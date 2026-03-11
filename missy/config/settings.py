@@ -42,11 +42,14 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import yaml
 
 from missy.core.exceptions import ConfigurationError
+
+if TYPE_CHECKING:
+    from missy.channels.discord.config import DiscordConfig
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +161,7 @@ class MissyConfig:
         providers: Mapping of provider name to :class:`ProviderConfig`.
         workspace_path: Absolute path to the agent's working directory.
         audit_log_path: Absolute path where audit events are persisted.
+        discord: Optional Discord integration configuration.
     """
 
     network: NetworkPolicy
@@ -167,6 +171,7 @@ class MissyConfig:
     providers: dict[str, ProviderConfig]
     workspace_path: str
     audit_log_path: str
+    discord: Optional["DiscordConfig"] = None
 
 
 # ---------------------------------------------------------------------------
@@ -264,6 +269,12 @@ def load_config(path: str) -> MissyConfig:
         )
 
     try:
+        discord_raw = data.get("discord")
+        discord_cfg: Optional["DiscordConfig"] = None
+        if discord_raw is not None:
+            from missy.channels.discord.config import parse_discord_config
+            discord_cfg = parse_discord_config(discord_raw)
+
         return MissyConfig(
             network=_parse_network(data.get("network") or {}),
             filesystem=_parse_filesystem(data.get("filesystem") or {}),
@@ -272,6 +283,7 @@ def load_config(path: str) -> MissyConfig:
             providers=_parse_providers(data.get("providers") or {}),
             workspace_path=str(data.get("workspace_path", ".")),
             audit_log_path=str(data.get("audit_log_path", "~/.missy/audit.log")),
+            discord=discord_cfg,
         )
     except ConfigurationError:
         raise
@@ -309,4 +321,5 @@ def get_default_config() -> MissyConfig:
         providers={},
         workspace_path=str(Path.home() / "missy-workspace"),
         audit_log_path=str(Path.home() / ".missy" / "audit.log"),
+        discord=None,
     )

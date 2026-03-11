@@ -875,6 +875,221 @@ def plugins_list(ctx: click.Context) -> None:
 
 
 # ---------------------------------------------------------------------------
+# missy discord
+# ---------------------------------------------------------------------------
+
+
+@cli.group()
+def discord() -> None:
+    """Discord channel commands (status, probe, register-commands, audit)."""
+    pass
+
+
+@discord.command("status")
+@click.pass_context
+def discord_status(ctx: click.Context) -> None:
+    """Show Discord connection status and bot user info.
+
+    Reads the Discord configuration from the Missy config file and prints
+    a summary of each configured account.
+    """
+    cfg = _load_subsystems(ctx.obj["config_path"])
+    discord_cfg = cfg.discord
+
+    if discord_cfg is None or not discord_cfg.accounts:
+        console.print("[dim]No Discord accounts configured.[/]")
+        return
+
+    enabled_text = (
+        "[green]enabled[/]" if discord_cfg.enabled else "[red]disabled[/]"
+    )
+    console.print(f"Discord integration: {enabled_text}")
+
+    table = Table(title="Discord Accounts", show_lines=True)
+    table.add_column("Token Env Var", style="bold")
+    table.add_column("Application ID")
+    table.add_column("DM Policy")
+    table.add_column("Guilds Configured", justify="right")
+    table.add_column("Ignore Bots", justify="center")
+
+    for account in discord_cfg.accounts:
+        table.add_row(
+            account.token_env_var,
+            account.application_id or "[dim]—[/]",
+            account.dm_policy.value,
+            str(len(account.guild_policies)),
+            "yes" if account.ignore_bots else "no",
+        )
+
+    console.print(table)
+
+
+@discord.command("probe")
+@click.pass_context
+def discord_probe(ctx: click.Context) -> None:
+    """Test Discord API connectivity and bot token validity.
+
+    Attempts to call GET /users/@me for each configured account and reports
+    whether the token is valid and the network policy allows the request.
+    """
+    from missy.channels.discord.rest import DiscordRestClient
+    from missy.gateway.client import create_client
+
+    cfg = _load_subsystems(ctx.obj["config_path"])
+    discord_cfg = cfg.discord
+
+    if discord_cfg is None or not discord_cfg.accounts:
+        console.print("[dim]No Discord accounts configured.[/]")
+        return
+
+    for idx, account in enumerate(discord_cfg.accounts):
+        token = account.resolve_token()
+        label = f"Account {idx + 1} ({account.token_env_var})"
+
+        if not token:
+            err_console.print(
+                f"[yellow]{label}[/]: env var [bold]{account.token_env_var}[/] is not set."
+            )
+            continue
+
+        try:
+            http = create_client(session_id="discord-probe", task_id=f"account-{idx}")
+            rest = DiscordRestClient(bot_token=token, http_client=http)
+            user = rest.get_current_user()
+            console.print(
+                f"[green]{label}[/]: connected as [bold]{user.get('username')}[/]"
+                f"#{user.get('discriminator', '0')} (id={user.get('id')})"
+            )
+        except Exception as exc:
+            err_console.print(f"[red]{label}[/]: probe failed — {exc}")
+
+
+@discord.command("register-commands")
+@click.option("--guild-id", default=None, help="Guild ID for guild-scoped registration.")
+@click.option(
+    "--account-index",
+    default=0,
+    show_default=True,
+    help="Index of the account in the config accounts list.",
+)
+@click.pass_context
+def discord_register_commands(
+    ctx: click.Context,
+    guild_id: Optional[str],
+    account_index: int,
+) -> None:
+    """Register slash commands with Discord.
+
+    Registers /ask, /status, /model, and /help.  When --guild-id is
+    provided the commands are registered as guild-scoped (instant
+    propagation); without it they are registered globally.
+    """
+    from missy.channels.discord.commands import SLASH_COMMANDS
+    from missy.channels.discord.rest import DiscordRestClient
+    from missy.gateway.client import create_client
+
+    cfg = _load_subsystems(ctx.obj["config_path"])
+    discord_cfg = cfg.discord
+
+    if discord_cfg is None or not discord_cfg.accounts:
+        _print_error("No Discord accounts configured.")
+        sys.exit(1)
+
+    if account_index >= len(discord_cfg.accounts):
+        _print_error(
+            f"Account index {account_index} out of range "
+            f"(only {len(discord_cfg.accounts)} account(s) configured)."
+        )
+        sys.exit(1)
+
+    account = discord_cfg.accounts[account_index]
+    token = account.resolve_token()
+    if not token:
+        _print_error(
+            f"Environment variable {account.token_env_var!r} is not set.",
+            hint="Export the bot token before running this command.",
+        )
+        sys.exit(1)
+
+    if not account.application_id:
+        _print_error(
+            "No application_id configured for this account.",
+            hint="Set application_id in your Discord config.",
+        )
+        sys.exit(1)
+
+    try:
+        http = create_client(session_id="discord-register", task_id="commands")
+        rest = DiscordRestClient(bot_token=token, http_client=http)
+        registered = rest.register_slash_commands(
+            application_id=account.application_id,
+            commands=SLASH_COMMANDS,
+            guild_id=guild_id,
+        )
+    except Exception as exc:
+        _print_error(f"Failed to register commands: {exc}")
+        sys.exit(1)
+
+    scope = f"guild {guild_id}" if guild_id else "global"
+    _print_success(
+        f"Registered {len(registered)} command(s) [{scope}]:\n"
+        + "\n".join(f"  /{cmd.get('name', '?')}" for cmd in registered)
+    )
+
+
+@discord.command("audit")
+@click.option(
+    "--limit",
+    default=50,
+    show_default=True,
+    help="Maximum number of events to show.",
+)
+@click.pass_context
+def discord_audit(ctx: click.Context, limit: int) -> None:
+    """Show recent Discord-related audit events from the log."""
+    from missy.observability.audit_logger import AuditLogger
+
+    cfg = _load_subsystems(ctx.obj["config_path"])
+    al = AuditLogger(log_path=cfg.audit_log_path)
+    all_events = al.get_recent_events(limit=limit * 10)
+
+    discord_events = [
+        e for e in all_events if str(e.get("event_type", "")).startswith("discord.")
+    ][-limit:]
+
+    if not discord_events:
+        console.print("[dim]No Discord audit events found.[/]")
+        return
+
+    table = Table(title=f"Discord Audit Events (last {len(discord_events)})", show_lines=True)
+    table.add_column("Timestamp", style="dim")
+    table.add_column("Event Type")
+    table.add_column("Result", justify="center")
+    table.add_column("Detail")
+
+    result_styles = {"allow": "green", "deny": "red", "error": "yellow"}
+
+    for event in discord_events:
+        result = event.get("result", "")
+        style = result_styles.get(result, "white")
+        result_text = Text(result, style=style)
+        detail_raw = event.get("detail", {})
+        detail_str = (
+            json.dumps(detail_raw, separators=(",", ":"))
+            if isinstance(detail_raw, dict)
+            else str(detail_raw)
+        )
+        table.add_row(
+            event.get("timestamp", "")[:19],
+            event.get("event_type", ""),
+            result_text,
+            detail_str[:80] + ("…" if len(detail_str) > 80 else ""),
+        )
+
+    console.print(table)
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
