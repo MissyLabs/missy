@@ -75,6 +75,10 @@ class NetworkPolicy:
     allowed_cidrs: list[str] = field(default_factory=list)
     allowed_domains: list[str] = field(default_factory=list)
     allowed_hosts: list[str] = field(default_factory=list)
+    # Per-category overrides (union with allowed_domains/hosts)
+    provider_allowed_hosts: list[str] = field(default_factory=list)
+    tool_allowed_hosts: list[str] = field(default_factory=list)
+    discord_allowed_hosts: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -142,6 +146,25 @@ class ProviderConfig:
     api_key: Optional[str] = None
     base_url: Optional[str] = None
     timeout: int = 30
+    enabled: bool = True
+
+
+# ---------------------------------------------------------------------------
+# Scheduling policy
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class SchedulingPolicy:
+    """Controls scheduled job execution.
+
+    Attributes:
+        enabled: When False, no new jobs may be added or run.
+        max_jobs: Maximum number of concurrent scheduled jobs (0 = unlimited).
+    """
+
+    enabled: bool = True
+    max_jobs: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +185,7 @@ class MissyConfig:
         workspace_path: Absolute path to the agent's working directory.
         audit_log_path: Absolute path where audit events are persisted.
         discord: Optional Discord integration configuration.
+        scheduling: Scheduled job execution policy.
     """
 
     network: NetworkPolicy
@@ -172,6 +196,7 @@ class MissyConfig:
     workspace_path: str
     audit_log_path: str
     discord: Optional["DiscordConfig"] = None
+    scheduling: SchedulingPolicy = field(default_factory=SchedulingPolicy)
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +210,9 @@ def _parse_network(data: dict[str, Any]) -> NetworkPolicy:
         allowed_cidrs=list(data.get("allowed_cidrs", [])),
         allowed_domains=list(data.get("allowed_domains", [])),
         allowed_hosts=list(data.get("allowed_hosts", [])),
+        provider_allowed_hosts=list(data.get("provider_allowed_hosts", [])),
+        tool_allowed_hosts=list(data.get("tool_allowed_hosts", [])),
+        discord_allowed_hosts=list(data.get("discord_allowed_hosts", [])),
     )
 
 
@@ -224,8 +252,16 @@ def _parse_providers(data: dict[str, Any]) -> dict[str, ProviderConfig]:
             api_key=raw.get("api_key") or os.environ.get(f"{key.upper()}_API_KEY"),
             base_url=raw.get("base_url"),
             timeout=int(raw.get("timeout", 30)),
+            enabled=bool(raw.get("enabled", True)),
         )
     return providers
+
+
+def _parse_scheduling(data: dict[str, Any]) -> SchedulingPolicy:
+    return SchedulingPolicy(
+        enabled=bool(data.get("enabled", True)),
+        max_jobs=int(data.get("max_jobs", 0)),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -284,6 +320,7 @@ def load_config(path: str) -> MissyConfig:
             workspace_path=str(data.get("workspace_path", ".")),
             audit_log_path=str(data.get("audit_log_path", "~/.missy/audit.log")),
             discord=discord_cfg,
+            scheduling=_parse_scheduling(data.get("scheduling") or {}),
         )
     except ConfigurationError:
         raise
@@ -322,4 +359,5 @@ def get_default_config() -> MissyConfig:
         workspace_path=str(Path.home() / "missy-workspace"),
         audit_log_path=str(Path.home() / ".missy" / "audit.log"),
         discord=None,
+        scheduling=SchedulingPolicy(),
     )

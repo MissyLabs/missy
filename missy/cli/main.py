@@ -222,6 +222,11 @@ def init(ctx: click.Context) -> None:
         jobs_file.write_text("[]", encoding="utf-8")
         console.print(f"[green]Created[/] {jobs_file}")
 
+    secrets_dir = missy_dir / "secrets"
+    if not secrets_dir.exists():
+        secrets_dir.mkdir(mode=0o700)
+        console.print(f"[green]Created[/] secrets directory at {secrets_dir} (mode 700)")
+
     workspace = Path("~/workspace").expanduser()
     try:
         workspace.mkdir(parents=True, exist_ok=True)
@@ -1085,6 +1090,223 @@ def discord_audit(ctx: click.Context, limit: int) -> None:
             result_text,
             detail_str[:80] + ("…" if len(detail_str) > 80 else ""),
         )
+
+    console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# missy gateway
+# ---------------------------------------------------------------------------
+
+
+@cli.group()
+def gateway() -> None:
+    """Gateway / service-mode commands."""
+    pass
+
+
+@gateway.command("start")
+@click.option("--host", default="127.0.0.1", show_default=True, help="Bind address.")
+@click.option("--port", default=8765, show_default=True, help="Bind port.")
+@click.pass_context
+def gateway_start(ctx: click.Context, host: str, port: int) -> None:
+    """Start Missy in service mode (long-running agent loop).
+
+    Runs the agent as a persistent service, processing tasks from all
+    configured channels (Discord, etc.) until interrupted with Ctrl-C.
+    """
+    import signal
+
+    cfg = _load_subsystems(ctx.obj["config_path"])
+    console.print(
+        Panel(
+            f"[bold cyan]Missy Gateway[/] starting\n\n"
+            f"  Host : [bold]{host}[/]\n"
+            f"  Port : [bold]{port}[/]\n\n"
+            "Press Ctrl-C to stop.",
+            border_style="cyan",
+        )
+    )
+
+    stop_event = False
+
+    def _stop(signum, frame):
+        nonlocal stop_event
+        stop_event = True
+        console.print("\n[dim]Shutting down gateway...[/]")
+
+    signal.signal(signal.SIGINT, _stop)
+    signal.signal(signal.SIGTERM, _stop)
+
+    # Start Discord channel if configured.
+    if cfg.discord and cfg.discord.enabled and cfg.discord.accounts:
+        import asyncio
+        from missy.channels.discord.channel import DiscordChannel
+
+        async def _run_discord():
+            channels = []
+            for account in cfg.discord.accounts:
+                ch = DiscordChannel(account_config=account)
+                await ch.start()
+                channels.append(ch)
+                console.print(f"[green]Discord channel started[/] ({account.token_env_var})")
+            try:
+                while not stop_event:
+                    await asyncio.sleep(1)
+            finally:
+                for ch in channels:
+                    await ch.stop()
+
+        asyncio.run(_run_discord())
+    else:
+        console.print("[dim]No Discord channels configured. Running in idle service mode.[/]")
+        import time
+        while not stop_event:
+            time.sleep(1)
+
+    console.print("[dim]Gateway stopped.[/]")
+
+
+@gateway.command("status")
+@click.pass_context
+def gateway_status(ctx: click.Context) -> None:
+    """Show gateway configuration and channel status."""
+    cfg = _load_subsystems(ctx.obj["config_path"])
+
+    table = Table(title="Gateway Status", show_lines=True)
+    table.add_column("Channel", style="bold")
+    table.add_column("Status")
+    table.add_column("Detail")
+
+    # Discord
+    if cfg.discord and cfg.discord.enabled and cfg.discord.accounts:
+        for i, account in enumerate(cfg.discord.accounts):
+            token_set = bool(account.resolve_token())
+            status = Text("configured", style="green") if token_set else Text("token missing", style="red")
+            table.add_row(
+                f"discord[{i}]",
+                status,
+                f"env={account.token_env_var} dm_policy={account.dm_policy.value}",
+            )
+    else:
+        table.add_row("discord", Text("disabled", style="dim"), "not configured")
+
+    # CLI channel always available
+    table.add_row("cli", Text("available", style="green"), "stdin/stdout")
+
+    console.print(table)
+
+    # Providers
+    from missy.providers.registry import get_registry
+    registry = get_registry()
+    provider_names = registry.list_providers()
+    console.print(f"\n[bold]Providers registered:[/] {', '.join(provider_names) if provider_names else '[dim]none[/]'}")
+
+
+# ---------------------------------------------------------------------------
+# missy doctor
+# ---------------------------------------------------------------------------
+
+
+@cli.command()
+@click.pass_context
+def doctor(ctx: click.Context) -> None:
+    """Run health diagnostics and print a system status report.
+
+    Checks configuration, provider availability, network policy, filesystem
+    policy, audit log, scheduler state, and Discord configuration.
+    """
+    from missy.providers.registry import get_registry
+    from missy.scheduler.manager import SchedulerManager
+
+    cfg = _load_subsystems(ctx.obj["config_path"])
+
+    ok = Text("OK", style="green")
+    warn = Text("WARN", style="yellow")
+    fail = Text("FAIL", style="red")
+
+    table = Table(title="Missy Doctor", show_lines=True)
+    table.add_column("Check", style="bold")
+    table.add_column("Result", justify="center")
+    table.add_column("Detail")
+
+    # 1. Config loaded
+    table.add_row("config loaded", ok, str(Path(ctx.obj["config_path"]).expanduser()))
+
+    # 2. Audit log
+    audit_path = Path(cfg.audit_log_path).expanduser()
+    if audit_path.exists():
+        table.add_row("audit log", ok, str(audit_path))
+    else:
+        table.add_row("audit log", warn, f"not found: {audit_path}")
+
+    # 3. Workspace
+    workspace = Path(cfg.workspace_path).expanduser()
+    if workspace.exists():
+        table.add_row("workspace", ok, str(workspace))
+    else:
+        table.add_row("workspace", warn, f"missing: {workspace} — run missy init")
+
+    # 4. Secrets dir
+    secrets_dir = Path("~/.missy/secrets").expanduser()
+    if secrets_dir.exists():
+        table.add_row("secrets dir", ok, str(secrets_dir))
+    else:
+        table.add_row("secrets dir", warn, f"missing: {secrets_dir} — run missy init")
+
+    # 5. Network policy
+    net = cfg.network
+    net_detail = (
+        f"default_deny={net.default_deny} "
+        f"domains={len(net.allowed_domains)} "
+        f"cidrs={len(net.allowed_cidrs)} "
+        f"hosts={len(net.allowed_hosts)}"
+    )
+    net_status = ok if net.default_deny else warn
+    table.add_row("network policy", net_status, net_detail)
+
+    # 6. Providers
+    registry = get_registry()
+    provider_names = registry.list_providers()
+    if not provider_names:
+        table.add_row("providers", warn, "no providers configured")
+    else:
+        for name in provider_names:
+            p = registry.get(name)
+            try:
+                avail = p.is_available() if p else False
+            except Exception:
+                avail = False
+            status = ok if avail else fail
+            table.add_row(f"provider:{name}", status, "api key present" if avail else "not available")
+
+    # 7. Shell policy
+    shell_status = warn if cfg.shell.enabled else ok
+    shell_detail = "ENABLED" if cfg.shell.enabled else "disabled (secure)"
+    if cfg.shell.enabled and cfg.shell.allowed_commands:
+        shell_detail += f" commands={cfg.shell.allowed_commands}"
+    table.add_row("shell policy", shell_status, shell_detail)
+
+    # 8. Plugin policy
+    plugin_status = warn if cfg.plugins.enabled else ok
+    plugin_detail = "ENABLED" if cfg.plugins.enabled else "disabled (secure)"
+    table.add_row("plugin policy", plugin_status, plugin_detail)
+
+    # 9. Scheduler jobs
+    mgr = SchedulerManager()
+    jobs = mgr.list_jobs()
+    table.add_row("scheduled jobs", ok, f"{len(jobs)} job(s) defined")
+
+    # 10. Discord
+    if cfg.discord and cfg.discord.enabled:
+        accounts = cfg.discord.accounts
+        for i, acc in enumerate(accounts):
+            has_token = bool(acc.resolve_token())
+            ds = ok if has_token else fail
+            dd = f"token_env={acc.token_env_var} dm_policy={acc.dm_policy.value}"
+            table.add_row(f"discord[{i}]", ds, dd)
+    else:
+        table.add_row("discord", Text("disabled", style="dim"), "not configured")
 
     console.print(table)
 

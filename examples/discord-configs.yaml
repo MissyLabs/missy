@@ -1,0 +1,205 @@
+# =============================================================================
+# Missy Discord Configuration Examples
+#
+# Each YAML document (separated by ---) is a complete discord: section
+# that can be pasted into your config.yaml. Choose the example that
+# matches your use case and adapt the IDs and values.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Example 1: DM Pairing Mode
+#
+# The bot ignores all DMs until a user sends "!pair" to initiate a pairing
+# request. An admin accepts or denies the request. Once paired, the user
+# can DM the bot freely. This is the most secure DM mode.
+# -----------------------------------------------------------------------------
+discord:
+  enabled: true
+  accounts:
+    - token_env_var: DISCORD_BOT_TOKEN
+      application_id: "1234567890123456789"
+
+      # Pairing mode: users must send "!pair" and be accepted before
+      # the bot responds to their DMs.
+      dm_policy: pairing
+
+      # Initially empty -- users are added here when pairing is accepted.
+      dm_allowlist: []
+
+      # Ignore messages from other bots.
+      ignore_bots: true
+      allow_bots_if_mention_only: false
+
+      # No guild policies -- this bot is DM-only.
+      guild_policies: {}
+
+---
+# -----------------------------------------------------------------------------
+# Example 2: Guild Mention-Only Mode
+#
+# The bot is active in a guild but only responds when explicitly
+# @mentioned. This prevents the bot from reacting to every message in
+# the channel while still being available on demand.
+# -----------------------------------------------------------------------------
+discord:
+  enabled: true
+  accounts:
+    - token_env_var: DISCORD_BOT_TOKEN
+      application_id: "1234567890123456789"
+
+      # Disable DMs entirely -- guild-only bot.
+      dm_policy: disabled
+
+      ignore_bots: true
+      allow_bots_if_mention_only: false
+
+      guild_policies:
+        # Replace with your actual guild (server) ID.
+        "987654321098765432":
+          enabled: true
+
+          # The bot only responds when @mentioned in a message.
+          require_mention: true
+
+          # Empty = all channels allowed.
+          allowed_channels: []
+
+          # Empty = all users allowed.
+          allowed_users: []
+
+          # Full mode: tools, skills, and plugins available.
+          mode: full
+
+---
+# -----------------------------------------------------------------------------
+# Example 3: Allowlisted Support Channel
+#
+# The bot is restricted to specific channels within a guild. Only
+# messages in the listed channels are processed. This is useful for
+# containing the bot to a designated support or bot-commands channel.
+# -----------------------------------------------------------------------------
+discord:
+  enabled: true
+  accounts:
+    - token_env_var: DISCORD_BOT_TOKEN
+      application_id: "1234567890123456789"
+
+      # DMs also restricted to an allowlist of known support staff.
+      dm_policy: allowlist
+      dm_allowlist:
+        - "111222333444555666"    # Support team lead user ID
+        - "777888999000111222"    # Support team member user ID
+
+      ignore_bots: true
+      allow_bots_if_mention_only: false
+
+      guild_policies:
+        "987654321098765432":
+          enabled: true
+
+          # No mention required -- the bot listens to all messages
+          # in the allowed channels.
+          require_mention: false
+
+          # Only respond in these channels (by channel name, not ID).
+          allowed_channels:
+            - "bot-commands"
+            - "support"
+
+          # Only these users may interact (by user ID).
+          # Empty list would allow all users.
+          allowed_users: []
+
+          # Restricted mode: no tools or plugins, chat only.
+          mode: safe_chat_only
+
+---
+# -----------------------------------------------------------------------------
+# Example 4: Multi-Account Setup
+#
+# Two separate bot accounts running in the same Missy process. One is
+# a public-facing bot for a community guild; the other is a private
+# bot for an internal team guild. Each account has its own token,
+# policies, and guild configurations.
+# -----------------------------------------------------------------------------
+discord:
+  enabled: true
+  accounts:
+    # --- Public community bot ---
+    - token_env_var: DISCORD_PUBLIC_BOT_TOKEN
+      application_id: "1111111111111111111"
+      account_id: "2222222222222222222"
+
+      dm_policy: disabled
+
+      ignore_bots: true
+      allow_bots_if_mention_only: false
+
+      guild_policies:
+        # Community server
+        "3333333333333333333":
+          enabled: true
+          require_mention: true
+          allowed_channels:
+            - "ask-missy"
+          allowed_users: []
+          mode: safe_chat_only
+
+    # --- Internal team bot ---
+    - token_env_var: DISCORD_INTERNAL_BOT_TOKEN
+      application_id: "4444444444444444444"
+      account_id: "5555555555555555555"
+
+      # Open DMs for the internal team.
+      dm_policy: open
+
+      ignore_bots: true
+      allow_bots_if_mention_only: false
+
+      guild_policies:
+        # Internal team server
+        "6666666666666666666":
+          enabled: true
+          require_mention: false
+          allowed_channels: []          # All channels
+          allowed_users:
+            - "7777777777777777777"      # Team member 1
+            - "8888888888888888888"      # Team member 2
+          allowed_roles: []
+          mode: full                    # Full tool access for trusted team
+
+---
+# -----------------------------------------------------------------------------
+# Example 5: allowBots="mentions" Mode
+#
+# The bot ignores other bots by default, but makes an exception when
+# another bot explicitly @mentions this bot. This is useful for
+# bot-to-bot orchestration where a coordinator bot dispatches tasks
+# to Missy by mentioning it.
+# -----------------------------------------------------------------------------
+discord:
+  enabled: true
+  accounts:
+    - token_env_var: DISCORD_BOT_TOKEN
+      application_id: "1234567890123456789"
+      account_id: "9999999999999999999"
+
+      dm_policy: disabled
+
+      # Ignore bots by default...
+      ignore_bots: true
+
+      # ...but allow bot messages that @mention this bot.
+      # When another bot sends "<@9999999999999999999> please summarise",
+      # the message is processed. All other bot messages are dropped.
+      allow_bots_if_mention_only: true
+
+      guild_policies:
+        "987654321098765432":
+          enabled: true
+          require_mention: false   # Humans don't need to mention
+          allowed_channels:
+            - "orchestration"
+            - "general"
+          allowed_users: []
+          mode: no_tools            # Bot-triggered runs: no tools

@@ -38,3 +38,20 @@ class ProviderError(MissyError):
 
 class SchedulerError(MissyError):
     """Raised when the task scheduler encounters an unrecoverable error."""
+
+
+class ApprovalRequiredError(MissyError):
+    """Raised when an action requires explicit operator approval before proceeding.
+
+    Attributes:
+        action: Short description of the action requiring approval.
+        reason: Why approval is required.
+    """
+
+    def __init__(self, action: str, reason: str = "") -> None:
+        self.action = action
+        self.reason = reason
+        msg = f"Approval required for action: {action!r}"
+        if reason:
+            msg += f" \u2014 {reason}"
+        super().__init__(msg)

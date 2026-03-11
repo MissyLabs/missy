@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
+import enum
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID, uuid4
+
+
+class SessionMode(str, enum.Enum):
+    """Capability mode for a session."""
+
+    FULL = "full"          # All policy-approved capabilities available.
+    NO_TOOLS = "no_tools"  # Tools disabled; LLM chat only.
+    SAFE_CHAT = "safe_chat"  # No tools, no skills, no plugins.
 
 
 @dataclass
@@ -17,11 +26,13 @@ class Session:
         id: Unique session identifier.
         created_at: UTC timestamp of session creation.
         metadata: Arbitrary key/value data attached to the session.
+        mode: Capability mode controlling which features are active.
     """
 
     id: UUID
     created_at: datetime
     metadata: dict[str, Any] = field(default_factory=dict)
+    mode: SessionMode = SessionMode.FULL
 
     def __post_init__(self) -> None:
         if self.created_at.tzinfo is None:

@@ -188,6 +188,7 @@ class DiscordChannel(BaseChannel):
         channel_id: str,
         message: str,
         reply_to: Optional[str] = None,
+        thread_id: Optional[str] = None,
     ) -> None:
         """Send *message* to a specific Discord channel asynchronously.
 
@@ -195,10 +196,19 @@ class DiscordChannel(BaseChannel):
             channel_id: Discord channel snowflake ID.
             message: Text to send (max 2 000 characters).
             reply_to: Optional message ID to reply to.
+            thread_id: Optional thread snowflake ID; when set, the message
+                is sent to the thread rather than the parent channel.
         """
+        # Send typing indicator as an in-progress UX signal.
+        try:
+            self._rest.trigger_typing(channel_id)
+        except Exception:
+            pass
+
+        target_channel = thread_id if thread_id else channel_id
         try:
             self._rest.send_message(
-                channel_id=channel_id,
+                channel_id=target_channel,
                 content=message,
                 reply_to_message_id=reply_to,
             )
@@ -248,6 +258,7 @@ class DiscordChannel(BaseChannel):
         channel_id: str = str(data.get("channel_id", ""))
         guild_id: Optional[str] = data.get("guild_id") or None
         content: str = str(data.get("content", ""))
+        thread_id: Optional[str] = data.get("thread_id") or None
 
         # 1. Filter own-bot messages.
         if self._is_own_message(author_id):
@@ -263,7 +274,29 @@ class DiscordChannel(BaseChannel):
             )
             return
 
-        # 3. Route to DM or guild access control.
+        # 3. Attachment policy gate.
+        attachments: list[dict] = data.get("attachments") or []
+        if attachments:
+            # Attachments are policy-gated: deny unless explicitly configured.
+            # For now: log and drop messages with attachments (safe default).
+            self._emit_audit(
+                "discord.channel.attachment_denied",
+                "deny",
+                {
+                    "author_id": author_id,
+                    "channel_id": channel_id,
+                    "attachment_count": len(attachments),
+                    "reason": "attachments_not_permitted",
+                },
+            )
+            logger.info(
+                "Discord: message with %d attachment(s) from %s denied by policy",
+                len(attachments),
+                author_id,
+            )
+            return
+
+        # 4. Route to DM or guild access control.
         if guild_id is None:
             allowed = self._check_dm_policy(author_id, content)
         else:
@@ -272,7 +305,7 @@ class DiscordChannel(BaseChannel):
         if not allowed:
             return
 
-        # 4. Enqueue.
+        # 5. Enqueue.
         self._current_channel_id = channel_id
         msg = ChannelMessage(
             content=content,
@@ -282,6 +315,7 @@ class DiscordChannel(BaseChannel):
                 "discord_message_id": str(data.get("id", "")),
                 "discord_channel_id": channel_id,
                 "discord_guild_id": guild_id or "",
+                "discord_thread_id": thread_id or "",
                 "discord_author": author,
             },
         )

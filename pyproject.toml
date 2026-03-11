@@ -29,6 +29,7 @@ dev = [
     "pytest-cov>=5.0",
     "black>=24.0",
     "ruff>=0.4",
+    "mypy>=1.10",
 ]
 
 [project.scripts]
@@ -64,3 +65,8 @@ omit = ["tests/*"]
 [tool.coverage.report]
 fail_under = 85
 show_missing = true
+
+[tool.mypy]
+python_version = "3.11"
+strict = false
+ignore_missing_imports = true

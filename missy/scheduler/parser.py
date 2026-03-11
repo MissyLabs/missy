@@ -9,7 +9,7 @@ Interval triggers
 
 Cron triggers
     - ``"daily at 09:00"``
-    - ``"weekly on Monday 09:00"``
+    - ``"weekly on Monday at 09:00"``
     - ``"weekly on friday 14:30"``
 """
 
@@ -46,7 +46,7 @@ _DAILY_PATTERN = re.compile(
 )
 
 _WEEKLY_PATTERN = re.compile(
-    r"^weekly\s+on\s+(?P<day>\w+)\s+(?P<hour>\d{1,2}):(?P<minute>\d{2})$",
+    r"^weekly\s+on\s+(?P<day>\w+)\s+(?:at\s+)?(?P<hour>\d{1,2}):(?P<minute>\d{2})$",
     re.IGNORECASE,
 )
 
@@ -121,7 +121,7 @@ def parse_schedule(schedule_str: str) -> dict[str, Any]:
         "every 2 hours"            -> {"trigger": "interval", "hours": 2}
         "every 30 seconds"         -> {"trigger": "interval", "seconds": 30}
         "daily at 09:00"           -> {"trigger": "cron", "hour": 9, "minute": 0}
-        "weekly on Monday 09:00"   -> {"trigger": "cron", "day_of_week": "mon",
+        "weekly on Monday at 09:00" -> {"trigger": "cron", "day_of_week": "mon",
                                        "hour": 9, "minute": 0}
         "weekly on friday 14:30"   -> {"trigger": "cron", "day_of_week": "fri",
                                        "hour": 14, "minute": 30}
@@ -159,5 +159,5 @@ def parse_schedule(schedule_str: str) -> dict[str, Any]:
         "Supported formats: "
         "'every N seconds/minutes/hours', "
         "'daily at HH:MM', "
-        "'weekly on <day> HH:MM'."
+        "'weekly on <day> [at] HH:MM'."
     )

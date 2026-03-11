@@ -133,6 +133,9 @@ class ProviderRegistry:
         """
         registry = cls()
         for key, provider_config in config.providers.items():
+            if not provider_config.enabled:
+                logger.info("Provider %r is disabled; skipping.", key)
+                continue
             provider_name = provider_config.name or key
             provider_cls = _PROVIDER_CLASSES.get(provider_name)
             if provider_cls is None:

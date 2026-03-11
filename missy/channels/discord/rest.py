@@ -186,23 +186,21 @@ class DiscordRestClient:
         http_response.raise_for_status()
 
     def trigger_typing(self, channel_id: str) -> None:
-        """Trigger the typing indicator in a channel.
+        """Send a typing indicator to *channel_id*.
 
-        The indicator displays for ~10 seconds or until the bot sends a
-        message, whichever comes first.
+        Discord displays a "Bot is typing..." indicator for ~10 seconds.
+        Call this before sending a long response to give users feedback.
 
         Args:
-            channel_id: The channel to show the typing indicator in.
-
-        Raises:
-            PolicyViolationError: If ``discord.com`` is not allowed.
-            httpx.HTTPStatusError: On non-2xx responses.
+            channel_id: The channel snowflake ID.
         """
-        url = f"{BASE}/channels/{channel_id}/typing"
-        response = self._http.post(url, headers=self._headers(), content=b"")
-        # Discord returns 204; raise_for_status handles non-2xx.
-        if response.status_code not in (200, 204):
-            response.raise_for_status()
+        try:
+            self._http.post(
+                f"{BASE}/channels/{channel_id}/typing",
+                headers=self._headers(),
+            )
+        except Exception as exc:
+            logger.debug("typing indicator failed for %s: %s", channel_id, exc)
 
     def register_slash_commands(
         self,
