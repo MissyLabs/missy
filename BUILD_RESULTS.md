@@ -1,262 +1,160 @@
-# Build Results
+# BUILD_RESULTS
 
-**Project:** Missy AI Agent Framework
-**Build Date:** 2026-03-11
-**Python:** 3.12
-**Test runner:** pytest 8.4.1
+- Timestamp: 2026-03-11 22:33:56
+- Python version:
+Python 3.12.3
 
----
-
-## Project Structure Overview
-
+## Repository snapshot
 ```
-missy/
-├── agent/
-│   └── runtime.py          AgentRuntime — main run loop, provider resolution
-├── channels/
-│   ├── base.py             BaseChannel — abstract I/O channel
-│   └── cli_channel.py      CliChannel — stdin/stdout channel
-├── cli/
-│   └── main.py             Click-based CLI entry-points
-├── config/
-│   └── settings.py         Policy dataclasses, MissyConfig, YAML loader
-├── core/
-│   ├── events.py           AuditEvent and EventBus
-│   ├── exceptions.py       Exception hierarchy
-│   └── session.py          Session and thread management
-├── gateway/
-│   └── client.py           PolicyHttpClient — policy-gated HTTP
-├── memory/
-│   └── store.py            JSON-based conversation memory store
-├── observability/
-│   └── audit_logger.py     AuditLogger — JSONL audit file writer
-├── plugins/
-│   ├── base.py             BasePlugin, PluginPermissions
-│   └── loader.py           PluginLoader — policy-gated plugin lifecycle
-├── policy/
-│   ├── engine.py           PolicyEngine facade + singleton helpers
-│   ├── filesystem.py       FilesystemPolicyEngine
-│   ├── network.py          NetworkPolicyEngine
-│   └── shell.py            ShellPolicyEngine
-├── providers/
-│   ├── anthropic_provider.py   Anthropic Claude adapter
-│   ├── base.py                 BaseProvider abstract class
-│   ├── ollama_provider.py      Ollama local inference adapter
-│   ├── openai_provider.py      OpenAI adapter
-│   └── registry.py             ProviderRegistry
-├── scheduler/
-│   ├── jobs.py             Job data structures
-│   ├── manager.py          SchedulerManager — cron and interval scheduling
-│   └── parser.py           Schedule expression parser
-├── security/
-│   ├── sanitizer.py        InputSanitizer — injection detection + truncation
-│   └── secrets.py          SecretsDetector — credential scanning + redaction
-├── skills/
-│   ├── base.py             BaseSkill abstract class
-│   └── registry.py         SkillRegistry
-└── tools/
-    ├── base.py             BaseTool, ToolResult
-    ├── builtin/
-    │   └── calculator.py   Calculator — safe AST-based expression evaluator
-    └── registry.py         ToolRegistry
-
-tests/                      740 tests across 30 test files
-docs/                       Project documentation
-examples/                   Usage examples
+/home/bmerriam/git/missy/AUDIT_CONNECTIVITY.md
+/home/bmerriam/git/missy/AUDIT_SECURITY.md
+/home/bmerriam/git/missy/build_log.txt
+/home/bmerriam/git/missy/BUILD_RESULTS.md
+/home/bmerriam/git/missy/BUILD_STATUS.md
+/home/bmerriam/git/missy/COMPLETE.md
+/home/bmerriam/git/missy/.coverage
+/home/bmerriam/git/missy/DISCORD.md
+/home/bmerriam/git/missy/docs/implementation/discord-channel.md
+/home/bmerriam/git/missy/docs/THREAT_MODEL.md
+/home/bmerriam/git/missy/.embedded_prompt.txt
+/home/bmerriam/git/missy/examples/config.yaml
+/home/bmerriam/git/missy/.git/COMMIT_EDITMSG
+/home/bmerriam/git/missy/.git/config
+/home/bmerriam/git/missy/.git/description
+/home/bmerriam/git/missy/.git/HEAD
+/home/bmerriam/git/missy/.git/hooks/applypatch-msg.sample
+/home/bmerriam/git/missy/.git/hooks/commit-msg.sample
+/home/bmerriam/git/missy/.git/hooks/fsmonitor-watchman.sample
+/home/bmerriam/git/missy/.git/hooks/post-update.sample
+/home/bmerriam/git/missy/.git/hooks/pre-applypatch.sample
+/home/bmerriam/git/missy/.git/hooks/pre-commit.sample
+/home/bmerriam/git/missy/.git/hooks/pre-merge-commit.sample
+/home/bmerriam/git/missy/.git/hooks/prepare-commit-msg.sample
+/home/bmerriam/git/missy/.git/hooks/pre-push.sample
+/home/bmerriam/git/missy/.git/hooks/pre-rebase.sample
+/home/bmerriam/git/missy/.git/hooks/pre-receive.sample
+/home/bmerriam/git/missy/.git/hooks/push-to-checkout.sample
+/home/bmerriam/git/missy/.git/hooks/sendemail-validate.sample
+/home/bmerriam/git/missy/.git/hooks/update.sample
+/home/bmerriam/git/missy/.gitignore
+/home/bmerriam/git/missy/.git/index
+/home/bmerriam/git/missy/.git/info/exclude
+/home/bmerriam/git/missy/.git/logs/HEAD
+/home/bmerriam/git/missy/LAST_SESSION_SUMMARY.md
+/home/bmerriam/git/missy/LOOP_HEALTH.md
+/home/bmerriam/git/missy/LOOP_INSTRUCTIONS.md
+/home/bmerriam/git/missy/missy/agent/__init__.py
+/home/bmerriam/git/missy/missy/agent/runtime.py
+/home/bmerriam/git/missy/missy/channels/base.py
+/home/bmerriam/git/missy/missy/channels/cli_channel.py
+/home/bmerriam/git/missy/missy/channels/__init__.py
+/home/bmerriam/git/missy/missy/cli/__init__.py
+/home/bmerriam/git/missy/missy/cli/main.py
+/home/bmerriam/git/missy/missy/config/__init__.py
+/home/bmerriam/git/missy/missy/config/settings.py
+/home/bmerriam/git/missy/missy/core/events.py
+/home/bmerriam/git/missy/missy/core/exceptions.py
+/home/bmerriam/git/missy/missy/core/__init__.py
+/home/bmerriam/git/missy/missy/core/session.py
+/home/bmerriam/git/missy/missy.egg-info/dependency_links.txt
+/home/bmerriam/git/missy/missy.egg-info/entry_points.txt
+/home/bmerriam/git/missy/missy.egg-info/PKG-INFO
+/home/bmerriam/git/missy/missy.egg-info/requires.txt
+/home/bmerriam/git/missy/missy.egg-info/SOURCES.txt
+/home/bmerriam/git/missy/missy.egg-info/top_level.txt
+/home/bmerriam/git/missy/missy/gateway/client.py
+/home/bmerriam/git/missy/missy/gateway/__init__.py
+/home/bmerriam/git/missy/missy/__init__.py
+/home/bmerriam/git/missy/missy/memory/__init__.py
+/home/bmerriam/git/missy/missy/memory/store.py
+/home/bmerriam/git/missy/missy/observability/audit_logger.py
+/home/bmerriam/git/missy/missy/observability/__init__.py
+/home/bmerriam/git/missy/missy/plugins/base.py
+/home/bmerriam/git/missy/missy/plugins/__init__.py
+/home/bmerriam/git/missy/missy/plugins/loader.py
+/home/bmerriam/git/missy/missy/policy/engine.py
+/home/bmerriam/git/missy/missy/policy/filesystem.py
+/home/bmerriam/git/missy/missy/policy/__init__.py
+/home/bmerriam/git/missy/missy/policy/network.py
+/home/bmerriam/git/missy/missy/policy/shell.py
+/home/bmerriam/git/missy/missy/providers/anthropic_provider.py
+/home/bmerriam/git/missy/missy/providers/base.py
+/home/bmerriam/git/missy/missy/providers/__init__.py
+/home/bmerriam/git/missy/missy/providers/ollama_provider.py
+/home/bmerriam/git/missy/missy/providers/openai_provider.py
+/home/bmerriam/git/missy/missy/providers/registry.py
+/home/bmerriam/git/missy/missy/__pycache__/__init__.cpython-312.pyc
+/home/bmerriam/git/missy/missy/scheduler/__init__.py
+/home/bmerriam/git/missy/missy/scheduler/jobs.py
+/home/bmerriam/git/missy/missy/scheduler/manager.py
+/home/bmerriam/git/missy/missy/scheduler/parser.py
+/home/bmerriam/git/missy/missy/security/__init__.py
+/home/bmerriam/git/missy/missy/security/sanitizer.py
+/home/bmerriam/git/missy/missy/security/secrets.py
+/home/bmerriam/git/missy/missy/skills/base.py
+/home/bmerriam/git/missy/missy/skills/__init__.py
+/home/bmerriam/git/missy/missy/skills/registry.py
+/home/bmerriam/git/missy/missy/tools/base.py
+/home/bmerriam/git/missy/missy/tools/__init__.py
+/home/bmerriam/git/missy/missy/tools/registry.py
+/home/bmerriam/git/missy/OPERATIONS.md
+/home/bmerriam/git/missy/pyproject.toml
+/home/bmerriam/git/missy/.pytest_cache/CACHEDIR.TAG
+/home/bmerriam/git/missy/.pytest_cache/.gitignore
+/home/bmerriam/git/missy/.pytest_cache/README.md
+/home/bmerriam/git/missy/README.md
+/home/bmerriam/git/missy/SECURITY.md
+/home/bmerriam/git/missy/.stagnation_count
+/home/bmerriam/git/missy/TEST_EDGE_CASES.md
+/home/bmerriam/git/missy/TEST_RESULTS.md
+/home/bmerriam/git/missy/tests/agent/__init__.py
+/home/bmerriam/git/missy/tests/agent/test_runtime.py
+/home/bmerriam/git/missy/tests/channels/__init__.py
+/home/bmerriam/git/missy/tests/channels/test_cli_channel.py
+/home/bmerriam/git/missy/tests/cli/__init__.py
+/home/bmerriam/git/missy/tests/cli/test_main.py
+/home/bmerriam/git/missy/tests/config/__init__.py
+/home/bmerriam/git/missy/tests/config/test_settings.py
+/home/bmerriam/git/missy/tests/core/__init__.py
+/home/bmerriam/git/missy/tests/core/test_session.py
+/home/bmerriam/git/missy/tests/__init__.py
+/home/bmerriam/git/missy/tests/integration/__init__.py
+/home/bmerriam/git/missy/tests/integration/test_policy_enforcement.py
+/home/bmerriam/git/missy/tests/memory/__init__.py
+/home/bmerriam/git/missy/tests/memory/test_store.py
+/home/bmerriam/git/missy/tests/observability/__init__.py
+/home/bmerriam/git/missy/tests/observability/test_audit_logger.py
+/home/bmerriam/git/missy/tests/plugins/__init__.py
+/home/bmerriam/git/missy/tests/plugins/test_base.py
+/home/bmerriam/git/missy/tests/plugins/test_loader.py
+/home/bmerriam/git/missy/tests/policy/__init__.py
+/home/bmerriam/git/missy/tests/policy/test_engine.py
+/home/bmerriam/git/missy/tests/policy/test_filesystem.py
+/home/bmerriam/git/missy/tests/policy/test_network.py
+/home/bmerriam/git/missy/tests/policy/test_shell.py
+/home/bmerriam/git/missy/tests/providers/__init__.py
+/home/bmerriam/git/missy/tests/providers/test_anthropic.py
+/home/bmerriam/git/missy/tests/providers/test_base.py
+/home/bmerriam/git/missy/tests/providers/test_ollama.py
+/home/bmerriam/git/missy/tests/providers/test_openai.py
+/home/bmerriam/git/missy/tests/providers/test_registry.py
+/home/bmerriam/git/missy/tests/__pycache__/__init__.cpython-312.pyc
+/home/bmerriam/git/missy/tests/scheduler/__init__.py
+/home/bmerriam/git/missy/tests/scheduler/test_jobs.py
+/home/bmerriam/git/missy/tests/scheduler/test_manager.py
+/home/bmerriam/git/missy/tests/scheduler/test_parser.py
+/home/bmerriam/git/missy/tests/security/__init__.py
+/home/bmerriam/git/missy/tests/security/test_sanitizer.py
+/home/bmerriam/git/missy/tests/security/test_secrets.py
+/home/bmerriam/git/missy/tests/skills/__init__.py
+/home/bmerriam/git/missy/tests/skills/test_base.py
+/home/bmerriam/git/missy/tests/skills/test_registry.py
+/home/bmerriam/git/missy/tests/tools/__init__.py
+/home/bmerriam/git/missy/tests/tools/test_calculator.py
+/home/bmerriam/git/missy/tests/tools/test_registry.py
+/home/bmerriam/git/missy/tests/unit/__init__.py
+/home/bmerriam/git/missy/tests/unit/test_discord_channel.py
+/home/bmerriam/git/missy/tests/unit/test_discord_config.py
+/home/bmerriam/git/missy/tests/unit/test_gateway_client.py
+/home/bmerriam/git/missy/.venv/pyvenv.cfg
 ```
-
----
-
-## All Modules Implemented
-
-| Module | Status | Description |
-|--------|--------|-------------|
-| `missy.config.settings` | Complete | YAML config loading; four policy dataclasses; `get_default_config()` |
-| `missy.core.events` | Complete | `AuditEvent`, `EventBus` with typed filtering |
-| `missy.core.exceptions` | Complete | `PolicyViolationError`, `ConfigurationError`, `ProviderError`, `SchedulerError` |
-| `missy.core.session` | Complete | Session lifecycle and thread tracking |
-| `missy.policy.network` | Complete | CIDR + domain + DNS chain; full audit trail |
-| `missy.policy.filesystem` | Complete | Symlink-resolved path containment |
-| `missy.policy.shell` | Complete | Disabled-by-default; basename allow-list |
-| `missy.policy.engine` | Complete | Facade + thread-safe singleton |
-| `missy.gateway.client` | Complete | Policy-gated sync/async HTTP client |
-| `missy.providers.anthropic_provider` | Complete | Claude completions and streaming |
-| `missy.providers.openai_provider` | Complete | OpenAI completions and streaming |
-| `missy.providers.ollama_provider` | Complete | Ollama local completions |
-| `missy.providers.registry` | Complete | Provider registration and lookup |
-| `missy.agent.runtime` | Complete | Agent run loop with tool and skill dispatch |
-| `missy.tools.base` | Complete | `BaseTool`, `ToolResult` types |
-| `missy.tools.builtin.calculator` | Complete | Safe AST evaluator with DoS guards |
-| `missy.tools.registry` | Complete | Tool registration, dispatch, audit events |
-| `missy.skills.base` | Complete | `BaseSkill` abstract class |
-| `missy.skills.registry` | Complete | Skill registration and lookup |
-| `missy.plugins.base` | Complete | `BasePlugin`, `PluginPermissions` manifest |
-| `missy.plugins.loader` | Complete | Double-gate policy enforcement; full audit trail |
-| `missy.scheduler.parser` | Complete | Cron and interval expression parser |
-| `missy.scheduler.jobs` | Complete | Job data structures |
-| `missy.scheduler.manager` | Complete | Job scheduling, execution, cancellation |
-| `missy.memory.store` | Complete | JSON conversation memory with session query |
-| `missy.observability.audit_logger` | Complete | JSONL audit file writer |
-| `missy.security.sanitizer` | Complete | Injection pattern detection + truncation |
-| `missy.security.secrets` | Complete | Nine-pattern credential scanner + redaction |
-| `missy.channels.base` | Complete | Abstract I/O channel interface |
-| `missy.channels.cli_channel` | Complete | stdin/stdout channel implementation |
-| `missy.cli.main` | Complete | `missy run` and `missy chat` CLI commands |
-
----
-
-## Feature Checklist
-
-### AI Providers
-
-- [x] Anthropic Claude (claude-sonnet-4-6 and other models)
-- [x] OpenAI (GPT-4o and compatible models)
-- [x] Ollama local inference (no API key required)
-- [x] Provider registry with name-based lookup
-- [x] Automatic fallback to any available provider
-- [x] Per-provider `api_key`, `base_url`, and `timeout` configuration
-- [x] Streaming support (Anthropic and OpenAI)
-
-### Policy Engine
-
-- [x] Network access control (CIDR, domain wildcard, exact host)
-- [x] DNS-resolution fallback for hostname-to-CIDR matching
-- [x] Filesystem read/write sandboxing with symlink resolution
-- [x] Shell command allow-list with basename matching
-- [x] Plugin double-gate (global enable + per-name allow-list)
-- [x] Secure-by-default: all capabilities off at construction time
-- [x] Thread-safe singleton management for all engines
-- [x] Complete audit event emission for every allow/deny decision
-
-### Task Scheduler
-
-- [x] Cron expression scheduling (five-field standard syntax)
-- [x] Natural language interval scheduling ("every 5 minutes", "every hour")
-- [x] Job registration, execution, and cancellation
-- [x] Scheduler manager with start/stop lifecycle
-
-### Tools
-
-- [x] `BaseTool` abstract class with typed `ToolResult`
-- [x] `ToolRegistry` with registration, schema introspection, and dispatch
-- [x] Built-in calculator (safe AST evaluator, DoS-guarded)
-- [x] Audit events on tool execute, allow, and error
-
-### Skills
-
-- [x] `BaseSkill` abstract class
-- [x] `SkillRegistry` with registration and lookup
-- [x] Skills are pre-loaded capabilities distinct from externally-loaded plugins
-
-### Plugins
-
-- [x] `BasePlugin` with `PluginPermissions` manifest
-- [x] `PluginLoader` with two-gate policy enforcement
-- [x] `initialize()` / `execute()` lifecycle
-- [x] Audit events on every load and execute outcome
-
-### CLI
-
-- [x] `missy run <prompt>` — single-turn agent invocation
-- [x] `missy chat` — interactive multi-turn session
-- [x] Config file path argument (`--config`)
-- [x] Provider selection argument (`--provider`)
-
-### Memory
-
-- [x] JSON-based conversation memory store
-- [x] Session-scoped turn retrieval
-- [x] Recency-based query support
-
-### Observability
-
-- [x] In-process `EventBus` with typed filtering
-- [x] `AuditLogger` writing structured JSONL to disk
-- [x] Session and task ID correlation across all events
-- [x] UTC timestamps on every event
-
-### Security
-
-- [x] `InputSanitizer` — thirteen prompt injection patterns, 10,000-char limit
-- [x] `SecretsDetector` — nine credential patterns with redaction
-- [x] `PolicyHttpClient` — host checked before every HTTP request
-- [x] All policy exceptions carry `category` and `detail` for structured handling
-
----
-
-## Test Results Summary
-
-| Category | Files | Tests |
-|----------|-------|-------|
-| Policy (unit) | 4 | 110 |
-| Integration | 1 | 72 |
-| Security | 2 | 52 |
-| Providers | 5 | 80 |
-| Tools | 2 | 48 |
-| Plugins | 2 | 46 |
-| Scheduler | 3 | 65 |
-| Agent | 1 | 30 |
-| Channels | 1 | 25 |
-| Config | 1 | 40 |
-| Core | 1 | 28 |
-| Memory | 1 | 25 |
-| Observability | 1 | 30 |
-| Skills | 2 | 32 |
-| CLI | 1 | 22 |
-| Gateway (unit) | 1 | 35 |
-| **Total** | **30** | **740** |
-
-All 740 tests pass.  Coverage: **86%** (required threshold: 85%).
-
-Run command: `python3 -m pytest tests/ -v`
-
----
-
-## Security Features Implemented
-
-1. **Default deny** — every policy defaults to maximum restriction.
-2. **Network CIDR + domain enforcement** — outbound connections require explicit
-   allow-list entries; DNS fallback cannot bypass CIDR checks for bare IPs.
-3. **Symlink-safe filesystem sandboxing** — `Path.resolve(strict=False)` before
-   comparison prevents traversal attacks.
-4. **Shell disabled by default** — must be explicitly enabled; allow-list is
-   basename-exact.
-5. **Plugin double-gate** — global `enabled` flag plus per-name allow-list.
-6. **Credential detection** — nine-pattern scanner prevents accidental secret
-   logging or forwarding.
-7. **Prompt injection heuristics** — thirteen patterns covering all common
-   formulations.
-8. **Complete audit trail** — every policy decision emits a structured event
-   with correlation IDs.
-9. **Safe calculator** — AST visitor whitelist blocks `__import__`, `exec`,
-   `eval`, and exponent DoS.
-
----
-
-## Known Limitations and Future Work
-
-### Current Limitations
-
-- **Plugin manifest is advisory** — `PluginPermissions` declares what a plugin
-  claims to need, but runtime enforcement (preventing a plugin from calling
-  `urllib` even if `network=False`) is not implemented.
-- **Scheduler has no resource limits** — a scheduled job can consume unbounded
-  CPU or memory; no cgroup or timeout enforcement.
-- **Single-node only** — the event bus and singletons are in-process; there is
-  no distributed coordination for multi-node deployments.
-- **No cryptographic signing** — plugin packages are not signed; supply-chain
-  integrity relies on operator due diligence.
-- **Heuristic injection detection** — pattern-based detection can be evaded;
-  there is no semantic-level analysis.
-
-### Future Work
-
-- Runtime capability enforcement for plugins (seccomp, network namespace, or
-  subprocess isolation).
-- Log rotation and encryption for the audit log.
-- Distributed event bus (Redis, NATS) for multi-node deployments.
-- Semantic injection detection using a classifier model.
-- Rate limiting on tool and provider calls.
-- Plugin signature verification.
-- OpenTelemetry export for the audit event stream.
-- Web UI for session monitoring and audit log review.

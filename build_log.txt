@@ -46,3 +46,15 @@ Project is complete. All 740 tests pass. `COMPLETE.md` has been recreated along 
  create mode 100644 build_log.txt
 [master 8eeeb6c] Checkpoint before Claude session 1
  1 file changed, 8 insertions(+)
+The project is now complete. Here's what was done this session:
+
+**Discord Integration** (the missing requirement):
+- `missy/channels/discord/gateway.py` — WebSocket gateway client with heartbeat, session resume, HELLO/READY/RECONNECT handling (no discord.py dependency)
+- `missy/channels/discord/rest.py` — REST client wrapping `PolicyHTTPClient` so all Discord HTTP goes through network policy
+- `missy/channels/discord/channel.py` — `DiscordChannel` with full access control: DM pairing/allowlist/open/disabled policies, guild require-mention, channel/user allowlists, bot-loop prevention via `account_id` comparison, audit events on every allow/deny
+- `missy/channels/discord/config.py` — `DiscordDMPolicy`, `DiscordGuildPolicy`, `DiscordAccountConfig`, `DiscordConfig`
+- `missy/channels/discord/commands.py` — Slash commands `/ask`, `/status`, `/model`, `/help`
+- CLI updated with `discord status/probe/register-commands/audit`
+- `DISCORD.md` and `docs/implementation/discord-channel.md` added
+
+**Results:** 814 tests passing (74 new Discord tests). `COMPLETE.md` created and committed.

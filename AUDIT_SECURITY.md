@@ -1,373 +1,262 @@
-# Security Audit
+# AUDIT_SECURITY
 
-**Project:** Missy AI Agent Framework
-**Audit Date:** 2026-03-11
-**Auditor:** Internal
-**Scope:** Policy enforcement, input sanitisation, secrets detection, audit
-logging, plugin isolation
+- Timestamp: 2026-03-11 22:34:00
 
----
+## Expected security artifacts
+- present: SECURITY.md
+- present: OPERATIONS.md
+- present: DISCORD.md
 
-## Executive Summary
-
-Missy is designed with a secure-by-default posture.  Every capability —
-network access, filesystem access, shell execution, plugin loading — is
-disabled or denied at construction time and must be explicitly unlocked via
-configuration.  The audit found strong enforcement of these defaults, a
-complete audit trail, and effective credential detection.  The main areas
-requiring ongoing attention are the inherent limitations of heuristic prompt-
-injection detection and the scheduler's reliance on process isolation rather
-than sandboxing for job execution.
-
-**Overall Risk Rating: LOW** (with the caveats documented per area below)
-
----
-
-## 1. Default Security Posture
-
-### Analysis
-
-All four policy dataclasses (`NetworkPolicy`, `FilesystemPolicy`,
-`ShellPolicy`, `PluginPolicy`) default to maximum restriction:
-
-```python
-NetworkPolicy(default_deny=True, allowed_cidrs=[], allowed_domains=[], allowed_hosts=[])
-FilesystemPolicy(allowed_read_paths=[], allowed_write_paths=[])
-ShellPolicy(enabled=False, allowed_commands=[])
-PluginPolicy(enabled=False, allowed_plugins=[])
+## Repository grep
 ```
-
-`get_default_config()` is the canonical safe baseline and returns this
-configuration.  Nothing is permitted without an explicit, named grant.
-
-### What Is Secure
-
-- Zero-trust defaults require opt-in for every capability.
-- Configuration is loaded from YAML; no environment variable overrides bypass
-  policy at runtime.
-- Changing policy requires updating the YAML file and restarting; there is no
-  runtime API to relax policy mid-session.
-
-### What to Watch
-
-- Operators must review every allow-list entry added to their YAML file.
-  Overly broad entries (`"*"` in domains, `"0.0.0.0/0"` in CIDRs) would
-  negate the default-deny benefit.
-- There is no schema validation layer that rejects obviously dangerous entries
-  such as `0.0.0.0/0`; that responsibility lies with the operator.
-
-**Risk Rating: LOW**
-
----
-
-## 2. Network Policy Enforcement
-
-### Analysis
-
-`NetworkPolicyEngine` implements a six-step decision algorithm:
-
-1. If `default_deny=False`, allow everything immediately.
-2. If the host is a bare IP address, evaluate CIDR allow-lists only (no DNS
-   lookup for IPs).
-3. Exact hostname match against `allowed_hosts`.
-4. Wildcard/suffix match against `allowed_domains`.
-5. DNS resolution of the hostname followed by CIDR re-evaluation.
-6. Deny.
-
-Each step short-circuits on the first match, so the order is deterministic and
-cannot be bypassed by crafting a hostname that matches a later step after
-failing an earlier one.
-
-### What Is Secure
-
-- Bare IP addresses bypass DNS and go directly to CIDR comparison, preventing
-  DNS rebinding as a bypass vector.
-- All hostnames are lowercased before comparison; case-sensitivity bypass is
-  not possible.
-- IPv6 bracket notation (`[::1]`) is stripped before evaluation.
-- Mixed IPv4/IPv6 comparisons are caught as `TypeError` and skipped safely
-  rather than raising.
-- Every evaluation — allow or deny — emits an `AuditEvent`, producing a
-  complete forensic trail.
-
-### What to Watch
-
-- The DNS fallback in step 5 introduces network latency.  A slow or
-  unresponsive DNS server will delay the deny decision.  Consider setting a
-  short timeout on `socket.getaddrinfo` if the agent runs in latency-sensitive
-  contexts.
-- DNS caching is delegated to the operating system.  DNS TTLs are honoured by
-  the OS resolver; Missy does not implement its own TTL check.
-- `default_deny=False` mode disables all network checks.  This mode should only
-  be used in fully trusted development environments.
-
-**Risk Rating: LOW**
-
----
-
-## 3. Filesystem Sandboxing
-
-### Analysis
-
-`FilesystemPolicyEngine` resolves all paths with `Path.resolve(strict=False)`
-before comparison.  This means:
-
-- `..` components are collapsed before any comparison, preventing path
-  traversal via `workspace/../../etc/passwd`.
-- Symlink targets are resolved where the symlink itself exists, preventing
-  symlink-in-workspace attacks that point outside the allowed directory.
-- Non-existent files (write targets about to be created) are resolved as far
-  as their existing parent allows, then the final component is appended.
-
-The `is_relative_to` method (Python 3.9+, used here on Python 3.11+) returns
-`True` only when one path is strictly nested inside another, with no substring
-false-positives.
-
-### What Is Secure
-
-- Symlink resolution prevents a common class of container escape analogues.
-- Path traversal attempts collapse to the real target before evaluation.
-- Read and write permissions are fully independent lists.
-- Empty allow-lists deny all access without special-case logic.
-
-### What to Watch
-
-- `strict=False` resolves symlinks only as far as they exist.  If a symlink
-  target is itself a symlink, the chain is followed.  An adversary who can
-  create new symlinks inside the workspace after policy evaluation but before
-  the actual file operation could still redirect writes.  This is a TOCTOU
-  window inherent in any filesystem policy enforcement layer; mitigate by
-  running the agent as a low-privilege user with minimal filesystem write
-  permissions at the OS level.
-- There is no file-type or file-size enforcement; the policy engine checks
-  path containment only.  Operators who need to restrict by extension or size
-  must add that logic above the policy layer.
-
-**Risk Rating: LOW** (TOCTOU window is low-severity in the agent's typical
-threat model)
-
----
-
-## 4. Shell Policy
-
-### Analysis
-
-`ShellPolicyEngine` applies a two-stage gate:
-
-1. Global `enabled` flag — if `False`, every command is denied regardless of
-   the allow-list.
-2. Allow-list check — the program name (first token from `shlex.split`) is
-   compared by basename against `allowed_commands`.
-
-`shlex.split` uses POSIX rules.  Unmatched quotes return `None` from the
-extraction helper, which maps to a deny rather than a crash.
-
-Basename comparison is exact: `"git"` does not match `"gitk"`.  Path-qualified
-programs like `/usr/bin/git` are normalised to their basename before matching,
-so `"git"` allows both `git status` and `/usr/bin/git status`.
-
-### What Is Secure
-
-- Shell execution is off by default; no accidental enablement.
-- The allow-list check is on the extracted program basename, not the full
-  command string, preventing bypass via `git; malicious-cmd`.
-- Malformed commands (unmatched quotes) are denied rather than falling through.
-- Empty and whitespace-only commands are denied.
-
-### What to Watch
-
-- The policy engine checks the declared program name only.  It does not prevent
-  an allowed program from performing dangerous actions (e.g. `git` can run
-  hooks that execute arbitrary code).  Operators should consider what each
-  allowed command can do transitively.
-- Shell metacharacters (`;`, `&&`, `|`, `$()`) in the command string are not
-  individually stripped.  The engine trusts that the caller constructs commands
-  from safe inputs.  If user-supplied data is interpolated into a command string
-  before calling `check_command`, the caller must sanitise that data first.
-- `enabled=True` with an empty `allowed_commands` list is safe (denies all) but
-  confusing.  Document the intended state clearly.
-
-**Risk Rating: LOW** (with the caveat that transitive program behaviour is not
-audited)
-
----
-
-## 5. Plugin Security Model
-
-### Analysis
-
-Plugins require two explicit grants before loading:
-
-1. `plugins.enabled = True` in configuration.
-2. The plugin's `name` must appear in `plugins.allowed_plugins`.
-
-After passing both gates, the plugin's `initialize()` method is called.  A
-return value of `False` or an exception during initialisation is treated as a
-load failure; the plugin is not registered and `enabled` remains `False`.
-
-Every load and execute attempt emits an `AuditEvent` regardless of outcome.
-
-### What Is Secure
-
-- Double gate prevents accidental plugin loading.
-- Plugins that fail initialisation cannot be executed.
-- `PluginPermissions` provides a manifest for security review, listing the
-  network, filesystem, and shell permissions a plugin claims to need.
-- Audit events cover every lifecycle transition: load allow, load deny, execute
-  start, execute allow, execute error.
-
-### What to Watch
-
-- `PluginPermissions` is a declarative manifest only.  Missy does not enforce
-  that a plugin's `execute()` method actually restricts itself to the declared
-  permissions.  A plugin declaring `network=False` is still free to call
-  `urllib.request.urlopen` unless its code is independently audited.  Operators
-  should review plugin source code before adding names to `allowed_plugins`.
-- The `allowed_plugins` list contains plugin name strings.  There is no
-  cryptographic signing of plugin packages; supply-chain security is outside
-  the current scope.
-- Plugin execution errors propagate to the caller.  A buggy plugin can raise
-  arbitrary exceptions that the agent runtime must handle gracefully.
-
-**Risk Rating: MEDIUM** (the manifest is advisory, not enforced at runtime)
-
----
-
-## 6. Input Sanitisation and Injection Prevention
-
-### Analysis
-
-`InputSanitizer` applies two defences:
-
-1. **Truncation** — input longer than 10,000 characters is truncated and
-   suffixed with `[truncated]` before being forwarded.
-2. **Pattern matching** — thirteen heuristic regular expressions are checked
-   case-insensitively.  A match logs a warning; the input is still returned
-   (possibly truncated) for the caller to decide how to handle.
-
-The sanitiser does not silently drop or transform injection attempts; it reports
-them.  This is intentional: the framework does not know whether a flagged
-pattern is genuinely adversarial or a legitimate user discussing prompt
-injection.
-
-### What Is Secure
-
-- Truncation prevents memory and token-limit exhaustion attacks.
-- Pattern coverage includes all common prompt injection formulations observed in
-  published adversarial datasets.
-- Warning logs provide a detection signal for monitoring systems.
-
-### What to Watch
-
-- Heuristic detection can be evaded by adversaries who are aware of the
-  patterns (e.g. inserting zero-width characters, using homoglyphs, or
-  splitting keywords across message boundaries).  This layer is a
-  speed-bump, not a guarantee.
-- The sanitiser does not modify or remove detected patterns.  Callers that
-  forward flagged input to an LLM must implement their own policy for how to
-  handle suspicious content.
-- There is no test for Unicode normalisation attacks (e.g. `ｉｇｎｏｒｅ`
-  instead of `ignore`).  Consider adding normalisation before pattern matching.
-
-**Risk Rating: MEDIUM** (heuristic bypass is a known limitation of all
-pattern-based injection detection)
-
----
-
-## 7. Secrets Detection
-
-### Analysis
-
-`SecretsDetector` maintains nine compiled regular expression patterns covering:
-API keys, AWS access keys, PEM private keys, GitHub personal access tokens,
-passwords, generic tokens/secrets, Stripe keys, Slack tokens, and JWTs.
-
-The `redact()` method replaces matches right-to-left so that earlier match
-offsets remain valid after each substitution.
-
-### What Is Secure
-
-- Patterns are compiled once at construction time for performance.
-- Right-to-left redaction is correct for overlapping matches.
-- `has_secrets()` short-circuits at the first match for fast pre-checks.
-- Multiple secrets in the same string are all detected and redacted.
-
-### What to Watch
-
-- The pattern set is not exhaustive.  New credential formats (e.g. a new
-  provider's API key scheme) must be added manually.
-- The `password` and `token` patterns require a label prefix followed by the
-  value.  Bare passwords without a label (e.g. a raw password string) are not
-  detected.
-- There is no integration with the audit logger that would emit an event when
-  secrets are detected.  Add a hook if you need alerting on credential exposure
-  attempts.
-
-**Risk Rating: LOW**
-
----
-
-## 8. Audit Logging Completeness
-
-### Analysis
-
-The in-process event bus (`event_bus`) receives `AuditEvent` objects for every
-policy decision.  `AuditLogger` writes these events to a structured log file.
-Each event carries:
-
-- `timestamp` (UTC, timezone-aware)
-- `session_id` and `task_id` for request correlation
-- `event_type` (e.g. `network_check`, `filesystem_write`, `shell_check`,
-  `plugin.load`)
-- `category` (e.g. `"network"`, `"filesystem"`, `"shell"`, `"plugin"`)
-- `result` (`"allow"` or `"deny"`)
-- `policy_rule` (the specific rule that produced the result, or `None`)
-- `detail` (structured dict with host, path, command, or plugin name)
-
-### What Is Secure
-
-- Every allow and deny decision is logged — no silent outcomes.
-- Events are emitted before the exception is raised on deny, so the audit trail
-  is complete even when the caller catches the exception.
-- `session_id` and `task_id` allow reconstruction of a full request lifecycle
-  across multiple policy checks.
-
-### What to Watch
-
-- The event bus is in-process only.  If the process crashes mid-operation, the
-  most recent events may not have been flushed to disk.  Consider writing events
-  synchronously or using a durable queue for high-assurance environments.
-- Audit log files are not rotated or encrypted by default.  Add log rotation
-  and access controls appropriate to your deployment.
-- There is no alerting integration; detecting anomalous patterns requires
-  external log analysis tooling.
-
-**Risk Rating: LOW**
-
----
-
-## 9. Summary of Findings
-
-| Area | Status | Risk |
-|------|--------|------|
-| Default security posture | All capabilities off by default | LOW |
-| Network enforcement | CIDR + domain + DNS chain; audit trail complete | LOW |
-| Filesystem sandboxing | Symlink-resolved path containment | LOW |
-| Shell policy | Disabled by default; basename allow-list | LOW |
-| Plugin security | Double-gate (enabled + allowlist); advisory manifest | MEDIUM |
-| Input sanitisation | Heuristic injection detection; truncation | MEDIUM |
-| Secrets detection | Nine-pattern credential scanner with redaction | LOW |
-| Audit logging | Complete event trail; in-process bus | LOW |
-
-### Recommendations
-
-1. Add OS-level privilege separation (run the agent as a dedicated low-privilege
-   user) to complement filesystem path policy.
-2. Audit plugin source code before adding names to `allowed_plugins`; the
-   manifest is advisory.
-3. Consider Unicode normalisation before prompt-injection pattern matching.
-4. Restrict CIDR and domain allow-lists to the minimum required for each
-   deployment.  Document and review every allow-list entry.
-5. Add log rotation and access controls to the audit log file.
-6. Emit an `AuditEvent` when `SecretsDetector` finds a match, to enable
-   alerting on credential exposure attempts.
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:7:          "name": "test_default_provider_is_anthropic",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:8:          "fullName": "tests/agent/test_runtime.py::TestAgentConfig::test_default_provider_is_anthropic",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:257:          "name": "test_root_help_lists_skills_command",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:258:          "fullName": "tests/cli/test_main.py::TestHelp::test_root_help_lists_skills_command",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:262:          "name": "test_root_help_lists_plugins_command",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:263:          "fullName": "tests/cli/test_main.py::TestHelp::test_root_help_lists_plugins_command",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:272:          "name": "test_root_help_lists_audit_command",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:273:          "fullName": "tests/cli/test_main.py::TestHelp::test_root_help_lists_audit_command",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:287:          "name": "test_audit_help_exits_zero",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:288:          "fullName": "tests/cli/test_main.py::TestHelp::test_audit_help_exits_zero",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:317:          "name": "test_init_audit_file_created",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:318:          "fullName": "tests/cli/test_main.py::TestInit::test_init_audit_file_created",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:367:          "name": "test_skills_exits_zero_with_no_skills",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:368:          "fullName": "tests/cli/test_main.py::TestSkills::test_skills_exits_zero_with_no_skills",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:372:          "name": "test_skills_no_skills_message",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:373:          "fullName": "tests/cli/test_main.py::TestSkills::test_skills_no_skills_message",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:377:          "name": "test_skills_lists_registered_skills",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:378:          "fullName": "tests/cli/test_main.py::TestSkills::test_skills_lists_registered_skills",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:382:          "name": "test_plugins_exits_zero",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:383:          "fullName": "tests/cli/test_main.py::TestPlugins::test_plugins_exits_zero",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:387:          "name": "test_plugins_shows_disabled_status_by_default",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:388:          "fullName": "tests/cli/test_main.py::TestPlugins::test_plugins_shows_disabled_status_by_default",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:392:          "name": "test_plugins_no_plugins_loaded_message",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:393:          "fullName": "tests/cli/test_main.py::TestPlugins::test_plugins_no_plugins_loaded_message",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:397:          "name": "test_plugins_displays_loaded_plugin",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:398:          "fullName": "tests/cli/test_main.py::TestPlugins::test_plugins_displays_loaded_plugin",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:422:          "name": "test_audit_security_exits_zero_no_violations",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:423:          "fullName": "tests/cli/test_main.py::TestAuditSecurity::test_audit_security_exits_zero_no_violations",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:427:          "name": "test_audit_security_no_violations_message",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:428:          "fullName": "tests/cli/test_main.py::TestAuditSecurity::test_audit_security_no_violations_message",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:432:          "name": "test_audit_security_shows_violations",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:433:          "fullName": "tests/cli/test_main.py::TestAuditSecurity::test_audit_security_shows_violations",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:437:          "name": "test_audit_security_respects_limit_option",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:438:          "fullName": "tests/cli/test_main.py::TestAuditSecurity::test_audit_security_respects_limit_option",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:442:          "name": "test_audit_security_help_exits_zero",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:443:          "fullName": "tests/cli/test_main.py::TestAuditSecurity::test_audit_security_help_exits_zero",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:467:          "name": "test_network_default_deny_is_true",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:468:          "fullName": "tests/config/test_settings.py::TestGetDefaultConfig::test_network_default_deny_is_true",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:487:          "name": "test_plugins_disabled_by_default",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:488:          "fullName": "tests/config/test_settings.py::TestGetDefaultConfig::test_plugins_disabled_by_default",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:492:          "name": "test_plugins_allowed_list_empty",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:493:          "fullName": "tests/config/test_settings.py::TestGetDefaultConfig::test_plugins_allowed_list_empty",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:512:          "name": "test_audit_log_path_is_string",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:513:          "fullName": "tests/config/test_settings.py::TestGetDefaultConfig::test_audit_log_path_is_string",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:527:          "name": "test_minimal_yaml_audit_log_path",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:528:          "fullName": "tests/config/test_settings.py::TestLoadConfigMinimal::test_minimal_yaml_audit_log_path",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:537:          "name": "test_default_deny_false",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:538:          "fullName": "tests/config/test_settings.py::TestLoadConfigNetwork::test_default_deny_false",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:662:          "name": "test_network_policy_defaults",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:663:          "fullName": "tests/config/test_settings.py::TestDataclasses::test_network_policy_defaults",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:667:          "name": "test_network_policy_custom_values",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:668:          "fullName": "tests/config/test_settings.py::TestDataclasses::test_network_policy_custom_values",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:672:          "name": "test_filesystem_policy_defaults",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:673:          "fullName": "tests/config/test_settings.py::TestDataclasses::test_filesystem_policy_defaults",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:677:          "name": "test_filesystem_policy_custom_values",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:678:          "fullName": "tests/config/test_settings.py::TestDataclasses::test_filesystem_policy_custom_values",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:682:          "name": "test_shell_policy_defaults",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:683:          "fullName": "tests/config/test_settings.py::TestDataclasses::test_shell_policy_defaults",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:687:          "name": "test_shell_policy_custom_values",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:688:          "fullName": "tests/config/test_settings.py::TestDataclasses::test_shell_policy_custom_values",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:692:          "name": "test_plugin_policy_defaults",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:693:          "fullName": "tests/config/test_settings.py::TestDataclasses::test_plugin_policy_defaults",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:697:          "name": "test_plugin_policy_custom_values",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:698:          "fullName": "tests/config/test_settings.py::TestDataclasses::test_plugin_policy_custom_values",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:717:          "name": "test_network_policy_list_independence",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:718:          "fullName": "tests/config/test_settings.py::TestDataclasses::test_network_policy_list_independence",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:722:          "name": "test_shell_policy_list_independence",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:723:          "fullName": "tests/config/test_settings.py::TestDataclasses::test_shell_policy_list_independence",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:839:      "moduleId": "tests/integration/test_policy_enforcement.py",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:842:          "name": "test_blocked_domain_raises_when_default_deny",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:843:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_blocked_domain_raises_when_default_deny",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:847:          "name": "test_blocked_domain_emits_deny_audit_event",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:848:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_blocked_domain_emits_deny_audit_event",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:853:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_another_blocked_domain",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:857:          "name": "test_blocked_cidr_raises_for_ip_outside_allowlist",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:858:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_blocked_cidr_raises_for_ip_outside_allowlist",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:863:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_blocked_cidr_172_not_in_192_block",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:867:          "name": "test_blocked_cidr_deny_event_carries_ip",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:868:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_blocked_cidr_deny_event_carries_ip",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:873:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_allowed_cidr_passes_for_ip_inside_block",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:878:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_allowed_cidr_emits_allow_event",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:883:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_allowed_cidr_last_octet_boundary",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:888:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_allowed_multiple_cidrs_second_matches",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:893:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_private_localhost_allowed_via_cidr",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:898:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_wildcard_domain_allows_subdomain",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:903:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_wildcard_domain_allows_root_domain",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:908:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_wildcard_domain_allows_deep_subdomain",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:913:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_wildcard_domain_blocks_different_root",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:918:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_exact_domain_match_allowed",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:923:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_exact_domain_blocks_subdomains",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:928:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_wildcard_domain_emits_allow_event_with_rule",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:933:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_allowed_host_exact_match",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:938:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_default_allow_mode_permits_anything",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:943:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_default_allow_mode_emits_allow_event",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:948:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_empty_host_raises_value_error",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:953:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_session_and_task_ids_recorded_in_event",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:958:          "fullName": "tests/integration/test_policy_enforcement.py::TestFilesystemPolicyEnforcement::test_write_to_etc_passwd_is_blocked",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:963:          "fullName": "tests/integration/test_policy_enforcement.py::TestFilesystemPolicyEnforcement::test_write_to_system_binary_is_blocked",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:968:          "fullName": "tests/integration/test_policy_enforcement.py::TestFilesystemPolicyEnforcement::test_write_outside_workspace_is_blocked",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:972:          "name": "test_write_denied_emits_deny_audit_event",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:973:          "fullName": "tests/integration/test_policy_enforcement.py::TestFilesystemPolicyEnforcement::test_write_denied_emits_deny_audit_event",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:978:          "fullName": "tests/integration/test_policy_enforcement.py::TestFilesystemPolicyEnforcement::test_path_traversal_attempt_is_blocked",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:983:          "fullName": "tests/integration/test_policy_enforcement.py::TestFilesystemPolicyEnforcement::test_write_inside_workspace_is_allowed",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:988:          "fullName": "tests/integration/test_policy_enforcement.py::TestFilesystemPolicyEnforcement::test_write_to_workspace_root_is_allowed",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:992:          "name": "test_write_allowed_emits_allow_audit_event",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:993:          "fullName": "tests/integration/test_policy_enforcement.py::TestFilesystemPolicyEnforcement::test_write_allowed_emits_allow_audit_event",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:998:          "fullName": "tests/integration/test_policy_enforcement.py::TestFilesystemPolicyEnforcement::test_read_from_etc_passwd_is_blocked",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1002:          "name": "test_read_denied_emits_deny_audit_event",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1003:          "fullName": "tests/integration/test_policy_enforcement.py::TestFilesystemPolicyEnforcement::test_read_denied_emits_deny_audit_event",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1008:          "fullName": "tests/integration/test_policy_enforcement.py::TestFilesystemPolicyEnforcement::test_read_from_workspace_is_allowed",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1013:          "fullName": "tests/integration/test_policy_enforcement.py::TestFilesystemPolicyEnforcement::test_multiple_allowed_read_paths",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1018:          "fullName": "tests/integration/test_policy_enforcement.py::TestFilesystemPolicyEnforcement::test_empty_allowed_write_paths_denies_all",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1023:          "fullName": "tests/integration/test_policy_enforcement.py::TestFilesystemPolicyEnforcement::test_empty_allowed_read_paths_denies_all",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1028:          "fullName": "tests/integration/test_policy_enforcement.py::TestFilesystemPolicyEnforcement::test_session_and_task_ids_in_write_event",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1033:          "fullName": "tests/integration/test_policy_enforcement.py::TestShellPolicyEnforcement::test_shell_disabled_blocks_all_commands",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1038:          "fullName": "tests/integration/test_policy_enforcement.py::TestShellPolicyEnforcement::test_shell_disabled_blocks_even_allowed_commands",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1042:          "name": "test_shell_disabled_emits_deny_event_with_shell_disabled_rule",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1043:          "fullName": "tests/integration/test_policy_enforcement.py::TestShellPolicyEnforcement::test_shell_disabled_emits_deny_event_with_shell_disabled_rule",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1048:          "fullName": "tests/integration/test_policy_enforcement.py::TestShellPolicyEnforcement::test_shell_disabled_blocks_rm_rf",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1053:          "fullName": "tests/integration/test_policy_enforcement.py::TestShellPolicyEnforcement::test_shell_disabled_blocks_empty_command",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1057:          "name": "test_default_shell_policy_is_disabled",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1058:          "fullName": "tests/integration/test_policy_enforcement.py::TestShellPolicyEnforcement::test_default_shell_policy_is_disabled",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1063:          "fullName": "tests/integration/test_policy_enforcement.py::TestShellPolicyEnforcement::test_allowed_command_git_passes",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1068:          "fullName": "tests/integration/test_policy_enforcement.py::TestShellPolicyEnforcement::test_allowed_command_with_flags_passes",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1073:          "fullName": "tests/integration/test_policy_enforcement.py::TestShellPolicyEnforcement::test_unlisted_command_is_denied_when_shell_enabled",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1077:          "name": "test_empty_allowlist_denies_everything_when_enabled",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1078:          "fullName": "tests/integration/test_policy_enforcement.py::TestShellPolicyEnforcement::test_empty_allowlist_denies_everything_when_enabled",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1083:          "fullName": "tests/integration/test_policy_enforcement.py::TestShellPolicyEnforcement::test_allowed_command_emits_allow_event",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1087:          "name": "test_denied_command_emits_deny_event",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1088:          "fullName": "tests/integration/test_policy_enforcement.py::TestShellPolicyEnforcement::test_denied_command_emits_deny_event",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1093:          "fullName": "tests/integration/test_policy_enforcement.py::TestShellPolicyEnforcement::test_absolute_path_program_matches_basename",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1098:          "fullName": "tests/integration/test_policy_enforcement.py::TestShellPolicyEnforcement::test_similar_name_not_matched",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1103:          "fullName": "tests/integration/test_policy_enforcement.py::TestShellPolicyEnforcement::test_malformed_quoted_command_denied",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1108:          "fullName": "tests/integration/test_policy_enforcement.py::TestShellPolicyEnforcement::test_whitespace_only_command_denied",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1113:          "fullName": "tests/integration/test_policy_enforcement.py::TestShellPolicyEnforcement::test_multiple_allowed_commands",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1117:          "name": "test_plugins_blocked_when_globally_disabled",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1118:          "fullName": "tests/integration/test_policy_enforcement.py::TestPluginPolicyEnforcement::test_plugins_blocked_when_globally_disabled",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1122:          "name": "test_default_config_blocks_plugins",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1123:          "fullName": "tests/integration/test_policy_enforcement.py::TestPluginPolicyEnforcement::test_default_config_blocks_plugins",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1127:          "name": "test_disabled_plugins_emit_deny_event",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1128:          "fullName": "tests/integration/test_policy_enforcement.py::TestPluginPolicyEnforcement::test_disabled_plugins_emit_deny_event",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1132:          "name": "test_plugin_not_in_allowlist_is_blocked",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1133:          "fullName": "tests/integration/test_policy_enforcement.py::TestPluginPolicyEnforcement::test_plugin_not_in_allowlist_is_blocked",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1137:          "name": "test_plugin_not_in_allowlist_emits_deny_event",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1138:          "fullName": "tests/integration/test_policy_enforcement.py::TestPluginPolicyEnforcement::test_plugin_not_in_allowlist_emits_deny_event",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1142:          "name": "test_allowed_plugin_loads_successfully",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1143:          "fullName": "tests/integration/test_policy_enforcement.py::TestPluginPolicyEnforcement::test_allowed_plugin_loads_successfully",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1147:          "name": "test_allowed_plugin_is_enabled_after_load",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1148:          "fullName": "tests/integration/test_policy_enforcement.py::TestPluginPolicyEnforcement::test_allowed_plugin_is_enabled_after_load",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1152:          "name": "test_allowed_plugin_load_emits_allow_event",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1153:          "fullName": "tests/integration/test_policy_enforcement.py::TestPluginPolicyEnforcement::test_allowed_plugin_load_emits_allow_event",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1157:          "name": "test_execute_allowed_plugin_returns_result",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1158:          "fullName": "tests/integration/test_policy_enforcement.py::TestPluginPolicyEnforcement::test_execute_allowed_plugin_returns_result",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1162:          "name": "test_execute_unloaded_plugin_raises_policy_violation",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1163:          "fullName": "tests/integration/test_policy_enforcement.py::TestPluginPolicyEnforcement::test_execute_unloaded_plugin_raises_policy_violation",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1168:          "fullName": "tests/integration/test_policy_enforcement.py::TestPolicyEngineFacade::test_facade_network_allow",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1172:          "name": "test_facade_network_deny",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1173:          "fullName": "tests/integration/test_policy_enforcement.py::TestPolicyEngineFacade::test_facade_network_deny",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1178:          "fullName": "tests/integration/test_policy_enforcement.py::TestPolicyEngineFacade::test_facade_filesystem_write_allow",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1182:          "name": "test_facade_filesystem_write_deny",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1183:          "fullName": "tests/integration/test_policy_enforcement.py::TestPolicyEngineFacade::test_facade_filesystem_write_deny",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1188:          "fullName": "tests/integration/test_policy_enforcement.py::TestPolicyEngineFacade::test_facade_shell_allow",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1192:          "name": "test_facade_shell_deny",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1193:          "fullName": "tests/integration/test_policy_enforcement.py::TestPolicyEngineFacade::test_facade_shell_deny",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1198:          "fullName": "tests/integration/test_policy_enforcement.py::TestPolicyEngineFacade::test_facade_init_and_get_singleton",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1324:      "moduleId": "tests/observability/test_audit_logger.py",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1328:          "fullName": "tests/observability/test_audit_logger.py::TestAuditLoggerInit::test_creates_parent_directory",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1333:          "fullName": "tests/observability/test_audit_logger.py::TestAuditLoggerInit::test_log_path_set_correctly",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1338:          "fullName": "tests/observability/test_audit_logger.py::TestHandleEvent::test_event_written_to_file",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1343:          "fullName": "tests/observability/test_audit_logger.py::TestHandleEvent::test_multiple_events_appended",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1348:          "fullName": "tests/observability/test_audit_logger.py::TestHandleEvent::test_record_contains_all_fields",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1353:          "fullName": "tests/observability/test_audit_logger.py::TestHandleEvent::test_detail_dict_is_preserved",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1358:          "fullName": "tests/observability/test_audit_logger.py::TestHandleEvent::test_existing_subscribers_still_called",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1363:          "fullName": "tests/observability/test_audit_logger.py::TestGetRecentEvents::test_returns_empty_when_file_missing",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1368:          "fullName": "tests/observability/test_audit_logger.py::TestGetRecentEvents::test_returns_all_events_within_limit",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1373:          "fullName": "tests/observability/test_audit_logger.py::TestGetRecentEvents::test_limit_is_applied_newest_first",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1378:          "fullName": "tests/observability/test_audit_logger.py::TestGetRecentEvents::test_result_is_list_of_dicts",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1382:          "name": "test_returns_only_deny_events",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1383:          "fullName": "tests/observability/test_audit_logger.py::TestGetPolicyViolations::test_returns_only_deny_events",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1388:          "fullName": "tests/observability/test_audit_logger.py::TestGetPolicyViolations::test_returns_empty_when_no_denies",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1393:          "fullName": "tests/observability/test_audit_logger.py::TestGetPolicyViolations::test_limit_is_applied",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1398:          "fullName": "tests/observability/test_audit_logger.py::TestGetPolicyViolations::test_returns_empty_when_file_missing",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1403:          "fullName": "tests/observability/test_audit_logger.py::TestGetPolicyViolations::test_violations_returned_in_chronological_order",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1407:          "name": "test_init_audit_logger_returns_audit_logger",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1408:          "fullName": "tests/observability/test_audit_logger.py::TestSingleton::test_init_audit_logger_returns_audit_logger",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1412:          "name": "test_get_audit_logger_returns_same_instance",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1413:          "fullName": "tests/observability/test_audit_logger.py::TestSingleton::test_get_audit_logger_returns_same_instance",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1417:          "name": "test_get_audit_logger_raises_before_init",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1418:          "fullName": "tests/observability/test_audit_logger.py::TestSingleton::test_get_audit_logger_raises_before_init",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1424:      "moduleId": "tests/plugins/test_base.py",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1428:          "fullName": "tests/plugins/test_base.py::TestPluginPermissionsDefaults::test_all_flags_default_false",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1433:          "fullName": "tests/plugins/test_base.py::TestPluginPermissionsDefaults::test_allowed_hosts_defaults_empty",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1438:          "fullName": "tests/plugins/test_base.py::TestPluginPermissionsDefaults::test_allowed_paths_defaults_empty",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1443:          "fullName": "tests/plugins/test_base.py::TestPluginPermissionsDefaults::test_can_set_all_fields",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1448:          "fullName": "tests/plugins/test_base.py::TestBasePlugin::test_default_enabled_is_false",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1453:          "fullName": "tests/plugins/test_base.py::TestBasePlugin::test_default_version",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1458:          "fullName": "tests/plugins/test_base.py::TestBasePlugin::test_initialize_returns_bool",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1463:          "fullName": "tests/plugins/test_base.py::TestBasePlugin::test_execute_returns_value",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1468:          "fullName": "tests/plugins/test_base.py::TestBasePlugin::test_get_manifest_keys",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1473:          "fullName": "tests/plugins/test_base.py::TestBasePlugin::test_get_manifest_values",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1478:          "fullName": "tests/plugins/test_base.py::TestBasePlugin::test_get_manifest_permissions_dict",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1483:          "fullName": "tests/plugins/test_base.py::TestBasePlugin::test_abstract_base_cannot_be_instantiated",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1489:      "moduleId": "tests/plugins/test_loader.py",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1493:          "fullName": "tests/plugins/test_loader.py::TestLoadPlugin::test_load_succeeds_when_allowed",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1498:          "fullName": "tests/plugins/test_loader.py::TestLoadPlugin::test_load_sets_enabled_true",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1502:          "name": "test_load_denied_when_plugins_globally_disabled",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1503:          "fullName": "tests/plugins/test_loader.py::TestLoadPlugin::test_load_denied_when_plugins_globally_disabled",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1508:          "fullName": "tests/plugins/test_loader.py::TestLoadPlugin::test_load_denied_when_not_in_allowed_list",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1513:          "fullName": "tests/plugins/test_loader.py::TestLoadPlugin::test_load_returns_false_when_init_fails",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1518:          "fullName": "tests/plugins/test_loader.py::TestLoadPlugin::test_load_returns_false_when_init_crashes",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1522:          "name": "test_load_denied_emits_deny_audit_event",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1523:          "fullName": "tests/plugins/test_loader.py::TestLoadPlugin::test_load_denied_emits_deny_audit_event",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1527:          "name": "test_load_success_emits_allow_audit_event",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1528:          "fullName": "tests/plugins/test_loader.py::TestLoadPlugin::test_load_success_emits_allow_audit_event",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1532:          "name": "test_load_bad_init_emits_error_audit_event",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1533:          "fullName": "tests/plugins/test_loader.py::TestLoadPlugin::test_load_bad_init_emits_error_audit_event",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1538:          "fullName": "tests/plugins/test_loader.py::TestListPlugins::test_empty_before_any_loads",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1543:          "fullName": "tests/plugins/test_loader.py::TestListPlugins::test_returns_manifest_after_load",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1548:          "fullName": "tests/plugins/test_loader.py::TestListPlugins::test_failed_load_not_in_list",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1552:          "name": "test_returns_plugin_after_load",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1553:          "fullName": "tests/plugins/test_loader.py::TestGetPlugin::test_returns_plugin_after_load",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1558:          "fullName": "tests/plugins/test_loader.py::TestGetPlugin::test_returns_none_when_not_loaded",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1563:          "fullName": "tests/plugins/test_loader.py::TestExecutePlugin::test_execute_returns_result",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1567:          "name": "test_execute_unloaded_raises_policy_violation",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1568:          "fullName": "tests/plugins/test_loader.py::TestExecutePlugin::test_execute_unloaded_raises_policy_violation",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1572:          "name": "test_execute_raises_if_plugin_not_enabled",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1573:          "fullName": "tests/plugins/test_loader.py::TestExecutePlugin::test_execute_raises_if_plugin_not_enabled",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1577:          "name": "test_execute_crashing_plugin_propagates_exception",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1578:          "fullName": "tests/plugins/test_loader.py::TestExecutePlugin::test_execute_crashing_plugin_propagates_exception",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1583:          "fullName": "tests/plugins/test_loader.py::TestExecutePlugin::test_execute_emits_allow_event_on_success",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1588:          "fullName": "tests/plugins/test_loader.py::TestExecutePlugin::test_execute_emits_error_event_on_crash",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1592:          "name": "test_execute_emits_deny_event_when_not_loaded",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1593:          "fullName": "tests/plugins/test_loader.py::TestExecutePlugin::test_execute_emits_deny_event_when_not_loaded",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1598:          "fullName": "tests/plugins/test_loader.py::TestSingleton::test_init_returns_loader",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1603:          "fullName": "tests/plugins/test_loader.py::TestSingleton::test_get_returns_same_instance",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1608:          "fullName": "tests/plugins/test_loader.py::TestSingleton::test_get_before_init_raises",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1613:          "fullName": "tests/plugins/test_loader.py::TestSingleton::test_second_init_replaces_first",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1619:      "moduleId": "tests/policy/test_engine.py",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1623:          "fullName": "tests/policy/test_engine.py::TestPolicyEngineConstruction::test_creates_sub_engines",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1628:          "fullName": "tests/policy/test_engine.py::TestCheckNetwork::test_allowed_host",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1633:          "fullName": "tests/policy/test_engine.py::TestCheckNetwork::test_denied_host_raises",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1638:          "fullName": "tests/policy/test_engine.py::TestCheckNetwork::test_session_task_forwarded",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1643:          "fullName": "tests/policy/test_engine.py::TestCheckNetwork::test_empty_host_raises_value_error",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1648:          "fullName": "tests/policy/test_engine.py::TestCheckWrite::test_allowed_write",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1653:          "fullName": "tests/policy/test_engine.py::TestCheckWrite::test_denied_write_raises",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1658:          "fullName": "tests/policy/test_engine.py::TestCheckRead::test_allowed_read",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1663:          "fullName": "tests/policy/test_engine.py::TestCheckRead::test_denied_read_raises",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1668:          "fullName": "tests/policy/test_engine.py::TestCheckShell::test_allowed_command",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1673:          "fullName": "tests/policy/test_engine.py::TestCheckShell::test_denied_command_raises",
+/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1678:          "fullName": "tests/policy/test_engine.py::TestCheckShell::test_shell_disabled_always_raises",
+```
