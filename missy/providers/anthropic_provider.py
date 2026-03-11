@@ -1,0 +1,198 @@
+"""Anthropic Claude provider for the Missy framework.
+
+Uses the ``anthropic`` SDK to call the Messages API.  The SDK is imported
+lazily so that Missy can start without it installed - :meth:`is_available`
+returns ``False`` in that case.
+
+Example::
+
+    from missy.config.settings import ProviderConfig
+    from missy.providers.anthropic_provider import AnthropicProvider
+
+    config = ProviderConfig(name="anthropic", model="claude-3-5-sonnet-20241022",
+                            api_key="sk-ant-...")
+    provider = AnthropicProvider(config)
+    response = provider.complete([Message(role="user", content="Hello")])
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from missy.config.settings import ProviderConfig
+from missy.core.events import AuditEvent, event_bus
+from missy.core.exceptions import ProviderError
+
+from .base import BaseProvider, CompletionResponse, Message
+
+logger = logging.getLogger(__name__)
+
+_DEFAULT_MODEL = "claude-3-5-sonnet-20241022"
+
+try:
+    import anthropic as _anthropic_sdk
+
+    _ANTHROPIC_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    _anthropic_sdk = None  # type: ignore[assignment]
+    _ANTHROPIC_AVAILABLE = False
+
+
+class AnthropicProvider(BaseProvider):
+    """Provider implementation backed by the Anthropic Messages API.
+
+    Args:
+        config: Provider-level configuration.  The ``api_key`` field is
+            forwarded directly to :class:`anthropic.Anthropic`; when
+            ``None`` the SDK will fall back to the ``ANTHROPIC_API_KEY``
+            environment variable.
+    """
+
+    name = "anthropic"
+
+    def __init__(self, config: ProviderConfig) -> None:
+        self._api_key: str | None = config.api_key
+        self._model: str = config.model or _DEFAULT_MODEL
+        self._timeout: int = config.timeout
+
+    # ------------------------------------------------------------------
+    # BaseProvider interface
+    # ------------------------------------------------------------------
+
+    def is_available(self) -> bool:
+        """Return ``True`` when the SDK is installed and an API key is set.
+
+        Returns:
+            ``True`` if the ``anthropic`` package is importable and an API
+            key is present.
+        """
+        return _ANTHROPIC_AVAILABLE and bool(self._api_key)
+
+    def complete(self, messages: list[Message], **kwargs: Any) -> CompletionResponse:
+        """Send *messages* to the Anthropic Messages API.
+
+        System messages are extracted from *messages* and passed separately
+        via the ``system`` parameter (Anthropic's API requires this).
+
+        Args:
+            messages: Ordered conversation turns.  A single ``"system"``
+                role message is supported; it is extracted and forwarded as
+                the ``system`` parameter.
+            **kwargs: Optional overrides.  Recognised keys:
+
+                * ``temperature`` (float) - sampling temperature.
+                * ``max_tokens`` (int) - maximum completion tokens
+                  (default 4096).
+                * ``model`` (str) - override the configured model.
+
+        Returns:
+            A :class:`CompletionResponse` with the assistant reply.
+
+        Raises:
+            ProviderError: On SDK import failure, authentication error,
+                API error, or timeout.
+        """
+        if not _ANTHROPIC_AVAILABLE:
+            raise ProviderError(
+                "anthropic SDK is not installed. Run: pip install anthropic"
+            )
+
+        session_id = kwargs.pop("session_id", "")
+        task_id = kwargs.pop("task_id", "")
+        model = kwargs.pop("model", self._model)
+
+        # Separate system prompt from the message list
+        system_content: str | None = None
+        api_messages: list[dict[str, str]] = []
+        for msg in messages:
+            if msg.role == "system":
+                system_content = msg.content
+            else:
+                api_messages.append({"role": msg.role, "content": msg.content})
+
+        call_kwargs: dict[str, Any] = {
+            "model": model,
+            "max_tokens": kwargs.pop("max_tokens", 4096),
+            "messages": api_messages,
+        }
+        if system_content is not None:
+            call_kwargs["system"] = system_content
+        if "temperature" in kwargs:
+            call_kwargs["temperature"] = kwargs.pop("temperature")
+        # Forward any remaining provider-specific kwargs
+        call_kwargs.update(kwargs)
+
+        try:
+            client = _anthropic_sdk.Anthropic(
+                api_key=self._api_key,
+                timeout=float(self._timeout),
+            )
+            raw_response = client.messages.create(**call_kwargs)
+        except _anthropic_sdk.APITimeoutError as exc:
+            self._emit_event(session_id, task_id, "error", str(exc))
+            raise ProviderError(
+                f"Anthropic request timed out after {self._timeout}s: {exc}"
+            ) from exc
+        except _anthropic_sdk.AuthenticationError as exc:
+            self._emit_event(session_id, task_id, "error", str(exc))
+            raise ProviderError(f"Anthropic authentication failed: {exc}") from exc
+        except _anthropic_sdk.APIError as exc:
+            self._emit_event(session_id, task_id, "error", str(exc))
+            raise ProviderError(f"Anthropic API error: {exc}") from exc
+        except Exception as exc:
+            self._emit_event(session_id, task_id, "error", str(exc))
+            raise ProviderError(f"Unexpected error calling Anthropic: {exc}") from exc
+
+        content_text = raw_response.content[0].text if raw_response.content else ""
+        usage_obj = raw_response.usage
+        usage = {
+            "prompt_tokens": getattr(usage_obj, "input_tokens", 0),
+            "completion_tokens": getattr(usage_obj, "output_tokens", 0),
+            "total_tokens": (
+                getattr(usage_obj, "input_tokens", 0)
+                + getattr(usage_obj, "output_tokens", 0)
+            ),
+        }
+
+        self._emit_event(session_id, task_id, "allow", "completion successful")
+
+        return CompletionResponse(
+            content=content_text,
+            model=raw_response.model,
+            provider=self.name,
+            usage=usage,
+            raw=raw_response.model_dump() if hasattr(raw_response, "model_dump") else {},
+        )
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    def _emit_event(
+        self,
+        session_id: str,
+        task_id: str,
+        result: str,
+        detail_msg: str,
+    ) -> None:
+        """Publish a provider audit event to the global event bus.
+
+        Args:
+            session_id: Calling session identifier.
+            task_id: Calling task identifier.
+            result: One of ``"allow"`` or ``"error"``.
+            detail_msg: Human-readable description to include in the event.
+        """
+        try:
+            event = AuditEvent.now(
+                session_id=session_id,
+                task_id=task_id,
+                event_type="provider_invoke",
+                category="provider",
+                result=result,  # type: ignore[arg-type]
+                detail={"provider": self.name, "model": self._model, "message": detail_msg},
+            )
+            event_bus.publish(event)
+        except Exception:
+            logger.exception("Failed to emit audit event for provider %r", self.name)

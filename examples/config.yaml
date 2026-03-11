@@ -1,0 +1,94 @@
+# Missy secure example configuration
+#
+# This file demonstrates a realistic, security-conscious configuration that:
+#   - Denies all network access by default (only named providers allowed)
+#   - Restricts filesystem access to ~/workspace and ~/.missy
+#   - Disables shell execution and plugins
+#   - Configures all three supported providers
+#
+# Copy this file to ~/.missy/config.yaml and edit to suit your environment.
+#
+# API keys must NEVER be placed in this file.
+# Set them as environment variables instead:
+#
+#   export ANTHROPIC_API_KEY="sk-ant-..."
+#   export OPENAI_API_KEY="sk-..."
+#
+# Missy reads <PROVIDER_NAME>_API_KEY automatically.
+
+# ---------------------------------------------------------------------------
+# Network policy
+# ---------------------------------------------------------------------------
+network:
+  default_deny: true
+  allowed_cidrs:
+    - "10.0.0.0/8"        # RFC 1918 private network A
+    - "172.16.0.0/12"     # RFC 1918 private network B
+    - "192.168.0.0/16"    # RFC 1918 private network C
+  allowed_domains:
+    - "*.github.com"
+    - "*.anthropic.com"
+    - "*.openai.com"
+  allowed_hosts:
+    - "localhost"
+    - "127.0.0.1"
+    - "api.anthropic.com"
+    - "api.openai.com"
+    - "localhost:11434"   # local Ollama instance
+
+# ---------------------------------------------------------------------------
+# Filesystem policy
+# ---------------------------------------------------------------------------
+filesystem:
+  allowed_write_paths:
+    - "~/workspace"
+    - "~/.missy"
+  allowed_read_paths:
+    - "~/workspace"
+    - "~/.missy"
+    - "/tmp"
+
+# ---------------------------------------------------------------------------
+# Shell policy
+# Disabled for maximum security. Enable only if required and list specific
+# commands. An empty allowed_commands list blocks all execution even when
+# shell.enabled is true.
+# ---------------------------------------------------------------------------
+shell:
+  enabled: false
+  allowed_commands: []
+
+# ---------------------------------------------------------------------------
+# Plugin policy
+# Disabled for maximum security. Enable only trusted, reviewed plugins.
+# ---------------------------------------------------------------------------
+plugins:
+  enabled: false
+  allowed_plugins: []
+
+# ---------------------------------------------------------------------------
+# Provider configuration
+# Three providers are shown; only configure those you intend to use.
+# ---------------------------------------------------------------------------
+providers:
+  anthropic:
+    name: anthropic
+    model: "claude-3-5-sonnet-20241022"
+    timeout: 30
+
+  openai:
+    name: openai
+    model: "gpt-4o"
+    timeout: 30
+
+  ollama:
+    name: ollama
+    base_url: "http://localhost:11434"
+    model: "llama3.2"
+    timeout: 60
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+workspace_path: "~/workspace"
+audit_log_path: "~/.missy/audit.jsonl"
