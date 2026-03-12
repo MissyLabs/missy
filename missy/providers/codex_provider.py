@@ -252,10 +252,12 @@ class CodexProvider(BaseProvider):
                     elif etype == "response.output_item.added":
                         item = event.get("item", {})
                         if item.get("type") == "function_call":
+                            # Arguments may be inline in this event OR arrive
+                            # via subsequent function_call_arguments.delta events.
                             current_fn = {
                                 "id": item.get("call_id", item.get("id", "")),
                                 "name": item.get("name", ""),
-                                "arguments": "",
+                                "arguments": item.get("arguments", ""),
                             }
                     elif etype == "response.function_call_arguments.delta":
                         current_fn["arguments"] = current_fn.get("arguments", "") + event.get("delta", "")
