@@ -1,61 +1,47 @@
 # LAST_SESSION_SUMMARY
 
-## Session Date: 2026-03-12 (Session 3)
+## Session Date: 2026-03-12 (Session 4)
 
 ## What Was Implemented This Session
 
-### 1. OPENCLAW_GAP_ANALYSIS.md
-- Full capability assessment vs OpenClaw-style behavior
-- 50+ implemented capabilities documented with status
-- 8 remaining gaps identified and prioritized
-- Intentionally out-of-scope items documented
+### 1. ShellExecTool Sandbox Integration
+- `execute()` now routes through Docker sandbox when `self._sandbox` is set
+- Split into `_execute_sandboxed()` and `_execute_direct()` private methods
+- Previously sandbox config was accepted in `__init__` but never used in `execute()`
+- 11 new tests for sandbox routing, direct execution, schema
 
-### 2. Discord Thread Management
-- `DiscordRestClient.create_thread()` — create threads from channels or messages
-- `DiscordRestClient.get_channel()` — fetch channel objects
-- `DiscordChannel` thread-scoped session mapping (`_thread_sessions` dict)
-- Auto-thread threshold tracking (`auto_thread_threshold` config)
-- Thread-aware message routing with `discord_thread_session_id` in metadata
-- `DiscordAccountConfig.auto_thread_threshold` config option
-- 20 new tests (62 total Discord channel tests)
+### 2. Budget Enforcement in Agent Tool Loop
+- `CostTracker.check_budget()` called after every `_record_cost(response)` in `_tool_loop()`
+- New `_check_budget()` method emits `agent.budget.exceeded` audit event before raising `BudgetExceededError`
+- `max_spend_usd` config field added to `MissyConfig` and `AgentConfig`
+- `_make_cost_tracker()` now passes `max_spend_usd` from config to `CostTracker`
+- Wired through CLI: both `missy ask` and `missy run` pass `cfg.max_spend_usd` to `AgentConfig`
 
-### 3. Doctor Command Enhancements
-- Memory store connectivity check (SQLite accessible)
-- MCP server listing from `~/.missy/mcp.json`
-- Config hot-reload (watchdog) availability check
-- Voice channel configuration check
-- Checkpoint database existence check
-- Total: 15 checks (was 10)
+### 3. Checkpoint Recovery Scan at Startup
+- `AgentRuntime.__init__()` now calls `_scan_checkpoints()` which invokes `scan_for_recovery()`
+- `pending_recovery` property exposes incomplete checkpoints to callers
+- `missy run` displays resumable/restartable tasks at session start
 
-### 4. Docker Sandbox
-- `DockerSandbox`: containerized execution with --cap-drop=ALL, --security-opt=no-new-privileges, read-only root, network isolation, memory/CPU limits
-- Bind mount policy enforcement (only allowed paths)
-- `FallbackSandbox`: subprocess wrapper when Docker unavailable
-- `SandboxConfig` with full YAML parsing
-- `get_sandbox()` auto-selects best available implementation
-- Integrated into `MissyConfig` via `sandbox:` YAML section
-- 28 new tests
+### 4. Cost CLI Command
+- `missy cost` shows budget config (max_spend_usd) and usage hint
+- `--session` option for session-specific lookup
 
-### 5. Session Metadata & Friendly Names
-- SQLite `sessions` table: session_id, name, created_at, updated_at, turn_count, provider, channel
-- `register_session()`, `rename_session()`, `list_sessions()`, `resolve_session_name()`, `update_session_turn_count()`
-- CLI: `missy sessions list` — tabular view of recent sessions
-- CLI: `missy sessions rename SESSION_ID NAME` — set friendly names
-- 13 new tests
+### 5. Misc Fixes
+- Wizard step numbering corrected (was "Step 2 of 4", now "Step 2 of 5")
+- CLI test updated to handle new `max_spend_usd` parameter in AgentConfig
 
-## Test Results
-
-1029 tests passing (up from 976 — added 61 new tests)
+### 6. Tests
+- 24 new tests (11 shell_exec, 13 runtime enhancements)
+- Full suite: 1053 passing, 0 failures
 
 ## What Remains
 
-- Discord multi-account support (P3)
-- Interactive Discord setup in wizard (P3)
+- Discord multi-account support (P3, low demand)
 - Web UI / dashboard (P4, intentionally deferred)
 
 ## First Action Next Session
 
-1. Check for any new parity gaps to close
-2. Consider adding sandbox integration to ShellExecTool (optional routing through Docker)
-3. Consider Discord interactive setup wizard step
-4. Run full test suite to verify continued health
+1. Run full test suite to verify continued health
+2. Consider adding per-model cost breakdown to `missy cost --detailed`
+3. Consider sandbox integration tests with Docker mocking
+4. Update CONFIG_REFERENCE.md with `max_spend_usd` field

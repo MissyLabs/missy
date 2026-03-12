@@ -1,29 +1,22 @@
 # TEST_RESULTS
 
-- Timestamp: 2026-03-12 23:27:44
+- Timestamp: 2026-03-12 (Session 4)
 
 ## pytest
 ```
-........................................................................ [  6%]
-........................................................................ [ 13%]
-........................................................................ [ 20%]
-........................................................................ [ 27%]
-........................................................................ [ 34%]
-........................................................................ [ 41%]
-........................................................................ [ 48%]
-........................................................................ [ 55%]
-........................................................................ [ 62%]
-........................................................................ [ 69%]
-........................................................................ [ 76%]
-........................................................................ [ 83%]
-........................................................................ [ 90%]
-........................................................................ [ 97%]
-.....................                                                    [100%]
-=============================== warnings summary ===============================
-tests/channels/test_discord_credential_delete.py::TestHandleMessageCredentialDetection::test_secret_message_is_dropped
-  /home/bmerriam/git/missy/tests/channels/test_discord_credential_delete.py:130: DeprecationWarning: There is no current event loop
-    return asyncio.get_event_loop().run_until_complete(coro)
-
--- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-1029 passed, 1 warning in 3.86s
+1053 passed, 1 warning in 4.91s
 ```
+
+## New Tests Added (Session 4)
+
+### tests/tools/test_shell_exec.py (11 tests)
+- TestDirectExecution: simple_command, empty_command_fails, nonexistent_command, timeout_respected, cwd_parameter, timeout_capped_at_max
+- TestSandboxRouting: no_sandbox_uses_direct, sandbox_execute_called_when_available, sandbox_failure_returns_error, sandbox_cwd_passed_through
+- TestSchema: schema_has_required_fields
+
+### tests/agent/test_runtime_enhancements.py (13 tests)
+- TestAgentConfigMaxSpend: default_is_zero, custom_value
+- TestCostTrackerCreation: cost_tracker_inherits_budget, cost_tracker_default_unlimited
+- TestCheckBudget: check_budget_no_tracker, check_budget_under_limit, check_budget_over_limit_raises, check_budget_emits_audit_event
+- TestCheckpointRecoveryScan: scan_returns_empty_when_no_db, pending_recovery_property, pending_recovery_is_copy
+- TestMissyConfigMaxSpend: default_config_has_max_spend, load_config_parses_max_spend

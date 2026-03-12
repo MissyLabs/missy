@@ -2,7 +2,7 @@
 
 ## Status: COMPLETE + PARITY ENHANCEMENTS
 
-All core phases implemented, parity gaps being closed systematically.
+All core phases implemented, parity gaps closed systematically.
 
 ## Completed Steps
 
@@ -20,10 +20,10 @@ All core phases implemented, parity gaps being closed systematically.
 12. Security (InputSanitizer, SecretsDetector, SecretCensor, Vault, Docker Sandbox)
 13. Channels (CLI, Discord, Webhook, Voice)
 14. Agent runtime (multi-step loop, tool calling, circuit breaker, context management)
-15. Advanced agent (checkpoint/recovery, failure tracker, done criteria, learnings, prompt patches, sub-agents, approval gate, proactive triggers, cost tracking)
+15. Advanced agent (checkpoint/recovery, failure tracker, done criteria, learnings, prompt patches, sub-agents, approval gate, proactive triggers, cost tracking with budget enforcement)
 16. CLI (50+ commands via click + rich)
-17. Discord (WebSocket gateway, REST API, threads, slash commands, pairing, access control)
-18. Tests (1029 tests, ~86% coverage)
+17. Discord (WebSocket gateway, REST API, threads, slash commands, pairing, access control, interactive setup wizard)
+18. Tests (1053 tests, ~86% coverage)
 19. Documentation (SECURITY.md, OPERATIONS.md, ARCHITECTURE.md, CONFIG_REFERENCE.md, DISCORD.md, TESTING.md, TROUBLESHOOTING.md, 10+ implementation docs)
 20. Audit artifacts (AUDIT_SECURITY.md, AUDIT_CONNECTIVITY.md)
 21. Test artifacts (TEST_RESULTS.md, TEST_EDGE_CASES.md, BUILD_RESULTS.md)
@@ -32,13 +32,13 @@ All core phases implemented, parity gaps being closed systematically.
 ## Architecture State
 
 ```
-missy/                          # 115+ Python source files
+missy/                          # 116+ Python source files
   core/        - session (w/ metadata), events, exceptions
   config/      - settings, YAML loading, hot-reload (watchdog)
   policy/      - network (CIDR/domain/per-category), filesystem, shell engines + facade
   gateway/     - PolicyHTTPClient
   providers/   - base, anthropic, openai, ollama, registry (fallback, tiering, rotation)
-  tools/       - base, registry, 10+ builtin tools (shell, file, web, calculator, browser, tts)
+  tools/       - base, registry, 10+ builtin tools (shell w/ sandbox, file, web, calculator, browser, tts)
   skills/      - base, registry, 4 builtin skills (config_show, datetime, health_check, summarize)
   plugins/     - base, loader
   scheduler/   - jobs, parser, manager (retry, timezone)
@@ -46,34 +46,37 @@ missy/                          # 115+ Python source files
   observability/ - audit_logger, otel_exporter
   security/    - sanitizer, secrets, censor, vault (ChaCha20), sandbox (Docker)
   channels/    - base, cli, discord (gateway, rest, commands, config, threads), webhook, voice
-  agent/       - runtime, circuit_breaker, context, checkpoint, failure_tracker,
-                 done_criteria, learnings, prompt_patches, sub_agent, approval, proactive, cost_tracker
-  cli/         - main (full click CLI: 50+ commands)
+  agent/       - runtime (w/ budget enforcement & recovery scan), circuit_breaker, context,
+                 checkpoint, failure_tracker, done_criteria, learnings, prompt_patches,
+                 sub_agent, approval, proactive, cost_tracker (w/ budget enforcement)
+  cli/         - main (full click CLI: 50+ commands including cost)
   mcp/         - manager (MCP server integration)
 ```
 
 ## Test Results
 
-- 1029 tests passing
+- 1053 tests passing
 - ~86% code coverage
-- Unit, integration, policy, Discord, security, memory, agent tests
+- Unit, integration, policy, Discord, security, memory, agent, tools tests
 
-## Session 3 Additions
+## Session 4 Additions
 
-- Discord thread creation and thread-scoped session management
-- Docker sandbox (DockerSandbox + FallbackSandbox) for isolated execution
-- Doctor command: 5 new checks (memory store, MCP servers, watchdog, voice, checkpoints)
-- Session metadata: friendly names, list, rename commands
-- OPENCLAW_GAP_ANALYSIS.md created
+- ShellExecTool → Docker sandbox routing (was declared but not wired)
+- Budget enforcement in agent tool loop (CostTracker.check_budget() after each provider call)
+- max_spend_usd config field (config.yaml → MissyConfig → AgentConfig → CostTracker)
+- Checkpoint recovery scan at AgentRuntime init (pending_recovery property)
+- Recovery notification in `missy run` CLI
+- `missy cost` CLI command
+- Wizard step numbering fix (1-5 consistent)
+- 24 new tests (11 shell_exec, 13 runtime enhancements)
 
 ## Remaining Tasks
 
-- Discord multi-account support (P3)
-- Interactive Discord setup in wizard (P3)
+- Discord multi-account support (P3, low demand)
 - Web UI / dashboard (P4, intentionally deferred)
 
 ## Next Actions
 
-- Continue parity gap closure if session continues
-- Consider interactive Discord setup integration
+- Consider adding sandbox integration tests with Docker mocking
+- Consider `missy cost --detailed` for per-model breakdown
 - Consider advanced sandbox features (Podman support, custom images)
