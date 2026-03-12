@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 
 _CODEX_BASE = "https://chatgpt.com/backend-api"
 _CODEX_ENDPOINT = f"{_CODEX_BASE}/codex/responses"
-_DEFAULT_MODEL = "gpt-4o"
+_DEFAULT_MODEL = "gpt-5.2"
 
 
 def _extract_account_id(token: str) -> str:

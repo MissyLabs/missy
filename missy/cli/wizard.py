@@ -65,6 +65,25 @@ _PROVIDERS = {
             ("gpt-4-turbo", "GPT-4 Turbo — most capable"),
         ],
     },
+    # openai-codex is set dynamically when the user chooses OAuth in the openai flow.
+    # These models only work with chatgpt.com/backend-api (not api.openai.com).
+    "openai-codex": {
+        "label": "OpenAI Codex (ChatGPT OAuth)",
+        "host": "chatgpt.com",
+        "env_var": None,
+        "key_prefix": None,
+        "models": {
+            "primary": "gpt-5.2",
+            "fast": "gpt-5.1-codex-mini",
+            "premium": "gpt-5.3-codex",
+        },
+        "model_choices": [
+            ("gpt-5.2", "GPT-5.2 — balanced (recommended)"),
+            ("gpt-5.1-codex-mini", "GPT-5.1 Codex Mini — fastest"),
+            ("gpt-5.1-codex-max", "GPT-5.1 Codex Max — high capacity"),
+            ("gpt-5.3-codex", "GPT-5.3 Codex — most capable"),
+        ],
+    },
     "ollama": {
         "label": "Ollama (local models)",
         "host": None,  # localhost — no network policy entry needed
