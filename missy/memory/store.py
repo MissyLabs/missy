@@ -4,6 +4,9 @@
 ``~/.missy/memory.json`` and provides query methods for retrieving turns by
 session or recency.
 
+:class:`~missy.memory.sqlite_store.SQLiteMemoryStore` is also re-exported from
+this module for convenience.
+
 Example::
 
     from missy.memory.store import MemoryStore
@@ -27,6 +30,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
+
+from missy.memory.sqlite_store import SQLiteMemoryStore  # re-export
+
+__all__ = ["ConversationTurn", "MemoryStore", "SQLiteMemoryStore"]
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +158,107 @@ class MemoryStore:
         if removed:
             self._save()
         logger.debug("Cleared %d turn(s) for session %r.", removed, session_id)
+
+    def compact_session(self, session_id: str, keep_recent: int = 10) -> int:
+        """Summarise and remove old turns for a session, keeping the most recent *keep_recent*.
+
+        Old turns are replaced by a single synthetic ``"assistant"`` turn that
+        contains a brief excerpt of each compacted message.  The summary is
+        inserted at the chronological position of the oldest removed turn.
+
+        Args:
+            session_id: The session to compact.
+            keep_recent: Number of most-recent turns to preserve verbatim.
+
+        Returns:
+            Number of turns removed (0 when nothing was compacted).
+        """
+        session_turns = self.get_session_turns(session_id)
+        if len(session_turns) <= keep_recent:
+            return 0
+
+        to_remove = session_turns[:-keep_recent]
+        removed_count = len(to_remove)
+        to_remove_ids = {t.id for t in to_remove}
+
+        # Build a compact summary of the removed turns
+        summary_lines: list[str] = []
+        for t in to_remove:
+            prefix = "User" if t.role == "user" else "Assistant"
+            summary_lines.append(f"{prefix}: {t.content[:100]}")
+        summary = "[Compacted history]\n" + "\n".join(summary_lines)
+
+        summary_turn = ConversationTurn(
+            id=f"compact-{session_id}",
+            session_id=session_id,
+            timestamp=to_remove[0].timestamp,
+            role="assistant",
+            content=summary,
+            provider="compaction",
+        )
+
+        # Rebuild the global turn list: drop removed turns, prepend summary
+        remaining = [t for t in self._turns if not (t.session_id == session_id and t.id in to_remove_ids)]
+        # Insert the summary turn before all other turns for this session so
+        # it appears first in chronological order.
+        insert_pos = next(
+            (i for i, t in enumerate(remaining) if t.session_id == session_id),
+            0,
+        )
+        remaining.insert(insert_pos, summary_turn)
+        self._turns = remaining
+        self._save()
+
+        return removed_count
+
+    def search(
+        self,
+        query: str,
+        limit: int = 10,
+        session_id: Optional[str] = None,
+    ) -> list[ConversationTurn]:
+        """Basic case-insensitive keyword search across conversation history.
+
+        This is a simple linear scan suitable for the JSON store.  For
+        full-text ranked search use
+        :class:`~missy.memory.sqlite_store.SQLiteMemoryStore`.
+
+        Args:
+            query: Substring to search for (case-insensitive).
+            limit: Maximum number of results to return.
+            session_id: When given, restrict results to this session.
+
+        Returns:
+            Matching :class:`ConversationTurn` objects in the order they
+            appear in the store, capped at *limit*.
+        """
+        query_lower = query.lower()
+        matches: list[ConversationTurn] = []
+        for turn in self._turns:
+            if session_id and turn.session_id != session_id:
+                continue
+            if query_lower in turn.content.lower():
+                matches.append(turn)
+        return matches[:limit]
+
+    def save_learning(self, learning) -> None:  # noqa: ARG002
+        """No-op stub — learnings require :class:`~missy.memory.sqlite_store.SQLiteMemoryStore`.
+
+        Args:
+            learning: Ignored.
+        """
+
+    def get_learnings(
+        self,
+        task_type: Optional[str] = None,  # noqa: ARG002
+        limit: int = 5,  # noqa: ARG002
+    ) -> list:
+        """No-op stub — learnings require :class:`~missy.memory.sqlite_store.SQLiteMemoryStore`.
+
+        Returns:
+            An empty list.
+        """
+        return []
 
     # ------------------------------------------------------------------
     # Read operations

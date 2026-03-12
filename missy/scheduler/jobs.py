@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -25,6 +26,14 @@ class ScheduledJob:
         next_run: UTC timestamp of the next scheduled execution, or ``None``.
         run_count: Total number of times the job has been executed.
         last_result: The agent's response from the most recent execution.
+        max_attempts: Maximum consecutive failures before giving up (default 3).
+        backoff_seconds: Delay in seconds between retry attempts.
+        retry_on: Error category tags that trigger a retry.
+        consecutive_failures: Number of failures since last success.
+        last_error: String representation of the most recent exception.
+        delete_after_run: When ``True`` the job is removed after one success.
+        active_hours: ``"HH:MM-HH:MM"`` window outside which the job is skipped.
+        timezone: IANA timezone string for this job (e.g. ``"America/New_York"``).
     """
 
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
@@ -39,6 +48,88 @@ class ScheduledJob:
     next_run: Optional[datetime] = None
     run_count: int = 0
     last_result: Optional[str] = None
+
+    # ------------------------------------------------------------------
+    # Retry configuration
+    # ------------------------------------------------------------------
+    max_attempts: int = 3
+    backoff_seconds: list = field(default_factory=lambda: [30, 60, 300])
+    retry_on: list = field(default_factory=lambda: ["network", "provider_error"])
+    consecutive_failures: int = 0
+    last_error: str = ""
+
+    # ------------------------------------------------------------------
+    # One-shot behaviour
+    # ------------------------------------------------------------------
+    delete_after_run: bool = False
+
+    # ------------------------------------------------------------------
+    # Active-hours window
+    # ------------------------------------------------------------------
+    active_hours: str = ""  # empty = always active
+
+    # ------------------------------------------------------------------
+    # Timezone
+    # ------------------------------------------------------------------
+    timezone: str = ""  # IANA timezone string, empty = system/UTC
+
+    # ------------------------------------------------------------------
+    # Helper methods
+    # ------------------------------------------------------------------
+
+    def should_run_now(self) -> bool:
+        """Check whether the current local time falls within :attr:`active_hours`.
+
+        Returns:
+            ``True`` when no active-hours restriction is set or when the
+            current time is within the configured window (inclusive).
+            ``False`` when the current time is outside the window.
+
+        The window format is ``"HH:MM-HH:MM"``.  Overnight windows (where
+        end time is earlier than start time) are handled correctly — e.g.
+        ``"22:00-06:00"`` means "from 10 PM until 6 AM".
+        """
+        if not self.active_hours:
+            return True
+
+        m = re.match(r"(\d{2}):(\d{2})-(\d{2}):(\d{2})", self.active_hours)
+        if not m:
+            return True
+
+        now = datetime.now()
+        start = now.replace(
+            hour=int(m.group(1)), minute=int(m.group(2)), second=0, microsecond=0
+        )
+        end = now.replace(
+            hour=int(m.group(3)), minute=int(m.group(4)), second=0, microsecond=0
+        )
+
+        if end < start:  # overnight window (e.g. 22:00-06:00)
+            return now >= start or now <= end
+
+        return start <= now <= end
+
+    def should_retry(self, error: str) -> bool:  # noqa: ARG002
+        """Return ``True`` if this job should be retried after *error*.
+
+        Retry is allowed when :attr:`consecutive_failures` has not yet reached
+        :attr:`max_attempts`.  The *error* string is accepted for API
+        compatibility but is not currently used to gate retry decisions —
+        all error types are retried up to the maximum.
+
+        Args:
+            error: String representation of the exception that caused the failure.
+
+        Returns:
+            ``True`` when a retry should be attempted, ``False`` otherwise.
+        """
+        if self.consecutive_failures >= self.max_attempts:
+            return False
+        return True
+
+    # ------------------------------------------------------------------
+    # Serialisation
+    # ------------------------------------------------------------------
 
     def to_dict(self) -> dict[str, Any]:
         """Serialise the job to a JSON-compatible dictionary.
@@ -60,11 +151,27 @@ class ScheduledJob:
             "next_run": self.next_run.isoformat() if self.next_run else None,
             "run_count": self.run_count,
             "last_result": self.last_result,
+            # Retry fields
+            "max_attempts": self.max_attempts,
+            "backoff_seconds": self.backoff_seconds,
+            "retry_on": self.retry_on,
+            "consecutive_failures": self.consecutive_failures,
+            "last_error": self.last_error,
+            # One-shot
+            "delete_after_run": self.delete_after_run,
+            # Active hours
+            "active_hours": self.active_hours,
+            # Timezone
+            "timezone": self.timezone,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ScheduledJob":
         """Deserialise a job from a dictionary previously produced by :meth:`to_dict`.
+
+        Missing keys fall back to safe defaults so that existing ``jobs.json``
+        files produced by older versions of the software continue to load
+        without error.
 
         Args:
             data: Mapping with job fields.  ISO-8601 datetime strings are
@@ -92,4 +199,16 @@ class ScheduledJob:
             next_run=_parse_dt(data.get("next_run")),
             run_count=int(data.get("run_count", 0)),
             last_result=data.get("last_result"),
+            # Retry fields — safe defaults for legacy records
+            max_attempts=int(data.get("max_attempts", 3)),
+            backoff_seconds=list(data.get("backoff_seconds", [30, 60, 300])),
+            retry_on=list(data.get("retry_on", ["network", "provider_error"])),
+            consecutive_failures=int(data.get("consecutive_failures", 0)),
+            last_error=str(data.get("last_error", "")),
+            # One-shot
+            delete_after_run=bool(data.get("delete_after_run", False)),
+            # Active hours
+            active_hours=str(data.get("active_hours", "")),
+            # Timezone
+            timezone=str(data.get("timezone", "")),
         )

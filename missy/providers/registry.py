@@ -50,12 +50,14 @@ class ProviderRegistry:
 
     def __init__(self) -> None:
         self._providers: dict[str, BaseProvider] = {}
+        self._key_indices: dict[str, int] = {}
+        self._provider_configs: dict[str, ProviderConfig] = {}
 
     # ------------------------------------------------------------------
     # Mutation
     # ------------------------------------------------------------------
 
-    def register(self, name: str, provider: BaseProvider) -> None:
+    def register(self, name: str, provider: BaseProvider, config: Optional[ProviderConfig] = None) -> None:
         """Add *provider* under the given *name*.
 
         A previous registration under the same name is silently replaced.
@@ -63,8 +65,42 @@ class ProviderRegistry:
         Args:
             name: Registry key for the provider.
             provider: The provider instance to register.
+            config: Optional provider configuration for key rotation support.
         """
         self._providers[name] = provider
+        if config is not None:
+            self._provider_configs[name] = config
+            self._key_indices.setdefault(name, 0)
+
+    def rotate_key(self, provider_name: str) -> None:
+        """Rotate to the next API key for the named provider (round-robin).
+
+        If the provider has multiple ``api_keys`` configured, advances the
+        internal index and updates the provider's active API key.  Has no
+        effect when fewer than two keys are configured.
+
+        Args:
+            provider_name: Registry key of the provider to rotate.
+        """
+        config = self._provider_configs.get(provider_name)
+        provider = self._providers.get(provider_name)
+        if config is None or provider is None:
+            logger.warning("rotate_key: provider %r not found.", provider_name)
+            return
+        keys = getattr(config, "api_keys", [])
+        if len(keys) < 2:
+            logger.debug("rotate_key: provider %r has fewer than 2 api_keys; skipping rotation.", provider_name)
+            return
+        current_idx = self._key_indices.get(provider_name, 0)
+        next_idx = (current_idx + 1) % len(keys)
+        self._key_indices[provider_name] = next_idx
+        next_key = keys[next_idx]
+        # Update the provider's api_key attribute if accessible.
+        if hasattr(provider, "api_key"):
+            provider.api_key = next_key  # type: ignore[attr-defined]
+        elif hasattr(provider, "_api_key"):
+            provider._api_key = next_key  # type: ignore[attr-defined]
+        logger.info("rotate_key: provider %r rotated to key index %d.", provider_name, next_idx)
 
     # ------------------------------------------------------------------
     # Queries
@@ -145,13 +181,70 @@ class ProviderRegistry:
                 continue
             try:
                 instance = provider_cls(provider_config)
-                registry.register(key, instance)
+                registry.register(key, instance, config=provider_config)
                 logger.debug("Registered provider %r (%s).", key, provider_cls.__name__)
             except Exception:
                 logger.exception(
                     "Failed to construct provider %r; skipping.", key
                 )
         return registry
+
+
+# ---------------------------------------------------------------------------
+# Model router
+# ---------------------------------------------------------------------------
+
+
+class ModelRouter:
+    """Routes tasks to fast/primary/premium provider tiers based on complexity."""
+
+    PREMIUM_KEYWORDS = frozenset(["debug", "architect", "refactor", "analyze", "optimize", "complex"])
+    FAST_INDICATORS = frozenset(["what", "how", "when", "where", "who", "list", "show"])
+
+    def score_complexity(self, prompt: str, history_length: int = 0, tool_count: int = 0) -> str:
+        """Return 'fast' | 'primary' | 'premium' for the given inputs.
+
+        Args:
+            prompt: The user prompt text.
+            history_length: Number of prior turns in the conversation.
+            tool_count: Number of tools available or requested.
+
+        Returns:
+            One of ``"fast"``, ``"primary"``, or ``"premium"``.
+        """
+        prompt_lower = prompt.lower()
+        words = set(prompt_lower.split())
+
+        # Force fast if message is very short and contains only fast indicators.
+        if len(prompt) < 80 and tool_count == 0 and words & self.FAST_INDICATORS:
+            return "fast"
+
+        # Premium signals.
+        if (
+            words & self.PREMIUM_KEYWORDS
+            or history_length > 10
+            or tool_count > 3
+            or len(prompt) > 500
+        ):
+            return "premium"
+
+        return "primary"
+
+    def select_model(self, provider_config: ProviderConfig, tier: str) -> str:
+        """Return the model name for the given tier, falling back to primary model.
+
+        Args:
+            provider_config: The provider configuration to inspect.
+            tier: One of ``"fast"``, ``"primary"``, or ``"premium"``.
+
+        Returns:
+            The model identifier string appropriate for the tier.
+        """
+        if tier == "fast" and getattr(provider_config, "fast_model", ""):
+            return provider_config.fast_model
+        if tier == "premium" and getattr(provider_config, "premium_model", ""):
+            return provider_config.premium_model
+        return provider_config.model
 
 
 # ---------------------------------------------------------------------------

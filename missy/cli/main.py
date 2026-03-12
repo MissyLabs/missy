@@ -86,6 +86,23 @@ providers:
 
 workspace_path: "~/workspace"
 audit_log_path: "~/.missy/audit.jsonl"
+
+# Heartbeat: periodic agent task from HEARTBEAT.md
+heartbeat:
+  enabled: false
+  interval_seconds: 1800
+  active_hours: ""
+
+# Observability: OpenTelemetry export
+observability:
+  otel_enabled: false
+  otel_endpoint: "http://localhost:4317"
+  log_level: "warning"
+
+# Vault: encrypted secrets store
+vault:
+  enabled: false
+  vault_dir: "~/.missy/secrets"
 """
 
 
@@ -130,6 +147,14 @@ def _load_subsystems(config_path: str):
     init_policy_engine(cfg)
     init_audit_logger(cfg.audit_log_path)
     init_registry(cfg)
+
+    # Initialize OpenTelemetry if configured.
+    try:
+        from missy.observability.otel import init_otel
+        init_otel(cfg)
+    except Exception:
+        pass
+
     return cfg
 
 
@@ -1309,6 +1334,267 @@ def doctor(ctx: click.Context) -> None:
         table.add_row("discord", Text("disabled", style="dim"), "not configured")
 
     console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# missy vault
+# ---------------------------------------------------------------------------
+
+
+@cli.group()
+def vault() -> None:
+    """Encrypted secrets vault commands."""
+    pass
+
+
+@vault.command("set")
+@click.argument("key")
+@click.argument("value")
+@click.pass_context
+def vault_set(ctx: click.Context, key: str, value: str) -> None:
+    """Store a secret in the encrypted vault."""
+    from missy.security.vault import Vault, VaultError
+    cfg = _load_subsystems(ctx.obj["config_path"])
+    vault_dir = getattr(getattr(cfg, "vault", None), "vault_dir", "~/.missy/secrets")
+    try:
+        v = Vault(vault_dir)
+        v.set(key, value)
+        _print_success(f"Secret [bold]{key}[/] stored in vault.")
+    except VaultError as exc:
+        _print_error(str(exc))
+        sys.exit(1)
+
+
+@vault.command("get")
+@click.argument("key")
+@click.pass_context
+def vault_get(ctx: click.Context, key: str) -> None:
+    """Retrieve a secret from the vault (prints to stdout)."""
+    from missy.security.vault import Vault, VaultError
+    cfg = _load_subsystems(ctx.obj["config_path"])
+    vault_dir = getattr(getattr(cfg, "vault", None), "vault_dir", "~/.missy/secrets")
+    try:
+        v = Vault(vault_dir)
+        val = v.get(key)
+        if val is None:
+            _print_error(f"Key {key!r} not found in vault.")
+            sys.exit(1)
+        console.print(val)
+    except VaultError as exc:
+        _print_error(str(exc))
+        sys.exit(1)
+
+
+@vault.command("list")
+@click.pass_context
+def vault_list(ctx: click.Context) -> None:
+    """List all key names in the vault."""
+    from missy.security.vault import Vault, VaultError
+    cfg = _load_subsystems(ctx.obj["config_path"])
+    vault_dir = getattr(getattr(cfg, "vault", None), "vault_dir", "~/.missy/secrets")
+    try:
+        v = Vault(vault_dir)
+        keys = v.list_keys()
+        if not keys:
+            console.print("[dim]Vault is empty.[/]")
+        else:
+            for k in keys:
+                console.print(f"  {k}")
+    except VaultError as exc:
+        _print_error(str(exc))
+        sys.exit(1)
+
+
+@vault.command("delete")
+@click.argument("key")
+@click.pass_context
+def vault_delete(ctx: click.Context, key: str) -> None:
+    """Delete a secret from the vault."""
+    from missy.security.vault import Vault, VaultError
+    cfg = _load_subsystems(ctx.obj["config_path"])
+    vault_dir = getattr(getattr(cfg, "vault", None), "vault_dir", "~/.missy/secrets")
+    try:
+        v = Vault(vault_dir)
+        removed = v.delete(key)
+        if removed:
+            _print_success(f"Key [bold]{key}[/] deleted.")
+        else:
+            _print_error(f"Key {key!r} not found.")
+    except VaultError as exc:
+        _print_error(str(exc))
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# missy sessions
+# ---------------------------------------------------------------------------
+
+
+@cli.group()
+def sessions() -> None:
+    """Session and conversation history commands."""
+    pass
+
+
+@sessions.command("cleanup")
+@click.option("--older-than", default=30, show_default=True, help="Delete history older than N days.")
+@click.option("--dry-run", is_flag=True, default=False, help="Show what would be deleted without deleting.")
+@click.pass_context
+def sessions_cleanup(ctx: click.Context, older_than: int, dry_run: bool) -> None:
+    """Delete old conversation history from the memory store."""
+    from missy.memory.store import MemoryStore
+    _load_subsystems(ctx.obj["config_path"])
+    store = MemoryStore()
+    if dry_run:
+        console.print(f"[dim]Dry run: would delete turns older than {older_than} days.[/]")
+        return
+    if hasattr(store, "cleanup"):
+        removed = store.cleanup(older_than_days=older_than)
+        _print_success(f"Removed {removed} conversation turn(s) older than {older_than} days.")
+    else:
+        console.print("[dim]Memory store does not support cleanup (use SQLiteMemoryStore).[/]")
+
+
+# ---------------------------------------------------------------------------
+# missy approvals
+# ---------------------------------------------------------------------------
+
+
+@cli.group()
+def approvals() -> None:
+    """Approval gate management."""
+    pass
+
+
+@approvals.command("list")
+@click.pass_context
+def approvals_list(ctx: click.Context) -> None:
+    """List pending approval requests (for the current gateway session)."""
+    console.print("[dim]No active gateway session; approvals are processed during missy gateway start.[/]")
+
+
+# ---------------------------------------------------------------------------
+# missy patches
+# ---------------------------------------------------------------------------
+
+
+@cli.group()
+def patches() -> None:
+    """Prompt patch (self-tuning) management."""
+    pass
+
+
+@patches.command("list")
+@click.pass_context
+def patches_list(ctx: click.Context) -> None:
+    """List all prompt patches."""
+    from missy.agent.prompt_patches import PromptPatchManager
+    _load_subsystems(ctx.obj["config_path"])
+    mgr = PromptPatchManager()
+    all_patches = mgr.list_all()
+    if not all_patches:
+        console.print("[dim]No patches.[/]")
+        return
+    table = Table(title="Prompt Patches", show_lines=True)
+    table.add_column("ID")
+    table.add_column("Type")
+    table.add_column("Status")
+    table.add_column("Success Rate", justify="right")
+    table.add_column("Content")
+    for p in all_patches:
+        rate = f"{p.success_rate:.0%}" if p.applications > 0 else "—"
+        table.add_row(p.id, p.patch_type.value, p.status.value, rate, p.content[:60])
+    console.print(table)
+
+
+@patches.command("approve")
+@click.argument("patch_id")
+@click.pass_context
+def patches_approve(ctx: click.Context, patch_id: str) -> None:
+    """Approve a proposed patch."""
+    from missy.agent.prompt_patches import PromptPatchManager
+    _load_subsystems(ctx.obj["config_path"])
+    mgr = PromptPatchManager()
+    if mgr.approve(patch_id):
+        _print_success(f"Patch [bold]{patch_id}[/] approved.")
+    else:
+        _print_error(f"Patch {patch_id!r} not found.")
+
+
+@patches.command("reject")
+@click.argument("patch_id")
+@click.pass_context
+def patches_reject(ctx: click.Context, patch_id: str) -> None:
+    """Reject a proposed patch."""
+    from missy.agent.prompt_patches import PromptPatchManager
+    _load_subsystems(ctx.obj["config_path"])
+    mgr = PromptPatchManager()
+    if mgr.reject(patch_id):
+        _print_success(f"Patch [bold]{patch_id}[/] rejected.")
+    else:
+        _print_error(f"Patch {patch_id!r} not found.")
+
+
+# ---------------------------------------------------------------------------
+# missy mcp
+# ---------------------------------------------------------------------------
+
+
+@cli.group()
+def mcp() -> None:
+    """Model Context Protocol (MCP) server management."""
+    pass
+
+
+@mcp.command("list")
+@click.pass_context
+def mcp_list(ctx: click.Context) -> None:
+    """List configured MCP servers."""
+    from missy.mcp.manager import McpManager
+    _load_subsystems(ctx.obj["config_path"])
+    mgr = McpManager()
+    servers = mgr.list_servers()
+    if not servers:
+        console.print("[dim]No MCP servers configured. Add one with missy mcp add.[/]")
+        return
+    table = Table(title="MCP Servers", show_lines=True)
+    table.add_column("Name", style="bold")
+    table.add_column("Alive", justify="center")
+    table.add_column("Tools", justify="right")
+    for s in servers:
+        alive = Text("yes", style="green") if s["alive"] else Text("no", style="red")
+        table.add_row(s["name"], alive, str(s["tools"]))
+    console.print(table)
+
+
+@mcp.command("add")
+@click.argument("name")
+@click.option("--command", default=None, help="Stdio command to launch the MCP server.")
+@click.option("--url", default=None, help="HTTP URL for the MCP server.")
+@click.pass_context
+def mcp_add(ctx: click.Context, name: str, command: Optional[str], url: Optional[str]) -> None:
+    """Connect to a new MCP server."""
+    from missy.mcp.manager import McpManager
+    _load_subsystems(ctx.obj["config_path"])
+    mgr = McpManager()
+    try:
+        client = mgr.add_server(name, command=command, url=url)
+        _print_success(f"Connected to MCP server [bold]{name}[/] ({len(client.tools)} tools).")
+    except Exception as exc:
+        _print_error(f"Failed to connect: {exc}")
+        sys.exit(1)
+
+
+@mcp.command("remove")
+@click.argument("name")
+@click.pass_context
+def mcp_remove(ctx: click.Context, name: str) -> None:
+    """Disconnect and remove an MCP server."""
+    from missy.mcp.manager import McpManager
+    _load_subsystems(ctx.obj["config_path"])
+    mgr = McpManager()
+    mgr.remove_server(name)
+    _print_success(f"MCP server [bold]{name}[/] removed.")
 
 
 # ---------------------------------------------------------------------------

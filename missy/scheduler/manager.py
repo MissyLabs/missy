@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -106,6 +106,13 @@ class SchedulerManager:
         schedule: str,
         task: str,
         provider: str = "anthropic",
+        description: str = "",
+        max_attempts: int = 3,
+        backoff_seconds: Optional[list] = None,
+        retry_on: Optional[list] = None,
+        delete_after_run: bool = False,
+        active_hours: str = "",
+        timezone: str = "",
     ) -> ScheduledJob:
         """Create a new job, persist it, and register it with APScheduler.
 
@@ -115,6 +122,13 @@ class SchedulerManager:
                 :func:`~missy.scheduler.parser.parse_schedule`).
             task: Prompt or task text to run when the job fires.
             provider: AI provider name to use for the run.
+            description: Optional description of the job.
+            max_attempts: Maximum retry attempts on failure.
+            backoff_seconds: Delay in seconds between retries.
+            retry_on: Error category tags that trigger a retry.
+            delete_after_run: Remove the job after one successful execution.
+            active_hours: ``"HH:MM-HH:MM"`` window; job is skipped outside it.
+            timezone: IANA timezone string for cron/date triggers.
 
         Returns:
             The newly created :class:`ScheduledJob`.
@@ -125,7 +139,7 @@ class SchedulerManager:
         """
         # Validate the schedule string before creating the job.
         try:
-            parse_schedule(schedule)
+            parse_schedule(schedule, tz=timezone or None)
         except ValueError as exc:
             self._emit_event(
                 event_type="scheduler.job.add",
@@ -136,9 +150,16 @@ class SchedulerManager:
 
         job = ScheduledJob(
             name=name,
+            description=description,
             schedule=schedule,
             task=task,
             provider=provider,
+            max_attempts=max_attempts,
+            backoff_seconds=backoff_seconds if backoff_seconds is not None else [30, 60, 300],
+            retry_on=retry_on if retry_on is not None else ["network", "provider_error"],
+            delete_after_run=delete_after_run,
+            active_hours=active_hours,
+            timezone=timezone,
         )
         self._jobs[job.id] = job
 
@@ -251,6 +272,43 @@ class SchedulerManager:
         """
         return list(self._jobs.values())
 
+    def list_jobs_with_details(self) -> list[ScheduledJob]:
+        """Return full :class:`ScheduledJob` objects for all registered jobs.
+
+        This is an alias for :meth:`list_jobs` and always returns the complete
+        dataclass objects (never stripped/summarised representations).
+
+        Returns:
+            A new list of :class:`ScheduledJob` instances.
+        """
+        return list(self._jobs.values())
+
+    def cleanup_memory(self, older_than_days: int = 30) -> int:
+        """Delete conversation history older than *older_than_days* days.
+
+        Delegates to :class:`~missy.memory.store.MemoryStore` when it exposes
+        a ``cleanup`` method.  Errors are logged as warnings and the method
+        always returns without raising.
+
+        Args:
+            older_than_days: Threshold in days.  Records older than this are
+                removed.
+
+        Returns:
+            The number of records removed, or ``0`` if the store does not
+            support cleanup or an error occurs.
+        """
+        try:
+            from missy.memory.store import MemoryStore
+
+            store = MemoryStore()
+            if hasattr(store, "cleanup"):
+                return store.cleanup(older_than_days=older_than_days)
+            return 0
+        except Exception as exc:
+            logger.warning("Memory cleanup failed: %s", exc)
+            return 0
+
     # ------------------------------------------------------------------
     # Internal execution
     # ------------------------------------------------------------------
@@ -262,12 +320,24 @@ class SchedulerManager:
         resolves the :class:`~missy.agent.runtime.AgentRuntime`, runs the
         job's task string, stores the result, and emits audit events.
 
+        Active-hours gating, retry scheduling, delete-after-run, and
+        permanent-failure alerting are all handled here.
+
         Args:
             job_id: ID of the job to execute.
         """
         job = self._jobs.get(job_id)
         if job is None:
             logger.warning("Scheduled job %r no longer exists; skipping.", job_id)
+            return
+
+        # ------------------------------------------------------------------
+        # Active-hours gate
+        # ------------------------------------------------------------------
+        if not job.should_run_now():
+            logger.info(
+                "Job %s outside active_hours %s; skipping.", job.id, job.active_hours
+            )
             return
 
         session_id = str(uuid.uuid4())
@@ -296,7 +366,9 @@ class SchedulerManager:
             logger.exception("Error executing scheduled job %r (id=%s).", job.name, job_id)
             job.last_run = datetime.now(tz=timezone.utc)
             job.last_result = f"ERROR: {exc}"
-            self._save_jobs()
+            job.consecutive_failures += 1
+            job.last_error = str(exc)
+
             self._emit_event(
                 event_type="scheduler.job.run.error",
                 result="error",
@@ -304,11 +376,88 @@ class SchedulerManager:
                 session_id=session_id,
                 task_id=task_id,
             )
+
+            if job.should_retry(str(exc)):
+                # Calculate backoff delay using the failure index (clamped to
+                # the length of the backoff list).
+                failures = job.consecutive_failures
+                backoff = job.backoff_seconds[
+                    min(failures - 1, len(job.backoff_seconds) - 1)
+                ]
+                retry_run_date = datetime.now(tz=timezone.utc) + timedelta(seconds=backoff)
+                try:
+                    retry_job_id = f"{job_id}_retry_{failures}"
+                    self._scheduler.add_job(
+                        func=self._run_job,
+                        trigger="date",
+                        run_date=retry_run_date,
+                        kwargs={"job_id": job_id},
+                        id=retry_job_id,
+                        name=f"{job.name} (retry {failures})",
+                        replace_existing=True,
+                    )
+                    logger.info(
+                        "Retry %d for job %r scheduled in %ds (at %s).",
+                        failures,
+                        job.name,
+                        backoff,
+                        retry_run_date.isoformat(),
+                    )
+                    self._emit_event(
+                        event_type="scheduler.job.retry_scheduled",
+                        result="allow",
+                        detail={
+                            "job_id": job_id,
+                            "name": job.name,
+                            "attempt": failures,
+                            "backoff_seconds": backoff,
+                            "retry_run_date": retry_run_date.isoformat(),
+                        },
+                    )
+                except Exception as retry_exc:
+                    logger.error(
+                        "Failed to schedule retry for job %r: %s", job.name, retry_exc
+                    )
+            else:
+                # Maximum attempts exhausted.
+                logger.error(
+                    "Job %r (id=%s) exceeded max_attempts=%d; not retrying.",
+                    job.name,
+                    job_id,
+                    job.max_attempts,
+                )
+                self._emit_event(
+                    event_type="scheduler.job.failed_permanently",
+                    result="error",
+                    detail={
+                        "job_id": job_id,
+                        "name": job.name,
+                        "failures": job.consecutive_failures,
+                        "last_error": job.last_error,
+                    },
+                )
+                self._emit_event(
+                    event_type="scheduler.job.alert",
+                    result="error",
+                    detail={
+                        "job_id": job_id,
+                        "job_name": job.name,
+                        "failures": job.consecutive_failures,
+                        "last_error": job.last_error,
+                    },
+                )
+
+            self._save_jobs()
             return
 
+        # ------------------------------------------------------------------
+        # Successful run
+        # ------------------------------------------------------------------
         job.last_run = datetime.now(tz=timezone.utc)
         job.run_count += 1
         job.last_result = result_text
+        job.consecutive_failures = 0
+        job.last_error = ""
 
         # Update next_run from APScheduler if available.
         ap_job = self._scheduler.get_job(job_id)
@@ -333,6 +482,16 @@ class SchedulerManager:
             session_id=session_id,
             task_id=task_id,
         )
+
+        # Delete-after-run: remove the job after a single successful execution.
+        if job.delete_after_run:
+            logger.info("Job %r has delete_after_run=True; removing.", job.name)
+            try:
+                self.remove_job(job_id)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to remove one-shot job %r after run: %s", job_id, exc
+                )
 
     # ------------------------------------------------------------------
     # Persistence
@@ -396,8 +555,11 @@ class SchedulerManager:
         """Register *job* with the APScheduler instance.
 
         The trigger configuration is derived by
-        :func:`~missy.scheduler.parser.parse_schedule`.  The ``"trigger"``
-        key is extracted and the remaining keys are passed as trigger kwargs.
+        :func:`~missy.scheduler.parser.parse_schedule`.  Raw cron expressions
+        (signalled by the ``"_cron_expression"`` key) are handled via
+        ``CronTrigger.from_crontab``; one-shot date triggers are handled via
+        ``DateTrigger``; all other triggers are passed directly to
+        ``scheduler.add_job``.
 
         Args:
             job: The job to schedule.
@@ -405,25 +567,62 @@ class SchedulerManager:
         Raises:
             SchedulerError: When APScheduler refuses to add the job.
         """
+        tz = job.timezone or None
+
         try:
-            trigger_config = parse_schedule(job.schedule)
+            schedule_config = parse_schedule(job.schedule, tz=tz)
         except ValueError as exc:
             raise SchedulerError(
                 f"Cannot schedule job {job.id!r}: invalid schedule {job.schedule!r}: {exc}"
             ) from exc
 
-        trigger = trigger_config.pop("trigger")
+        trigger_type = schedule_config.pop("trigger")
 
         try:
-            self._scheduler.add_job(
-                func=self._run_job,
-                trigger=trigger,
-                kwargs={"job_id": job.id},
-                id=job.id,
-                name=job.name,
-                replace_existing=True,
-                **trigger_config,
-            )
+            if trigger_type == "cron" and "_cron_expression" in schedule_config:
+                # Raw cron expression — use CronTrigger.from_crontab.
+                from apscheduler.triggers.cron import CronTrigger
+
+                cron_expr = schedule_config.pop("_cron_expression")
+                # Any remaining key after popping _cron_expression is "timezone".
+                cron_tz = schedule_config.pop("timezone", None) or tz
+                trigger = CronTrigger.from_crontab(cron_expr, timezone=cron_tz)
+                self._scheduler.add_job(
+                    func=self._run_job,
+                    trigger=trigger,
+                    kwargs={"job_id": job.id},
+                    id=job.id,
+                    name=job.name,
+                    replace_existing=True,
+                )
+
+            elif trigger_type == "date":
+                # One-shot future-dated trigger.
+                from apscheduler.triggers.date import DateTrigger
+
+                run_date = schedule_config.pop("run_date")
+                date_tz = schedule_config.pop("timezone", None) or tz
+                trigger = DateTrigger(run_date=run_date, timezone=date_tz)
+                self._scheduler.add_job(
+                    func=self._run_job,
+                    trigger=trigger,
+                    kwargs={"job_id": job.id},
+                    id=job.id,
+                    name=job.name,
+                    replace_existing=True,
+                )
+
+            else:
+                # interval or standard cron (daily/weekly) — pass kwargs directly.
+                self._scheduler.add_job(
+                    func=self._run_job,
+                    trigger=trigger_type,
+                    kwargs={"job_id": job.id},
+                    id=job.id,
+                    name=job.name,
+                    replace_existing=True,
+                    **schedule_config,
+                )
         except Exception as exc:
             raise SchedulerError(
                 f"APScheduler failed to add job {job.id!r} ({job.name!r}): {exc}"

@@ -147,6 +147,9 @@ class ProviderConfig:
     base_url: Optional[str] = None
     timeout: int = 30
     enabled: bool = True
+    api_keys: list = field(default_factory=list)  # Multiple API keys for rotation
+    fast_model: str = ""      # Model for fast/simple tier (e.g. claude-haiku-4-5)
+    premium_model: str = ""   # Model for premium/complex tier (e.g. claude-opus-4-6)
 
 
 # ---------------------------------------------------------------------------
@@ -161,10 +164,41 @@ class SchedulingPolicy:
     Attributes:
         enabled: When False, no new jobs may be added or run.
         max_jobs: Maximum number of concurrent scheduled jobs (0 = unlimited).
+        active_hours: Optional time window for job execution, e.g. "08:00-22:00".
     """
 
     enabled: bool = True
     max_jobs: int = 0
+    active_hours: str = ""
+
+
+@dataclass
+class HeartbeatConfig:
+    """Heartbeat system configuration."""
+
+    enabled: bool = False
+    interval_seconds: int = 1800
+    workspace: str = "~/workspace"
+    active_hours: str = ""  # e.g. "08:00-22:00"
+
+
+@dataclass
+class ObservabilityConfig:
+    """OpenTelemetry and logging configuration."""
+
+    otel_enabled: bool = False
+    otel_endpoint: str = "http://localhost:4317"
+    otel_protocol: str = "grpc"  # "grpc" | "http/protobuf"
+    otel_service_name: str = "missy"
+    log_level: str = "warning"
+
+
+@dataclass
+class VaultConfig:
+    """Encrypted secrets vault configuration."""
+
+    enabled: bool = False
+    vault_dir: str = "~/.missy/secrets"
 
 
 # ---------------------------------------------------------------------------
@@ -197,6 +231,9 @@ class MissyConfig:
     audit_log_path: str
     discord: Optional["DiscordConfig"] = None
     scheduling: SchedulingPolicy = field(default_factory=SchedulingPolicy)
+    heartbeat: HeartbeatConfig = field(default_factory=HeartbeatConfig)
+    observability: ObservabilityConfig = field(default_factory=ObservabilityConfig)
+    vault: VaultConfig = field(default_factory=VaultConfig)
 
 
 # ---------------------------------------------------------------------------
@@ -246,13 +283,21 @@ def _parse_providers(data: dict[str, Any]) -> dict[str, ProviderConfig]:
             )
         if "model" not in raw:
             raise ConfigurationError(f"Provider '{key}' is missing required field 'model'.")
+        api_keys = list(raw.get("api_keys", []))
+        api_key = raw.get("api_key") or os.environ.get(f"{key.upper()}_API_KEY")
+        # If api_key is not set but api_keys has entries, use the first one.
+        if not api_key and api_keys:
+            api_key = api_keys[0]
         providers[key] = ProviderConfig(
             name=str(raw.get("name", key)),
             model=str(raw["model"]),
-            api_key=raw.get("api_key") or os.environ.get(f"{key.upper()}_API_KEY"),
+            api_key=api_key,
             base_url=raw.get("base_url"),
             timeout=int(raw.get("timeout", 30)),
             enabled=bool(raw.get("enabled", True)),
+            api_keys=api_keys,
+            fast_model=str(raw.get("fast_model", "")),
+            premium_model=str(raw.get("premium_model", "")),
         )
     return providers
 
@@ -261,6 +306,33 @@ def _parse_scheduling(data: dict[str, Any]) -> SchedulingPolicy:
     return SchedulingPolicy(
         enabled=bool(data.get("enabled", True)),
         max_jobs=int(data.get("max_jobs", 0)),
+        active_hours=str(data.get("active_hours", "")),
+    )
+
+
+def _parse_heartbeat(data: dict[str, Any]) -> HeartbeatConfig:
+    return HeartbeatConfig(
+        enabled=bool(data.get("enabled", False)),
+        interval_seconds=int(data.get("interval_seconds", 1800)),
+        workspace=str(data.get("workspace", "~/workspace")),
+        active_hours=str(data.get("active_hours", "")),
+    )
+
+
+def _parse_observability(data: dict[str, Any]) -> ObservabilityConfig:
+    return ObservabilityConfig(
+        otel_enabled=bool(data.get("otel_enabled", False)),
+        otel_endpoint=str(data.get("otel_endpoint", "http://localhost:4317")),
+        otel_protocol=str(data.get("otel_protocol", "grpc")),
+        otel_service_name=str(data.get("otel_service_name", "missy")),
+        log_level=str(data.get("log_level", "warning")),
+    )
+
+
+def _parse_vault(data: dict[str, Any]) -> VaultConfig:
+    return VaultConfig(
+        enabled=bool(data.get("enabled", False)),
+        vault_dir=str(data.get("vault_dir", "~/.missy/secrets")),
     )
 
 
@@ -321,6 +393,9 @@ def load_config(path: str) -> MissyConfig:
             audit_log_path=str(data.get("audit_log_path", "~/.missy/audit.log")),
             discord=discord_cfg,
             scheduling=_parse_scheduling(data.get("scheduling") or {}),
+            heartbeat=_parse_heartbeat(data.get("heartbeat") or {}),
+            observability=_parse_observability(data.get("observability") or {}),
+            vault=_parse_vault(data.get("vault") or {}),
         )
     except ConfigurationError:
         raise
@@ -360,4 +435,7 @@ def get_default_config() -> MissyConfig:
         audit_log_path=str(Path.home() / ".missy" / "audit.log"),
         discord=None,
         scheduling=SchedulingPolicy(),
+        heartbeat=HeartbeatConfig(),
+        observability=ObservabilityConfig(),
+        vault=VaultConfig(),
     )

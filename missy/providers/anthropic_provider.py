@@ -18,13 +18,13 @@ Example::
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Iterator
 
 from missy.config.settings import ProviderConfig
 from missy.core.events import AuditEvent, event_bus
 from missy.core.exceptions import ProviderError
 
-from .base import BaseProvider, CompletionResponse, Message
+from .base import BaseProvider, CompletionResponse, Message, ToolCall
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +164,194 @@ class AnthropicProvider(BaseProvider):
             usage=usage,
             raw=raw_response.model_dump() if hasattr(raw_response, "model_dump") else {},
         )
+
+    def get_tool_schema(self, tools: list) -> list:
+        """Convert BaseTool instances to Anthropic tool schema format.
+
+        Args:
+            tools: List of :class:`~missy.tools.base.BaseTool` instances.
+
+        Returns:
+            A list of Anthropic-format tool dicts with ``name``,
+            ``description``, and ``input_schema`` keys.
+        """
+        schemas = []
+        for tool in tools:
+            # Use get_schema() if available for richer parameter info
+            base_schema = tool.get_schema() if hasattr(tool, "get_schema") else {}
+            params = base_schema.get("parameters", {})
+            input_schema: dict[str, Any] = {
+                "type": "object",
+                "properties": params.get("properties", {}),
+                "required": params.get("required", []),
+            }
+            schemas.append(
+                {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "input_schema": input_schema,
+                }
+            )
+        return schemas
+
+    def complete_with_tools(
+        self,
+        messages: list[Message],
+        tools: list,
+        system: str = "",
+    ) -> CompletionResponse:
+        """Send *messages* to the Anthropic API with tool calling enabled.
+
+        Args:
+            messages: Ordered conversation turns.
+            tools: List of :class:`~missy.tools.base.BaseTool` instances.
+            system: Optional system prompt string.
+
+        Returns:
+            A :class:`CompletionResponse`.  When ``finish_reason`` is
+            ``"tool_calls"``, ``tool_calls`` is populated with
+            :class:`~missy.providers.base.ToolCall` instances.
+
+        Raises:
+            ProviderError: On SDK import failure or API error.
+        """
+        if not _ANTHROPIC_AVAILABLE:
+            raise ProviderError(
+                "anthropic SDK is not installed. Run: pip install anthropic"
+            )
+
+        tool_schemas = self.get_tool_schema(tools)
+
+        # Separate system prompt (prefer explicit arg, fall back to message list)
+        system_content: str = system
+        api_messages: list[dict] = []
+        for msg in messages:
+            if msg.role == "system":
+                if not system_content:
+                    system_content = msg.content
+            else:
+                api_messages.append({"role": msg.role, "content": msg.content})
+
+        call_kwargs: dict[str, Any] = {
+            "model": self._model,
+            "max_tokens": 4096,
+            "messages": api_messages,
+            "tools": tool_schemas,
+            "tool_choice": {"type": "auto"},
+        }
+        if system_content:
+            call_kwargs["system"] = system_content
+
+        try:
+            client = _anthropic_sdk.Anthropic(
+                api_key=self._api_key,
+                timeout=float(self._timeout),
+            )
+            raw_response = client.messages.create(**call_kwargs)
+        except _anthropic_sdk.APITimeoutError as exc:
+            raise ProviderError(
+                f"Anthropic request timed out after {self._timeout}s: {exc}"
+            ) from exc
+        except _anthropic_sdk.AuthenticationError as exc:
+            raise ProviderError(f"Anthropic authentication failed: {exc}") from exc
+        except _anthropic_sdk.APIError as exc:
+            raise ProviderError(f"Anthropic API error: {exc}") from exc
+        except Exception as exc:
+            raise ProviderError(f"Unexpected error calling Anthropic: {exc}") from exc
+
+        # Extract text content and tool use blocks
+        content_text = ""
+        tool_calls: list[ToolCall] = []
+        for block in raw_response.content:
+            if getattr(block, "type", None) == "text":
+                content_text += block.text
+            elif getattr(block, "type", None) == "tool_use":
+                tool_calls.append(
+                    ToolCall(
+                        id=block.id,
+                        name=block.name,
+                        arguments=dict(block.input),
+                    )
+                )
+
+        finish_reason = (
+            "tool_calls" if raw_response.stop_reason == "tool_use" else "stop"
+        )
+
+        usage_obj = raw_response.usage
+        usage = {
+            "prompt_tokens": getattr(usage_obj, "input_tokens", 0),
+            "completion_tokens": getattr(usage_obj, "output_tokens", 0),
+            "total_tokens": (
+                getattr(usage_obj, "input_tokens", 0)
+                + getattr(usage_obj, "output_tokens", 0)
+            ),
+        }
+
+        return CompletionResponse(
+            content=content_text,
+            model=raw_response.model,
+            provider=self.name,
+            usage=usage,
+            raw=raw_response.model_dump() if hasattr(raw_response, "model_dump") else {},
+            tool_calls=tool_calls,
+            finish_reason=finish_reason,
+        )
+
+    def stream(self, messages: list[Message], system: str = "") -> Iterator[str]:
+        """Stream partial response tokens from the Anthropic API.
+
+        Args:
+            messages: Ordered conversation turns.
+            system: Optional system prompt string (overrides any system
+                message in *messages*).
+
+        Yields:
+            String text delta chunks as they arrive from the API.
+
+        Raises:
+            ProviderError: On SDK import failure or API error.
+        """
+        if not _ANTHROPIC_AVAILABLE:
+            raise ProviderError(
+                "anthropic SDK is not installed. Run: pip install anthropic"
+            )
+
+        system_content: str = system
+        api_messages: list[dict] = []
+        for msg in messages:
+            if msg.role == "system":
+                if not system_content:
+                    system_content = msg.content
+            else:
+                api_messages.append({"role": msg.role, "content": msg.content})
+
+        call_kwargs: dict[str, Any] = {
+            "model": self._model,
+            "max_tokens": 4096,
+            "messages": api_messages,
+        }
+        if system_content:
+            call_kwargs["system"] = system_content
+
+        try:
+            client = _anthropic_sdk.Anthropic(
+                api_key=self._api_key,
+                timeout=float(self._timeout),
+            )
+            with client.messages.stream(**call_kwargs) as stream:
+                for text in stream.text_stream:
+                    yield text
+        except _anthropic_sdk.APITimeoutError as exc:
+            raise ProviderError(
+                f"Anthropic stream timed out after {self._timeout}s: {exc}"
+            ) from exc
+        except _anthropic_sdk.AuthenticationError as exc:
+            raise ProviderError(f"Anthropic authentication failed: {exc}") from exc
+        except _anthropic_sdk.APIError as exc:
+            raise ProviderError(f"Anthropic API error during stream: {exc}") from exc
+        except Exception as exc:
+            raise ProviderError(f"Unexpected error streaming from Anthropic: {exc}") from exc
 
     # ------------------------------------------------------------------
     # Private helpers
