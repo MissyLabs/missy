@@ -27,6 +27,7 @@ from missy.config.settings import MissyConfig, ProviderConfig
 
 from .anthropic_provider import AnthropicProvider
 from .base import BaseProvider
+from .codex_provider import CodexProvider
 from .ollama_provider import OllamaProvider
 from .openai_provider import OpenAIProvider
 
@@ -37,6 +38,7 @@ logger = logging.getLogger(__name__)
 _PROVIDER_CLASSES: dict[str, type[BaseProvider]] = {
     "anthropic": AnthropicProvider,
     "openai": OpenAIProvider,
+    "openai-codex": CodexProvider,
     "ollama": OllamaProvider,
 }
 

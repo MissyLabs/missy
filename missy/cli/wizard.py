@@ -450,10 +450,15 @@ def run_wizard(config_path: str) -> None:
                 )
                 oauth_token = run_openai_oauth()
                 if oauth_token:
-                    # The access token is used as the API key for the OpenAI SDK.
+                    # OAuth tokens go to chatgpt.com/backend-api, not api.openai.com.
+                    # Switch provider name to openai-codex so the right provider is used.
+                    pkey = "openai-codex"
                     api_key = oauth_token
                     verify_results.append(("openai-oauth", True))
-                    console.print("    [green]OAuth token will be used as the bearer token.[/]")
+                    console.print(
+                        "    [green]OAuth token acquired.[/] "
+                        "Provider set to [bold]openai-codex[/] (chatgpt.com backend)."
+                    )
                 else:
                     console.print("    [yellow]OAuth flow failed or was skipped — falling back to API key.[/]")
                     api_key = _prompt_api_key(pkey, info)
@@ -505,12 +510,14 @@ def run_wizard(config_path: str) -> None:
 
         primary, fast, premium = _prompt_model(info)
 
-        if info["host"]:
-            allowed_hosts.append(info["host"])
-        # OAuth also requires auth.openai.com for the token endpoint.
-        if pkey == "openai":
-            if "auth.openai.com" not in allowed_hosts:
-                allowed_hosts.append("auth.openai.com")
+        # Add network allowlist entries for this provider.
+        provider_host = _PROVIDERS.get(pkey, _PROVIDERS.get("openai", {})).get("host")
+        if provider_host and provider_host not in allowed_hosts:
+            allowed_hosts.append(provider_host)
+        if pkey in ("openai", "openai-codex"):
+            for h in ("auth.openai.com", "chatgpt.com"):
+                if h not in allowed_hosts:
+                    allowed_hosts.append(h)
 
         providers_cfg.append(
             {
