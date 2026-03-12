@@ -26,7 +26,7 @@ from typing import Any, Callable, Literal
 logger = logging.getLogger(__name__)
 
 # Allowed values for AuditEvent.category
-EventCategory = Literal["network", "filesystem", "shell", "plugin", "scheduler", "provider"]
+EventCategory = Literal["network", "filesystem", "shell", "plugin", "scheduler", "provider", "channel"]
 
 # Allowed values for AuditEvent.result
 EventResult = Literal["allow", "deny", "error"]

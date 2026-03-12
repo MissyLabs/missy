@@ -4,101 +4,74 @@ Comparison of Missy against its two upstream inspirations:
 - **SkyClaw** — Rust, 15-crate workspace, ~59,100 LOC, autonomous agentic loop
 - **OpenClaw** — TypeScript, monorepo, 52+ bundled skills, 23+ channels, production assistant platform
 
+Updated: 2026-03-12.
+
 Gaps are grouped by priority. Features that are platform-specific (iOS/Android companion apps, macOS-only integrations, browser extension relay) are excluded as out-of-scope for a Linux Python implementation.
 
 ---
 
 ## Critical — Core Agent Functionality
 
-These gaps make Missy a single-turn chatbot rather than an autonomous agent.
+### 1. Multi-step agentic loop (SkyClaw) ✅ Implemented
 
-### 1. Multi-step agentic loop (SkyClaw)
+`AgentRuntime._tool_loop()` in `missy/agent/runtime.py` implements the full iterative loop:
+- Calls `provider.complete_with_tools()` via the circuit breaker each iteration.
+- Executes tool calls and feeds results back as messages.
+- Injects a verification prompt (from `agent/done_criteria.py`) after each tool round.
+- Respects `max_iterations` (default 10) with a final fallback completion when the limit is reached.
+- Falls back to single-turn mode when no tools are registered or `max_iterations == 1`.
 
-**What's missing:** The `AgentRuntime.run()` executes exactly one provider call and returns. Neither iterative tool use nor a think→act→verify loop exists. `max_iterations` is accepted but never used.
+### 2. Tool invocation in the agent loop (both) ✅ Implemented
 
-SkyClaw's loop:
-- Classify message (chat / order / stop) in one combined LLM call
-- If "order": immediate acknowledgement → enter tool loop
-- Each tool round injects a verification prompt before the next step
-- Loop continues until DONE criteria satisfied or iteration limit hit
-- Difficulty tiers (Simple → 2 rounds, Standard → 5, Complex → 10)
+`ToolRegistry` is called by `AgentRuntime._get_tools()` and `_execute_tool()` on every iteration.
 
-**Required additions:**
-- Iteration control driven by `max_iterations` in `AgentConfig`
-- Tool invocation inside the loop (the tool registry exists but is never called by the runtime)
-- Verification injection after tool calls
-- Classification gate (chat / action / stop) — "stop" should cancel the active task
+Built-in tools implemented in `missy/tools/builtin/`:
+- `file_read`, `file_write`, `file_delete`, `list_files`
+- `shell_exec` — policy-checked via `ShellPolicyEngine`
+- `web_fetch` — policy-checked via `PolicyHTTPClient`
+- `calculator`
+- `self_create_tool` — agent-authored persistent tools
 
-### 2. Tool invocation in the agent loop (both)
+### 3. Streaming responses (both) ✅ Implemented
 
-**What's missing:** `ToolRegistry` is fully implemented and policy-enforced, but `AgentRuntime` never calls it. Tools are never executed.
+All three providers (`AnthropicProvider`, `OpenAIProvider`, `OllamaProvider`) expose a `stream()` async generator method. `AgentRuntime` and channel implementations consume it for progressive token delivery.
 
-SkyClaw has 13 built-in tools: `shell`, `file_read`, `file_write`, `file_delete`, `web_fetch`, `git`, `browser`, `send_message`, `send_file`, `check_messages`, `memory_manage`, `key_manage`, `self_create_tool`.
+### 4. Function/tool calling protocol (both) ✅ Implemented
 
-**Required built-in tools for Missy (minimum viable set):**
-- `file_read` — reads a file (requires filesystem_read policy)
-- `file_write` — writes a file (requires filesystem_write policy)
-- `shell_exec` — runs a whitelisted command (requires shell policy)
-- `web_fetch` — HTTP GET via PolicyHTTPClient (requires network policy)
-- `list_files` — lists directory contents
+`BaseProvider` defines `ToolCall` / `ToolResult` dataclasses and `complete_with_tools()`.
+- `AnthropicProvider` and `OpenAIProvider` use native function-calling APIs.
+- `OllamaProvider` uses a prompted fallback: schemas injected into system prompt, JSON parsed from model output.
+- `AgentRuntime._tool_loop()` processes `finish_reason == "tool_calls"` and loops.
 
-### 3. Streaming responses (both)
+### 5. MCP (Model Context Protocol) integration (SkyClaw) ✅ Implemented
 
-**What's missing:** All providers return a single completed string. Both upstreams stream partial tokens to the channel as they arrive, giving immediate feedback.
-
-SkyClaw's `StreamBuffer` flushes on a configurable interval (default 1000ms) and edits messages in place on Telegram.
-
-OpenClaw streams with configurable coalescing and chunking per channel.
-
-**Required:** Async generator interface on `BaseProvider.complete()`, consumed by `AgentRuntime` and forwarded to the active channel's `send()`.
-
-### 4. Function/tool calling protocol (both)
-
-**What's missing:** Missy's providers return plain text. Neither structured tool-call parsing (Anthropic/OpenAI native function calling) nor a fallback prompted tool calling scheme is implemented.
-
-SkyClaw implements both:
-- Native function calling for providers that support it
-- Prompted tool calling fallback: tool schemas injected into system prompt; model text parsed for `{"response": "...", "tool_call": {...}}` JSON
-
-**Required:** `BaseProvider.complete()` must be able to return both a text response and a list of tool calls. The agent loop processes tool calls before continuing.
-
-### 5. MCP (Model Context Protocol) integration (SkyClaw)
-
-**What's missing:** No MCP support. SkyClaw's `McpManager` hot-loads any stdio or HTTP MCP server, auto-namespaces tools across servers, and lets the agent add/remove servers at runtime via `mcp_manage` and `self_add_mcp` tools.
-
-**Required:** `McpManager` class connecting to stdio subprocess or HTTP MCP servers; tool discovery and injection into `ToolRegistry`; `/mcp list/add/remove` CLI or CLI commands.
+- `missy/mcp/client.py` — `McpClient` connects to stdio subprocess or HTTP MCP servers.
+- `missy/mcp/manager.py` — `McpManager` hot-loads servers, auto-namespaces tools (`server__tool`), persists config to `~/.missy/mcp.json`, restarts dead servers via `health_check()`.
+- CLI: `missy mcp list/add/remove`.
 
 ---
 
 ## High — Resilience and Context Management
 
-### 6. Circuit breaker for provider failures (SkyClaw)
+### 6. Circuit breaker for provider failures (SkyClaw) ✅ Implemented
 
-**What's missing:** Provider errors are caught and re-raised. There is no backoff, cooldown, or circuit-breaker pattern.
+`missy/agent/circuit_breaker.py` — full Closed → Open → HalfOpen state machine:
+- Configurable failure threshold (default 5), base timeout 60 s, max timeout 300 s.
+- Exponential backoff: recovery timeout doubles on HalfOpen probe failure.
+- Thread-safe via `threading.Lock`.
+- Integrated into `AgentRuntime` as `self._circuit_breaker`; wraps every provider call.
 
-SkyClaw implements: Closed → Open → HalfOpen state machine, configurable failure threshold (default 5), exponential backoff with deterministic jitter (±25%), doubles recovery timeout on HalfOpen failure, caps at 5 minutes.
+### 7. Retry / self-correction on tool failure (SkyClaw) ❌ Remaining
 
-**Required:** `CircuitBreaker` wrapper around each provider in the registry, consulted before each call.
+`FailureTracker` per-tool failure counter and strategy-rotation prompt injection are not implemented. Tool failures return an error result and the agent loop continues, but there is no threshold-based strategy-rotation prompt ("analyze why this failed, list 3 alternatives").
 
-### 7. Retry / self-correction on tool failure (SkyClaw)
+### 8. Task checkpointing and startup recovery (SkyClaw) ❌ Remaining
 
-**What's missing:** If a tool call fails the agent returns an error. SkyClaw's `FailureTracker` counts per-tool failures; after N failures it injects a strategy-rotation prompt: "analyze why this failed, list 3 alternatives, execute the best one."
+No checkpoint is written after each tool round. Interrupted tasks are lost. No `RecoveryManager` scans for incomplete tasks on startup.
 
-**Required:** Per-tool failure counter in the agent loop; strategy injection prompt after threshold.
+### 9. Context window management (SkyClaw) ✅ Implemented
 
-### 8. Task checkpointing and startup recovery (SkyClaw)
-
-**What's missing:** If Missy is interrupted mid-task (crash, kill) the task is lost with no record.
-
-SkyClaw serializes session history to SQLite's `TaskQueue` after every tool round. On startup, `RecoveryManager` scans for incomplete tasks and classifies as Resume (valid checkpoint), Restart (no checkpoint), or Abandon (>24h old).
-
-**Required:** Checkpoint write after each tool round; startup scan in `AgentRuntime.__init__` or `gateway start`.
-
-### 9. Context window management (SkyClaw)
-
-**What's missing:** There is no token counting, no history pruning, and no truncation. Long sessions will silently exceed provider context limits.
-
-SkyClaw's 7-tier token budget:
+`missy/agent/context.py` — `ContextManager` with 7-tier token budget:
 1. System prompt (always)
 2. Tool definitions
 3. Task state / DONE criteria
@@ -107,283 +80,212 @@ SkyClaw's 7-tier token budget:
 6. Cross-task learnings (≤5% of budget)
 7. Older history (fills remainder, newest-first)
 
-History pruning assigns 5 importance levels to messages, preserves atomic tool+result pairs, and drops oldest low-importance messages first.
+History pruning assigns importance levels to messages, preserves atomic tool+result pairs, and drops oldest low-importance messages first. Called by `AgentRuntime._build_context_messages()`.
 
-OpenClaw implements session compaction (history summarization by LLM) with `postCompactionSections` for selective preservation.
+### 10. Cost tracking and budget limits (SkyClaw) ❌ Remaining
 
-**Required:** Token counting on messages, `ContextManager` applying budget rules before each provider call.
+No per-token cost tracking, no pricing table in `ProviderConfig`, no `max_spend_usd` enforcement. Token usage is not accumulated across runs.
 
-### 10. Cost tracking and budget limits (SkyClaw)
+### 11. Resilient memory with failover (SkyClaw) ✅ Implemented
 
-**What's missing:** No per-token cost tracking. SkyClaw has a full pricing table (cost per 1M input/output tokens for each model), tracks spend per task, and enforces `max_spend_usd` limits.
+`missy/memory/resilient.py` — `ResilientMemoryStore` wraps the primary backend with an in-memory dict cache. On primary I/O failure all operations fall back to the cache transparently; auto-triggers repair after consecutive failures; syncs cache back to primary on recovery.
 
-**Required:** Pricing table in `ProviderConfig`, spend accumulator in `AgentRuntime`, enforcement check before each provider call.
+### 12. Watchdog / subsystem health monitor (SkyClaw) ✅ Implemented
 
-### 11. Resilient memory with failover (SkyClaw)
-
-**What's missing:** `MemoryStore` reads/writes a JSON file directly. Any I/O error raises an exception and the store is unavailable.
-
-SkyClaw's `ResilientMemory`: wraps primary backend with in-memory `dict` cache; on primary failure, all operations fall back to cache transparently; auto-triggers repair after N consecutive failures; syncs cache back to primary on recovery.
-
-**Required:** `ResilientMemoryStore` wrapper with in-memory fallback.
-
-### 12. Watchdog / subsystem health monitor (SkyClaw)
-
-**What's missing:** `missy doctor` runs a one-shot check. There is no ongoing background health monitoring.
-
-SkyClaw's `Watchdog` runs on a configurable interval (default 60s), monitors provider/memory/channel subsystems, tracks consecutive failures, logs transitions (info→warn→error), and recommends shutdown if health is critical.
-
-**Required:** Background task in `gateway start` that periodically checks all subsystems and emits health audit events.
+`missy/agent/watchdog.py` — background task that runs on a configurable interval (default 60 s), monitors provider/memory/channel subsystems, tracks consecutive failures, logs state transitions, and emits health audit events. Integrated into `gateway start`.
 
 ---
 
 ## High — Missing Built-in Tools
 
-### 13. File operation tools
+### 13. File operation tools ✅ Implemented
 
-Neither `file_read` nor `file_write` nor `file_delete` tools exist, only the policy engines that would gate them. The agent cannot read or write files.
+`missy/tools/builtin/file_read.py`, `file_write.py`, `file_delete.py`, `list_files.py` — each checks `FilesystemPolicyEngine` before operating.
 
-**Required:** `FileReadTool`, `FileWriteTool`, `FileDeleteTool`, `ListFilesTool` in `missy/tools/builtin/` — each checks `FilesystemPolicyEngine` before operating.
+### 14. Shell execution tool ✅ Implemented
 
-### 14. Shell execution tool
+`missy/tools/builtin/shell_exec.py` — passes commands through `ShellPolicyEngine.check_command()` before executing via `subprocess` with timeout and output cap.
 
-`ShellPolicy` exists and is fully implemented. No tool actually runs a shell command.
+### 15. Web fetch tool ✅ Implemented
 
-**Required:** `ShellExecTool` that passes the command through `ShellPolicyEngine.check_command()` before executing via `subprocess` with timeout and output cap.
-
-### 15. Web fetch tool
-
-`PolicyHTTPClient` exists. No tool exposes it to the agent.
-
-**Required:** `WebFetchTool` that issues a GET via `create_client()` after `NetworkPolicyEngine` approval.
+`missy/tools/builtin/web_fetch.py` — issues GET via `PolicyHTTPClient` after `NetworkPolicyEngine` approval.
 
 ---
 
 ## High — Intelligence Features
 
-### 16. DONE criteria engine for compound tasks (SkyClaw)
+### 16. DONE criteria engine for compound tasks (SkyClaw) ✅ Implemented
 
-**What's missing:** The agent has no mechanism to determine when a multi-step task is complete.
+`missy/agent/done_criteria.py` — detects compound tasks, generates verifiable DONE conditions, and provides `make_verification_prompt()` injected by `AgentRuntime._tool_loop()` after each tool round.
 
-SkyClaw: detects compound tasks (numbered lists, multiple imperatives, "and/then" sequences) heuristically; injects a "define DONE conditions" prompt before execution; tracks verifiable conditions; re-prompts if any criterion unmet; continues loop until all verified.
+### 17. Cross-task learning (SkyClaw) ✅ Implemented
 
-**Required:** `DoneCriteria` class, compound-task detector, verification injection in the agent loop.
+`missy/agent/learnings.py` — `extract_learnings()` runs post-task (called by `AgentRuntime._record_learnings()` after tool-augmented runs). `TaskLearning` objects are persisted via `SQLiteMemoryStore.save_learning()`. `ContextManager` retrieves relevant lessons and injects them at ≤5% of token budget.
 
-### 17. Cross-task learning (SkyClaw)
+### 18. Prompt self-tuning / patch system (SkyClaw) ✅ Implemented
 
-**What's missing:** Missy forgets everything between sessions. SkyClaw extracts structured learnings after each task (task_type, approach, outcome, lesson) and injects relevant ones (≤5% of token budget) into future tasks.
+`missy/agent/prompt_patches.py` — `PromptPatchManager` with propose/review/approve/expire lifecycle (ToolUsageHint, ErrorAvoidance, WorkflowPattern, DomainKnowledge, StylePreference). Tracks per-patch success rate; auto-expires underperforming patches.
+CLI: `missy patches list/approve/reject`.
 
-**Required:** `extract_learnings()` post-task, `TaskLearning` storage in `MemoryStore`, retrieval and injection in `ContextManager`.
+### 19. Tiered model routing (SkyClaw) ✅ Implemented
 
-### 18. Prompt self-tuning / patch system (SkyClaw)
+`missy/providers/registry.py` — `ModelRouter` routes to `fast` / `primary` / `premium` tiers based on message length, tool count, complexity keywords (debug/architect/refactor → premium), and history length. User prefix overrides (`!fast`, `!best`) supported.
 
-**What's missing:** No mechanism to improve the system prompt based on observed outcomes.
+### 20. Multiple API key rotation (SkyClaw) ✅ Implemented
 
-SkyClaw proposes prompt patches after tasks (ToolUsageHint, ErrorAvoidance, WorkflowPattern, DomainKnowledge, StylePreference), requires user approval via `/patches` before activation, tracks per-patch success rate, and auto-expires underperforming patches.
-
-**Required:** `PromptPatchManager` with propose/review/approve/expire lifecycle; `/patches` CLI command.
-
-### 19. Tiered model routing (SkyClaw)
-
-**What's missing:** Provider selection is first-configured or CLI-specified. No dynamic routing based on task complexity.
-
-SkyClaw routes to `fast` / `primary` / `premium` tiers based on message length, tool count, keywords (debug/architect/refactor → premium), and history length. Users can override with `!fast` or `!best` prefixes.
-
-**Required:** `ModelRouter` in `AgentRuntime`; tier configuration in `ProviderConfig`; message complexity scoring; user prefix overrides.
-
-### 20. Multiple API key rotation (SkyClaw)
-
-**What's missing:** Each provider takes a single `api_key`. SkyClaw accepts a list of keys and rotates on rate-limit or auth errors.
-
-**Required:** `keys: list[str]` in `ProviderConfig`; atomic round-robin on 429/401 responses.
+`missy/providers/registry.py` — providers accept `api_keys: list[str]`; atomic round-robin rotation on 429/401 responses via `rotate_key()`.
 
 ---
 
 ## Medium — Execution and Security
 
-### 21. Execution approval flow (OpenClaw)
+### 21. Execution approval flow (OpenClaw) ✅ Implemented
 
-**What's missing:** `ApprovalRequiredError` was added but there is no mechanism to pause execution, present the action to the user, wait for approval, and resume.
+`missy/agent/approval.py` — `ApprovalGate` pauses execution on `ApprovalRequiredError`, presents the action to the user/channel, waits for approve/deny, and resumes. Per-agent glob allowlists for pre-approved commands. Discord integration via `approve`/`deny` slash commands.
+CLI: `missy approvals list`.
 
-OpenClaw's approval system: request → 15s grace period → user approves/denies → `consumeAllowOnce()` replay protection. Supports per-agent glob allowlists for pre-approved commands. Approval forwarding to Discord/Telegram with `approve`/`deny` slash commands.
+### 22. Vault / encrypted secrets store (SkyClaw) ✅ Implemented
 
-**Required:** `ApprovalGate` class; agent loop yields on `ApprovalRequiredError`; channel receives approval prompt; `missy approvals` CLI commands.
+`missy/security/vault.py` — `Vault` class using ChaCha20-Poly1305 (via `cryptography` package). Supports `vault://key-name` URI scheme for config references, resolved by the config loader. Key stored at `~/.missy/secrets/vault.key` (mode 0o600).
+CLI: `missy vault set/get/list/delete`.
 
-### 22. Vault / encrypted secrets store (SkyClaw)
+### 23. Outbound secret censoring (SkyClaw) ✅ Implemented
 
-**What's missing:** `~/.missy/secrets/` directory exists (created by `init`) but has no encryption or structured access. SkyClaw uses ChaCha20-Poly1305 with a `vault://` URI scheme for secret references in config.
+`missy/security/censor.py` — wraps channel `send()` with redaction of known API key patterns before delivery. All `agent.run()` responses are post-processed through `secrets_detector.redact()` before being printed to console or sent to a channel.
 
-**Required:** `VaultManager` with ChaCha20Poly1305 encryption (via `cryptography` package already in deps); `vault://key-name` resolution in config loader; `key_manage` tool.
+### 24. Docker sandbox for isolated task execution (OpenClaw) ❌ Remaining
 
-### 23. Outbound secret censoring (SkyClaw)
+No Docker/Podman wrapper for sub-task or scheduled job execution. No `SandboxConfig` in `MissyConfig`. No process isolation for shell or agent execution.
 
-**What's missing:** `SecretsDetector` detects secrets in inbound prompts. Nothing scans outbound responses before they are sent to the channel.
+### 25. Credential detection and deletion on inbound messages (SkyClaw) ❌ Remaining
 
-SkyClaw wraps every channel's `send()` with `SecretCensorChannel` which redacts known API keys from the text before delivery.
-
-**Required:** Post-process all `agent.run()` responses through `secrets_detector.redact()` before passing to the channel or printing to console.
-
-### 24. Docker sandbox for isolated task execution (OpenClaw)
-
-**What's missing:** SkyClaw has `security.sandbox = "mandatory"`. OpenClaw has full Docker lifecycle management for non-main agent sessions. Missy has no process isolation.
-
-OpenClaw's sandbox config: `image`, `readOnlyRoot`, `capDrop`, `seccompProfile`, `memory`, `cpus`, `pidsLimit`, `network`, `tmpfs`, `binds`.
-
-**Required:** Optional Docker/Podman wrapper for sub-task or scheduled job execution; `SandboxConfig` in `MissyConfig`; `missy sandbox list/explain` commands.
-
-### 25. Credential detection and deletion on inbound messages (SkyClaw)
-
-**What's missing:** Credentials detected in Discord messages are warned about but not deleted from the channel.
-
-SkyClaw deletes the message from the channel after reading it to prevent the key from sitting in chat history.
-
-**Required:** When `SecretsDetector.has_secrets(content)` is true on an inbound Discord message, call `rest.delete_message(channel_id, message_id)` and emit an audit event.
+`SecretsDetector` flags credentials in inbound Discord messages but does not delete the message from the channel. No `rest.delete_message()` call on detection.
 
 ---
 
 ## Medium — Scheduler Enhancements
 
-### 26. Raw cron expression support (OpenClaw)
+### 26. Raw cron expression support (OpenClaw) ✅ Implemented
 
-**What's missing:** The parser only handles `"every N units"`, `"daily at HH:MM"`, and `"weekly on DAY at HH:MM"`. OpenClaw accepts full 5- or 6-field cron expressions.
+`missy/scheduler/parser.py` — `_RAW_CRON_PATTERN` matches 5- or 6-field cron expressions and passes them to `CronTrigger.from_crontab()` via the `_cron_expression` key in the trigger config.
 
-**Required:** Detect and pass raw cron strings directly to APScheduler's `CronTrigger.from_crontab()`.
+### 27. Timezone support in scheduler (OpenClaw) ✅ Implemented
 
-### 27. Timezone support in scheduler (OpenClaw)
+`parse_schedule()` accepts an optional `tz: str` IANA timezone parameter. When supplied it is attached as `"timezone"` to cron and date trigger configs and forwarded to APScheduler.
+CLI: `missy schedule add --tz IANA_TIMEZONE`.
 
-**What's missing:** `parse_schedule()` has no timezone awareness. All cron jobs fire in local time.
+### 28. Job retry on failure (OpenClaw/SkyClaw) ✅ Implemented
 
-**Required:** `--tz IANA_TIMEZONE` option on `schedule add`; stored in `ScheduledJob`; passed to APScheduler trigger.
+`missy/scheduler/jobs.py` and `missy/scheduler/manager.py` — `ScheduledJob` carries `max_attempts` (default 3) and `backoff_seconds` array (30, 60, 300). `SchedulerManager._run_job()` retries on failure with the configured backoff.
 
-### 28. Job retry on failure (OpenClaw/SkyClaw)
+### 29. One-shot future-dated jobs (OpenClaw) ✅ Implemented
 
-**What's missing:** If a scheduled job fails (provider error, policy violation) it is silently skipped.
+`missy/scheduler/parser.py` — `_AT_PATTERN` matches `"at YYYY-MM-DD HH:MM"` / `"at YYYY-MM-DDTHH:MM"` and returns `{"trigger": "date", "run_date": ...}` for APScheduler's `DateTrigger`.
 
-SkyClaw/OpenClaw: configurable `max_attempts` (default 3), `backoff_ms` array (30s, 60s, 300s), `retry_on` error categories.
+### 30. Active-hours window for heartbeat/scheduler (SkyClaw) ✅ Implemented
 
-**Required:** Retry wrapper in `SchedulerManager._run_job()`; per-job `max_attempts` and `backoff_seconds` in `ScheduledJob`.
-
-### 29. One-shot future-dated jobs (OpenClaw)
-
-**What's missing:** All jobs are recurring. OpenClaw supports `--at <ISO datetime>` for one-shot execution.
-
-**Required:** `"at YYYY-MM-DD HH:MM"` format in `parse_schedule()`; APScheduler `DateTrigger`.
-
-### 30. Active-hours window for heartbeat/scheduler (SkyClaw)
-
-**What's missing:** Scheduled jobs fire at any hour. SkyClaw's heartbeat runner respects `active_hours = "08:00-22:00"`.
-
-**Required:** `active_hours: str` in `SchedulingPolicy`; skip-and-reschedule logic in job runner.
+`active_hours: str` field in `SchedulingPolicy` (format `"HH:MM-HH:MM"`). `missy/scheduler/jobs.py` and `manager.py` check active hours before executing jobs; jobs outside the window are skipped and rescheduled.
 
 ---
 
 ## Medium — Memory and Context
 
-### 31. Semantic / vector memory search (OpenClaw)
+### 31. Semantic / full-text memory search (OpenClaw/SkyClaw) ✅ Implemented
 
-**What's missing:** `MemoryStore.get_session_turns()` returns by session ID only. There is no text search or semantic retrieval.
+`missy/memory/sqlite_store.py` — `SQLiteMemoryStore` with FTS5 virtual table `turns_fts`. `search(query, limit, session_id)` method supports FTS5 prefix, phrase, and boolean operators. `ContextManager` injects relevant memories into each agent call at ≤15% of token budget.
 
-OpenClaw uses embedding providers (Voyage, Mistral, Gemini, OpenAI, Ollama) with MMR re-ranking, temporal decay scoring, and hybrid search (keyword + vector).
+Full vector/semantic search (embedding providers, MMR re-ranking, hybrid search) is not implemented — only keyword FTS is available. This makes this item partial relative to OpenClaw's full implementation.
 
-SkyClaw uses SQLite FTS with AND-logic keyword search plus configurable vector/keyword weight blend (default 0.7/0.3).
+### 32. Session compaction / history summarization (OpenClaw) ✅ Implemented
 
-**Required (minimum viable):** SQLite FTS-backed `MemoryStore` with `search(query, limit)` method; context manager injects relevant memories into each agent call.
+`missy/memory/store.py` — `compact_session(session_id)` summarizes old history using the LLM when token count exceeds threshold. Called by `ContextManager` when context pressure is detected.
 
-### 32. Session compaction / history summarization (OpenClaw)
+### 33. Sub-agent / task decomposition (SkyClaw/OpenClaw) ✅ Implemented
 
-**What's missing:** Conversation history grows unbounded in `MemoryStore`. OpenClaw compacts old history into a summary using the LLM when context pressure is detected.
-
-**Required:** `compact_session(session_id)` in `MemoryStore`; called by `ContextManager` when token count exceeds threshold.
-
-### 33. Sub-agent / task decomposition (SkyClaw/OpenClaw)
-
-**What's missing:** Missy has no mechanism to spawn isolated sub-agents for parallel or sequential subtask execution.
-
-SkyClaw: `DelegationManager` spawns `SubAgent` instances with scoped tool subsets, hard cap of 10 sub-agents / 3 concurrent, 300s timeout, no recursive delegation.
-
-OpenClaw: `sessions_spawn` tool with `mode=run|session`, depth limit 1–5, up to 20 children.
-
-**Required:** `SubAgentRunner`; `spawn_agent(task, tools, timeout)` tool; result aggregation back to primary agent.
+`missy/agent/sub_agent.py` — `SubAgentRunner` spawns isolated sub-agents with scoped tool subsets. Hard cap of 10 sub-agents / 3 concurrent, 300 s timeout, no recursive delegation. `spawn_agent(task, tools, timeout)` tool is callable from the primary agent.
 
 ---
 
 ## Medium — Heartbeat and Proactive Features
 
-### 34. Heartbeat system (SkyClaw/OpenClaw)
+### 34. Heartbeat system (SkyClaw/OpenClaw) ✅ Implemented
 
-**What's missing:** `missy gateway start` runs but has no periodic self-driven activity. SkyClaw's heartbeat reads `HEARTBEAT.md` every N minutes and sends it as a synthetic task to the agent.
+`missy/agent/heartbeat.py` — background loop in `gateway start`. `HeartbeatConfig` in `MissyConfig` (enabled, interval_seconds, active_hours). Reads `HEARTBEAT.md` on each tick and sends it as a synthetic task to the agent. `HEARTBEAT_OK` suppression file prevents redundant runs.
 
-**Required:** Background loop in `gateway start`; `HeartbeatConfig` in `MissyConfig`; `HEARTBEAT.md` checklist processing; `HEARTBEAT_OK` suppression file.
+### 35. Proactive task initiation (SkyClaw) ❌ Remaining
 
-### 35. Proactive task initiation (SkyClaw)
-
-**What's missing:** Tasks only originate from user input or the scheduler. SkyClaw supports file-change triggers (`FileChanged`), cron triggers, webhook triggers, and threshold triggers. All require explicit user opt-in.
-
-**Required:** `ProactiveManager` with `watchdog`-style file watching (via `watchdog` Python package) and webhook receiver (via `aiohttp`); `requires_confirmation` flag gates destructive actions.
+`ProactiveManager` with file-change triggers (`watchdog` package), webhook triggers, and threshold triggers is not implemented. Tasks originate only from user input or the scheduler.
 
 ---
 
 ## Low — Additional Channels
 
-### 36. Telegram channel
+### 36. Telegram channel ❌ Excluded
 
-SkyClaw has native Telegram with file transfer, streaming in-place edits, image download for vision models, and allowlist-based access control.
+Excluded from Missy by user decision. No `TelegramChannel` implementation is planned.
 
-OpenClaw adds topic-based agent routing, webhook/polling mode, and custom commands.
+### 37. Slack channel ❌ Excluded
 
-**Required:** `TelegramChannel` implementing `BaseChannel`; `python-telegram-bot` or `aiogram` library.
+Excluded from Missy by user decision. No `SlackChannel` implementation is planned.
 
-### 37. Slack channel
+### 38. Webhook channel (OpenClaw) ✅ Implemented
 
-Both upstreams support Slack. OpenClaw uses Bolt.
-
-**Required:** `SlackChannel` implementing `BaseChannel`; `slack_bolt` library.
-
-### 38. Webhook channel
-
-OpenClaw supports inbound webhooks as a channel, allowing external systems to trigger the agent.
-
-**Required:** `WebhookChannel`; HTTP listener in `gateway start`; shared secret validation; policy gating.
+`missy/channels/webhook.py` — `WebhookChannel` provides an HTTP listener for inbound webhooks. Shared secret validation enforced. Policy gating applied to all inbound requests. Activated via `gateway start`.
 
 ---
 
 ## Low — Developer Experience and Operations
 
-### 39. OpenTelemetry integration (SkyClaw/OpenClaw)
+### 39. OpenTelemetry integration (SkyClaw/OpenClaw) ✅ Implemented
 
-**What's missing:** Audit events are JSONL only. Both upstreams export traces and metrics to an OTEL collector.
+`missy/observability/otel.py` — `init_otel(cfg)` initialises `opentelemetry-sdk` and `opentelemetry-exporter-otlp`. `OtelExporter` wraps `AuditLogger`. Config: `observability.otel_enabled` / `otel_endpoint` in `config.yaml`. Disabled by default.
 
-**Required:** `opentelemetry-sdk` + `opentelemetry-exporter-otlp` in dependencies; `OtelExporter` wrapping `AuditLogger`; `observability.otel_enabled` / `otel_endpoint` in config.
+### 40. Config hot-reload (OpenClaw) ✅ Implemented
 
-### 40. Config hot-reload (OpenClaw)
+`missy/config/hotreload.py` — `watchdog`-based file watcher on `config.yaml`. Debounced reload re-applies config to `PolicyEngine`, `ProviderRegistry`, and `SchedulerManager` without restart.
 
-**What's missing:** Config is loaded once at startup. OpenClaw supports `hot` reload mode (debounced file watcher re-applies config without restart).
+### 41. Multiple API keys per provider (SkyClaw) ✅ Implemented
 
-**Required:** `watchdog`-based file watcher on `config.yaml`; reload signals to `PolicyEngine`, `ProviderRegistry`, and `SchedulerManager`.
+`ProviderConfig` accepts `api_keys: list[str]`. Round-robin rotation with atomic index advance on 429/401 responses, implemented in `missy/providers/registry.py`.
 
-### 41. Multiple API keys per provider (SkyClaw)
+### 42. Agent-authored persistent custom tools (SkyClaw) ✅ Implemented
 
-**What's missing:** `ProviderConfig.api_key` is a single optional string. SkyClaw accepts `keys: list[str]` and rotates atomically on 429/401.
+`missy/tools/builtin/self_create_tool.py` — `SelfCreateTool` writes bash/Python scripts to `~/.missy/custom-tools/`. `ToolRegistry` dynamically re-registers them on next agent run, making them persistent across restarts.
 
-**Required:** `api_keys: list[str]` in `ProviderConfig`; round-robin index in provider; rotate on rate-limit.
+### 43. Failure alert routing for scheduled jobs (OpenClaw) ✅ Implemented
 
-### 42. Agent-authored persistent custom tools (SkyClaw)
+`missy/scheduler/manager.py` — consecutive failure counter in `ScheduledJob`. After a configurable threshold of consecutive failures, an alert is routed to the configured Discord channel (and emitted as an audit event).
 
-**What's missing:** Tools are only registered at startup. SkyClaw's `self_create_tool` lets the agent write bash/python/node scripts to `~/.skyclaw/custom-tools/` which persist across restarts.
+### 44. Session cleanup CLI (OpenClaw) ✅ Implemented
 
-**Required:** `SelfCreateTool` that writes scripts to `~/.missy/custom-tools/`; dynamic re-registration in `ToolRegistry`.
+`missy sessions cleanup [--dry-run] [--before DAYS]` — TTL-based purge in `SQLiteMemoryStore.cleanup()`. Default retention: 30 days. `--dry-run` reports what would be deleted without acting.
 
-### 43. Failure alert routing for scheduled jobs (OpenClaw)
+---
 
-**What's missing:** Scheduled job failures are audited but not surfaced. OpenClaw triggers a `failureAlert` after N consecutive failures with routing to a configured channel.
+## Additional Capabilities Not in Original 44 Gaps
 
-**Required:** Consecutive failure counter in `ScheduledJob`; alert routing to Discord when threshold exceeded.
+These were implemented beyond the original gap list:
 
-### 44. Session cleanup CLI (OpenClaw)
+### Onboarding wizard ✅ Implemented
 
-**What's missing:** Memory store entries accumulate indefinitely. OpenClaw prunes sessions older than 30 days (500-entry cap) with a `sessions cleanup --dry-run` command.
+`missy/cli/wizard.py` — `missy setup` guides the user through workspace selection, provider configuration (Anthropic, OpenAI, Ollama), API key entry with masking and env-var detection, model tier selection, connectivity verification, and atomic `config.yaml` write. Includes vault and OAuth paths.
 
-**Required:** `missy sessions cleanup [--dry-run] [--before DAYS]` command; TTL-based purge in `MemoryStore`.
+### OpenAI OAuth PKCE flow ✅ Implemented
+
+`missy/cli/oauth.py` — full PKCE S256 OAuth 2.0 flow against `auth.openai.com`. Local callback server on port 1455 with headless/SSH tunnel fallback. JWT parsing extracts `account_id` and email. Tokens persisted at `~/.missy/secrets/openai-oauth.json` (mode 0o600) with automatic refresh support.
+
+### Anthropic setup-token flow ✅ Implemented
+
+`missy/cli/anthropic_auth.py` — paste flow for Claude Code setup-tokens (`sk-ant-oat01-...`). Mandatory ToS acknowledgement prompt (Anthropic updated ToS on 2026-02-19 to prohibit third-party use of setup-tokens). Token classification (API key vs. setup-token), expiry tracking, vault storage option. `get_current_token()` for runtime resolution (env → token file → vault).
+
+### Voice channel ✅ Implemented
+
+`missy/channels/voice/` — full implementation including:
+- WebSocket server for edge node communication
+- STT (speech-to-text) and TTS (text-to-speech) pipeline
+- `DeviceRegistry` (`channels/voice/registry.py`) — persistent JSON registry of edge nodes with PBKDF2-HMAC-SHA256 token auth, pairing/approval workflow, sensor data (occupancy, noise level), audio log retention, and atomic writes
+- Per-device `policy_mode` (`full`, `safe-chat`, `muted`)
+- CLI: `missy devices list/pair/unpair/status/policy` and `missy voice status/test`
 
 ---
 
@@ -399,18 +301,19 @@ The following OpenClaw features are excluded as they require platform infrastruc
 - ClawHub package registry
 - ACP (Agent Control Protocol) full implementation
 - QR code pairing flow
-- Voice pipeline / TTS (ElevenLabs, Edge TTS)
 - mDNS/Bonjour gateway discovery
 - Tailscale Funnel integration
 - SSH tunnel transport
 
 ---
 
-## Summary by Priority
+## Summary by Status
 
-| Priority | # Gaps | Key Items |
+| Status | Count | Items |
 |---|---|---|
-| Critical | 5 | Multi-step loop, tool invocation, streaming, function calling protocol, MCP |
-| High | 15 | Circuit breaker, checkpointing, context management, cost tracking, file/shell/web tools, DONE criteria, cross-task learning, prompt patches, model tiering |
-| Medium | 13 | Approval flow, vault, outbound censoring, Docker sandbox, scheduler enhancements (cron syntax, timezone, retry, one-shot), vector search, compaction, sub-agents, heartbeat, proactive triggers |
-| Low | 6 | Telegram/Slack/webhook channels, OpenTelemetry, config hot-reload, custom agent-authored tools |
+| ✅ Implemented | 35 | #1-6, #9, #11-23, #26-34, #38-44 + wizard, OAuth, Anthropic auth, voice |
+| ⚠️ Partial | 1 | #31 (FTS search implemented; vector/semantic search not) |
+| ❌ Remaining | 6 | #7, #8, #10, #24, #25, #35 |
+| ❌ Excluded | 2 | #36 (Telegram), #37 (Slack) — user decision |
+
+**Original 44 gaps: 35 implemented, 1 partial, 6 remaining, 2 excluded by design.**

@@ -272,6 +272,32 @@ def init(ctx: click.Context) -> None:
 
 
 # ---------------------------------------------------------------------------
+# missy setup (onboarding wizard)
+# ---------------------------------------------------------------------------
+
+
+@cli.command()
+@click.pass_context
+def setup(ctx: click.Context) -> None:
+    """Interactive onboarding wizard — configure providers and write config.yaml.
+
+    Walks through workspace setup, AI provider selection (Anthropic / OpenAI /
+    Ollama), API key entry with masked preview and optional live verification,
+    model tier selection, and atomic config write.
+
+    Safe to re-run: prompts before overwriting an existing config.
+    """
+    from missy.cli.wizard import run_wizard
+
+    config_path = ctx.obj.get("config_path", "~/.missy/config.yaml") if ctx.obj else "~/.missy/config.yaml"
+    try:
+        run_wizard(config_path)
+    except (KeyboardInterrupt, click.Abort):
+        console.print("\n[dim]Setup aborted. Nothing was written.[/]")
+        sys.exit(0)
+
+
+# ---------------------------------------------------------------------------
 # missy ask
 # ---------------------------------------------------------------------------
 
@@ -1595,6 +1621,319 @@ def mcp_remove(ctx: click.Context, name: str) -> None:
     mgr = McpManager()
     mgr.remove_server(name)
     _print_success(f"MCP server [bold]{name}[/] removed.")
+
+
+# ---------------------------------------------------------------------------
+# missy devices
+# ---------------------------------------------------------------------------
+
+
+@cli.group()
+def devices() -> None:
+    """Edge node device management commands."""
+    pass
+
+
+@devices.command("list")
+@click.pass_context
+def devices_list(ctx: click.Context) -> None:
+    """List all registered edge nodes."""
+    from datetime import datetime
+
+    from missy.channels.voice.registry import DeviceRegistry
+
+    reg = DeviceRegistry()
+    reg.load()
+    nodes = reg.all()
+    if not nodes:
+        console.print("[dim]No edge nodes registered. Use a node's pair command to initiate pairing.[/]")
+        return
+    table = Table(title="Edge Nodes", show_lines=True)
+    table.add_column("Node ID", style="bold")
+    table.add_column("Name")
+    table.add_column("Room")
+    table.add_column("Status", justify="center")
+    table.add_column("Policy")
+    table.add_column("Last Seen")
+    table.add_column("Paired", justify="center")
+    for node in nodes:
+        paired = node.get("paired", False)
+        status_text = Text("paired", style="green") if paired else Text("pending", style="yellow")
+        paired_text = Text("yes", style="green") if paired else Text("no", style="yellow")
+        last_seen_ts = node.get("last_seen")
+        if last_seen_ts:
+            last_seen = datetime.fromtimestamp(last_seen_ts).strftime("%Y-%m-%d %H:%M")
+        else:
+            last_seen = "never"
+        table.add_row(
+            node.get("node_id", "")[:8],
+            node.get("name", ""),
+            node.get("room", ""),
+            status_text,
+            node.get("policy", "full"),
+            last_seen,
+            paired_text,
+        )
+    console.print(table)
+
+
+@devices.command("pair")
+@click.option("--node-id", default=None, help="Node ID to approve (omit to list pending and prompt).")
+@click.pass_context
+def devices_pair(ctx: click.Context, node_id: Optional[str]) -> None:
+    """Approve a pending edge node pairing request.
+
+    If --node-id is omitted, lists pending nodes and prompts for selection.
+    Prints the auth token on approval — the token is shown only once.
+    """
+    from missy.channels.voice.pairing import PairingManager
+    from missy.channels.voice.registry import DeviceRegistry
+
+    reg = DeviceRegistry()
+    reg.load()
+    mgr = PairingManager(registry=reg)
+
+    if node_id is None:
+        pending = [n for n in reg.all() if not n.get("paired", False)]
+        if not pending:
+            console.print("[dim]No pending pairing requests.[/]")
+            return
+        console.print("[bold]Pending nodes:[/]")
+        for i, node in enumerate(pending):
+            console.print(f"  [{i}] {node.get('node_id', '')[:8]}  {node.get('name', '')}  {node.get('room', '')}")
+        idx = click.prompt("Select index to approve", type=int)
+        if idx < 0 or idx >= len(pending):
+            _print_error("Invalid selection.")
+            sys.exit(1)
+        node_id = pending[idx]["node_id"]
+
+    try:
+        token = mgr.approve(node_id)
+        _print_success(f"Node [bold]{node_id[:8]}[/] approved.")
+        console.print(f"[bold yellow]Auth token (shown once):[/] [green]{token}[/]")
+    except Exception as exc:
+        _print_error(f"Failed to approve node: {exc}")
+        sys.exit(1)
+
+
+@devices.command("unpair")
+@click.argument("node_id")
+@click.confirmation_option(prompt="Remove this node?")
+@click.pass_context
+def devices_unpair(ctx: click.Context, node_id: str) -> None:
+    """Remove a paired edge node."""
+    from missy.channels.voice.registry import DeviceRegistry
+
+    reg = DeviceRegistry()
+    reg.load()
+    try:
+        reg.remove(node_id)
+        reg.save()
+        _print_success(f"Node [bold]{node_id[:8]}[/] removed.")
+    except KeyError:
+        _print_error(f"Node {node_id!r} not found.")
+        sys.exit(1)
+
+
+@devices.command("status")
+@click.pass_context
+def devices_status(ctx: click.Context) -> None:
+    """Show online/offline status of all edge nodes."""
+    from datetime import datetime
+
+    from missy.channels.voice.registry import DeviceRegistry
+
+    reg = DeviceRegistry()
+    reg.load()
+    nodes = reg.all()
+    if not nodes:
+        console.print("[dim]No edge nodes registered.[/]")
+        return
+    table = Table(title="Edge Node Status", show_lines=True)
+    table.add_column("Node ID", style="bold")
+    table.add_column("Name")
+    table.add_column("Room")
+    table.add_column("Status", justify="center")
+    table.add_column("Last Seen")
+    table.add_column("Occupancy", justify="center")
+    table.add_column("Noise Level", justify="right")
+    for node in nodes:
+        online = node.get("online", False)
+        status_text = Text("online", style="green") if online else Text("offline", style="red")
+        last_seen_ts = node.get("last_seen")
+        if last_seen_ts:
+            last_seen = datetime.fromtimestamp(last_seen_ts).strftime("%Y-%m-%d %H:%M")
+        else:
+            last_seen = "never"
+        occupancy = node.get("occupancy")
+        occupancy_str = str(occupancy) if occupancy is not None else "-"
+        noise = node.get("noise_level")
+        noise_str = f"{noise:.1f} dB" if noise is not None else "-"
+        table.add_row(
+            node.get("node_id", "")[:8],
+            node.get("name", ""),
+            node.get("room", ""),
+            status_text,
+            last_seen,
+            occupancy_str,
+            noise_str,
+        )
+    console.print(table)
+
+
+@devices.command("policy")
+@click.argument("node_id")
+@click.option(
+    "--mode",
+    type=click.Choice(["full", "safe-chat", "muted"]),
+    required=True,
+    help="Policy mode for this node.",
+)
+@click.pass_context
+def devices_policy(ctx: click.Context, node_id: str, mode: str) -> None:
+    """Set the policy mode for an edge node."""
+    from missy.channels.voice.registry import DeviceRegistry
+
+    reg = DeviceRegistry()
+    reg.load()
+    try:
+        reg.set_policy(node_id, mode)
+        reg.save()
+        _print_success(f"Node [bold]{node_id[:8]}[/] policy set to [bold]{mode}[/].")
+    except KeyError:
+        _print_error(f"Node {node_id!r} not found.")
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# missy voice
+# ---------------------------------------------------------------------------
+
+
+@cli.group()
+def voice() -> None:
+    """Voice channel management commands."""
+    pass
+
+
+@voice.command("status")
+@click.pass_context
+def voice_status(ctx: click.Context) -> None:
+    """Show voice channel configuration and STT/TTS engine status."""
+    import shutil
+
+    from missy.channels.voice.registry import DeviceRegistry
+
+    # Check faster-whisper availability
+    try:
+        import faster_whisper  # noqa: F401
+
+        whisper_status = Text("installed", style="green")
+    except ImportError:
+        whisper_status = Text("not installed", style="red")
+
+    # Check piper binary availability
+    piper_bin = shutil.which("piper")
+    piper_status = Text(piper_bin or "not found", style="green" if piper_bin else "red")
+
+    # Load config for voice channel settings
+    config_path = ctx.obj.get("config_path") if ctx.obj else None
+    voice_cfg: dict = {}
+    if config_path:
+        try:
+            import yaml
+
+            cfg_file = Path(config_path).expanduser()
+            if cfg_file.exists():
+                with cfg_file.open() as fh:
+                    raw = yaml.safe_load(fh) or {}
+                voice_cfg = raw.get("voice", {})
+        except Exception:
+            pass
+
+    host = voice_cfg.get("host", "0.0.0.0")
+    port = voice_cfg.get("port", 8765)
+    stt_engine = voice_cfg.get("stt", {}).get("engine", "faster-whisper")
+    stt_model = voice_cfg.get("stt", {}).get("model", "base.en")
+    tts_engine = voice_cfg.get("tts", {}).get("engine", "piper")
+    tts_voice = voice_cfg.get("tts", {}).get("voice", "en_US-lessac-medium")
+
+    reg = DeviceRegistry()
+    reg.load()
+    paired_count = sum(1 for n in reg.all() if n.get("paired", False))
+
+    table = Table(title="Voice Channel Status", show_lines=True)
+    table.add_column("Setting", style="bold")
+    table.add_column("Value")
+    table.add_row("Gateway", f"{host}:{port}")
+    table.add_row("STT Engine", stt_engine)
+    table.add_row("STT Model", stt_model)
+    table.add_row("TTS Engine", tts_engine)
+    table.add_row("TTS Voice", tts_voice)
+    table.add_row("faster-whisper", whisper_status)
+    table.add_row("piper binary", piper_status)
+    table.add_row("Paired nodes", str(paired_count))
+    console.print(table)
+
+
+@voice.command("test")
+@click.argument("node_id")
+@click.option(
+    "--text",
+    default="Missy voice channel test. Audio is working correctly.",
+    help="Text to synthesize and send.",
+)
+@click.pass_context
+def voice_test(ctx: click.Context, node_id: str, text: str) -> None:
+    """Send a test TTS phrase to an edge node.
+
+    Synthesizes the text using the configured TTS engine and notes in the
+    output what would be sent.  Since this runs outside a live gateway
+    session, it validates the TTS engine is functional rather than sending
+    to a live node.
+    """
+    import asyncio
+    import time
+
+    from missy.channels.voice.registry import DeviceRegistry
+    from missy.channels.voice.tts.piper import PiperTTS
+
+    # Validate node exists
+    reg = DeviceRegistry()
+    reg.load()
+    node = next((n for n in reg.all() if n.get("node_id", "").startswith(node_id)), None)
+    if node is None:
+        _print_error(f"Node {node_id!r} not found in registry.")
+        sys.exit(1)
+
+    console.print(f"Synthesizing test phrase for node [bold]{node_id[:8]}[/]...")
+    try:
+        tts = PiperTTS()
+
+        async def _synth() -> bytes:
+            return await tts.synthesize(text)
+
+        start = time.monotonic()
+        audio_bytes = asyncio.run(_synth())
+        elapsed = time.monotonic() - start
+
+        # Estimate duration: PCM 16-bit mono 22050 Hz is piper's default output rate
+        sample_rate = 22050
+        duration_s = len(audio_bytes) / (sample_rate * 2)
+        _print_success(
+            f"TTS synthesis succeeded in {elapsed:.2f}s — "
+            f"{len(audio_bytes):,} bytes, ~{duration_s:.1f}s of audio."
+        )
+        console.print(
+            f"[dim]Would send to node {node.get('name', node_id[:8])} "
+            f"in room {node.get('room', 'unknown')} via gateway WebSocket.[/]"
+        )
+    except FileNotFoundError:
+        _print_error("piper binary not found in PATH. Install piper and ensure it is on your PATH.")
+        sys.exit(1)
+    except Exception as exc:
+        _print_error(f"TTS synthesis failed: {exc}")
+        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
