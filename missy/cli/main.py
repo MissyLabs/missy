@@ -148,6 +148,15 @@ def _load_subsystems(config_path: str):
     init_audit_logger(cfg.audit_log_path)
     init_registry(cfg)
 
+    # Register built-in tools so the agent can use them.
+    try:
+        from missy.tools.registry import init_tool_registry
+        from missy.tools.builtin import register_builtin_tools
+        tool_registry = init_tool_registry()
+        register_builtin_tools(tool_registry)
+    except Exception:
+        pass
+
     # Initialize OpenTelemetry if configured.
     try:
         from missy.observability.otel import init_otel
