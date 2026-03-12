@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import shutil
 import time
 import wave
@@ -41,12 +42,25 @@ logger = logging.getLogger(__name__)
 # Default directory where Piper voice ONNX models are stored.
 _DEFAULT_VOICES_DIR = Path.home() / ".local" / "share" / "piper-voices"
 
+# Fallback path for user-local Piper install.
+_LOCAL_PIPER_BIN = Path.home() / ".local" / "bin" / "piper"
+
 # Default sample rate output by Piper (model-dependent; most Piper voices use 22050 Hz).
 _DEFAULT_SAMPLE_RATE = 22050
 
 # Session/task IDs forwarded to audit events.
 _SESSION_ID = "voice"
 _TASK_ID = "tts"
+
+
+def _piper_subprocess_env() -> dict[str, str]:
+    """Return env dict with LD_LIBRARY_PATH set for Piper shared libs."""
+    env = {**os.environ}
+    piper_lib = str(_LOCAL_PIPER_BIN.parent)
+    existing = env.get("LD_LIBRARY_PATH", "")
+    if piper_lib not in existing:
+        env["LD_LIBRARY_PATH"] = f"{piper_lib}:{existing}" if existing else piper_lib
+    return env
 
 
 def _pcm_to_wav(pcm_bytes: bytes, sample_rate: int, channels: int) -> bytes:
@@ -139,13 +153,16 @@ class PiperTTS(TTSEngine):
         if self._loaded:
             return  # Idempotent.
 
-        # Resolve binary.
+        # Resolve binary — check PATH first, then ~/.local/bin/piper.
         resolved_bin = shutil.which(self._piper_bin_arg)
+        if resolved_bin is None and _LOCAL_PIPER_BIN.is_file():
+            resolved_bin = str(_LOCAL_PIPER_BIN)
         if resolved_bin is None:
             raise RuntimeError(
                 f"Piper binary '{self._piper_bin_arg}' not found. "
                 "Download from https://github.com/rhasspy/piper/releases "
-                "and place it on PATH, or pass piper_bin='/absolute/path/to/piper'."
+                "and place it on PATH or at ~/.local/bin/piper, "
+                "or pass piper_bin='/absolute/path/to/piper'."
             )
         self._piper_bin = resolved_bin
 
@@ -255,6 +272,7 @@ class PiperTTS(TTSEngine):
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=_piper_subprocess_env(),
         )
 
         # Write text followed by a newline; Piper processes one utterance per line.
