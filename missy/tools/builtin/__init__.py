@@ -12,6 +12,23 @@ Example::
     registry = init_tool_registry()
     register_builtin_tools(registry)
 """
+from missy.tools.builtin.atspi_tools import (
+    AtSpiClickTool,
+    AtSpiGetTextTool,
+    AtSpiGetTreeTool,
+    AtSpiSetValueTool,
+)
+from missy.tools.builtin.browser_tools import (
+    BrowserClickTool,
+    BrowserCloseTool,
+    BrowserEvaluateTool,
+    BrowserFillTool,
+    BrowserGetContentTool,
+    BrowserGetUrlTool,
+    BrowserNavigateTool,
+    BrowserScreenshotTool,
+    BrowserWaitTool,
+)
 from missy.tools.builtin.calculator import CalculatorTool
 from missy.tools.builtin.discord_upload import DiscordUploadTool
 from missy.tools.builtin.file_delete import FileDeleteTool
@@ -32,6 +49,19 @@ from missy.tools.builtin.x11_tools import (
 )
 
 __all__ = [
+    "AtSpiClickTool",
+    "AtSpiGetTextTool",
+    "AtSpiGetTreeTool",
+    "AtSpiSetValueTool",
+    "BrowserClickTool",
+    "BrowserCloseTool",
+    "BrowserEvaluateTool",
+    "BrowserFillTool",
+    "BrowserGetContentTool",
+    "BrowserGetUrlTool",
+    "BrowserNavigateTool",
+    "BrowserScreenshotTool",
+    "BrowserWaitTool",
     "CalculatorTool",
     "DiscordUploadTool",
     "FileDeleteTool",
@@ -52,6 +82,19 @@ __all__ = [
 ]
 
 _ALL_TOOL_CLASSES = [
+    AtSpiClickTool,
+    AtSpiGetTextTool,
+    AtSpiGetTreeTool,
+    AtSpiSetValueTool,
+    BrowserClickTool,
+    BrowserCloseTool,
+    BrowserEvaluateTool,
+    BrowserFillTool,
+    BrowserGetContentTool,
+    BrowserGetUrlTool,
+    BrowserNavigateTool,
+    BrowserScreenshotTool,
+    BrowserWaitTool,
     CalculatorTool,
     DiscordUploadTool,
     FileDeleteTool,

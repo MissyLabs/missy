@@ -44,6 +44,12 @@ voice = [
     "numpy>=1.24",
     "soundfile>=0.12",
 ]
+# Browser automation (Firefox via Playwright) and GTK/X11 accessibility tools.
+# After installing playwright, run: playwright install firefox
+desktop = [
+    "playwright>=1.40",
+    "pyatspi>=2.46",
+]
 
 [project.scripts]
 missy = "missy.cli.main:cli"
