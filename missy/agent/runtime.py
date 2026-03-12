@@ -75,6 +75,11 @@ class AgentConfig:
         "If it requires running a command, call shell_exec now. "
         "Available tools: file_read, file_write, file_delete, list_files, "
         "shell_exec, web_fetch, calculator, self_create_tool. "
+        "X11 desktop tools available: x11_screenshot (capture screen), "
+        "x11_read_screen (screenshot + AI vision interpretation), "
+        "x11_click (click at coordinates), x11_type (type text), "
+        "x11_key (send keypress), x11_window_list (list open windows). "
+        "Use x11_read_screen to verify UI state after actions. "
         "Always use tools to get real information rather than guessing or describing."
     )
     max_iterations: int = 10

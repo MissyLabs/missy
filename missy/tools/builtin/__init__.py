@@ -21,6 +21,14 @@ from missy.tools.builtin.list_files import ListFilesTool
 from missy.tools.builtin.self_create_tool import SelfCreateTool
 from missy.tools.builtin.shell_exec import ShellExecTool
 from missy.tools.builtin.web_fetch import WebFetchTool
+from missy.tools.builtin.x11_tools import (
+    X11ClickTool,
+    X11KeyTool,
+    X11ReadScreenTool,
+    X11ScreenshotTool,
+    X11TypeTool,
+    X11WindowListTool,
+)
 
 __all__ = [
     "CalculatorTool",
@@ -32,6 +40,12 @@ __all__ = [
     "SelfCreateTool",
     "ShellExecTool",
     "WebFetchTool",
+    "X11ClickTool",
+    "X11KeyTool",
+    "X11ReadScreenTool",
+    "X11ScreenshotTool",
+    "X11TypeTool",
+    "X11WindowListTool",
     "register_builtin_tools",
 ]
 
@@ -45,6 +59,12 @@ _ALL_TOOL_CLASSES = [
     SelfCreateTool,
     ShellExecTool,
     WebFetchTool,
+    X11ClickTool,
+    X11KeyTool,
+    X11ReadScreenTool,
+    X11ScreenshotTool,
+    X11TypeTool,
+    X11WindowListTool,
 ]
 
 
