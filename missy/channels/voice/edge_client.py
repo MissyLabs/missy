@@ -73,14 +73,61 @@ def _record_audio(
     sample_rate: int = _DEFAULT_SAMPLE_RATE,
     channels: int = _DEFAULT_CHANNELS,
 ) -> bytes:
-    """Record audio from the default mic using GStreamer and return raw PCM bytes."""
+    """Record audio from the default mic and return raw PCM-16 bytes.
+
+    Tries pw-record (PipeWire native) first, falls back to GStreamer pipewiresrc.
+    """
     env = _ensure_runtime_dir()
 
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        wav_path = tmp.name
+
+    try:
+        # pw-record captures reliably from PipeWire, including over SSH.
+        cmd = [
+            "pw-record",
+            "--format=s16",
+            f"--rate={sample_rate}",
+            f"--channels={channels}",
+            wav_path,
+        ]
+
+        proc = subprocess.Popen(cmd, env=env, stderr=subprocess.PIPE)
+        time.sleep(duration)
+        proc.send_signal(signal.SIGINT)
+
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+
+        if not Path(wav_path).exists() or Path(wav_path).stat().st_size == 0:
+            return b""
+
+        # pw-record writes a WAV file. Extract raw PCM from it.
+        import wave
+        with wave.open(wav_path, "rb") as wf:
+            return wf.readframes(wf.getnframes())
+    except FileNotFoundError:
+        logger.warning("pw-record not found, trying GStreamer...")
+        return _record_audio_gst(duration, sample_rate, channels, env)
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(wav_path)
+
+
+def _record_audio_gst(
+    duration: float,
+    sample_rate: int,
+    channels: int,
+    env: dict[str, str],
+) -> bytes:
+    """Fallback: record audio using GStreamer pipewiresrc."""
     with tempfile.NamedTemporaryFile(suffix=".raw", delete=False) as tmp:
         raw_path = tmp.name
 
     try:
-        # GStreamer pipeline: capture from PipeWire → convert → save raw PCM
         cmd = [
             "gst-launch-1.0", "-q",
             "pipewiresrc", "do-timestamp=true",
@@ -92,8 +139,6 @@ def _record_audio(
         ]
 
         proc = subprocess.Popen(cmd, env=env, stderr=subprocess.PIPE)
-
-        # Record for the specified duration, then send EOS.
         time.sleep(duration)
         proc.send_signal(signal.SIGINT)
 
