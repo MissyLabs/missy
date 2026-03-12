@@ -15,7 +15,6 @@ Example::
 """
 from __future__ import annotations
 
-import shlex
 import subprocess
 from typing import Any, Optional
 
@@ -78,21 +77,17 @@ class ShellExecTool(BaseTool):
         """
         timeout = min(int(timeout), _MAX_TIMEOUT)
 
-        try:
-            args = shlex.split(command)
-        except ValueError as exc:
-            return ToolResult(success=False, output=None, error=f"Invalid command syntax: {exc}")
-
-        if not args:
+        if not command.strip():
             return ToolResult(success=False, output=None, error="command must not be empty")
 
         try:
             proc = subprocess.run(
-                args,
-                shell=False,
+                command,
+                shell=True,
                 capture_output=True,
-                cwd=cwd,
+                cwd=cwd or None,
                 timeout=timeout,
+                executable="/bin/bash",
             )
             combined: bytes = proc.stdout + proc.stderr
             if len(combined) > _MAX_OUTPUT_BYTES:
