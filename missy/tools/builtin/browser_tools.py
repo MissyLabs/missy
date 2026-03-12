@@ -113,6 +113,27 @@ class _SessionRegistry:
                 self._sessions[session_id] = BrowserSession(session_id, headless=headless)
             return self._sessions[session_id]
 
+    def has_active_session(self) -> bool:
+        """Return True if any browser session has a live context."""
+        with self._lock:
+            return any(s._context is not None for s in self._sessions.values())
+
+    def screenshot_active(self, path: str) -> bool:
+        """Take a Playwright screenshot from the most recent active session.
+
+        Returns True on success, False if no active session exists.
+        """
+        with self._lock:
+            for session in reversed(list(self._sessions.values())):
+                if session._context is not None:
+                    try:
+                        page = session.get_page()
+                        page.screenshot(path=path)
+                        return True
+                    except Exception:
+                        return False
+            return False
+
     def close(self, session_id: str) -> None:
         with self._lock:
             if session_id in self._sessions:

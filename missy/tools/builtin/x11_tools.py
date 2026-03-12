@@ -448,7 +448,21 @@ class X11ReadScreenTool(BaseTool):
     # ------------------------------------------------------------------
 
     def _take_screenshot(self, path: str, region: str) -> Optional[str]:
-        """Take a screenshot; return an error string or None on success."""
+        """Take a screenshot; return an error string or None on success.
+
+        If a Playwright browser session is active and no specific region
+        is requested, captures from the browser page directly — this is
+        more reliable than scrot which captures the desktop and may show
+        the wrong window.  Falls back to scrot for desktop/region captures.
+        """
+        if not region:
+            try:
+                from missy.tools.builtin.browser_tools import _registry as browser_registry
+                if browser_registry.screenshot_active(path):
+                    return None
+            except Exception:
+                pass
+
         if region:
             cmd = f"scrot -a {region} {path}"
         else:
