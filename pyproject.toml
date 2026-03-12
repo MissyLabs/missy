@@ -48,7 +48,8 @@ voice = [
 # After installing playwright, run: playwright install firefox
 desktop = [
     "playwright>=1.40",
-    "pyatspi>=2.46",
+    # pyatspi is a system package, not on PyPI.
+    # Install separately: sudo apt install python3-pyatspi
 ]
 
 [project.scripts]
