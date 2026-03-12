@@ -1,37 +1,29 @@
 # TEST_RESULTS
 
-- Timestamp: 2026-03-12 (Session 3)
+- Timestamp: 2026-03-12 23:27:44
 
 ## pytest
 ```
-1029 passed, 1 warning in 3.48s
+........................................................................ [  6%]
+........................................................................ [ 13%]
+........................................................................ [ 20%]
+........................................................................ [ 27%]
+........................................................................ [ 34%]
+........................................................................ [ 41%]
+........................................................................ [ 48%]
+........................................................................ [ 55%]
+........................................................................ [ 62%]
+........................................................................ [ 69%]
+........................................................................ [ 76%]
+........................................................................ [ 83%]
+........................................................................ [ 90%]
+........................................................................ [ 97%]
+.....................                                                    [100%]
+=============================== warnings summary ===============================
+tests/channels/test_discord_credential_delete.py::TestHandleMessageCredentialDetection::test_secret_message_is_dropped
+  /home/bmerriam/git/missy/tests/channels/test_discord_credential_delete.py:130: DeprecationWarning: There is no current event loop
+    return asyncio.get_event_loop().run_until_complete(coro)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+1029 passed, 1 warning in 3.86s
 ```
-
-## Test Breakdown by Area
-
-| Area | Tests | Status |
-|---|---|---|
-| agent/ | ~200 | pass |
-| channels/ | ~80 | pass |
-| cli/ | ~45 | pass |
-| config/ | ~30 | pass |
-| core/ | ~40 | pass |
-| memory/ | ~40 | pass |
-| observability/ | ~20 | pass |
-| plugins/ | ~20 | pass |
-| policy/ | ~60 | pass |
-| providers/ | ~50 | pass |
-| scheduler/ | ~30 | pass |
-| security/ | ~80 | pass |
-| skills/ | ~30 | pass |
-| tools/ | ~40 | pass |
-| unit/ (discord) | ~62 | pass |
-| integration/ | ~20 | pass |
-
-## Session 3 New Tests
-
-- 20 Discord thread management tests
-- 28 Docker sandbox tests
-- 13 session metadata tests
-
-Total new: 61 tests (976 → 1029)

@@ -28,10 +28,10 @@ _MAX_TIMEOUT = 300
 class ShellExecTool(BaseTool):
     """Execute a whitelisted shell command as a subprocess.
 
-    Commands are split with :func:`shlex.split` and passed directly to
-    :func:`subprocess.run` with ``shell=False``, preventing shell
-    metacharacter injection.  Both stdout and stderr are captured and
-    combined in the result output.
+    When a :class:`~missy.security.sandbox.SandboxConfig` is provided (or
+    the ``sandbox:`` section is present in the Missy config), commands are
+    routed through the Docker sandbox for isolated execution.  Otherwise
+    commands run directly via :func:`subprocess.run`.
 
     Attributes:
         name: ``"shell_exec"``
@@ -47,6 +47,16 @@ class ShellExecTool(BaseTool):
         "Always provide a non-empty command string."
     )
     permissions = ToolPermissions(shell=True)
+
+    def __init__(self, sandbox_config: Optional[Any] = None) -> None:
+        self._sandbox = None
+        if sandbox_config is not None:
+            try:
+                from missy.security.sandbox import get_sandbox
+
+                self._sandbox = get_sandbox(sandbox_config)
+            except Exception:
+                pass
 
     def execute(
         self,

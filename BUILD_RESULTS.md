@@ -1,10 +1,8 @@
 # BUILD_RESULTS
 
-- Timestamp: 2026-03-12 (Session 3)
-- Python version: 3.12.3
-- Source files: 116 Python files in missy/
-- Test files: 55 Python files in tests/
-- Tests: 1029 passing
+- Timestamp: 2026-03-12 23:27:44
+- Python version:
+Python 3.12.3
 
 ## Repository snapshot
 ```
@@ -138,6 +136,7 @@
 /home/bmerriam/git/missy/missy/scheduler/parser.py
 /home/bmerriam/git/missy/missy/security/censor.py
 /home/bmerriam/git/missy/missy/security/__init__.py
+/home/bmerriam/git/missy/missy/security/sandbox.py
 /home/bmerriam/git/missy/missy/security/sanitizer.py
 /home/bmerriam/git/missy/missy/security/secrets.py
 /home/bmerriam/git/missy/missy/security/vault.py
@@ -147,6 +146,7 @@
 /home/bmerriam/git/missy/missy/tools/base.py
 /home/bmerriam/git/missy/missy/tools/__init__.py
 /home/bmerriam/git/missy/missy/tools/registry.py
+/home/bmerriam/git/missy/OPENCLAW_GAP_ANALYSIS.md
 /home/bmerriam/git/missy/OPERATIONS.md
 /home/bmerriam/git/missy/prompt.md
 /home/bmerriam/git/missy/PROVIDERS.md
@@ -184,6 +184,7 @@
 /home/bmerriam/git/missy/tests/integration/__init__.py
 /home/bmerriam/git/missy/tests/integration/test_policy_enforcement.py
 /home/bmerriam/git/missy/tests/memory/__init__.py
+/home/bmerriam/git/missy/tests/memory/test_sqlite_sessions.py
 /home/bmerriam/git/missy/tests/memory/test_store.py
 /home/bmerriam/git/missy/tests/observability/__init__.py
 /home/bmerriam/git/missy/tests/observability/test_audit_logger.py
@@ -207,6 +208,7 @@
 /home/bmerriam/git/missy/tests/scheduler/test_manager.py
 /home/bmerriam/git/missy/tests/scheduler/test_parser.py
 /home/bmerriam/git/missy/tests/security/__init__.py
+/home/bmerriam/git/missy/tests/security/test_sandbox.py
 /home/bmerriam/git/missy/tests/security/test_sanitizer.py
 /home/bmerriam/git/missy/tests/security/test_secrets.py
 /home/bmerriam/git/missy/tests/skills/__init__.py
