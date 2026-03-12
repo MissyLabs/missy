@@ -202,6 +202,48 @@ class DiscordRestClient:
         except Exception as exc:
             logger.debug("typing indicator failed for %s: %s", channel_id, exc)
 
+    def delete_message(self, channel_id: str, message_id: str) -> bool:
+        """Delete a message from a Discord channel.
+
+        Used to remove messages that contain credentials or secrets detected
+        by SecretsDetector to prevent them from sitting in chat history.
+
+        Args:
+            channel_id: The channel containing the message.
+            message_id: The message snowflake ID to delete.
+
+        Returns:
+            True on success (HTTP 204), False if the message was not found
+            (HTTP 404) or the bot lacks permissions (HTTP 403).
+
+        Raises:
+            PolicyViolationError: If discord.com is not in the network policy.
+        """
+        url = f"{BASE}/channels/{channel_id}/messages/{message_id}"
+        try:
+            import httpx
+
+            response = httpx.delete(
+                url,
+                headers={k: v for k, v in self._headers().items() if k != "Content-Type"},
+                timeout=10,
+            )
+            if response.status_code == 204:
+                return True
+            if response.status_code in (403, 404):
+                logger.warning(
+                    "Could not delete Discord message %s/%s: HTTP %d",
+                    channel_id,
+                    message_id,
+                    response.status_code,
+                )
+                return False
+            response.raise_for_status()
+            return True
+        except Exception as exc:
+            logger.warning("delete_message failed for %s/%s: %s", channel_id, message_id, exc)
+            return False
+
     def register_slash_commands(
         self,
         application_id: str,

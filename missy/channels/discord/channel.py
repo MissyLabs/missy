@@ -265,6 +265,55 @@ class DiscordChannel(BaseChannel):
             logger.debug("Discord: ignoring own message")
             return
 
+        # 1b. Credential / secrets detection — delete message and warn if secrets found.
+        if content:
+            try:
+                from missy.security.secrets import SecretsDetector
+
+                _detector = SecretsDetector()
+                if _detector.has_secrets(content):
+                    message_id = str(data.get("id", ""))
+                    # Attempt to delete the message from Discord.
+                    deleted = False
+                    if message_id and self._rest is not None:
+                        try:
+                            deleted = self._rest.delete_message(channel_id, message_id)
+                        except Exception as _del_exc:
+                            logger.warning("Failed to delete credential message: %s", _del_exc)
+
+                    self._emit_audit(
+                        "discord.channel.credential_detected",
+                        "deny",
+                        {
+                            "author_id": author_id,
+                            "channel_id": channel_id,
+                            "message_id": message_id,
+                            "message_deleted": deleted,
+                        },
+                    )
+                    logger.warning(
+                        "Discord: credentials detected in message from %s in channel %s — message %s",
+                        author_id,
+                        channel_id,
+                        "deleted" if deleted else "could not be deleted",
+                    )
+                    # Send a warning back to the channel.
+                    if self._rest is not None:
+                        try:
+                            self._rest.send_message(
+                                channel_id,
+                                f"\u26a0\ufe0f <@{author_id}> Your message appeared to contain"
+                                f" credentials or secrets and has been"
+                                f" {'removed from this channel' if deleted else 'flagged'}."
+                                f" Please rotate any exposed keys immediately.",
+                            )
+                        except Exception:
+                            pass
+                    # Do NOT enqueue this message — drop it after warning.
+                    return
+            except Exception as _sec_exc:
+                logger.debug("Secrets detection error: %s", _sec_exc)
+
         # 2. Filter other bots.
         if not self._allow_bot_author(author, content, guild_id):
             self._emit_audit(

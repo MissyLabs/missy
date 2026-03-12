@@ -202,6 +202,64 @@ class VaultConfig:
 
 
 # ---------------------------------------------------------------------------
+# Proactive config
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ProactiveTriggerConfig:
+    """Configuration for a single proactive trigger loaded from YAML.
+
+    Attributes:
+        name: Unique identifier for the trigger.
+        trigger_type: One of ``"file_change"``, ``"disk_threshold"``,
+            ``"load_threshold"``, or ``"schedule"``.
+        enabled: When ``False`` the trigger is skipped entirely.
+        requires_confirmation: When ``True``, an :class:`ApprovalGate` must
+            confirm the trigger before the agent callback is invoked.
+        prompt_template: Template for the synthetic prompt.  Supports
+            ``{trigger_name}``, ``{trigger_type}``, and ``{timestamp}``.
+        watch_path: Directory or file path to watch (``file_change`` only).
+        watch_patterns: Glob patterns, e.g. ``["*.log"]``.
+        watch_recursive: Whether to recurse into subdirectories.
+        disk_path: Path to evaluate for ``disk_threshold`` triggers.
+        disk_threshold_pct: Fire when disk usage exceeds this percentage.
+        load_threshold: Fire when normalised 1-minute load average exceeds
+            this value (``load_threshold`` triggers only).
+        interval_seconds: Repeat interval for ``schedule`` triggers; also
+            used as the polling cadence cap for threshold triggers.
+        cooldown_seconds: Minimum seconds between consecutive firings.
+    """
+
+    name: str
+    trigger_type: str
+    enabled: bool = True
+    requires_confirmation: bool = False
+    prompt_template: str = ""
+    watch_path: str = ""
+    watch_patterns: list = field(default_factory=list)
+    watch_recursive: bool = False
+    disk_path: str = "/"
+    disk_threshold_pct: float = 90.0
+    load_threshold: float = 4.0
+    interval_seconds: int = 300
+    cooldown_seconds: int = 300
+
+
+@dataclass
+class ProactiveConfig:
+    """Controls proactive (autonomous) task initiation.
+
+    Attributes:
+        enabled: Master switch — when ``False`` no triggers are evaluated.
+        triggers: List of :class:`ProactiveTriggerConfig` instances.
+    """
+
+    enabled: bool = False
+    triggers: list[ProactiveTriggerConfig] = field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
 # Top-level config
 # ---------------------------------------------------------------------------
 
@@ -234,6 +292,7 @@ class MissyConfig:
     heartbeat: HeartbeatConfig = field(default_factory=HeartbeatConfig)
     observability: ObservabilityConfig = field(default_factory=ObservabilityConfig)
     vault: VaultConfig = field(default_factory=VaultConfig)
+    proactive: ProactiveConfig = field(default_factory=ProactiveConfig)
 
 
 # ---------------------------------------------------------------------------
@@ -336,6 +395,48 @@ def _parse_vault(data: dict[str, Any]) -> VaultConfig:
     )
 
 
+def _parse_proactive_trigger(raw: Any) -> ProactiveTriggerConfig:
+    """Parse a single proactive trigger dict from YAML."""
+    if not isinstance(raw, dict):
+        raise ConfigurationError(
+            f"Each proactive trigger must be a mapping, got {type(raw).__name__}."
+        )
+    name = raw.get("name")
+    if not name:
+        raise ConfigurationError("Each proactive trigger must have a 'name' field.")
+    trigger_type = raw.get("trigger_type")
+    if not trigger_type:
+        raise ConfigurationError(
+            f"Proactive trigger '{name}' is missing required field 'trigger_type'."
+        )
+    return ProactiveTriggerConfig(
+        name=str(name),
+        trigger_type=str(trigger_type),
+        enabled=bool(raw.get("enabled", True)),
+        requires_confirmation=bool(raw.get("requires_confirmation", False)),
+        prompt_template=str(raw.get("prompt_template", "")),
+        watch_path=str(raw.get("watch_path", "")),
+        watch_patterns=list(raw.get("watch_patterns", [])),
+        watch_recursive=bool(raw.get("watch_recursive", False)),
+        disk_path=str(raw.get("disk_path", "/")),
+        disk_threshold_pct=float(raw.get("disk_threshold_pct", 90.0)),
+        load_threshold=float(raw.get("load_threshold", 4.0)),
+        interval_seconds=int(raw.get("interval_seconds", 300)),
+        cooldown_seconds=int(raw.get("cooldown_seconds", 300)),
+    )
+
+
+def _parse_proactive(data: dict[str, Any]) -> ProactiveConfig:
+    """Parse the ``proactive`` section of a Missy config dict."""
+    triggers = [
+        _parse_proactive_trigger(raw) for raw in data.get("triggers", [])
+    ]
+    return ProactiveConfig(
+        enabled=bool(data.get("enabled", False)),
+        triggers=triggers,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -396,6 +497,7 @@ def load_config(path: str) -> MissyConfig:
             heartbeat=_parse_heartbeat(data.get("heartbeat") or {}),
             observability=_parse_observability(data.get("observability") or {}),
             vault=_parse_vault(data.get("vault") or {}),
+            proactive=_parse_proactive(data.get("proactive") or {}),
         )
     except ConfigurationError:
         raise
@@ -438,4 +540,5 @@ def get_default_config() -> MissyConfig:
         heartbeat=HeartbeatConfig(),
         observability=ObservabilityConfig(),
         vault=VaultConfig(),
+        proactive=ProactiveConfig(),
     )

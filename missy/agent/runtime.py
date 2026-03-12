@@ -181,6 +181,7 @@ class AgentRuntime:
                 messages=messages,
                 session_id=sid,
                 task_id=task_id,
+                user_input=user_input,
             )
         except ProviderError as exc:
             self._emit_event(
@@ -241,6 +242,7 @@ class AgentRuntime:
         messages: list[dict],
         session_id: str,
         task_id: str,
+        user_input: str = "",
     ) -> tuple[str, list[str]]:
         """Execute the multi-step provider loop.
 
@@ -254,6 +256,8 @@ class AgentRuntime:
             messages: Initial message list (user turn last).
             session_id: Session ID for kwargs forwarding.
             task_id: Task ID for kwargs forwarding.
+            user_input: Original user prompt, forwarded to the tool loop for
+                checkpointing.
 
         Returns:
             A 2-tuple of ``(final_response_text, list_of_tool_names_used)``.
@@ -269,6 +273,7 @@ class AgentRuntime:
                 tools=tools,
                 session_id=session_id,
                 task_id=task_id,
+                user_input=user_input,
             )
         else:
             response = self._single_turn(
@@ -288,6 +293,7 @@ class AgentRuntime:
         tools: list,
         session_id: str,
         task_id: str,
+        user_input: str = "",
     ) -> tuple[str, list[str]]:
         """Inner agentic tool-call loop.
 
@@ -297,7 +303,9 @@ class AgentRuntime:
         2. If the model requests tool calls, executes them and appends
            results as messages.
         3. Injects a verification prompt so the model can assess outcomes.
-        4. If the model returns a final text response, exits.
+        4. After each round of tool results, saves a checkpoint and checks
+           for repeated tool failures (strategy rotation).
+        5. If the model returns a final text response, exits.
 
         Falls back to single-turn :meth:`complete` if
         ``complete_with_tools`` is not implemented or fails at the protocol
@@ -310,95 +318,163 @@ class AgentRuntime:
             tools: List of :class:`~missy.tools.base.BaseTool` instances.
             session_id: For audit events.
             task_id: For audit events.
+            user_input: Original user prompt, used for checkpointing.
 
         Returns:
             A 2-tuple of ``(final_response_text, list_of_tool_names_used)``.
         """
         from missy.agent.done_criteria import make_verification_prompt
 
-        # Convert message dicts to Message objects for the provider
-        msg_objects = self._dicts_to_messages(system_prompt, messages)
+        # --- Feature #7: failure tracker (graceful degradation) ---
+        try:
+            from missy.agent.failure_tracker import FailureTracker as _FailureTracker
+            failure_tracker: Optional[_FailureTracker] = _FailureTracker(threshold=3)
+        except ImportError:
+            failure_tracker = None
+
+        # --- Feature #8: checkpoint manager (graceful degradation) ---
+        _cm = None
+        _checkpoint_id = None
+        try:
+            from missy.agent.checkpoint import CheckpointManager as _CheckpointManager
+            _cm = _CheckpointManager()
+            _checkpoint_id = _cm.create(session_id, task_id, user_input)
+        except Exception:
+            _cm = None
+            _checkpoint_id = None
 
         tool_names_used: list[str] = []
         # Mutable message list for the loop; starts from what context manager gave us
         loop_messages: list[dict] = list(messages)
 
-        for iteration in range(self.config.max_iterations):
-            provider_messages = self._dicts_to_messages(system_prompt, loop_messages)
+        try:
+            for iteration in range(self.config.max_iterations):
+                provider_messages = self._dicts_to_messages(system_prompt, loop_messages)
 
-            try:
-                response: CompletionResponse = self._circuit_breaker.call(
-                    provider.complete_with_tools,
-                    provider_messages,
-                    tools,
-                    system_prompt,
-                )
-            except AttributeError:
-                # Provider doesn't implement complete_with_tools; fall back
-                logger.debug(
-                    "Provider %r does not implement complete_with_tools; using complete()",
-                    provider.name,
-                )
-                fallback = self._single_turn(
-                    provider=provider,
-                    system_prompt=system_prompt,
-                    messages=loop_messages,
-                    session_id=session_id,
-                    task_id=task_id,
-                )
-                return fallback.content, tool_names_used
+                try:
+                    response: CompletionResponse = self._circuit_breaker.call(
+                        provider.complete_with_tools,
+                        provider_messages,
+                        tools,
+                        system_prompt,
+                    )
+                except AttributeError:
+                    # Provider doesn't implement complete_with_tools; fall back
+                    logger.debug(
+                        "Provider %r does not implement complete_with_tools; using complete()",
+                        provider.name,
+                    )
+                    fallback = self._single_turn(
+                        provider=provider,
+                        system_prompt=system_prompt,
+                        messages=loop_messages,
+                        session_id=session_id,
+                        task_id=task_id,
+                    )
+                    return fallback.content, tool_names_used
 
-            if response.finish_reason == "tool_calls" and response.tool_calls:
-                # Execute each tool call
-                tool_results: list[ToolResult] = []
-                for tc in response.tool_calls:
-                    tool_names_used.append(tc.name)
-                    tr = self._execute_tool(tc, session_id=session_id, task_id=task_id)
-                    tool_results.append(tr)
+                if response.finish_reason == "tool_calls" and response.tool_calls:
+                    # Execute each tool call
+                    tool_results: list[ToolResult] = []
+                    for tc in response.tool_calls:
+                        tool_names_used.append(tc.name)
+                        tr = self._execute_tool(tc, session_id=session_id, task_id=task_id)
+                        tool_results.append(tr)
 
-                # Append assistant message with tool_calls to loop history
-                loop_messages.append(
-                    {
-                        "role": "assistant",
-                        "content": response.content or "",
-                        "tool_calls": [
-                            {
-                                "id": tc.id,
-                                "name": tc.name,
-                                "arguments": tc.arguments,
-                            }
-                            for tc in response.tool_calls
-                        ],
-                    }
-                )
+                        # Feature #7: track failures / successes per tool
+                        if failure_tracker is not None:
+                            if tr.is_error:
+                                should_inject = failure_tracker.record_failure(tc.name, tr.content)
+                            else:
+                                failure_tracker.record_success(tc.name)
+                                should_inject = False
+                        else:
+                            should_inject = False
 
-                # Append tool result messages
-                for tr in tool_results:
+                    # Append assistant message with tool_calls to loop history
                     loop_messages.append(
                         {
-                            "role": "tool",
-                            "tool_call_id": tr.tool_call_id,
-                            "name": tr.name,
-                            "content": tr.content,
-                            "is_error": tr.is_error,
+                            "role": "assistant",
+                            "content": response.content or "",
+                            "tool_calls": [
+                                {
+                                    "id": tc.id,
+                                    "name": tc.name,
+                                    "arguments": tc.arguments,
+                                }
+                                for tc in response.tool_calls
+                            ],
                         }
                     )
 
-                # Inject verification prompt
-                verification = make_verification_prompt()
-                loop_messages.append({"role": "user", "content": verification})
+                    # Append tool result messages
+                    for tr in tool_results:
+                        loop_messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tr.tool_call_id,
+                                "name": tr.name,
+                                "content": tr.content,
+                                "is_error": tr.is_error,
+                            }
+                        )
 
-                # Continue loop to get model's next response
-                continue
+                    # Feature #7: inject strategy-rotation prompt when threshold hit
+                    if should_inject and failure_tracker is not None:
+                        # Use the last tc/tr from the loop (they stay in scope)
+                        strategy_prompt = failure_tracker.get_strategy_prompt(tc.name, tr.content)
+                        loop_messages.append({"role": "user", "content": strategy_prompt})
+                        try:
+                            self._emit_event(
+                                session_id=session_id,
+                                task_id=task_id,
+                                event_type="agent.tool.strategy_rotation",
+                                result="allow",
+                                detail={
+                                    "tool_name": tc.name,
+                                    "failure_count": failure_tracker.threshold,
+                                },
+                            )
+                        except Exception:
+                            pass
 
-            # finish_reason == "stop" or "length": we have a final response
-            final_text = response.content or ""
-            logger.debug(
-                "Tool loop completed after %d iteration(s); finish_reason=%r",
-                iteration + 1,
-                response.finish_reason,
-            )
-            return final_text, tool_names_used
+                    # Feature #8: checkpoint after each round of tool results
+                    if _cm is not None and _checkpoint_id is not None:
+                        try:
+                            _cm.update(_checkpoint_id, loop_messages, tool_names_used, iteration)
+                        except Exception:
+                            pass
+
+                    # Inject verification prompt
+                    verification = make_verification_prompt()
+                    loop_messages.append({"role": "user", "content": verification})
+
+                    # Continue loop to get model's next response
+                    continue
+
+                # finish_reason == "stop" or "length": we have a final response
+                final_text = response.content or ""
+                logger.debug(
+                    "Tool loop completed after %d iteration(s); finish_reason=%r",
+                    iteration + 1,
+                    response.finish_reason,
+                )
+                # Feature #8: mark checkpoint complete on success
+                if _cm is not None and _checkpoint_id is not None:
+                    try:
+                        _cm.complete(_checkpoint_id)
+                    except Exception:
+                        pass
+                return final_text, tool_names_used
+
+        except Exception:
+            # Feature #8: mark checkpoint failed on unhandled exception
+            if _cm is not None and _checkpoint_id is not None:
+                try:
+                    _cm.fail(_checkpoint_id)
+                except Exception:
+                    pass
+            raise
 
         # Iteration limit reached: return whatever content we have
         logger.warning(

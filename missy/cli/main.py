@@ -1189,31 +1189,90 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
     signal.signal(signal.SIGINT, _stop)
     signal.signal(signal.SIGTERM, _stop)
 
-    # Start Discord channel if configured.
-    if cfg.discord and cfg.discord.enabled and cfg.discord.accounts:
-        import asyncio
-        from missy.channels.discord.channel import DiscordChannel
+    # Start proactive manager if configured.
+    proactive_manager = None
+    try:
+        if hasattr(cfg, "proactive") and cfg.proactive.enabled and cfg.proactive.triggers:
+            from missy.agent.proactive import ProactiveManager, ProactiveTrigger
 
-        async def _run_discord():
-            channels = []
-            for account in cfg.discord.accounts:
-                ch = DiscordChannel(account_config=account)
-                await ch.start()
-                channels.append(ch)
-                console.print(f"[green]Discord channel started[/] ({account.token_env_var})")
+            triggers = [
+                ProactiveTrigger(
+                    name=t.name,
+                    trigger_type=t.trigger_type,
+                    enabled=t.enabled,
+                    requires_confirmation=t.requires_confirmation,
+                    prompt_template=t.prompt_template,
+                    watch_path=t.watch_path,
+                    watch_patterns=t.watch_patterns,
+                    watch_recursive=t.watch_recursive,
+                    disk_path=t.disk_path,
+                    disk_threshold_pct=t.disk_threshold_pct,
+                    load_threshold=t.load_threshold,
+                    interval_seconds=t.interval_seconds,
+                    cooldown_seconds=t.cooldown_seconds,
+                )
+                for t in cfg.proactive.triggers
+            ]
+
+            # Build a lightweight runtime for proactive prompts.
             try:
-                while not stop_event:
-                    await asyncio.sleep(1)
-            finally:
-                for ch in channels:
-                    await ch.stop()
+                from missy.agent.runtime import AgentConfig, AgentRuntime
 
-        asyncio.run(_run_discord())
-    else:
-        console.print("[dim]No Discord channels configured. Running in idle service mode.[/]")
-        import time
-        while not stop_event:
-            time.sleep(1)
+                _provider_name = next(iter(cfg.providers), "anthropic") if cfg.providers else "anthropic"
+                _agent_cfg = AgentConfig(provider=_provider_name)
+                _runtime = AgentRuntime(_agent_cfg)
+
+                def _proactive_callback(prompt: str, session_id: str) -> str:
+                    return _runtime.run(prompt, session_id=session_id)
+
+            except Exception as _rt_exc:
+                logger.warning("proactive: could not create AgentRuntime: %s", _rt_exc)
+
+                def _proactive_callback(prompt: str, session_id: str) -> str:  # type: ignore[misc]
+                    logger.info("proactive prompt [%s]: %s", session_id, prompt[:200])
+                    return ""
+
+            proactive_manager = ProactiveManager(
+                triggers=triggers,
+                agent_callback=_proactive_callback,
+            )
+            proactive_manager.start()
+            console.print(f"[green]Proactive manager started[/] ({len(triggers)} trigger(s))")
+    except Exception as _pe:
+        console.print(f"[yellow]Proactive manager failed to start: {_pe}[/]")
+
+    # Start Discord channel if configured.
+    try:
+        if cfg.discord and cfg.discord.enabled and cfg.discord.accounts:
+            import asyncio
+            from missy.channels.discord.channel import DiscordChannel
+
+            async def _run_discord():
+                channels = []
+                for account in cfg.discord.accounts:
+                    ch = DiscordChannel(account_config=account)
+                    await ch.start()
+                    channels.append(ch)
+                    console.print(f"[green]Discord channel started[/] ({account.token_env_var})")
+                try:
+                    while not stop_event:
+                        await asyncio.sleep(1)
+                finally:
+                    for ch in channels:
+                        await ch.stop()
+
+            asyncio.run(_run_discord())
+        else:
+            console.print("[dim]No Discord channels configured. Running in idle service mode.[/]")
+            import time
+            while not stop_event:
+                time.sleep(1)
+    finally:
+        if proactive_manager is not None:
+            try:
+                proactive_manager.stop()
+            except Exception as _stop_exc:
+                logger.debug("proactive: stop error: %s", _stop_exc)
 
     console.print("[dim]Gateway stopped.[/]")
 
