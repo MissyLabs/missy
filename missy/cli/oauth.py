@@ -12,14 +12,10 @@ Implements the Codex / ChatGPT OAuth flow:
 8. Expose :func:`load_token` and :func:`refresh_token_if_needed` for
    runtime use by the OpenAI provider.
 
-NOTE: OpenClaw's implementation requests only identity scopes
-(``openid profile email offline_access``), which causes 403 errors on
-all model calls because ``model.request`` is missing.  This
-implementation requests the full required scope set.
-
-The OAuth client ID is read from the environment variable
-``OPENAI_OAUTH_CLIENT_ID``.  Users who wish to use their own registered
-OAuth application can set this variable before running ``missy setup``.
+Uses the same client ID and parameters as OpenClaw's ``@mariozechner/pi-ai``
+package (``app_EMoamEEZ73f0CkXaXp7hrann``) so the flow is accepted by
+OpenAI's auth server.  Override with ``OPENAI_OAUTH_CLIENT_ID`` env var
+to use your own registered OAuth application.
 """
 
 from __future__ import annotations
@@ -49,16 +45,15 @@ console = Console()
 AUTH_BASE = "https://auth.openai.com"
 AUTHORIZE_URL = f"{AUTH_BASE}/oauth/authorize"
 TOKEN_URL = f"{AUTH_BASE}/oauth/token"
-REDIRECT_URI = "http://127.0.0.1:1455/auth/callback"
+REDIRECT_URI = "http://localhost:1455/auth/callback"
 CALLBACK_PORT = 1455
 
-# Scopes required for model inference (fixes the known OpenClaw bug where
-# only identity scopes were requested, resulting in 403 on all API calls).
-SCOPES = "openid profile email offline_access model.request api.responses.write"
+# Scopes — matches the @mariozechner/pi-ai package used by OpenClaw exactly.
+SCOPES = "openid profile email offline_access"
 
-# OAuth client ID — override via OPENAI_OAUTH_CLIENT_ID env var.
-# This is the client ID registered with OpenAI for your OAuth application.
-DEFAULT_CLIENT_ID = os.environ.get("OPENAI_OAUTH_CLIENT_ID", "")
+# Client ID from @mariozechner/pi-ai v0.57.1 (openclaw's OAuth dependency).
+# Override via OPENAI_OAUTH_CLIENT_ID env var to use your own registered app.
+DEFAULT_CLIENT_ID = os.environ.get("OPENAI_OAUTH_CLIENT_ID", "app_EMoamEEZ73f0CkXaXp7hrann")
 
 TOKEN_FILE = Path("~/.missy/secrets/openai-oauth.json").expanduser()
 
