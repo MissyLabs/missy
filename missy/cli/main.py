@@ -390,8 +390,10 @@ def ask(
 
 @cli.command()
 @click.option("--provider", default=None, help="Provider to use.")
+@click.option("--session", default="default", show_default=True,
+              help="Session ID for conversation continuity. Use 'default' to persist memory across runs.")
 @click.pass_context
-def run(ctx: click.Context, provider: Optional[str]) -> None:
+def run(ctx: click.Context, provider: Optional[str], session: str) -> None:
     """Start an interactive session with Missy.
 
     Type your messages and press Enter.  Type [bold]quit[/] or [bold]exit[/],
@@ -422,7 +424,7 @@ def run(ctx: click.Context, provider: Optional[str]) -> None:
         )
     )
 
-    session_id: Optional[str] = None
+    session_id: str = session  # stable across turns and re-invocations
 
     while True:
         # Render our own prompt via rich then delegate to the channel.
