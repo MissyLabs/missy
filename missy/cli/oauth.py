@@ -351,44 +351,66 @@ def run_openai_oauth(client_id: Optional[str] = None) -> Optional[str]:
     state = secrets.token_urlsafe(16)
     auth_url = _build_auth_url(cid, state, challenge)
 
-    # Try to start local callback server.
+    # Start local callback server (best-effort).
     _callback_event.clear()
     _callback_result.clear()
     server = _start_callback_server()
-    use_callback = server is not None
 
-    if use_callback:
-        console.print(
-            "  [dim]Local callback server started on port 1455.[/]\n"
-            "  Opening browser to OpenAI authorization page…"
-        )
+    if server:
+        console.print("  [dim]Callback server listening on localhost:1455.[/]")
     else:
-        console.print(
-            "  [yellow]Port 1455 is in use — falling back to manual URL paste.[/]\n"
-            "  (For remote/VPS: run [bold]ssh -L 1455:localhost:1455 user@host[/] first.)"
-        )
-        use_callback = False
+        console.print("  [yellow]Port 1455 is in use — automatic capture unavailable.[/]")
 
-    # Open browser.
-    opened = webbrowser.open(auth_url)
-    if not opened or not use_callback:
-        console.print(f"\n  Open this URL in your browser:\n  [cyan]{auth_url}[/]\n")
+    # Open browser and always print the URL.
+    webbrowser.open(auth_url)
+    console.print(
+        f"\n  [bold]Authorization URL:[/]\n  [cyan]{auth_url}[/]\n\n"
+        "  1. Complete sign-in in your browser.\n"
+        "  2. After authorizing, your browser will redirect to localhost:1455.\n"
+        "     If it shows a blank page or an error, that's fine — the code was captured.\n"
+        "  3. If automatic capture doesn't work, paste the full redirect URL below.\n"
+    )
 
-    # Get authorization code.
+    # Race: automatic callback vs. manual paste.
+    # prompt runs in a thread so the callback server can win concurrently.
     code: Optional[str] = None
+    paste_result: list[str] = []
+    paste_done = threading.Event()
 
-    if use_callback:
-        console.print("  [dim]Waiting up to 120 s for browser callback…[/]")
-        code = _wait_for_callback(server, timeout=120)
-        if not code:
-            console.print("  [yellow]Callback timed out. Falling back to manual paste.[/]")
+    def _prompt_thread() -> None:
+        try:
+            raw = click.prompt(
+                "  Paste redirect URL (or press Enter to wait for automatic capture)",
+                default="",
+                show_default=False,
+            )
+            paste_result.append(raw.strip())
+        except Exception:
+            paste_result.append("")
+        finally:
+            paste_done.set()
 
+    prompt_t = threading.Thread(target=_prompt_thread, daemon=True)
+    prompt_t.start()
+
+    # Wait for whichever arrives first: callback or paste.
+    if server:
+        while not paste_done.is_set():
+            if _callback_event.wait(timeout=0.5):
+                break
+        if _callback_event.is_set() and not _callback_result.get("error"):
+            code = _callback_result.get("code")
+            if code:
+                console.print("  [green]Automatic callback received.[/]")
+                server.shutdown()
+
+    # If automatic capture didn't get a code, use whatever was pasted.
     if not code:
-        raw = click.prompt(
-            "  Paste the full redirect URL (or just the 'code' value) from your browser",
-            default="",
-        )
-        code = _extract_code_from_url(raw)
+        paste_done.wait(timeout=120)
+        if server:
+            server.shutdown()
+        raw = paste_result[0] if paste_result else ""
+        code = _extract_code_from_url(raw) if raw else None
 
     if not code:
         console.print("  [red]No authorization code received. OAuth flow aborted.[/]")
