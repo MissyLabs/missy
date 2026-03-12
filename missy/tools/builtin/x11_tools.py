@@ -449,62 +449,46 @@ class X11ReadScreenTool(BaseTool):
     # ------------------------------------------------------------------
 
     def _call_vision(self, question: str, b64_image: str, token: str) -> str:
-        """Send the base64 image to the Codex endpoint and collect the answer."""
-        account_id = _extract_account_id(token)
+        """Send screenshot to OpenAI vision API (gpt-4o) for interpretation.
+
+        The Codex endpoint does not support image inputs — uses api.openai.com
+        with the standard Chat Completions vision format instead.
+        """
+        # Prefer a plain API key; OAuth tokens are for the Codex backend only.
+        api_key = os.environ.get("OPENAI_API_KEY") or token
         headers: dict[str, str] = {
-            "Authorization": f"Bearer {token}",
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
-        if account_id:
-            headers["chatgpt-account-id"] = account_id
-
         body: dict[str, Any] = {
-            "model": _DEFAULT_MODEL,
-            "store": False,
-            "stream": True,  # Codex endpoint requires stream=true
-            "input": [
+            "model": "gpt-4o",
+            "messages": [
                 {
                     "role": "user",
                     "content": [
-                        {"type": "input_text", "text": question},
+                        {"type": "text", "text": question},
                         {
-                            "type": "input_image",
-                            "image_url": f"data:image/png;base64,{b64_image}",
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/png;base64,{b64_image}",
+                                "detail": "high",
+                            },
                         },
                     ],
                 }
             ],
+            "max_tokens": 1000,
         }
 
-        parts: list[str] = []
-        with httpx.stream(
-            "POST",
-            _CODEX_ENDPOINT,
+        resp = httpx.post(
+            "https://api.openai.com/v1/chat/completions",
             headers=headers,
             json=body,
             timeout=60,
-        ) as resp:
-            resp.raise_for_status()
-            for line in resp.iter_lines():
-                if not line.startswith("data: "):
-                    continue
-                raw = line[6:].strip()
-                if raw in ("", "[DONE]"):
-                    continue
-                try:
-                    event = json.loads(raw)
-                except json.JSONDecodeError:
-                    continue
-                etype = event.get("type", "")
-                if etype == "response.output_text.delta":
-                    delta = event.get("delta", "")
-                    if delta:
-                        parts.append(delta)
-                elif etype in ("response.failed", "error"):
-                    msg = event.get("message") or event.get("error", {}).get("message", "unknown")
-                    raise RuntimeError(f"Vision API error: {msg}")
-
-        return "".join(parts)
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data["choices"][0]["message"]["content"]
 
     # ------------------------------------------------------------------
     # execute

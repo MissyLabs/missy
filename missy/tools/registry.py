@@ -135,8 +135,11 @@ class ToolRegistry:
             self._emit_event(name, session_id, task_id, "deny", str(exc))
             return ToolResult(success=False, output=None, error=str(exc))
 
+        # Strip registry-internal keys that tools don't accept.
+        tool_kwargs = {k: v for k, v in kwargs.items()
+                       if k not in ("session_id", "task_id")}
         try:
-            result = tool.execute(**kwargs)
+            result = tool.execute(**tool_kwargs)
         except Exception as exc:
             logger.exception("Tool %r raised an unhandled exception.", name)
             self._emit_event(name, session_id, task_id, "error", str(exc))
