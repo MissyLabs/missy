@@ -127,6 +127,8 @@ class AgentRuntime:
         self._session_mgr = SessionManager()
         # Circuit breaker per runtime instance (keyed to provider name)
         self._circuit_breaker = self._make_circuit_breaker(config.provider)
+        # Rate limiter for API calls
+        self._rate_limiter = self._make_rate_limiter()
         # Lazy-loaded subsystems
         self._context_manager = self._make_context_manager()
         self._memory_store = self._make_memory_store()
@@ -269,6 +271,66 @@ class AgentRuntime:
 
         return final_response
 
+    def run_stream(self, user_input: str, session_id: Optional[str] = None):
+        """Stream the response token-by-token for real-time CLI output.
+
+        For tool-calling loops, this falls back to ``run()`` and yields the
+        full response as a single chunk (streaming during multi-step tool
+        calls is not practical since tool results must be processed first).
+
+        For single-turn completions, yields text deltas from the provider's
+        ``stream()`` method.
+
+        Args:
+            user_input: The user's message text.
+            session_id: Optional existing session ID.
+
+        Yields:
+            String chunks of the model's response.
+        """
+        session = self._resolve_session(session_id)
+        sid = str(session.id)
+
+        try:
+            provider = self._get_provider()
+        except ProviderError:
+            raise
+
+        # If tools are available, use the full run loop (no streaming mid-tool-call)
+        tools = self._get_tools()
+        if tools and self.config.max_iterations > 1:
+            result = self.run(user_input, session_id=session_id)
+            yield result
+            return
+
+        # Single-turn streaming
+        history = self._load_history(sid)
+        system_prompt, messages = self._build_context_messages(user_input, history)
+        msg_objects = self._dicts_to_messages(system_prompt, messages)
+
+        self._acquire_rate_limit()
+
+        full_text = ""
+        try:
+            for chunk in provider.stream(msg_objects, system=system_prompt):
+                full_text += chunk
+                yield chunk
+        except Exception:
+            # Fall back to non-streaming
+            response = self._single_turn(
+                provider=provider,
+                system_prompt=system_prompt,
+                messages=messages,
+                session_id=sid,
+                task_id=str(self._session_mgr.generate_task_id()),
+            )
+            yield response.content
+            full_text = response.content
+
+        # Persist turns
+        self._save_turn(sid, "user", user_input)
+        self._save_turn(sid, "assistant", full_text, provider=provider.name)
+
     # ------------------------------------------------------------------
     # Agentic loop
     # ------------------------------------------------------------------
@@ -389,6 +451,9 @@ class AgentRuntime:
             for iteration in range(self.config.max_iterations):
                 provider_messages = self._dicts_to_messages(system_prompt, loop_messages)
 
+                # Rate limit before calling provider
+                self._acquire_rate_limit()
+
                 try:
                     response: CompletionResponse = self._circuit_breaker.call(
                         provider.complete_with_tools,
@@ -412,7 +477,7 @@ class AgentRuntime:
                     return fallback.content, tool_names_used
 
                 # Record cost and enforce budget
-                self._record_cost(response)
+                self._record_cost(response, session_id=session_id)
                 self._check_budget(session_id=session_id, task_id=task_id)
 
                 if response.finish_reason == "tool_calls" and response.tool_calls:
@@ -565,12 +630,15 @@ class AgentRuntime:
         if self.config.model:
             complete_kwargs["model"] = self.config.model
 
+        # Rate limit before calling provider
+        self._acquire_rate_limit()
+
         result = self._circuit_breaker.call(
             provider.complete,
             msg_objects,
             **complete_kwargs,
         )
-        self._record_cost(result)
+        self._record_cost(result, session_id=session_id)
         return result
 
     # ------------------------------------------------------------------
@@ -883,6 +951,20 @@ class AgentRuntime:
             return None
 
     @staticmethod
+    def _make_rate_limiter():
+        """Create a :class:`~missy.providers.rate_limiter.RateLimiter`.
+
+        Returns:
+            A :class:`~missy.providers.rate_limiter.RateLimiter` instance,
+            or ``None`` when the module is unavailable.
+        """
+        try:
+            from missy.providers.rate_limiter import RateLimiter
+            return RateLimiter(requests_per_minute=60, tokens_per_minute=100_000)
+        except Exception:
+            return None
+
+    @staticmethod
     def _scan_checkpoints() -> list:
         """Scan for incomplete checkpoints from previous runs.
 
@@ -913,14 +995,40 @@ class AgentRuntime:
         """
         return list(self._pending_recovery)
 
-    def _record_cost(self, response) -> None:
-        """Record token usage from a completion response in the cost tracker."""
+    def _record_cost(self, response, session_id: str = "") -> None:
+        """Record token usage in the cost tracker and persist to SQLite."""
         if self._cost_tracker is None:
             return
         try:
-            self._cost_tracker.record_from_response(response)
+            rec = self._cost_tracker.record_from_response(response)
+            # Persist to SQLite for historical cost queries
+            if rec is not None and session_id and self._memory_store is not None:
+                try:
+                    store = self._memory_store
+                    # Unwrap resilient store to get at SQLite store
+                    if hasattr(store, "_primary"):
+                        store = store._primary
+                    if hasattr(store, "record_cost"):
+                        store.record_cost(
+                            session_id=session_id,
+                            model=rec.model,
+                            prompt_tokens=rec.prompt_tokens,
+                            completion_tokens=rec.completion_tokens,
+                            cost_usd=rec.cost_usd,
+                        )
+                except Exception as exc:
+                    logger.debug("Failed to persist cost to store: %s", exc)
         except Exception as exc:
             logger.debug("Failed to record cost: %s", exc)
+
+    def _acquire_rate_limit(self) -> None:
+        """Block until the rate limiter allows the next API call."""
+        if self._rate_limiter is None:
+            return
+        try:
+            self._rate_limiter.acquire()
+        except Exception as exc:
+            logger.warning("Rate limiter error: %s", exc)
 
     def _check_budget(self, session_id: str = "", task_id: str = "") -> None:
         """Enforce budget limits after recording cost.

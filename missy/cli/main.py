@@ -1673,11 +1673,31 @@ def cost(ctx: click.Context, session: Optional[str]) -> None:
 
     if session:
         try:
-            from missy.memory.resilient_store import ResilientMemoryStore
-            store = ResilientMemoryStore()
-            history = store.load_history(session, limit=1000)
+            from missy.memory.sqlite_store import SQLiteMemoryStore
+            store = SQLiteMemoryStore()
+            turns = store.get_session_turns(session, limit=1000)
             table.add_row("Session", session)
-            table.add_row("Turns loaded", str(len(history)))
+            table.add_row("Turns", str(len(turns)))
+
+            # Show persisted cost data if available
+            cost_rows = store.get_session_costs(session)
+            if cost_rows:
+                total_cost = sum(r["cost_usd"] for r in cost_rows)
+                total_prompt = sum(r["prompt_tokens"] for r in cost_rows)
+                total_completion = sum(r["completion_tokens"] for r in cost_rows)
+                table.add_row("API calls", str(len(cost_rows)))
+                table.add_row("Prompt tokens", f"{total_prompt:,}")
+                table.add_row("Completion tokens", f"{total_completion:,}")
+                table.add_row("Total cost", f"${total_cost:.6f}")
+
+                # Per-model breakdown
+                models: dict[str, float] = {}
+                for r in cost_rows:
+                    models[r["model"]] = models.get(r["model"], 0.0) + r["cost_usd"]
+                for model, cost in sorted(models.items(), key=lambda x: -x[1]):
+                    table.add_row(f"  {model}", f"${cost:.6f}")
+            else:
+                table.add_row("Cost data", "[dim]No cost records for this session[/]")
         except Exception as exc:
             table.add_row("Session lookup", f"[red]Error: {exc}[/]")
 
@@ -1686,6 +1706,72 @@ def cost(ctx: click.Context, session: Optional[str]) -> None:
     console.print(
         "\n[dim]To set a budget, add to config.yaml:[/]\n"
         "  [bold]max_spend_usd: 5.00[/]  # dollars per session\n"
+    )
+
+
+# ---------------------------------------------------------------------------
+# missy recover
+# ---------------------------------------------------------------------------
+
+
+@cli.command()
+@click.option("--abandon-all", is_flag=True, help="Abandon all incomplete checkpoints.")
+@click.pass_context
+def recover(ctx: click.Context, abandon_all: bool) -> None:
+    """List or act on incomplete task checkpoints from previous sessions.
+
+    Scans for tasks that were interrupted by crashes or restarts and shows
+    recovery options.  Use --abandon-all to clear all stale checkpoints.
+    """
+    from datetime import datetime
+
+    try:
+        from missy.agent.checkpoint import CheckpointManager, scan_for_recovery
+    except ImportError:
+        _print_error("Checkpoint module not available.")
+        sys.exit(1)
+
+    if abandon_all:
+        try:
+            cm = CheckpointManager()
+            count = cm.abandon_old(max_age_seconds=0)
+            _print_success(f"Abandoned {count} checkpoint(s).")
+        except Exception as exc:
+            _print_error(f"Failed to abandon checkpoints: {exc}")
+            sys.exit(1)
+        return
+
+    results = scan_for_recovery()
+    if not results:
+        console.print("[green]No incomplete checkpoints found.[/]")
+        return
+
+    table = Table(title="Incomplete Checkpoints", show_lines=True)
+    table.add_column("ID", style="dim", max_width=12)
+    table.add_column("Session", max_width=12)
+    table.add_column("Action", style="bold")
+    table.add_column("Prompt", max_width=50)
+    table.add_column("Iteration")
+
+    for r in results:
+        action_style = {
+            "resume": "[green]resume[/]",
+            "restart": "[yellow]restart[/]",
+            "abandon": "[red]abandon[/]",
+        }.get(r.action, r.action)
+
+        table.add_row(
+            r.checkpoint_id[:12],
+            r.session_id[:12] if r.session_id else "",
+            action_style,
+            r.prompt[:50] if r.prompt else "",
+            str(r.iteration),
+        )
+
+    console.print(table)
+    console.print(
+        f"\n[dim]{len(results)} checkpoint(s) found. "
+        "Use [bold]missy recover --abandon-all[/bold] to clear stale tasks.[/]"
     )
 
 
