@@ -92,6 +92,7 @@ class AgentConfig:
     )
     max_iterations: int = 10
     temperature: float = 0.7
+    capability_mode: str = "full"  # "full" | "safe-chat" | "no-tools"
 
 
 class AgentRuntime:
@@ -572,19 +573,40 @@ class AgentRuntime:
     # Tool execution
     # ------------------------------------------------------------------
 
+    # Safe tools allowed in safe-chat mode (read-only, no side effects)
+    _SAFE_CHAT_TOOLS = frozenset({
+        "calculator", "file_read", "list_files", "web_fetch",
+        "browser_get_content", "browser_get_url", "browser_screenshot",
+        "x11_screenshot", "x11_window_list", "atspi_get_tree", "atspi_get_text",
+    })
+
     def _get_tools(self) -> list:
         """Return registered tools, or an empty list when unavailable.
+
+        Respects :attr:`AgentConfig.capability_mode`:
+
+        - ``"full"``: all registered tools
+        - ``"safe-chat"``: only read-only/safe tools
+        - ``"no-tools"``: empty list (pure chat)
 
         Returns:
             A list of :class:`~missy.tools.base.BaseTool` instances, or
             ``[]`` when the registry is not initialised.
         """
+        if self.config.capability_mode == "no-tools":
+            return []
+
         try:
             registry = get_tool_registry()
             tool_names = registry.list_tools()
-            return [registry.get(name) for name in tool_names if registry.get(name) is not None]
+            tools = [registry.get(name) for name in tool_names if registry.get(name) is not None]
         except RuntimeError:
             return []
+
+        if self.config.capability_mode == "safe-chat":
+            tools = [t for t in tools if getattr(t, "name", "") in self._SAFE_CHAT_TOOLS]
+
+        return tools
 
     def _execute_tool(
         self, tool_call: ToolCall, session_id: str = "", task_id: str = ""

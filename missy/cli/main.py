@@ -315,12 +315,16 @@ def setup(ctx: click.Context) -> None:
 @click.argument("prompt")
 @click.option("--provider", default=None, help="Provider to use (overrides config default).")
 @click.option("--session", default=None, help="Session ID for conversation continuity.")
+@click.option("--mode", "capability_mode", default="full",
+              type=click.Choice(["full", "safe-chat", "no-tools"], case_sensitive=False),
+              show_default=True, help="Capability mode: full (all tools), safe-chat (read-only tools), no-tools (pure chat).")
 @click.pass_context
 def ask(
     ctx: click.Context,
     prompt: str,
     provider: Optional[str],
     session: Optional[str],
+    capability_mode: str,
 ) -> None:
     """Ask Missy a single question and print the response.
 
@@ -370,7 +374,7 @@ def ask(
         next(iter(cfg.providers), "anthropic") if cfg.providers else "anthropic"
     )
 
-    agent_cfg = AgentConfig(provider=provider_name)
+    agent_cfg = AgentConfig(provider=provider_name, capability_mode=capability_mode)
     agent = AgentRuntime(agent_cfg)
 
     with console.status("[bold cyan]Thinking...[/]", spinner="dots"):
@@ -401,8 +405,11 @@ def ask(
 @click.option("--provider", default=None, help="Provider to use.")
 @click.option("--session", default="default", show_default=True,
               help="Session ID for conversation continuity. Use 'default' to persist memory across runs.")
+@click.option("--mode", "capability_mode", default="full",
+              type=click.Choice(["full", "safe-chat", "no-tools"], case_sensitive=False),
+              show_default=True, help="Capability mode: full (all tools), safe-chat (read-only tools), no-tools (pure chat).")
 @click.pass_context
-def run(ctx: click.Context, provider: Optional[str], session: str) -> None:
+def run(ctx: click.Context, provider: Optional[str], session: str, capability_mode: str) -> None:
     """Start an interactive session with Missy.
 
     Type your messages and press Enter.  Type [bold]quit[/] or [bold]exit[/],
@@ -420,14 +427,16 @@ def run(ctx: click.Context, provider: Optional[str], session: str) -> None:
         next(iter(cfg.providers), "anthropic") if cfg.providers else "anthropic"
     )
 
-    agent_cfg = AgentConfig(provider=provider_name)
+    agent_cfg = AgentConfig(provider=provider_name, capability_mode=capability_mode)
     agent = AgentRuntime(agent_cfg)
     channel = CLIChannel()
 
+    mode_label = {"full": "full (all tools)", "safe-chat": "safe-chat (read-only)", "no-tools": "no-tools (pure chat)"}
     console.print(
         Panel(
             "[bold cyan]Missy[/] interactive session\n\n"
             f"Provider : [bold]{provider_name}[/]\n"
+            f"Mode     : [bold]{mode_label.get(capability_mode, capability_mode)}[/]\n"
             "Type [bold]quit[/] or [bold]exit[/] to end, or press Ctrl-D.",
             border_style="cyan",
         )
