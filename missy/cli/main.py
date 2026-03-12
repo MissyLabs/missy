@@ -1252,18 +1252,61 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
     except Exception as _pe:
         console.print(f"[yellow]Proactive manager failed to start: {_pe}[/]")
 
+    # Build the shared agent runtime for all channels.
+    from missy.agent.runtime import AgentConfig, AgentRuntime
+
+    _provider_name = next(iter(cfg.providers), "anthropic") if cfg.providers else "anthropic"
+    _agent_cfg = AgentConfig(provider=_provider_name)
+    _agent = AgentRuntime(_agent_cfg)
+
+    # Start voice channel if configured.
+    voice_channel = None
+    try:
+        import yaml as _yaml
+
+        _cfg_file = Path(ctx.obj["config_path"]).expanduser()
+        _raw_cfg = {}
+        if _cfg_file.exists():
+            with _cfg_file.open() as _fh:
+                _raw_cfg = _yaml.safe_load(_fh) or {}
+        _voice_cfg = _raw_cfg.get("voice", {})
+
+        if _voice_cfg.get("enabled", True):
+            import os as _os
+
+            from missy.channels.voice.channel import VoiceChannel
+
+            # Ensure CUDA libs and Piper libs are available.
+            _ld = _os.environ.get("LD_LIBRARY_PATH", "")
+            _piper_lib = str(Path.home() / ".local" / "bin")
+            _cuda_lib = "/usr/local/lib/ollama/cuda_v12"
+            for _p in [_piper_lib, _cuda_lib]:
+                if _p not in _ld:
+                    _ld = f"{_p}:{_ld}" if _ld else _p
+            _os.environ["LD_LIBRARY_PATH"] = _ld
+
+            voice_channel = VoiceChannel(
+                host=_voice_cfg.get("host", "0.0.0.0"),
+                port=_voice_cfg.get("port", 8765),
+                stt_model=_voice_cfg.get("stt", {}).get("model", "base.en"),
+                tts_voice=_voice_cfg.get("tts", {}).get("voice", "en_US-lessac-medium"),
+                debug_transcripts=_voice_cfg.get("debug_transcripts", False),
+            )
+            voice_channel.start(_agent)
+            _vc_host = _voice_cfg.get("host", "0.0.0.0")
+            _vc_port = _voice_cfg.get("port", 8765)
+            console.print(f"[green]Voice channel started[/] on ws://{_vc_host}:{_vc_port}")
+    except Exception as _ve:
+        console.print(f"[yellow]Voice channel failed to start: {_ve}[/]")
+        logger.warning("Voice channel startup error: %s", _ve, exc_info=True)
+
     # Start Discord channel if configured.
     try:
         if cfg.discord and cfg.discord.enabled and cfg.discord.accounts:
             import asyncio
             from missy.channels.discord.channel import DiscordChannel
 
-            from missy.agent.runtime import AgentConfig, AgentRuntime
             from missy.core.exceptions import ProviderError
-
-            _provider_name = next(iter(cfg.providers), "anthropic") if cfg.providers else "anthropic"
-            _agent_cfg = AgentConfig(provider=_provider_name)
-            _agent = AgentRuntime(_agent_cfg)
 
             async def _process_channel(ch: "DiscordChannel") -> None:
                 """Drain the channel queue and run the agent for each message."""
@@ -1277,7 +1320,6 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
 
                     session_id = msg.metadata.get("discord_author", {}).get("id", "discord")
                     channel_id = msg.metadata.get("discord_channel_id", "")
-                    author_id = msg.metadata.get("discord_author", {}).get("id", "")
 
                     # Inject Discord context so the agent knows where it is.
                     discord_ctx = (
@@ -1330,6 +1372,12 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
             while not stop_event:
                 time.sleep(1)
     finally:
+        if voice_channel is not None:
+            try:
+                voice_channel.stop()
+                console.print("[dim]Voice channel stopped.[/]")
+            except Exception as _vs_exc:
+                logger.debug("voice: stop error: %s", _vs_exc)
         if proactive_manager is not None:
             try:
                 proactive_manager.stop()
