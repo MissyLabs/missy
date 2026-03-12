@@ -311,3 +311,85 @@ class TestEdgeCases:
         # 10.0.0.1 is IPv4 vs IPv6 network -> TypeError caught, returns None.
         result = engine._check_cidr("10.0.0.1")
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Per-category network allowlists
+# ---------------------------------------------------------------------------
+
+
+class TestPerCategoryAllowlists:
+    """Tests for per-category host lists (provider, tool, discord)."""
+
+    def test_provider_host_allowed_with_category(self):
+        engine = NetworkPolicyEngine(
+            NetworkPolicy(
+                default_deny=True,
+                allowed_hosts=[],
+                provider_allowed_hosts=["api.anthropic.com"],
+            )
+        )
+        # Allowed when category matches
+        assert engine.check_host("api.anthropic.com", category="provider") is True
+        # Denied without the matching category
+        with pytest.raises(PolicyViolationError):
+            engine.check_host("api.anthropic.com", category="")
+
+    def test_tool_host_allowed_with_category(self):
+        engine = NetworkPolicyEngine(
+            NetworkPolicy(
+                default_deny=True,
+                allowed_hosts=[],
+                tool_allowed_hosts=["api.weatherapi.com"],
+            )
+        )
+        assert engine.check_host("api.weatherapi.com", category="tool") is True
+        with pytest.raises(PolicyViolationError):
+            engine.check_host("api.weatherapi.com", category="provider")
+
+    def test_discord_host_allowed_with_category(self):
+        engine = NetworkPolicyEngine(
+            NetworkPolicy(
+                default_deny=True,
+                allowed_hosts=[],
+                discord_allowed_hosts=["discord.com", "gateway.discord.gg"],
+            )
+        )
+        assert engine.check_host("discord.com", category="discord") is True
+        assert engine.check_host("gateway.discord.gg", category="discord") is True
+
+    def test_global_host_still_works_with_category(self):
+        engine = NetworkPolicyEngine(
+            NetworkPolicy(
+                default_deny=True,
+                allowed_hosts=["api.anthropic.com"],
+                provider_allowed_hosts=[],
+            )
+        )
+        # Global list works regardless of category
+        assert engine.check_host("api.anthropic.com", category="provider") is True
+        assert engine.check_host("api.anthropic.com", category="tool") is True
+        assert engine.check_host("api.anthropic.com", category="") is True
+
+    def test_category_rule_prefix_in_audit(self):
+        engine = NetworkPolicyEngine(
+            NetworkPolicy(
+                default_deny=True,
+                tool_allowed_hosts=["api.example.com"],
+            )
+        )
+        event_bus.clear()
+        engine.check_host("api.example.com", category="tool")
+        events = event_bus.get_events(event_type="network_check", result="allow")
+        assert len(events) == 1
+        assert events[0].policy_rule.startswith("tool_host:")
+
+    def test_unknown_category_falls_through(self):
+        engine = NetworkPolicyEngine(
+            NetworkPolicy(
+                default_deny=True,
+                provider_allowed_hosts=["api.anthropic.com"],
+            )
+        )
+        with pytest.raises(PolicyViolationError):
+            engine.check_host("api.anthropic.com", category="unknown")
