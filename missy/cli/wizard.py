@@ -316,6 +316,8 @@ def _build_config_yaml(
     if discord_cfg:
         lines += ["", "discord:", "  enabled: true", "  accounts:"]
         lines.append(f'    - token_env_var: "{discord_cfg["token_env_var"]}"')
+        if discord_cfg.get("bot_token"):
+            lines.append(f'      token: "{discord_cfg["bot_token"]}"')
         if discord_cfg.get("application_id"):
             lines.append(f'      application_id: "{discord_cfg["application_id"]}"')
         lines.append(f'      dm_policy: {discord_cfg["dm_policy"]}')
@@ -597,7 +599,11 @@ def run_wizard(config_path: str) -> None:
             "    • Application ID from discord.com/developers/applications\n"
         )
 
-        token_env_var = click.prompt("  Environment variable holding bot token", default="DISCORD_BOT_TOKEN")
+        bot_token = click.prompt("  Bot token (from discord.com/developers → Bot → Reset Token)", hide_input=True, default="").strip()
+        # Strip "Bot " prefix if user included it — we store the raw token
+        if bot_token.lower().startswith("bot "):
+            bot_token = bot_token[4:].strip()
+        token_env_var = "DISCORD_BOT_TOKEN"  # kept for fallback; direct token takes precedence
         application_id = click.prompt("  Application ID", default="").strip()
 
         # DM policy
@@ -641,6 +647,7 @@ def run_wizard(config_path: str) -> None:
         ignore_bots = click.confirm("  Ignore messages from other bots?", default=True)
 
         discord_cfg = {
+            "bot_token": bot_token,
             "token_env_var": token_env_var,
             "application_id": application_id,
             "dm_policy": dm_policy,
@@ -683,7 +690,8 @@ def run_wizard(config_path: str) -> None:
     for pname, ok in verify_results:
         table.add_row(f"Verified: {pname}", "[green]OK[/]" if ok else "[red]FAILED[/]")
     if discord_cfg:
-        table.add_row("Discord", f"token_env={discord_cfg['token_env_var']}  dm={discord_cfg['dm_policy']}")
+        tok_display = _mask_key(discord_cfg["bot_token"]) if discord_cfg.get("bot_token") else f"env:{discord_cfg['token_env_var']}"
+        table.add_row("Discord", f"token={tok_display}  dm={discord_cfg['dm_policy']}")
     console.print(table)
 
     if not click.confirm("\n  Write this configuration?", default=True):
