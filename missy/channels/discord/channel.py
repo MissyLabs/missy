@@ -78,6 +78,13 @@ class DiscordChannel(BaseChannel):
         self._bot_user_id: Optional[str] = None
 
         token = account_config.resolve_token() or ""
+        if not token:
+            logger.error(
+                "Discord: no bot token found — set env var %r or add 'token:' to config",
+                account_config.token_env_var,
+            )
+        else:
+            logger.info("Discord: bot token resolved (%.8s…)", token.lstrip("Bot ").strip()[:8])
         self._rest = DiscordRestClient(
             bot_token=token,
             session_id=session_id,
@@ -260,9 +267,14 @@ class DiscordChannel(BaseChannel):
         content: str = str(data.get("content", ""))
         thread_id: Optional[str] = data.get("thread_id") or None
 
+        logger.info(
+            "Discord: MESSAGE_CREATE guild=%s channel=%s author=%s content=%r",
+            guild_id, channel_id, author_id, content[:80],
+        )
+
         # 1. Filter own-bot messages.
         if self._is_own_message(author_id):
-            logger.debug("Discord: ignoring own message")
+            logger.debug("Discord: ignoring own message (bot_id=%s)", self._bot_user_id)
             return
 
         # 1b. Credential / secrets detection — delete message and warn if secrets found.
@@ -538,18 +550,28 @@ class DiscordChannel(BaseChannel):
             )
             return False
 
-        # Channel allowlist check.
+        # Channel allowlist check — match by ID or name.
         if guild_policy.allowed_channels:
             channel_name = str(
                 (data.get("channel") or {}).get("name", "")
                 or data.get("channel_name", "")
             )
-            if channel_name and channel_name not in guild_policy.allowed_channels:
+            # A message always has channel_id; name may be absent from Gateway events.
+            in_allowlist = (
+                channel_id in guild_policy.allowed_channels
+                or (channel_name and channel_name in guild_policy.allowed_channels)
+            )
+            logger.debug(
+                "Discord: channel check guild=%s channel_id=%s channel_name=%r allowlist=%s match=%s",
+                guild_id, channel_id, channel_name, guild_policy.allowed_channels, in_allowlist,
+            )
+            if not in_allowlist:
                 self._emit_audit(
                     "discord.channel.allowlist_denied",
                     "deny",
                     {
                         "reason": "channel_not_allowed",
+                        "channel_id": channel_id,
                         "channel_name": channel_name,
                         "guild_id": guild_id,
                         "author_id": author_id,

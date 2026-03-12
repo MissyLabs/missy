@@ -100,6 +100,7 @@ class DiscordAccountConfig:
     """
 
     token_env_var: str = "DISCORD_BOT_TOKEN"
+    token: Optional[str] = None          # direct token (takes precedence over token_env_var)
     account_id: Optional[str] = None
     application_id: str = ""
     guild_policies: dict[str, DiscordGuildPolicy] = field(default_factory=dict)
@@ -110,11 +111,21 @@ class DiscordAccountConfig:
     allow_bots_if_mention_only: bool = False
 
     def resolve_token(self) -> Optional[str]:
-        """Read the bot token from the configured environment variable.
+        """Return the bot token — checks direct token, env var, and vault in order.
 
         Returns:
-            The token string, or ``None`` when the variable is not set.
+            The token string, or ``None`` when none are configured.
         """
+        if self.token:
+            # Resolve vault:// references
+            if self.token.startswith("vault://"):
+                try:
+                    from missy.security.vault import Vault
+                    key = self.token[len("vault://"):]
+                    return Vault().get(key)
+                except Exception:
+                    pass
+            return self.token
         return os.environ.get(self.token_env_var)
 
 
@@ -166,6 +177,7 @@ def _parse_account(data: dict[str, Any]) -> DiscordAccountConfig:
 
     return DiscordAccountConfig(
         token_env_var=str(data.get("token_env_var", "DISCORD_BOT_TOKEN")),
+        token=data.get("token") or None,
         account_id=data.get("account_id") or None,
         application_id=str(data.get("application_id", "")),
         guild_policies=guild_policies,
