@@ -129,7 +129,7 @@ class ToolRegistry:
         # Policy checks - failures surface as ToolResult(success=False)
         # rather than raised exceptions so the agent can handle them gracefully.
         try:
-            self._check_permissions(tool, session_id, task_id)
+            self._check_permissions(tool, session_id, task_id, kwargs)
         except PolicyViolationError as exc:
             logger.warning("Policy denied execution of tool %r: %s", name, exc)
             self._emit_event(name, session_id, task_id, "deny", str(exc))
@@ -155,6 +155,7 @@ class ToolRegistry:
         tool: BaseTool,
         session_id: str,
         task_id: str,
+        kwargs: dict | None = None,
     ) -> None:
         """Run policy engine checks for the tool's declared permissions.
 
@@ -192,9 +193,9 @@ class ToolRegistry:
                 engine.check_write(path, session_id=session_id, task_id=task_id)
 
         if perms.shell:
-            # A bare shell permission check uses an empty string; callers
-            # that need per-command checks should invoke the engine directly.
-            engine.check_shell("", session_id=session_id, task_id=task_id)
+            # Pass the actual command so the policy engine can check it.
+            command = (kwargs or {}).get("command", "shell")
+            engine.check_shell(command, session_id=session_id, task_id=task_id)
 
     def _emit_event(
         self,
