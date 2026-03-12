@@ -67,26 +67,23 @@ class BrowserSession:
         )
 
     def get_page(self):
+        """Return the most recent open page in the context.
+
+        Always checks the context for the latest page rather than
+        returning a stale cached reference — Firefox may open new tabs
+        via session restore, redirects, or target=_blank links.
+        """
         with self._lock:
             if self._context is None:
                 self._start()
-            if self._page is None or self._page.is_closed():
-                pages = self._context.pages
-                self._page = pages[-1] if pages else self._context.new_page()
+            pages = self._context.pages
+            # Filter out closed pages
+            live = [p for p in pages if not p.is_closed()]
+            if live:
+                self._page = live[-1]
+            else:
+                self._page = self._context.new_page()
             return self._page
-
-    def new_page(self):
-        """Create a new tab and set it as the active page."""
-        with self._lock:
-            if self._context is None:
-                self._start()
-            self._page = self._context.new_page()
-            return self._page
-
-    def set_page(self, page):
-        """Set the active page (e.g. after navigating in a new tab)."""
-        with self._lock:
-            self._page = page
 
     def close(self) -> None:
         with self._lock:
@@ -155,11 +152,8 @@ class BrowserNavigateTool(BaseTool):
     def execute(self, *, url: str, headless: bool = False,
                 wait_until: str = "domcontentloaded", session_id: str = "default", **_kw) -> ToolResult:
         try:
-            session = _registry.get_or_create(session_id, headless=headless)
-            pg = session.get_page()
+            pg = _page(session_id, headless=headless)
             pg.goto(url, wait_until=wait_until, timeout=30_000)
-            # Ensure the navigated page is the active one for subsequent tools
-            session.set_page(pg)
             return ToolResult(success=True, output=f"URL: {pg.url}\nTitle: {pg.title()}", error=None)
         except Exception as exc:
             return _err(exc)
