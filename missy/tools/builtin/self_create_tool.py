@@ -24,11 +24,11 @@ class SelfCreateTool(BaseTool):
     )
     permissions = ToolPermissions(filesystem_write=True)
     parameters = {
-        "action": {"type": "string", "enum": ["create", "list", "delete"], "description": "Operation to perform."},
-        "tool_name": {"type": "string", "description": "Name of the tool (alphanumeric, underscore, hyphen only)."},
-        "language": {"type": "string", "enum": ["bash", "python", "node"], "description": "Script language for create."},
-        "script": {"type": "string", "description": "Script source code for create. Receives JSON input on stdin, writes output to stdout."},
-        "tool_description": {"type": "string", "description": "Human-readable description for create."},
+        "action": {"type": "string", "enum": ["create", "list", "delete"], "description": "Operation: 'create' writes a new script tool, 'list' shows existing, 'delete' removes one.", "required": True},
+        "tool_name": {"type": "string", "description": "Name of the tool (alphanumeric/underscore/hyphen). Required for create and delete."},
+        "language": {"type": "string", "enum": ["bash", "python", "node"], "description": "Script language for create (default: python)."},
+        "script": {"type": "string", "description": "Full script source code for create. Python scripts should print output to stdout."},
+        "tool_description": {"type": "string", "description": "Human-readable description for the tool being created."},
     }
 
     def execute(self, *, action: str, tool_name: str = "", language: str = "bash",

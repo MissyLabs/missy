@@ -98,8 +98,8 @@ def make_verification_prompt() -> str:
         whether DONE conditions are satisfied.
     """
     return (
-        "[VERIFICATION REQUIRED] Review the tool output(s) above. "
-        "1. Did the action succeed? What evidence confirms this? "
-        "2. If it failed, what went wrong? "
-        "3. Are all DONE conditions met? If not, what remains?"
+        "Review the tool output above. "
+        "If the task is fully complete, reply with a concise summary for the user. "
+        "If it failed or is incomplete, call the appropriate tool again to fix it — "
+        "do not describe what went wrong, just retry with corrected parameters."
     )

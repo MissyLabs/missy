@@ -122,13 +122,21 @@ class BaseTool(ABC):
                     },
                 }
         """
+        # Build properties from the class-level `parameters` dict if present.
+        props: dict = {}
+        required: list = []
+        raw_params = getattr(self, "parameters", {}) or {}
+        for param_name, param_def in raw_params.items():
+            props[param_name] = {k: v for k, v in param_def.items() if k != "required"}
+            if param_def.get("required", False):
+                required.append(param_name)
         return {
             "name": self.name,
             "description": self.description,
             "parameters": {
                 "type": "object",
-                "properties": {},
-                "required": [],
+                "properties": props,
+                "required": required,
             },
         }
 
