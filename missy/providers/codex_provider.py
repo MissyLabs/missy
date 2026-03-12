@@ -141,7 +141,7 @@ class CodexProvider(BaseProvider):
             "text": {"verbosity": "medium"},
             "include": ["reasoning.encrypted_content"],
             "store": False,
-            "stream": stream,
+            "stream": True,  # Codex endpoint requires stream=true always
         }
         if instructions:
             body["instructions"] = instructions
@@ -151,26 +151,8 @@ class CodexProvider(BaseProvider):
         return body
 
     def complete(self, messages: list[Message], **kwargs: Any) -> CompletionResponse:
-        """Single-turn completion via the Codex backend (non-streaming)."""
-        token = self._get_token()
-        account_id = _extract_account_id(token)
-        body = self._build_body(messages, stream=False)
-
-        try:
-            resp = httpx.post(
-                _CODEX_ENDPOINT,
-                headers=self._headers(token, account_id),
-                json=body,
-                timeout=self._timeout,
-            )
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            raise ProviderError(f"openai-codex HTTP {exc.response.status_code}: {exc.response.text[:200]}") from exc
-        except Exception as exc:
-            raise ProviderError(f"openai-codex request failed: {exc}") from exc
-
-        data = resp.json()
-        text = self._extract_text_from_response(data)
+        """Single-turn completion — collects the SSE stream and returns full text."""
+        text = "".join(self.stream(messages, **kwargs))
         return CompletionResponse(content=text, finish_reason="stop")
 
     def _extract_text_from_response(self, data: dict) -> str:
@@ -227,45 +209,68 @@ class CodexProvider(BaseProvider):
         system_prompt: str = "",
         **kwargs: Any,
     ) -> CompletionResponse:
-        """Tool-calling completion via the Codex backend (non-streaming)."""
+        """Tool-calling completion — collects SSE stream and parses tool calls."""
         token = self._get_token()
         account_id = _extract_account_id(token)
-        body = self._build_body(messages, stream=False, tools=tools)
+        body = self._build_body(messages, tools=tools)
+
+        tool_calls: list[ToolCall] = []
+        text_parts: list[str] = []
+        current_fn: dict = {}
 
         try:
-            resp = httpx.post(
+            with httpx.stream(
+                "POST",
                 _CODEX_ENDPOINT,
                 headers=self._headers(token, account_id),
                 json=body,
                 timeout=self._timeout,
-            )
-            resp.raise_for_status()
+            ) as resp:
+                resp.raise_for_status()
+                for line in resp.iter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    raw = line[6:].strip()
+                    if raw in ("", "[DONE]"):
+                        continue
+                    try:
+                        event = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    etype = event.get("type", "")
+                    if etype == "response.output_text.delta":
+                        text_parts.append(event.get("delta", ""))
+                    elif etype == "response.output_item.added":
+                        item = event.get("item", {})
+                        if item.get("type") == "function_call":
+                            current_fn = {
+                                "id": item.get("call_id", item.get("id", "")),
+                                "name": item.get("name", ""),
+                                "arguments": "",
+                            }
+                    elif etype == "response.function_call_arguments.delta":
+                        current_fn["arguments"] = current_fn.get("arguments", "") + event.get("delta", "")
+                    elif etype == "response.function_call_arguments.done":
+                        if current_fn.get("name"):
+                            try:
+                                args = json.loads(current_fn.get("arguments", "{}"))
+                            except json.JSONDecodeError:
+                                args = {}
+                            tool_calls.append(ToolCall(
+                                id=current_fn["id"],
+                                name=current_fn["name"],
+                                arguments=args,
+                            ))
+                            current_fn = {}
+                    elif etype in ("response.failed", "error"):
+                        msg = event.get("message") or event.get("error", {}).get("message", "unknown")
+                        raise ProviderError(f"openai-codex stream error: {msg}")
         except httpx.HTTPStatusError as exc:
             raise ProviderError(f"openai-codex HTTP {exc.response.status_code}: {exc.response.text[:200]}") from exc
 
-        data = resp.json()
-        tool_calls: list[ToolCall] = []
-        text = ""
-
-        for item in data.get("output", []):
-            if item.get("type") == "function_call":
-                try:
-                    args = json.loads(item.get("arguments", "{}"))
-                except json.JSONDecodeError:
-                    args = {}
-                tool_calls.append(ToolCall(
-                    id=item.get("call_id", item.get("id", "")),
-                    name=item.get("name", ""),
-                    arguments=args,
-                ))
-            elif item.get("type") == "message":
-                for part in item.get("content", []):
-                    if part.get("type") == "output_text":
-                        text += part.get("text", "")
-
         finish_reason = "tool_calls" if tool_calls else "stop"
         return CompletionResponse(
-            content=text,
+            content="".join(text_parts),
             finish_reason=finish_reason,
             tool_calls=tool_calls,
         )

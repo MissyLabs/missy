@@ -527,7 +527,8 @@ def run_wizard(config_path: str) -> None:
                     else:
                         console.print("    [yellow]Verification failed — key will still be saved.[/]")
 
-        primary, fast, premium = _prompt_model(info)
+        # Use updated pkey's info for model choices (e.g. openai-codex after OAuth).
+        primary, fast, premium = _prompt_model(_PROVIDERS.get(pkey, info))
 
         # Add network allowlist entries for this provider.
         provider_host = _PROVIDERS.get(pkey, _PROVIDERS.get("openai", {})).get("host")
