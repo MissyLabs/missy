@@ -582,7 +582,7 @@ def run_wizard(config_path: str) -> None:
             f"[green bold]Configuration written to {config_file}[/]\n\n"
             + (
                 "Next steps:\n"
-                "  [bold]missy chat[/]          — start a conversation\n"
+                "  [bold]missy run[/]           — start a conversation\n"
                 "  [bold]missy gateway start[/] — run as a persistent service\n"
                 "  [bold]missy doctor[/]        — verify all subsystems"
             ),
