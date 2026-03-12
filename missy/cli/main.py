@@ -1648,6 +1648,48 @@ def doctor(ctx: click.Context) -> None:
 
 
 # ---------------------------------------------------------------------------
+# missy cost
+# ---------------------------------------------------------------------------
+
+
+@cli.command()
+@click.option("--session", default=None, help="Session ID to query (default: show config).")
+@click.pass_context
+def cost(ctx: click.Context, session: Optional[str]) -> None:
+    """Show cost tracking configuration and session cost summary.
+
+    When ``--session`` is given, shows cost data from the memory store for
+    that session.  Otherwise shows the current budget configuration.
+    """
+    cfg = _load_subsystems(ctx.obj["config_path"])
+
+    table = Table(title="Cost Tracking", show_lines=True)
+    table.add_column("Setting", style="bold")
+    table.add_column("Value")
+
+    budget = getattr(cfg, "max_spend_usd", 0.0)
+    table.add_row("Budget limit (max_spend_usd)", f"${budget:.2f}" if budget > 0 else "unlimited")
+    table.add_row("Config location", "max_spend_usd in config.yaml")
+
+    if session:
+        try:
+            from missy.memory.resilient_store import ResilientMemoryStore
+            store = ResilientMemoryStore()
+            history = store.load_history(session, limit=1000)
+            table.add_row("Session", session)
+            table.add_row("Turns loaded", str(len(history)))
+        except Exception as exc:
+            table.add_row("Session lookup", f"[red]Error: {exc}[/]")
+
+    console.print(table)
+
+    console.print(
+        "\n[dim]To set a budget, add to config.yaml:[/]\n"
+        "  [bold]max_spend_usd: 5.00[/]  # dollars per session\n"
+    )
+
+
+# ---------------------------------------------------------------------------
 # missy vault
 # ---------------------------------------------------------------------------
 
