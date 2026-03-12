@@ -120,6 +120,13 @@ class PolicyHTTPClient:
         self._emit_request_event("POST", url, response.status_code)
         return response
 
+    def put(self, url: str, **kwargs: Any) -> httpx.Response:
+        """Perform a synchronous HTTP PUT after a policy check."""
+        self._check_url(url)
+        response = self._get_sync_client().put(url, **kwargs)
+        self._emit_request_event("PUT", url, response.status_code)
+        return response
+
     # ------------------------------------------------------------------
     # Asynchronous interface
     # ------------------------------------------------------------------

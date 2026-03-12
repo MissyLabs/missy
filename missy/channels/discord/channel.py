@@ -213,12 +213,18 @@ class DiscordChannel(BaseChannel):
             pass
 
         target_channel = thread_id if thread_id else channel_id
+
+        # Discord hard limit is 2000 characters per message. Split if needed.
+        _DISCORD_MAX = 1990
+        chunks = [message[i:i + _DISCORD_MAX] for i in range(0, max(len(message), 1), _DISCORD_MAX)]
+
         try:
-            self._rest.send_message(
-                channel_id=target_channel,
-                content=message,
-                reply_to_message_id=reply_to,
-            )
+            for idx, chunk in enumerate(chunks):
+                self._rest.send_message(
+                    channel_id=target_channel,
+                    content=chunk,
+                    reply_to_message_id=reply_to if idx == 0 else None,
+                )
             self._emit_audit(
                 "discord.channel.reply_sent",
                 "allow",

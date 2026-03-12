@@ -273,6 +273,7 @@ class DiscordRestClient:
         else:
             url = f"{BASE}/applications/{application_id}/commands"
 
-        response = self._http.post(url, headers=self._headers(), json=commands)
+        # PUT = bulk overwrite; POST expects a single command object, not a list.
+        response = self._http.put(url, headers=self._headers(), json=commands)
         response.raise_for_status()
         return response.json()

@@ -1249,17 +1249,57 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
             import asyncio
             from missy.channels.discord.channel import DiscordChannel
 
+            from missy.agent.runtime import AgentConfig, AgentRuntime
+            from missy.core.exceptions import ProviderError
+
+            _provider_name = next(iter(cfg.providers), "anthropic") if cfg.providers else "anthropic"
+            _agent_cfg = AgentConfig(provider=_provider_name)
+            _agent = AgentRuntime(_agent_cfg)
+
+            async def _process_channel(ch: "DiscordChannel") -> None:
+                """Drain the channel queue and run the agent for each message."""
+                while not stop_event:
+                    try:
+                        msg = await asyncio.wait_for(ch._queue.get(), timeout=1.0)
+                    except asyncio.TimeoutError:
+                        continue
+                    except Exception:
+                        break
+
+                    session_id = msg.metadata.get("discord_author", {}).get("id", "discord")
+                    try:
+                        loop = asyncio.get_event_loop()
+                        response = await loop.run_in_executor(
+                            None, _agent.run, msg.content, session_id
+                        )
+                    except ProviderError as exc:
+                        response = f"Sorry, I encountered a provider error: {exc}"
+                    except Exception as exc:
+                        logger.exception("Discord agent error: %s", exc)
+                        response = f"Sorry, an error occurred: {exc}"
+
+                    try:
+                        channel_id = msg.metadata.get("discord_channel_id", "")
+                        reply_to = msg.metadata.get("discord_message_id")
+                        await ch.send_to(channel_id, response, reply_to=reply_to)
+                    except Exception as exc:
+                        logger.error("Discord send error: %s", exc)
+
             async def _run_discord():
                 channels = []
+                tasks = []
                 for account in cfg.discord.accounts:
                     ch = DiscordChannel(account_config=account)
                     await ch.start()
                     channels.append(ch)
                     console.print(f"[green]Discord channel started[/] ({account.token_env_var})")
+                    tasks.append(asyncio.create_task(_process_channel(ch)))
                 try:
                     while not stop_event:
                         await asyncio.sleep(1)
                 finally:
+                    for t in tasks:
+                        t.cancel()
                     for ch in channels:
                         await ch.stop()
 
