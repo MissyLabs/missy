@@ -216,24 +216,24 @@ class TestDiscordRestClient:
         assert "chan-1/typing" in call_url
 
     def test_register_slash_commands_global(self, rest_client: DiscordRestClient, mock_http_client: MagicMock) -> None:
-        mock_http_client.post.return_value.json.return_value = [{"name": "ask"}]
+        mock_http_client.put.return_value.json.return_value = [{"name": "ask"}]
         commands = [{"name": "ask", "description": "Ask Missy"}]
         result = rest_client.register_slash_commands(
             application_id="app-111",
             commands=commands,
         )
-        call_url = mock_http_client.post.call_args[0][0]
+        call_url = mock_http_client.put.call_args[0][0]
         assert "app-111/commands" in call_url
         assert "guilds" not in call_url
 
     def test_register_slash_commands_guild(self, rest_client: DiscordRestClient, mock_http_client: MagicMock) -> None:
-        mock_http_client.post.return_value.json.return_value = [{"name": "ask"}]
+        mock_http_client.put.return_value.json.return_value = [{"name": "ask"}]
         rest_client.register_slash_commands(
             application_id="app-111",
             commands=[],
             guild_id="guild-222",
         )
-        call_url = mock_http_client.post.call_args[0][0]
+        call_url = mock_http_client.put.call_args[0][0]
         assert "guilds/guild-222/commands" in call_url
 
     def test_authorization_header_present(self, rest_client: DiscordRestClient, mock_http_client: MagicMock) -> None:

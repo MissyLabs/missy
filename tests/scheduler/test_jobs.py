@@ -51,6 +51,9 @@ class TestScheduledJobToDict:
             "id", "name", "description", "schedule", "task",
             "provider", "enabled", "created_at", "last_run",
             "next_run", "run_count", "last_result",
+            "max_attempts", "backoff_seconds", "retry_on",
+            "consecutive_failures", "last_error",
+            "delete_after_run", "active_hours", "timezone",
         }
         assert expected_keys == set(d.keys())
 

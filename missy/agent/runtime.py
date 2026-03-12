@@ -128,6 +128,8 @@ class AgentRuntime:
         # Lazy-loaded subsystems
         self._context_manager = self._make_context_manager()
         self._memory_store = self._make_memory_store()
+        # Cost tracking (graceful degradation)
+        self._cost_tracker = self._make_cost_tracker()
 
     # ------------------------------------------------------------------
     # Public interface
@@ -242,6 +244,13 @@ class AgentRuntime:
         if all_tool_names_used:
             self._record_learnings(all_tool_names_used, final_response, user_input)
 
+        cost_detail = {}
+        if self._cost_tracker is not None:
+            try:
+                cost_detail = self._cost_tracker.get_summary()
+            except Exception:
+                pass
+
         self._emit_event(
             session_id=sid,
             task_id=task_id,
@@ -250,6 +259,7 @@ class AgentRuntime:
             detail={
                 "provider": provider.name,
                 "tools_used": all_tool_names_used,
+                **cost_detail,
             },
         )
 
@@ -396,6 +406,9 @@ class AgentRuntime:
                         task_id=task_id,
                     )
                     return fallback.content, tool_names_used
+
+                # Record cost for this completion call
+                self._record_cost(response)
 
                 if response.finish_reason == "tool_calls" and response.tool_calls:
                     # Execute each tool call
@@ -547,11 +560,13 @@ class AgentRuntime:
         if self.config.model:
             complete_kwargs["model"] = self.config.model
 
-        return self._circuit_breaker.call(
+        result = self._circuit_breaker.call(
             provider.complete,
             msg_objects,
             **complete_kwargs,
         )
+        self._record_cost(result)
+        return result
 
     # ------------------------------------------------------------------
     # Tool execution
@@ -825,6 +840,29 @@ class AgentRuntime:
             return MemoryStore()
         except Exception:
             return None
+
+    @staticmethod
+    def _make_cost_tracker():
+        """Create a :class:`~missy.agent.cost_tracker.CostTracker`.
+
+        Returns:
+            A :class:`~missy.agent.cost_tracker.CostTracker` instance, or
+            ``None`` when the module is unavailable.
+        """
+        try:
+            from missy.agent.cost_tracker import CostTracker
+            return CostTracker()
+        except Exception:
+            return None
+
+    def _record_cost(self, response) -> None:
+        """Record token usage from a completion response in the cost tracker."""
+        if self._cost_tracker is None:
+            return
+        try:
+            self._cost_tracker.record_from_response(response)
+        except Exception as exc:
+            logger.debug("Failed to record cost: %s", exc)
 
     # ------------------------------------------------------------------
     # Private helpers
