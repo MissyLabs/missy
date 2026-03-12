@@ -1537,6 +1537,88 @@ def doctor(ctx: click.Context) -> None:
     else:
         table.add_row("discord", Text("disabled", style="dim"), "not configured")
 
+    # 11. Memory store
+    try:
+        from missy.memory.sqlite_store import SQLiteMemoryStore
+
+        mem_path = Path("~/.missy/memory.db").expanduser()
+        if mem_path.exists():
+            store = SQLiteMemoryStore(str(mem_path))
+            # Quick connectivity check: count turns
+            turns = store.get_session_turns("__health_check__", limit=1)
+            table.add_row("memory store", ok, f"sqlite: {mem_path} (accessible)")
+        else:
+            table.add_row("memory store", warn, f"not found: {mem_path}")
+    except Exception as exc:
+        table.add_row("memory store", fail, f"error: {exc}")
+
+    # 12. MCP servers
+    try:
+        mcp_path = Path("~/.missy/mcp.json").expanduser()
+        if mcp_path.exists():
+            import json
+
+            mcp_data = json.loads(mcp_path.read_text())
+            servers = mcp_data.get("servers", {}) if isinstance(mcp_data, dict) else {}
+            if servers:
+                table.add_row(
+                    "mcp servers",
+                    ok,
+                    f"{len(servers)} server(s) configured: {', '.join(servers.keys())}",
+                )
+            else:
+                table.add_row("mcp servers", Text("none", style="dim"), "no servers in mcp.json")
+        else:
+            table.add_row("mcp servers", Text("none", style="dim"), "mcp.json not found")
+    except Exception as exc:
+        table.add_row("mcp servers", fail, f"error reading mcp.json: {exc}")
+
+    # 13. Config hot-reload (watchdog)
+    try:
+        import importlib
+
+        watchdog_spec = importlib.util.find_spec("watchdog")
+        if watchdog_spec is not None:
+            table.add_row("config hot-reload", ok, "watchdog available")
+        else:
+            table.add_row("config hot-reload", warn, "watchdog not installed — hot-reload disabled")
+    except Exception:
+        table.add_row("config hot-reload", warn, "could not check watchdog")
+
+    # 14. Voice channel
+    try:
+        raw_cfg = {}
+        config_path = Path(ctx.obj["config_path"]).expanduser()
+        if config_path.exists():
+            import yaml
+
+            raw_cfg = yaml.safe_load(config_path.read_text()) or {}
+        voice_cfg = raw_cfg.get("voice", {})
+        if voice_cfg:
+            voice_host = voice_cfg.get("host", "0.0.0.0")
+            voice_port = voice_cfg.get("port", 8765)
+            stt_engine = voice_cfg.get("stt", {}).get("engine", "none")
+            tts_engine = voice_cfg.get("tts", {}).get("engine", "none")
+            table.add_row(
+                "voice channel",
+                ok,
+                f"{voice_host}:{voice_port} stt={stt_engine} tts={tts_engine}",
+            )
+        else:
+            table.add_row("voice channel", Text("disabled", style="dim"), "not configured")
+    except Exception as exc:
+        table.add_row("voice channel", warn, f"error checking voice: {exc}")
+
+    # 15. Checkpoint database
+    try:
+        cp_path = Path("~/.missy/checkpoints.db").expanduser()
+        if cp_path.exists():
+            table.add_row("checkpoints", ok, f"database: {cp_path}")
+        else:
+            table.add_row("checkpoints", Text("none", style="dim"), "no checkpoint database")
+    except Exception:
+        pass
+
     console.print(table)
 
 
