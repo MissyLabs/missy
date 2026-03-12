@@ -1,11 +1,18 @@
 """Text-to-speech tool for Missy.
 
-Synthesizes text to speech using espeak-ng and plays it through the
-system's default audio output via GStreamer + PipeWire.  Works over SSH
-sessions when ``XDG_RUNTIME_DIR`` is set correctly.
+Synthesizes text to speech using Piper neural TTS (primary) or espeak-ng
+(fallback) and plays it through the system's default audio output via
+GStreamer + PipeWire.  Works over SSH sessions when ``XDG_RUNTIME_DIR``
+is set correctly.
 
 Prerequisites::
 
+    # Piper (primary — high-quality neural TTS)
+    # Install from https://github.com/rhasspy/piper
+    # Binary: ~/.local/bin/piper
+    # Voices: ~/.local/share/piper-voices/
+
+    # espeak-ng (fallback — robotic but always available)
     sudo apt install espeak-ng gstreamer1.0-tools gstreamer1.0-plugins-base
 
 Example::
@@ -22,11 +29,17 @@ import logging
 import os
 import subprocess
 import tempfile
+from pathlib import Path
 from typing import Any
 
 from missy.tools.base import BaseTool, ToolPermissions, ToolResult
 
 logger = logging.getLogger(__name__)
+
+# Piper paths (user-local install)
+_PIPER_BIN = Path.home() / ".local" / "bin" / "piper"
+_PIPER_VOICES_DIR = Path.home() / ".local" / "share" / "piper-voices"
+_PIPER_DEFAULT_VOICE = "en_US-lessac-medium"
 
 
 def _ensure_runtime_dir() -> dict[str, str]:
@@ -38,11 +51,134 @@ def _ensure_runtime_dir() -> dict[str, str]:
     return env
 
 
+def _piper_env() -> dict[str, str]:
+    """Return env dict with LD_LIBRARY_PATH set for Piper shared libs."""
+    env = _ensure_runtime_dir()
+    piper_lib = str(_PIPER_BIN.parent)
+    existing = env.get("LD_LIBRARY_PATH", "")
+    if piper_lib not in existing:
+        env["LD_LIBRARY_PATH"] = f"{piper_lib}:{existing}" if existing else piper_lib
+    return env
+
+
+def _find_piper_model(voice: str) -> Path | None:
+    """Locate a Piper .onnx voice model file."""
+    if not _PIPER_VOICES_DIR.is_dir():
+        return None
+    # Try exact name first, then with .onnx suffix
+    for candidate in [
+        _PIPER_VOICES_DIR / f"{voice}.onnx",
+        _PIPER_VOICES_DIR / voice / f"{voice}.onnx",
+    ]:
+        if candidate.is_file():
+            return candidate
+    # Search for any matching .onnx
+    for onnx in _PIPER_VOICES_DIR.glob(f"*{voice}*.onnx"):
+        return onnx
+    return None
+
+
+def _synth_piper(text: str, wav_path: str, voice: str, speed: float) -> str | None:
+    """Synthesize with Piper. Returns None on success, error string on failure."""
+    if not _PIPER_BIN.is_file():
+        return "piper binary not found"
+
+    model = _find_piper_model(voice)
+    if model is None:
+        return f"piper voice model not found: {voice}"
+
+    env = _piper_env()
+    cmd = [
+        str(_PIPER_BIN),
+        "--model", str(model),
+        "--output_file", wav_path,
+    ]
+    if speed != 1.0:
+        cmd.extend(["--length_scale", str(1.0 / speed)])
+
+    try:
+        result = subprocess.run(
+            cmd,
+            input=text.encode("utf-8"),
+            capture_output=True,
+            env=env,
+            timeout=60,
+        )
+        if result.returncode != 0:
+            err = result.stderr.decode("utf-8", errors="replace").strip()
+            return f"piper failed: {err}"
+        if not Path(wav_path).exists() or Path(wav_path).stat().st_size == 0:
+            return "piper produced no audio"
+        return None
+    except FileNotFoundError:
+        return "piper binary not found"
+    except subprocess.TimeoutExpired:
+        return "piper timed out"
+
+
+def _synth_espeak(text: str, wav_path: str, speed: int, pitch: int, voice: str, env: dict) -> str | None:
+    """Synthesize with espeak-ng. Returns None on success, error string on failure."""
+    try:
+        synth = subprocess.run(
+            [
+                "espeak-ng",
+                "--stdout",
+                "-s", str(speed),
+                "-p", str(pitch),
+                "-v", voice,
+                text,
+            ],
+            capture_output=True,
+            env=env,
+            timeout=30,
+        )
+        if synth.returncode != 0:
+            err = synth.stderr.decode("utf-8", errors="replace").strip()
+            return f"espeak-ng failed: {err}"
+        if not synth.stdout:
+            return "espeak-ng produced no audio"
+        with open(wav_path, "wb") as f:
+            f.write(synth.stdout)
+        return None
+    except FileNotFoundError:
+        return "espeak-ng not installed"
+    except subprocess.TimeoutExpired:
+        return "espeak-ng timed out"
+
+
+def _play_wav(wav_path: str, env: dict) -> str | None:
+    """Play a WAV file via GStreamer + PipeWire. Returns None on success, error on failure."""
+    try:
+        play = subprocess.run(
+            [
+                "gst-launch-1.0",
+                "filesrc", f"location={wav_path}",
+                "!", "wavparse",
+                "!", "audioconvert",
+                "!", "audioresample",
+                "!", "pipewiresink",
+            ],
+            capture_output=True,
+            env=env,
+            timeout=60,
+        )
+        if play.returncode != 0:
+            err = play.stderr.decode("utf-8", errors="replace").strip()
+            if "command not found" in err or play.returncode == 127:
+                return "gst-launch-1.0 not installed. Install with: sudo apt install gstreamer1.0-tools"
+            return f"audio playback failed: {err}"
+        return None
+    except FileNotFoundError:
+        return "gst-launch-1.0 not found"
+    except subprocess.TimeoutExpired:
+        return "audio playback timed out"
+
+
 class TTSSpeakTool(BaseTool):
     """Speak text aloud through the system audio output.
 
-    Uses espeak-ng for synthesis and GStreamer for playback through
-    PipeWire.  The Jabra or default audio sink is used automatically.
+    Uses Piper neural TTS for high-quality speech synthesis, with espeak-ng
+    as a fallback.  Playback uses GStreamer through PipeWire.
     """
 
     name = "tts_speak"
@@ -59,19 +195,17 @@ class TTSSpeakTool(BaseTool):
             "required": True,
         },
         "speed": {
-            "type": "integer",
-            "description": "Speech rate in words per minute (default 160, range 80-450).",
-            "default": 160,
-        },
-        "pitch": {
-            "type": "integer",
-            "description": "Voice pitch (default 50, range 0-99).",
-            "default": 50,
+            "type": "number",
+            "description": "Speech speed multiplier (default 1.0; >1 = faster, <1 = slower).",
+            "default": 1.0,
         },
         "voice": {
             "type": "string",
-            "description": "espeak-ng voice name (default 'en', try 'en+f3' for female).",
-            "default": "en",
+            "description": (
+                "Voice name. For Piper: 'en_US-lessac-medium' (default). "
+                "For espeak-ng fallback: 'en', 'en+f3', etc."
+            ),
+            "default": "en_US-lessac-medium",
         },
     }
 
@@ -79,82 +213,48 @@ class TTSSpeakTool(BaseTool):
         self,
         *,
         text: str,
-        speed: int = 160,
-        pitch: int = 50,
-        voice: str = "en",
+        speed: float = 1.0,
+        voice: str = "en_US-lessac-medium",
         **_: Any,
     ) -> ToolResult:
         if not text.strip():
             return ToolResult(success=False, output=None, error="No text provided.")
 
-        speed = max(80, min(450, speed))
-        pitch = max(0, min(99, pitch))
-        env = _ensure_runtime_dir()
+        speed = max(0.25, min(4.0, float(speed)))
+        env = _piper_env()
 
-        # 1. Synthesize to a temp WAV file.
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
             wav_path = tmp.name
 
         try:
-            synth = subprocess.run(
-                [
-                    "espeak-ng",
-                    "--stdout",
-                    "-s", str(speed),
-                    "-p", str(pitch),
-                    "-v", voice,
-                    text,
-                ],
-                capture_output=True,
-                env=env,
-                timeout=30,
-            )
-            if synth.returncode != 0:
-                err = synth.stderr.decode("utf-8", errors="replace").strip()
-                if "command not found" in err or synth.returncode == 127:
-                    return ToolResult(
-                        success=False, output=None,
-                        error="espeak-ng not installed. Install with: sudo apt install espeak-ng",
-                    )
-                return ToolResult(success=False, output=None, error=f"espeak-ng failed: {err}")
+            # 1. Try Piper first (high-quality neural TTS).
+            engine = "piper"
+            piper_voice = voice if voice != "en" else _PIPER_DEFAULT_VOICE
+            err = _synth_piper(text, wav_path, piper_voice, speed)
 
-            if not synth.stdout:
-                return ToolResult(success=False, output=None, error="espeak-ng produced no audio.")
+            if err is not None:
+                # 2. Fall back to espeak-ng.
+                engine = "espeak-ng"
+                logger.info("Piper unavailable (%s), falling back to espeak-ng", err)
+                espeak_voice = voice if not voice.startswith("en_US") else "en"
+                espeak_speed = max(80, min(450, int(160 * speed)))
+                err = _synth_espeak(text, wav_path, espeak_speed, 50, espeak_voice, env)
+                if err is not None:
+                    return ToolResult(success=False, output=None, error=f"TTS synthesis failed: {err}")
 
-            with open(wav_path, "wb") as f:
-                f.write(synth.stdout)
-
-            # 2. Play via GStreamer + PipeWire.
-            play = subprocess.run(
-                [
-                    "gst-launch-1.0",
-                    "filesrc", f"location={wav_path}",
-                    "!", "wavparse",
-                    "!", "audioconvert",
-                    "!", "audioresample",
-                    "!", "pipewiresink",
-                ],
-                capture_output=True,
-                env=env,
-                timeout=30,
-            )
-            if play.returncode != 0:
-                err = play.stderr.decode("utf-8", errors="replace").strip()
-                if "command not found" in err or play.returncode == 127:
-                    return ToolResult(
-                        success=False, output=None,
-                        error="gst-launch-1.0 not installed. Install with: sudo apt install gstreamer1.0-tools",
-                    )
-                return ToolResult(success=False, output=None, error=f"Audio playback failed: {err}")
+            # 3. Play via GStreamer + PipeWire.
+            play_err = _play_wav(wav_path, env)
+            if play_err is not None:
+                return ToolResult(success=False, output=None, error=play_err)
 
             word_count = len(text.split())
             return ToolResult(
                 success=True,
-                output=f"Spoke {word_count} words aloud ({len(text)} chars, voice={voice}, speed={speed}wpm).",
+                output=f"Spoke {word_count} words aloud ({len(text)} chars, engine={engine}, voice={voice}).",
             )
 
         except subprocess.TimeoutExpired:
-            return ToolResult(success=False, output=None, error="TTS timed out after 30 seconds.")
+            return ToolResult(success=False, output=None, error="TTS timed out.")
         except FileNotFoundError as exc:
             return ToolResult(success=False, output=None, error=f"Required binary not found: {exc}")
         finally:
