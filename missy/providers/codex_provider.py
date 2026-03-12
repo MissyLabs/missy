@@ -140,6 +140,7 @@ class CodexProvider(BaseProvider):
             "input": input_messages,
             "text": {"verbosity": "medium"},
             "include": ["reasoning.encrypted_content"],
+            "store": False,
             "stream": stream,
         }
         if instructions:
