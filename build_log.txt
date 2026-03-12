@@ -50,3 +50,20 @@ Session 4 complete. Here's what was accomplished:
 === Session ended (exit code: 0): Thu Mar 12 11:39:58 PM UTC 2026 ===
 === File count before: 7301 after: 7305 stagnation: 0 ===
 
+[parity 793beb9] Checkpoint before Claude session 4
+ 2 files changed, 7 insertions(+), 1 deletion(-)
+## Session 5 Summary
+
+**1097 tests passing** (up from 1053). Five concrete improvements implemented:
+
+1. **Fixed `missy cost --session`** — Was crashing with ImportError. Now shows actual per-model cost breakdowns from SQLite.
+
+2. **Cost persistence** — New `costs` table in SQLiteMemoryStore. Every provider call's token usage and USD cost is persisted. Queryable per-session and cross-session.
+
+3. **Provider rate limiting** — New `RateLimiter` with token bucket algorithm (60 RPM, 100k TPM defaults). Blocks before every provider call to prevent API rate limit hits.
+
+4. **Response streaming** — `AgentRuntime.run_stream()` yields tokens as they arrive from the provider. Falls back to batch mode for tool-calling loops.
+
+5. **`missy recover` CLI** — Lists incomplete checkpoints from crashed sessions with recommended actions. `--abandon-all` clears stale tasks.
+
+All completion criteria are met. The only remaining gaps are P3/P4 items (Discord multi-account, web UI) that are intentionally deferred.

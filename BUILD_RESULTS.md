@@ -1,6 +1,6 @@
 # BUILD_RESULTS
 
-- Timestamp: 2026-03-12 23:39:52
+- Timestamp: 2026-03-12 23:53:54
 - Python version:
 Python 3.12.3
 
@@ -13,6 +13,7 @@ Python 3.12.3
 /home/bmerriam/git/missy/BUILD_RESULTS.md
 /home/bmerriam/git/missy/BUILD_STATUS.md
 /home/bmerriam/git/missy/CLAUDE.md
+/home/bmerriam/git/missy/COMPLETE.md
 /home/bmerriam/git/missy/CONFIG_REFERENCE.md
 /home/bmerriam/git/missy/.coverage
 /home/bmerriam/git/missy/DISCORD.md
@@ -128,6 +129,7 @@ Python 3.12.3
 /home/bmerriam/git/missy/missy/providers/__init__.py
 /home/bmerriam/git/missy/missy/providers/ollama_provider.py
 /home/bmerriam/git/missy/missy/providers/openai_provider.py
+/home/bmerriam/git/missy/missy/providers/rate_limiter.py
 /home/bmerriam/git/missy/missy/providers/registry.py
 /home/bmerriam/git/missy/missy/__pycache__/__init__.cpython-312.pyc
 /home/bmerriam/git/missy/missy/scheduler/__init__.py
@@ -172,10 +174,12 @@ Python 3.12.3
 /home/bmerriam/git/missy/tests/agent/test_proactive.py
 /home/bmerriam/git/missy/tests/agent/test_runtime_enhancements.py
 /home/bmerriam/git/missy/tests/agent/test_runtime.py
+/home/bmerriam/git/missy/tests/agent/test_runtime_streaming.py
 /home/bmerriam/git/missy/tests/channels/__init__.py
 /home/bmerriam/git/missy/tests/channels/test_cli_channel.py
 /home/bmerriam/git/missy/tests/channels/test_discord_credential_delete.py
 /home/bmerriam/git/missy/tests/cli/__init__.py
+/home/bmerriam/git/missy/tests/cli/test_cost_recover.py
 /home/bmerriam/git/missy/tests/cli/test_main.py
 /home/bmerriam/git/missy/tests/config/__init__.py
 /home/bmerriam/git/missy/tests/config/test_settings.py
@@ -185,6 +189,7 @@ Python 3.12.3
 /home/bmerriam/git/missy/tests/integration/__init__.py
 /home/bmerriam/git/missy/tests/integration/test_policy_enforcement.py
 /home/bmerriam/git/missy/tests/memory/__init__.py
+/home/bmerriam/git/missy/tests/memory/test_sqlite_costs.py
 /home/bmerriam/git/missy/tests/memory/test_sqlite_sessions.py
 /home/bmerriam/git/missy/tests/memory/test_store.py
 /home/bmerriam/git/missy/tests/observability/__init__.py
@@ -202,6 +207,7 @@ Python 3.12.3
 /home/bmerriam/git/missy/tests/providers/test_base.py
 /home/bmerriam/git/missy/tests/providers/test_ollama.py
 /home/bmerriam/git/missy/tests/providers/test_openai.py
+/home/bmerriam/git/missy/tests/providers/test_rate_limiter.py
 /home/bmerriam/git/missy/tests/providers/test_registry.py
 /home/bmerriam/git/missy/tests/__pycache__/__init__.cpython-312.pyc
 /home/bmerriam/git/missy/tests/scheduler/__init__.py
