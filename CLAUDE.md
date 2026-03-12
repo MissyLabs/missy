@@ -43,6 +43,7 @@ CLI (missy/cli/main.py)
        ├─ CircuitBreaker (agent/circuit_breaker.py)
        ├─ ContextManager (agent/context.py) — token budget with memory/learnings injection
        ├─ ProviderRegistry + ModelRouter (providers/registry.py)
+       ├─ RateLimiter (providers/rate_limiter.py)
        ├─ PolicyHTTPClient (gateway/client.py)
        ├─ ToolRegistry (tools/registry.py) + built-in tools
        ├─ McpManager (mcp/manager.py) — MCP server integration
@@ -250,6 +251,7 @@ missy voice status                  Show voice channel config and STT/TTS status
 missy voice test NODE_ID            Test TTS synthesis for an edge node (--text)
 
 missy cost                          Show cost tracking config and budget status (--session)
+missy recover                       List incomplete checkpoints from previous sessions (--abandon-all)
 ```
 
 ## Optional Extras
@@ -264,4 +266,4 @@ Piper TTS is a separate binary, not a pip package. Install from https://github.c
 
 ## Test Layout
 
-Tests under `tests/` with subdirectories: `agent/`, `channels/`, `cli/`, `config/`, `core/`, `integration/`, `memory/`, `observability/`, `plugins/`, `policy/`, `providers/`, `scheduler/`, `security/`, `skills/`, `tools/`, `unit/`. 48 test files, 814 tests, coverage threshold 85% (configured in `pyproject.toml`).
+Tests under `tests/` with subdirectories: `agent/`, `channels/`, `cli/`, `config/`, `core/`, `integration/`, `memory/`, `observability/`, `plugins/`, `policy/`, `providers/`, `scheduler/`, `security/`, `skills/`, `tools/`, `unit/`. 52 test files, 1097 tests, coverage threshold 85% (configured in `pyproject.toml`).
