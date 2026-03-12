@@ -1,38 +1,52 @@
 # LAST_SESSION_SUMMARY
 
-## Session Date: 2026-03-12 (Session 4)
+## Session Date: 2026-03-12 (Session 5)
 
 ## What Was Implemented This Session
 
-### 1. ShellExecTool Sandbox Integration
-- `execute()` now routes through Docker sandbox when `self._sandbox` is set
-- Split into `_execute_sandboxed()` and `_execute_direct()` private methods
-- Previously sandbox config was accepted in `__init__` but never used in `execute()`
-- 11 new tests for sandbox routing, direct execution, schema
+### 1. Provider Rate Limiting
+- New `missy/providers/rate_limiter.py` with token bucket algorithm
+- Enforces requests-per-minute (60) and tokens-per-minute (100k) limits
+- Blocking `acquire()` with configurable `max_wait_seconds` (30s default)
+- `on_rate_limit_response()` handles 429 API responses
+- Thread-safe with internal lock
+- Wired into `AgentRuntime` — called before every `_single_turn()` and `_tool_loop()` provider call
+- 18 new tests covering init, acquire, blocking, timeout, capacity, thread safety
 
-### 2. Budget Enforcement in Agent Tool Loop
-- `CostTracker.check_budget()` called after every `_record_cost(response)` in `_tool_loop()`
-- New `_check_budget()` method emits `agent.budget.exceeded` audit event before raising `BudgetExceededError`
-- `max_spend_usd` config field added to `MissyConfig` and `AgentConfig`
-- `_make_cost_tracker()` now passes `max_spend_usd` from config to `CostTracker`
-- Wired through CLI: both `missy ask` and `missy run` pass `cfg.max_spend_usd` to `AgentConfig`
+### 2. Cost Persistence to SQLite
+- New `costs` table in `SQLiteMemoryStore._init_db()` DDL
+- `record_cost(session_id, model, prompt_tokens, completion_tokens, cost_usd)` method
+- `get_session_costs(session_id)` returns per-call records with model + tokens + USD
+- `get_total_costs(limit)` returns per-session aggregates ordered by most recent
+- `AgentRuntime._record_cost()` now accepts `session_id` and persists to SQLite
+- Both `_tool_loop()` and `_single_turn()` pass session_id to `_record_cost()`
+- 11 new tests covering record/retrieve, isolation, aggregation, table creation
 
-### 3. Checkpoint Recovery Scan at Startup
-- `AgentRuntime.__init__()` now calls `_scan_checkpoints()` which invokes `scan_for_recovery()`
-- `pending_recovery` property exposes incomplete checkpoints to callers
-- `missy run` displays resumable/restartable tasks at session start
+### 3. Fixed `missy cost --session` Command
+- Was crashing: `ImportError: cannot import name 'ResilientMemoryStore' from 'missy.memory.resilient_store'`
+- Also called nonexistent `store.load_history()` method
+- Now imports `SQLiteMemoryStore` directly
+- Shows: session ID, turn count, API call count, prompt/completion tokens, total cost, per-model breakdown
 
-### 4. Cost CLI Command
-- `missy cost` shows budget config (max_spend_usd) and usage hint
-- `--session` option for session-specific lookup
+### 4. Response Streaming
+- New `AgentRuntime.run_stream()` generator method
+- Yields text chunks from `provider.stream()` for single-turn completions
+- Falls back to full `run()` for tool-calling loops (tool calls need complete responses)
+- Falls back to `_single_turn()` if streaming raises an exception
+- Persists user/assistant turns to memory after streaming completes
+- 3 new tests covering streaming, error fallback, tool-loop fallback
 
-### 5. Misc Fixes
-- Wizard step numbering corrected (was "Step 2 of 4", now "Step 2 of 5")
-- CLI test updated to handle new `max_spend_usd` parameter in AgentConfig
+### 5. `missy recover` CLI Command
+- Lists incomplete checkpoints from previous sessions
+- Shows: checkpoint ID, session ID, recommended action, prompt preview, iteration count
+- Actions classified by age: resume (<1h), restart (1-24h), abandon (>24h)
+- `--abandon-all` flag clears all incomplete checkpoints (calls `abandon_old(max_age_seconds=0)`)
+- 4 new tests covering no-checkpoints, display, abandon-all, help
 
 ### 6. Tests
-- 24 new tests (11 shell_exec, 13 runtime enhancements)
-- Full suite: 1053 passing, 0 failures
+- 44 new tests across 4 test files
+- Full suite: 1097 passing, 0 failures
+- Test files: test_rate_limiter.py, test_sqlite_costs.py, test_runtime_streaming.py, test_cost_recover.py
 
 ## What Remains
 
@@ -42,6 +56,6 @@
 ## First Action Next Session
 
 1. Run full test suite to verify continued health
-2. Consider adding per-model cost breakdown to `missy cost --detailed`
-3. Consider sandbox integration tests with Docker mocking
-4. Update CONFIG_REFERENCE.md with `max_spend_usd` field
+2. Consider wiring `run_stream()` into the CLI channel's interactive loop for real-time output
+3. Consider adding `missy cost --all` for cross-session cost summary
+4. Consider adding rate limiter config to `config.yaml` (requests_per_minute, tokens_per_minute)
