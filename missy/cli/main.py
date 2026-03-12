@@ -374,7 +374,11 @@ def ask(
         next(iter(cfg.providers), "anthropic") if cfg.providers else "anthropic"
     )
 
-    agent_cfg = AgentConfig(provider=provider_name, capability_mode=capability_mode)
+    agent_cfg = AgentConfig(
+        provider=provider_name,
+        capability_mode=capability_mode,
+        max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
+    )
     agent = AgentRuntime(agent_cfg)
 
     with console.status("[bold cyan]Thinking...[/]", spinner="dots"):
@@ -427,7 +431,11 @@ def run(ctx: click.Context, provider: Optional[str], session: str, capability_mo
         next(iter(cfg.providers), "anthropic") if cfg.providers else "anthropic"
     )
 
-    agent_cfg = AgentConfig(provider=provider_name, capability_mode=capability_mode)
+    agent_cfg = AgentConfig(
+        provider=provider_name,
+        capability_mode=capability_mode,
+        max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
+    )
     agent = AgentRuntime(agent_cfg)
     channel = CLIChannel()
 
@@ -441,6 +449,23 @@ def run(ctx: click.Context, provider: Optional[str], session: str, capability_mo
             border_style="cyan",
         )
     )
+
+    # Notify user about incomplete tasks from previous runs
+    recovery = agent.pending_recovery
+    if recovery:
+        resumable = [r for r in recovery if r.action == "resume"]
+        restartable = [r for r in recovery if r.action == "restart"]
+        if resumable:
+            console.print(
+                f"[yellow]Found {len(resumable)} resumable task(s) from previous sessions.[/]"
+            )
+            for r in resumable[:3]:
+                prompt_preview = (r.prompt[:60] + "...") if len(r.prompt) > 60 else r.prompt
+                console.print(f"  [dim]• session={r.session_id} — {prompt_preview}[/]")
+        if restartable:
+            console.print(
+                f"[yellow]Found {len(restartable)} restartable task(s) (older, may need restart).[/]"
+            )
 
     session_id: str = session  # stable across turns and re-invocations
 

@@ -295,6 +295,7 @@ class MissyConfig:
     vault: VaultConfig = field(default_factory=VaultConfig)
     proactive: ProactiveConfig = field(default_factory=ProactiveConfig)
     sandbox: Optional["SandboxConfig"] = None
+    max_spend_usd: float = 0.0  # 0 = unlimited; per-session budget cap
 
 
 # ---------------------------------------------------------------------------
@@ -508,6 +509,7 @@ def load_config(path: str) -> MissyConfig:
             vault=_parse_vault(data.get("vault") or {}),
             proactive=_parse_proactive(data.get("proactive") or {}),
             sandbox=_parse_sandbox(data.get("sandbox") or {}),
+            max_spend_usd=float(data.get("max_spend_usd", 0.0)),
         )
     except ConfigurationError:
         raise

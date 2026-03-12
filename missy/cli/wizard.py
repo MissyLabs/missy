@@ -420,7 +420,7 @@ def run_wizard(config_path: str) -> None:
     # -----------------------------------------------------------------------
     # Step 1: Workspace
     # -----------------------------------------------------------------------
-    console.print("\n[bold]Step 1 of 4 — Workspace[/]")
+    console.print("\n[bold]Step 1 of 5 — Workspace[/]")
     workspace_default = str(Path.home() / "workspace")
     workspace = click.prompt("  Workspace directory", default=workspace_default)
     workspace_path = Path(workspace).expanduser()
@@ -430,7 +430,7 @@ def run_wizard(config_path: str) -> None:
     # -----------------------------------------------------------------------
     # Step 2: Provider selection
     # -----------------------------------------------------------------------
-    console.print("\n[bold]Step 2 of 4 — AI Provider(s)[/]")
+    console.print("\n[bold]Step 2 of 5 — AI Provider(s)[/]")
     console.print("  Choose which providers to configure:\n")
     console.print("    [bold]1[/]. Anthropic (Claude)")
     console.print("    [bold]2[/]. OpenAI (GPT-4o / Codex)")

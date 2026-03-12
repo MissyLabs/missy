@@ -93,6 +93,7 @@ class AgentConfig:
     max_iterations: int = 10
     temperature: float = 0.7
     capability_mode: str = "full"  # "full" | "safe-chat" | "no-tools"
+    max_spend_usd: float = 0.0  # 0 = unlimited; per-session cost cap
 
 
 class AgentRuntime:
@@ -131,6 +132,8 @@ class AgentRuntime:
         self._memory_store = self._make_memory_store()
         # Cost tracking (graceful degradation)
         self._cost_tracker = self._make_cost_tracker()
+        # Scan for incomplete checkpoints from previous runs
+        self._pending_recovery: list = self._scan_checkpoints()
 
     # ------------------------------------------------------------------
     # Public interface
@@ -408,8 +411,9 @@ class AgentRuntime:
                     )
                     return fallback.content, tool_names_used
 
-                # Record cost for this completion call
+                # Record cost and enforce budget
                 self._record_cost(response)
+                self._check_budget(session_id=session_id, task_id=task_id)
 
                 if response.finish_reason == "tool_calls" and response.tool_calls:
                     # Execute each tool call
@@ -863,9 +867,10 @@ class AgentRuntime:
         except Exception:
             return None
 
-    @staticmethod
-    def _make_cost_tracker():
+    def _make_cost_tracker(self):
         """Create a :class:`~missy.agent.cost_tracker.CostTracker`.
+
+        Uses ``max_spend_usd`` from the agent config when set.
 
         Returns:
             A :class:`~missy.agent.cost_tracker.CostTracker` instance, or
@@ -873,9 +878,40 @@ class AgentRuntime:
         """
         try:
             from missy.agent.cost_tracker import CostTracker
-            return CostTracker()
+            return CostTracker(max_spend_usd=self.config.max_spend_usd)
         except Exception:
             return None
+
+    @staticmethod
+    def _scan_checkpoints() -> list:
+        """Scan for incomplete checkpoints from previous runs.
+
+        Returns a list of :class:`~missy.agent.checkpoint.RecoveryResult`
+        objects that the caller (e.g. CLI) can present to the user.
+        Fails gracefully — returns an empty list if checkpoint module
+        is unavailable or the DB doesn't exist.
+        """
+        try:
+            from missy.agent.checkpoint import scan_for_recovery
+            results = scan_for_recovery()
+            if results:
+                logger.info(
+                    "Found %d incomplete checkpoint(s) from previous runs.",
+                    len(results),
+                )
+            return results
+        except Exception:
+            return []
+
+    @property
+    def pending_recovery(self) -> list:
+        """Incomplete checkpoints from previous runs.
+
+        Returns a list of :class:`~missy.agent.checkpoint.RecoveryResult`
+        objects.  Each has an ``action`` field (``"resume"``, ``"restart"``,
+        or ``"abandon"``) indicating the recommended recovery strategy.
+        """
+        return list(self._pending_recovery)
 
     def _record_cost(self, response) -> None:
         """Record token usage from a completion response in the cost tracker."""
@@ -885,6 +921,31 @@ class AgentRuntime:
             self._cost_tracker.record_from_response(response)
         except Exception as exc:
             logger.debug("Failed to record cost: %s", exc)
+
+    def _check_budget(self, session_id: str = "", task_id: str = "") -> None:
+        """Enforce budget limits after recording cost.
+
+        Raises :class:`~missy.agent.cost_tracker.BudgetExceededError` if the
+        accumulated session cost exceeds ``max_spend_usd``.  An audit event
+        is emitted before the exception propagates.
+        """
+        if self._cost_tracker is None:
+            return
+        try:
+            self._cost_tracker.check_budget()
+        except Exception as exc:
+            # Emit audit event for budget breach
+            try:
+                self._emit_event(
+                    session_id=session_id,
+                    task_id=task_id,
+                    event_type="agent.budget.exceeded",
+                    result="deny",
+                    detail=self._cost_tracker.get_summary(),
+                )
+            except Exception:
+                pass
+            raise
 
     # ------------------------------------------------------------------
     # Private helpers
