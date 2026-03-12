@@ -216,24 +216,24 @@ class TestDiscordRestClient:
         assert "chan-1/typing" in call_url
 
     def test_register_slash_commands_global(self, rest_client: DiscordRestClient, mock_http_client: MagicMock) -> None:
-        mock_http_client.post.return_value.json.return_value = [{"name": "ask"}]
+        mock_http_client.put.return_value.json.return_value = [{"name": "ask"}]
         commands = [{"name": "ask", "description": "Ask Missy"}]
         result = rest_client.register_slash_commands(
             application_id="app-111",
             commands=commands,
         )
-        call_url = mock_http_client.post.call_args[0][0]
+        call_url = mock_http_client.put.call_args[0][0]
         assert "app-111/commands" in call_url
         assert "guilds" not in call_url
 
     def test_register_slash_commands_guild(self, rest_client: DiscordRestClient, mock_http_client: MagicMock) -> None:
-        mock_http_client.post.return_value.json.return_value = [{"name": "ask"}]
+        mock_http_client.put.return_value.json.return_value = [{"name": "ask"}]
         rest_client.register_slash_commands(
             application_id="app-111",
             commands=[],
             guild_id="guild-222",
         )
-        call_url = mock_http_client.post.call_args[0][0]
+        call_url = mock_http_client.put.call_args[0][0]
         assert "guilds/guild-222/commands" in call_url
 
     def test_authorization_header_present(self, rest_client: DiscordRestClient, mock_http_client: MagicMock) -> None:
@@ -733,3 +733,184 @@ class TestAuditEvents:
             event_type="discord.channel.require_mention_filtered"
         )
         assert len(events) == 1
+
+
+# ---------------------------------------------------------------------------
+# Thread management
+# ---------------------------------------------------------------------------
+
+
+class TestDiscordThreadManagement:
+    """Tests for thread creation and thread-scoped sessions."""
+
+    def test_set_and_get_thread_session(self, open_dm_account: DiscordAccountConfig) -> None:
+        channel = _make_channel(open_dm_account)
+        assert channel.get_thread_session("thread-1") is None
+        channel.set_thread_session("thread-1", "session-abc")
+        assert channel.get_thread_session("thread-1") == "session-abc"
+
+    def test_thread_session_in_metadata(self, open_dm_account: DiscordAccountConfig) -> None:
+        """Thread session ID is included in enqueued message metadata."""
+        channel = _make_channel(open_dm_account)
+        channel._bot_user_id = "bot-001"
+        channel.set_thread_session("thread-42", "sess-xyz")
+
+        msg = _make_message(content="hi from thread", channel_id="thread-42")
+        msg["channel_type"] = 11  # PUBLIC_THREAD
+
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(channel._handle_message(msg))
+            queued = loop.run_until_complete(channel._queue.get())
+            assert queued.metadata["discord_thread_id"] == "thread-42"
+            assert queued.metadata["discord_thread_session_id"] == "sess-xyz"
+        finally:
+            loop.close()
+
+    def test_non_thread_message_has_empty_thread_session(
+        self, open_dm_account: DiscordAccountConfig
+    ) -> None:
+        channel = _make_channel(open_dm_account)
+        channel._bot_user_id = "bot-001"
+
+        msg = _make_message(content="normal message")
+
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(channel._handle_message(msg))
+            queued = loop.run_until_complete(channel._queue.get())
+            assert queued.metadata["discord_thread_id"] == ""
+            assert queued.metadata["discord_thread_session_id"] == ""
+        finally:
+            loop.close()
+
+    def test_create_thread_success(self, open_dm_account: DiscordAccountConfig) -> None:
+        channel = _make_channel(open_dm_account)
+        channel._rest = MagicMock()
+        channel._rest.create_thread.return_value = {"id": "new-thread-123"}
+
+        loop = asyncio.new_event_loop()
+        try:
+            thread_id = loop.run_until_complete(
+                channel.create_thread("chan-1", "Test Thread", session_id="sess-1")
+            )
+            assert thread_id == "new-thread-123"
+            assert channel.get_thread_session("new-thread-123") == "sess-1"
+        finally:
+            loop.close()
+
+    def test_create_thread_failure(self, open_dm_account: DiscordAccountConfig) -> None:
+        channel = _make_channel(open_dm_account)
+        channel._rest = MagicMock()
+        channel._rest.create_thread.side_effect = Exception("API error")
+
+        loop = asyncio.new_event_loop()
+        try:
+            thread_id = loop.run_until_complete(
+                channel.create_thread("chan-1", "Test Thread")
+            )
+            assert thread_id is None
+        finally:
+            loop.close()
+
+    def test_create_thread_with_message_id(
+        self, open_dm_account: DiscordAccountConfig
+    ) -> None:
+        channel = _make_channel(open_dm_account)
+        channel._rest = MagicMock()
+        channel._rest.create_thread.return_value = {"id": "thread-from-msg"}
+
+        loop = asyncio.new_event_loop()
+        try:
+            thread_id = loop.run_until_complete(
+                channel.create_thread("chan-1", "Thread", message_id="msg-42")
+            )
+            assert thread_id == "thread-from-msg"
+            channel._rest.create_thread.assert_called_once_with(
+                channel_id="chan-1", name="Thread", message_id="msg-42"
+            )
+        finally:
+            loop.close()
+
+    def test_auto_thread_threshold_config(self) -> None:
+        account = DiscordAccountConfig(
+            token_env_var="DISCORD_BOT_TOKEN",
+            account_id="bot-001",
+            dm_policy=DiscordDMPolicy.OPEN,
+            auto_thread_threshold=5,
+        )
+        channel = _make_channel(account)
+        assert channel._auto_thread_threshold == 5
+
+    def test_channel_message_count_tracking(
+        self, event_bus_fresh: EventBus
+    ) -> None:
+        """Messages in guild channels increment the message count."""
+        account = DiscordAccountConfig(
+            token_env_var="DISCORD_BOT_TOKEN",
+            account_id="bot-001",
+            dm_policy=DiscordDMPolicy.DISABLED,
+            guild_policies={
+                "guild-1": DiscordGuildPolicy(enabled=True),
+            },
+            auto_thread_threshold=10,
+        )
+        channel = _make_channel(account, bus=event_bus_fresh)
+        channel._bot_user_id = "bot-001"
+
+        msg = _make_message(content="hello", guild_id="guild-1", channel_id="chan-1")
+
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(channel._handle_message(msg))
+            assert channel._channel_message_counts.get("chan-1") == 1
+        finally:
+            loop.close()
+
+
+# ---------------------------------------------------------------------------
+# REST client thread operations
+# ---------------------------------------------------------------------------
+
+
+class TestDiscordRestThreads:
+    """Tests for REST client thread creation and channel fetching."""
+
+    def test_create_thread_without_message(
+        self, rest_client: DiscordRestClient, mock_http_client: MagicMock
+    ) -> None:
+        mock_http_client.post.return_value.json.return_value = {"id": "thread-1"}
+        result = rest_client.create_thread("chan-1", "My Thread")
+        assert result["id"] == "thread-1"
+        call_args = mock_http_client.post.call_args
+        assert "/channels/chan-1/threads" in call_args[0][0]
+        body = call_args[1]["json"]
+        assert body["name"] == "My Thread"
+        assert body["type"] == 11  # PUBLIC_THREAD
+
+    def test_create_thread_with_message(
+        self, rest_client: DiscordRestClient, mock_http_client: MagicMock
+    ) -> None:
+        mock_http_client.post.return_value.json.return_value = {"id": "thread-2"}
+        result = rest_client.create_thread("chan-1", "Thread", message_id="msg-99")
+        assert result["id"] == "thread-2"
+        call_args = mock_http_client.post.call_args
+        assert "/messages/msg-99/threads" in call_args[0][0]
+
+    def test_create_thread_name_truncation(
+        self, rest_client: DiscordRestClient, mock_http_client: MagicMock
+    ) -> None:
+        mock_http_client.post.return_value.json.return_value = {"id": "thread-3"}
+        long_name = "x" * 200
+        rest_client.create_thread("chan-1", long_name)
+        call_args = mock_http_client.post.call_args
+        assert len(call_args[1]["json"]["name"]) == 100
+
+    def test_get_channel(
+        self, rest_client: DiscordRestClient, mock_http_client: MagicMock
+    ) -> None:
+        mock_http_client.get.return_value.json.return_value = {"id": "chan-1", "type": 0}
+        result = rest_client.get_channel("chan-1")
+        assert result["id"] == "chan-1"
+        call_args = mock_http_client.get.call_args
+        assert "/channels/chan-1" in call_args[0][0]

@@ -28,10 +28,10 @@ _MAX_TIMEOUT = 300
 class ShellExecTool(BaseTool):
     """Execute a whitelisted shell command as a subprocess.
 
-    Commands are split with :func:`shlex.split` and passed directly to
-    :func:`subprocess.run` with ``shell=False``, preventing shell
-    metacharacter injection.  Both stdout and stderr are captured and
-    combined in the result output.
+    When a :class:`~missy.security.sandbox.SandboxConfig` is provided (or
+    the ``sandbox:`` section is present in the Missy config), commands are
+    routed through the Docker sandbox for isolated execution.  Otherwise
+    commands run directly via :func:`subprocess.run`.
 
     Attributes:
         name: ``"shell_exec"``
@@ -48,6 +48,16 @@ class ShellExecTool(BaseTool):
     )
     permissions = ToolPermissions(shell=True)
 
+    def __init__(self, sandbox_config: Optional[Any] = None) -> None:
+        self._sandbox = None
+        if sandbox_config is not None:
+            try:
+                from missy.security.sandbox import get_sandbox
+
+                self._sandbox = get_sandbox(sandbox_config)
+            except Exception:
+                pass
+
     def execute(
         self,
         *,
@@ -56,12 +66,16 @@ class ShellExecTool(BaseTool):
         timeout: int = _DEFAULT_TIMEOUT,
         **_kwargs: Any,
     ) -> ToolResult:
-        """Run *command* as a subprocess.
+        """Run *command* as a subprocess — or inside a Docker sandbox.
+
+        When a sandbox was configured (``sandbox.enabled: true`` in config)
+        and Docker is available, the command runs inside an ephemeral
+        container with dropped capabilities, network isolation, and
+        read-only root.  Otherwise falls back to direct subprocess
+        execution.
 
         Args:
             command: The command string to execute, e.g. ``"ls -la /tmp"``.
-                Parsed with :func:`shlex.split`; shell metacharacters are
-                not interpreted.
             cwd: Optional working directory for the subprocess.
             timeout: Maximum wall-clock seconds before the process is killed
                 (default: 30, capped at 300).
@@ -80,6 +94,38 @@ class ShellExecTool(BaseTool):
         if not command.strip():
             return ToolResult(success=False, output=None, error="command must not be empty")
 
+        # Route through Docker sandbox when available
+        if self._sandbox is not None:
+            return self._execute_sandboxed(command=command, cwd=cwd, timeout=timeout)
+
+        return self._execute_direct(command=command, cwd=cwd, timeout=timeout)
+
+    def _execute_sandboxed(
+        self,
+        *,
+        command: str,
+        cwd: Optional[str],
+        timeout: int,
+    ) -> ToolResult:
+        """Execute via the configured sandbox (Docker or fallback)."""
+        try:
+            result = self._sandbox.execute(command, cwd=cwd, timeout=timeout)
+            return ToolResult(
+                success=result.success,
+                output=result.output,
+                error=result.error,
+            )
+        except Exception as exc:
+            return ToolResult(success=False, output=None, error=str(exc))
+
+    def _execute_direct(
+        self,
+        *,
+        command: str,
+        cwd: Optional[str],
+        timeout: int,
+    ) -> ToolResult:
+        """Execute directly via subprocess."""
         try:
             proc = subprocess.run(
                 command,
@@ -106,7 +152,7 @@ class ShellExecTool(BaseTool):
             return ToolResult(
                 success=False,
                 output=None,
-                error=f"Command not found: {args[0]!r}",
+                error="Command not found",
             )
         except PermissionError as exc:
             return ToolResult(success=False, output=None, error=f"Permission denied: {exc}")

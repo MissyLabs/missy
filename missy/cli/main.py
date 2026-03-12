@@ -315,12 +315,16 @@ def setup(ctx: click.Context) -> None:
 @click.argument("prompt")
 @click.option("--provider", default=None, help="Provider to use (overrides config default).")
 @click.option("--session", default=None, help="Session ID for conversation continuity.")
+@click.option("--mode", "capability_mode", default="full",
+              type=click.Choice(["full", "safe-chat", "no-tools"], case_sensitive=False),
+              show_default=True, help="Capability mode: full (all tools), safe-chat (read-only tools), no-tools (pure chat).")
 @click.pass_context
 def ask(
     ctx: click.Context,
     prompt: str,
     provider: Optional[str],
     session: Optional[str],
+    capability_mode: str,
 ) -> None:
     """Ask Missy a single question and print the response.
 
@@ -370,7 +374,11 @@ def ask(
         next(iter(cfg.providers), "anthropic") if cfg.providers else "anthropic"
     )
 
-    agent_cfg = AgentConfig(provider=provider_name)
+    agent_cfg = AgentConfig(
+        provider=provider_name,
+        capability_mode=capability_mode,
+        max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
+    )
     agent = AgentRuntime(agent_cfg)
 
     with console.status("[bold cyan]Thinking...[/]", spinner="dots"):
@@ -401,8 +409,11 @@ def ask(
 @click.option("--provider", default=None, help="Provider to use.")
 @click.option("--session", default="default", show_default=True,
               help="Session ID for conversation continuity. Use 'default' to persist memory across runs.")
+@click.option("--mode", "capability_mode", default="full",
+              type=click.Choice(["full", "safe-chat", "no-tools"], case_sensitive=False),
+              show_default=True, help="Capability mode: full (all tools), safe-chat (read-only tools), no-tools (pure chat).")
 @click.pass_context
-def run(ctx: click.Context, provider: Optional[str], session: str) -> None:
+def run(ctx: click.Context, provider: Optional[str], session: str, capability_mode: str) -> None:
     """Start an interactive session with Missy.
 
     Type your messages and press Enter.  Type [bold]quit[/] or [bold]exit[/],
@@ -420,18 +431,41 @@ def run(ctx: click.Context, provider: Optional[str], session: str) -> None:
         next(iter(cfg.providers), "anthropic") if cfg.providers else "anthropic"
     )
 
-    agent_cfg = AgentConfig(provider=provider_name)
+    agent_cfg = AgentConfig(
+        provider=provider_name,
+        capability_mode=capability_mode,
+        max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
+    )
     agent = AgentRuntime(agent_cfg)
     channel = CLIChannel()
 
+    mode_label = {"full": "full (all tools)", "safe-chat": "safe-chat (read-only)", "no-tools": "no-tools (pure chat)"}
     console.print(
         Panel(
             "[bold cyan]Missy[/] interactive session\n\n"
             f"Provider : [bold]{provider_name}[/]\n"
+            f"Mode     : [bold]{mode_label.get(capability_mode, capability_mode)}[/]\n"
             "Type [bold]quit[/] or [bold]exit[/] to end, or press Ctrl-D.",
             border_style="cyan",
         )
     )
+
+    # Notify user about incomplete tasks from previous runs
+    recovery = agent.pending_recovery
+    if recovery:
+        resumable = [r for r in recovery if r.action == "resume"]
+        restartable = [r for r in recovery if r.action == "restart"]
+        if resumable:
+            console.print(
+                f"[yellow]Found {len(resumable)} resumable task(s) from previous sessions.[/]"
+            )
+            for r in resumable[:3]:
+                prompt_preview = (r.prompt[:60] + "...") if len(r.prompt) > 60 else r.prompt
+                console.print(f"  [dim]• session={r.session_id} — {prompt_preview}[/]")
+        if restartable:
+            console.print(
+                f"[yellow]Found {len(restartable)} restartable task(s) (older, may need restart).[/]"
+            )
 
     session_id: str = session  # stable across turns and re-invocations
 
@@ -1528,7 +1562,217 @@ def doctor(ctx: click.Context) -> None:
     else:
         table.add_row("discord", Text("disabled", style="dim"), "not configured")
 
+    # 11. Memory store
+    try:
+        from missy.memory.sqlite_store import SQLiteMemoryStore
+
+        mem_path = Path("~/.missy/memory.db").expanduser()
+        if mem_path.exists():
+            store = SQLiteMemoryStore(str(mem_path))
+            # Quick connectivity check: count turns
+            turns = store.get_session_turns("__health_check__", limit=1)
+            table.add_row("memory store", ok, f"sqlite: {mem_path} (accessible)")
+        else:
+            table.add_row("memory store", warn, f"not found: {mem_path}")
+    except Exception as exc:
+        table.add_row("memory store", fail, f"error: {exc}")
+
+    # 12. MCP servers
+    try:
+        mcp_path = Path("~/.missy/mcp.json").expanduser()
+        if mcp_path.exists():
+            import json
+
+            mcp_data = json.loads(mcp_path.read_text())
+            servers = mcp_data.get("servers", {}) if isinstance(mcp_data, dict) else {}
+            if servers:
+                table.add_row(
+                    "mcp servers",
+                    ok,
+                    f"{len(servers)} server(s) configured: {', '.join(servers.keys())}",
+                )
+            else:
+                table.add_row("mcp servers", Text("none", style="dim"), "no servers in mcp.json")
+        else:
+            table.add_row("mcp servers", Text("none", style="dim"), "mcp.json not found")
+    except Exception as exc:
+        table.add_row("mcp servers", fail, f"error reading mcp.json: {exc}")
+
+    # 13. Config hot-reload (watchdog)
+    try:
+        import importlib
+
+        watchdog_spec = importlib.util.find_spec("watchdog")
+        if watchdog_spec is not None:
+            table.add_row("config hot-reload", ok, "watchdog available")
+        else:
+            table.add_row("config hot-reload", warn, "watchdog not installed — hot-reload disabled")
+    except Exception:
+        table.add_row("config hot-reload", warn, "could not check watchdog")
+
+    # 14. Voice channel
+    try:
+        raw_cfg = {}
+        config_path = Path(ctx.obj["config_path"]).expanduser()
+        if config_path.exists():
+            import yaml
+
+            raw_cfg = yaml.safe_load(config_path.read_text()) or {}
+        voice_cfg = raw_cfg.get("voice", {})
+        if voice_cfg:
+            voice_host = voice_cfg.get("host", "0.0.0.0")
+            voice_port = voice_cfg.get("port", 8765)
+            stt_engine = voice_cfg.get("stt", {}).get("engine", "none")
+            tts_engine = voice_cfg.get("tts", {}).get("engine", "none")
+            table.add_row(
+                "voice channel",
+                ok,
+                f"{voice_host}:{voice_port} stt={stt_engine} tts={tts_engine}",
+            )
+        else:
+            table.add_row("voice channel", Text("disabled", style="dim"), "not configured")
+    except Exception as exc:
+        table.add_row("voice channel", warn, f"error checking voice: {exc}")
+
+    # 15. Checkpoint database
+    try:
+        cp_path = Path("~/.missy/checkpoints.db").expanduser()
+        if cp_path.exists():
+            table.add_row("checkpoints", ok, f"database: {cp_path}")
+        else:
+            table.add_row("checkpoints", Text("none", style="dim"), "no checkpoint database")
+    except Exception:
+        pass
+
     console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# missy cost
+# ---------------------------------------------------------------------------
+
+
+@cli.command()
+@click.option("--session", default=None, help="Session ID to query (default: show config).")
+@click.pass_context
+def cost(ctx: click.Context, session: Optional[str]) -> None:
+    """Show cost tracking configuration and session cost summary.
+
+    When ``--session`` is given, shows cost data from the memory store for
+    that session.  Otherwise shows the current budget configuration.
+    """
+    cfg = _load_subsystems(ctx.obj["config_path"])
+
+    table = Table(title="Cost Tracking", show_lines=True)
+    table.add_column("Setting", style="bold")
+    table.add_column("Value")
+
+    budget = getattr(cfg, "max_spend_usd", 0.0)
+    table.add_row("Budget limit (max_spend_usd)", f"${budget:.2f}" if budget > 0 else "unlimited")
+    table.add_row("Config location", "max_spend_usd in config.yaml")
+
+    if session:
+        try:
+            from missy.memory.sqlite_store import SQLiteMemoryStore
+            store = SQLiteMemoryStore()
+            turns = store.get_session_turns(session, limit=1000)
+            table.add_row("Session", session)
+            table.add_row("Turns", str(len(turns)))
+
+            # Show persisted cost data if available
+            cost_rows = store.get_session_costs(session)
+            if cost_rows:
+                total_cost = sum(r["cost_usd"] for r in cost_rows)
+                total_prompt = sum(r["prompt_tokens"] for r in cost_rows)
+                total_completion = sum(r["completion_tokens"] for r in cost_rows)
+                table.add_row("API calls", str(len(cost_rows)))
+                table.add_row("Prompt tokens", f"{total_prompt:,}")
+                table.add_row("Completion tokens", f"{total_completion:,}")
+                table.add_row("Total cost", f"${total_cost:.6f}")
+
+                # Per-model breakdown
+                models: dict[str, float] = {}
+                for r in cost_rows:
+                    models[r["model"]] = models.get(r["model"], 0.0) + r["cost_usd"]
+                for model, cost in sorted(models.items(), key=lambda x: -x[1]):
+                    table.add_row(f"  {model}", f"${cost:.6f}")
+            else:
+                table.add_row("Cost data", "[dim]No cost records for this session[/]")
+        except Exception as exc:
+            table.add_row("Session lookup", f"[red]Error: {exc}[/]")
+
+    console.print(table)
+
+    console.print(
+        "\n[dim]To set a budget, add to config.yaml:[/]\n"
+        "  [bold]max_spend_usd: 5.00[/]  # dollars per session\n"
+    )
+
+
+# ---------------------------------------------------------------------------
+# missy recover
+# ---------------------------------------------------------------------------
+
+
+@cli.command()
+@click.option("--abandon-all", is_flag=True, help="Abandon all incomplete checkpoints.")
+@click.pass_context
+def recover(ctx: click.Context, abandon_all: bool) -> None:
+    """List or act on incomplete task checkpoints from previous sessions.
+
+    Scans for tasks that were interrupted by crashes or restarts and shows
+    recovery options.  Use --abandon-all to clear all stale checkpoints.
+    """
+    from datetime import datetime
+
+    try:
+        from missy.agent.checkpoint import CheckpointManager, scan_for_recovery
+    except ImportError:
+        _print_error("Checkpoint module not available.")
+        sys.exit(1)
+
+    if abandon_all:
+        try:
+            cm = CheckpointManager()
+            count = cm.abandon_old(max_age_seconds=0)
+            _print_success(f"Abandoned {count} checkpoint(s).")
+        except Exception as exc:
+            _print_error(f"Failed to abandon checkpoints: {exc}")
+            sys.exit(1)
+        return
+
+    results = scan_for_recovery()
+    if not results:
+        console.print("[green]No incomplete checkpoints found.[/]")
+        return
+
+    table = Table(title="Incomplete Checkpoints", show_lines=True)
+    table.add_column("ID", style="dim", max_width=12)
+    table.add_column("Session", max_width=12)
+    table.add_column("Action", style="bold")
+    table.add_column("Prompt", max_width=50)
+    table.add_column("Iteration")
+
+    for r in results:
+        action_style = {
+            "resume": "[green]resume[/]",
+            "restart": "[yellow]restart[/]",
+            "abandon": "[red]abandon[/]",
+        }.get(r.action, r.action)
+
+        table.add_row(
+            r.checkpoint_id[:12],
+            r.session_id[:12] if r.session_id else "",
+            action_style,
+            r.prompt[:50] if r.prompt else "",
+            str(r.iteration),
+        )
+
+    console.print(table)
+    console.print(
+        f"\n[dim]{len(results)} checkpoint(s) found. "
+        "Use [bold]missy recover --abandon-all[/bold] to clear stale tasks.[/]"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1648,6 +1892,70 @@ def sessions_cleanup(ctx: click.Context, older_than: int, dry_run: bool) -> None
         _print_success(f"Removed {removed} conversation turn(s) older than {older_than} days.")
     else:
         console.print("[dim]Memory store does not support cleanup (use SQLiteMemoryStore).[/]")
+
+
+@sessions.command("list")
+@click.option("--limit", default=20, show_default=True, help="Max sessions to show.")
+@click.pass_context
+def sessions_list(ctx: click.Context, limit: int) -> None:
+    """List recent sessions with their names and turn counts."""
+    from missy.memory.sqlite_store import SQLiteMemoryStore
+
+    _load_subsystems(ctx.obj["config_path"])
+    try:
+        store = SQLiteMemoryStore()
+        items = store.list_sessions(limit=limit)
+    except Exception as exc:
+        _print_error(f"Cannot read sessions: {exc}")
+        return
+
+    if not items:
+        console.print("[dim]No sessions found in memory store.[/]")
+        return
+
+    table = Table(title="Sessions", show_lines=False)
+    table.add_column("Session ID", style="cyan", no_wrap=True, max_width=36)
+    table.add_column("Name", style="bold")
+    table.add_column("Turns", justify="right")
+    table.add_column("Provider")
+    table.add_column("Channel")
+    table.add_column("Last Updated")
+
+    for s in items:
+        sid = s["session_id"]
+        name = s["name"] or "[dim]-[/]"
+        turns = str(s["turn_count"])
+        provider = s["provider"] or "[dim]-[/]"
+        channel = s["channel"] or "[dim]-[/]"
+        updated = s["updated_at"][:19] if s["updated_at"] else ""
+        table.add_row(sid, name, turns, provider, channel, updated)
+
+    console.print(table)
+
+
+@sessions.command("rename")
+@click.argument("session_id")
+@click.argument("name")
+@click.pass_context
+def sessions_rename(ctx: click.Context, session_id: str, name: str) -> None:
+    """Set a friendly name for a session."""
+    from missy.memory.sqlite_store import SQLiteMemoryStore
+
+    _load_subsystems(ctx.obj["config_path"])
+    try:
+        store = SQLiteMemoryStore()
+        # Try to resolve by name if it doesn't look like a UUID
+        if len(session_id) < 32 and "-" not in session_id:
+            resolved = store.resolve_session_name(session_id)
+            if resolved:
+                session_id = resolved
+
+        if store.rename_session(session_id, name):
+            _print_success(f"Session {session_id[:12]}... renamed to [bold]{name}[/]")
+        else:
+            _print_error(f"Session {session_id!r} not found.")
+    except Exception as exc:
+        _print_error(f"Cannot rename session: {exc}")
 
 
 # ---------------------------------------------------------------------------

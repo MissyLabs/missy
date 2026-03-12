@@ -92,6 +92,8 @@ class AgentConfig:
     )
     max_iterations: int = 10
     temperature: float = 0.7
+    capability_mode: str = "full"  # "full" | "safe-chat" | "no-tools"
+    max_spend_usd: float = 0.0  # 0 = unlimited; per-session cost cap
 
 
 class AgentRuntime:
@@ -125,9 +127,15 @@ class AgentRuntime:
         self._session_mgr = SessionManager()
         # Circuit breaker per runtime instance (keyed to provider name)
         self._circuit_breaker = self._make_circuit_breaker(config.provider)
+        # Rate limiter for API calls
+        self._rate_limiter = self._make_rate_limiter()
         # Lazy-loaded subsystems
         self._context_manager = self._make_context_manager()
         self._memory_store = self._make_memory_store()
+        # Cost tracking (graceful degradation)
+        self._cost_tracker = self._make_cost_tracker()
+        # Scan for incomplete checkpoints from previous runs
+        self._pending_recovery: list = self._scan_checkpoints()
 
     # ------------------------------------------------------------------
     # Public interface
@@ -242,6 +250,13 @@ class AgentRuntime:
         if all_tool_names_used:
             self._record_learnings(all_tool_names_used, final_response, user_input)
 
+        cost_detail = {}
+        if self._cost_tracker is not None:
+            try:
+                cost_detail = self._cost_tracker.get_summary()
+            except Exception:
+                pass
+
         self._emit_event(
             session_id=sid,
             task_id=task_id,
@@ -250,10 +265,71 @@ class AgentRuntime:
             detail={
                 "provider": provider.name,
                 "tools_used": all_tool_names_used,
+                **cost_detail,
             },
         )
 
         return final_response
+
+    def run_stream(self, user_input: str, session_id: Optional[str] = None):
+        """Stream the response token-by-token for real-time CLI output.
+
+        For tool-calling loops, this falls back to ``run()`` and yields the
+        full response as a single chunk (streaming during multi-step tool
+        calls is not practical since tool results must be processed first).
+
+        For single-turn completions, yields text deltas from the provider's
+        ``stream()`` method.
+
+        Args:
+            user_input: The user's message text.
+            session_id: Optional existing session ID.
+
+        Yields:
+            String chunks of the model's response.
+        """
+        session = self._resolve_session(session_id)
+        sid = str(session.id)
+
+        try:
+            provider = self._get_provider()
+        except ProviderError:
+            raise
+
+        # If tools are available, use the full run loop (no streaming mid-tool-call)
+        tools = self._get_tools()
+        if tools and self.config.max_iterations > 1:
+            result = self.run(user_input, session_id=session_id)
+            yield result
+            return
+
+        # Single-turn streaming
+        history = self._load_history(sid)
+        system_prompt, messages = self._build_context_messages(user_input, history)
+        msg_objects = self._dicts_to_messages(system_prompt, messages)
+
+        self._acquire_rate_limit()
+
+        full_text = ""
+        try:
+            for chunk in provider.stream(msg_objects, system=system_prompt):
+                full_text += chunk
+                yield chunk
+        except Exception:
+            # Fall back to non-streaming
+            response = self._single_turn(
+                provider=provider,
+                system_prompt=system_prompt,
+                messages=messages,
+                session_id=sid,
+                task_id=str(self._session_mgr.generate_task_id()),
+            )
+            yield response.content
+            full_text = response.content
+
+        # Persist turns
+        self._save_turn(sid, "user", user_input)
+        self._save_turn(sid, "assistant", full_text, provider=provider.name)
 
     # ------------------------------------------------------------------
     # Agentic loop
@@ -375,6 +451,9 @@ class AgentRuntime:
             for iteration in range(self.config.max_iterations):
                 provider_messages = self._dicts_to_messages(system_prompt, loop_messages)
 
+                # Rate limit before calling provider
+                self._acquire_rate_limit()
+
                 try:
                     response: CompletionResponse = self._circuit_breaker.call(
                         provider.complete_with_tools,
@@ -396,6 +475,10 @@ class AgentRuntime:
                         task_id=task_id,
                     )
                     return fallback.content, tool_names_used
+
+                # Record cost and enforce budget
+                self._record_cost(response, session_id=session_id)
+                self._check_budget(session_id=session_id, task_id=task_id)
 
                 if response.finish_reason == "tool_calls" and response.tool_calls:
                     # Execute each tool call
@@ -547,29 +630,55 @@ class AgentRuntime:
         if self.config.model:
             complete_kwargs["model"] = self.config.model
 
-        return self._circuit_breaker.call(
+        # Rate limit before calling provider
+        self._acquire_rate_limit()
+
+        result = self._circuit_breaker.call(
             provider.complete,
             msg_objects,
             **complete_kwargs,
         )
+        self._record_cost(result, session_id=session_id)
+        return result
 
     # ------------------------------------------------------------------
     # Tool execution
     # ------------------------------------------------------------------
 
+    # Safe tools allowed in safe-chat mode (read-only, no side effects)
+    _SAFE_CHAT_TOOLS = frozenset({
+        "calculator", "file_read", "list_files", "web_fetch",
+        "browser_get_content", "browser_get_url", "browser_screenshot",
+        "x11_screenshot", "x11_window_list", "atspi_get_tree", "atspi_get_text",
+    })
+
     def _get_tools(self) -> list:
         """Return registered tools, or an empty list when unavailable.
+
+        Respects :attr:`AgentConfig.capability_mode`:
+
+        - ``"full"``: all registered tools
+        - ``"safe-chat"``: only read-only/safe tools
+        - ``"no-tools"``: empty list (pure chat)
 
         Returns:
             A list of :class:`~missy.tools.base.BaseTool` instances, or
             ``[]`` when the registry is not initialised.
         """
+        if self.config.capability_mode == "no-tools":
+            return []
+
         try:
             registry = get_tool_registry()
             tool_names = registry.list_tools()
-            return [registry.get(name) for name in tool_names if registry.get(name) is not None]
+            tools = [registry.get(name) for name in tool_names if registry.get(name) is not None]
         except RuntimeError:
             return []
+
+        if self.config.capability_mode == "safe-chat":
+            tools = [t for t in tools if getattr(t, "name", "") in self._SAFE_CHAT_TOOLS]
+
+        return tools
 
     def _execute_tool(
         self, tool_call: ToolCall, session_id: str = "", task_id: str = ""
@@ -825,6 +934,126 @@ class AgentRuntime:
             return MemoryStore()
         except Exception:
             return None
+
+    def _make_cost_tracker(self):
+        """Create a :class:`~missy.agent.cost_tracker.CostTracker`.
+
+        Uses ``max_spend_usd`` from the agent config when set.
+
+        Returns:
+            A :class:`~missy.agent.cost_tracker.CostTracker` instance, or
+            ``None`` when the module is unavailable.
+        """
+        try:
+            from missy.agent.cost_tracker import CostTracker
+            return CostTracker(max_spend_usd=self.config.max_spend_usd)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _make_rate_limiter():
+        """Create a :class:`~missy.providers.rate_limiter.RateLimiter`.
+
+        Returns:
+            A :class:`~missy.providers.rate_limiter.RateLimiter` instance,
+            or ``None`` when the module is unavailable.
+        """
+        try:
+            from missy.providers.rate_limiter import RateLimiter
+            return RateLimiter(requests_per_minute=60, tokens_per_minute=100_000)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _scan_checkpoints() -> list:
+        """Scan for incomplete checkpoints from previous runs.
+
+        Returns a list of :class:`~missy.agent.checkpoint.RecoveryResult`
+        objects that the caller (e.g. CLI) can present to the user.
+        Fails gracefully — returns an empty list if checkpoint module
+        is unavailable or the DB doesn't exist.
+        """
+        try:
+            from missy.agent.checkpoint import scan_for_recovery
+            results = scan_for_recovery()
+            if results:
+                logger.info(
+                    "Found %d incomplete checkpoint(s) from previous runs.",
+                    len(results),
+                )
+            return results
+        except Exception:
+            return []
+
+    @property
+    def pending_recovery(self) -> list:
+        """Incomplete checkpoints from previous runs.
+
+        Returns a list of :class:`~missy.agent.checkpoint.RecoveryResult`
+        objects.  Each has an ``action`` field (``"resume"``, ``"restart"``,
+        or ``"abandon"``) indicating the recommended recovery strategy.
+        """
+        return list(self._pending_recovery)
+
+    def _record_cost(self, response, session_id: str = "") -> None:
+        """Record token usage in the cost tracker and persist to SQLite."""
+        if self._cost_tracker is None:
+            return
+        try:
+            rec = self._cost_tracker.record_from_response(response)
+            # Persist to SQLite for historical cost queries
+            if rec is not None and session_id and self._memory_store is not None:
+                try:
+                    store = self._memory_store
+                    # Unwrap resilient store to get at SQLite store
+                    if hasattr(store, "_primary"):
+                        store = store._primary
+                    if hasattr(store, "record_cost"):
+                        store.record_cost(
+                            session_id=session_id,
+                            model=rec.model,
+                            prompt_tokens=rec.prompt_tokens,
+                            completion_tokens=rec.completion_tokens,
+                            cost_usd=rec.cost_usd,
+                        )
+                except Exception as exc:
+                    logger.debug("Failed to persist cost to store: %s", exc)
+        except Exception as exc:
+            logger.debug("Failed to record cost: %s", exc)
+
+    def _acquire_rate_limit(self) -> None:
+        """Block until the rate limiter allows the next API call."""
+        if self._rate_limiter is None:
+            return
+        try:
+            self._rate_limiter.acquire()
+        except Exception as exc:
+            logger.warning("Rate limiter error: %s", exc)
+
+    def _check_budget(self, session_id: str = "", task_id: str = "") -> None:
+        """Enforce budget limits after recording cost.
+
+        Raises :class:`~missy.agent.cost_tracker.BudgetExceededError` if the
+        accumulated session cost exceeds ``max_spend_usd``.  An audit event
+        is emitted before the exception propagates.
+        """
+        if self._cost_tracker is None:
+            return
+        try:
+            self._cost_tracker.check_budget()
+        except Exception as exc:
+            # Emit audit event for budget breach
+            try:
+                self._emit_event(
+                    session_id=session_id,
+                    task_id=task_id,
+                    event_type="agent.budget.exceeded",
+                    result="deny",
+                    detail=self._cost_tracker.get_summary(),
+                )
+            except Exception:
+                pass
+            raise
 
     # ------------------------------------------------------------------
     # Private helpers

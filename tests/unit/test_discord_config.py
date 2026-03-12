@@ -261,11 +261,11 @@ class TestTokenResolution:
         assert ac.resolve_token() is None
 
     def test_token_env_var_is_not_stored_as_value(self) -> None:
-        """Verify the dataclass stores the variable name, not the value."""
+        """Verify the dataclass stores the variable name, not the resolved secret."""
         ac = DiscordAccountConfig(token_env_var="SOME_SECRET_VAR")
         assert ac.token_env_var == "SOME_SECRET_VAR"
-        # The actual token value is NOT stored on the dataclass.
-        assert not hasattr(ac, "token") or ac.token_env_var != "SOME_SECRET_VAR"
+        # The token field should be None (not pre-resolved from env).
+        assert ac.token is None
 
     def test_multiple_accounts_different_env_vars(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("BOT_A", "token-a")

@@ -279,6 +279,59 @@ class DiscordRestClient:
             logger.warning("delete_message failed for %s/%s: %s", channel_id, message_id, exc)
             return False
 
+    def create_thread(
+        self,
+        channel_id: str,
+        name: str,
+        message_id: Optional[str] = None,
+        auto_archive_duration: int = 1440,
+    ) -> dict[str, Any]:
+        """Create a new thread in a Discord channel.
+
+        When *message_id* is provided, creates a thread attached to that
+        message.  Otherwise creates a standalone thread (no starter message).
+
+        Args:
+            channel_id: Parent channel snowflake ID.
+            name: Thread name (max 100 characters).
+            message_id: Optional message to start the thread from.
+            auto_archive_duration: Minutes of inactivity before auto-archive
+                (60, 1440, 4320, or 10080).
+
+        Returns:
+            The created channel (thread) object as a dict.
+        """
+        if message_id:
+            url = f"{BASE}/channels/{channel_id}/messages/{message_id}/threads"
+            body: dict[str, Any] = {
+                "name": name[:100],
+                "auto_archive_duration": auto_archive_duration,
+            }
+        else:
+            url = f"{BASE}/channels/{channel_id}/threads"
+            body = {
+                "name": name[:100],
+                "auto_archive_duration": auto_archive_duration,
+                "type": 11,  # PUBLIC_THREAD
+            }
+        response = self._http.post(url, headers=self._headers(), json=body)
+        response.raise_for_status()
+        return response.json()
+
+    def get_channel(self, channel_id: str) -> dict[str, Any]:
+        """Fetch a channel object by ID.
+
+        Args:
+            channel_id: The channel snowflake ID.
+
+        Returns:
+            The Discord Channel object as a dict.
+        """
+        url = f"{BASE}/channels/{channel_id}"
+        response = self._http.get(url, headers=self._headers())
+        response.raise_for_status()
+        return response.json()
+
     def register_slash_commands(
         self,
         application_id: str,

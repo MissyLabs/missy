@@ -94,11 +94,7 @@ class ShellPolicyEngine:
             )
 
         # Step 3 – allow-list check.
-        # Empty allowed_commands means allow-all (shell is unrestricted when enabled).
-        if not self._policy.allowed_commands:
-            self._emit_event(command, "allow", "*", session_id, task_id)
-            return True
-
+        # Empty allowed_commands means nothing is allowed (deny-all).
         rule = self._match_allowed(program)
         if rule:
             self._emit_event(command, "allow", rule, session_id, task_id)

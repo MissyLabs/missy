@@ -63,6 +63,7 @@ class NetworkPolicyEngine:
         host: str,
         session_id: str = "",
         task_id: str = "",
+        category: str = "",
     ) -> bool:
         """Return ``True`` if *host* is reachable under the current policy.
 
@@ -71,7 +72,8 @@ class NetworkPolicyEngine:
 
         1. If ``policy.default_deny`` is ``False``, allow everything.
         2. If *host* is a bare IP address, check CIDR allow-lists.
-        3. Check for an exact match in ``policy.allowed_hosts``.
+        3. Check for an exact match in ``policy.allowed_hosts`` (and any
+           per-category hosts when *category* is set).
         4. Check wildcard / suffix match in ``policy.allowed_domains``.
         5. Attempt a DNS resolution of *host* and re-check the resulting IPs
            against the CIDR allow-lists.
@@ -81,6 +83,9 @@ class NetworkPolicyEngine:
             host: Hostname or IP address (without port or scheme).
             session_id: Optional identifier of the calling session.
             task_id: Optional identifier of the calling task.
+            category: Request category (``"provider"``, ``"tool"``,
+                ``"discord"``).  When set, the corresponding per-category
+                host list is merged into the check.
 
         Returns:
             ``True`` when the host is explicitly allowed.
@@ -115,8 +120,8 @@ class NetworkPolicyEngine:
                 detail=f"IP address {host!r} is not covered by any allowed_cidrs entry.",
             )
 
-        # Step 3 – exact hostname match.
-        rule = self._check_exact_host(host)
+        # Step 3 – exact hostname match (global + per-category).
+        rule = self._check_exact_host(host, category=category)
         if rule:
             self._emit_event(host, "allow", rule, session_id, task_id)
             return True
@@ -188,25 +193,53 @@ class NetworkPolicyEngine:
                 continue
         return None
 
-    def _check_exact_host(self, host: str) -> Optional[str]:
+    def _check_exact_host(self, host: str, category: str = "") -> Optional[str]:
         """Return the matching ``allowed_hosts`` entry, or ``None``.
 
         The comparison is case-insensitive and strips any port suffix from the
         configured entry so that ``"api.github.com:443"`` still matches the
         plain hostname ``"api.github.com"``.
 
+        When *category* is set, the per-category host list is also checked.
+
         Args:
             host: Normalised (lowercase, no brackets) hostname.
+            category: Request category (``"provider"``, ``"tool"``,
+                ``"discord"``).
 
         Returns:
             The matching entry string, or ``None``.
         """
-        for entry in self._policy.allowed_hosts:
-            # Strip optional port from the configured allow-list entry.
+        # Build combined host list: global + per-category
+        hosts = list(self._policy.allowed_hosts)
+        cat_hosts = self._category_hosts(category)
+        for entry in hosts:
             configured_host = entry.lower().rsplit(":", 1)[0].strip("[]")
             if host == configured_host:
                 return f"host:{entry}"
+        for entry in cat_hosts:
+            configured_host = entry.lower().rsplit(":", 1)[0].strip("[]")
+            if host == configured_host:
+                return f"{category}_host:{entry}"
         return None
+
+    def _category_hosts(self, category: str) -> list[str]:
+        """Return the per-category host list for *category*.
+
+        Args:
+            category: One of ``"provider"``, ``"tool"``, ``"discord"``, or
+                empty string.
+
+        Returns:
+            The relevant per-category host list, or an empty list.
+        """
+        if category == "provider":
+            return self._policy.provider_allowed_hosts
+        if category == "tool":
+            return self._policy.tool_allowed_hosts
+        if category == "discord":
+            return self._policy.discord_allowed_hosts
+        return []
 
     def _check_domain(self, host: str) -> Optional[str]:
         """Return the matching ``allowed_domains`` entry, or ``None``.

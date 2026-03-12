@@ -297,7 +297,10 @@ class TestAsk:
                         )
 
                     # Ensure AgentConfig was called with provider="openai"
-                    mock_agent_cfg.assert_called_once_with(provider="openai")
+                    mock_agent_cfg.assert_called_once()
+                    call_kwargs = mock_agent_cfg.call_args[1]
+                    assert call_kwargs["provider"] == "openai"
+                    assert call_kwargs["capability_mode"] == "full"
         finally:
             os.unlink(cfg_path)
 

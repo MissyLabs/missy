@@ -77,6 +77,18 @@ class DiscordChannel(BaseChannel):
         # Resolved bot user ID (populated after READY).
         self._bot_user_id: Optional[str] = None
 
+        # Thread-scoped session mapping: thread_id -> session_id
+        # Enables conversation continuity within Discord threads.
+        self._thread_sessions: dict[str, str] = {}
+
+        # Message count per channel for auto-thread creation.
+        self._channel_message_counts: dict[str, int] = {}
+
+        # Auto-thread threshold: create a thread after N messages in a channel.
+        self._auto_thread_threshold: int = getattr(
+            account_config, "auto_thread_threshold", 0
+        )
+
         token = account_config.resolve_token() or ""
         if not token:
             logger.error(
@@ -372,7 +384,24 @@ class DiscordChannel(BaseChannel):
         if not allowed:
             return
 
-        # 5. Enqueue.
+        # 5. Resolve thread-scoped session if applicable.
+        effective_thread_id = thread_id
+        # Discord thread channels have type 11 (PUBLIC_THREAD) or 12 (PRIVATE_THREAD).
+        # If the message came from a thread, the channel_id IS the thread ID.
+        channel_type = data.get("channel_type") or data.get("type")
+        if channel_type in (11, 12):
+            effective_thread_id = channel_id
+
+        thread_session_id = ""
+        if effective_thread_id:
+            thread_session_id = self._thread_sessions.get(effective_thread_id, "")
+
+        # Track message counts for auto-thread threshold.
+        if guild_id and not effective_thread_id and self._auto_thread_threshold > 0:
+            count = self._channel_message_counts.get(channel_id, 0) + 1
+            self._channel_message_counts[channel_id] = count
+
+        # 6. Enqueue.
         self._current_channel_id = channel_id
         msg = ChannelMessage(
             content=content,
@@ -382,14 +411,21 @@ class DiscordChannel(BaseChannel):
                 "discord_message_id": str(data.get("id", "")),
                 "discord_channel_id": channel_id,
                 "discord_guild_id": guild_id or "",
-                "discord_thread_id": thread_id or "",
+                "discord_thread_id": effective_thread_id or "",
+                "discord_thread_session_id": thread_session_id,
                 "discord_author": author,
             },
         )
         self._emit_audit(
             "discord.channel.message_received",
             "allow",
-            {"author_id": author_id, "channel_id": channel_id, "guild_id": guild_id or "dm"},
+            {
+                "author_id": author_id,
+                "channel_id": channel_id,
+                "guild_id": guild_id or "dm",
+                "thread_id": effective_thread_id or "",
+                "thread_session_id": thread_session_id,
+            },
         )
         await self._queue.put(msg)
 
@@ -631,6 +667,66 @@ class DiscordChannel(BaseChannel):
     def deny_pair(self, user_id: str) -> None:
         """Deny and remove a pending pairing request from *user_id*."""
         self._pending_pairs.discard(user_id)
+
+    # ------------------------------------------------------------------
+    # Thread management
+    # ------------------------------------------------------------------
+
+    def get_thread_session(self, thread_id: str) -> Optional[str]:
+        """Return the session ID associated with a thread, if any."""
+        return self._thread_sessions.get(thread_id)
+
+    def set_thread_session(self, thread_id: str, session_id: str) -> None:
+        """Associate a session ID with a Discord thread."""
+        self._thread_sessions[thread_id] = session_id
+
+    async def create_thread(
+        self,
+        channel_id: str,
+        name: str,
+        message_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> Optional[str]:
+        """Create a new Discord thread and optionally bind it to a session.
+
+        Args:
+            channel_id: Parent channel snowflake ID.
+            name: Thread name.
+            message_id: Optional message ID to start thread from.
+            session_id: Optional session ID to bind to this thread.
+
+        Returns:
+            The thread ID on success, or None on failure.
+        """
+        try:
+            result = self._rest.create_thread(
+                channel_id=channel_id,
+                name=name,
+                message_id=message_id,
+            )
+            thread_id = str(result.get("id", ""))
+            if thread_id and session_id:
+                self._thread_sessions[thread_id] = session_id
+            self._emit_audit(
+                "discord.thread.created",
+                "allow",
+                {
+                    "channel_id": channel_id,
+                    "thread_id": thread_id,
+                    "thread_name": name,
+                    "session_id": session_id or "",
+                },
+            )
+            logger.info("Discord: created thread %s (%s) in %s", thread_id, name, channel_id)
+            return thread_id
+        except Exception as exc:
+            logger.error("Discord: thread creation failed: %s", exc)
+            self._emit_audit(
+                "discord.thread.create_failed",
+                "error",
+                {"channel_id": channel_id, "error": str(exc)},
+            )
+            return None
 
     # ------------------------------------------------------------------
     # Audit helpers

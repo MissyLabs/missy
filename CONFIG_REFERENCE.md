@@ -23,7 +23,8 @@ parsed into a `MissyConfig` dataclass hierarchy.
 7. [discord](#discord)
 8. [workspace_path](#workspace_path)
 9. [audit_log_path](#audit_log_path)
-10. [Full Annotated Example](#full-annotated-example)
+10. [max_spend_usd](#max_spend_usd)
+11. [Full Annotated Example](#full-annotated-example)
 
 ---
 
@@ -200,6 +201,27 @@ The agent's working directory.  Tilde expansion is supported.  Created by
 
 Path to the JSONL audit log file.  Tilde expansion is supported.  The parent
 directory is created automatically.
+
+---
+
+## `max_spend_usd`
+
+| Key | Type | Default |
+|---|---|---|
+| `max_spend_usd` | float | `0.0` |
+
+Per-session budget cap in USD.  When set to a positive value, the agent loop
+will raise `BudgetExceededError` after any provider call that causes the
+accumulated session cost to exceed this limit.  An `agent.budget.exceeded`
+audit event is emitted before the error propagates.
+
+Set to `0` (the default) for unlimited spending.
+
+```yaml
+max_spend_usd: 5.00    # halt after $5 of API calls per session
+```
+
+View the current budget with `missy cost`.
 
 ---
 

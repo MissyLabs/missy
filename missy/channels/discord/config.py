@@ -109,6 +109,7 @@ class DiscordAccountConfig:
     ack_reaction: str = ""
     ignore_bots: bool = True
     allow_bots_if_mention_only: bool = False
+    auto_thread_threshold: int = 0  # 0 = disabled; N = create thread after N messages
 
     def resolve_token(self) -> Optional[str]:
         """Return the bot token — checks direct token, env var, and vault in order.
@@ -186,6 +187,7 @@ def _parse_account(data: dict[str, Any]) -> DiscordAccountConfig:
         ack_reaction=str(data.get("ack_reaction", "")),
         ignore_bots=bool(data.get("ignore_bots", True)),
         allow_bots_if_mention_only=bool(data.get("allow_bots_if_mention_only", False)),
+        auto_thread_threshold=int(data.get("auto_thread_threshold", 0)),
     )
 
 

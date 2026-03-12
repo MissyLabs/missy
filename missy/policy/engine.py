@@ -51,6 +51,7 @@ class PolicyEngine:
         host: str,
         session_id: str = "",
         task_id: str = "",
+        category: str = "",
     ) -> bool:
         """Evaluate a network access request.
 
@@ -60,6 +61,8 @@ class PolicyEngine:
             host: Hostname or IP address (without port or scheme).
             session_id: Optional calling session identifier.
             task_id: Optional calling task identifier.
+            category: Request category (``"provider"``, ``"tool"``,
+                ``"discord"``).
 
         Returns:
             ``True`` when the host is allowed.
@@ -68,7 +71,9 @@ class PolicyEngine:
             PolicyViolationError: When the host is denied.
             ValueError: When *host* is empty.
         """
-        return self.network.check_host(host, session_id=session_id, task_id=task_id)
+        return self.network.check_host(
+            host, session_id=session_id, task_id=task_id, category=category,
+        )
 
     def check_write(
         self,

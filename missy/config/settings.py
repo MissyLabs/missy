@@ -50,6 +50,7 @@ from missy.core.exceptions import ConfigurationError
 
 if TYPE_CHECKING:
     from missy.channels.discord.config import DiscordConfig
+    from missy.security.sandbox import SandboxConfig
 
 
 # ---------------------------------------------------------------------------
@@ -293,6 +294,8 @@ class MissyConfig:
     observability: ObservabilityConfig = field(default_factory=ObservabilityConfig)
     vault: VaultConfig = field(default_factory=VaultConfig)
     proactive: ProactiveConfig = field(default_factory=ProactiveConfig)
+    sandbox: Optional["SandboxConfig"] = None
+    max_spend_usd: float = 0.0  # 0 = unlimited; per-session budget cap
 
 
 # ---------------------------------------------------------------------------
@@ -437,6 +440,13 @@ def _parse_proactive(data: dict[str, Any]) -> ProactiveConfig:
     )
 
 
+def _parse_sandbox(data: dict[str, Any]) -> "SandboxConfig":
+    """Parse the ``sandbox`` section of a Missy config dict."""
+    from missy.security.sandbox import parse_sandbox_config
+
+    return parse_sandbox_config(data)
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -498,6 +508,8 @@ def load_config(path: str) -> MissyConfig:
             observability=_parse_observability(data.get("observability") or {}),
             vault=_parse_vault(data.get("vault") or {}),
             proactive=_parse_proactive(data.get("proactive") or {}),
+            sandbox=_parse_sandbox(data.get("sandbox") or {}),
+            max_spend_usd=float(data.get("max_spend_usd", 0.0)),
         )
     except ConfigurationError:
         raise
