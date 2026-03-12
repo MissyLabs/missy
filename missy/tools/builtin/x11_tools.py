@@ -27,6 +27,10 @@ logger = logging.getLogger(__name__)
 _CODEX_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses"
 _DEFAULT_MODEL = "gpt-5.2"
 
+# Vision model defaults — Ollama is the primary backend for x11_read_screen.
+_OLLAMA_VISION_MODEL = "minicpm-v"
+_OLLAMA_DEFAULT_URL = "http://localhost:11434"
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -73,6 +77,19 @@ def _load_oauth_token() -> Optional[str]:
 def _get_vision_token() -> Optional[str]:
     """Return an API token suitable for vision calls."""
     return os.environ.get("OPENAI_API_KEY") or _load_oauth_token()
+
+
+def _get_ollama_base_url() -> str:
+    """Return the Ollama base URL from config or default."""
+    try:
+        from missy.config.settings import load_config
+        cfg = load_config()
+        provider_cfg = cfg.providers.get("ollama")
+        if provider_cfg and provider_cfg.base_url:
+            return provider_cfg.base_url.rstrip("/")
+    except Exception:
+        pass
+    return _OLLAMA_DEFAULT_URL
 
 
 # ---------------------------------------------------------------------------
@@ -445,50 +462,36 @@ class X11ReadScreenTool(BaseTool):
         return None
 
     # ------------------------------------------------------------------
-    # Vision call
+    # Vision call via Ollama
     # ------------------------------------------------------------------
 
-    def _call_vision(self, question: str, b64_image: str, token: str) -> str:
-        """Send screenshot to OpenAI vision API (gpt-4o) for interpretation.
+    def _call_ollama_vision(self, question: str, b64_image: str) -> str:
+        """Send screenshot to Ollama vision model for interpretation.
 
-        The Codex endpoint does not support image inputs — uses api.openai.com
-        with the standard Chat Completions vision format instead.
+        Uses the ``/api/chat`` endpoint with the ``images`` field, which
+        accepts a list of base64-encoded images alongside the text prompt.
         """
-        # Prefer a plain API key; OAuth tokens are for the Codex backend only.
-        api_key = os.environ.get("OPENAI_API_KEY") or token
-        headers: dict[str, str] = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
+        base_url = _get_ollama_base_url()
         body: dict[str, Any] = {
-            "model": "gpt-4o",
+            "model": _OLLAMA_VISION_MODEL,
             "messages": [
                 {
                     "role": "user",
-                    "content": [
-                        {"type": "text", "text": question},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/png;base64,{b64_image}",
-                                "detail": "high",
-                            },
-                        },
-                    ],
+                    "content": question,
+                    "images": [b64_image],
                 }
             ],
-            "max_tokens": 1000,
+            "stream": False,
         }
 
         resp = httpx.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers=headers,
+            f"{base_url}/api/chat",
             json=body,
-            timeout=60,
+            timeout=120,
         )
         resp.raise_for_status()
         data = resp.json()
-        return data["choices"][0]["message"]["content"]
+        return data.get("message", {}).get("content", "")
 
     # ------------------------------------------------------------------
     # execute
@@ -514,26 +517,23 @@ class X11ReadScreenTool(BaseTool):
         except OSError as exc:
             return ToolResult(success=False, output=None, error=f"Could not read screenshot: {exc}")
 
-        # 3. Get token.
-        token = _get_vision_token()
-        if not token:
-            return ToolResult(
-                success=False,
-                output=None,
-                error=(
-                    "No OpenAI token available for vision. "
-                    "Set OPENAI_API_KEY or run 'missy setup' to authenticate via OAuth."
-                ),
-            )
-
-        # 4. Call vision model.
+        # 3. Call Ollama vision model.
         try:
-            description = self._call_vision(question, b64_image, token)
+            description = self._call_ollama_vision(question, b64_image)
         except httpx.HTTPStatusError as exc:
             return ToolResult(
                 success=False,
                 output=None,
-                error=f"Vision API HTTP {exc.response.status_code}: {exc.response.text[:200]}",
+                error=f"Ollama vision HTTP {exc.response.status_code}: {exc.response.text[:200]}",
+            )
+        except httpx.ConnectError:
+            return ToolResult(
+                success=False,
+                output=None,
+                error=(
+                    f"Cannot connect to Ollama at {_get_ollama_base_url()}. "
+                    "Is the Ollama server running?"
+                ),
             )
         except Exception as exc:  # noqa: BLE001
             return ToolResult(success=False, output=None, error=f"Vision call failed: {exc}")
