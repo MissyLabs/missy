@@ -153,7 +153,14 @@ class CodexProvider(BaseProvider):
     def complete(self, messages: list[Message], **kwargs: Any) -> CompletionResponse:
         """Single-turn completion — collects the SSE stream and returns full text."""
         text = "".join(self.stream(messages, **kwargs))
-        return CompletionResponse(content=text, finish_reason="stop")
+        return CompletionResponse(
+            content=text,
+            model=self._model,
+            provider=self.name,
+            usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            raw={},
+            finish_reason="stop",
+        )
 
     def _extract_text_from_response(self, data: dict) -> str:
         """Extract text content from a non-streaming Responses API response."""
@@ -271,6 +278,10 @@ class CodexProvider(BaseProvider):
         finish_reason = "tool_calls" if tool_calls else "stop"
         return CompletionResponse(
             content="".join(text_parts),
+            model=self._model,
+            provider=self.name,
+            usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            raw={},
             finish_reason=finish_reason,
             tool_calls=tool_calls,
         )
