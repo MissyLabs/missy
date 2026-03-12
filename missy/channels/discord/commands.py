@@ -80,6 +80,8 @@ def _get_option(interaction: dict[str, Any], name: str) -> str | None:
 
 async def _handle_ask(interaction: dict[str, Any], channel: "DiscordChannel") -> str:
     """Handle ``/ask`` — forward prompt to the agent and return the reply."""
+    import asyncio
+
     prompt = _get_option(interaction, "prompt")
     if not prompt:
         return "Please provide a prompt with `/ask <your question>`."
@@ -89,7 +91,8 @@ async def _handle_ask(interaction: dict[str, Any], channel: "DiscordChannel") ->
 
         agent_cfg = AgentConfig(provider="anthropic")
         agent = AgentRuntime(agent_cfg)
-        return agent.run(prompt, session_id="discord")
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, agent.run, prompt, "discord")
     except Exception as exc:
         logger.exception("Slash /ask handler failed: %s", exc)
         return f"Sorry, I encountered an error: {exc}"
