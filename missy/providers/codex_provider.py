@@ -219,7 +219,9 @@ class CodexProvider(BaseProvider):
         """Tool-calling completion — collects SSE stream and parses tool calls."""
         token = self._get_token()
         account_id = _extract_account_id(token)
-        body = self._build_body(messages, tools=tools)
+        # Convert BaseTool instances → schema dicts if needed.
+        tool_schemas = self.get_tool_schema(tools) if tools and not isinstance(tools[0], dict) else tools
+        body = self._build_body(messages, tools=tool_schemas)
 
         tool_calls: list[ToolCall] = []
         text_parts: list[str] = []
@@ -286,14 +288,25 @@ class CodexProvider(BaseProvider):
             tool_calls=tool_calls,
         )
 
-    def get_tool_schema(self, tool_name: str, description: str, parameters: dict) -> dict:
-        """Return a Responses API function tool schema."""
-        return {
-            "type": "function",
-            "name": tool_name,
-            "description": description,
-            "parameters": parameters,
-        }
+    def get_tool_schema(self, tools: list) -> list:
+        """Convert BaseTool instances to Codex Responses API function schemas."""
+        schemas = []
+        for tool in tools:
+            if isinstance(tool, dict):
+                schemas.append(tool)
+                continue
+            base = tool.get_schema() if hasattr(tool, "get_schema") else {}
+            schemas.append({
+                "type": "function",
+                "name": getattr(tool, "name", ""),
+                "description": getattr(tool, "description", ""),
+                "parameters": base.get("parameters", {
+                    "type": "object",
+                    "properties": getattr(tool, "parameters", {}),
+                    "required": [],
+                }),
+            })
+        return schemas
 
     def is_available(self) -> bool:
         """Return True if an OAuth token is accessible."""
