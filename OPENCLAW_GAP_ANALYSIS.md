@@ -81,10 +81,10 @@ Last updated: 2026-03-12
 
 | Priority | Capability | Gap Level | Notes |
 |---|---|---|---|
-| P1 | Docker/container sandbox for tool execution | **Not implemented** | All tools run on host with policy enforcement. No isolated execution environment. |
-| P2 | Discord thread creation & thread-scoped sessions | **Partial** | Thread-aware routing exists but no thread creation or thread-specific session management. |
-| P2 | Doctor command — MCP, memory, watchdog checks | **Partial** | Doctor checks 10 areas but misses MCP server health, memory store connectivity, watchdog status. |
-| P3 | Session friendly names | **Not implemented** | Sessions identified by UUID only; no human-friendly naming or listing. |
+| ~~P1~~ | ~~Docker/container sandbox for tool execution~~ | **Implemented (Session 3)** | DockerSandbox + FallbackSandbox with full security controls |
+| ~~P2~~ | ~~Discord thread creation & thread-scoped sessions~~ | **Implemented (Session 3)** | create_thread(), thread-scoped sessions, auto-thread config |
+| ~~P2~~ | ~~Doctor command — MCP, memory, watchdog checks~~ | **Implemented (Session 3)** | 15 checks: memory, MCP, watchdog, voice, checkpoints |
+| ~~P3~~ | ~~Session friendly names~~ | **Implemented (Session 3)** | sessions table, list/rename CLI, name resolution |
 | P3 | Discord multi-account support | **Not implemented** | Single bot token; OpenClaw supports multiple Discord accounts. |
 | P3 | Interactive setup for Discord | **Partial** | Setup wizard handles API keys/OAuth but Discord config is YAML-only. |
 | P4 | Web UI / dashboard | **Not implemented** | CLI-only operator interface. Intentionally deferred. |
@@ -106,11 +106,12 @@ Last updated: 2026-03-12
 
 ## Priority Order for Remaining Work
 
-1. **Docker sandbox** — Biggest security gap. OpenClaw isolates tool execution; Missy relies on policy enforcement only.
-2. **Discord thread support** — Important for conversation management in busy guilds.
-3. **Doctor enhancements** — Operational visibility for MCP, memory, watchdog.
-4. **Session friendly names** — Quality-of-life for operators using `--session`.
+1. ~~**Docker sandbox**~~ — Implemented in Session 3
+2. ~~**Discord thread support**~~ — Implemented in Session 3
+3. ~~**Doctor enhancements**~~ — Implemented in Session 3
+4. ~~**Session friendly names**~~ — Implemented in Session 3
 5. **Discord multi-account** — Niche but relevant for multi-guild operators.
+6. **Interactive Discord setup** — Streamline onboarding for Discord bot configuration.
 
 ## Intentionally Out of Scope
 
@@ -124,6 +125,6 @@ Last updated: 2026-03-12
 
 ## Test Coverage
 
-- **976 tests passing** (as of session 3)
+- **1029 tests passing** (as of session 3)
 - Coverage threshold: 85% (configured in pyproject.toml)
 - Test areas: agent, channels, cli, config, core, integration, memory, observability, plugins, policy, providers, scheduler, security, skills, tools, unit
