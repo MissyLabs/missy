@@ -571,6 +571,11 @@ class AgentRuntime:
         """
         try:
             registry = get_tool_registry()
+            logger.info(
+                "Executing tool %r with args: %s",
+                tool_call.name,
+                tool_call.arguments,
+            )
             result = registry.execute(
                 tool_call.name,
                 session_id=session_id,
