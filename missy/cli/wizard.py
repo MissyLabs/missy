@@ -258,6 +258,7 @@ def _build_config_yaml(
     workspace: str,
     providers_cfg: list[dict],
     allowed_hosts: list[str],
+    discord_cfg: Optional[dict] = None,
 ) -> str:
     """Render the config.yaml content from gathered wizard data."""
     lines: list[str] = [
@@ -310,6 +311,39 @@ def _build_config_yaml(
         if p.get("base_url"):
             lines.append(f'    base_url: "{p["base_url"]}"')
         lines.append(f'    timeout: 30')
+
+    # Discord section (optional)
+    if discord_cfg:
+        lines += ["", "discord:", "  enabled: true", "  accounts:"]
+        lines.append(f'    - token_env_var: "{discord_cfg["token_env_var"]}"')
+        if discord_cfg.get("application_id"):
+            lines.append(f'      application_id: "{discord_cfg["application_id"]}"')
+        lines.append(f'      dm_policy: {discord_cfg["dm_policy"]}')
+        if discord_cfg.get("dm_allowlist"):
+            lines.append("      dm_allowlist:")
+            for uid in discord_cfg["dm_allowlist"]:
+                lines.append(f'        - "{uid}"')
+        else:
+            lines.append("      dm_allowlist: []")
+        if discord_cfg.get("ack_reaction"):
+            lines.append(f'      ack_reaction: "{discord_cfg["ack_reaction"]}"')
+        lines.append(f'      ignore_bots: {str(discord_cfg.get("ignore_bots", True)).lower()}')
+        guild_policies = discord_cfg.get("guild_policies", [])
+        if guild_policies:
+            lines.append("      guild_policies:")
+            for gp in guild_policies:
+                lines.append(f'        "{gp["guild_id"]}":')
+                lines.append(f'          enabled: true')
+                lines.append(f'          require_mention: {str(gp["require_mention"]).lower()}')
+                lines.append(f'          mode: {gp["mode"]}')
+                if gp.get("allowed_channels"):
+                    lines.append("          allowed_channels:")
+                    for ch in gp["allowed_channels"]:
+                        lines.append(f'            - "{ch}"')
+                else:
+                    lines.append("          allowed_channels: []")
+        else:
+            lines.append("      guild_policies: {}")
 
     lines += [
         "",
@@ -551,9 +585,82 @@ def run_wizard(config_path: str) -> None:
         )
 
     # -----------------------------------------------------------------------
-    # Step 4: Summary + write
+    # Step 4: Discord (optional)
     # -----------------------------------------------------------------------
-    console.print("\n[bold]Step 4 of 4 — Write Configuration[/]")
+    console.print("\n[bold]Step 4 of 5 — Discord Integration[/]  [dim](optional)[/]")
+    discord_cfg: Optional[dict] = None
+
+    if click.confirm("  Configure Discord bot?", default=False):
+        console.print(
+            "\n  You'll need:\n"
+            "    • Bot token in an environment variable (e.g. DISCORD_BOT_TOKEN)\n"
+            "    • Application ID from discord.com/developers/applications\n"
+        )
+
+        token_env_var = click.prompt("  Environment variable holding bot token", default="DISCORD_BOT_TOKEN")
+        application_id = click.prompt("  Application ID", default="").strip()
+
+        # DM policy
+        console.print("\n  DM policy:")
+        console.print("    [bold]1[/]. disabled  — ignore all DMs")
+        console.print("    [bold]2[/]. allowlist — only listed user IDs can DM")
+        console.print("    [bold]3[/]. pairing   — users must send !pair to be approved")
+        console.print("    [bold]4[/]. open      — anyone can DM")
+        dm_choice = click.prompt("  Selection", default="1")
+        dm_policy_map = {"1": "disabled", "2": "allowlist", "3": "pairing", "4": "open"}
+        dm_policy = dm_policy_map.get(dm_choice, "disabled")
+
+        dm_allowlist: list[str] = []
+        if dm_policy == "allowlist":
+            raw = click.prompt("  Allowed user IDs (comma-separated)", default="").strip()
+            dm_allowlist = [u.strip() for u in raw.split(",") if u.strip()]
+
+        # Guild (server) policies
+        guild_policies: list[dict] = []
+        if click.confirm("\n  Add a guild (server) policy?", default=False):
+            while True:
+                guild_id = click.prompt("    Guild ID", default="").strip()
+                if not guild_id:
+                    break
+                require_mention = click.confirm("    Require @mention to respond?", default=True)
+                raw_channels = click.prompt("    Allowed channels (comma-separated, blank=all)", default="").strip()
+                allowed_channels = [c.strip() for c in raw_channels.split(",") if c.strip()]
+                console.print("    Mode: [bold]1[/]=full  [bold]2[/]=safe-chat  [bold]3[/]=no-tools")
+                mode_map = {"1": "full", "2": "safe_chat_only", "3": "no_tools"}
+                mode = mode_map.get(click.prompt("    Mode", default="1"), "full")
+                guild_policies.append({
+                    "guild_id": guild_id,
+                    "require_mention": require_mention,
+                    "allowed_channels": allowed_channels,
+                    "mode": mode,
+                })
+                if not click.confirm("    Add another guild?", default=False):
+                    break
+
+        ack_reaction = click.prompt("\n  Acknowledgement reaction emoji (blank to disable)", default="eyes").strip()
+        ignore_bots = click.confirm("  Ignore messages from other bots?", default=True)
+
+        discord_cfg = {
+            "token_env_var": token_env_var,
+            "application_id": application_id,
+            "dm_policy": dm_policy,
+            "dm_allowlist": dm_allowlist,
+            "guild_policies": guild_policies,
+            "ack_reaction": ack_reaction,
+            "ignore_bots": ignore_bots,
+        }
+        # Discord needs discord.com and gateway.discord.gg in allowed_hosts
+        for host in ("discord.com", "gateway.discord.gg"):
+            if host not in allowed_hosts:
+                allowed_hosts.append(host)
+        console.print("  [green]Discord configured.[/]")
+    else:
+        console.print("  [dim]Skipping Discord — add a discord: section to config.yaml later.[/]")
+
+    # -----------------------------------------------------------------------
+    # Step 5: Summary + write
+    # -----------------------------------------------------------------------
+    console.print("\n[bold]Step 5 of 5 — Write Configuration[/]")
 
     table = Table(show_header=True, header_style="bold cyan")
     table.add_column("Setting")
@@ -575,6 +682,8 @@ def run_wizard(config_path: str) -> None:
         table.add_row(f"Provider: {p['name']}", f"{p['model']}  auth={key_display}")
     for pname, ok in verify_results:
         table.add_row(f"Verified: {pname}", "[green]OK[/]" if ok else "[red]FAILED[/]")
+    if discord_cfg:
+        table.add_row("Discord", f"token_env={discord_cfg['token_env_var']}  dm={discord_cfg['dm_policy']}")
     console.print(table)
 
     if not click.confirm("\n  Write this configuration?", default=True):
@@ -585,6 +694,7 @@ def run_wizard(config_path: str) -> None:
         workspace=str(workspace_path),
         providers_cfg=providers_cfg,
         allowed_hosts=allowed_hosts,
+        discord_cfg=discord_cfg,
     )
 
     try:
