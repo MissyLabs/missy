@@ -13,6 +13,7 @@ Example::
     register_builtin_tools(registry)
 """
 from missy.tools.builtin.calculator import CalculatorTool
+from missy.tools.builtin.discord_upload import DiscordUploadTool
 from missy.tools.builtin.file_delete import FileDeleteTool
 from missy.tools.builtin.file_read import FileReadTool
 from missy.tools.builtin.file_write import FileWriteTool
@@ -23,6 +24,7 @@ from missy.tools.builtin.web_fetch import WebFetchTool
 
 __all__ = [
     "CalculatorTool",
+    "DiscordUploadTool",
     "FileDeleteTool",
     "FileReadTool",
     "FileWriteTool",
@@ -35,6 +37,7 @@ __all__ = [
 
 _ALL_TOOL_CLASSES = [
     CalculatorTool,
+    DiscordUploadTool,
     FileDeleteTool,
     FileReadTool,
     FileWriteTool,

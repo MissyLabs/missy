@@ -144,6 +144,41 @@ class DiscordRestClient:
         response.raise_for_status()
         return response.json()
 
+    def upload_file(
+        self,
+        channel_id: str,
+        file_path: str,
+        caption: str = "",
+    ) -> dict[str, Any]:
+        """Upload a file to a Discord channel as an attachment.
+
+        Args:
+            channel_id: The target channel snowflake ID.
+            file_path: Absolute path to the file to upload.
+            caption: Optional message text to include with the file.
+
+        Returns:
+            The created Discord Message object as a dict.
+        """
+        import mimetypes
+        from pathlib import Path
+        import httpx
+
+        path = Path(file_path).expanduser()
+        if not path.exists():
+            raise FileNotFoundError(f"File not found: {file_path}")
+
+        mime = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+        url = f"{BASE}/channels/{channel_id}/messages"
+        headers = {k: v for k, v in self._headers().items() if k != "Content-Type"}
+
+        with path.open("rb") as fh:
+            files = {"file": (path.name, fh, mime)}
+            data = {"content": caption} if caption else {}
+            response = httpx.post(url, headers=headers, files=files, data=data, timeout=60)
+        response.raise_for_status()
+        return response.json()
+
     def add_reaction(
         self,
         channel_id: str,

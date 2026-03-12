@@ -1276,10 +1276,22 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                         break
 
                     session_id = msg.metadata.get("discord_author", {}).get("id", "discord")
+                    channel_id = msg.metadata.get("discord_channel_id", "")
+                    author_id = msg.metadata.get("discord_author", {}).get("id", "")
+
+                    # Inject Discord context so the agent knows where it is.
+                    discord_ctx = (
+                        f"[CONTEXT] You are a Discord bot. "
+                        f"You are currently responding in Discord channel {channel_id}. "
+                        f"To post a file/image into this Discord channel, use the "
+                        f"discord_upload_file tool with channel_id='{channel_id}'."
+                    )
+                    enriched_prompt = f"{discord_ctx}\n\n{msg.content}"
+
                     try:
                         loop = asyncio.get_event_loop()
                         response = await loop.run_in_executor(
-                            None, _agent.run, msg.content, session_id
+                            None, _agent.run, enriched_prompt, session_id
                         )
                     except ProviderError as exc:
                         response = f"Sorry, I encountered a provider error: {exc}"
@@ -1288,7 +1300,6 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                         response = f"Sorry, an error occurred: {exc}"
 
                     try:
-                        channel_id = msg.metadata.get("discord_channel_id", "")
                         reply_to = msg.metadata.get("discord_message_id")
                         await ch.send_to(channel_id, response, reply_to=reply_to)
                     except Exception as exc:
