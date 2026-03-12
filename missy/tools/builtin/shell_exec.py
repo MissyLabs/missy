@@ -42,8 +42,10 @@ class ShellExecTool(BaseTool):
 
     name = "shell_exec"
     description = (
-        "Execute a whitelisted shell command. "
-        "The command must be permitted by the shell policy's allowed_commands list."
+        "Execute a shell command. Pass the full command string in the 'command' parameter, "
+        "e.g. command='ls -la /home' or command='sudo systemctl status cups'. "
+        "Supports pipes, redirection, and compound commands with && or ;. "
+        "Always provide a non-empty command string."
     )
     permissions = ToolPermissions(shell=True)
 
