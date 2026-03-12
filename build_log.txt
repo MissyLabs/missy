@@ -25,3 +25,22 @@ Error: Reached max turns (100)[parity ca3bc25] Post-session checkpoint 2
 === Session ended (exit code: 0): Thu Mar 12 11:27:49 PM UTC 2026 ===
 === File count before: 7294 after: 7301 stagnation: 0 ===
 
+[parity bc4e0a9] Checkpoint before Claude session 3
+ 2 files changed, 7 insertions(+), 2 deletions(-)
+Session 4 complete. Here's what was accomplished:
+
+## Session 4 Summary
+
+**4 integration gaps closed, 1 new CLI command, 24 new tests:**
+
+1. **ShellExecTool sandbox integration** — Commands now actually route through Docker sandbox when `sandbox.enabled: true`. Previously the sandbox was built (Session 3) but `execute()` always bypassed it with direct subprocess.
+
+2. **Budget enforcement in agent tool loop** — `CostTracker.check_budget()` is called after every provider response. `max_spend_usd` flows from `config.yaml` → `MissyConfig` → `AgentConfig` → `CostTracker`. Budget breach emits an `agent.budget.exceeded` audit event.
+
+3. **Checkpoint recovery scan at startup** — `AgentRuntime.__init__()` now calls `scan_for_recovery()`. `missy run` displays resumable tasks from previous interrupted sessions.
+
+4. **`missy cost` CLI command** — Shows budget config and provides session cost lookup.
+
+5. **24 new tests** (1053 total, 0 failures) — 11 for shell sandbox routing, 13 for budget enforcement + checkpoint recovery + config parsing.
+
+**Remaining gaps:** Discord multi-account (P3, low demand) and Web UI (P4, deferred). The project has strong OpenClaw-style parity across all major capability areas.

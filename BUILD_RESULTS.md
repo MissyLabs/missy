@@ -1,6 +1,6 @@
 # BUILD_RESULTS
 
-- Timestamp: 2026-03-12 23:27:44
+- Timestamp: 2026-03-12 23:39:52
 - Python version:
 Python 3.12.3
 
@@ -170,6 +170,7 @@ Python 3.12.3
 /home/bmerriam/git/missy/tests/agent/test_cost_tracker.py
 /home/bmerriam/git/missy/tests/agent/test_failure_tracker.py
 /home/bmerriam/git/missy/tests/agent/test_proactive.py
+/home/bmerriam/git/missy/tests/agent/test_runtime_enhancements.py
 /home/bmerriam/git/missy/tests/agent/test_runtime.py
 /home/bmerriam/git/missy/tests/channels/__init__.py
 /home/bmerriam/git/missy/tests/channels/test_cli_channel.py
@@ -217,6 +218,7 @@ Python 3.12.3
 /home/bmerriam/git/missy/tests/tools/__init__.py
 /home/bmerriam/git/missy/tests/tools/test_calculator.py
 /home/bmerriam/git/missy/tests/tools/test_registry.py
+/home/bmerriam/git/missy/tests/tools/test_shell_exec.py
 /home/bmerriam/git/missy/tests/unit/__init__.py
 /home/bmerriam/git/missy/tests/unit/test_discord_channel.py
 /home/bmerriam/git/missy/tests/unit/test_discord_config.py
