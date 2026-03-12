@@ -1741,6 +1741,70 @@ def sessions_cleanup(ctx: click.Context, older_than: int, dry_run: bool) -> None
         console.print("[dim]Memory store does not support cleanup (use SQLiteMemoryStore).[/]")
 
 
+@sessions.command("list")
+@click.option("--limit", default=20, show_default=True, help="Max sessions to show.")
+@click.pass_context
+def sessions_list(ctx: click.Context, limit: int) -> None:
+    """List recent sessions with their names and turn counts."""
+    from missy.memory.sqlite_store import SQLiteMemoryStore
+
+    _load_subsystems(ctx.obj["config_path"])
+    try:
+        store = SQLiteMemoryStore()
+        items = store.list_sessions(limit=limit)
+    except Exception as exc:
+        _print_error(f"Cannot read sessions: {exc}")
+        return
+
+    if not items:
+        console.print("[dim]No sessions found in memory store.[/]")
+        return
+
+    table = Table(title="Sessions", show_lines=False)
+    table.add_column("Session ID", style="cyan", no_wrap=True, max_width=36)
+    table.add_column("Name", style="bold")
+    table.add_column("Turns", justify="right")
+    table.add_column("Provider")
+    table.add_column("Channel")
+    table.add_column("Last Updated")
+
+    for s in items:
+        sid = s["session_id"]
+        name = s["name"] or "[dim]-[/]"
+        turns = str(s["turn_count"])
+        provider = s["provider"] or "[dim]-[/]"
+        channel = s["channel"] or "[dim]-[/]"
+        updated = s["updated_at"][:19] if s["updated_at"] else ""
+        table.add_row(sid, name, turns, provider, channel, updated)
+
+    console.print(table)
+
+
+@sessions.command("rename")
+@click.argument("session_id")
+@click.argument("name")
+@click.pass_context
+def sessions_rename(ctx: click.Context, session_id: str, name: str) -> None:
+    """Set a friendly name for a session."""
+    from missy.memory.sqlite_store import SQLiteMemoryStore
+
+    _load_subsystems(ctx.obj["config_path"])
+    try:
+        store = SQLiteMemoryStore()
+        # Try to resolve by name if it doesn't look like a UUID
+        if len(session_id) < 32 and "-" not in session_id:
+            resolved = store.resolve_session_name(session_id)
+            if resolved:
+                session_id = resolved
+
+        if store.rename_session(session_id, name):
+            _print_success(f"Session {session_id[:12]}... renamed to [bold]{name}[/]")
+        else:
+            _print_error(f"Session {session_id!r} not found.")
+    except Exception as exc:
+        _print_error(f"Cannot rename session: {exc}")
+
+
 # ---------------------------------------------------------------------------
 # missy approvals
 # ---------------------------------------------------------------------------

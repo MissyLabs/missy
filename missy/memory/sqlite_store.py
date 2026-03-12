@@ -159,6 +159,18 @@ class SQLiteMemoryStore:
                 approach   TEXT DEFAULT '[]',
                 timestamp  TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS sessions (
+                session_id  TEXT PRIMARY KEY,
+                name        TEXT DEFAULT '',
+                created_at  TEXT NOT NULL,
+                updated_at  TEXT NOT NULL,
+                turn_count  INTEGER DEFAULT 0,
+                provider    TEXT DEFAULT '',
+                channel     TEXT DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_sessions_updated
+                ON sessions(updated_at);
         """)
         conn.commit()
 
@@ -337,6 +349,115 @@ class SQLiteMemoryStore:
                 (limit,),
             ).fetchall()
         return [r[0] for r in rows]
+
+    # ------------------------------------------------------------------
+    # Session metadata
+    # ------------------------------------------------------------------
+
+    def register_session(
+        self,
+        session_id: str,
+        name: str = "",
+        provider: str = "",
+        channel: str = "",
+    ) -> None:
+        """Register or update a session in the sessions table.
+
+        Args:
+            session_id: The session identifier.
+            name: Optional human-friendly name.
+            provider: Provider used for this session.
+            channel: Channel this session originates from.
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        conn = self._conn()
+        conn.execute(
+            """INSERT INTO sessions (session_id, name, created_at, updated_at, provider, channel)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(session_id) DO UPDATE SET
+                   updated_at = excluded.updated_at,
+                   provider = CASE WHEN excluded.provider != '' THEN excluded.provider ELSE sessions.provider END,
+                   channel = CASE WHEN excluded.channel != '' THEN excluded.channel ELSE sessions.channel END,
+                   name = CASE WHEN excluded.name != '' THEN excluded.name ELSE sessions.name END""",
+            (session_id, name, now, now, provider, channel),
+        )
+        conn.commit()
+
+    def update_session_turn_count(self, session_id: str) -> None:
+        """Recalculate the turn count for a session from the turns table."""
+        conn = self._conn()
+        count = conn.execute(
+            "SELECT COUNT(*) FROM turns WHERE session_id = ?", (session_id,)
+        ).fetchone()[0]
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            "UPDATE sessions SET turn_count = ?, updated_at = ? WHERE session_id = ?",
+            (count, now, session_id),
+        )
+        conn.commit()
+
+    def rename_session(self, session_id: str, name: str) -> bool:
+        """Set a human-friendly name for a session.
+
+        Args:
+            session_id: The session to rename.
+            name: The new name.
+
+        Returns:
+            True if the session was found and renamed.
+        """
+        conn = self._conn()
+        cur = conn.execute(
+            "UPDATE sessions SET name = ? WHERE session_id = ?",
+            (name, session_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+    def list_sessions(self, limit: int = 50) -> list[dict]:
+        """List sessions ordered by most recently updated.
+
+        Returns:
+            List of dicts with session_id, name, created_at, updated_at,
+            turn_count, provider, channel.
+        """
+        conn = self._conn()
+        rows = conn.execute(
+            """SELECT session_id, name, created_at, updated_at,
+                      turn_count, provider, channel
+               FROM sessions
+               ORDER BY updated_at DESC
+               LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        return [
+            {
+                "session_id": r["session_id"],
+                "name": r["name"],
+                "created_at": r["created_at"],
+                "updated_at": r["updated_at"],
+                "turn_count": r["turn_count"],
+                "provider": r["provider"],
+                "channel": r["channel"],
+            }
+            for r in rows
+        ]
+
+    def resolve_session_name(self, name: str) -> Optional[str]:
+        """Look up a session ID by its friendly name.
+
+        Args:
+            name: The friendly name to search for.
+
+        Returns:
+            The session_id if found, None otherwise.
+        """
+        conn = self._conn()
+        row = conn.execute(
+            "SELECT session_id FROM sessions WHERE name = ? LIMIT 1",
+            (name,),
+        ).fetchone()
+        return row["session_id"] if row else None
 
     # ------------------------------------------------------------------
     # Maintenance
