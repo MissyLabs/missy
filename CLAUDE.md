@@ -191,6 +191,7 @@ discord:
 
 workspace_path: "~/workspace"
 audit_log_path: "~/.missy/audit.jsonl"
+max_spend_usd: 0.0                  # per-session budget cap; 0 = unlimited
 ```
 
 ## CLI Commands
@@ -247,6 +248,8 @@ missy devices policy NODE_ID        Set node policy mode (--mode full|safe-chat|
 
 missy voice status                  Show voice channel config and STT/TTS status
 missy voice test NODE_ID            Test TTS synthesis for an edge node (--text)
+
+missy cost                          Show cost tracking config and budget status (--session)
 ```
 
 ## Optional Extras
