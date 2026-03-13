@@ -22,8 +22,8 @@ from __future__ import annotations
 
 import json
 import logging
-import re
-from typing import Any, Iterator
+from collections.abc import Iterator
+from typing import Any
 
 from missy.config.settings import ProviderConfig
 from missy.core.events import AuditEvent, event_bus
@@ -36,12 +36,6 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_BASE_URL = "http://localhost:11434"
 _DEFAULT_MODEL = "llama3.2"
-
-# Pattern to detect prompted tool call JSON in model output
-_TOOL_CALL_RE = re.compile(
-    r'\{\s*"tool_call"\s*:\s*\{.*?\}\s*\}',
-    re.DOTALL,
-)
 
 
 class OllamaProvider(BaseProvider):
@@ -171,27 +165,34 @@ class OllamaProvider(BaseProvider):
         )
 
     def get_tool_schema(self, tools: list) -> list:
-        """Convert BaseTool instances to a JSON-serialisable description list.
+        """Convert BaseTool instances to Ollama's native tool schema format.
 
-        Ollama does not support native function calling, so this returns a
-        simplified list of name/description/parameters dicts that can be
-        injected into the system prompt as a text description.
+        Ollama expects tools in the OpenAI-compatible format::
+
+            {"type": "function", "function": {"name": "...", "description": "...",
+             "parameters": {"type": "object", "properties": {...}, "required": [...]}}}
 
         Args:
             tools: List of :class:`~missy.tools.base.BaseTool` instances.
 
         Returns:
-            A list of tool description dicts.
+            A list of Ollama-native tool schema dicts.
         """
         schemas = []
         for tool in tools:
             base_schema = tool.get_schema() if hasattr(tool, "get_schema") else {}
             params = base_schema.get("parameters", {})
+            # Ensure parameters has a proper JSON Schema structure
+            if params and "type" not in params:
+                params = {"type": "object", "properties": params}
             schemas.append(
                 {
-                    "name": tool.name,
-                    "description": tool.description,
-                    "parameters": params,
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parameters": params or {"type": "object", "properties": {}},
+                    },
                 }
             )
         return schemas
@@ -202,17 +203,12 @@ class OllamaProvider(BaseProvider):
         tools: list,
         system: str = "",
     ) -> CompletionResponse:
-        """Prompted tool-call fallback for Ollama (no native function calling).
+        """Send messages with native tool calling via Ollama's ``tools`` parameter.
 
-        Injects tool schemas into the system prompt as a JSON description and
-        instructs the model to respond with a specific JSON format when it
-        wants to call a tool.  The model output is then parsed for that format.
-
-        Expected tool-call format from model::
-
-            {"tool_call": {"name": "tool_name", "arguments": {...}}}
-
-        If no tool-call JSON is found the response is treated as plain text.
+        Uses Ollama's native ``/api/chat`` tool calling support. The tool
+        schemas are passed as the ``tools`` key in the request payload and
+        the model returns ``tool_calls`` in the response message when it
+        wants to invoke a tool.
 
         Args:
             messages: Ordered conversation turns.
@@ -221,73 +217,95 @@ class OllamaProvider(BaseProvider):
 
         Returns:
             A :class:`CompletionResponse`.  When ``finish_reason`` is
-            ``"tool_calls"``, ``tool_calls`` contains a single parsed
-            :class:`~missy.providers.base.ToolCall`.
+            ``"tool_calls"``, ``tool_calls`` contains the parsed
+            :class:`~missy.providers.base.ToolCall` instances.
         """
         tool_schemas = self.get_tool_schema(tools)
 
-        # Build an augmented system prompt with tool instructions
-        tool_json = json.dumps(tool_schemas, indent=2)
-        tool_instructions = (
-            "You have access to the following tools. When you need to call a tool, "
-            "respond ONLY with a JSON object in this exact format and nothing else:\n"
-            '{"tool_call": {"name": "<tool_name>", "arguments": {<key>: <value>}}}\n\n'
-            f"Available tools:\n{tool_json}"
-        )
+        # Build messages, injecting system prompt if provided
+        api_messages: list[dict[str, str]] = []
+        has_system = any(m.role == "system" for m in messages)
+        if system and not has_system:
+            api_messages.append({"role": "system", "content": system})
 
-        # Merge system prompt
-        augmented_system = tool_instructions
-        if system:
-            augmented_system = f"{system}\n\n{tool_instructions}"
-
-        # Build messages for the underlying complete() call
-        augmented_messages: list[Message] = [
-            Message(role="system", content=augmented_system)
-        ]
         for msg in messages:
-            if msg.role != "system":
-                augmented_messages.append(msg)
+            api_messages.append({"role": msg.role, "content": msg.content})
 
-        response = self.complete(augmented_messages)
-        raw_content = response.content.strip()
+        payload: dict[str, Any] = {
+            "model": self._model,
+            "messages": api_messages,
+            "tools": tool_schemas,
+            "stream": False,
+        }
 
-        # Try to parse a tool_call JSON block from the response
-        match = _TOOL_CALL_RE.search(raw_content)
-        if match:
-            try:
-                parsed = json.loads(match.group(0))
-                tc_data = parsed.get("tool_call", {})
-                tool_name = tc_data.get("name", "")
-                arguments = tc_data.get("arguments", {})
-                if tool_name:
-                    import uuid as _uuid
+        try:
+            client = PolicyHTTPClient(
+                timeout=self._timeout,
+                category="provider",
+            )
+            response = client.post(
+                f"{self._base_url}/api/chat",
+                json=payload,
+            )
+            response.raise_for_status()
+        except ProviderError:
+            raise
+        except Exception as exc:
+            self._emit_event("", "", "error", str(exc))
+            raise ProviderError(f"Ollama request failed: {exc}") from exc
 
-                    tool_calls = [
-                        ToolCall(
-                            id=str(_uuid.uuid4())[:8],
-                            name=tool_name,
-                            arguments=arguments if isinstance(arguments, dict) else {},
-                        )
-                    ]
-                    return CompletionResponse(
-                        content="",
-                        model=response.model,
-                        provider=self.name,
-                        usage=response.usage,
-                        raw=response.raw,
-                        tool_calls=tool_calls,
-                        finish_reason="tool_calls",
+        try:
+            data: dict[str, Any] = response.json()
+        except Exception as exc:
+            self._emit_event("", "", "error", "invalid JSON response")
+            raise ProviderError(f"Ollama returned invalid JSON: {exc}") from exc
+
+        message_obj = data.get("message") or {}
+        content_text: str = message_obj.get("content", "")
+
+        prompt_tokens = int(data.get("prompt_eval_count", 0))
+        completion_tokens = int(data.get("eval_count", 0))
+        usage = {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        }
+
+        # Parse native tool_calls from the response
+        raw_tool_calls = message_obj.get("tool_calls") or []
+        parsed_tool_calls: list[ToolCall] = []
+        for tc in raw_tool_calls:
+            func = tc.get("function") or {}
+            tc_name = func.get("name", "")
+            tc_args = func.get("arguments", {})
+            if tc_name:
+                parsed_tool_calls.append(
+                    ToolCall(
+                        id=tc.get("id", "") or tc_name[:8],
+                        name=tc_name,
+                        arguments=tc_args if isinstance(tc_args, dict) else {},
                     )
-            except (json.JSONDecodeError, Exception) as exc:
-                logger.debug("Failed to parse tool call from Ollama response: %s", exc)
+                )
 
-        # Plain text response
+        if parsed_tool_calls:
+            self._emit_event("", "", "allow", "tool_calls")
+            return CompletionResponse(
+                content=content_text,
+                model=data.get("model", self._model),
+                provider=self.name,
+                usage=usage,
+                raw=data,
+                tool_calls=parsed_tool_calls,
+                finish_reason="tool_calls",
+            )
+
+        self._emit_event("", "", "allow", "completion successful")
         return CompletionResponse(
-            content=raw_content,
-            model=response.model,
+            content=content_text,
+            model=data.get("model", self._model),
             provider=self.name,
-            usage=response.usage,
-            raw=response.raw,
+            usage=usage,
+            raw=data,
             tool_calls=[],
             finish_reason="stop",
         )

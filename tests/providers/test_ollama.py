@@ -12,7 +12,6 @@ from missy.core.exceptions import ProviderError
 from missy.providers.base import CompletionResponse, Message
 from missy.providers.ollama_provider import OllamaProvider
 
-
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
 # ---------------------------------------------------------------------------
@@ -268,3 +267,163 @@ class TestConfiguration:
 
     def test_name_attribute(self, provider):
         assert provider.name == "ollama"
+
+
+# ---------------------------------------------------------------------------
+# get_tool_schema
+# ---------------------------------------------------------------------------
+
+
+class _FakeTool:
+    def __init__(self, name: str, description: str, params: dict | None = None):
+        self.name = name
+        self.description = description
+        self._params = params or {}
+
+    def get_schema(self) -> dict:
+        return {"parameters": self._params}
+
+
+class TestGetToolSchema:
+    def test_returns_ollama_native_format(self, provider):
+        tools = [_FakeTool("greet", "Say hello", {"type": "object", "properties": {"name": {"type": "string"}}})]
+        schemas = provider.get_tool_schema(tools)
+        assert len(schemas) == 1
+        assert schemas[0]["type"] == "function"
+        assert schemas[0]["function"]["name"] == "greet"
+        assert schemas[0]["function"]["description"] == "Say hello"
+        assert schemas[0]["function"]["parameters"]["properties"]["name"]["type"] == "string"
+
+    def test_empty_params_get_default_object_schema(self, provider):
+        tools = [_FakeTool("ping", "Ping")]
+        schemas = provider.get_tool_schema(tools)
+        assert schemas[0]["function"]["parameters"] == {"type": "object", "properties": {}}
+
+    def test_multiple_tools(self, provider):
+        tools = [_FakeTool("a", "Tool A"), _FakeTool("b", "Tool B")]
+        schemas = provider.get_tool_schema(tools)
+        assert len(schemas) == 2
+        assert schemas[0]["function"]["name"] == "a"
+        assert schemas[1]["function"]["name"] == "b"
+
+
+# ---------------------------------------------------------------------------
+# complete_with_tools – native tool calling
+# ---------------------------------------------------------------------------
+
+
+_TOOL_CALL_RESPONSE = {
+    "model": "qwen3.5:9b",
+    "message": {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call_abc123",
+                "function": {
+                    "name": "tts_speak",
+                    "arguments": {"text": "Hello there!"},
+                },
+            }
+        ],
+    },
+    "prompt_eval_count": 20,
+    "eval_count": 10,
+}
+
+_PLAIN_TEXT_RESPONSE = {
+    "model": "qwen3.5:9b",
+    "message": {"role": "assistant", "content": "Just text, no tools."},
+    "prompt_eval_count": 5,
+    "eval_count": 8,
+}
+
+
+class TestCompleteWithTools:
+    def test_parses_native_tool_calls(self, provider):
+        mock_resp = _make_http_response(200, _TOOL_CALL_RESPONSE)
+        with patch("missy.providers.ollama_provider.PolicyHTTPClient") as MockClient:
+            MockClient.return_value.post.return_value = mock_resp
+            tools = [_FakeTool("tts_speak", "Speak text", {"type": "object", "properties": {"text": {"type": "string"}}})]
+            result = provider.complete_with_tools(
+                [Message(role="user", content="say hi")], tools
+            )
+        assert result.finish_reason == "tool_calls"
+        assert len(result.tool_calls) == 1
+        assert result.tool_calls[0].name == "tts_speak"
+        assert result.tool_calls[0].arguments == {"text": "Hello there!"}
+        assert result.tool_calls[0].id == "call_abc123"
+
+    def test_plain_text_response_returns_stop(self, provider):
+        mock_resp = _make_http_response(200, _PLAIN_TEXT_RESPONSE)
+        with patch("missy.providers.ollama_provider.PolicyHTTPClient") as MockClient:
+            MockClient.return_value.post.return_value = mock_resp
+            tools = [_FakeTool("tts_speak", "Speak text")]
+            result = provider.complete_with_tools(
+                [Message(role="user", content="tell me a joke")], tools
+            )
+        assert result.finish_reason == "stop"
+        assert result.tool_calls == []
+        assert result.content == "Just text, no tools."
+
+    def test_tools_passed_in_payload(self, provider):
+        mock_resp = _make_http_response(200, _PLAIN_TEXT_RESPONSE)
+        with patch("missy.providers.ollama_provider.PolicyHTTPClient") as MockClient:
+            MockClient.return_value.post.return_value = mock_resp
+            tools = [_FakeTool("greet", "Say hi")]
+            provider.complete_with_tools(
+                [Message(role="user", content="hi")], tools
+            )
+            payload = MockClient.return_value.post.call_args[1]["json"]
+            assert "tools" in payload
+            assert payload["tools"][0]["type"] == "function"
+            assert payload["tools"][0]["function"]["name"] == "greet"
+
+    def test_system_prompt_injected(self, provider):
+        mock_resp = _make_http_response(200, _PLAIN_TEXT_RESPONSE)
+        with patch("missy.providers.ollama_provider.PolicyHTTPClient") as MockClient:
+            MockClient.return_value.post.return_value = mock_resp
+            tools = [_FakeTool("greet", "Say hi")]
+            provider.complete_with_tools(
+                [Message(role="user", content="hi")],
+                tools,
+                system="You are helpful.",
+            )
+            payload = MockClient.return_value.post.call_args[1]["json"]
+            assert payload["messages"][0]["role"] == "system"
+            assert payload["messages"][0]["content"] == "You are helpful."
+
+    def test_multiple_tool_calls_parsed(self, provider):
+        data = {
+            "model": "qwen3.5:9b",
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "c1", "function": {"name": "tool_a", "arguments": {"x": 1}}},
+                    {"id": "c2", "function": {"name": "tool_b", "arguments": {"y": 2}}},
+                ],
+            },
+            "prompt_eval_count": 10,
+            "eval_count": 5,
+        }
+        mock_resp = _make_http_response(200, data)
+        with patch("missy.providers.ollama_provider.PolicyHTTPClient") as MockClient:
+            MockClient.return_value.post.return_value = mock_resp
+            tools = [_FakeTool("tool_a", "A"), _FakeTool("tool_b", "B")]
+            result = provider.complete_with_tools(
+                [Message(role="user", content="do both")], tools
+            )
+        assert len(result.tool_calls) == 2
+        assert result.tool_calls[0].name == "tool_a"
+        assert result.tool_calls[1].name == "tool_b"
+
+    def test_http_error_raises_provider_error(self, provider):
+        mock_resp = _make_http_response(500)
+        with patch("missy.providers.ollama_provider.PolicyHTTPClient") as MockClient:
+            MockClient.return_value.post.return_value = mock_resp
+            tools = [_FakeTool("greet", "Say hi")]
+            with pytest.raises(ProviderError):
+                provider.complete_with_tools(
+                    [Message(role="user", content="hi")], tools
+                )
