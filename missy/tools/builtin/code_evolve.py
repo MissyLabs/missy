@@ -324,10 +324,29 @@ class CodeEvolveTool(BaseTool):
 
         try:
             result = mgr.apply(proposal_id)
+            if result["success"]:
+                msg = (
+                    result["message"]
+                    + "\n\nProcess restart required to load changes. "
+                    "Restarting now..."
+                )
+                import contextlib
+
+                from missy.agent.code_evolution import restart_process
+
+                # Return success first, then restart — the ToolResult will
+                # be the last thing the agent sees before the process is
+                # replaced.  If we're in a context where restart isn't
+                # possible (e.g. tests), the function returns and we
+                # continue normally.
+
+                with contextlib.suppress(SystemExit):
+                    restart_process()
+                return ToolResult(success=True, output=msg)
             return ToolResult(
-                success=result["success"],
+                success=False,
                 output=result["message"],
-                error=None if result["success"] else result["message"],
+                error=result["message"],
             )
         except ValueError as exc:
             return ToolResult(success=False, output=None, error=str(exc))

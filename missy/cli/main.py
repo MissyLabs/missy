@@ -2093,10 +2093,15 @@ def evolve_reject(ctx: click.Context, proposal_id: str) -> None:
 
 @evolve.command("apply")
 @click.argument("proposal_id")
+@click.option("--no-restart", is_flag=True, default=False, help="Skip automatic process restart after successful apply.")
 @click.pass_context
-def evolve_apply(ctx: click.Context, proposal_id: str) -> None:
-    """Apply an approved evolution (runs tests, commits on success)."""
-    from missy.agent.code_evolution import CodeEvolutionManager
+def evolve_apply(ctx: click.Context, proposal_id: str, no_restart: bool) -> None:
+    """Apply an approved evolution (runs tests, commits on success).
+
+    After a successful apply the process restarts itself so the new code
+    takes effect immediately.  Pass --no-restart to skip the restart.
+    """
+    from missy.agent.code_evolution import CodeEvolutionManager, restart_process
     _load_subsystems(ctx.obj["config_path"])
     mgr = CodeEvolutionManager()
     prop = mgr.get(proposal_id)
@@ -2110,6 +2115,11 @@ def evolve_apply(ctx: click.Context, proposal_id: str) -> None:
     result = mgr.apply(proposal_id)
     if result["success"]:
         _print_success(result["message"])
+        if no_restart:
+            console.print("[dim]Skipping restart (--no-restart). Restart manually to load changes.[/]")
+        else:
+            console.print("[bold cyan]Restarting to load evolved code...[/]")
+            restart_process()
     else:
         _print_error(result["message"])
         if result.get("test_output"):

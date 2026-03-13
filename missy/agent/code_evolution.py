@@ -46,6 +46,26 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+
+def restart_process() -> None:
+    """Replace the current process with a fresh invocation of the same command.
+
+    Uses :func:`os.execv` so the PID is reused and the caller's terminal
+    session is preserved.  This function does **not** return on success.
+
+    Falls back to :func:`sys.exit` with a restart hint if ``execv`` fails.
+    """
+    import os
+    import sys
+
+    logger.info("Restarting process: %s %s", sys.executable, sys.argv)
+    try:
+        os.execv(sys.executable, [sys.executable, *sys.argv])
+    except OSError as exc:
+        logger.error("Failed to restart: %s", exc)
+        print(f"[missy-evolve] Restart failed ({exc}). Please restart manually.")
+        sys.exit(75)  # EX_TEMPFAIL
+
 # Root of the Missy package — the only directory we allow edits in
 _PACKAGE_ROOT = Path(__file__).resolve().parent.parent
 
