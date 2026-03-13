@@ -80,10 +80,9 @@ class TestShellEnabled:
             engine.check_command("rm -rf /")
         assert exc_info.value.category == "shell"
 
-    def test_empty_allowlist_denies_all(self):
+    def test_empty_allowlist_allows_all(self):
         engine = make_engine(enabled=True, commands=[])
-        with pytest.raises(PolicyViolationError):
-            engine.check_command("ls")
+        assert engine.check_command("ls") is True
 
     def test_empty_command_denied(self):
         engine = make_engine(commands=["ls"])
