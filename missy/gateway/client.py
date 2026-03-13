@@ -69,10 +69,12 @@ class PolicyHTTPClient:
         session_id: str = "",
         task_id: str = "",
         timeout: int = 30,
+        category: str = "",
     ) -> None:
         self.session_id = session_id
         self.task_id = task_id
         self.timeout = timeout
+        self.category = category
         self._sync_client: httpx.Client | None = None
         self._async_client: httpx.AsyncClient | None = None
 
@@ -226,7 +228,9 @@ class PolicyHTTPClient:
                 f"Cannot determine host from URL {url!r}. "
                 "Ensure the URL includes a scheme (e.g. https://)."
             )
-        get_policy_engine().check_network(host, self.session_id, self.task_id)
+        get_policy_engine().check_network(
+            host, self.session_id, self.task_id, category=self.category,
+        )
 
     def _get_sync_client(self) -> httpx.Client:
         """Return the shared synchronous client, creating it on first call."""
@@ -268,6 +272,7 @@ def create_client(
     session_id: str = "",
     task_id: str = "",
     timeout: int = 30,
+    category: str = "",
 ) -> PolicyHTTPClient:
     """Construct a :class:`PolicyHTTPClient` with the given parameters.
 
@@ -280,8 +285,13 @@ def create_client(
         task_id: Task identifier forwarded to the policy engine and audit
             events.
         timeout: Default request timeout in seconds.
+        category: Request category (``"provider"``, ``"tool"``,
+            ``"discord"``) forwarded to the policy engine so per-category
+            host allowlists are checked.
 
     Returns:
         A configured :class:`PolicyHTTPClient` instance.
     """
-    return PolicyHTTPClient(session_id=session_id, task_id=task_id, timeout=timeout)
+    return PolicyHTTPClient(
+        session_id=session_id, task_id=task_id, timeout=timeout, category=category,
+    )

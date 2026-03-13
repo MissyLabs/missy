@@ -74,7 +74,7 @@ class OllamaProvider(BaseProvider):
             ``False`` on any network or HTTP error without raising.
         """
         try:
-            client = PolicyHTTPClient(timeout=self._timeout)
+            client = PolicyHTTPClient(timeout=self._timeout, category="provider")
             response = client.get(f"{self._base_url}/api/tags")
             return response.status_code == 200
         except Exception as exc:
@@ -127,6 +127,7 @@ class OllamaProvider(BaseProvider):
                 session_id=session_id,
                 task_id=task_id,
                 timeout=self._timeout,
+                category="provider",
             )
             response = client.post(
                 f"{self._base_url}/api/chat",
@@ -323,7 +324,7 @@ class OllamaProvider(BaseProvider):
         }
 
         try:
-            client = PolicyHTTPClient(timeout=self._timeout)
+            client = PolicyHTTPClient(timeout=self._timeout, category="provider")
             response = client.post(
                 f"{self._base_url}/api/chat",
                 json=payload,

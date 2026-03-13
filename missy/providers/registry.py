@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 import threading
 from typing import Optional
+from urllib.parse import urlparse
 
 from missy.config.settings import MissyConfig, ProviderConfig
 
@@ -170,6 +171,20 @@ class ProviderRegistry:
             constructed provider instances.
         """
         registry = cls()
+        # Auto-populate provider_allowed_hosts from provider base_url entries
+        # so users don't have to duplicate hosts in network policy manually.
+        existing = {h.lower() for h in config.network.provider_allowed_hosts}
+        for provider_config in config.providers.values():
+            if provider_config.enabled and provider_config.base_url:
+                parsed = urlparse(provider_config.base_url)
+                host = parsed.hostname
+                if host and host.lower() not in existing:
+                    config.network.provider_allowed_hosts.append(host)
+                    existing.add(host.lower())
+                    logger.debug(
+                        "Auto-allowed provider host %r from base_url.", host,
+                    )
+
         for key, provider_config in config.providers.items():
             if not provider_config.enabled:
                 logger.info("Provider %r is disabled; skipping.", key)
