@@ -64,7 +64,12 @@ def _make_mgr(store_path, repo_root):
     )
 
 
-class TestCodeEvolveToolPropose:
+# ---------------------------------------------------------------------------
+# propose
+# ---------------------------------------------------------------------------
+
+
+class TestPropose:
     def test_propose_success(self, tool, tmp_repo, store_path):
         with _patch_mgr(store_path, str(tmp_repo)):
             result = tool.execute(
@@ -77,6 +82,7 @@ class TestCodeEvolveToolPropose:
             )
         assert result.success
         assert "Evolution proposed" in result.output
+        assert "code_evolve(action='approve'" in result.output
 
     def test_propose_missing_fields(self, tool):
         result = tool.execute(action="propose", title="T")
@@ -96,7 +102,12 @@ class TestCodeEvolveToolPropose:
         assert not result.success
 
 
-class TestCodeEvolveToolProposeMutli:
+# ---------------------------------------------------------------------------
+# propose_multi
+# ---------------------------------------------------------------------------
+
+
+class TestProposeMulti:
     def test_propose_multi_success(self, tool, tmp_repo, store_path):
         (tmp_repo / "missy" / "second.py").write_text("val = 42\n")
         subprocess.run(["git", "add", "."], cwd=str(tmp_repo), capture_output=True)
@@ -138,7 +149,12 @@ class TestCodeEvolveToolProposeMutli:
         assert "Invalid diffs JSON" in result.error
 
 
-class TestCodeEvolveToolList:
+# ---------------------------------------------------------------------------
+# list
+# ---------------------------------------------------------------------------
+
+
+class TestList:
     def test_list_empty(self, tool, tmp_repo, store_path):
         with _patch_mgr(store_path, str(tmp_repo)):
             result = tool.execute(action="list")
@@ -163,7 +179,12 @@ class TestCodeEvolveToolList:
         assert "Test prop" in result.output
 
 
-class TestCodeEvolveToolShow:
+# ---------------------------------------------------------------------------
+# show
+# ---------------------------------------------------------------------------
+
+
+class TestShow:
     def test_show_missing_id(self, tool):
         result = tool.execute(action="show")
         assert not result.success
@@ -192,7 +213,97 @@ class TestCodeEvolveToolShow:
         assert "details here" in result.output
 
 
-class TestCodeEvolveToolApply:
+# ---------------------------------------------------------------------------
+# approve
+# ---------------------------------------------------------------------------
+
+
+class TestApprove:
+    def test_approve_missing_id(self, tool):
+        result = tool.execute(action="approve")
+        assert not result.success
+        assert "proposal_id is required" in result.error
+
+    def test_approve_not_found(self, tool, tmp_repo, store_path):
+        with _patch_mgr(store_path, str(tmp_repo)):
+            result = tool.execute(action="approve", proposal_id="nope")
+        assert not result.success
+
+    def test_approve_success(self, tool, tmp_repo, store_path):
+        mgr = _make_mgr(store_path, str(tmp_repo))
+        prop = mgr.propose(
+            title="Approve me",
+            description="D",
+            file_path="missy/example.py",
+            original_code="return 'hello'",
+            proposed_code="return 'hi'",
+        )
+        with patch(
+            "missy.agent.code_evolution.CodeEvolutionManager",
+            return_value=mgr,
+        ):
+            result = tool.execute(action="approve", proposal_id=prop.id)
+        assert result.success
+        assert "approved" in result.output
+        assert "code_evolve(action='apply'" in result.output
+
+    def test_approve_already_approved(self, tool, tmp_repo, store_path):
+        mgr = _make_mgr(store_path, str(tmp_repo))
+        prop = mgr.propose(
+            title="T", description="D",
+            file_path="missy/example.py",
+            original_code="return 'hello'",
+            proposed_code="return 'hi'",
+        )
+        mgr.approve(prop.id)
+        with patch(
+            "missy.agent.code_evolution.CodeEvolutionManager",
+            return_value=mgr,
+        ):
+            result = tool.execute(action="approve", proposal_id=prop.id)
+        assert not result.success
+        assert "approved" in result.error
+
+
+# ---------------------------------------------------------------------------
+# reject
+# ---------------------------------------------------------------------------
+
+
+class TestReject:
+    def test_reject_missing_id(self, tool):
+        result = tool.execute(action="reject")
+        assert not result.success
+
+    def test_reject_success(self, tool, tmp_repo, store_path):
+        mgr = _make_mgr(store_path, str(tmp_repo))
+        prop = mgr.propose(
+            title="Reject me",
+            description="D",
+            file_path="missy/example.py",
+            original_code="return 'hello'",
+            proposed_code="return 'hi'",
+        )
+        with patch(
+            "missy.agent.code_evolution.CodeEvolutionManager",
+            return_value=mgr,
+        ):
+            result = tool.execute(action="reject", proposal_id=prop.id)
+        assert result.success
+        assert "rejected" in result.output
+
+    def test_reject_not_found(self, tool, tmp_repo, store_path):
+        with _patch_mgr(store_path, str(tmp_repo)):
+            result = tool.execute(action="reject", proposal_id="nope")
+        assert not result.success
+
+
+# ---------------------------------------------------------------------------
+# apply
+# ---------------------------------------------------------------------------
+
+
+class TestApply:
     def test_apply_missing_id(self, tool):
         result = tool.execute(action="apply")
         assert not result.success
@@ -216,10 +327,80 @@ class TestCodeEvolveToolApply:
         ):
             result = tool.execute(action="apply", proposal_id=prop.id)
         assert not result.success
-        assert "must be approved" in result.error
+        assert "Approve it first" in result.error
+
+    def test_apply_approved_success(self, tool, tmp_repo, store_path):
+        mgr = _make_mgr(store_path, str(tmp_repo))
+        prop = mgr.propose(
+            title="T", description="D",
+            file_path="missy/example.py",
+            original_code="return 'hello'",
+            proposed_code="return 'hi'",
+        )
+        mgr.approve(prop.id)
+        with patch(
+            "missy.agent.code_evolution.CodeEvolutionManager",
+            return_value=mgr,
+        ), patch(
+            "missy.agent.code_evolution.restart_process",
+        ):
+            result = tool.execute(action="apply", proposal_id=prop.id)
+        assert result.success
+        assert "committed" in result.output
 
 
-class TestCodeEvolveToolUnknownAction:
+# ---------------------------------------------------------------------------
+# rollback
+# ---------------------------------------------------------------------------
+
+
+class TestRollback:
+    def test_rollback_missing_id(self, tool):
+        result = tool.execute(action="rollback")
+        assert not result.success
+
+    def test_rollback_not_applied(self, tool, tmp_repo, store_path):
+        mgr = _make_mgr(store_path, str(tmp_repo))
+        prop = mgr.propose(
+            title="T", description="D",
+            file_path="missy/example.py",
+            original_code="return 'hello'",
+            proposed_code="return 'hi'",
+        )
+        with patch(
+            "missy.agent.code_evolution.CodeEvolutionManager",
+            return_value=mgr,
+        ):
+            result = tool.execute(action="rollback", proposal_id=prop.id)
+        assert not result.success
+
+    def test_rollback_success(self, tool, tmp_repo, store_path):
+        mgr = _make_mgr(store_path, str(tmp_repo))
+        prop = mgr.propose(
+            title="T", description="D",
+            file_path="missy/example.py",
+            original_code="return 'hello'",
+            proposed_code="return 'hi'",
+        )
+        mgr.approve(prop.id)
+        mgr.apply(prop.id)
+        with patch(
+            "missy.agent.code_evolution.CodeEvolutionManager",
+            return_value=mgr,
+        ), patch(
+            "missy.agent.code_evolution.restart_process",
+        ):
+            result = tool.execute(action="rollback", proposal_id=prop.id)
+        assert result.success
+        assert "Reverted" in result.output
+
+
+# ---------------------------------------------------------------------------
+# unknown action
+# ---------------------------------------------------------------------------
+
+
+class TestUnknownAction:
     def test_unknown_action(self, tool):
         result = tool.execute(action="delete")
         assert not result.success

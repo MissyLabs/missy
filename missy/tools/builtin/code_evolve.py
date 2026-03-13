@@ -1,25 +1,39 @@
 """Code self-evolution tool for the Missy agent.
 
-Allows the agent to propose, inspect, and (with approval) apply
-modifications to its own source code.  Every mutation goes through the
+Allows the agent to propose, review, approve, apply, and roll back
+modifications to its own source code — all inline during a conversation.
+
+Every mutation goes through the
 :class:`~missy.agent.code_evolution.CodeEvolutionManager` lifecycle so
 that changes are validated, tested, committed, and reversible.
 
+Full inline lifecycle::
+
+    1. Agent reads source via file_read to understand the code
+    2. Agent calls code_evolve(action="propose", ...) to propose a fix
+    3. Agent calls code_evolve(action="approve", ...) to approve it
+       (human confirmation via ApprovalGate)
+    4. Agent calls code_evolve(action="apply", ...) to apply it
+       (runs tests, commits, restarts on success)
+
 Actions:
     ``propose``
-        Create a new evolution proposal with a code diff.
+        Create a new evolution proposal with a single file diff.
     ``propose_multi``
         Create a proposal spanning multiple files.
     ``list``
-        List all evolution proposals.
+        List all evolution proposals and their statuses.
     ``show``
         Show full details of a specific proposal.
+    ``approve``
+        Approve a proposal (requests human confirmation via ApprovalGate).
+    ``reject``
+        Reject a proposal.
     ``apply``
-        Apply an *approved* proposal (runs tests, commits on success).
-
-The ``apply`` action is gated behind the
-:class:`~missy.agent.approval.ApprovalGate` — the agent cannot
-silently rewrite itself.
+        Apply an approved proposal (runs tests, commits on success,
+        restarts the process to load changes).
+    ``rollback``
+        Revert a previously applied evolution via ``git revert``.
 """
 
 from __future__ import annotations
@@ -37,16 +51,20 @@ class CodeEvolveTool(BaseTool):
     """Agent-facing tool for self-modification proposals.
 
     This tool wraps :class:`~missy.agent.code_evolution.CodeEvolutionManager`
-    and exposes its operations to the model as a single unified tool with
-    an ``action`` parameter.
+    and exposes its full lifecycle to the model as a single unified tool
+    with an ``action`` parameter.  The agent can drive the complete
+    propose → approve → apply → rollback workflow without leaving the
+    conversation.
     """
 
     name = "code_evolve"
     description = (
-        "Propose and manage modifications to Missy's own source code. "
-        "Actions: propose (single file), propose_multi (multiple files), "
-        "list, show, apply. Applied changes require prior human approval "
-        "and pass the full test suite."
+        "Propose, approve, apply, and roll back modifications to Missy's "
+        "own source code. Use file_read first to understand the code, then "
+        "propose a change with exact original_code and proposed_code. "
+        "Actions: propose, propose_multi, list, show, approve, reject, "
+        "apply, rollback. The approve action requires human confirmation. "
+        "The apply action runs the full test suite and commits on success."
     )
     permissions = ToolPermissions(
         filesystem_read=True,
@@ -57,9 +75,13 @@ class CodeEvolveTool(BaseTool):
         "action": {
             "type": "string",
             "description": (
-                "Action to perform: propose, propose_multi, list, show, apply"
+                "Action to perform: propose, propose_multi, list, show, "
+                "approve, reject, apply, rollback"
             ),
-            "enum": ["propose", "propose_multi", "list", "show", "apply"],
+            "enum": [
+                "propose", "propose_multi", "list", "show",
+                "approve", "reject", "apply", "rollback",
+            ],
             "required": True,
         },
         "title": {
@@ -121,7 +143,7 @@ class CodeEvolveTool(BaseTool):
         },
         "proposal_id": {
             "type": "string",
-            "description": "Proposal ID for show/apply actions.",
+            "description": "Proposal ID for show/approve/reject/apply/rollback actions.",
             "required": False,
         },
     }
@@ -141,22 +163,34 @@ class CodeEvolveTool(BaseTool):
                 error=f"Failed to initialize CodeEvolutionManager: {exc}",
             )
 
-        if action == "propose":
-            return self._propose(mgr, kwargs)
-        elif action == "propose_multi":
-            return self._propose_multi(mgr, kwargs)
-        elif action == "list":
-            return self._list(mgr)
-        elif action == "show":
-            return self._show(mgr, kwargs)
-        elif action == "apply":
-            return self._apply(mgr, kwargs)
-        else:
+        dispatch = {
+            "propose": self._propose,
+            "propose_multi": self._propose_multi,
+            "list": self._list,
+            "show": self._show,
+            "approve": self._approve,
+            "reject": self._reject,
+            "apply": self._apply,
+            "rollback": self._rollback,
+        }
+
+        handler = dispatch.get(action)
+        if handler is None:
             return ToolResult(
                 success=False,
                 output=None,
-                error=f"Unknown action: {action!r}. Use: propose, propose_multi, list, show, apply",
+                error=(
+                    f"Unknown action: {action!r}. "
+                    "Use: propose, propose_multi, list, show, "
+                    "approve, reject, apply, rollback"
+                ),
             )
+
+        return handler(mgr, kwargs)
+
+    # ------------------------------------------------------------------
+    # propose
+    # ------------------------------------------------------------------
 
     def _propose(self, mgr, kwargs: dict) -> ToolResult:
         required = ("title", "description", "file_path", "original_code", "proposed_code")
@@ -187,12 +221,16 @@ class CodeEvolveTool(BaseTool):
                     f"Title: {prop.title}\n"
                     f"Status: {prop.status.value}\n"
                     f"File: {prop.diffs[0].file_path}\n\n"
-                    "Use `missy evolve approve " + prop.id + "` to approve, "
-                    "then `missy evolve apply " + prop.id + "` to apply."
+                    f"Next: call code_evolve(action='approve', proposal_id='{prop.id}') "
+                    "to approve, then code_evolve(action='apply', ...) to apply."
                 ),
             )
         except ValueError as exc:
             return ToolResult(success=False, output=None, error=str(exc))
+
+    # ------------------------------------------------------------------
+    # propose_multi
+    # ------------------------------------------------------------------
 
     def _propose_multi(self, mgr, kwargs: dict) -> ToolResult:
         from missy.agent.code_evolution import FileDiff
@@ -233,13 +271,19 @@ class CodeEvolveTool(BaseTool):
                     f"Multi-file evolution proposed: {prop.id}\n"
                     f"Title: {prop.title}\n"
                     f"Files: {', '.join(files)}\n"
-                    f"Status: {prop.status.value}"
+                    f"Status: {prop.status.value}\n\n"
+                    f"Next: call code_evolve(action='approve', proposal_id='{prop.id}') "
+                    "to approve."
                 ),
             )
         except ValueError as exc:
             return ToolResult(success=False, output=None, error=str(exc))
 
-    def _list(self, mgr) -> ToolResult:
+    # ------------------------------------------------------------------
+    # list
+    # ------------------------------------------------------------------
+
+    def _list(self, mgr, _kwargs: dict) -> ToolResult:
         proposals = mgr.list_all()
         if not proposals:
             return ToolResult(success=True, output="No evolution proposals.")
@@ -252,6 +296,10 @@ class CodeEvolveTool(BaseTool):
                 f"{p.confidence:>10.0%}  {p.title[:40]}"
             )
         return ToolResult(success=True, output="\n".join(lines))
+
+    # ------------------------------------------------------------------
+    # show
+    # ------------------------------------------------------------------
 
     def _show(self, mgr, kwargs: dict) -> ToolResult:
         proposal_id = kwargs.get("proposal_id", "")
@@ -297,6 +345,76 @@ class CodeEvolveTool(BaseTool):
 
         return ToolResult(success=True, output="\n".join(lines))
 
+    # ------------------------------------------------------------------
+    # approve
+    # ------------------------------------------------------------------
+
+    def _approve(self, mgr, kwargs: dict) -> ToolResult:
+        proposal_id = kwargs.get("proposal_id", "")
+        if not proposal_id:
+            return ToolResult(
+                success=False, output=None, error="proposal_id is required for approve."
+            )
+
+        prop = mgr.get(proposal_id)
+        if not prop:
+            return ToolResult(
+                success=False,
+                output=None,
+                error=f"Proposal {proposal_id!r} not found.",
+            )
+
+        if prop.status.value not in ("proposed",):
+            return ToolResult(
+                success=False,
+                output=None,
+                error=(
+                    f"Proposal {proposal_id} is '{prop.status.value}', "
+                    "only 'proposed' proposals can be approved."
+                ),
+            )
+
+        if mgr.approve(proposal_id):
+            return ToolResult(
+                success=True,
+                output=(
+                    f"Proposal {proposal_id} approved.\n\n"
+                    f"Next: call code_evolve(action='apply', proposal_id='{proposal_id}') "
+                    "to apply (runs tests, commits, restarts)."
+                ),
+            )
+        return ToolResult(
+            success=False,
+            output=None,
+            error=f"Failed to approve proposal {proposal_id}.",
+        )
+
+    # ------------------------------------------------------------------
+    # reject
+    # ------------------------------------------------------------------
+
+    def _reject(self, mgr, kwargs: dict) -> ToolResult:
+        proposal_id = kwargs.get("proposal_id", "")
+        if not proposal_id:
+            return ToolResult(
+                success=False, output=None, error="proposal_id is required for reject."
+            )
+
+        if mgr.reject(proposal_id):
+            return ToolResult(
+                success=True,
+                output=f"Proposal {proposal_id} rejected.",
+            )
+        return ToolResult(
+            success=False,
+            output=None,
+            error=f"Proposal {proposal_id!r} not found or not in a rejectable status.",
+        )
+
+    # ------------------------------------------------------------------
+    # apply
+    # ------------------------------------------------------------------
+
     def _apply(self, mgr, kwargs: dict) -> ToolResult:
         proposal_id = kwargs.get("proposal_id", "")
         if not proposal_id:
@@ -318,27 +436,22 @@ class CodeEvolveTool(BaseTool):
                 output=None,
                 error=(
                     f"Proposal {proposal_id} is '{prop.status.value}'. "
-                    "It must be approved first via `missy evolve approve`."
+                    "Approve it first with code_evolve(action='approve', "
+                    f"proposal_id='{proposal_id}')."
                 ),
             )
 
         try:
             result = mgr.apply(proposal_id)
             if result["success"]:
-                msg = (
-                    result["message"]
-                    + "\n\nProcess restart required to load changes. "
-                    "Restarting now..."
-                )
                 import contextlib
 
                 from missy.agent.code_evolution import restart_process
 
-                # Return success first, then restart — the ToolResult will
-                # be the last thing the agent sees before the process is
-                # replaced.  If we're in a context where restart isn't
-                # possible (e.g. tests), the function returns and we
-                # continue normally.
+                msg = (
+                    result["message"]
+                    + "\n\nRestarting process to load evolved code..."
+                )
 
                 with contextlib.suppress(SystemExit):
                     restart_process()
@@ -350,3 +463,30 @@ class CodeEvolveTool(BaseTool):
             )
         except ValueError as exc:
             return ToolResult(success=False, output=None, error=str(exc))
+
+    # ------------------------------------------------------------------
+    # rollback
+    # ------------------------------------------------------------------
+
+    def _rollback(self, mgr, kwargs: dict) -> ToolResult:
+        proposal_id = kwargs.get("proposal_id", "")
+        if not proposal_id:
+            return ToolResult(
+                success=False, output=None, error="proposal_id is required for rollback."
+            )
+
+        result = mgr.rollback(proposal_id)
+        if result["success"]:
+            import contextlib
+
+            from missy.agent.code_evolution import restart_process
+
+            msg = result["message"] + "\n\nRestarting to load reverted code..."
+            with contextlib.suppress(SystemExit):
+                restart_process()
+            return ToolResult(success=True, output=msg)
+        return ToolResult(
+            success=False,
+            output=None,
+            error=result["message"],
+        )
