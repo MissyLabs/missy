@@ -1377,7 +1377,23 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
 
                     try:
                         reply_to = msg.metadata.get("discord_message_id")
-                        await ch.send_to(channel_id, response, reply_to=reply_to)
+                        sent_id = await ch.send_to(channel_id, response, reply_to=reply_to)
+
+                        # Detect evolution proposals and add reaction buttons.
+                        if sent_id and "Evolution proposed:" in response:
+                            import re
+                            _evo_match = re.search(r"Evolution proposed:\s*(\S+)", response)
+                            if _evo_match:
+                                _proposal_id = _evo_match.group(1)
+                                ch.add_evolution_reactions(channel_id, sent_id, _proposal_id)
+                        elif sent_id and "Multi-file evolution proposed:" in response:
+                            import re
+                            _evo_match = re.search(
+                                r"Multi-file evolution proposed:\s*(\S+)", response
+                            )
+                            if _evo_match:
+                                _proposal_id = _evo_match.group(1)
+                                ch.add_evolution_reactions(channel_id, sent_id, _proposal_id)
                     except Exception as exc:
                         logger.error("Discord send error: %s", exc)
 

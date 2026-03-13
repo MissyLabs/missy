@@ -53,9 +53,9 @@ _OP_HEARTBEAT_ACK = 11
 # Gateway API version
 _GATEWAY_URL = "wss://gateway.discord.gg/?v=10&encoding=json"
 
-# Intents: GUILDS + GUILD_MESSAGES + DIRECT_MESSAGES + MESSAGE_CONTENT
-# Bit flags: 1 | 512 | 4096 | 32768 = 37377
-_INTENTS = 1 | 512 | 4096 | 32768
+# Intents: GUILDS | GUILD_MESSAGES | GUILD_MESSAGE_REACTIONS
+#         | DIRECT_MESSAGES | DIRECT_MESSAGE_REACTIONS | MESSAGE_CONTENT
+_INTENTS = 1 | 512 | 1024 | 4096 | 8192 | 32768
 
 AsyncMessageCallback = Callable[[dict[str, Any]], Coroutine[Any, Any, None]]
 
@@ -254,8 +254,11 @@ class DiscordGatewayClient:
             logger.info("Gateway: session resumed")
             return
 
-        # Forward MESSAGE_CREATE, GUILD_CREATE, INTERACTION_CREATE to the callback.
-        if event_name in ("MESSAGE_CREATE", "GUILD_CREATE", "INTERACTION_CREATE"):
+        # Forward dispatched events to the callback.
+        if event_name in (
+            "MESSAGE_CREATE", "GUILD_CREATE", "INTERACTION_CREATE",
+            "MESSAGE_REACTION_ADD",
+        ):
             event_payload = {"t": event_name, "d": data}
             try:
                 await self._on_message(event_payload)

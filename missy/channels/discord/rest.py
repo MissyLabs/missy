@@ -190,8 +190,8 @@ class DiscordRestClient:
         Args:
             channel_id: The channel containing the message.
             message_id: The message to react to.
-            emoji: URL-encoded emoji string (e.g. ``"eyes"`` or a custom
-                emoji in ``name:id`` format).
+            emoji: Unicode emoji (e.g. ``"\u2705"``) or a custom emoji in
+                ``name:id`` format.
 
         Raises:
             PolicyViolationError: If ``discord.com`` is not allowed.
@@ -199,26 +199,17 @@ class DiscordRestClient:
         """
         from urllib.parse import quote
 
-        encoded = quote(emoji, safe="")
-        url = f"{BASE}/channels/{channel_id}/messages/{message_id}/reactions/{encoded}/@me"
-        # PUT with empty body; Discord returns 204 No Content on success.
-        response = self._http.post(
-            f"{BASE}/channels/{channel_id}/messages/{message_id}/reactions/{encoded}/@me/put",
-            headers=self._headers(),
-            content=b"",
-        )
-        # Some callers use a raw PUT which PolicyHTTPClient does not expose yet;
-        # fall back to a workaround using post with the special _method marker.
-        # In practice we issue a real PUT via the sync client directly here.
         import httpx
 
-        parsed_url = f"{BASE}/channels/{channel_id}/messages/{message_id}/reactions/{encoded}/@me"
-        http_response = httpx.put(
-            parsed_url,
+        encoded = quote(emoji, safe="")
+        url = f"{BASE}/channels/{channel_id}/messages/{message_id}/reactions/{encoded}/@me"
+        # Discord expects a PUT with empty body; returns 204 No Content.
+        response = httpx.put(
+            url,
             headers={k: v for k, v in self._headers().items() if k != "Content-Type"},
             timeout=10,
         )
-        http_response.raise_for_status()
+        response.raise_for_status()
 
     def trigger_typing(self, channel_id: str) -> None:
         """Send a typing indicator to *channel_id*.
