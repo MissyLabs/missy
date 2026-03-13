@@ -74,7 +74,7 @@ class AgentConfig:
         "If a task requires reading a file, call file_read now. "
         "If it requires running a command, call shell_exec now. "
         "Available tools: file_read, file_write, file_delete, list_files, "
-        "shell_exec, web_fetch, calculator, self_create_tool. "
+        "shell_exec, web_fetch, calculator, self_create_tool, code_evolve. "
         "BROWSER: Use browser_navigate(url=...) for ALL web tasks — never use x11 tools for the browser. "
         "browser_navigate launches Firefox automatically and navigates in one call. "
         "To search: browser_navigate(url='https://duckduckgo.com/?q=query'). "
@@ -545,6 +545,11 @@ class AgentRuntime:
                         except Exception:
                             pass
 
+                        # Feature #9: error-driven code evolution analysis
+                        self._analyze_for_evolution(
+                            tc.name, tr.content, failure_tracker
+                        )
+
                     # Feature #8: checkpoint after each round of tool results
                     if _cm is not None and _checkpoint_id is not None:
                         try:
@@ -847,6 +852,60 @@ class AgentRuntime:
             )
         except Exception as exc:
             logger.debug("Failed to extract learnings: %s", exc)
+
+    def _analyze_for_evolution(
+        self,
+        tool_name: str,
+        error_content: str,
+        failure_tracker,
+    ) -> None:
+        """Analyze repeated tool failures for possible code self-evolution.
+
+        When a tool fails repeatedly and the error traceback points to Missy's
+        own source code, this method logs a skeleton evolution proposal that
+        the agent (or operator) can later flesh out and apply.
+
+        This is a best-effort operation; failures are silently swallowed.
+
+        Args:
+            tool_name: Name of the tool that failed.
+            error_content: The error message / traceback text.
+            failure_tracker: The active
+                :class:`~missy.agent.failure_tracker.FailureTracker`.
+        """
+        try:
+            from missy.agent.code_evolution import CodeEvolutionManager
+
+            mgr = CodeEvolutionManager()
+            stats = failure_tracker.get_stats()
+            total = stats.get(tool_name, {}).get("total_failures", 0)
+
+            skeleton = mgr.analyze_error_for_evolution(
+                error_message=error_content[:200],
+                traceback_text=error_content,
+                tool_name=tool_name,
+                failure_count=total,
+            )
+            if skeleton is not None:
+                logger.info(
+                    "Code evolution skeleton proposed: %s — %s",
+                    skeleton.id,
+                    skeleton.title,
+                )
+                self._emit_event(
+                    session_id="system",
+                    task_id="code_evolution",
+                    event_type="code_evolution.skeleton_proposed",
+                    result="allow",
+                    detail={
+                        "proposal_id": skeleton.id,
+                        "title": skeleton.title,
+                        "tool_name": tool_name,
+                        "failure_count": total,
+                    },
+                )
+        except Exception as exc:
+            logger.debug("Code evolution analysis failed: %s", exc)
 
     # ------------------------------------------------------------------
     # Message format conversion

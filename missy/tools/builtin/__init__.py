@@ -30,6 +30,7 @@ from missy.tools.builtin.browser_tools import (
     BrowserWaitTool,
 )
 from missy.tools.builtin.calculator import CalculatorTool
+from missy.tools.builtin.code_evolve import CodeEvolveTool
 from missy.tools.builtin.discord_upload import DiscordUploadTool
 from missy.tools.builtin.file_delete import FileDeleteTool
 from missy.tools.builtin.incus_tools import (
@@ -81,6 +82,7 @@ __all__ = [
     "BrowserScreenshotTool",
     "BrowserWaitTool",
     "CalculatorTool",
+    "CodeEvolveTool",
     "DiscordUploadTool",
     "FileDeleteTool",
     "IncusCopyMoveTool",
@@ -132,6 +134,7 @@ _ALL_TOOL_CLASSES = [
     BrowserScreenshotTool,
     BrowserWaitTool,
     CalculatorTool,
+    CodeEvolveTool,
     DiscordUploadTool,
     FileDeleteTool,
     FileReadTool,

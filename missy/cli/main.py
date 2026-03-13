@@ -1977,6 +1977,161 @@ def approvals_list(ctx: click.Context) -> None:
 
 
 # ---------------------------------------------------------------------------
+# missy evolve
+# ---------------------------------------------------------------------------
+
+
+@cli.group()
+def evolve() -> None:
+    """Code self-evolution management."""
+    pass
+
+
+@evolve.command("list")
+@click.pass_context
+def evolve_list(ctx: click.Context) -> None:
+    """List all evolution proposals."""
+    from missy.agent.code_evolution import CodeEvolutionManager
+    _load_subsystems(ctx.obj["config_path"])
+    mgr = CodeEvolutionManager()
+    proposals = mgr.list_all()
+    if not proposals:
+        console.print("[dim]No evolution proposals.[/]")
+        return
+    table = Table(title="Code Evolution Proposals", show_lines=True)
+    table.add_column("ID", style="bold")
+    table.add_column("Status")
+    table.add_column("Trigger")
+    table.add_column("Confidence", justify="right")
+    table.add_column("Title")
+    table.add_column("Created")
+    for p in proposals:
+        status_style = {
+            "proposed": "yellow",
+            "approved": "cyan",
+            "applied": "green",
+            "rejected": "red",
+            "rolled_back": "magenta",
+            "failed": "red bold",
+        }.get(p.status.value, "")
+        table.add_row(
+            p.id,
+            Text(p.status.value, style=status_style),
+            p.trigger.value,
+            f"{p.confidence:.0%}",
+            p.title[:50],
+            p.created_at[:10] if p.created_at else "—",
+        )
+    console.print(table)
+
+
+@evolve.command("show")
+@click.argument("proposal_id")
+@click.pass_context
+def evolve_show(ctx: click.Context, proposal_id: str) -> None:
+    """Show full details of an evolution proposal."""
+    from missy.agent.code_evolution import CodeEvolutionManager
+    _load_subsystems(ctx.obj["config_path"])
+    mgr = CodeEvolutionManager()
+    prop = mgr.get(proposal_id)
+    if not prop:
+        _print_error(f"Proposal {proposal_id!r} not found.")
+        return
+    lines = [
+        f"[bold]ID:[/] {prop.id}",
+        f"[bold]Title:[/] {prop.title}",
+        f"[bold]Status:[/] {prop.status.value}",
+        f"[bold]Trigger:[/] {prop.trigger.value}",
+        f"[bold]Confidence:[/] {prop.confidence:.0%}",
+        f"[bold]Created:[/] {prop.created_at}",
+        f"[bold]Resolved:[/] {prop.resolved_at or '—'}",
+        f"[bold]Commit:[/] {prop.git_commit_sha or '—'}",
+        f"\n[bold]Description:[/]\n{prop.description}",
+    ]
+    if prop.diffs:
+        lines.append(f"\n[bold]Diffs ({len(prop.diffs)}):[/]")
+        for i, d in enumerate(prop.diffs, 1):
+            lines.append(f"\n[cyan]--- Diff {i}: {d.file_path} ---[/]")
+            if d.description:
+                lines.append(f"  Why: {d.description}")
+            lines.append(f"  [red]- {d.original_code[:200]}[/]")
+            lines.append(f"  [green]+ {d.proposed_code[:200]}[/]")
+    if prop.error_pattern:
+        lines.append(f"\n[bold]Error pattern:[/] {prop.error_pattern}")
+    if prop.test_output:
+        lines.append(f"\n[bold]Test output (last 500 chars):[/]\n{prop.test_output[-500:]}")
+    console.print(Panel("\n".join(lines), title="Evolution Proposal", border_style="blue"))
+
+
+@evolve.command("approve")
+@click.argument("proposal_id")
+@click.pass_context
+def evolve_approve(ctx: click.Context, proposal_id: str) -> None:
+    """Approve an evolution proposal for application."""
+    from missy.agent.code_evolution import CodeEvolutionManager
+    _load_subsystems(ctx.obj["config_path"])
+    mgr = CodeEvolutionManager()
+    if mgr.approve(proposal_id):
+        _print_success(f"Proposal [bold]{proposal_id}[/] approved. Use `missy evolve apply {proposal_id}` to apply.")
+    else:
+        _print_error(f"Proposal {proposal_id!r} not found or not in proposed status.")
+
+
+@evolve.command("reject")
+@click.argument("proposal_id")
+@click.pass_context
+def evolve_reject(ctx: click.Context, proposal_id: str) -> None:
+    """Reject an evolution proposal."""
+    from missy.agent.code_evolution import CodeEvolutionManager
+    _load_subsystems(ctx.obj["config_path"])
+    mgr = CodeEvolutionManager()
+    if mgr.reject(proposal_id):
+        _print_success(f"Proposal [bold]{proposal_id}[/] rejected.")
+    else:
+        _print_error(f"Proposal {proposal_id!r} not found or not in a rejectable status.")
+
+
+@evolve.command("apply")
+@click.argument("proposal_id")
+@click.pass_context
+def evolve_apply(ctx: click.Context, proposal_id: str) -> None:
+    """Apply an approved evolution (runs tests, commits on success)."""
+    from missy.agent.code_evolution import CodeEvolutionManager
+    _load_subsystems(ctx.obj["config_path"])
+    mgr = CodeEvolutionManager()
+    prop = mgr.get(proposal_id)
+    if not prop:
+        _print_error(f"Proposal {proposal_id!r} not found.")
+        return
+    if prop.status.value != "approved":
+        _print_error(f"Proposal is '{prop.status.value}', not approved. Approve it first.")
+        return
+    console.print(f"[bold]Applying evolution {proposal_id}...[/] (running tests)")
+    result = mgr.apply(proposal_id)
+    if result["success"]:
+        _print_success(result["message"])
+    else:
+        _print_error(result["message"])
+        if result.get("test_output"):
+            console.print(Panel(result["test_output"][-1000:], title="Test Output", border_style="red"))
+
+
+@evolve.command("rollback")
+@click.argument("proposal_id")
+@click.pass_context
+def evolve_rollback(ctx: click.Context, proposal_id: str) -> None:
+    """Rollback a previously applied evolution via git revert."""
+    from missy.agent.code_evolution import CodeEvolutionManager
+    _load_subsystems(ctx.obj["config_path"])
+    mgr = CodeEvolutionManager()
+    result = mgr.rollback(proposal_id)
+    if result["success"]:
+        _print_success(result["message"])
+    else:
+        _print_error(result["message"])
+
+
+# ---------------------------------------------------------------------------
 # missy patches
 # ---------------------------------------------------------------------------
 
