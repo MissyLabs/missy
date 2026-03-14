@@ -89,12 +89,18 @@ class DiscordVoiceError(RuntimeError):
     """Actionable voice-layer error."""
 
 
+# How often the listening watchdog checks for a dead PacketRouter (seconds).
+_WATCHDOG_INTERVAL_S = 5.0
+
+
 @dataclass
 class _GuildVoiceState:
     voice_client: Any  # discord.VoiceClient or VoiceRecvClient
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     listening: bool = False
     listen_task: Optional[asyncio.Task] = None
+    sink: Any = None  # _SpeechCollectorSink instance
+    watchdog_task: Optional[asyncio.Task] = None
 
 
 class DiscordVoiceManager:
@@ -365,9 +371,18 @@ class DiscordVoiceManager:
             return None
 
         channel_name = None
+        state.listening = False
+
+        # Cancel watchdog.
+        if state.watchdog_task is not None:
+            state.watchdog_task.cancel()
+            try:
+                await state.watchdog_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
         # Stop listening.
         if state.listen_task is not None:
-            state.listening = False
             state.listen_task.cancel()
             try:
                 await state.listen_task
@@ -460,6 +475,18 @@ class DiscordVoiceManager:
             return
 
         state.listening = True
+        self._attach_sink(guild_id, state)
+
+        # Start a watchdog that restarts the sink if the PacketRouter crashes.
+        if state.watchdog_task is not None:
+            state.watchdog_task.cancel()
+        state.watchdog_task = asyncio.ensure_future(
+            self._listen_watchdog(guild_id)
+        )
+        logger.info("Discord voice: now listening in guild %d", guild_id)
+
+    def _attach_sink(self, guild_id: int, state: _GuildVoiceState) -> None:
+        """Create and attach a fresh audio sink to the voice client."""
         SinkClass = _make_sink_class(self._voice_recv)
         sink = SinkClass(
             loop=self._loop,
@@ -469,8 +496,63 @@ class DiscordVoiceManager:
             ),
             bot_user_id=self._client.user.id if self._client.user else 0,
         )
+        state.sink = sink
         state.voice_client.listen(sink)
-        logger.info("Discord voice: now listening in guild %d", guild_id)
+
+    async def _listen_watchdog(self, guild_id: int) -> None:
+        """Periodically check if the PacketRouter is alive; restart if dead.
+
+        The ``discord-ext-voice-recv`` PacketRouter thread can crash on
+        corrupted Opus packets (``OpusError: corrupted stream``).  When
+        this happens the thread dies silently and no more audio is
+        decoded.  This watchdog detects the dead thread and re-attaches
+        a fresh sink so listening resumes automatically.
+        """
+        while True:
+            await asyncio.sleep(_WATCHDOG_INTERVAL_S)
+
+            state = self._guild_states.get(guild_id)
+            if state is None or not state.listening:
+                return
+
+            vc = state.voice_client
+            if not getattr(vc, "is_connected", lambda: False)():
+                return
+
+            # Check if the PacketRouter thread is still alive.
+            router_alive = True
+            try:
+                # voice_recv stores the router on the voice client.
+                router = getattr(vc, "_packet_router", None)
+                if router is None:
+                    router = getattr(vc, "packet_router", None)
+                if router is not None and hasattr(router, "is_alive"):
+                    router_alive = router.is_alive()
+            except Exception:
+                pass
+
+            if not router_alive:
+                logger.warning(
+                    "Discord voice: PacketRouter thread died in guild %d — "
+                    "restarting listener",
+                    guild_id,
+                )
+                try:
+                    # Stop the dead listener first.
+                    if hasattr(vc, "stop_listening"):
+                        vc.stop_listening()
+
+                    self._attach_sink(guild_id, state)
+                    logger.info(
+                        "Discord voice: listener restarted in guild %d",
+                        guild_id,
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "Discord voice: failed to restart listener in guild %d: %s",
+                        guild_id,
+                        exc,
+                    )
 
     async def _handle_speech(
         self,

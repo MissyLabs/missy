@@ -607,3 +607,110 @@ class TestCleanForSpeech:
         assert "the docs" in result
         assert "https://" not in result
         assert "[" not in result
+
+
+# ---------------------------------------------------------------------------
+# Listen watchdog
+# ---------------------------------------------------------------------------
+
+
+class TestListenWatchdog:
+    def test_watchdog_restarts_dead_router(self):
+        """Watchdog detects dead PacketRouter thread and re-attaches sink."""
+        from missy.channels.discord.voice import (
+            DiscordVoiceManager,
+            _GuildVoiceState,
+            _WATCHDOG_INTERVAL_S,
+        )
+
+        mgr = DiscordVoiceManager.__new__(DiscordVoiceManager)
+        mgr._loop = asyncio.new_event_loop()
+        mgr._client = MagicMock()
+        mgr._client.user = MagicMock(id=999)
+        mgr._stt_engine = MagicMock()
+        mgr._tts_engine = MagicMock()
+        mgr._agent_callback = None
+
+        # Build a mock voice_recv module.
+        mock_voice_recv = MagicMock()
+        mock_voice_recv.AudioSink = type("AudioSink", (), {
+            "__init__": lambda self: None,
+        })
+        mgr._voice_recv = mock_voice_recv
+
+        # Mock voice client with dead router thread.
+        vc = MagicMock()
+        vc.is_connected.return_value = True
+        dead_router = MagicMock()
+        dead_router.is_alive.return_value = False
+        vc._packet_router = dead_router
+
+        state = _GuildVoiceState(voice_client=vc)
+        state.listening = True
+        mgr._guild_states = {1: state}
+
+        # Run the watchdog for one tick.
+        async def _run_one_tick():
+            import missy.channels.discord.voice as vmod
+            original = vmod._WATCHDOG_INTERVAL_S
+            vmod._WATCHDOG_INTERVAL_S = 0.01
+            task = asyncio.ensure_future(mgr._listen_watchdog(1))
+            await asyncio.sleep(0.05)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            vmod._WATCHDOG_INTERVAL_S = original
+
+        mgr._loop.run_until_complete(_run_one_tick())
+
+        # The watchdog should have called stop_listening then listen(new_sink).
+        vc.stop_listening.assert_called()
+        vc.listen.assert_called()
+        mgr._loop.close()
+
+    def test_watchdog_ignores_alive_router(self):
+        """Watchdog does nothing when the PacketRouter is alive."""
+        from missy.channels.discord.voice import (
+            DiscordVoiceManager,
+            _GuildVoiceState,
+        )
+
+        mgr = DiscordVoiceManager.__new__(DiscordVoiceManager)
+        mgr._loop = asyncio.new_event_loop()
+        mgr._client = MagicMock()
+        mgr._client.user = MagicMock(id=999)
+        mgr._stt_engine = MagicMock()
+        mgr._tts_engine = MagicMock()
+        mgr._agent_callback = None
+        mgr._voice_recv = MagicMock()
+
+        vc = MagicMock()
+        vc.is_connected.return_value = True
+        alive_router = MagicMock()
+        alive_router.is_alive.return_value = True
+        vc._packet_router = alive_router
+
+        state = _GuildVoiceState(voice_client=vc)
+        state.listening = True
+        mgr._guild_states = {1: state}
+
+        async def _run_one_tick():
+            import missy.channels.discord.voice as vmod
+            original = vmod._WATCHDOG_INTERVAL_S
+            vmod._WATCHDOG_INTERVAL_S = 0.01
+            task = asyncio.ensure_future(mgr._listen_watchdog(1))
+            await asyncio.sleep(0.05)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            vmod._WATCHDOG_INTERVAL_S = original
+
+        mgr._loop.run_until_complete(_run_one_tick())
+
+        # Should NOT have restarted.
+        vc.stop_listening.assert_not_called()
+        mgr._loop.close()
