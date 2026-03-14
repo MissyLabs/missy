@@ -1,32 +1,47 @@
-"""Discord voice manager using discord.py.
+"""Discord voice manager — full conversational voice via discord.py.
 
 Runs a lightweight discord.py Client dedicated to voice connections.
 The text gateway remains Missy's own raw WebSocket implementation; this
-module only handles voice join/leave/say.
+module handles voice join/leave/say and continuous listen→STT→agent→TTS.
 
-API:
-- start(bot_token)       — connect the voice-only client
-- stop()                 — disconnect and shut down
-- join(guild_id)         — join a voice channel (by user location, name, or ID)
-- leave(guild_id)        — leave the current voice channel
-- say(guild_id, text)    — speak text via TTS in the connected channel
-- get_user_voice_channel — look up which voice channel a user is in
+Requires: pip install -e ".[discord_voice,voice]"
 
-Requires: pip install -e ".[discord_voice]"   (discord.py[voice] + ffmpeg)
+Dependencies:
+- discord.py[voice]       — voice connection and audio playback
+- discord-ext-voice-recv  — audio receiving (discord.py 2.x lacks it)
+- faster-whisper           — speech-to-text
+- piper (binary)           — text-to-speech
+- ffmpeg (binary)          — audio codec support
 """
 
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import os
+import struct
 import tempfile
+import threading
+import time
+from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Coroutine, Dict, Optional
 
 from missy.channels.discord.ffmpeg import ensure_ffmpeg_available
 
 logger = logging.getLogger(__name__)
+
+# Silence threshold: if no audio packets arrive for this many seconds,
+# consider the user done speaking and trigger transcription.
+_SILENCE_TIMEOUT_S = 1.5
+
+# Minimum speech duration in seconds to bother transcribing.
+_MIN_SPEECH_S = 0.3
+
+# Discord sends audio at 48kHz stereo; Whisper expects 16kHz mono.
+_DISCORD_SAMPLE_RATE = 48000
+_WHISPER_SAMPLE_RATE = 16000
 
 
 class DiscordVoiceError(RuntimeError):
@@ -35,54 +50,101 @@ class DiscordVoiceError(RuntimeError):
 
 @dataclass
 class _GuildVoiceState:
-    voice_client: Any  # discord.VoiceClient
+    voice_client: Any  # discord.VoiceClient or VoiceRecvClient
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    listening: bool = False
+    listen_task: Optional[asyncio.Task] = None
 
 
 class DiscordVoiceManager:
     """Manages Discord voice connections per guild using discord.py.
 
-    Runs its own discord.py Client for voice transport while the rest of
-    Missy continues to use the custom raw WebSocket gateway for text.
-
-    Args:
-        tts_render: Callable that renders text to a WAV file.
-            Signature: (text: str, out_path: str) -> None
+    Supports full conversational voice: the bot listens to users speaking,
+    transcribes with STT, runs the agent, synthesises a response with TTS,
+    and plays it back in the voice channel.
     """
 
     def __init__(
         self,
         *,
-        tts_render: Optional[Callable[[str, str], None]] = None,
+        agent_callback: Optional[Callable[..., Coroutine]] = None,
+        text_channel_callback: Optional[Callable[[str, str], Coroutine]] = None,
     ) -> None:
-        self._tts_render = tts_render
+        """
+        Args:
+            agent_callback: async (prompt, session_id) -> response_text
+            text_channel_callback: async (channel_id, message) -> None
+                Sends a text message to a Discord text channel (for transcripts).
+        """
+        self._agent_callback = agent_callback
+        self._text_channel_callback = text_channel_callback
         self._guild_states: Dict[int, _GuildVoiceState] = {}
-        self._client: Any = None  # discord.Client
-        self._discord: Any = None  # discord module
+        self._client: Any = None
+        self._discord: Any = None
+        self._voice_recv: Any = None
+        self._stt_engine: Any = None
+        self._tts_engine: Any = None
         self._ready = asyncio.Event()
         self._client_task: Optional[asyncio.Task] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
 
         try:
             ensure_ffmpeg_available()
         except Exception as e:
             raise DiscordVoiceError(str(e)) from e
 
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
     async def start(self, bot_token: str) -> None:
-        """Start the discord.py voice client in the background."""
+        """Start the discord.py voice client and load STT/TTS engines."""
         try:
-            import discord  # type: ignore[import-untyped]
+            import discord
         except ImportError as e:
             raise DiscordVoiceError(
                 "discord.py[voice] is not installed. "
                 "Install with: pip install -e '.[discord_voice]'"
             ) from e
 
-        self._discord = discord
+        try:
+            from discord.ext import voice_recv  # type: ignore[import-untyped]
+            self._voice_recv = voice_recv
+        except ImportError as e:
+            raise DiscordVoiceError(
+                "discord-ext-voice-recv is not installed. "
+                "Install with: pip install discord-ext-voice-recv"
+            ) from e
 
+        self._discord = discord
+        self._loop = asyncio.get_event_loop()
+
+        # Load STT engine.
+        try:
+            from missy.channels.voice.stt.whisper import FasterWhisperSTT
+            self._stt_engine = FasterWhisperSTT(model_size="base.en")
+            self._stt_engine.load()
+            logger.info("Discord voice: STT engine loaded (faster-whisper base.en)")
+        except Exception as exc:
+            logger.warning("Discord voice: STT unavailable: %s", exc)
+            self._stt_engine = None
+
+        # Load TTS engine.
+        try:
+            from missy.channels.voice.tts.piper import PiperTTS
+            self._tts_engine = PiperTTS()
+            self._tts_engine.load()
+            logger.info("Discord voice: TTS engine loaded (piper)")
+        except Exception as exc:
+            logger.warning("Discord voice: TTS unavailable: %s", exc)
+            self._tts_engine = None
+
+        # Start discord.py client.
         intents = discord.Intents.default()
         intents.voice_states = True
         intents.guilds = True
-        intents.message_content = False  # not needed for voice-only
+        intents.members = True
+        intents.message_content = False
 
         self._client = discord.Client(intents=intents)
 
@@ -94,15 +156,11 @@ class DiscordVoiceManager:
             )
             self._ready.set()
 
-        # Strip "Bot " prefix if present — discord.py adds it automatically.
         raw_token = bot_token
         if raw_token.startswith("Bot "):
             raw_token = raw_token[4:]
 
-        self._client_task = asyncio.create_task(
-            self._client.start(raw_token),
-        )
-        # Wait for the client to be ready (with timeout).
+        self._client_task = asyncio.create_task(self._client.start(raw_token))
         try:
             await asyncio.wait_for(self._ready.wait(), timeout=30.0)
         except asyncio.TimeoutError:
@@ -111,10 +169,20 @@ class DiscordVoiceManager:
             )
 
     async def stop(self) -> None:
-        """Disconnect all voice connections and shut down the client."""
+        """Disconnect all voice connections, unload engines, shut down."""
         for guild_id in list(self._guild_states):
             try:
                 await self.leave(guild_id)
+            except Exception:
+                pass
+        if self._stt_engine is not None:
+            try:
+                self._stt_engine.unload()
+            except Exception:
+                pass
+        if self._tts_engine is not None:
+            try:
+                self._tts_engine.unload()
             except Exception:
                 pass
         if self._client is not None:
@@ -133,12 +201,19 @@ class DiscordVoiceManager:
     def is_ready(self) -> bool:
         return self._ready.is_set()
 
+    @property
+    def can_listen(self) -> bool:
+        return self._stt_engine is not None and self._voice_recv is not None
+
+    @property
+    def can_speak(self) -> bool:
+        return self._tts_engine is not None
+
     # ------------------------------------------------------------------
     # Guild / channel lookup helpers
     # ------------------------------------------------------------------
 
     def _get_guild(self, guild_id: int) -> Any:
-        """Get a guild from the discord.py client cache."""
         if self._client is None:
             raise DiscordVoiceError("Voice client is not started.")
         guild = self._client.get_guild(guild_id)
@@ -148,10 +223,7 @@ class DiscordVoiceManager:
             )
         return guild
 
-    def get_user_voice_channel(
-        self, guild_id: int, user_id: int
-    ) -> Optional[Any]:
-        """Return the voice channel a user is currently in, or None."""
+    def get_user_voice_channel(self, guild_id: int, user_id: int) -> Optional[Any]:
         guild = self._get_guild(guild_id)
         member = guild.get_member(user_id)
         if member is None:
@@ -161,39 +233,29 @@ class DiscordVoiceManager:
             return None
         return voice_state.channel
 
-    def find_voice_channel(
-        self, guild_id: int, query: str
-    ) -> Optional[Any]:
-        """Find a voice channel by name (case-insensitive) or ID."""
+    def find_voice_channel(self, guild_id: int, query: str) -> Optional[Any]:
         guild = self._get_guild(guild_id)
-        discord = self._discord
 
-        # Try as numeric ID first.
         if query.isdigit():
             ch = guild.get_channel(int(query))
-            if ch is not None and isinstance(ch, discord.VoiceChannel):
+            if ch is not None and isinstance(ch, self._discord.VoiceChannel):
                 return ch
 
-        # Case-insensitive name match.
         query_lower = query.lower()
         for ch in guild.voice_channels:
             if ch.name.lower() == query_lower:
                 return ch
-
-        # Partial match as fallback.
         for ch in guild.voice_channels:
             if query_lower in ch.name.lower():
                 return ch
-
         return None
 
     def list_voice_channels(self, guild_id: int) -> list[str]:
-        """Return names of all voice channels in the guild."""
         guild = self._get_guild(guild_id)
         return [ch.name for ch in guild.voice_channels]
 
     # ------------------------------------------------------------------
-    # Core operations
+    # Join / Leave
     # ------------------------------------------------------------------
 
     async def join(
@@ -204,22 +266,10 @@ class DiscordVoiceManager:
         channel_name: Optional[str] = None,
         user_id: Optional[int] = None,
     ) -> str:
-        """Join a voice channel. Returns the channel name joined.
-
-        Resolution order:
-        1. If *user_id* is given and no channel specified, join the user's
-           current voice channel.
-        2. If *channel_name* is given, find the channel by name.
-        3. If *channel_id* is given, join by ID.
-        4. If nothing is given but *user_id* is set, follow the user.
-
-        Raises:
-            DiscordVoiceError: If the channel cannot be resolved or joined.
-        """
+        """Join a voice channel and start listening. Returns channel name."""
         guild = self._get_guild(guild_id)
         target: Any = None
 
-        # Resolve target channel.
         if channel_id is not None:
             target = guild.get_channel(channel_id)
             if target is None:
@@ -231,7 +281,7 @@ class DiscordVoiceManager:
             if target is None:
                 names = ", ".join(self.list_voice_channels(guild_id)) or "(none)"
                 raise DiscordVoiceError(
-                    f"No voice channel matching \"{channel_name}\". "
+                    f'No voice channel matching "{channel_name}". '
                     f"Available: {names}"
                 )
         elif user_id is not None:
@@ -247,31 +297,42 @@ class DiscordVoiceManager:
                 "Usage: `!join` or `!join <channel name>`"
             )
 
-        # Check if already connected to this channel.
+        # Already connected to this channel?
         state = self._guild_states.get(guild_id)
         if state and getattr(state.voice_client, "is_connected", lambda: False)():
             current = getattr(state.voice_client, "channel", None)
             if current and current.id == target.id:
+                if not state.listening:
+                    self._start_listening(guild_id, state)
                 return target.name
-            # Move to the new channel.
             await state.voice_client.move_to(target)
             return target.name
 
-        # Connect.
-        voice_client = await target.connect()
-        self._guild_states[guild_id] = _GuildVoiceState(voice_client=voice_client)
+        # Connect using VoiceRecvClient for audio receive support.
+        voice_client = await target.connect(cls=self._voice_recv.VoiceRecvClient)
+        state = _GuildVoiceState(voice_client=voice_client)
+        self._guild_states[guild_id] = state
+
+        # Start listening automatically.
+        self._start_listening(guild_id, state)
         return target.name
 
     async def leave(self, guild_id: int) -> Optional[str]:
-        """Leave the voice channel in the given guild.
-
-        Returns the channel name that was left, or None if not connected.
-        """
+        """Leave voice and stop listening. Returns channel name left."""
         state = self._guild_states.pop(guild_id, None)
         if state is None:
             return None
 
         channel_name = None
+        # Stop listening.
+        if state.listen_task is not None:
+            state.listening = False
+            state.listen_task.cancel()
+            try:
+                await state.listen_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
         async with state.lock:
             try:
                 ch = getattr(state.voice_client, "channel", None)
@@ -282,17 +343,17 @@ class DiscordVoiceManager:
                 logger.warning("Voice disconnect error: %s", exc)
         return channel_name
 
-    async def say(self, guild_id: int, text: str) -> None:
-        """Speak text via TTS in the connected voice channel.
+    # ------------------------------------------------------------------
+    # TTS playback
+    # ------------------------------------------------------------------
 
-        Raises:
-            DiscordVoiceError: If not connected or TTS is unavailable.
-        """
+    async def say(self, guild_id: int, text: str) -> None:
+        """Speak text via TTS in the connected voice channel."""
         text = (text or "").strip()
         if not text:
             raise DiscordVoiceError("No text provided.")
 
-        if self._tts_render is None:
+        if self._tts_engine is None:
             raise DiscordVoiceError("TTS is not configured.")
 
         state = self._guild_states.get(guild_id)
@@ -301,20 +362,28 @@ class DiscordVoiceManager:
                 "I'm not in a voice channel. Use `!join` to bring me in first."
             )
 
+        await self._play_tts(state, text)
+
+    async def _play_tts(self, state: _GuildVoiceState, text: str) -> None:
+        """Synthesize text and play it through the voice connection."""
         async with state.lock:
             # Stop any currently playing audio.
-            if hasattr(state.voice_client, "is_playing") and state.voice_client.is_playing():
-                if hasattr(state.voice_client, "stop"):
-                    state.voice_client.stop()
+            vc = state.voice_client
+            if hasattr(vc, "is_playing") and vc.is_playing():
+                if hasattr(vc, "stop"):
+                    vc.stop()
 
+            # Synthesize to WAV via piper.
+            audio_buf = await self._tts_engine.synthesize(text)
+
+            # Write to temp file for FFmpegPCMAudio.
             path: Optional[str] = None
             try:
                 with tempfile.NamedTemporaryFile(
                     prefix="missy-tts-", suffix=".wav", delete=False
                 ) as f:
+                    f.write(audio_buf.data)
                     path = f.name
-
-                await asyncio.to_thread(self._tts_render, text, path)
 
                 source = self._discord.FFmpegPCMAudio(path)
                 done = asyncio.Event()
@@ -324,14 +393,14 @@ class DiscordVoiceManager:
                         logger.exception("Voice playback error", exc_info=err)
                     done.set()
 
-                state.voice_client.play(source, after=_after)
+                vc.play(source, after=_after)
 
                 try:
-                    await asyncio.wait_for(done.wait(), timeout=60)
+                    await asyncio.wait_for(done.wait(), timeout=120)
                 except asyncio.TimeoutError:
-                    if hasattr(state.voice_client, "stop"):
-                        state.voice_client.stop()
-                    raise DiscordVoiceError("TTS playback timed out.")
+                    if hasattr(vc, "stop"):
+                        vc.stop()
+                    logger.warning("TTS playback timed out")
             finally:
                 if path:
                     try:
@@ -339,19 +408,265 @@ class DiscordVoiceManager:
                     except FileNotFoundError:
                         pass
 
+    # ------------------------------------------------------------------
+    # Listening / STT / conversation loop
+    # ------------------------------------------------------------------
+
+    def _start_listening(self, guild_id: int, state: _GuildVoiceState) -> None:
+        """Begin listening for user speech in the voice channel."""
+        if not self.can_listen:
+            logger.info("Discord voice: listening disabled (STT or voice_recv unavailable)")
+            return
+
+        state.listening = True
+        sink = _SpeechCollectorSink(
+            loop=self._loop,
+            on_speech_done=lambda user_id, pcm, sr: asyncio.run_coroutine_threadsafe(
+                self._handle_speech(guild_id, user_id, pcm, sr),
+                self._loop,
+            ),
+            bot_user_id=self._client.user.id if self._client.user else 0,
+        )
+        state.voice_client.listen(sink)
+        logger.info("Discord voice: now listening in guild %d", guild_id)
+
+    async def _handle_speech(
+        self,
+        guild_id: int,
+        user_id: int,
+        pcm_48k: bytes,
+        sample_rate: int,
+    ) -> None:
+        """Process captured speech: resample → STT → agent → TTS → playback."""
+        state = self._guild_states.get(guild_id)
+        if state is None or not state.listening:
+            return
+
+        # Don't process while bot is speaking.
+        vc = state.voice_client
+        if hasattr(vc, "is_playing") and vc.is_playing():
+            return
+
+        try:
+            # Resample 48kHz → 16kHz mono PCM for Whisper.
+            pcm_16k = _resample_pcm(pcm_48k, sample_rate, _WHISPER_SAMPLE_RATE)
+
+            # Minimum speech check.
+            duration_s = len(pcm_16k) / (2 * _WHISPER_SAMPLE_RATE)
+            if duration_s < _MIN_SPEECH_S:
+                return
+
+            # Transcribe.
+            result = await self._stt_engine.transcribe(
+                pcm_16k, sample_rate=_WHISPER_SAMPLE_RATE, channels=1,
+            )
+            transcript = result.text.strip()
+            if not transcript:
+                return
+
+            # Look up user name for logging.
+            guild = self._get_guild(guild_id)
+            member = guild.get_member(user_id)
+            user_name = member.display_name if member else str(user_id)
+            logger.info(
+                "Discord voice STT [%s]: %r (confidence=%.2f, %dms)",
+                user_name, transcript, result.confidence, result.processing_ms,
+            )
+
+            # Run agent.
+            if self._agent_callback is None:
+                logger.warning("Discord voice: no agent callback configured")
+                return
+
+            session_id = f"voice-{user_id}"
+            response = await self._agent_callback(
+                f"[Voice from {user_name}]: {transcript}",
+                session_id,
+            )
+
+            if not response or not response.strip():
+                return
+
+            logger.info(
+                "Discord voice response to %s: %r",
+                user_name, response[:100],
+            )
+
+            # Speak response via TTS.
+            if self.can_speak:
+                try:
+                    await self._play_tts(state, response)
+                except Exception as exc:
+                    logger.error("Discord voice TTS playback failed: %s", exc)
+
+        except Exception as exc:
+            logger.exception("Discord voice _handle_speech error: %s", exc)
+
+    # ------------------------------------------------------------------
+    # Status helpers
+    # ------------------------------------------------------------------
+
     def is_connected(self, guild_id: int) -> bool:
-        """Return True if the bot is in a voice channel in this guild."""
         state = self._guild_states.get(guild_id)
         if state is None:
             return False
-        return bool(
-            getattr(state.voice_client, "is_connected", lambda: False)()
-        )
+        return bool(getattr(state.voice_client, "is_connected", lambda: False)())
+
+    def is_listening(self, guild_id: int) -> bool:
+        state = self._guild_states.get(guild_id)
+        if state is None:
+            return False
+        return state.listening
 
     def current_channel_name(self, guild_id: int) -> Optional[str]:
-        """Return the name of the voice channel the bot is in, or None."""
         state = self._guild_states.get(guild_id)
         if state is None:
             return None
         ch = getattr(state.voice_client, "channel", None)
         return getattr(ch, "name", None) if ch else None
+
+
+# ======================================================================
+# Audio sink — collects per-user speech with silence detection
+# ======================================================================
+
+
+class _SpeechCollectorSink:
+    """AudioSink that buffers PCM per user and fires a callback on silence.
+
+    This runs on discord.py's voice receive thread. The callback is
+    dispatched to the asyncio event loop via run_coroutine_threadsafe.
+    """
+
+    def __init__(
+        self,
+        *,
+        loop: asyncio.AbstractEventLoop,
+        on_speech_done: Callable[[int, bytes, int], Any],
+        bot_user_id: int = 0,
+    ) -> None:
+        self._loop = loop
+        self._on_speech_done = on_speech_done
+        self._bot_user_id = bot_user_id
+
+        # Per-user audio buffers: user_id -> list of PCM chunks.
+        self._buffers: Dict[int, list[bytes]] = defaultdict(list)
+        # Per-user last-packet timestamp.
+        self._last_packet_time: Dict[int, float] = {}
+        # Per-user silence timer handles.
+        self._timers: Dict[int, asyncio.TimerHandle] = {}
+        self._lock = threading.Lock()
+
+    def wants_opus(self) -> bool:
+        """We want decoded PCM, not raw Opus."""
+        return False
+
+    def write(self, user: Any, data: Any) -> None:
+        """Called by discord-ext-voice-recv for each audio packet."""
+        if user is None:
+            return
+        user_id = user.id if hasattr(user, "id") else int(user)
+
+        # Ignore our own audio (echo prevention).
+        if user_id == self._bot_user_id:
+            return
+
+        pcm = data.pcm if hasattr(data, "pcm") else data
+        if not pcm:
+            return
+
+        now = time.monotonic()
+        with self._lock:
+            self._buffers[user_id].append(pcm)
+            self._last_packet_time[user_id] = now
+
+            # Reset the silence timer for this user.
+            old_timer = self._timers.pop(user_id, None)
+            if old_timer is not None:
+                old_timer.cancel()
+
+            self._timers[user_id] = self._loop.call_later(
+                _SILENCE_TIMEOUT_S,
+                self._on_silence,
+                user_id,
+            )
+
+    def _on_silence(self, user_id: int) -> None:
+        """Called when a user has been silent for _SILENCE_TIMEOUT_S."""
+        with self._lock:
+            chunks = self._buffers.pop(user_id, [])
+            self._last_packet_time.pop(user_id, None)
+            self._timers.pop(user_id, None)
+
+        if not chunks:
+            return
+
+        pcm = b"".join(chunks)
+        # Fire the callback (which schedules an async coroutine).
+        try:
+            self._on_speech_done(user_id, pcm, _DISCORD_SAMPLE_RATE)
+        except Exception as exc:
+            logger.error("_SpeechCollectorSink callback error: %s", exc)
+
+    def cleanup(self) -> None:
+        """Called when the sink is removed."""
+        with self._lock:
+            for timer in self._timers.values():
+                timer.cancel()
+            self._timers.clear()
+            self._buffers.clear()
+            self._last_packet_time.clear()
+
+
+# ======================================================================
+# Audio resampling helper
+# ======================================================================
+
+
+def _resample_pcm(
+    pcm: bytes,
+    from_rate: int,
+    to_rate: int,
+) -> bytes:
+    """Resample 16-bit signed LE PCM from one sample rate to another.
+
+    Uses linear interpolation. Converts stereo to mono if the data
+    appears to be stereo (Discord sends stereo 48kHz).
+    """
+    if from_rate == to_rate:
+        return pcm
+
+    # Parse 16-bit samples.
+    sample_count = len(pcm) // 2
+    samples = struct.unpack(f"<{sample_count}h", pcm[:sample_count * 2])
+
+    # Convert stereo to mono (Discord sends 2-channel audio).
+    # Heuristic: if sample count is even and sounds like stereo, mix down.
+    if sample_count >= 2:
+        mono = []
+        for i in range(0, len(samples) - 1, 2):
+            mono.append((samples[i] + samples[i + 1]) // 2)
+        samples = mono
+
+    # Linear interpolation resample.
+    ratio = from_rate / to_rate / 2  # /2 because we already halved via stereo→mono
+    out_count = int(len(samples) / ratio)
+    if out_count == 0:
+        return b""
+
+    resampled = []
+    for i in range(out_count):
+        src_idx = i * ratio
+        idx = int(src_idx)
+        frac = src_idx - idx
+        if idx + 1 < len(samples):
+            val = samples[idx] * (1.0 - frac) + samples[idx + 1] * frac
+        elif idx < len(samples):
+            val = float(samples[idx])
+        else:
+            break
+        # Clamp to int16 range.
+        val = max(-32768, min(32767, int(val)))
+        resampled.append(val)
+
+    return struct.pack(f"<{len(resampled)}h", *resampled)

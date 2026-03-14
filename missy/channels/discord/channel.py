@@ -110,6 +110,10 @@ class DiscordChannel(BaseChannel):
         # Optional voice manager (lazy import so text-only deployments don't need voice deps)
         self._voice = None
 
+        # Agent runtime reference — set via set_agent_runtime() from main.py
+        # so voice can call the agent for conversational responses.
+        self._agent_runtime: Any = None
+
         token = account_config.resolve_token() or ""
         if not token:
             logger.error(
@@ -140,6 +144,10 @@ class DiscordChannel(BaseChannel):
     def bot_user_id(self) -> Optional[str]:
         """The Discord user ID of the connected bot, available after READY."""
         return self._bot_user_id or self._gateway.bot_user_id
+
+    def set_agent_runtime(self, agent_runtime: Any) -> None:
+        """Provide the agent runtime for voice conversation support."""
+        self._agent_runtime = agent_runtime
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -616,7 +624,20 @@ class DiscordChannel(BaseChannel):
             try:
                 from missy.channels.discord.voice import DiscordVoiceManager
 
-                self._voice = DiscordVoiceManager()
+                # Build async agent callback for voice conversations.
+                agent_cb = None
+                if self._agent_runtime is not None:
+                    _rt = self._agent_runtime
+
+                    async def _voice_agent_cb(prompt: str, session_id: str) -> str:
+                        loop = asyncio.get_event_loop()
+                        return await loop.run_in_executor(
+                            None, _rt.run, prompt, session_id,
+                        )
+
+                    agent_cb = _voice_agent_cb
+
+                self._voice = DiscordVoiceManager(agent_callback=agent_cb)
                 token = self.account_config.resolve_token() or ""
                 await self._voice.start(token)
             except Exception as exc:

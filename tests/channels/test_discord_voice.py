@@ -10,6 +10,7 @@ Covers:
 from __future__ import annotations
 
 import asyncio
+import struct
 from dataclasses import dataclass
 from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -88,6 +89,10 @@ def manager():
     mock_discord.VoiceChannel = MagicMock
     mgr._discord = mock_discord
 
+    # Mock voice_recv module so join() can use VoiceRecvClient.
+    mock_voice_recv = MagicMock()
+    mgr._voice_recv = mock_voice_recv
+
     return mgr
 
 
@@ -95,6 +100,7 @@ def _setup_client(mgr, guild):
     """Wire a mock client with the given guild."""
     client = MagicMock()
     client.get_guild = MagicMock(return_value=guild)
+    client.user = MagicMock(id=999)
     mgr._client = client
 
 
@@ -274,6 +280,8 @@ class TestVoiceCommands:
     def _make_voice(self) -> MagicMock:
         voice = MagicMock(spec=DiscordVoiceManager)
         voice.is_ready = True
+        voice.can_listen = True
+        voice.can_speak = True
         voice.join = AsyncMock(return_value="General")
         voice.leave = AsyncMock(return_value="General")
         voice.say = AsyncMock()
@@ -407,3 +415,125 @@ class TestVoiceCommands:
             author_id="42", voice=None,
         ))
         assert result.handled is False
+
+    def test_join_shows_capabilities(self):
+        voice = self._make_voice()
+        voice.can_listen = True
+        voice.can_speak = True
+        result = _run(maybe_handle_voice_command(
+            content="!join", channel_id="ch-1", guild_id="999",
+            author_id="42", voice=voice,
+        ))
+        assert "listening" in result.reply.lower()
+        assert "speaking" in result.reply.lower()
+
+    def test_join_no_capabilities(self):
+        voice = self._make_voice()
+        voice.can_listen = False
+        voice.can_speak = False
+        result = _run(maybe_handle_voice_command(
+            content="!join", channel_id="ch-1", guild_id="999",
+            author_id="42", voice=voice,
+        ))
+        assert "listening" not in result.reply.lower()
+        assert "speaking" not in result.reply.lower()
+        assert "General" in result.reply
+
+
+# ---------------------------------------------------------------------------
+# Audio resampling
+# ---------------------------------------------------------------------------
+
+
+class TestResamplePcm:
+    def test_same_rate_passthrough(self):
+        from missy.channels.discord.voice import _resample_pcm
+
+        pcm = struct.pack("<4h", 100, 200, 300, 400)
+        result = _resample_pcm(pcm, 16000, 16000)
+        assert result == pcm
+
+    def test_downsample_produces_fewer_samples(self):
+        from missy.channels.discord.voice import _resample_pcm
+
+        # 960 stereo samples at 48kHz = 20ms of audio.
+        n = 960
+        samples = [1000] * (n * 2)  # stereo
+        pcm = struct.pack(f"<{n * 2}h", *samples)
+        result = _resample_pcm(pcm, 48000, 16000)
+        out_count = len(result) // 2
+        # Should be roughly 960 / (48000/16000) / 2 (stereo→mono) ≈ 160 samples.
+        # But our function does stereo→mono first then resample.
+        assert out_count > 0
+        assert out_count < n
+
+    def test_empty_input(self):
+        from missy.channels.discord.voice import _resample_pcm
+
+        result = _resample_pcm(b"", 48000, 16000)
+        assert result == b""
+
+
+# ---------------------------------------------------------------------------
+# SpeechCollectorSink
+# ---------------------------------------------------------------------------
+
+
+class TestSpeechCollectorSink:
+    def test_buffers_audio_per_user(self):
+        from missy.channels.discord.voice import _SpeechCollectorSink
+
+        collected = []
+        loop = asyncio.new_event_loop()
+
+        sink = _SpeechCollectorSink(
+            loop=loop,
+            on_speech_done=lambda uid, pcm, sr: collected.append((uid, pcm, sr)),
+            bot_user_id=999,
+        )
+
+        user = MagicMock(id=42)
+        data = MagicMock(pcm=b"\x00\x01\x02\x03")
+        sink.write(user, data)
+
+        assert 42 in sink._buffers
+        assert len(sink._buffers[42]) == 1
+        sink.cleanup()
+        loop.close()
+
+    def test_ignores_bot_audio(self):
+        from missy.channels.discord.voice import _SpeechCollectorSink
+
+        loop = asyncio.new_event_loop()
+        sink = _SpeechCollectorSink(
+            loop=loop,
+            on_speech_done=lambda uid, pcm, sr: None,
+            bot_user_id=999,
+        )
+
+        bot_user = MagicMock(id=999)
+        data = MagicMock(pcm=b"\x00\x01")
+        sink.write(bot_user, data)
+
+        assert 999 not in sink._buffers
+        sink.cleanup()
+        loop.close()
+
+    def test_cleanup_clears_state(self):
+        from missy.channels.discord.voice import _SpeechCollectorSink
+
+        loop = asyncio.new_event_loop()
+        sink = _SpeechCollectorSink(
+            loop=loop,
+            on_speech_done=lambda uid, pcm, sr: None,
+            bot_user_id=0,
+        )
+
+        user = MagicMock(id=42)
+        data = MagicMock(pcm=b"\x00\x01")
+        sink.write(user, data)
+        sink.cleanup()
+
+        assert len(sink._buffers) == 0
+        assert len(sink._timers) == 0
+        loop.close()

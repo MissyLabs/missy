@@ -85,8 +85,15 @@ async def maybe_handle_voice_command(
                 "Discord voice: joined %r guild=%s by=%s",
                 channel_name, guild_id, author_id,
             )
+            # Build status message.
+            capabilities = []
+            if voice.can_listen:
+                capabilities.append("listening")
+            if voice.can_speak:
+                capabilities.append("speaking")
+            status = f" ({', '.join(capabilities)})" if capabilities else ""
             return VoiceCommandResult(
-                True, f"Joined **{channel_name}**"
+                True, f"Joined **{channel_name}**{status}"
             )
         except DiscordVoiceError as exc:
             return VoiceCommandResult(True, str(exc))

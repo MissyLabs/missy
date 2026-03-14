@@ -1423,6 +1423,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                 tasks = []
                 for account in cfg.discord.accounts:
                     ch = DiscordChannel(account_config=account)
+                    ch.set_agent_runtime(_agent)
                     await ch.start()
                     channels.append(ch)
                     console.print(f"[green]Discord channel started[/] ({account.token_env_var})")
