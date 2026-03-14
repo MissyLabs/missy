@@ -668,7 +668,6 @@ class TestEmitAuditExceptionSwallowed:
     def test_emit_audit_publishes_to_event_bus(self):
         ch = _make_channel()
 
-        from missy.core.events import event_bus as real_bus
 
         with patch("missy.channels.discord.channel.event_bus") as mock_bus:
             mock_bus.publish = MagicMock()
