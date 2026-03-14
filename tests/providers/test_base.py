@@ -6,7 +6,6 @@ import pytest
 
 from missy.providers.base import BaseProvider, CompletionResponse, Message
 
-
 # ---------------------------------------------------------------------------
 # Concrete stub for abstract base
 # ---------------------------------------------------------------------------

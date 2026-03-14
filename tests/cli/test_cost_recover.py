@@ -1,6 +1,7 @@
 """Tests for missy cost and missy recover CLI commands."""
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
 from click.testing import CliRunner
 
 from missy.cli.main import cli

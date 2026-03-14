@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-import tempfile
 from pathlib import Path
 from typing import Generator
 
@@ -13,7 +11,6 @@ from missy.config.settings import FilesystemPolicy
 from missy.core.events import event_bus
 from missy.core.exceptions import PolicyViolationError
 from missy.policy.filesystem import FilesystemPolicyEngine
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

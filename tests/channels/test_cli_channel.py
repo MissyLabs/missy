@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 from io import StringIO
 from unittest.mock import patch
 
@@ -10,7 +9,6 @@ import pytest
 
 from missy.channels.base import BaseChannel, ChannelMessage
 from missy.channels.cli_channel import CLIChannel
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

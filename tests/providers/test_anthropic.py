@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import sys
-from types import ModuleType
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -12,7 +10,6 @@ from missy.config.settings import ProviderConfig
 from missy.core.events import event_bus
 from missy.core.exceptions import ProviderError
 from missy.providers.base import CompletionResponse, Message
-
 
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
@@ -111,8 +108,8 @@ class TestIsAvailable:
 class TestComplete:
     def _run_complete(self, messages, config=None, **kwargs):
         """Helper that patches the SDK and runs complete()."""
-        from missy.providers.anthropic_provider import AnthropicProvider
         import missy.providers.anthropic_provider as mod
+        from missy.providers.anthropic_provider import AnthropicProvider
 
         sdk_mock = _make_sdk_module()
         sdk_resp = _make_sdk_response()

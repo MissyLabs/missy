@@ -7,9 +7,9 @@ Usage::
     # Blocks until approved or timeout
 """
 from __future__ import annotations
-import threading
-import time
+
 import logging
+import threading
 from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)

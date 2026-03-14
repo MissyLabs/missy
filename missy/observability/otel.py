@@ -1,5 +1,6 @@
 """OpenTelemetry integration for Missy audit events."""
 from __future__ import annotations
+
 import logging
 
 logger = logging.getLogger(__name__)
@@ -28,8 +29,8 @@ class OtelExporter:
     def _setup(self) -> None:
         try:
             from opentelemetry import trace
+            from opentelemetry.sdk.resources import SERVICE_NAME, Resource
             from opentelemetry.sdk.trace import TracerProvider
-            from opentelemetry.sdk.resources import Resource, SERVICE_NAME
 
             resource = Resource.create({SERVICE_NAME: self._service_name})
             provider = TracerProvider(resource=resource)

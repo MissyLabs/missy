@@ -8,7 +8,6 @@ a world-readable kernel file.
 from __future__ import annotations
 
 import datetime
-import time
 from pathlib import Path
 from typing import Any
 

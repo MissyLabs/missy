@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from missy.core.events import AuditEvent, EventBus
-from missy.observability.audit_logger import AuditLogger, init_audit_logger, get_audit_logger
+from missy.observability.audit_logger import AuditLogger, get_audit_logger, init_audit_logger
 
 
 @pytest.fixture

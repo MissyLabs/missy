@@ -164,7 +164,7 @@ def _try_store_in_vault(token: str, vault_dir: str = "~/.missy/secrets") -> Opti
     success, or None if the vault is unavailable.
     """
     try:
-        from missy.security.vault import Vault, VaultError
+        from missy.security.vault import Vault
         v = Vault(vault_dir)
         v.set("anthropic_api_key", token)
         return "vault://anthropic_api_key"

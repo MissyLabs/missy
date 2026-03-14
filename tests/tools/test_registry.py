@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
-from missy.tools.base import BaseTool, ToolPermissions, ToolResult
-from missy.tools import registry as registry_module
-from missy.tools.registry import ToolRegistry, get_tool_registry, init_tool_registry
 from missy.core.events import event_bus
-
+from missy.tools import registry as registry_module
+from missy.tools.base import BaseTool, ToolPermissions, ToolResult
+from missy.tools.registry import ToolRegistry, get_tool_registry, init_tool_registry
 
 # ---------------------------------------------------------------------------
 # Helpers

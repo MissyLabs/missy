@@ -33,7 +33,6 @@ Example::
 from __future__ import annotations
 
 import logging
-import shlex
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path

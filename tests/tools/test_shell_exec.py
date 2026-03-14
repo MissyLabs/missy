@@ -2,13 +2,9 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import MagicMock
 
 from missy.tools.builtin.shell_exec import ShellExecTool
-from missy.tools.base import ToolResult
-
 
 # ---------------------------------------------------------------------------
 # Direct execution (no sandbox)

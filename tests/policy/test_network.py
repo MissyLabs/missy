@@ -4,15 +4,14 @@ from __future__ import annotations
 
 import socket
 from typing import Generator
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from missy.config.settings import NetworkPolicy
-from missy.core.events import AuditEvent, event_bus
+from missy.core.events import event_bus
 from missy.core.exceptions import PolicyViolationError
 from missy.policy.network import NetworkPolicyEngine
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

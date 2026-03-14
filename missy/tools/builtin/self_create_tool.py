@@ -4,10 +4,11 @@ Custom tools are scripts stored in ~/.missy/custom-tools/ and registered
 at startup. The agent can create bash, python, or node scripts as tools.
 """
 from __future__ import annotations
+
 import json
-import os
 import stat
 from pathlib import Path
+
 from missy.tools.base import BaseTool, ToolPermissions, ToolResult
 
 CUSTOM_TOOLS_DIR = Path("~/.missy/custom-tools")

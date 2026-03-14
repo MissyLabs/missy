@@ -3,14 +3,13 @@ recovery scan, max_spend_usd config flow."""
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
+from missy.agent.cost_tracker import BudgetExceededError
 from missy.agent.runtime import AgentConfig, AgentRuntime
-from missy.agent.cost_tracker import BudgetExceededError, CostTracker
 from missy.providers import registry as registry_module
-
 
 # ---------------------------------------------------------------------------
 # Helpers

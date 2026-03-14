@@ -14,14 +14,13 @@ from missy.config.settings import (
     ProviderConfig,
     ShellPolicy,
 )
-from missy.providers.base import BaseProvider, CompletionResponse, Message
 from missy.providers import registry as registry_module
+from missy.providers.base import BaseProvider, CompletionResponse
 from missy.providers.registry import (
     ProviderRegistry,
     get_registry,
     init_registry,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

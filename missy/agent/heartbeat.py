@@ -1,10 +1,11 @@
 """Heartbeat system: periodic agent invocation from HEARTBEAT.md checklist."""
 from __future__ import annotations
+
 import logging
-import threading
 import re
+import threading
 from pathlib import Path
-from typing import Optional, Callable
+from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
 

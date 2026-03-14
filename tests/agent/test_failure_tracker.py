@@ -6,7 +6,6 @@ import pytest
 
 from missy.agent.failure_tracker import FailureTracker
 
-
 # ---------------------------------------------------------------------------
 # Construction / configuration
 # ---------------------------------------------------------------------------

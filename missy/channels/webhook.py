@@ -1,5 +1,6 @@
 """Webhook channel: receive agent tasks via HTTP POST."""
 from __future__ import annotations
+
 import hashlib
 import hmac
 import json

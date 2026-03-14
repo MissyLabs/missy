@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -24,9 +24,8 @@ from missy.channels.discord.config import (
     DiscordDMPolicy,
     DiscordGuildPolicy,
 )
-from missy.channels.discord.rest import DiscordRestClient, BASE
-from missy.core.events import EventBus, AuditEvent
-
+from missy.channels.discord.rest import BASE, DiscordRestClient
+from missy.core.events import AuditEvent, EventBus
 
 # ---------------------------------------------------------------------------
 # Fixtures

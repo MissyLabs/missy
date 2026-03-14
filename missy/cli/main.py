@@ -150,8 +150,8 @@ def _load_subsystems(config_path: str):
 
     # Register built-in tools so the agent can use them.
     try:
-        from missy.tools.registry import init_tool_registry
         from missy.tools.builtin import register_builtin_tools
+        from missy.tools.registry import init_tool_registry
         tool_registry = init_tool_registry()
         register_builtin_tools(tool_registry)
     except Exception:
@@ -1338,8 +1338,8 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
     try:
         if cfg.discord and cfg.discord.enabled and cfg.discord.accounts:
             import asyncio
-            from missy.channels.discord.channel import DiscordChannel
 
+            from missy.channels.discord.channel import DiscordChannel
             from missy.core.exceptions import ProviderError
 
             async def _process_channel(ch: "DiscordChannel") -> None:
@@ -1761,7 +1761,6 @@ def recover(ctx: click.Context, abandon_all: bool) -> None:
     Scans for tasks that were interrupted by crashes or restarts and shows
     recovery options.  Use --abandon-all to clear all stale checkpoints.
     """
-    from datetime import datetime
 
     try:
         from missy.agent.checkpoint import CheckpointManager, scan_for_recovery

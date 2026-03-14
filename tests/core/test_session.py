@@ -10,7 +10,6 @@ import pytest
 
 from missy.core.session import Session, SessionManager
 
-
 # ---------------------------------------------------------------------------
 # Session dataclass
 # ---------------------------------------------------------------------------

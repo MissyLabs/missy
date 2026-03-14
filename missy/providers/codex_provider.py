@@ -37,7 +37,7 @@ import httpx
 from missy.config.settings import ProviderConfig
 from missy.core.exceptions import ProviderError
 
-from .base import BaseProvider, CompletionResponse, Message, ToolCall, ToolResult
+from .base import BaseProvider, CompletionResponse, Message, ToolCall
 
 logger = logging.getLogger(__name__)
 
