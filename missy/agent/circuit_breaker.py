@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import threading
 import time
-from enum import Enum, StrEnum
+from enum import StrEnum
 
 
 class CircuitState(StrEnum):

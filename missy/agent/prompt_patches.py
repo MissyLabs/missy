@@ -21,7 +21,7 @@ import threading
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
-from enum import Enum, StrEnum
+from enum import StrEnum
 from pathlib import Path
 
 
