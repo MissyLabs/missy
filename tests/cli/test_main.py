@@ -102,17 +102,17 @@ class TestInit:
     def test_init_exits_zero(self, runner: CliRunner):
         with runner.isolated_filesystem() as tmpdir:
             fake_home = Path(tmpdir)
-            with patch.dict(os.environ, {"HOME": tmpdir}):
-                # Make Path.home() return our fake directory
-                with patch("pathlib.Path.home", return_value=fake_home):
-                    result = runner.invoke(cli, ["init"])
+            with (
+                patch.dict(os.environ, {"HOME": tmpdir}),
+                patch("pathlib.Path.home", return_value=fake_home),
+            ):
+                result = runner.invoke(cli, ["init"])
         assert result.exit_code == 0
 
     def test_init_creates_missy_directory(self, runner: CliRunner):
         with runner.isolated_filesystem() as tmpdir:
             fake_home = Path(tmpdir)
-            with patch("pathlib.Path.home", return_value=fake_home):
-                with patch("missy.cli.main.Path"):
+            with patch("pathlib.Path.home", return_value=fake_home), patch("missy.cli.main.Path"):
                     # Let the real Path handle everything but control expanduser
                     fake_home / ".missy"
 
@@ -134,19 +134,17 @@ class TestInit:
         assert result.exit_code in (0, 1)
 
     def test_init_success_output_contains_initialised(self, runner: CliRunner):
-        with runner.isolated_filesystem() as tmpdir:
-            with patch.dict(os.environ, {"HOME": str(tmpdir)}):
-                result = runner.invoke(cli, ["init"])
+        with runner.isolated_filesystem() as tmpdir, patch.dict(os.environ, {"HOME": str(tmpdir)}):
+            result = runner.invoke(cli, ["init"])
         # If exit is 0, success message should reference initialisation
         if result.exit_code == 0:
             assert "initialised" in result.output.lower() or "Missy" in result.output
 
     def test_init_second_call_skips_existing_config(self, runner: CliRunner):
         """Re-running init should not fail when config already exists."""
-        with runner.isolated_filesystem() as tmpdir:
-            with patch.dict(os.environ, {"HOME": str(tmpdir)}):
-                runner.invoke(cli, ["init"])
-                result = runner.invoke(cli, ["init"])
+        with runner.isolated_filesystem() as tmpdir, patch.dict(os.environ, {"HOME": str(tmpdir)}):
+            runner.invoke(cli, ["init"])
+            result = runner.invoke(cli, ["init"])
         assert result.exit_code == 0
 
     def test_init_config_file_created(self, runner: CliRunner):

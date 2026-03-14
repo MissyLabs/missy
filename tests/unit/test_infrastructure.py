@@ -489,9 +489,11 @@ class TestMcpClientConnect:
         mock_proc.stdout.readline.return_value = error_resp
         mock_proc.stdin = MagicMock()
 
-        with patch("missy.mcp.client.subprocess.Popen", return_value=mock_proc):
-            with pytest.raises(RuntimeError, match="MCP init failed"):
-                client.connect()
+        with (
+            patch("missy.mcp.client.subprocess.Popen", return_value=mock_proc),
+            pytest.raises(RuntimeError, match="MCP init failed"),
+        ):
+            client.connect()
 
 
 class TestMcpClientRpc:

@@ -218,7 +218,7 @@ class TestRunLoopRunUntilCompleteError:
             patch("missy.channels.voice.channel.PiperTTS", return_value=mock_tts),
             patch("missy.channels.voice.channel.VoiceServer", return_value=mock_server),
             caplog.at_level(logging.ERROR, logger="missy.channels.voice.channel"),
+            pytest.raises(RuntimeError, match="VoiceChannel failed to start"),
         ):
             # server.start() raises → error_holder is filled → RuntimeError is raised.
-            with pytest.raises(RuntimeError, match="VoiceChannel failed to start"):
-                ch.start(MagicMock())
+            ch.start(MagicMock())

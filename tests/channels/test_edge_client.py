@@ -43,9 +43,11 @@ class TestEnsureRuntimeDir:
 
     def test_sets_xdg_runtime_dir_when_missing(self) -> None:
         clean_env = {k: v for k, v in os.environ.items() if k != "XDG_RUNTIME_DIR"}
-        with patch.dict(os.environ, clean_env, clear=True):
-            with patch("os.getuid", return_value=1001):
-                result = _ensure_runtime_dir()
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch("os.getuid", return_value=1001),
+        ):
+            result = _ensure_runtime_dir()
         assert result["XDG_RUNTIME_DIR"] == "/run/user/1001"
 
     def test_returns_copy_of_environment(self) -> None:
@@ -428,20 +430,22 @@ class TestVoiceLoop:
         mock_ws = self._make_ws(response_queue)
 
         # Patch input() to raise EOFError immediately so loop ends after one iteration.
-        with patch("missy.channels.voice.edge_client.websockets.connect", return_value=mock_ws):
-            with patch("builtins.input", side_effect=EOFError):
-                with patch.object(ec, "_record_audio", return_value=b""):
-                    asyncio.run(
-                        _voice_loop(
-                            server_url="ws://localhost:8765",
-                            node_id="node-1",
-                            token="valid-token",
-                            record_seconds=1.0,
-                            sample_rate=16000,
-                            channels=1,
-                            continuous=False,
-                        )
-                    )
+        with (
+            patch("missy.channels.voice.edge_client.websockets.connect", return_value=mock_ws),
+            patch("builtins.input", side_effect=EOFError),
+            patch.object(ec, "_record_audio", return_value=b""),
+        ):
+            asyncio.run(
+                _voice_loop(
+                    server_url="ws://localhost:8765",
+                    node_id="node-1",
+                    token="valid-token",
+                    record_seconds=1.0,
+                    sample_rate=16000,
+                    channels=1,
+                    continuous=False,
+                )
+            )
 
         # Auth was sent.
         first_sent = json.loads(mock_ws.send.call_args_list[0][0][0])
@@ -459,21 +463,23 @@ class TestVoiceLoop:
             input_called[0] = True
             raise EOFError
 
-        with patch("missy.channels.voice.edge_client.websockets.connect", return_value=mock_ws):
-            with patch("builtins.input", side_effect=mock_input):
-                with patch.object(ec, "_record_audio", return_value=b""):
-                    with patch("asyncio.sleep", new_callable=AsyncMock, side_effect=EOFError):
-                        asyncio.run(
-                            _voice_loop(
-                                server_url="ws://localhost:8765",
-                                node_id="node-1",
-                                token="tok",
-                                record_seconds=1.0,
-                                sample_rate=16000,
-                                channels=1,
-                                continuous=True,
-                            )
-                        )
+        with (
+            patch("missy.channels.voice.edge_client.websockets.connect", return_value=mock_ws),
+            patch("builtins.input", side_effect=mock_input),
+            patch.object(ec, "_record_audio", return_value=b""),
+            patch("asyncio.sleep", new_callable=AsyncMock, side_effect=EOFError),
+        ):
+            asyncio.run(
+                _voice_loop(
+                    server_url="ws://localhost:8765",
+                    node_id="node-1",
+                    token="tok",
+                    record_seconds=1.0,
+                    sample_rate=16000,
+                    channels=1,
+                    continuous=True,
+                )
+            )
 
         assert not input_called[0]
 
@@ -501,19 +507,21 @@ class TestVoiceLoop:
         mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
         mock_ws.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("missy.channels.voice.edge_client.websockets.connect", return_value=mock_ws):
-            with patch("builtins.input", side_effect=EOFError):
-                with patch.object(ec, "_record_audio", return_value=b""):
-                    asyncio.run(
-                        _voice_loop(
-                            server_url="ws://localhost:8765",
-                            node_id="n1",
-                            token="tok",
-                            record_seconds=1.0,
-                            sample_rate=16000,
-                            channels=1,
-                        )
-                    )
+        with (
+            patch("missy.channels.voice.edge_client.websockets.connect", return_value=mock_ws),
+            patch("builtins.input", side_effect=EOFError),
+            patch.object(ec, "_record_audio", return_value=b""),
+        ):
+            asyncio.run(
+                _voice_loop(
+                    server_url="ws://localhost:8765",
+                    node_id="n1",
+                    token="tok",
+                    record_seconds=1.0,
+                    sample_rate=16000,
+                    channels=1,
+                )
+            )
 
     def test_auth_message_with_unknown_reason_field(self) -> None:
         mock_ws = self._make_ws(
@@ -569,20 +577,22 @@ class TestVoiceLoopResponseFrames:
 
         pcm_data = b"\x00\x01" * 100  # 200 bytes of PCM
 
-        with patch("missy.channels.voice.edge_client.websockets.connect", return_value=mock_ws):
-            with patch("builtins.input", return_value=""):
-                with patch.object(ec, "_record_audio", return_value=pcm_data):
-                    with patch.object(ec, "_play_wav"):
-                        asyncio.run(
-                            _voice_loop(
-                                server_url="ws://localhost:8765",
-                                node_id="n1",
-                                token="tok",
-                                record_seconds=1.0,
-                                sample_rate=16000,
-                                channels=1,
-                            )
-                        )
+        with (
+            patch("missy.channels.voice.edge_client.websockets.connect", return_value=mock_ws),
+            patch("builtins.input", return_value=""),
+            patch.object(ec, "_record_audio", return_value=pcm_data),
+            patch.object(ec, "_play_wav"),
+        ):
+            asyncio.run(
+                _voice_loop(
+                    server_url="ws://localhost:8765",
+                    node_id="n1",
+                    token="tok",
+                    record_seconds=1.0,
+                    sample_rate=16000,
+                    channels=1,
+                )
+            )
 
         return mock_ws
 
@@ -681,20 +691,22 @@ class TestVoiceLoopEdgeCases:
                 return ""  # Allow one pass; _record_audio returns b"".
             raise EOFError  # Exit on second call.
 
-        with patch("missy.channels.voice.edge_client.websockets.connect", return_value=mock_ws):
-            with patch("builtins.input", side_effect=one_shot_input):
-                with patch.object(ec, "_record_audio", return_value=b""):
-                    asyncio.run(
-                        _voice_loop(
-                            server_url="ws://localhost:8765",
-                            node_id="n1",
-                            token="tok",
-                            record_seconds=1.0,
-                            sample_rate=16000,
-                            channels=1,
-                            continuous=False,
-                        )
-                    )
+        with (
+            patch("missy.channels.voice.edge_client.websockets.connect", return_value=mock_ws),
+            patch("builtins.input", side_effect=one_shot_input),
+            patch.object(ec, "_record_audio", return_value=b""),
+        ):
+            asyncio.run(
+                _voice_loop(
+                    server_url="ws://localhost:8765",
+                    node_id="n1",
+                    token="tok",
+                    record_seconds=1.0,
+                    sample_rate=16000,
+                    channels=1,
+                    continuous=False,
+                )
+            )
 
         # Only auth frame should have been sent (no audio frames).
         assert mock_ws.send.call_count == 1
@@ -729,20 +741,22 @@ class TestVoiceLoopEdgeCases:
                 return ""  # First iteration: proceed.
             raise EOFError  # Second iteration: exit.
 
-        with patch("missy.channels.voice.edge_client.websockets.connect", return_value=mock_ws):
-            with patch("builtins.input", side_effect=counting_input):
-                with patch.object(ec, "_record_audio", return_value=pcm_data):
-                    asyncio.run(
-                        _voice_loop(
-                            server_url="ws://localhost:8765",
-                            node_id="n1",
-                            token="tok",
-                            record_seconds=1.0,
-                            sample_rate=16000,
-                            channels=1,
-                            continuous=False,
-                        )
-                    )
+        with (
+            patch("missy.channels.voice.edge_client.websockets.connect", return_value=mock_ws),
+            patch("builtins.input", side_effect=counting_input),
+            patch.object(ec, "_record_audio", return_value=pcm_data),
+        ):
+            asyncio.run(
+                _voice_loop(
+                    server_url="ws://localhost:8765",
+                    node_id="n1",
+                    token="tok",
+                    record_seconds=1.0,
+                    sample_rate=16000,
+                    channels=1,
+                    continuous=False,
+                )
+            )
 
     def test_voice_loop_keyboard_interrupt_breaks_loop(self) -> None:
         """KeyboardInterrupt during input() cleanly exits the loop."""
@@ -763,19 +777,21 @@ class TestVoiceLoopEdgeCases:
         mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
         mock_ws.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("missy.channels.voice.edge_client.websockets.connect", return_value=mock_ws):
-            with patch("builtins.input", side_effect=KeyboardInterrupt):
-                asyncio.run(
-                    _voice_loop(
-                        server_url="ws://localhost:8765",
-                        node_id="n1",
-                        token="tok",
-                        record_seconds=1.0,
-                        sample_rate=16000,
-                        channels=1,
-                        continuous=False,
-                    )
+        with (
+            patch("missy.channels.voice.edge_client.websockets.connect", return_value=mock_ws),
+            patch("builtins.input", side_effect=KeyboardInterrupt),
+        ):
+            asyncio.run(
+                _voice_loop(
+                    server_url="ws://localhost:8765",
+                    node_id="n1",
+                    token="tok",
+                    record_seconds=1.0,
+                    sample_rate=16000,
+                    channels=1,
+                    continuous=False,
                 )
+            )
 
         # Verify we disconnected cleanly — only auth frame sent.
         assert mock_ws.send.call_count == 1
@@ -803,10 +819,12 @@ class TestMainFunction:
         cfg_path = tmp_path / "edge.json"
         from missy.channels.voice.edge_client import main
 
-        with patch("sys.argv", ["edge_client", "--config", str(cfg_path)]):
-            with patch("missy.channels.voice.edge_client._load_config", return_value={}):
-                with pytest.raises(SystemExit) as exc_info:
-                    main()
+        with (
+            patch("sys.argv", ["edge_client", "--config", str(cfg_path)]),
+            patch("missy.channels.voice.edge_client._load_config", return_value={}),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
         assert exc_info.value.code == 1
 
     def test_main_pair_mode_calls_pair_device_and_saves_config(self, tmp_path) -> None:
@@ -890,9 +908,11 @@ class TestMainFunction:
         )
         from missy.channels.voice.edge_client import main
 
-        with patch("sys.argv", ["edge_client", "--config", str(cfg_path)]):
-            with patch.object(ec, "_voice_loop", new=AsyncMock()) as mock_loop:
-                main()
+        with (
+            patch("sys.argv", ["edge_client", "--config", str(cfg_path)]),
+            patch.object(ec, "_voice_loop", new=AsyncMock()) as mock_loop,
+        ):
+            main()
 
         mock_loop.assert_awaited_once()
         kwargs = mock_loop.call_args[1]
@@ -930,21 +950,24 @@ class TestMainFunction:
         cfg_path = tmp_path / "edge.json"
         from missy.channels.voice.edge_client import main
 
-        with patch(
-            "sys.argv",
-            [
-                "edge_client",
-                "--node-id",
-                "n1",
-                "--token",
-                "t1",
-                "--config",
-                str(cfg_path),
-                "--verbose",
-            ],
-        ), patch.object(ec, "_voice_loop", new=AsyncMock()):
-            with patch("logging.basicConfig") as mock_basic:
-                main()
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "edge_client",
+                    "--node-id",
+                    "n1",
+                    "--token",
+                    "t1",
+                    "--config",
+                    str(cfg_path),
+                    "--verbose",
+                ],
+            ),
+            patch.object(ec, "_voice_loop", new=AsyncMock()),
+            patch("logging.basicConfig") as mock_basic,
+        ):
+            main()
 
         mock_basic.assert_called_once()
         call_kwargs = mock_basic.call_args[1]

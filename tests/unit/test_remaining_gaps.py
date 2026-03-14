@@ -456,9 +456,9 @@ class TestPiperTTSLoad:
         with (
             patch("shutil.which", return_value=None),
             patch("missy.channels.voice.tts.piper._LOCAL_PIPER_BIN", fake_missing_bin),
+            pytest.raises(RuntimeError, match="not found"),
         ):
-            with pytest.raises(RuntimeError, match="not found"):
-                tts.load()
+            tts.load()
 
     def test_load_raises_when_model_not_found(self, tmp_path):
         from missy.channels.voice.tts.piper import PiperTTS
@@ -468,9 +468,9 @@ class TestPiperTTSLoad:
         with (
             patch("shutil.which", return_value="/usr/bin/piper"),
             patch("missy.channels.voice.tts.piper._DEFAULT_VOICES_DIR", tmp_path),
+            pytest.raises(RuntimeError, match="not found"),
         ):
-            with pytest.raises(RuntimeError, match="not found"):
-                tts.load()
+            tts.load()
 
     def test_load_idempotent(self, tmp_path):
         from missy.channels.voice.tts.piper import PiperTTS
@@ -523,9 +523,11 @@ class TestPiperTTSLoad:
 
         tts = PiperTTS(piper_bin="piper", model_path=str(tmp_path / "nonexistent.onnx"))
 
-        with patch("shutil.which", return_value="/usr/bin/piper"):
-            with pytest.raises(RuntimeError, match="not found"):
-                tts.load()
+        with (
+            patch("shutil.which", return_value="/usr/bin/piper"),
+            pytest.raises(RuntimeError, match="not found"),
+        ):
+            tts.load()
 
 
 class TestPiperTTSListVoices:
@@ -615,9 +617,11 @@ class TestPiperTTSSynthesize:
         mock_proc.returncode = 1
         mock_proc.communicate = AsyncMock(return_value=(b"", b"model error"))
 
-        with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=mock_proc)):
-            with pytest.raises(RuntimeError, match="Piper exited"):
-                await tts.synthesize("hello")
+        with (
+            patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=mock_proc)),
+            pytest.raises(RuntimeError, match="Piper exited"),
+        ):
+            await tts.synthesize("hello")
 
     async def test_synthesize_raises_when_no_audio_output(self, tmp_path):
         tts = self._loaded_tts(tmp_path)
@@ -626,9 +630,11 @@ class TestPiperTTSSynthesize:
         mock_proc.returncode = 0
         mock_proc.communicate = AsyncMock(return_value=(b"", b""))
 
-        with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=mock_proc)):
-            with pytest.raises(RuntimeError, match="no audio"):
-                await tts.synthesize("hello")
+        with (
+            patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=mock_proc)),
+            pytest.raises(RuntimeError, match="no audio"),
+        ):
+            await tts.synthesize("hello")
 
     async def test_synthesize_with_override_voice(self, tmp_path):
         tts = self._loaded_tts(tmp_path)

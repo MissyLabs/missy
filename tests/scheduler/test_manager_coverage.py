@@ -196,11 +196,13 @@ class TestDeleteAfterRunFailure:
         mock_uuid.uuid4.return_value = "sess"
         job = started_manager.add_job("oneshot", "every 5 minutes", "task", delete_after_run=True)
 
-        with patch.object(started_manager, "remove_job", side_effect=Exception("cannot remove")):
-            with patch("missy.agent.runtime.AgentRuntime") as MockRuntime:
-                MockRuntime.return_value.run.return_value = "ok"
-                # Should not raise despite remove_job failing
-                started_manager._run_job(job.id)
+        with (
+            patch.object(started_manager, "remove_job", side_effect=Exception("cannot remove")),
+            patch("missy.agent.runtime.AgentRuntime") as MockRuntime,
+        ):
+            MockRuntime.return_value.run.return_value = "ok"
+            # Should not raise despite remove_job failing
+            started_manager._run_job(job.id)
 
         # Job still in memory since remove failed, but no exception propagated
         assert job.id in started_manager._jobs

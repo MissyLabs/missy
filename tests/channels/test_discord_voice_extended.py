@@ -884,9 +884,11 @@ class TestStart:
                     raise ImportError("No module named 'discord'")
                 return real_import(name, *args, **kwargs)
 
-            with patch("builtins.__import__", side_effect=fake_import):
-                with pytest.raises(DiscordVoiceError, match="discord.py"):
-                    loop.run_until_complete(mgr.start("test-token"))
+            with (
+                patch("builtins.__import__", side_effect=fake_import),
+                pytest.raises(DiscordVoiceError, match="discord.py"),
+            ):
+                loop.run_until_complete(mgr.start("test-token"))
         finally:
             loop.close()
             asyncio.set_event_loop(None)
@@ -912,10 +914,12 @@ class TestStart:
 
             mock_discord = MagicMock()
 
-            with patch.dict("sys.modules", {"discord": mock_discord}):
-                with patch("builtins.__import__", side_effect=fake_import):
-                    with pytest.raises(DiscordVoiceError, match="discord-ext-voice-recv"):
-                        loop.run_until_complete(mgr.start("test-token"))
+            with (
+                patch.dict("sys.modules", {"discord": mock_discord}),
+                patch("builtins.__import__", side_effect=fake_import),
+                pytest.raises(DiscordVoiceError, match="discord-ext-voice-recv"),
+            ):
+                loop.run_until_complete(mgr.start("test-token"))
         finally:
             loop.close()
             asyncio.set_event_loop(None)

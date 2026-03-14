@@ -50,9 +50,11 @@ class TestVaultInit:
         assert deep_dir.is_dir()
 
     def test_crypto_unavailable_raises_vault_error(self, tmp_path):
-        with patch("missy.security.vault._CRYPTO_AVAILABLE", False):
-            with pytest.raises(VaultError, match="cryptography package"):
-                Vault(vault_dir=str(tmp_path / "vault"))
+        with (
+            patch("missy.security.vault._CRYPTO_AVAILABLE", False),
+            pytest.raises(VaultError, match="cryptography package"),
+        ):
+            Vault(vault_dir=str(tmp_path / "vault"))
 
 
 # ---------------------------------------------------------------------------

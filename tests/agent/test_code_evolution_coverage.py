@@ -81,9 +81,12 @@ class TestRestartProcess:
         """restart_process calls os.execv with the current interpreter and argv."""
         from missy.agent.code_evolution import restart_process
 
-        with patch("os.execv") as mock_execv, patch("sys.argv", ["missy", "run"]):
-            with patch("sys.executable", "/usr/bin/python3"):
-                restart_process()
+        with (
+            patch("os.execv") as mock_execv,
+            patch("sys.argv", ["missy", "run"]),
+            patch("sys.executable", "/usr/bin/python3"),
+        ):
+            restart_process()
 
         mock_execv.assert_called_once_with("/usr/bin/python3", ["/usr/bin/python3", "missy", "run"])
 
@@ -91,11 +94,13 @@ class TestRestartProcess:
         """When os.execv raises OSError, restart_process calls sys.exit(75)."""
         from missy.agent.code_evolution import restart_process
 
-        with patch("os.execv", side_effect=OSError("permission denied")):
-            with patch("sys.argv", ["missy"]):
-                with patch("sys.executable", "/usr/bin/python3"):
-                    with pytest.raises(SystemExit) as exc_info:
-                        restart_process()
+        with (
+            patch("os.execv", side_effect=OSError("permission denied")),
+            patch("sys.argv", ["missy"]),
+            patch("sys.executable", "/usr/bin/python3"),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            restart_process()
 
         assert exc_info.value.code == 75
 
@@ -145,9 +150,11 @@ class TestApplyGeneralExceptionHandler:
         mgr.approve(prop.id)
 
         # Patch _stash_if_dirty to avoid filesystem work, then make subprocess.run raise
-        with patch.object(mgr, "_stash_if_dirty", return_value=False):
-            with patch("subprocess.run", side_effect=RuntimeError("disk on fire")):
-                result = mgr.apply(prop.id)
+        with (
+            patch.object(mgr, "_stash_if_dirty", return_value=False),
+            patch("subprocess.run", side_effect=RuntimeError("disk on fire")),
+        ):
+            result = mgr.apply(prop.id)
 
         assert result["success"] is False
         assert "Application failed" in result["message"]
@@ -173,10 +180,12 @@ class TestApplyGeneralExceptionHandler:
             revert_called.append(True)
             original_revert(diffs)
 
-        with patch.object(mgr, "_stash_if_dirty", return_value=False):
-            with patch.object(mgr, "_revert_diffs", side_effect=tracking_revert):
-                with patch("subprocess.run", side_effect=RuntimeError("unexpected")):
-                    mgr.apply(prop.id)
+        with (
+            patch.object(mgr, "_stash_if_dirty", return_value=False),
+            patch.object(mgr, "_revert_diffs", side_effect=tracking_revert),
+            patch("subprocess.run", side_effect=RuntimeError("unexpected")),
+        ):
+            mgr.apply(prop.id)
 
         assert revert_called, "_revert_diffs must be called on exception"
 

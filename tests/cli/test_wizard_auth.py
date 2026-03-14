@@ -112,8 +112,10 @@ class TestPromptApiKey:
         from missy.cli.wizard import _prompt_api_key
 
         info = {"env_var": "ANTHROPIC_API_KEY", "label": "Anthropic", "key_prefix": "sk-ant-"}
-        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-ant-api03-realkey"}):
-            with patch("click.confirm", return_value=True):
+        with (
+            patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-ant-api03-realkey"}),
+            patch("click.confirm", return_value=True),
+        ):
                 result = _prompt_api_key("anthropic", info)
         assert result is None
 
@@ -122,10 +124,12 @@ class TestPromptApiKey:
         from missy.cli.wizard import _prompt_api_key
 
         info = {"env_var": "ANTHROPIC_API_KEY", "label": "Anthropic", "key_prefix": "sk-ant-"}
-        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-ant-api03-realkey"}):
-            with patch("click.confirm", side_effect=[False, True]):  # decline env, skip provider
-                with patch("click.prompt", return_value=""):
-                    result = _prompt_api_key("anthropic", info)
+        with (
+            patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-ant-api03-realkey"}),
+            patch("click.confirm", side_effect=[False, True]),  # decline env, skip provider
+            patch("click.prompt", return_value=""),
+        ):
+            result = _prompt_api_key("anthropic", info)
         assert result is None
 
     def test_valid_key_returned_directly(self):
@@ -150,9 +154,11 @@ class TestPromptApiKey:
         from missy.cli.wizard import _prompt_api_key
 
         info = {"env_var": None, "label": "Anthropic", "key_prefix": "sk-ant-"}
-        with patch("click.prompt", return_value="bad-key-format"):
-            with patch("click.confirm", return_value=True):  # use it anyway
-                result = _prompt_api_key("anthropic", info)
+        with (
+            patch("click.prompt", return_value="bad-key-format"),
+            patch("click.confirm", return_value=True),  # use it anyway
+        ):
+            result = _prompt_api_key("anthropic", info)
         assert result == "bad-key-format"
 
     def test_bad_format_declined_then_valid_key(self):
@@ -160,9 +166,11 @@ class TestPromptApiKey:
         from missy.cli.wizard import _prompt_api_key
 
         info = {"env_var": None, "label": "Anthropic", "key_prefix": "sk-ant-"}
-        with patch("click.prompt", side_effect=["bad-key", "sk-ant-valid"]):
-            with patch("click.confirm", return_value=False):  # do not use bad key
-                result = _prompt_api_key("anthropic", info)
+        with (
+            patch("click.prompt", side_effect=["bad-key", "sk-ant-valid"]),
+            patch("click.confirm", return_value=False),  # do not use bad key
+        ):
+            result = _prompt_api_key("anthropic", info)
         assert result == "sk-ant-valid"
 
     def test_empty_prompt_then_skip(self):
@@ -170,9 +178,11 @@ class TestPromptApiKey:
         from missy.cli.wizard import _prompt_api_key
 
         info = {"env_var": None, "label": "OpenAI", "key_prefix": "sk-"}
-        with patch("click.prompt", return_value=""):
-            with patch("click.confirm", return_value=True):  # skip provider
-                result = _prompt_api_key("openai", info)
+        with (
+            patch("click.prompt", return_value=""),
+            patch("click.confirm", return_value=True),  # skip provider
+        ):
+            result = _prompt_api_key("openai", info)
         assert result is None
 
 
@@ -469,8 +479,10 @@ class TestRunWizard:
             False,  # configure Discord?
             True,  # write config?
         ]
-        with patch("click.prompt", side_effect=prompts):
-            with patch("click.confirm", side_effect=confirms):
+        with (
+            patch("click.prompt", side_effect=prompts),
+            patch("click.confirm", side_effect=confirms),
+        ):
                 run_wizard(str(config_file))
 
         assert config_file.exists()
@@ -497,8 +509,10 @@ class TestRunWizard:
             False,  # configure Discord?
             True,  # write config?
         ]
-        with patch("click.prompt", side_effect=prompts):
-            with patch("click.confirm", side_effect=confirms):
+        with (
+            patch("click.prompt", side_effect=prompts),
+            patch("click.confirm", side_effect=confirms),
+        ):
                 run_wizard(str(config_file))
 
         assert config_file.exists()
@@ -526,8 +540,10 @@ class TestRunWizard:
             False,  # configure Discord?
             True,  # write config?
         ]
-        with patch("click.prompt", side_effect=prompts):
-            with patch("click.confirm", side_effect=confirms):
+        with (
+            patch("click.prompt", side_effect=prompts),
+            patch("click.confirm", side_effect=confirms),
+        ):
                 run_wizard(str(config_file))
 
         assert config_file.exists()
@@ -552,10 +568,12 @@ class TestRunWizard:
             False,  # configure Discord?
             True,  # write config?
         ]
-        with patch("click.prompt", side_effect=prompts):
-            with patch("click.confirm", side_effect=confirms):
-                with patch("missy.cli.oauth.run_openai_oauth", return_value="oauth-access-token"):
-                    run_wizard(str(config_file))
+        with (
+            patch("click.prompt", side_effect=prompts),
+            patch("click.confirm", side_effect=confirms),
+            patch("missy.cli.oauth.run_openai_oauth", return_value="oauth-access-token"),
+        ):
+            run_wizard(str(config_file))
 
         assert config_file.exists()
         content = config_file.read_text()
@@ -581,10 +599,12 @@ class TestRunWizard:
             False,  # configure Discord?
             True,  # write config?
         ]
-        with patch("click.prompt", side_effect=prompts):
-            with patch("click.confirm", side_effect=confirms):
-                with patch("missy.cli.oauth.run_openai_oauth", return_value=None):
-                    run_wizard(str(config_file))
+        with (
+            patch("click.prompt", side_effect=prompts),
+            patch("click.confirm", side_effect=confirms),
+            patch("missy.cli.oauth.run_openai_oauth", return_value=None),
+        ):
+            run_wizard(str(config_file))
 
         assert config_file.exists()
 
@@ -606,13 +626,14 @@ class TestRunWizard:
             False,  # configure Discord?
             True,  # write config?
         ]
-        with patch("click.prompt", side_effect=prompts):
-            with patch("click.confirm", side_effect=confirms):
-                with patch(
-                    "missy.cli.anthropic_auth.run_anthropic_setup_token_flow",
-                    return_value="sk-ant-oat01-token",
-                ):
-                    run_wizard(str(config_file))
+        with (
+            patch("click.prompt", side_effect=prompts),
+            patch("click.confirm", side_effect=confirms),patch(
+            "missy.cli.anthropic_auth.run_anthropic_setup_token_flow",
+            return_value="sk-ant-oat01-token",
+        )
+        ):
+            run_wizard(str(config_file))
 
         assert config_file.exists()
 
@@ -637,13 +658,14 @@ class TestRunWizard:
             False,  # configure Discord?
             True,  # write config?
         ]
-        with patch("click.prompt", side_effect=prompts):
-            with patch("click.confirm", side_effect=confirms):
-                with patch(
-                    "missy.cli.anthropic_auth.run_anthropic_vault_flow",
-                    return_value="vault://anthropic_api_key",
-                ):
-                    run_wizard(str(config_file))
+        with (
+            patch("click.prompt", side_effect=prompts),
+            patch("click.confirm", side_effect=confirms),patch(
+            "missy.cli.anthropic_auth.run_anthropic_vault_flow",
+            return_value="vault://anthropic_api_key",
+        )
+        ):
+            run_wizard(str(config_file))
 
         assert config_file.exists()
         content = config_file.read_text()
@@ -666,8 +688,10 @@ class TestRunWizard:
             False,  # configure Discord?
             True,  # write config?
         ]
-        with patch("click.prompt", side_effect=prompts):
-            with patch("click.confirm", side_effect=confirms):
+        with (
+            patch("click.prompt", side_effect=prompts),
+            patch("click.confirm", side_effect=confirms),
+        ):
                 run_wizard(str(config_file))
 
         assert config_file.exists()
@@ -703,8 +727,10 @@ class TestRunWizard:
             False,  # configure Discord?
             True,  # write config?
         ]
-        with patch("click.prompt", side_effect=prompts):
-            with patch("click.confirm", side_effect=confirms):
+        with (
+            patch("click.prompt", side_effect=prompts),
+            patch("click.confirm", side_effect=confirms),
+        ):
                 run_wizard(str(config_file))
 
         content = config_file.read_text()
@@ -733,8 +759,10 @@ class TestRunWizard:
             True,  # ignore bots?
             True,  # write config?
         ]
-        with patch("click.prompt", side_effect=prompts):
-            with patch("click.confirm", side_effect=confirms):
+        with (
+            patch("click.prompt", side_effect=prompts),
+            patch("click.confirm", side_effect=confirms),
+        ):
                 run_wizard(str(config_file))
 
         content = config_file.read_text()
@@ -756,8 +784,10 @@ class TestRunWizard:
             False,  # configure Discord?
             False,  # write config?  <-- user says no
         ]
-        with patch("click.prompt", side_effect=prompts):
-            with patch("click.confirm", side_effect=confirms):
+        with (
+            patch("click.prompt", side_effect=prompts),
+            patch("click.confirm", side_effect=confirms),
+        ):
                 run_wizard(str(config_file))
 
         assert not config_file.exists()
@@ -776,8 +806,10 @@ class TestRunWizard:
             False,  # configure Discord?
             True,  # write config?
         ]
-        with patch("click.prompt", side_effect=prompts):
-            with patch("click.confirm", side_effect=confirms):
+        with (
+            patch("click.prompt", side_effect=prompts),
+            patch("click.confirm", side_effect=confirms),
+        ):
                 run_wizard(str(config_file))
 
         assert (tmp_path / ".missy" / "secrets").exists()
@@ -798,14 +830,14 @@ class TestRunWizard:
             False,  # configure Discord?
             True,  # write config?
         ]
-        with patch("click.prompt", side_effect=prompts):
-            with patch("click.confirm", side_effect=confirms):
-                with patch(
-                    "missy.cli.wizard._write_config_atomic",
-                    side_effect=OSError("disk full"),
-                ):
-                    with pytest.raises(SystemExit) as exc_info:
-                        run_wizard(str(config_file))
+        with (
+            patch("click.prompt", side_effect=prompts),
+            patch("click.confirm", side_effect=confirms),patch(
+            "missy.cli.wizard._write_config_atomic",
+            side_effect=OSError("disk full"),
+        ), pytest.raises(SystemExit) as exc_info
+        ):
+            run_wizard(str(config_file))
         assert exc_info.value.code == 1
 
     def test_wizard_verify_anthropic_key_on_success(self, tmp_path):
@@ -829,10 +861,12 @@ class TestRunWizard:
             True,  # write config?
         ]
         mock_client = MagicMock()
-        with patch("click.prompt", side_effect=prompts):
-            with patch("click.confirm", side_effect=confirms):
-                with patch("anthropic.Anthropic", return_value=mock_client):
-                    run_wizard(str(config_file))
+        with (
+            patch("click.prompt", side_effect=prompts),
+            patch("click.confirm", side_effect=confirms),
+            patch("anthropic.Anthropic", return_value=mock_client),
+        ):
+            run_wizard(str(config_file))
 
         mock_client.messages.create.assert_called_once()
         assert config_file.exists()
@@ -1014,8 +1048,10 @@ class TestExchangeCode:
         mock_resp.status_code = 400
         mock_resp.text = "Bad Request"
 
-        with patch("httpx.post", return_value=mock_resp):
-            with pytest.raises(RuntimeError, match="Token exchange failed"):
+        with (
+            patch("httpx.post", return_value=mock_resp),
+            pytest.raises(RuntimeError, match="Token exchange failed"),
+        ):
                 _exchange_code("client_id", "auth_code", "verifier")
 
 
@@ -1039,8 +1075,10 @@ class TestDoRefresh:
         mock_resp.status_code = 401
         mock_resp.text = "Unauthorized"
 
-        with patch("httpx.post", return_value=mock_resp):
-            with pytest.raises(RuntimeError, match="Token refresh failed"):
+        with (
+            patch("httpx.post", return_value=mock_resp),
+            pytest.raises(RuntimeError, match="Token refresh failed"),
+        ):
                 _do_refresh("client_id", "refresh_token")
 
 
@@ -1201,10 +1239,11 @@ class TestRunOpenaiOauth:
         orig = oauth_mod.TOKEN_FILE
         try:
             oauth_mod.TOKEN_FILE = tmp_path / "tok.json"
-            with patch("missy.cli.oauth._start_callback_server", return_value=None):
-                with patch("webbrowser.open"):
-                    with patch("click.prompt", return_value=""):  # no paste
-                        result = oauth_mod.run_openai_oauth("test-client")
+            with (
+                patch("missy.cli.oauth._start_callback_server", return_value=None),
+                patch("webbrowser.open"),patch("click.prompt", return_value="")
+            ):  # no paste
+                result = oauth_mod.run_openai_oauth("test-client")
             assert result is None
         finally:
             oauth_mod.TOKEN_FILE = orig
@@ -1221,11 +1260,12 @@ class TestRunOpenaiOauth:
             mock_resp.status_code = 200
             mock_resp.json.return_value = self._mock_exchange_response("access_tok_xyz")
 
-            with patch("missy.cli.oauth._start_callback_server", return_value=None):
-                with patch("webbrowser.open"):
-                    with patch("click.prompt", return_value=redirect_url):
-                        with patch("httpx.post", return_value=mock_resp):
-                            result = oauth_mod.run_openai_oauth("test-client")
+            with (
+                patch("missy.cli.oauth._start_callback_server", return_value=None),
+                patch("webbrowser.open"),patch("click.prompt", return_value=redirect_url),
+                patch("httpx.post", return_value=mock_resp),
+            ):
+                    result = oauth_mod.run_openai_oauth("test-client")
 
             assert result == "access_tok_xyz"
         finally:
@@ -1243,11 +1283,12 @@ class TestRunOpenaiOauth:
             mock_resp.status_code = 400
             mock_resp.text = "Bad Request"
 
-            with patch("missy.cli.oauth._start_callback_server", return_value=None):
-                with patch("webbrowser.open"):
-                    with patch("click.prompt", return_value=redirect_url):
-                        with patch("httpx.post", return_value=mock_resp):
-                            result = oauth_mod.run_openai_oauth("test-client")
+            with (
+                patch("missy.cli.oauth._start_callback_server", return_value=None),
+                patch("webbrowser.open"),patch("click.prompt", return_value=redirect_url),
+                patch("httpx.post", return_value=mock_resp),
+            ):
+                    result = oauth_mod.run_openai_oauth("test-client")
 
             assert result is None
         finally:
@@ -1265,11 +1306,12 @@ class TestRunOpenaiOauth:
             mock_resp.status_code = 200
             mock_resp.json.return_value = {"token_type": "Bearer"}  # no access_token
 
-            with patch("missy.cli.oauth._start_callback_server", return_value=None):
-                with patch("webbrowser.open"):
-                    with patch("click.prompt", return_value=redirect_url):
-                        with patch("httpx.post", return_value=mock_resp):
-                            result = oauth_mod.run_openai_oauth("test-client")
+            with (
+                patch("missy.cli.oauth._start_callback_server", return_value=None),
+                patch("webbrowser.open"),patch("click.prompt", return_value=redirect_url),
+                patch("httpx.post", return_value=mock_resp),
+            ):
+                    result = oauth_mod.run_openai_oauth("test-client")
 
             assert result is None
         finally:
@@ -1286,10 +1328,12 @@ class TestRunOpenaiOauth:
             oauth_mod.TOKEN_FILE = tmp_path / "tok.json"
 
             # User supplies client ID then no code
-            with patch("click.prompt", side_effect=["my-client", ""]):
-                with patch("missy.cli.oauth._start_callback_server", return_value=None):
-                    with patch("webbrowser.open"):
-                        result = oauth_mod.run_openai_oauth(None)
+            with (
+                patch("click.prompt", side_effect=["my-client", ""]),
+                patch("missy.cli.oauth._start_callback_server", return_value=None),
+                patch("webbrowser.open"),
+            ):
+                result = oauth_mod.run_openai_oauth(None)
 
             assert result is None  # no code → None
         finally:
@@ -1531,10 +1575,12 @@ class TestRunAnthropicVaultFlow:
         from missy.cli.anthropic_auth import run_anthropic_vault_flow
 
         mock_vault = MagicMock()
-        with patch("click.confirm", return_value=True):
-            with patch("missy.security.vault.Vault", return_value=mock_vault):
-                with patch("missy.cli.anthropic_auth.store_token"):
-                    result = run_anthropic_vault_flow("sk-ant-api03-key", str(tmp_path))
+        with (
+            patch("click.confirm", return_value=True),
+            patch("missy.security.vault.Vault", return_value=mock_vault),
+            patch("missy.cli.anthropic_auth.store_token"),
+        ):
+            result = run_anthropic_vault_flow("sk-ant-api03-key", str(tmp_path))
 
         assert result == "vault://anthropic_api_key"
 
@@ -1549,8 +1595,10 @@ class TestRunAnthropicVaultFlow:
     def test_vault_failure_returns_raw_key(self, tmp_path):
         from missy.cli.anthropic_auth import run_anthropic_vault_flow
 
-        with patch("click.confirm", return_value=True):
-            with patch("missy.security.vault.Vault", side_effect=Exception("fail")):
+        with (
+            patch("click.confirm", return_value=True),
+            patch("missy.security.vault.Vault", side_effect=Exception("fail")),
+        ):
                 result = run_anthropic_vault_flow("sk-ant-api03-key", str(tmp_path))
 
         assert result == "sk-ant-api03-key"
@@ -1579,10 +1627,12 @@ class TestRunAnthropicSetupTokenFlow:
             suffix = "C" * 70
             token = f"sk-ant-oat01-{suffix}"
 
-            with patch("click.confirm", return_value=True):  # accept ToS
-                with patch("click.prompt", return_value=token):
-                    with patch("shutil.which", return_value=None):
-                        result = auth_mod.run_anthropic_setup_token_flow()
+            with (
+                patch("click.confirm", return_value=True),  # accept ToS
+                patch("click.prompt", return_value=token),
+                patch("shutil.which", return_value=None),
+            ):
+                result = auth_mod.run_anthropic_setup_token_flow()
 
             assert result == token
             assert auth_mod.TOKEN_FILE.exists()
@@ -1599,10 +1649,12 @@ class TestRunAnthropicSetupTokenFlow:
             suffix = "D" * 90
             api_key = f"sk-ant-api03-{suffix}"
 
-            with patch("click.confirm", side_effect=[True, True]):  # ToS + use it anyway
-                with patch("click.prompt", return_value=api_key):
-                    with patch("shutil.which", return_value=None):
-                        result = auth_mod.run_anthropic_setup_token_flow()
+            with (
+                patch("click.confirm", side_effect=[True, True]),  # ToS + use it anyway
+                patch("click.prompt", return_value=api_key),
+                patch("shutil.which", return_value=None),
+            ):
+                result = auth_mod.run_anthropic_setup_token_flow()
 
             assert result == api_key
         finally:
@@ -1619,10 +1671,12 @@ class TestRunAnthropicSetupTokenFlow:
             api_key = f"sk-ant-api03-{suffix}"
 
             # ToS=True, use_api_key_anyway=False, empty prompt, abort=True
-            with patch("click.confirm", side_effect=[True, False, True]):
-                with patch("click.prompt", side_effect=[api_key, ""]):
-                    with patch("shutil.which", return_value=None):
-                        result = auth_mod.run_anthropic_setup_token_flow()
+            with (
+                patch("click.confirm", side_effect=[True, False, True]),
+                patch("click.prompt", side_effect=[api_key, ""]),
+                patch("shutil.which", return_value=None),
+            ):
+                result = auth_mod.run_anthropic_setup_token_flow()
 
             assert result is None
         finally:
@@ -1636,10 +1690,12 @@ class TestRunAnthropicSetupTokenFlow:
             auth_mod.TOKEN_FILE = tmp_path / "anthropic-token.json"
             weird_token = "weirdtoken12345"
 
-            with patch("click.confirm", side_effect=[True, True]):  # ToS + use anyway
-                with patch("click.prompt", return_value=weird_token):
-                    with patch("shutil.which", return_value=None):
-                        result = auth_mod.run_anthropic_setup_token_flow()
+            with (
+                patch("click.confirm", side_effect=[True, True]),  # ToS + use anyway
+                patch("click.prompt", return_value=weird_token),
+                patch("shutil.which", return_value=None),
+            ):
+                result = auth_mod.run_anthropic_setup_token_flow()
 
             assert result == weird_token
         finally:
@@ -1656,10 +1712,12 @@ class TestRunAnthropicSetupTokenFlow:
             token = f"sk-ant-oat01-{suffix}"
             pasted = f"TOKEN={token}"
 
-            with patch("click.confirm", return_value=True):  # accept ToS
-                with patch("click.prompt", return_value=pasted):
-                    with patch("shutil.which", return_value=None):
-                        result = auth_mod.run_anthropic_setup_token_flow()
+            with (
+                patch("click.confirm", return_value=True),  # accept ToS
+                patch("click.prompt", return_value=pasted),
+                patch("shutil.which", return_value=None),
+            ):
+                result = auth_mod.run_anthropic_setup_token_flow()
 
             assert result == token
         finally:
@@ -1675,10 +1733,12 @@ class TestRunAnthropicSetupTokenFlow:
             suffix = "G" * 70
             token = f"sk-ant-oat01-{suffix}"
 
-            with patch("click.confirm", return_value=True):
-                with patch("click.prompt", return_value=token):
-                    with patch("shutil.which", return_value="/usr/local/bin/claude"):
-                        result = auth_mod.run_anthropic_setup_token_flow()
+            with (
+                patch("click.confirm", return_value=True),
+                patch("click.prompt", return_value=token),
+                patch("shutil.which", return_value="/usr/local/bin/claude"),
+            ):
+                result = auth_mod.run_anthropic_setup_token_flow()
 
             assert result == token
         finally:
@@ -1729,8 +1789,10 @@ class TestGetCurrentToken:
             mock_vault = MagicMock()
             mock_vault.get.return_value = "vault-key"
 
-            with patch.dict("os.environ", {}, clear=True):
-                with patch("missy.security.vault.Vault", return_value=mock_vault):
+            with (
+                patch.dict("os.environ", {}, clear=True),
+                patch("missy.security.vault.Vault", return_value=mock_vault),
+            ):
                     result = auth_mod.get_current_token(str(tmp_path))
 
             assert result == "vault-key"
@@ -1744,8 +1806,10 @@ class TestGetCurrentToken:
         try:
             auth_mod.TOKEN_FILE = tmp_path / "missing.json"
 
-            with patch.dict("os.environ", {}, clear=True):
-                with patch("missy.security.vault.Vault", side_effect=Exception("no vault")):
+            with (
+                patch.dict("os.environ", {}, clear=True),
+                patch("missy.security.vault.Vault", side_effect=Exception("no vault")),
+            ):
                     result = auth_mod.get_current_token(str(tmp_path))
 
             assert result is None
@@ -1768,8 +1832,10 @@ class TestGetCurrentToken:
             )
             auth_mod.TOKEN_FILE = token_file
 
-            with patch.dict("os.environ", {}, clear=True):
-                with patch("missy.cli.anthropic_auth.remind_refresh") as mock_remind:
+            with (
+                patch.dict("os.environ", {}, clear=True),
+                patch("missy.cli.anthropic_auth.remind_refresh") as mock_remind,
+            ):
                     result = auth_mod.get_current_token()
 
             mock_remind.assert_called_once()

@@ -418,9 +418,11 @@ class TestConfigShowSkill:
     def test_os_error_on_read_returns_failure(self, skill, tmp_path):
         config_file = tmp_path / "config.yaml"
         config_file.write_text("key: value\n")
-        with patch("missy.skills.builtin.config_show._CONFIG_PATH", config_file):
-            with patch("pathlib.Path.read_text", side_effect=OSError("permission denied")):
-                result = skill.execute()
+        with (
+            patch("missy.skills.builtin.config_show._CONFIG_PATH", config_file),
+            patch("pathlib.Path.read_text", side_effect=OSError("permission denied")),
+        ):
+            result = skill.execute()
         _assert_result(result, success=False)
         assert "Failed to read" in result.error
 

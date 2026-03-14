@@ -598,9 +598,9 @@ class TestX11ReadScreenTool:
         with (
             patch.dict("sys.modules", {}),
             patch("missy.tools.builtin.x11_tools.subprocess.run") as mock_run,
+            patch("missy.tools.builtin.browser_tools._registry", mock_registry),
         ):
-            with patch("missy.tools.builtin.browser_tools._registry", mock_registry):
-                err = self.tool._take_screenshot(dest, "")
+            err = self.tool._take_screenshot(dest, "")
 
         # When browser registry succeeds subprocess is not called
         assert err is None
@@ -1303,9 +1303,11 @@ class TestBrowserSession:
         from missy.tools.builtin.browser_tools import BrowserSession
 
         session = BrowserSession("no-pw")
-        with patch.dict("sys.modules", {"playwright": None, "playwright.sync_api": None}):
-            with pytest.raises((RuntimeError, ImportError)):
-                session._start()
+        with (
+            patch.dict("sys.modules", {"playwright": None, "playwright.sync_api": None}),
+            pytest.raises((RuntimeError, ImportError)),
+        ):
+            session._start()
 
 
 # ---------------------------------------------------------------------------

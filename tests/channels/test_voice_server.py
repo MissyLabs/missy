@@ -194,9 +194,11 @@ class TestVoiceServerLifecycle:
         async def fake_serve(*args, **kwargs):
             return mock_ws_server
 
-        with patch("missy.channels.voice.server.websockets.serve", side_effect=fake_serve):
-            with patch("missy.channels.voice.server._emit") as mock_emit:
-                await server.start()
+        with (
+            patch("missy.channels.voice.server.websockets.serve", side_effect=fake_serve),
+            patch("missy.channels.voice.server._emit") as mock_emit,
+        ):
+            await server.start()
 
         # Should have emitted a warning about binding to all interfaces.
         # _emit called with keyword args: session_id, event_type, result, detail.
@@ -835,7 +837,9 @@ class TestLogAudioToDisk:
         node = _make_edge_node(audio_logging=True, audio_log_dir="/nonexistent/path")
         server = _make_server(node=node)
 
-        with patch("missy.channels.voice.server._emit"):
-            with patch("pathlib.Path.mkdir", side_effect=PermissionError("denied")):
-                # Should not propagate.
-                await server._log_audio_to_disk(node, b"\x00" * 100, 16000, 1)
+        with (
+            patch("missy.channels.voice.server._emit"),
+            patch("pathlib.Path.mkdir", side_effect=PermissionError("denied")),
+        ):
+            # Should not propagate.
+            await server._log_audio_to_disk(node, b"\x00" * 100, 16000, 1)

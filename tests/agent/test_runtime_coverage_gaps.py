@@ -424,10 +424,10 @@ class TestToolLoopCheckpointFailOnException:
             with (
                 patch("missy.agent.runtime.get_registry", return_value=reg),
                 patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
-            ):
                 # RuntimeError gets wrapped in ProviderError by run()
-                with pytest.raises(ProviderError):
-                    runtime.run("do task")
+                pytest.raises(ProviderError),
+            ):
+                runtime.run("do task")
         finally:
             if original_cls is not None:
                 _ckpt_mod.CheckpointManager = original_cls
@@ -674,9 +674,9 @@ class TestRunLoopGeneralException:
         with (
             patch.object(runtime, "_run_loop", side_effect=ValueError("unexpected")),
             patch("missy.agent.runtime.get_registry", return_value=reg),
+            pytest.raises(ProviderError, match="Unexpected error"),
         ):
-            with pytest.raises(ProviderError, match="Unexpected error"):
-                runtime.run("hello")
+            runtime.run("hello")
 
 
 # ---------------------------------------------------------------------------
@@ -693,9 +693,9 @@ class TestRunLoopProviderError:
         with (
             patch.object(runtime, "_run_loop", side_effect=ProviderError("provider died")),
             patch("missy.agent.runtime.get_registry", return_value=reg),
+            pytest.raises(ProviderError, match="provider died"),
         ):
-            with pytest.raises(ProviderError, match="provider died"):
-                runtime.run("hello")
+            runtime.run("hello")
 
 
 # ---------------------------------------------------------------------------

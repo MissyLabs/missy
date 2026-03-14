@@ -31,6 +31,7 @@ dev = [
     "ruff>=0.4",
     "mypy>=1.10",
     "watchdog>=4.0",
+    "hypothesis>=6.100",
 ]
 otel = [
     "opentelemetry-sdk>=1.20",

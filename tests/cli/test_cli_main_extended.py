@@ -175,12 +175,14 @@ class TestDebugFlag:
 
         cfg_path = _cfg_path()
         try:
-            with patch("missy.cli.main._load_subsystems", return_value=_make_mock_config()):
-                with patch(
+            with (
+                patch("missy.cli.main._load_subsystems", return_value=_make_mock_config()),
+                patch(
                     "missy.providers.registry.get_registry",
                     return_value=MagicMock(list_providers=list),
-                ):
-                    result = runner.invoke(cli, ["--debug", "--config", cfg_path, "providers"])
+                ),
+            ):
+                result = runner.invoke(cli, ["--debug", "--config", cfg_path, "providers"])
         finally:
             import os
 
@@ -208,8 +210,7 @@ class TestInitBranches:
         import os
         from pathlib import Path
 
-        with runner.isolated_filesystem() as tmpdir:
-            with patch.dict(os.environ, {"HOME": str(tmpdir)}):
+        with runner.isolated_filesystem() as tmpdir, patch.dict(os.environ, {"HOME": str(tmpdir)}):
                 # Allow ~/.missy to be created but fail on ~/workspace
                 original_mkdir = Path.mkdir
 
@@ -573,8 +574,10 @@ class TestScheduleErrorBranches:
     def _invoke_schedule(self, runner, subcmd, job_id, error=None):
         cfg_path = _cfg_path()
         try:
-            with patch("missy.cli.main._load_subsystems", return_value=_make_mock_config()):
-                with patch("missy.scheduler.manager.SchedulerManager") as mock_mgr_cls:
+            with (
+                patch("missy.cli.main._load_subsystems", return_value=_make_mock_config()),
+                patch("missy.scheduler.manager.SchedulerManager") as mock_mgr_cls,
+            ):
                     mock_mgr = MagicMock()
                     if error is not None:
                         getattr(mock_mgr, f"{subcmd}_job").side_effect = error

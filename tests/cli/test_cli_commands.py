@@ -199,8 +199,7 @@ class TestVaultSet:
     def test_vault_set_exits_zero(self, runner: CliRunner):
         cfg_path = _write_temp_config()
         mock_vault = MagicMock()
-        with _SubsystemsPatch():
-            with patch("missy.security.vault.Vault", return_value=mock_vault):
+        with _SubsystemsPatch(), patch("missy.security.vault.Vault", return_value=mock_vault):
                 result = runner.invoke(
                     cli, ["--config", cfg_path, "vault", "set", "MY_KEY", "my_value"]
                 )
@@ -209,8 +208,7 @@ class TestVaultSet:
     def test_vault_set_success_message(self, runner: CliRunner):
         cfg_path = _write_temp_config()
         mock_vault = MagicMock()
-        with _SubsystemsPatch():
-            with patch("missy.security.vault.Vault", return_value=mock_vault):
+        with _SubsystemsPatch(), patch("missy.security.vault.Vault", return_value=mock_vault):
                 result = runner.invoke(
                     cli, ["--config", cfg_path, "vault", "set", "MY_KEY", "my_value"]
                 )
@@ -219,8 +217,7 @@ class TestVaultSet:
     def test_vault_set_calls_vault_set(self, runner: CliRunner):
         cfg_path = _write_temp_config()
         mock_vault = MagicMock()
-        with _SubsystemsPatch():
-            with patch("missy.security.vault.Vault", return_value=mock_vault):
+        with _SubsystemsPatch(), patch("missy.security.vault.Vault", return_value=mock_vault):
                 runner.invoke(cli, ["--config", cfg_path, "vault", "set", "API_KEY", "secret123"])
         mock_vault.set.assert_called_once_with("API_KEY", "secret123")
 
@@ -230,8 +227,7 @@ class TestVaultSet:
         cfg_path = _write_temp_config()
         mock_vault = MagicMock()
         mock_vault.set.side_effect = VaultError("encryption failed")
-        with _SubsystemsPatch():
-            with patch("missy.security.vault.Vault", return_value=mock_vault):
+        with _SubsystemsPatch(), patch("missy.security.vault.Vault", return_value=mock_vault):
                 result = runner.invoke(cli, ["--config", cfg_path, "vault", "set", "KEY", "val"])
         assert result.exit_code == 1
 
@@ -245,8 +241,7 @@ class TestVaultGet:
         cfg_path = _write_temp_config()
         mock_vault = MagicMock()
         mock_vault.get.return_value = "super_secret"
-        with _SubsystemsPatch():
-            with patch("missy.security.vault.Vault", return_value=mock_vault):
+        with _SubsystemsPatch(), patch("missy.security.vault.Vault", return_value=mock_vault):
                 result = runner.invoke(cli, ["--config", cfg_path, "vault", "get", "MY_KEY"])
         assert "super_secret" in result.output
 
@@ -254,8 +249,7 @@ class TestVaultGet:
         cfg_path = _write_temp_config()
         mock_vault = MagicMock()
         mock_vault.get.return_value = None
-        with _SubsystemsPatch():
-            with patch("missy.security.vault.Vault", return_value=mock_vault):
+        with _SubsystemsPatch(), patch("missy.security.vault.Vault", return_value=mock_vault):
                 result = runner.invoke(cli, ["--config", cfg_path, "vault", "get", "MISSING"])
         assert result.exit_code == 1
 
@@ -265,8 +259,7 @@ class TestVaultGet:
         cfg_path = _write_temp_config()
         mock_vault = MagicMock()
         mock_vault.get.side_effect = VaultError("corrupt vault")
-        with _SubsystemsPatch():
-            with patch("missy.security.vault.Vault", return_value=mock_vault):
+        with _SubsystemsPatch(), patch("missy.security.vault.Vault", return_value=mock_vault):
                 result = runner.invoke(cli, ["--config", cfg_path, "vault", "get", "KEY"])
         assert result.exit_code == 1
 
@@ -280,8 +273,7 @@ class TestVaultList:
         cfg_path = _write_temp_config()
         mock_vault = MagicMock()
         mock_vault.list_keys.return_value = []
-        with _SubsystemsPatch():
-            with patch("missy.security.vault.Vault", return_value=mock_vault):
+        with _SubsystemsPatch(), patch("missy.security.vault.Vault", return_value=mock_vault):
                 result = runner.invoke(cli, ["--config", cfg_path, "vault", "list"])
         assert result.exit_code == 0
         assert "empty" in result.output.lower()
@@ -290,8 +282,7 @@ class TestVaultList:
         cfg_path = _write_temp_config()
         mock_vault = MagicMock()
         mock_vault.list_keys.return_value = ["OPENAI_KEY", "SLACK_TOKEN"]
-        with _SubsystemsPatch():
-            with patch("missy.security.vault.Vault", return_value=mock_vault):
+        with _SubsystemsPatch(), patch("missy.security.vault.Vault", return_value=mock_vault):
                 result = runner.invoke(cli, ["--config", cfg_path, "vault", "list"])
         assert result.exit_code == 0
         assert "OPENAI_KEY" in result.output
@@ -303,8 +294,7 @@ class TestVaultList:
         cfg_path = _write_temp_config()
         mock_vault = MagicMock()
         mock_vault.list_keys.side_effect = VaultError("read error")
-        with _SubsystemsPatch():
-            with patch("missy.security.vault.Vault", return_value=mock_vault):
+        with _SubsystemsPatch(), patch("missy.security.vault.Vault", return_value=mock_vault):
                 result = runner.invoke(cli, ["--config", cfg_path, "vault", "list"])
         assert result.exit_code == 1
 
@@ -318,8 +308,7 @@ class TestVaultDelete:
         cfg_path = _write_temp_config()
         mock_vault = MagicMock()
         mock_vault.delete.return_value = True
-        with _SubsystemsPatch():
-            with patch("missy.security.vault.Vault", return_value=mock_vault):
+        with _SubsystemsPatch(), patch("missy.security.vault.Vault", return_value=mock_vault):
                 result = runner.invoke(cli, ["--config", cfg_path, "vault", "delete", "MY_KEY"])
         assert result.exit_code == 0
         assert "MY_KEY" in result.output
@@ -328,8 +317,7 @@ class TestVaultDelete:
         cfg_path = _write_temp_config()
         mock_vault = MagicMock()
         mock_vault.delete.return_value = False
-        with _SubsystemsPatch():
-            with patch("missy.security.vault.Vault", return_value=mock_vault):
+        with _SubsystemsPatch(), patch("missy.security.vault.Vault", return_value=mock_vault):
                 result = runner.invoke(cli, ["--config", cfg_path, "vault", "delete", "GHOST"])
         # CLI may silently handle "not found" (vault.delete returns False)
         assert result.exit_code == 0
@@ -340,8 +328,7 @@ class TestVaultDelete:
         cfg_path = _write_temp_config()
         mock_vault = MagicMock()
         mock_vault.delete.side_effect = VaultError("io error")
-        with _SubsystemsPatch():
-            with patch("missy.security.vault.Vault", return_value=mock_vault):
+        with _SubsystemsPatch(), patch("missy.security.vault.Vault", return_value=mock_vault):
                 result = runner.invoke(cli, ["--config", cfg_path, "vault", "delete", "KEY"])
         assert result.exit_code == 1
 
@@ -372,8 +359,10 @@ class TestScheduleAdd:
         cfg_path = _write_temp_config()
         mock_mgr = MagicMock()
         mock_mgr.add_job.return_value = self._make_job()
-        with _SubsystemsPatch():
-            with patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr):
+        with (
+            _SubsystemsPatch(),
+            patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr),
+        ):
                 result = runner.invoke(
                     cli,
                     [
@@ -395,8 +384,10 @@ class TestScheduleAdd:
         cfg_path = _write_temp_config()
         mock_mgr = MagicMock()
         mock_mgr.add_job.return_value = self._make_job()
-        with _SubsystemsPatch():
-            with patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr):
+        with (
+            _SubsystemsPatch(),
+            patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr),
+        ):
                 result = runner.invoke(
                     cli,
                     [
@@ -418,8 +409,10 @@ class TestScheduleAdd:
         cfg_path = _write_temp_config()
         mock_mgr = MagicMock()
         mock_mgr.add_job.side_effect = ValueError("unrecognised schedule")
-        with _SubsystemsPatch():
-            with patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr):
+        with (
+            _SubsystemsPatch(),
+            patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr),
+        ):
                 result = runner.invoke(
                     cli,
                     [
@@ -451,8 +444,10 @@ class TestScheduleAdd:
         cfg_path = _write_temp_config()
         mock_mgr = MagicMock()
         mock_mgr.add_job.side_effect = SchedulerError("backend down")
-        with _SubsystemsPatch():
-            with patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr):
+        with (
+            _SubsystemsPatch(),
+            patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr),
+        ):
                 result = runner.invoke(
                     cli,
                     [
@@ -475,16 +470,20 @@ class TestSchedulePause:
     def test_schedule_pause_exits_zero(self, runner: CliRunner):
         cfg_path = _write_temp_config()
         mock_mgr = MagicMock()
-        with _SubsystemsPatch():
-            with patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr):
+        with (
+            _SubsystemsPatch(),
+            patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr),
+        ):
                 result = runner.invoke(cli, ["--config", cfg_path, "schedule", "pause", "abc123"])
         assert result.exit_code == 0
 
     def test_schedule_pause_success_message(self, runner: CliRunner):
         cfg_path = _write_temp_config()
         mock_mgr = MagicMock()
-        with _SubsystemsPatch():
-            with patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr):
+        with (
+            _SubsystemsPatch(),
+            patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr),
+        ):
                 result = runner.invoke(cli, ["--config", cfg_path, "schedule", "pause", "abc123"])
         assert "abc123" in result.output
 
@@ -492,8 +491,10 @@ class TestSchedulePause:
         cfg_path = _write_temp_config()
         mock_mgr = MagicMock()
         mock_mgr.pause_job.side_effect = KeyError("abc123")
-        with _SubsystemsPatch():
-            with patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr):
+        with (
+            _SubsystemsPatch(),
+            patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr),
+        ):
                 result = runner.invoke(cli, ["--config", cfg_path, "schedule", "pause", "abc123"])
         assert result.exit_code == 1
 
@@ -506,16 +507,20 @@ class TestScheduleResume:
     def test_schedule_resume_exits_zero(self, runner: CliRunner):
         cfg_path = _write_temp_config()
         mock_mgr = MagicMock()
-        with _SubsystemsPatch():
-            with patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr):
+        with (
+            _SubsystemsPatch(),
+            patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr),
+        ):
                 result = runner.invoke(cli, ["--config", cfg_path, "schedule", "resume", "abc123"])
         assert result.exit_code == 0
 
     def test_schedule_resume_success_message(self, runner: CliRunner):
         cfg_path = _write_temp_config()
         mock_mgr = MagicMock()
-        with _SubsystemsPatch():
-            with patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr):
+        with (
+            _SubsystemsPatch(),
+            patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr),
+        ):
                 result = runner.invoke(cli, ["--config", cfg_path, "schedule", "resume", "myjob"])
         assert "myjob" in result.output
 
@@ -523,8 +528,10 @@ class TestScheduleResume:
         cfg_path = _write_temp_config()
         mock_mgr = MagicMock()
         mock_mgr.resume_job.side_effect = KeyError("myjob")
-        with _SubsystemsPatch():
-            with patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr):
+        with (
+            _SubsystemsPatch(),
+            patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr),
+        ):
                 result = runner.invoke(cli, ["--config", cfg_path, "schedule", "resume", "myjob"])
         assert result.exit_code == 1
 
@@ -537,8 +544,10 @@ class TestScheduleRemove:
     def test_schedule_remove_exits_zero(self, runner: CliRunner):
         cfg_path = _write_temp_config()
         mock_mgr = MagicMock()
-        with _SubsystemsPatch():
-            with patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr):
+        with (
+            _SubsystemsPatch(),
+            patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr),
+        ):
                 # --yes bypasses the confirmation prompt
                 result = runner.invoke(
                     cli,
@@ -549,8 +558,10 @@ class TestScheduleRemove:
     def test_schedule_remove_success_message(self, runner: CliRunner):
         cfg_path = _write_temp_config()
         mock_mgr = MagicMock()
-        with _SubsystemsPatch():
-            with patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr):
+        with (
+            _SubsystemsPatch(),
+            patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr),
+        ):
                 result = runner.invoke(
                     cli,
                     ["--config", cfg_path, "schedule", "remove", "--yes", "job123"],
@@ -561,8 +572,10 @@ class TestScheduleRemove:
         cfg_path = _write_temp_config()
         mock_mgr = MagicMock()
         mock_mgr.remove_job.side_effect = KeyError("ghost")
-        with _SubsystemsPatch():
-            with patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr):
+        with (
+            _SubsystemsPatch(),
+            patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr),
+        ):
                 result = runner.invoke(
                     cli,
                     ["--config", cfg_path, "schedule", "remove", "--yes", "ghost"],
@@ -683,8 +696,7 @@ class TestSessionsCleanup:
         cfg_path = _write_temp_config()
         mock_store = MagicMock()
         mock_store.cleanup.return_value = 0
-        with _SubsystemsPatch():
-            with patch("missy.memory.store.MemoryStore", return_value=mock_store):
+        with _SubsystemsPatch(), patch("missy.memory.store.MemoryStore", return_value=mock_store):
                 result = runner.invoke(cli, ["--config", cfg_path, "sessions", "cleanup"])
         assert result.exit_code == 0
 
@@ -692,16 +704,14 @@ class TestSessionsCleanup:
         cfg_path = _write_temp_config()
         mock_store = MagicMock()
         mock_store.cleanup.return_value = 42
-        with _SubsystemsPatch():
-            with patch("missy.memory.store.MemoryStore", return_value=mock_store):
+        with _SubsystemsPatch(), patch("missy.memory.store.MemoryStore", return_value=mock_store):
                 result = runner.invoke(cli, ["--config", cfg_path, "sessions", "cleanup"])
         assert "42" in result.output
 
     def test_sessions_cleanup_dry_run_does_not_delete(self, runner: CliRunner):
         cfg_path = _write_temp_config()
         mock_store = MagicMock()
-        with _SubsystemsPatch():
-            with patch("missy.memory.store.MemoryStore", return_value=mock_store):
+        with _SubsystemsPatch(), patch("missy.memory.store.MemoryStore", return_value=mock_store):
                 result = runner.invoke(
                     cli,
                     ["--config", cfg_path, "sessions", "cleanup", "--dry-run"],
@@ -714,8 +724,7 @@ class TestSessionsCleanup:
         cfg_path = _write_temp_config()
         mock_store = MagicMock()
         mock_store.cleanup.return_value = 0
-        with _SubsystemsPatch():
-            with patch("missy.memory.store.MemoryStore", return_value=mock_store):
+        with _SubsystemsPatch(), patch("missy.memory.store.MemoryStore", return_value=mock_store):
                 runner.invoke(
                     cli,
                     [
@@ -875,8 +884,7 @@ class TestMcpList:
         cfg_path = _write_temp_config()
         mock_mgr = MagicMock()
         mock_mgr.list_servers.return_value = []
-        with _SubsystemsPatch():
-            with patch("missy.mcp.manager.McpManager", return_value=mock_mgr):
+        with _SubsystemsPatch(), patch("missy.mcp.manager.McpManager", return_value=mock_mgr):
                 result = runner.invoke(cli, ["--config", cfg_path, "mcp", "list"])
         assert result.exit_code == 0
         assert "No MCP servers" in result.output
@@ -885,8 +893,7 @@ class TestMcpList:
         cfg_path = _write_temp_config()
         mock_mgr = MagicMock()
         mock_mgr.list_servers.return_value = [{"name": "my-server", "alive": True, "tools": 5}]
-        with _SubsystemsPatch():
-            with patch("missy.mcp.manager.McpManager", return_value=mock_mgr):
+        with _SubsystemsPatch(), patch("missy.mcp.manager.McpManager", return_value=mock_mgr):
                 result = runner.invoke(cli, ["--config", cfg_path, "mcp", "list"])
         assert result.exit_code == 0
         assert "my-server" in result.output
@@ -895,8 +902,7 @@ class TestMcpList:
         cfg_path = _write_temp_config()
         mock_mgr = MagicMock()
         mock_mgr.list_servers.return_value = [{"name": "offline-srv", "alive": False, "tools": 0}]
-        with _SubsystemsPatch():
-            with patch("missy.mcp.manager.McpManager", return_value=mock_mgr):
+        with _SubsystemsPatch(), patch("missy.mcp.manager.McpManager", return_value=mock_mgr):
                 result = runner.invoke(cli, ["--config", cfg_path, "mcp", "list"])
         assert result.exit_code == 0
         assert "offline-srv" in result.output
@@ -917,8 +923,7 @@ class TestMcpAdd:
         mock_client.tools = ["tool_a", "tool_b"]
         mock_mgr = MagicMock()
         mock_mgr.add_server.return_value = mock_client
-        with _SubsystemsPatch():
-            with patch("missy.mcp.manager.McpManager", return_value=mock_mgr):
+        with _SubsystemsPatch(), patch("missy.mcp.manager.McpManager", return_value=mock_mgr):
                 result = runner.invoke(
                     cli,
                     [
@@ -940,8 +945,7 @@ class TestMcpAdd:
         mock_client.tools = ["echo"]
         mock_mgr = MagicMock()
         mock_mgr.add_server.return_value = mock_client
-        with _SubsystemsPatch():
-            with patch("missy.mcp.manager.McpManager", return_value=mock_mgr):
+        with _SubsystemsPatch(), patch("missy.mcp.manager.McpManager", return_value=mock_mgr):
                 result = runner.invoke(
                     cli,
                     [
@@ -960,8 +964,7 @@ class TestMcpAdd:
         cfg_path = _write_temp_config()
         mock_mgr = MagicMock()
         mock_mgr.add_server.side_effect = ConnectionError("refused")
-        with _SubsystemsPatch():
-            with patch("missy.mcp.manager.McpManager", return_value=mock_mgr):
+        with _SubsystemsPatch(), patch("missy.mcp.manager.McpManager", return_value=mock_mgr):
                 result = runner.invoke(
                     cli,
                     [
@@ -985,16 +988,14 @@ class TestMcpRemove:
     def test_mcp_remove_exits_zero(self, runner: CliRunner):
         cfg_path = _write_temp_config()
         mock_mgr = MagicMock()
-        with _SubsystemsPatch():
-            with patch("missy.mcp.manager.McpManager", return_value=mock_mgr):
+        with _SubsystemsPatch(), patch("missy.mcp.manager.McpManager", return_value=mock_mgr):
                 result = runner.invoke(cli, ["--config", cfg_path, "mcp", "remove", "my-srv"])
         assert result.exit_code == 0
 
     def test_mcp_remove_success_message(self, runner: CliRunner):
         cfg_path = _write_temp_config()
         mock_mgr = MagicMock()
-        with _SubsystemsPatch():
-            with patch("missy.mcp.manager.McpManager", return_value=mock_mgr):
+        with _SubsystemsPatch(), patch("missy.mcp.manager.McpManager", return_value=mock_mgr):
                 result = runner.invoke(cli, ["--config", cfg_path, "mcp", "remove", "my-srv"])
         assert "my-srv" in result.output
 
@@ -1464,8 +1465,10 @@ class TestSessionsList:
         cfg_path = _write_temp_config()
         mock_store = MagicMock()
         mock_store.list_sessions.return_value = []
-        with _SubsystemsPatch():
-            with patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store):
+        with (
+            _SubsystemsPatch(),
+            patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store),
+        ):
                 result = runner.invoke(cli, ["--config", cfg_path, "sessions", "list"])
         assert result.exit_code == 0
         assert "No sessions" in result.output
@@ -1483,8 +1486,10 @@ class TestSessionsList:
                 "updated_at": "2026-03-12T10:00:00",
             }
         ]
-        with _SubsystemsPatch():
-            with patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store):
+        with (
+            _SubsystemsPatch(),
+            patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store),
+        ):
                 result = runner.invoke(cli, ["--config", cfg_path, "sessions", "list"])
         assert result.exit_code == 0
         assert "abc-123" in result.output
@@ -1493,8 +1498,10 @@ class TestSessionsList:
         cfg_path = _write_temp_config()
         mock_store = MagicMock()
         mock_store.list_sessions.return_value = []
-        with _SubsystemsPatch():
-            with patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store):
+        with (
+            _SubsystemsPatch(),
+            patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store),
+        ):
                 runner.invoke(cli, ["--config", cfg_path, "sessions", "list", "--limit", "5"])
         mock_store.list_sessions.assert_called_once_with(limit=5)
 
@@ -1502,8 +1509,10 @@ class TestSessionsList:
         cfg_path = _write_temp_config()
         mock_store = MagicMock()
         mock_store.list_sessions.side_effect = Exception("db locked")
-        with _SubsystemsPatch():
-            with patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store):
+        with (
+            _SubsystemsPatch(),
+            patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store),
+        ):
                 result = runner.invoke(cli, ["--config", cfg_path, "sessions", "list"])
         # Should handle the error gracefully (not crash)
         assert result.exit_code in (0, 1)
@@ -1519,8 +1528,10 @@ class TestSessionsRename:
         mock_store = MagicMock()
         mock_store.rename_session.return_value = True
         mock_store.resolve_session_name.return_value = None
-        with _SubsystemsPatch():
-            with patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store):
+        with (
+            _SubsystemsPatch(),
+            patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store),
+        ):
                 result = runner.invoke(
                     cli,
                     ["--config", cfg_path, "sessions", "rename", "abc-123", "My Chat"],
@@ -1532,8 +1543,10 @@ class TestSessionsRename:
         mock_store = MagicMock()
         mock_store.rename_session.return_value = False
         mock_store.resolve_session_name.return_value = None
-        with _SubsystemsPatch():
-            with patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store):
+        with (
+            _SubsystemsPatch(),
+            patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store),
+        ):
                 result = runner.invoke(
                     cli,
                     ["--config", cfg_path, "sessions", "rename", "ghost-id", "New Name"],

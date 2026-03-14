@@ -92,9 +92,9 @@ class TestVoiceChannelStartFailure:
             patch("missy.channels.voice.channel.FasterWhisperSTT", return_value=mock_stt),
             patch("missy.channels.voice.channel.PiperTTS", return_value=mock_tts),
             patch("missy.channels.voice.channel.VoiceServer", return_value=mock_server),
+            pytest.raises(RuntimeError, match="VoiceChannel failed to start"),
         ):
-            with pytest.raises(RuntimeError, match="VoiceChannel failed to start"):
-                ch.start(MagicMock())
+            ch.start(MagicMock())
 
         # Thread and server are cleaned up on failure.
         assert ch._thread is None

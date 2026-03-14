@@ -216,9 +216,11 @@ class TestDNSFallback:
     def test_hostname_resolved_but_ip_not_in_cidr(self):
         engine = make_engine(allowed_cidrs=["10.0.0.0/8"])
         mock_result = [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 80))]
-        with patch("missy.policy.network.socket.getaddrinfo", return_value=mock_result):
-            with pytest.raises(PolicyViolationError):
-                engine.check_host("example.com")
+        with (
+            patch("missy.policy.network.socket.getaddrinfo", return_value=mock_result),
+            pytest.raises(PolicyViolationError),
+        ):
+            engine.check_host("example.com")
 
     def test_dns_failure_falls_through_to_deny(self):
         engine = make_engine(allowed_cidrs=["10.0.0.0/8"])

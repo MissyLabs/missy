@@ -59,10 +59,12 @@ class TestSubscribePatchedPublishExceptionHandling:
         """When _handle_event raises, the module logger.exception is called."""
         al = AuditLogger(log_path=str(tmp_path / "audit.jsonl"), bus=bus)
 
-        with patch.object(al, "_handle_event", side_effect=ValueError("bad event")):
-            with patch("missy.observability.audit_logger._module_logger") as mock_logger:
-                bus.publish(_make_event())
-                mock_logger.exception.assert_called_once()
+        with (
+            patch.object(al, "_handle_event", side_effect=ValueError("bad event")),
+            patch("missy.observability.audit_logger._module_logger") as mock_logger,
+        ):
+            bus.publish(_make_event())
+            mock_logger.exception.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -86,10 +88,12 @@ class TestHandleEventWriteFailure:
         """logger.error is called when the write fails."""
         al = AuditLogger(log_path=str(tmp_path / "audit.jsonl"), bus=bus)
 
-        with patch.object(Path, "open", side_effect=OSError("no space")):
-            with patch("missy.observability.audit_logger._module_logger") as mock_logger:
-                al._handle_event(_make_event())
-                mock_logger.error.assert_called_once()
+        with (
+            patch.object(Path, "open", side_effect=OSError("no space")),
+            patch("missy.observability.audit_logger._module_logger") as mock_logger,
+        ):
+            al._handle_event(_make_event())
+            mock_logger.error.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -115,10 +119,12 @@ class TestGetRecentEventsReadFailure:
         log_path.write_text("")
         al = AuditLogger(log_path=str(log_path), bus=bus)
 
-        with patch.object(Path, "read_text", side_effect=OSError("io err")):
-            with patch("missy.observability.audit_logger._module_logger") as mock_logger:
-                al.get_recent_events()
-                mock_logger.error.assert_called_once()
+        with (
+            patch.object(Path, "read_text", side_effect=OSError("io err")),
+            patch("missy.observability.audit_logger._module_logger") as mock_logger,
+        ):
+            al.get_recent_events()
+            mock_logger.error.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -181,10 +187,12 @@ class TestGetPolicyViolationsReadFailure:
         log_path.write_text("")
         al = AuditLogger(log_path=str(log_path), bus=bus)
 
-        with patch.object(Path, "read_text", side_effect=OSError("disk err")):
-            with patch("missy.observability.audit_logger._module_logger") as mock_logger:
-                al.get_policy_violations()
-                mock_logger.error.assert_called_once()
+        with (
+            patch.object(Path, "read_text", side_effect=OSError("disk err")),
+            patch("missy.observability.audit_logger._module_logger") as mock_logger,
+        ):
+            al.get_policy_violations()
+            mock_logger.error.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

@@ -138,9 +138,11 @@ class TestGatewayConnect:
     async def test_connect_raises_when_websockets_missing(self):
         gw = _make_gateway()
 
-        with patch.dict("sys.modules", {"websockets": None}):
-            with pytest.raises(RuntimeError, match="websockets"):
-                await gw.connect()
+        with (
+            patch.dict("sys.modules", {"websockets": None}),
+            pytest.raises(RuntimeError, match="websockets"),
+        ):
+            await gw.connect()
 
     @pytest.mark.asyncio
     async def test_connect_emits_audit_event(self):

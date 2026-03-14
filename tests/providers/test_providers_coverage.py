@@ -1311,9 +1311,11 @@ class TestCodexProviderGetToken:
 
         config = ProviderConfig(name="openai-codex", model="gpt-5.2", api_key=None)
         provider = CodexProvider(config)
-        with patch("missy.providers.codex_provider._load_oauth_token", return_value=None):
-            with pytest.raises(ProviderError, match="no OAuth token"):
-                provider._get_token()
+        with (
+            patch("missy.providers.codex_provider._load_oauth_token", return_value=None),
+            pytest.raises(ProviderError, match="no OAuth token"),
+        ):
+            provider._get_token()
 
 
 class TestCodexProviderHeaders:
@@ -1461,9 +1463,11 @@ class TestCodexProviderStream:
         mock_resp.iter_lines.return_value = iter(lines)
         mock_resp.raise_for_status = MagicMock()
 
-        with patch("missy.providers.codex_provider.httpx.stream", return_value=mock_resp):
-            with pytest.raises(ProviderError, match="rate limit exceeded"):
-                list(provider.stream([Message(role="user", content="hi")]))
+        with (
+            patch("missy.providers.codex_provider.httpx.stream", return_value=mock_resp),
+            pytest.raises(ProviderError, match="rate limit exceeded"),
+        ):
+            list(provider.stream([Message(role="user", content="hi")]))
 
     def test_stream_raises_on_error_event_with_error_dict(self):
         from missy.providers.codex_provider import CodexProvider
@@ -1482,9 +1486,11 @@ class TestCodexProviderStream:
         mock_resp.iter_lines.return_value = iter(lines)
         mock_resp.raise_for_status = MagicMock()
 
-        with patch("missy.providers.codex_provider.httpx.stream", return_value=mock_resp):
-            with pytest.raises(ProviderError, match="internal server error"):
-                list(provider.stream([Message(role="user", content="hi")]))
+        with (
+            patch("missy.providers.codex_provider.httpx.stream", return_value=mock_resp),
+            pytest.raises(ProviderError, match="internal server error"),
+        ):
+            list(provider.stream([Message(role="user", content="hi")]))
 
     def test_stream_raises_on_http_status_error(self):
         import httpx
@@ -1504,9 +1510,11 @@ class TestCodexProviderStream:
         mock_resp.__exit__ = MagicMock(return_value=False)
         mock_resp.raise_for_status.side_effect = http_error
 
-        with patch("missy.providers.codex_provider.httpx.stream", return_value=mock_resp):
-            with pytest.raises(ProviderError, match="401"):
-                list(provider.stream([Message(role="user", content="hi")]))
+        with (
+            patch("missy.providers.codex_provider.httpx.stream", return_value=mock_resp),
+            pytest.raises(ProviderError, match="401"),
+        ):
+            list(provider.stream([Message(role="user", content="hi")]))
 
     def test_stream_skips_invalid_json_data_lines(self):
         lines = [
@@ -1669,9 +1677,11 @@ class TestCodexProviderCompleteWithTools:
         mock_resp.__exit__ = MagicMock(return_value=False)
         mock_resp.raise_for_status.side_effect = http_error
 
-        with patch("missy.providers.codex_provider.httpx.stream", return_value=mock_resp):
-            with pytest.raises(ProviderError, match="403"):
-                provider.complete_with_tools([Message(role="user", content="hi")], [])
+        with (
+            patch("missy.providers.codex_provider.httpx.stream", return_value=mock_resp),
+            pytest.raises(ProviderError, match="403"),
+        ):
+            provider.complete_with_tools([Message(role="user", content="hi")], [])
 
     def test_response_failed_event_raises_provider_error(self):
         from missy.providers.codex_provider import CodexProvider
@@ -1690,9 +1700,11 @@ class TestCodexProviderCompleteWithTools:
         mock_resp.iter_lines.return_value = iter(lines)
         mock_resp.raise_for_status = MagicMock()
 
-        with patch("missy.providers.codex_provider.httpx.stream", return_value=mock_resp):
-            with pytest.raises(ProviderError, match="quota exceeded"):
-                provider.complete_with_tools([Message(role="user", content="hi")], [])
+        with (
+            patch("missy.providers.codex_provider.httpx.stream", return_value=mock_resp),
+            pytest.raises(ProviderError, match="quota exceeded"),
+        ):
+            provider.complete_with_tools([Message(role="user", content="hi")], [])
 
     def test_accepts_prebuilt_dict_tools(self):
         lines = _make_sse_lines(
@@ -1782,14 +1794,16 @@ class TestCodexLoadOAuthToken:
     def test_returns_none_on_import_error(self):
         from missy.providers.codex_provider import _load_oauth_token
 
-        with patch(
-            "missy.providers.codex_provider._load_oauth_token",
-            wraps=lambda: None,
-        ):
+        with (
+            patch(
+                "missy.providers.codex_provider._load_oauth_token",
+                wraps=lambda: None,
+            ),
             # Directly test the exception swallowing path by mocking the inner import.
-            with patch.dict("sys.modules", {"missy.cli.oauth": None}):
-                _load_oauth_token()
-            # If we get here without raising, the guard works.
+            patch.dict("sys.modules", {"missy.cli.oauth": None}),
+        ):
+            _load_oauth_token()
+        # If we get here without raising, the guard works.
 
     def test_returns_token_when_refresh_succeeds(self):
 

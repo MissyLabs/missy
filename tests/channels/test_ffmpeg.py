@@ -16,9 +16,11 @@ class TestEnsureFfmpegAvailable:
         assert result == "/usr/bin/ffmpeg"
 
     def test_raises_runtime_error_when_not_found(self) -> None:
-        with patch("missy.channels.discord.ffmpeg.shutil.which", return_value=None):
-            with pytest.raises(RuntimeError, match="ffmpeg not found"):
-                ensure_ffmpeg_available()
+        with (
+            patch("missy.channels.discord.ffmpeg.shutil.which", return_value=None),
+            pytest.raises(RuntimeError, match="ffmpeg not found"),
+        ):
+            ensure_ffmpeg_available()
 
     def test_returned_path_is_string(self) -> None:
         with patch(
@@ -28,6 +30,8 @@ class TestEnsureFfmpegAvailable:
         assert isinstance(result, str)
 
     def test_error_message_contains_install_hint(self) -> None:
-        with patch("missy.channels.discord.ffmpeg.shutil.which", return_value=None):
-            with pytest.raises(RuntimeError, match="apt install ffmpeg"):
-                ensure_ffmpeg_available()
+        with (
+            patch("missy.channels.discord.ffmpeg.shutil.which", return_value=None),
+            pytest.raises(RuntimeError, match="apt install ffmpeg"),
+        ):
+            ensure_ffmpeg_available()
