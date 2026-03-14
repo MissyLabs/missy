@@ -78,7 +78,7 @@ def _get_option(interaction: dict[str, Any], name: str) -> str | None:
     return None
 
 
-async def _handle_ask(interaction: dict[str, Any], channel: "DiscordChannel") -> str:
+async def _handle_ask(interaction: dict[str, Any], channel: DiscordChannel) -> str:
     """Handle ``/ask`` — forward prompt to the agent and return the reply."""
     import asyncio
 
@@ -98,7 +98,7 @@ async def _handle_ask(interaction: dict[str, Any], channel: "DiscordChannel") ->
         return f"Sorry, I encountered an error: {exc}"
 
 
-async def _handle_status(interaction: dict[str, Any], channel: "DiscordChannel") -> str:
+async def _handle_status(interaction: dict[str, Any], channel: DiscordChannel) -> str:
     """Handle ``/status`` — report connection and config state."""
     account_cfg = channel.account_config
     bot_id = channel.bot_user_id or "unknown"
@@ -112,11 +112,11 @@ async def _handle_status(interaction: dict[str, Any], channel: "DiscordChannel")
     return "\n".join(lines)
 
 
-async def _handle_model(interaction: dict[str, Any], channel: "DiscordChannel") -> str:
+async def _handle_model(interaction: dict[str, Any], channel: DiscordChannel) -> str:
     """Handle ``/model`` — show current model (setting not yet implemented)."""
     name = _get_option(interaction, "name")
     if name:
-        return f"Dynamic model switching is not yet supported. Current model unchanged."
+        return "Dynamic model switching is not yet supported. Current model unchanged."
     try:
         from missy.providers.registry import get_registry
 
@@ -129,7 +129,7 @@ async def _handle_model(interaction: dict[str, Any], channel: "DiscordChannel") 
         return "Provider information is unavailable."
 
 
-async def _handle_help(interaction: dict[str, Any], channel: "DiscordChannel") -> str:
+async def _handle_help(interaction: dict[str, Any], channel: DiscordChannel) -> str:
     """Handle ``/help`` — list available slash commands."""
     lines = ["**Available Missy commands:**", ""]
     for cmd in SLASH_COMMANDS:
@@ -153,7 +153,7 @@ _HANDLERS = {
 
 async def handle_slash_command(
     interaction: dict[str, Any],
-    channel: "DiscordChannel",
+    channel: DiscordChannel,
 ) -> str:
     """Route an INTERACTION_CREATE payload to the correct command handler.
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import socket
-from typing import Generator
+from collections.abc import Generator
 from unittest.mock import patch
 
 import pytest
@@ -225,9 +225,8 @@ class TestDNSFallback:
         with patch(
             "missy.policy.network.socket.getaddrinfo",
             side_effect=OSError("Name or service not known"),
-        ):
-            with pytest.raises(PolicyViolationError):
-                engine.check_host("unresolvable.invalid")
+        ), pytest.raises(PolicyViolationError):
+            engine.check_host("unresolvable.invalid")
 
     def test_multiple_dns_results_first_match_wins(self):
         engine = make_engine(allowed_cidrs=["10.0.0.0/8"])

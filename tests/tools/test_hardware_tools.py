@@ -7,16 +7,10 @@ are mocked so these tests run on headless CI without any hardware.
 from __future__ import annotations
 
 import subprocess
-import sys
 from pathlib import Path
-from types import ModuleType
-from typing import Any
-from unittest.mock import MagicMock, Mock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
-
-from missy.tools.base import ToolResult
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -306,7 +300,7 @@ class TestX11KeyTool:
         assert result.success is True
         assert result.output["key"] == "Return"
         called_cmd = mock_run.call_args[0][0]
-        assert "xdotool key Return" == called_cmd
+        assert called_cmd == "xdotool key Return"
 
     def test_send_ctrl_c_shortcut(self):
         with patch("missy.tools.builtin.x11_tools.subprocess.run") as mock_run:
@@ -580,8 +574,6 @@ class TestX11ReadScreenTool:
         mock_run.assert_not_called()
 
     def test_call_ollama_vision_sends_correct_payload(self, tmp_path):
-        import httpx
-        import json as _json
 
         mock_response = MagicMock()
         mock_response.json.return_value = {"message": {"content": "a cat"}}
@@ -760,7 +752,7 @@ class TestBrowserNavigateTool:
     def test_navigate_custom_wait_until(self):
         mock_page = _make_mock_page()
         with patch("missy.tools.builtin.browser_tools._page", return_value=mock_page):
-            result = self.tool.execute(url="https://example.com", wait_until="networkidle")
+            self.tool.execute(url="https://example.com", wait_until="networkidle")
 
         mock_page.goto.assert_called_once_with(
             "https://example.com", wait_until="networkidle", timeout=30_000
@@ -1123,7 +1115,7 @@ class TestBrowserCloseTool:
     def test_close_default_session(self):
         from missy.tools.builtin import browser_tools
         with patch.object(browser_tools._registry, "close") as mock_close:
-            result = self.tool.execute()
+            self.tool.execute()
 
         mock_close.assert_called_once_with("default")
 
@@ -1144,7 +1136,7 @@ class TestBrowserSession:
         assert reg.has_active_session() is False
 
     def test_session_registry_has_active_session_true_when_context_set(self):
-        from missy.tools.builtin.browser_tools import _SessionRegistry, BrowserSession
+        from missy.tools.builtin.browser_tools import _SessionRegistry
         reg = _SessionRegistry()
         session = reg.get_or_create("active")
         session._context = MagicMock()
@@ -1209,8 +1201,9 @@ class TestBrowserSession:
         assert "to-remove" not in reg._sessions
 
     def test_ensure_display_sets_display_when_missing(self):
-        from missy.tools.builtin.browser_tools import BrowserSession
         import os
+
+        from missy.tools.builtin.browser_tools import BrowserSession
         session = BrowserSession("disp-test")
         with patch.dict("os.environ", {}, clear=True):
             # No DISPLAY set, no X11 sockets
@@ -1312,7 +1305,7 @@ class TestTTSSpeakTool:
 
             def run_side_effect(cmd, **kw):
                 if isinstance(cmd, list) and cmd[0] == "espeak-ng":
-                    wav_path = kw.get("capture_output")  # not the wav path in espeak case
+                    kw.get("capture_output")  # not the wav path in espeak case
                     return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b"RIFF\x00\x00WAVE", stderr=b"")
                 if isinstance(cmd, list) and cmd[0] == "gst-launch-1.0":
                     return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b"", stderr=b"")
@@ -1681,7 +1674,7 @@ class TestAudioSetVolumeTool:
     def test_custom_device_id(self):
         with patch("missy.tools.builtin.tts_speak.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="Volume: 0.5\n", stderr="")
-            result = self.tool.execute(volume="50%", device_id="47")
+            self.tool.execute(volume="50%", device_id="47")
 
         set_cmd = mock_run.call_args_list[0][0][0]
         assert set_cmd[2] == "47"

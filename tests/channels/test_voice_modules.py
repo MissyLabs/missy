@@ -14,17 +14,15 @@ import asyncio
 import json
 import time
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
-from missy.channels.voice.registry import DeviceRegistry, EdgeNode, _node_from_dict, _node_to_dict
 from missy.channels.voice.pairing import PairingManager
 from missy.channels.voice.presence import PresenceData, PresenceStore
+from missy.channels.voice.registry import DeviceRegistry, EdgeNode, _node_from_dict, _node_to_dict
 from missy.channels.voice.stt.base import STTEngine, TranscriptionResult
 from missy.channels.voice.tts.base import AudioBuffer, TTSEngine
 from missy.core.events import event_bus
-
 
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
@@ -449,7 +447,7 @@ class TestDeviceRegistryPurgeAudioLogs:
             audio_log_retention_days=0,  # zero days = delete everything older than now
         )
         registry.add_node(node)
-        count = registry.purge_audio_logs()
+        registry.purge_audio_logs()
         # The subdirectory should never be deleted.
         assert subdir.exists()
 

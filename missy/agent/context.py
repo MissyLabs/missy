@@ -113,7 +113,7 @@ class ContextManager:
             enriched_system += f"\n\n## Relevant Memory\n{memory_text}"
 
         if learnings:
-            learnings_text = "\n".join(f"- {l}" for l in learnings[:5])
+            learnings_text = "\n".join(f"- {item}" for item in learnings[:5])
             if _approx_tokens(learnings_text) <= learnings_budget:
                 enriched_system += f"\n\n## Past Learnings\n{learnings_text}"
 

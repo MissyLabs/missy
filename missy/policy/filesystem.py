@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Optional, Union
 
 from missy.config.settings import FilesystemPolicy
 from missy.core.events import AuditEvent, event_bus
@@ -50,7 +49,7 @@ class FilesystemPolicyEngine:
 
     def check_write(
         self,
-        path: Union[str, Path],
+        path: str | Path,
         session_id: str = "",
         task_id: str = "",
     ) -> bool:
@@ -89,7 +88,7 @@ class FilesystemPolicyEngine:
 
     def check_read(
         self,
-        path: Union[str, Path],
+        path: str | Path,
         session_id: str = "",
         task_id: str = "",
     ) -> bool:
@@ -128,7 +127,7 @@ class FilesystemPolicyEngine:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _resolve(path: Union[str, Path]) -> Path:
+    def _resolve(path: str | Path) -> Path:
         """Return an absolute, symlink-resolved :class:`Path`.
 
         Uses :meth:`Path.resolve` with ``strict=False`` so that paths
@@ -148,7 +147,7 @@ class FilesystemPolicyEngine:
         self,
         path: Path,
         allowed_paths: list[str],
-    ) -> Optional[str]:
+    ) -> str | None:
         """Return the first entry in *allowed_paths* that contains *path*.
 
         The comparison checks that *path* is the allowed directory itself or
@@ -182,7 +181,7 @@ class FilesystemPolicyEngine:
         operation: str,
         path_str: str,
         result: str,
-        rule: Optional[str],
+        rule: str | None,
         session_id: str,
         task_id: str,
     ) -> None:

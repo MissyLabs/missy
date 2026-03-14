@@ -20,7 +20,6 @@ import json
 import logging
 import sys
 from pathlib import Path
-from typing import Optional
 
 import click
 from rich.console import Console
@@ -167,7 +166,7 @@ def _load_subsystems(config_path: str):
     return cfg
 
 
-def _print_error(message: str, hint: Optional[str] = None) -> None:
+def _print_error(message: str, hint: str | None = None) -> None:
     """Render a styled error panel to stderr."""
     body = message
     if hint:
@@ -322,8 +321,8 @@ def setup(ctx: click.Context) -> None:
 def ask(
     ctx: click.Context,
     prompt: str,
-    provider: Optional[str],
-    session: Optional[str],
+    provider: str | None,
+    session: str | None,
     capability_mode: str,
 ) -> None:
     """Ask Missy a single question and print the response.
@@ -413,7 +412,7 @@ def ask(
               type=click.Choice(["full", "safe-chat", "no-tools"], case_sensitive=False),
               show_default=True, help="Capability mode: full (all tools), safe-chat (read-only tools), no-tools (pure chat).")
 @click.pass_context
-def run(ctx: click.Context, provider: Optional[str], session: str, capability_mode: str) -> None:
+def run(ctx: click.Context, provider: str | None, session: str, capability_mode: str) -> None:
     """Start an interactive session with Missy.
 
     Type your messages and press Enter.  Type [bold]quit[/] or [bold]exit[/],
@@ -523,7 +522,6 @@ def run(ctx: click.Context, provider: Optional[str], session: str, capability_mo
 @cli.group()
 def schedule() -> None:
     """Manage scheduled jobs (recurring agent tasks)."""
-    pass
 
 
 @schedule.command("add")
@@ -712,7 +710,6 @@ def schedule_remove(ctx: click.Context, job_id: str) -> None:
 @cli.group()
 def audit() -> None:
     """Audit log and security event commands."""
-    pass
 
 
 @audit.command("security")
@@ -779,7 +776,7 @@ def audit_security(ctx: click.Context, limit: int) -> None:
     help="Filter by event category (e.g. network, filesystem, shell, plugin, scheduler).",
 )
 @click.pass_context
-def audit_recent(ctx: click.Context, limit: int, category: Optional[str]) -> None:
+def audit_recent(ctx: click.Context, limit: int, category: str | None) -> None:
     """Show recent audit events from the log.
 
     \b
@@ -983,7 +980,6 @@ def plugins_list(ctx: click.Context) -> None:
 @cli.group()
 def discord() -> None:
     """Discord channel commands (status, probe, register-commands, audit)."""
-    pass
 
 
 @discord.command("status")
@@ -1076,7 +1072,7 @@ def discord_probe(ctx: click.Context) -> None:
 @click.pass_context
 def discord_register_commands(
     ctx: click.Context,
-    guild_id: Optional[str],
+    guild_id: str | None,
     account_index: int,
 ) -> None:
     """Register slash commands with Discord.
@@ -1198,7 +1194,6 @@ def discord_audit(ctx: click.Context, limit: int) -> None:
 @cli.group()
 def gateway() -> None:
     """Gateway / service-mode commands."""
-    pass
 
 
 @gateway.command("start")
@@ -1342,12 +1337,12 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
             from missy.channels.discord.channel import DiscordChannel
             from missy.core.exceptions import ProviderError
 
-            async def _process_channel(ch: "DiscordChannel") -> None:
+            async def _process_channel(ch: DiscordChannel) -> None:
                 """Drain the channel queue and run the agent for each message."""
                 while not stop_event:
                     try:
                         msg = await asyncio.wait_for(ch._queue.get(), timeout=1.0)
-                    except asyncio.TimeoutError:
+                    except TimeoutError:
                         continue
                     except Exception:
                         break
@@ -1608,7 +1603,7 @@ def doctor(ctx: click.Context) -> None:
         if mem_path.exists():
             store = SQLiteMemoryStore(str(mem_path))
             # Quick connectivity check: count turns
-            turns = store.get_session_turns("__health_check__", limit=1)
+            store.get_session_turns("__health_check__", limit=1)
             table.add_row("memory store", ok, f"sqlite: {mem_path} (accessible)")
         else:
             table.add_row("memory store", warn, f"not found: {mem_path}")
@@ -1693,7 +1688,7 @@ def doctor(ctx: click.Context) -> None:
 @cli.command()
 @click.option("--session", default=None, help="Session ID to query (default: show config).")
 @click.pass_context
-def cost(ctx: click.Context, session: Optional[str]) -> None:
+def cost(ctx: click.Context, session: str | None) -> None:
     """Show cost tracking configuration and session cost summary.
 
     When ``--session`` is given, shows cost data from the memory store for
@@ -1820,7 +1815,6 @@ def recover(ctx: click.Context, abandon_all: bool) -> None:
 @cli.group()
 def vault() -> None:
     """Encrypted secrets vault commands."""
-    pass
 
 
 @vault.command("set")
@@ -1909,7 +1903,6 @@ def vault_delete(ctx: click.Context, key: str) -> None:
 @cli.group()
 def sessions() -> None:
     """Session and conversation history commands."""
-    pass
 
 
 @sessions.command("cleanup")
@@ -2003,7 +1996,6 @@ def sessions_rename(ctx: click.Context, session_id: str, name: str) -> None:
 @cli.group()
 def approvals() -> None:
     """Approval gate management."""
-    pass
 
 
 @approvals.command("list")
@@ -2021,7 +2013,6 @@ def approvals_list(ctx: click.Context) -> None:
 @cli.group()
 def evolve() -> None:
     """Code self-evolution management."""
-    pass
 
 
 @evolve.command("list")
@@ -2186,7 +2177,6 @@ def evolve_rollback(ctx: click.Context, proposal_id: str) -> None:
 @cli.group()
 def patches() -> None:
     """Prompt patch (self-tuning) management."""
-    pass
 
 
 @patches.command("list")
@@ -2248,7 +2238,6 @@ def patches_reject(ctx: click.Context, patch_id: str) -> None:
 @cli.group()
 def mcp() -> None:
     """Model Context Protocol (MCP) server management."""
-    pass
 
 
 @mcp.command("list")
@@ -2277,7 +2266,7 @@ def mcp_list(ctx: click.Context) -> None:
 @click.option("--command", default=None, help="Stdio command to launch the MCP server.")
 @click.option("--url", default=None, help="HTTP URL for the MCP server.")
 @click.pass_context
-def mcp_add(ctx: click.Context, name: str, command: Optional[str], url: Optional[str]) -> None:
+def mcp_add(ctx: click.Context, name: str, command: str | None, url: str | None) -> None:
     """Connect to a new MCP server."""
     from missy.mcp.manager import McpManager
     _load_subsystems(ctx.obj["config_path"])
@@ -2310,7 +2299,6 @@ def mcp_remove(ctx: click.Context, name: str) -> None:
 @cli.group()
 def devices() -> None:
     """Edge node device management commands."""
-    pass
 
 
 @devices.command("list")
@@ -2359,7 +2347,7 @@ def devices_list(ctx: click.Context) -> None:
 @devices.command("pair")
 @click.option("--node-id", default=None, help="Node ID to approve (omit to list pending and prompt).")
 @click.pass_context
-def devices_pair(ctx: click.Context, node_id: Optional[str]) -> None:
+def devices_pair(ctx: click.Context, node_id: str | None) -> None:
     """Approve a pending edge node pairing request.
 
     If --node-id is omitted, lists pending nodes and prompts for selection.
@@ -2492,7 +2480,6 @@ def devices_policy(ctx: click.Context, node_id: str, mode: str) -> None:
 @cli.group()
 def voice() -> None:
     """Voice channel management commands."""
-    pass
 
 
 @voice.command("status")

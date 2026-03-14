@@ -25,7 +25,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from missy.core.events import AuditEvent, EventBus, event_bus
 
@@ -53,7 +53,7 @@ class AuditLogger:
     def __init__(
         self,
         log_path: str = "~/.missy/audit.jsonl",
-        bus: Optional[EventBus] = None,
+        bus: EventBus | None = None,
     ) -> None:
         self.log_path = Path(log_path).expanduser()
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -207,7 +207,7 @@ class AuditLogger:
 # Module-level singleton
 # ---------------------------------------------------------------------------
 
-_audit_logger: Optional[AuditLogger] = None
+_audit_logger: AuditLogger | None = None
 
 
 def init_audit_logger(log_path: str = "~/.missy/audit.jsonl") -> AuditLogger:

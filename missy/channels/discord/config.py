@@ -25,7 +25,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 
 class DiscordDMPolicy(str, Enum):
@@ -100,8 +100,8 @@ class DiscordAccountConfig:
     """
 
     token_env_var: str = "DISCORD_BOT_TOKEN"
-    token: Optional[str] = None          # direct token (takes precedence over token_env_var)
-    account_id: Optional[str] = None
+    token: str | None = None          # direct token (takes precedence over token_env_var)
+    account_id: str | None = None
     application_id: str = ""
     guild_policies: dict[str, DiscordGuildPolicy] = field(default_factory=dict)
     dm_policy: DiscordDMPolicy = DiscordDMPolicy.DISABLED
@@ -111,7 +111,7 @@ class DiscordAccountConfig:
     allow_bots_if_mention_only: bool = False
     auto_thread_threshold: int = 0  # 0 = disabled; N = create thread after N messages
 
-    def resolve_token(self) -> Optional[str]:
+    def resolve_token(self) -> str | None:
         """Return the bot token — checks direct token, env var, and vault in order.
 
         Returns:

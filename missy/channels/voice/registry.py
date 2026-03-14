@@ -32,7 +32,7 @@ import threading
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from missy.core.events import AuditEvent, event_bus
 
@@ -199,7 +199,7 @@ class DeviceRegistry:
     # CRUD
     # ------------------------------------------------------------------
 
-    def get_node(self, node_id: str) -> Optional[EdgeNode]:
+    def get_node(self, node_id: str) -> EdgeNode | None:
         """Return the node with the given *node_id*, or ``None`` if absent.
 
         Args:
@@ -424,8 +424,8 @@ class DeviceRegistry:
     def update_sensor_data(
         self,
         node_id: str,
-        occupancy: Optional[bool],
-        noise_level: Optional[float],
+        occupancy: bool | None,
+        noise_level: float | None,
     ) -> None:
         """Persist the latest sensor readings for *node_id*.
 

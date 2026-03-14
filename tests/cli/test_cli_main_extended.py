@@ -128,7 +128,7 @@ class TestLoadSubsystemsBranches:
                 patch("missy.observability.audit_logger.init_audit_logger"),
                 patch("missy.providers.registry.init_registry"),
                 patch("missy.tools.builtin.register_builtin_tools", side_effect=RuntimeError("tool boom")),
-                patch("missy.providers.registry.get_registry", return_value=MagicMock(list_providers=lambda: [])),
+                patch("missy.providers.registry.get_registry", return_value=MagicMock(list_providers=list)),
             ):
                 result = runner.invoke(cli, ["--config", cfg_path, "providers"])
             assert result.exit_code == 0
@@ -146,7 +146,7 @@ class TestLoadSubsystemsBranches:
                 patch("missy.observability.audit_logger.init_audit_logger"),
                 patch("missy.providers.registry.init_registry"),
                 patch("missy.observability.otel.init_otel", side_effect=RuntimeError("otel boom")),
-                patch("missy.providers.registry.get_registry", return_value=MagicMock(list_providers=lambda: [])),
+                patch("missy.providers.registry.get_registry", return_value=MagicMock(list_providers=list)),
             ):
                 result = runner.invoke(cli, ["--config", cfg_path, "providers"])
             assert result.exit_code == 0
@@ -162,12 +162,11 @@ class TestLoadSubsystemsBranches:
 
 class TestDebugFlag:
     def test_debug_flag_enables_debug_logging(self, runner: CliRunner):
-        import logging
 
         cfg_path = _cfg_path()
         try:
             with patch("missy.cli.main._load_subsystems", return_value=_make_mock_config()):
-                with patch("missy.providers.registry.get_registry", return_value=MagicMock(list_providers=lambda: [])):
+                with patch("missy.providers.registry.get_registry", return_value=MagicMock(list_providers=list)):
                     result = runner.invoke(
                         cli, ["--debug", "--config", cfg_path, "providers"]
                     )
@@ -1016,7 +1015,6 @@ class TestDoctorBranchesExtended:
         return result
 
     def test_doctor_audit_log_missing_shows_warn(self, runner: CliRunner):
-        from pathlib import Path
 
         cfg_path = _cfg_path()
         mock_cfg = _make_mock_config()

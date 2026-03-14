@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import pytest
-
 from missy.security.censor import censor_response
-
 
 # ---------------------------------------------------------------------------
 # Falsy / empty input

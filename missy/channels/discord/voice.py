@@ -24,8 +24,9 @@ import tempfile
 import threading
 import time
 from collections import defaultdict
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
-from typing import Any, Callable, Coroutine, Dict, Optional
+from typing import Any
 
 from missy.channels.discord.ffmpeg import ensure_ffmpeg_available
 
@@ -97,9 +98,9 @@ class _GuildVoiceState:
     voice_client: Any  # discord.VoiceClient or VoiceRecvClient
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     listening: bool = False
-    listen_task: Optional[asyncio.Task] = None
+    listen_task: asyncio.Task | None = None
     sink: Any = None  # _SpeechCollectorSink instance
-    watchdog_task: Optional[asyncio.Task] = None
+    watchdog_task: asyncio.Task | None = None
 
 
 class DiscordVoiceManager:
@@ -113,8 +114,8 @@ class DiscordVoiceManager:
     def __init__(
         self,
         *,
-        agent_callback: Optional[Callable[..., Coroutine]] = None,
-        text_channel_callback: Optional[Callable[[str, str], Coroutine]] = None,
+        agent_callback: Callable[..., Coroutine] | None = None,
+        text_channel_callback: Callable[[str, str], Coroutine] | None = None,
     ) -> None:
         """
         Args:
@@ -124,15 +125,15 @@ class DiscordVoiceManager:
         """
         self._agent_callback = agent_callback
         self._text_channel_callback = text_channel_callback
-        self._guild_states: Dict[int, _GuildVoiceState] = {}
+        self._guild_states: dict[int, _GuildVoiceState] = {}
         self._client: Any = None
         self._discord: Any = None
         self._voice_recv: Any = None
         self._stt_engine: Any = None
         self._tts_engine: Any = None
         self._ready = asyncio.Event()
-        self._client_task: Optional[asyncio.Task] = None
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._client_task: asyncio.Task | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
 
         try:
             ensure_ffmpeg_available()
@@ -209,7 +210,7 @@ class DiscordVoiceManager:
         self._client_task = asyncio.create_task(self._client.start(raw_token))
         try:
             await asyncio.wait_for(self._ready.wait(), timeout=30.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise DiscordVoiceError(
                 "Discord voice client did not become ready within 30 seconds."
             )
@@ -269,7 +270,7 @@ class DiscordVoiceManager:
             )
         return guild
 
-    def get_user_voice_channel(self, guild_id: int, user_id: int) -> Optional[Any]:
+    def get_user_voice_channel(self, guild_id: int, user_id: int) -> Any | None:
         guild = self._get_guild(guild_id)
         member = guild.get_member(user_id)
         if member is None:
@@ -279,7 +280,7 @@ class DiscordVoiceManager:
             return None
         return voice_state.channel
 
-    def find_voice_channel(self, guild_id: int, query: str) -> Optional[Any]:
+    def find_voice_channel(self, guild_id: int, query: str) -> Any | None:
         guild = self._get_guild(guild_id)
 
         if query.isdigit():
@@ -308,9 +309,9 @@ class DiscordVoiceManager:
         self,
         guild_id: int,
         *,
-        channel_id: Optional[int] = None,
-        channel_name: Optional[str] = None,
-        user_id: Optional[int] = None,
+        channel_id: int | None = None,
+        channel_name: str | None = None,
+        user_id: int | None = None,
     ) -> str:
         """Join a voice channel and start listening. Returns channel name."""
         guild = self._get_guild(guild_id)
@@ -363,7 +364,7 @@ class DiscordVoiceManager:
         self._start_listening(guild_id, state)
         return target.name
 
-    async def leave(self, guild_id: int) -> Optional[str]:
+    async def leave(self, guild_id: int) -> str | None:
         """Leave voice and stop listening. Returns channel name left."""
         state = self._guild_states.pop(guild_id, None)
         if state is None:
@@ -432,7 +433,7 @@ class DiscordVoiceManager:
             audio_buf = await self._tts_engine.synthesize(text)
 
             # Write to temp file for FFmpegPCMAudio.
-            path: Optional[str] = None
+            path: str | None = None
             try:
                 with tempfile.NamedTemporaryFile(
                     prefix="missy-tts-", suffix=".wav", delete=False
@@ -443,7 +444,7 @@ class DiscordVoiceManager:
                 source = self._discord.FFmpegPCMAudio(path)
                 done = asyncio.Event()
 
-                def _after(err: Optional[BaseException]) -> None:
+                def _after(err: BaseException | None) -> None:
                     if err:
                         logger.exception("Voice playback error", exc_info=err)
                     done.set()
@@ -452,7 +453,7 @@ class DiscordVoiceManager:
 
                 try:
                     await asyncio.wait_for(done.wait(), timeout=120)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     if hasattr(vc, "stop"):
                         vc.stop()
                     logger.warning("TTS playback timed out")
@@ -653,7 +654,7 @@ class DiscordVoiceManager:
             return False
         return state.listening
 
-    def current_channel_name(self, guild_id: int) -> Optional[str]:
+    def current_channel_name(self, guild_id: int) -> str | None:
         state = self._guild_states.get(guild_id)
         if state is None:
             return None
@@ -693,11 +694,11 @@ def _make_sink_class(voice_recv_module: Any) -> type:
             self._bot_user_id = bot_user_id
 
             # Per-user audio buffers: user_id -> list of PCM chunks.
-            self._buffers: Dict[int, list[bytes]] = defaultdict(list)
+            self._buffers: dict[int, list[bytes]] = defaultdict(list)
             # Per-user last-packet timestamp.
-            self._last_packet_time: Dict[int, float] = {}
+            self._last_packet_time: dict[int, float] = {}
             # Per-user silence timer handles.
-            self._timers: Dict[int, asyncio.TimerHandle] = {}
+            self._timers: dict[int, asyncio.TimerHandle] = {}
             self._lock = threading.Lock()
 
         def wants_opus(self) -> bool:

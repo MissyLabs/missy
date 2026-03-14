@@ -18,7 +18,6 @@ from __future__ import annotations
 import os
 import tempfile
 from pathlib import Path
-from typing import Optional
 
 import click
 from rich.console import Console
@@ -110,12 +109,12 @@ def _mask_key(key: str) -> str:
     return key[:6] + "…" + key[-4:]
 
 
-def _detect_env_key(env_var: str) -> Optional[str]:
+def _detect_env_key(env_var: str) -> str | None:
     """Return the value of *env_var* if set and non-empty, else None."""
     return os.environ.get(env_var) or None
 
 
-def _validate_key_format(key: str, prefix: Optional[str]) -> bool:
+def _validate_key_format(key: str, prefix: str | None) -> bool:
     """Basic key format check — non-empty and starts with expected prefix."""
     if not key or not key.strip():
         return False
@@ -124,7 +123,7 @@ def _validate_key_format(key: str, prefix: Optional[str]) -> bool:
     return True
 
 
-def _prompt_api_key(provider_name: str, info: dict) -> Optional[str]:
+def _prompt_api_key(provider_name: str, info: dict) -> str | None:
     """Interactively prompt for an API key with env-var detection and masking."""
     env_var = info["env_var"]
     prefix = info["key_prefix"]
@@ -264,7 +263,7 @@ def _build_config_yaml(
     workspace: str,
     providers_cfg: list[dict],
     allowed_hosts: list[str],
-    discord_cfg: Optional[dict] = None,
+    discord_cfg: dict | None = None,
 ) -> str:
     """Render the config.yaml content from gathered wizard data."""
     lines: list[str] = [
@@ -316,7 +315,7 @@ def _build_config_yaml(
             lines.append(f'    api_key: "{p["api_key"]}"')
         if p.get("base_url"):
             lines.append(f'    base_url: "{p["base_url"]}"')
-        lines.append(f'    timeout: 30')
+        lines.append('    timeout: 30')
 
     # Discord section (optional)
     if discord_cfg:
@@ -341,7 +340,7 @@ def _build_config_yaml(
             lines.append("      guild_policies:")
             for gp in guild_policies:
                 lines.append(f'        "{gp["guild_id"]}":')
-                lines.append(f'          enabled: true')
+                lines.append('          enabled: true')
                 lines.append(f'          require_mention: {str(gp["require_mention"]).lower()}')
                 lines.append(f'          mode: {gp["mode"]}')
                 if gp.get("allowed_channels"):
@@ -494,7 +493,7 @@ def run_wizard(config_path: str) -> None:
             continue
 
         # API-key based providers (Anthropic, OpenAI)
-        api_key: Optional[str] = None
+        api_key: str | None = None
 
         if pkey == "openai":
             # OpenAI supports two auth methods: API key or OAuth (PKCE).
@@ -596,7 +595,7 @@ def run_wizard(config_path: str) -> None:
     # Step 4: Discord (optional)
     # -----------------------------------------------------------------------
     console.print("\n[bold]Step 4 of 5 — Discord Integration[/]  [dim](optional)[/]")
-    discord_cfg: Optional[dict] = None
+    discord_cfg: dict | None = None
 
     if click.confirm("  Configure Discord bot?", default=False):
         console.print(

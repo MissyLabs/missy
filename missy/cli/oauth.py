@@ -31,7 +31,6 @@ import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import Optional
 
 import click
 from rich.console import Console
@@ -125,7 +124,7 @@ class _CallbackHandler(BaseHTTPRequestHandler):
         pass
 
 
-def _start_callback_server() -> Optional[HTTPServer]:
+def _start_callback_server() -> HTTPServer | None:
     """Start the local callback HTTP server in a daemon thread.
 
     Returns the server on success, or None if the port is in use.
@@ -139,7 +138,7 @@ def _start_callback_server() -> Optional[HTTPServer]:
         return None
 
 
-def _wait_for_callback(server: HTTPServer, timeout: int = 120) -> Optional[str]:
+def _wait_for_callback(server: HTTPServer, timeout: int = 120) -> str | None:
     """Block until the callback arrives or timeout expires.
 
     Returns the authorization code, or None on timeout/error.
@@ -253,7 +252,7 @@ def _save_token(data: dict) -> None:
     tmp.replace(TOKEN_FILE)
 
 
-def load_token() -> Optional[dict]:
+def load_token() -> dict | None:
     """Load the stored OAuth token dict, or None if not present."""
     if not TOKEN_FILE.exists():
         return None
@@ -263,7 +262,7 @@ def load_token() -> Optional[dict]:
         return None
 
 
-def refresh_token_if_needed(client_id: Optional[str] = None) -> Optional[str]:
+def refresh_token_if_needed(client_id: str | None = None) -> str | None:
     """Return a valid access token, refreshing if within the expiry margin.
 
     Returns the access token string, or None if no token is stored or
@@ -306,7 +305,7 @@ def refresh_token_if_needed(client_id: Optional[str] = None) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
-def _extract_code_from_url(raw: str) -> Optional[str]:
+def _extract_code_from_url(raw: str) -> str | None:
     """Extract the ``code`` parameter from a full redirect URL string."""
     raw = raw.strip()
     if "?" not in raw:
@@ -322,7 +321,7 @@ def _extract_code_from_url(raw: str) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
-def run_openai_oauth(client_id: Optional[str] = None) -> Optional[str]:
+def run_openai_oauth(client_id: str | None = None) -> str | None:
     """Run the full PKCE OAuth flow and return the access token on success.
 
     Steps:
@@ -373,7 +372,7 @@ def run_openai_oauth(client_id: Optional[str] = None) -> Optional[str]:
 
     # Race: automatic callback vs. manual paste.
     # prompt runs in a thread so the callback server can win concurrently.
-    code: Optional[str] = None
+    code: str | None = None
     paste_result: list[str] = []
     paste_done = threading.Event()
 

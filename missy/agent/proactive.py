@@ -39,9 +39,10 @@ import os
 import shutil
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Callable, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +141,7 @@ class ProactiveManager:
         self,
         triggers: list[ProactiveTrigger],
         agent_callback: Callable[[str, str], Any],
-        approval_gate: Optional[Any] = None,
+        approval_gate: Any | None = None,
     ) -> None:
         self._triggers = triggers
         self._agent_callback = agent_callback
@@ -155,7 +156,7 @@ class ProactiveManager:
         self._stop_event = threading.Event()
 
         # Watchdog observer (created lazily, shared across file_change triggers)
-        self._observer: Optional[Any] = None
+        self._observer: Any | None = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -276,7 +277,7 @@ class ProactiveManager:
                     "trigger_type": trigger.trigger_type,
                     "enabled": trigger.enabled,
                     "last_fired": (
-                        datetime.fromtimestamp(last, tz=timezone.utc).isoformat()
+                        datetime.fromtimestamp(last, tz=UTC).isoformat()
                         if last
                         else None
                     ),
@@ -352,7 +353,7 @@ class ProactiveManager:
             self._last_fired[trigger.name] = now
 
         # 3. Build prompt
-        ts = datetime.fromtimestamp(now, tz=timezone.utc).isoformat()
+        ts = datetime.fromtimestamp(now, tz=UTC).isoformat()
         template = trigger.prompt_template or (
             "Proactive trigger '{trigger_name}' of type '{trigger_type}' fired at {timestamp}."
         )

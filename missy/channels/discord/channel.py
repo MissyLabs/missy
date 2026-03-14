@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from missy.channels.base import BaseChannel, ChannelMessage
 from missy.channels.discord.config import DiscordAccountConfig, DiscordDMPolicy
@@ -52,7 +52,7 @@ class DiscordSendError(Exception):
         message: str,
         *,
         channel_id: str = "",
-        original_error: Optional[Exception] = None,
+        original_error: Exception | None = None,
     ) -> None:
         super().__init__(message)
         self.channel_id = channel_id
@@ -83,14 +83,14 @@ class DiscordChannel(BaseChannel):
         self._session_id = session_id
         self._task_id = task_id
         self._queue: asyncio.Queue[ChannelMessage] = asyncio.Queue(maxsize=queue_max)
-        self._current_channel_id: Optional[str] = None
+        self._current_channel_id: str | None = None
 
         # Pairing state: set of Discord user IDs that have initiated pairing
         # but not yet been confirmed.
         self._pending_pairs: set[str] = set()
 
         # Resolved bot user ID (populated after READY).
-        self._bot_user_id: Optional[str] = None
+        self._bot_user_id: str | None = None
 
         # Thread-scoped session mapping: thread_id -> session_id
         # Enables conversation continuity within Discord threads.
@@ -134,14 +134,14 @@ class DiscordChannel(BaseChannel):
             task_id=task_id,
         )
 
-        self._gateway_task: Optional[asyncio.Task[None]] = None
+        self._gateway_task: asyncio.Task[None] | None = None
 
     # ------------------------------------------------------------------
     # Public properties
     # ------------------------------------------------------------------
 
     @property
-    def bot_user_id(self) -> Optional[str]:
+    def bot_user_id(self) -> str | None:
         """The Discord user ID of the connected bot, available after READY."""
         return self._bot_user_id or self._gateway.bot_user_id
 
@@ -189,7 +189,7 @@ class DiscordChannel(BaseChannel):
     # BaseChannel interface
     # ------------------------------------------------------------------
 
-    def receive(self) -> Optional[ChannelMessage]:
+    def receive(self) -> ChannelMessage | None:
         """Raise :exc:`NotImplementedError` — Discord is async-only.
 
         Use :meth:`areceive` or the internal queue directly when building
@@ -203,7 +203,7 @@ class DiscordChannel(BaseChannel):
             "Use 'await channel.areceive()' or consume the asyncio.Queue directly."
         )
 
-    async def areceive(self) -> Optional[ChannelMessage]:
+    async def areceive(self) -> ChannelMessage | None:
         """Await the next inbound :class:`ChannelMessage` from Discord.
 
         Returns:
@@ -235,9 +235,9 @@ class DiscordChannel(BaseChannel):
         self,
         channel_id: str,
         message: str,
-        reply_to: Optional[str] = None,
-        thread_id: Optional[str] = None,
-        mention_user_ids: Optional[list[str]] = None,
+        reply_to: str | None = None,
+        thread_id: str | None = None,
+        mention_user_ids: list[str] | None = None,
     ) -> str:
         """Send *message* to a specific Discord channel asynchronously.
 
@@ -267,7 +267,7 @@ class DiscordChannel(BaseChannel):
         _DISCORD_MAX = 1990
         chunks = [message[i:i + _DISCORD_MAX] for i in range(0, max(len(message), 1), _DISCORD_MAX)]
 
-        last_message_id: Optional[str] = None
+        last_message_id: str | None = None
         try:
             for idx, chunk in enumerate(chunks):
                 result = self._rest.send_message(
@@ -305,9 +305,9 @@ class DiscordChannel(BaseChannel):
         self,
         channel_id: str,
         message: str,
-        reply_to: Optional[str] = None,
-        thread_id: Optional[str] = None,
-        mention_user_ids: Optional[list[str]] = None,
+        reply_to: str | None = None,
+        thread_id: str | None = None,
+        mention_user_ids: list[str] | None = None,
         max_attempts: int = 6,
         max_total_seconds: float = 300.0,
     ) -> str:
@@ -337,7 +337,7 @@ class DiscordChannel(BaseChannel):
 
         start = _time.monotonic()
         base_delay = 2.0
-        last_error: Optional[Exception] = None
+        last_error: Exception | None = None
 
         for attempt in range(1, max_attempts + 1):
             elapsed = _time.monotonic() - start
@@ -441,9 +441,9 @@ class DiscordChannel(BaseChannel):
         author: dict[str, Any] = data.get("author") or {}
         author_id: str = str(author.get("id", ""))
         channel_id: str = str(data.get("channel_id", ""))
-        guild_id: Optional[str] = data.get("guild_id") or None
+        guild_id: str | None = data.get("guild_id") or None
         content: str = str(data.get("content", ""))
-        thread_id: Optional[str] = data.get("thread_id") or None
+        thread_id: str | None = data.get("thread_id") or None
 
         logger.info(
             "Discord: MESSAGE_CREATE guild=%s channel=%s author=%s content=%r",
@@ -707,7 +707,7 @@ class DiscordChannel(BaseChannel):
         self,
         author: dict[str, Any],
         content: str,
-        guild_id: Optional[str],
+        guild_id: str | None,
     ) -> bool:
         """Return True if the message from a bot author should be processed."""
         if not author.get("bot"):
@@ -901,7 +901,7 @@ class DiscordChannel(BaseChannel):
     # Thread management
     # ------------------------------------------------------------------
 
-    def get_thread_session(self, thread_id: str) -> Optional[str]:
+    def get_thread_session(self, thread_id: str) -> str | None:
         """Return the session ID associated with a thread, if any."""
         return self._thread_sessions.get(thread_id)
 
@@ -913,9 +913,9 @@ class DiscordChannel(BaseChannel):
         self,
         channel_id: str,
         name: str,
-        message_id: Optional[str] = None,
-        session_id: Optional[str] = None,
-    ) -> Optional[str]:
+        message_id: str | None = None,
+        session_id: str | None = None,
+    ) -> str | None:
         """Create a new Discord thread and optionally bind it to a session.
 
         Args:

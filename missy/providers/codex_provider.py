@@ -30,7 +30,8 @@ from __future__ import annotations
 import base64
 import json
 import logging
-from typing import Any, Iterator, Optional
+from collections.abc import Iterator
+from typing import Any
 
 import httpx
 
@@ -60,7 +61,7 @@ def _extract_account_id(token: str) -> str:
         return ""
 
 
-def _load_oauth_token() -> Optional[str]:
+def _load_oauth_token() -> str | None:
     """Load the stored OAuth access token, refreshing if needed."""
     try:
         from missy.cli.oauth import refresh_token_if_needed
@@ -105,7 +106,7 @@ class CodexProvider(BaseProvider):
     name = "openai-codex"
 
     def __init__(self, config: ProviderConfig) -> None:
-        self._api_key: Optional[str] = config.api_key
+        self._api_key: str | None = config.api_key
         self._model: str = config.model or _DEFAULT_MODEL
         self._timeout: int = config.timeout or 60
 
@@ -131,7 +132,7 @@ class CodexProvider(BaseProvider):
         self,
         messages: list[Message],
         stream: bool = True,
-        tools: Optional[list[dict]] = None,
+        tools: list[dict] | None = None,
     ) -> dict[str, Any]:
         instructions = _extract_system(messages)
         input_messages = _messages_to_input(messages)

@@ -43,7 +43,7 @@ def _publish(bus: EventBus, event_type: str, category: str, result: str, **detai
 class TestAuditLoggerInit:
     def test_creates_parent_directory(self, tmp_path: Path, bus: EventBus):
         nested = str(tmp_path / "sub" / "dir" / "audit.jsonl")
-        al = AuditLogger(log_path=nested, bus=bus)
+        AuditLogger(log_path=nested, bus=bus)
         assert Path(nested).parent.exists()
 
     def test_log_path_set_correctly(self, log_path: str, audit_logger: AuditLogger):

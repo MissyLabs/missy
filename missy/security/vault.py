@@ -15,7 +15,6 @@ import json
 import os
 import secrets
 from pathlib import Path
-from typing import Optional
 
 try:
     from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
@@ -91,7 +90,7 @@ class Vault:
         store[key] = value
         self._save_store(store)
 
-    def get(self, key: str) -> Optional[str]:
+    def get(self, key: str) -> str | None:
         """Retrieve a secret; returns None if not found."""
         store = self._load_store()
         return store.get(key)

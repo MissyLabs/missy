@@ -5,7 +5,7 @@ from __future__ import annotations
 import enum
 import threading
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -98,7 +98,7 @@ class SessionManager:
         """
         session = Session(
             id=self.generate_session_id(),
-            created_at=datetime.now(tz=timezone.utc),
+            created_at=datetime.now(tz=UTC),
             metadata=metadata or {},
         )
         self._local.session = session

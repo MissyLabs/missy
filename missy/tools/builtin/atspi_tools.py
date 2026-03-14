@@ -17,7 +17,7 @@ installed so they never break the runtime on headless or minimal systems.
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from missy.tools.base import BaseTool, ToolPermissions, ToolResult
 
@@ -212,8 +212,8 @@ def _format_tree(nodes: list[dict[str, Any]]) -> str:
 
 def _find_element(
     app,
-    name: Optional[str],
-    role: Optional[str],
+    name: str | None,
+    role: str | None,
     max_depth: int = 10,
 ):
     """Search an application's accessibility tree for a matching element.
@@ -608,7 +608,7 @@ class AtSpiSetValueTool(BaseTool):
         **_: Any,
     ) -> ToolResult:
         try:
-            import pyatspi  # type: ignore[import]
+            import pyatspi  # type: ignore[import]  # noqa: F401
         except ImportError:
             return ToolResult(success=False, output=None, error=_PYATSPI_MISSING)
 

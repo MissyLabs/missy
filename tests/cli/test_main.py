@@ -112,9 +112,9 @@ class TestInit:
         with runner.isolated_filesystem() as tmpdir:
             fake_home = Path(tmpdir)
             with patch("pathlib.Path.home", return_value=fake_home):
-                with patch("missy.cli.main.Path") as mock_path_cls:
+                with patch("missy.cli.main.Path"):
                     # Let the real Path handle everything but control expanduser
-                    missy_dir = fake_home / ".missy"
+                    fake_home / ".missy"
 
                     real_path = Path
 
@@ -123,7 +123,6 @@ class TestInit:
                         return p
 
                     # Restore real Path; just control expanduser via env
-                    pass
 
             # Simplest approach: patch HOME env var and let real Path work
             with patch.dict(os.environ, {"HOME": str(tmpdir)}):

@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Optional
 
 from missy.core.events import AuditEvent, event_bus
 from missy.core.exceptions import ProviderError
@@ -63,7 +62,7 @@ class AgentConfig:
     """
 
     provider: str = "anthropic"
-    model: Optional[str] = None
+    model: str | None = None
     system_prompt: str = (
         "You are Missy, a helpful local agentic assistant running on Linux. "
         "You have access to tools and MUST use them to complete tasks. "
@@ -147,7 +146,7 @@ class AgentRuntime:
     # Public interface
     # ------------------------------------------------------------------
 
-    def run(self, user_input: str, session_id: Optional[str] = None) -> str:
+    def run(self, user_input: str, session_id: str | None = None) -> str:
         """Run the agent with *user_input* and return the response string.
 
         Execution steps:
@@ -277,7 +276,7 @@ class AgentRuntime:
 
         return final_response
 
-    def run_stream(self, user_input: str, session_id: Optional[str] = None):
+    def run_stream(self, user_input: str, session_id: str | None = None):
         """Stream the response token-by-token for real-time CLI output.
 
         For tool-calling loops, this falls back to ``run()`` and yields the
@@ -434,7 +433,7 @@ class AgentRuntime:
         # --- Feature #7: failure tracker (graceful degradation) ---
         try:
             from missy.agent.failure_tracker import FailureTracker as _FailureTracker
-            failure_tracker: Optional[_FailureTracker] = _FailureTracker(threshold=3)
+            failure_tracker: _FailureTracker | None = _FailureTracker(threshold=3)
         except ImportError:
             failure_tracker = None
 
@@ -1106,7 +1105,7 @@ class AgentRuntime:
             return
         try:
             self._cost_tracker.check_budget()
-        except Exception as exc:
+        except Exception:
             # Emit audit event for budget breach
             try:
                 self._emit_event(
@@ -1124,7 +1123,7 @@ class AgentRuntime:
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _resolve_session(self, session_id: Optional[str]) -> Session:
+    def _resolve_session(self, session_id: str | None) -> Session:
         """Return the current thread session, creating one if needed.
 
         Args:

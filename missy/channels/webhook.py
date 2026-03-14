@@ -7,7 +7,6 @@ import json
 import logging
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Optional
 
 from missy.channels.base import BaseChannel, ChannelMessage
 
@@ -34,8 +33,8 @@ class WebhookChannel(BaseChannel):
         self._secret = secret.encode() if secret else b""
         self._queue: list[ChannelMessage] = []
         self._lock = threading.Lock()
-        self._server: Optional[HTTPServer] = None
-        self._thread: Optional[threading.Thread] = None
+        self._server: HTTPServer | None = None
+        self._thread: threading.Thread | None = None
 
     def start(self) -> None:
         channel_ref = self
@@ -95,7 +94,7 @@ class WebhookChannel(BaseChannel):
         if self._server:
             self._server.shutdown()
 
-    def receive(self) -> Optional[ChannelMessage]:
+    def receive(self) -> ChannelMessage | None:
         with self._lock:
             return self._queue.pop(0) if self._queue else None
 

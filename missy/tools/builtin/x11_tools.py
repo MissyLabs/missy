@@ -16,7 +16,7 @@ import json
 import logging
 import os
 import subprocess
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 
@@ -65,7 +65,7 @@ def _extract_account_id(token: str) -> str:
         return ""
 
 
-def _load_oauth_token() -> Optional[str]:
+def _load_oauth_token() -> str | None:
     """Load the stored OAuth access token, refreshing if needed."""
     try:
         from missy.cli.oauth import refresh_token_if_needed
@@ -74,7 +74,7 @@ def _load_oauth_token() -> Optional[str]:
         return None
 
 
-def _get_vision_token() -> Optional[str]:
+def _get_vision_token() -> str | None:
     """Return an API token suitable for vision calls."""
     return os.environ.get("OPENAI_API_KEY") or _load_oauth_token()
 
@@ -209,7 +209,6 @@ class X11ClickTool(BaseTool):
         window_name: str = "",
         **_: Any,
     ) -> ToolResult:
-        steps: list[str] = []
 
         if window_name:
             focus_cmd = f"xdotool search --name {json.dumps(window_name)} windowfocus"
@@ -447,7 +446,7 @@ class X11ReadScreenTool(BaseTool):
     # Screenshot helper
     # ------------------------------------------------------------------
 
-    def _take_screenshot(self, path: str, region: str) -> Optional[str]:
+    def _take_screenshot(self, path: str, region: str) -> str | None:
         """Take a screenshot; return an error string or None on success.
 
         If a Playwright browser session is active and no specific region

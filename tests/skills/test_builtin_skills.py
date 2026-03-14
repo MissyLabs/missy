@@ -22,7 +22,6 @@ import pytest
 
 from missy.skills.base import SkillResult
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -151,7 +150,7 @@ class TestDateTimeSkill:
 
     def test_utc_timestamp_is_iso8601(self, skill):
         result = skill.execute()
-        utc_line = next(l for l in result.output.splitlines() if l.startswith("datetime_utc:"))
+        utc_line = next(line for line in result.output.splitlines() if line.startswith("datetime_utc:"))
         ts_str = utc_line.split(": ", 1)[1].strip()
         # Should parse without error.
         parsed = datetime.datetime.fromisoformat(ts_str)
@@ -706,7 +705,7 @@ class TestFormatTurns:
             turn = MagicMock()
             turn.role = role
             turn.content = content
-            turn.timestamp = ts or datetime.datetime(2025, 1, 1, 12, 0, 0, tzinfo=datetime.timezone.utc)
+            turn.timestamp = ts or datetime.datetime(2025, 1, 1, 12, 0, 0, tzinfo=datetime.UTC)
             return turn
 
         return factory
@@ -742,7 +741,7 @@ class TestFormatTurns:
         assert "…" in result
 
     def test_content_exactly_at_limit_not_truncated(self, _make_turn):
-        from missy.skills.builtin.summarize_session import _format_turns, _CONTENT_PREVIEW_LEN
+        from missy.skills.builtin.summarize_session import _CONTENT_PREVIEW_LEN, _format_turns
 
         content = "x" * _CONTENT_PREVIEW_LEN
         turn = _make_turn("user", content)
@@ -752,7 +751,7 @@ class TestFormatTurns:
     def test_timestamp_in_output(self, _make_turn):
         from missy.skills.builtin.summarize_session import _format_turns
 
-        ts = datetime.datetime(2025, 6, 15, 10, 30, 0, tzinfo=datetime.timezone.utc)
+        ts = datetime.datetime(2025, 6, 15, 10, 30, 0, tzinfo=datetime.UTC)
         turn = _make_turn("user", "test", ts=ts)
         result = _format_turns([turn])
         assert "2025-06-15" in result
@@ -797,7 +796,7 @@ class TestSummarizeSessionSkill:
         turn = MagicMock()
         turn.role = "user"
         turn.content = "What is the weather?"
-        turn.timestamp = datetime.datetime(2025, 3, 1, 9, 0, 0, tzinfo=datetime.timezone.utc)
+        turn.timestamp = datetime.datetime(2025, 3, 1, 9, 0, 0, tzinfo=datetime.UTC)
         return turn
 
     def test_missing_session_id_returns_failure(self, skill):
@@ -929,8 +928,8 @@ class TestWorkspaceListSkill:
         (tmp_path / "zzz_subdir").mkdir()
         result = skill.execute(workspace_path=str(tmp_path))
         lines = result.output.splitlines()
-        dir_indices = [i for i, l in enumerate(lines) if l.startswith("[dir]")]
-        file_indices = [i for i, l in enumerate(lines) if l.startswith("[file]")]
+        dir_indices = [i for i, line in enumerate(lines) if line.startswith("[dir]")]
+        file_indices = [i for i, line in enumerate(lines) if line.startswith("[file]")]
         if dir_indices and file_indices:
             assert max(dir_indices) < min(file_indices)
 
@@ -939,7 +938,7 @@ class TestWorkspaceListSkill:
             (tmp_path / name).write_text("x")
         result = skill.execute(workspace_path=str(tmp_path))
         lines = result.output.splitlines()
-        file_lines = [l for l in lines if l.startswith("[file]")]
+        file_lines = [line for line in lines if line.startswith("[file]")]
         assert len(file_lines) == 3
 
     def test_tilde_expansion_for_default_path(self, skill, tmp_path):

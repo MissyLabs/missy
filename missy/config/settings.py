@@ -42,7 +42,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
@@ -144,8 +144,8 @@ class ProviderConfig:
 
     name: str
     model: str
-    api_key: Optional[str] = None
-    base_url: Optional[str] = None
+    api_key: str | None = None
+    base_url: str | None = None
     timeout: int = 30
     enabled: bool = True
     api_keys: list = field(default_factory=list)  # Multiple API keys for rotation
@@ -288,13 +288,13 @@ class MissyConfig:
     providers: dict[str, ProviderConfig]
     workspace_path: str
     audit_log_path: str
-    discord: Optional["DiscordConfig"] = None
+    discord: DiscordConfig | None = None
     scheduling: SchedulingPolicy = field(default_factory=SchedulingPolicy)
     heartbeat: HeartbeatConfig = field(default_factory=HeartbeatConfig)
     observability: ObservabilityConfig = field(default_factory=ObservabilityConfig)
     vault: VaultConfig = field(default_factory=VaultConfig)
     proactive: ProactiveConfig = field(default_factory=ProactiveConfig)
-    sandbox: Optional["SandboxConfig"] = None
+    sandbox: SandboxConfig | None = None
     max_spend_usd: float = 0.0  # 0 = unlimited; per-session budget cap
 
 
@@ -440,7 +440,7 @@ def _parse_proactive(data: dict[str, Any]) -> ProactiveConfig:
     )
 
 
-def _parse_sandbox(data: dict[str, Any]) -> "SandboxConfig":
+def _parse_sandbox(data: dict[str, Any]) -> SandboxConfig:
     """Parse the ``sandbox`` section of a Missy config dict."""
     from missy.security.sandbox import parse_sandbox_config
 
@@ -489,7 +489,7 @@ def load_config(path: str) -> MissyConfig:
 
     try:
         discord_raw = data.get("discord")
-        discord_cfg: Optional["DiscordConfig"] = None
+        discord_cfg: DiscordConfig | None = None
         if discord_raw is not None:
             from missy.channels.discord.config import parse_discord_config
             discord_cfg = parse_discord_config(discord_raw)

@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Optional
 
 
 @dataclass
@@ -44,7 +43,7 @@ class BaseChannel(ABC):
     name: str
 
     @abstractmethod
-    def receive(self) -> Optional[ChannelMessage]:
+    def receive(self) -> ChannelMessage | None:
         """Block until a message is available, then return it.
 
         Returns:

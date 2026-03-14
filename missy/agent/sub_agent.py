@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import re
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable, Optional
 
 MAX_SUB_AGENTS = 10
 MAX_CONCURRENT = 3
@@ -40,8 +40,8 @@ class SubTask:
     description: str
     tool_hints: list[str] = field(default_factory=list)
     depends_on: list[int] = field(default_factory=list)
-    result: Optional[str] = None
-    error: Optional[str] = None
+    result: str | None = None
+    error: str | None = None
 
 
 def parse_subtasks(prompt: str) -> list[SubTask]:

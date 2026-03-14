@@ -16,7 +16,7 @@ Example::
 from __future__ import annotations
 
 import subprocess
-from typing import Any, Optional
+from typing import Any
 
 from missy.tools.base import BaseTool, ToolPermissions, ToolResult
 
@@ -48,7 +48,7 @@ class ShellExecTool(BaseTool):
     )
     permissions = ToolPermissions(shell=True)
 
-    def __init__(self, sandbox_config: Optional[Any] = None) -> None:
+    def __init__(self, sandbox_config: Any | None = None) -> None:
         self._sandbox = None
         if sandbox_config is not None:
             try:
@@ -62,7 +62,7 @@ class ShellExecTool(BaseTool):
         self,
         *,
         command: str,
-        cwd: Optional[str] = None,
+        cwd: str | None = None,
         timeout: int = _DEFAULT_TIMEOUT,
         **_kwargs: Any,
     ) -> ToolResult:
@@ -104,7 +104,7 @@ class ShellExecTool(BaseTool):
         self,
         *,
         command: str,
-        cwd: Optional[str],
+        cwd: str | None,
         timeout: int,
     ) -> ToolResult:
         """Execute via the configured sandbox (Docker or fallback)."""
@@ -122,7 +122,7 @@ class ShellExecTool(BaseTool):
         self,
         *,
         command: str,
-        cwd: Optional[str],
+        cwd: str | None,
         timeout: int,
     ) -> ToolResult:
         """Execute directly via subprocess."""

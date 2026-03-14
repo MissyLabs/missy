@@ -15,17 +15,14 @@ Covers:
 
 from __future__ import annotations
 
-import asyncio
 import json
-import shutil
 import struct
 import threading
-import time
 import types
 import wave
 from io import BytesIO
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -100,8 +97,9 @@ class TestFasterWhisperSTTAutoDevice:
         return FasterWhisperSTT(device=device, compute_type=compute_type)
 
     def test_auto_device_falls_back_to_cpu_when_torch_missing(self):
-        from missy.channels.voice.stt.whisper import FasterWhisperSTT
         import sys
+
+        from missy.channels.voice.stt.whisper import FasterWhisperSTT
         # Remove torch and ctranslate2 so detection falls through to cpu
         saved_torch = sys.modules.pop("torch", None)
         saved_ct2 = sys.modules.pop("ctranslate2", None)
@@ -178,7 +176,6 @@ def _numpy_available() -> bool:
 
 def _make_numpy_mock():
     """Return a lightweight numpy mock sufficient for PCM conversion."""
-    import sys
     # If real numpy is present, just use it.
     if _numpy_available():
         import numpy as np
@@ -649,8 +646,9 @@ class TestPiperTTSSynthesize:
 
 class TestPiperSubprocessEnv:
     def test_ld_library_path_prepended(self):
-        from missy.channels.voice.tts.piper import _piper_subprocess_env
         import os
+
+        from missy.channels.voice.tts.piper import _piper_subprocess_env
         with patch.dict(os.environ, {"LD_LIBRARY_PATH": "/usr/lib"}, clear=False):
             env = _piper_subprocess_env()
         assert "LD_LIBRARY_PATH" in env
@@ -658,8 +656,9 @@ class TestPiperSubprocessEnv:
         assert env["LD_LIBRARY_PATH"].endswith("/usr/lib") or "/usr/lib" in env["LD_LIBRARY_PATH"]
 
     def test_ld_library_path_set_when_absent(self):
-        from missy.channels.voice.tts.piper import _piper_subprocess_env
         import os
+
+        from missy.channels.voice.tts.piper import _piper_subprocess_env
         env_without = {k: v for k, v in os.environ.items() if k != "LD_LIBRARY_PATH"}
         with patch.dict(os.environ, env_without, clear=True):
             env = _piper_subprocess_env()
@@ -692,7 +691,6 @@ class TestProactiveThresholdLoop:
         """Run _threshold_loop in a thread where stop_event.wait fires once then stops."""
         call_count = {"n": 0}
 
-        original_wait = mgr._stop_event.wait
 
         def fake_wait(timeout=None):
             call_count["n"] += 1
@@ -711,7 +709,7 @@ class TestProactiveThresholdLoop:
             t.join(timeout=3)
 
     def test_disk_threshold_fires_via_loop(self):
-        from missy.agent.proactive import ProactiveTrigger, ProactiveManager
+        from missy.agent.proactive import ProactiveManager, ProactiveTrigger
         counter = {"n": 0}
         lock = threading.Lock()
 
@@ -743,8 +741,9 @@ class TestProactiveThresholdLoop:
             assert counter["n"] >= 1
 
     def test_load_threshold_fires_via_loop(self):
-        from missy.agent.proactive import ProactiveTrigger, ProactiveManager
         import os as _os
+
+        from missy.agent.proactive import ProactiveManager, ProactiveTrigger
         counter = {"n": 0}
         lock = threading.Lock()
 
@@ -771,7 +770,7 @@ class TestProactiveThresholdLoop:
             assert counter["n"] >= 1
 
     def test_threshold_loop_handles_exception_without_crash(self):
-        from missy.agent.proactive import ProactiveTrigger, ProactiveManager
+        from missy.agent.proactive import ProactiveManager, ProactiveTrigger
         trigger = ProactiveTrigger(
             name="disk-err",
             trigger_type="disk_threshold",
@@ -789,7 +788,7 @@ class TestProactiveThresholdLoop:
 
 class TestProactiveScheduleLoop:
     def test_schedule_loop_fires_callback(self):
-        from missy.agent.proactive import ProactiveTrigger, ProactiveManager
+        from missy.agent.proactive import ProactiveManager, ProactiveTrigger
         counter = {"n": 0}
         lock = threading.Lock()
 
@@ -826,7 +825,7 @@ class TestProactiveScheduleLoop:
 
 class TestProactiveStopWithObserverError:
     def test_stop_handles_observer_exception(self):
-        from missy.agent.proactive import ProactiveTrigger, ProactiveManager
+        from missy.agent.proactive import ProactiveManager, ProactiveTrigger
         trigger = ProactiveTrigger(name="t", trigger_type="schedule", interval_seconds=10)
         mgr = ProactiveManager(triggers=[trigger], agent_callback=lambda p, s: None)
 
@@ -842,7 +841,7 @@ class TestProactiveStopWithObserverError:
 
 class TestProactiveManagerStartThresholdTrigger:
     def test_start_creates_threshold_thread(self):
-        from missy.agent.proactive import ProactiveTrigger, ProactiveManager
+        from missy.agent.proactive import ProactiveManager, ProactiveTrigger
         trigger = ProactiveTrigger(
             name="disk-start",
             trigger_type="disk_threshold",
@@ -871,7 +870,7 @@ class TestProactiveFileHandlerClass:
         if not _WATCHDOG_AVAILABLE:
             pytest.skip("watchdog not installed — testing stub path instead")
 
-        from missy.agent.proactive import _ProactiveFileHandler, ProactiveTrigger
+        from missy.agent.proactive import ProactiveTrigger, _ProactiveFileHandler
 
         fired = []
         trigger = ProactiveTrigger(name="fh-test", trigger_type="file_change")

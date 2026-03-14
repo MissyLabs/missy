@@ -20,10 +20,9 @@ import json
 import threading
 import uuid
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
-from typing import Optional
 
 
 class PatchType(str, Enum):
@@ -72,7 +71,7 @@ class PromptPatch:
 
     def __post_init__(self) -> None:
         if not self.created_at:
-            self.created_at = datetime.now(timezone.utc).isoformat()
+            self.created_at = datetime.now(UTC).isoformat()
 
     @property
     def success_rate(self) -> float:
@@ -153,7 +152,7 @@ class PromptPatchManager:
         patch_type: PatchType,
         content: str,
         confidence: float = 0.7,
-    ) -> Optional[PromptPatch]:
+    ) -> PromptPatch | None:
         """Create and store a new proposed patch.
 
         Low-risk patch types (tool usage hints, domain knowledge, style

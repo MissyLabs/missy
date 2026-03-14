@@ -31,15 +31,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-import tempfile
 import os
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch, call
+import tempfile
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from missy.channels.discord.gateway import (
-    DiscordGatewayClient,
     _OP_DISPATCH,
     _OP_HEARTBEAT,
     _OP_HEARTBEAT_ACK,
@@ -48,9 +46,9 @@ from missy.channels.discord.gateway import (
     _OP_INVALID_SESSION,
     _OP_RECONNECT,
     _OP_RESUME,
+    DiscordGatewayClient,
 )
 from missy.channels.discord.rest import BASE, DiscordRestClient, _mask_mentions
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -960,18 +958,16 @@ class TestRestSendMessageRetry:
 
         mock_http.post.return_value = rate_limit_resp
 
-        with patch("time.sleep"):
-            with pytest.raises(Exception):
-                client.send_message("chan-1", "hello")
+        with patch("time.sleep"), pytest.raises(Exception):
+            client.send_message("chan-1", "hello")
 
     def test_exception_in_send_retries_then_reraises(self):
         client, mock_http = _make_rest()
 
         mock_http.post.side_effect = OSError("connection refused")
 
-        with patch("time.sleep"):
-            with pytest.raises(OSError, match="connection refused"):
-                client.send_message("chan-1", "hello")
+        with patch("time.sleep"), pytest.raises(OSError, match="connection refused"):
+            client.send_message("chan-1", "hello")
 
         # Should have retried: attempt_count = len(backoffs)+1 = 4 total, but
         # exceptions exhaust backoffs array first (3 items) then re-raise
@@ -1158,9 +1154,8 @@ class TestRestAddReaction:
         mock_response.status_code = 403
         mock_response.raise_for_status.side_effect = Exception("Forbidden")
 
-        with patch("httpx.put", return_value=mock_response):
-            with pytest.raises(Exception):
-                client.add_reaction("chan-1", "msg-1", "\u2705")
+        with patch("httpx.put", return_value=mock_response), pytest.raises(Exception):
+            client.add_reaction("chan-1", "msg-1", "\u2705")
 
 
 class TestRestTriggerTyping:
@@ -1237,7 +1232,7 @@ class TestRestRegisterSlashCommands:
         client.register_slash_commands("app-123", [{"name": "ask"}])
 
         call_url = mock_http.put.call_args[0][0]
-        assert f"applications/app-123/commands" in call_url
+        assert "applications/app-123/commands" in call_url
         assert "guilds" not in call_url
 
     def test_guild_scoped_registration_url(self):

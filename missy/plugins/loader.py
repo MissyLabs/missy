@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Any, Optional
+from typing import Any
 
 from missy.config.settings import MissyConfig
 from missy.core.events import AuditEvent, event_bus
@@ -155,7 +155,7 @@ class PluginLoader:
         """
         return [plugin.get_manifest() for plugin in self._plugins.values()]
 
-    def get_plugin(self, name: str) -> Optional[BasePlugin]:
+    def get_plugin(self, name: str) -> BasePlugin | None:
         """Return the plugin registered under *name*, or ``None``.
 
         Args:
@@ -297,7 +297,7 @@ class PluginLoader:
 # Module-level singleton
 # ---------------------------------------------------------------------------
 
-_loader: Optional[PluginLoader] = None
+_loader: PluginLoader | None = None
 _lock: threading.Lock = threading.Lock()
 
 

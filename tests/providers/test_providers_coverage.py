@@ -17,8 +17,6 @@ from __future__ import annotations
 
 import json
 from contextlib import contextmanager
-from types import SimpleNamespace
-from typing import Iterator
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -33,7 +31,6 @@ from missy.config.settings import (
 )
 from missy.core.exceptions import ProviderError
 from missy.providers.base import CompletionResponse, Message, ToolCall
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -1226,9 +1223,9 @@ class TestCodexExtractAccountId:
         assert _extract_account_id("") == ""
 
     def test_returns_empty_string_for_invalid_json_payload(self):
-        from missy.providers.codex_provider import _extract_account_id
-
         import base64
+
+        from missy.providers.codex_provider import _extract_account_id
         bad_b64 = base64.urlsafe_b64encode(b"not-json").decode()
         token = f"header.{bad_b64}.signature"
         assert _extract_account_id(token) == ""
@@ -1302,7 +1299,7 @@ class TestCodexProviderInit:
         assert provider._timeout == 60
 
     def test_init_without_model_uses_default(self):
-        from missy.providers.codex_provider import CodexProvider, _DEFAULT_MODEL
+        from missy.providers.codex_provider import _DEFAULT_MODEL, CodexProvider
 
         config = ProviderConfig(name="openai-codex", model="", api_key="tok_abc")
         provider = CodexProvider(config)
@@ -1504,6 +1501,7 @@ class TestCodexProviderStream:
 
     def test_stream_raises_on_http_status_error(self):
         import httpx
+
         from missy.providers.codex_provider import CodexProvider
 
         config = ProviderConfig(name="openai-codex", model="gpt-5.2", api_key="tok")
@@ -1661,6 +1659,7 @@ class TestCodexProviderCompleteWithTools:
 
     def test_http_status_error_raises_provider_error(self):
         import httpx
+
         from missy.providers.codex_provider import CodexProvider
 
         config = ProviderConfig(name="openai-codex", model="gpt-5.2", api_key="tok")
@@ -1796,11 +1795,10 @@ class TestCodexLoadOAuthToken:
         ):
             # Directly test the exception swallowing path by mocking the inner import.
             with patch.dict("sys.modules", {"missy.cli.oauth": None}):
-                result = _load_oauth_token()
+                _load_oauth_token()
             # If we get here without raising, the guard works.
 
     def test_returns_token_when_refresh_succeeds(self):
-        from missy.providers import codex_provider
 
         with patch(
             "missy.providers.codex_provider._load_oauth_token", return_value="fresh_token"
@@ -1816,8 +1814,8 @@ class TestCodexLoadOAuthToken:
 
 class TestProviderRegistryRotateKey:
     def test_rotate_advances_to_next_key(self):
-        from missy.providers.registry import ProviderRegistry
         from missy.providers.anthropic_provider import AnthropicProvider
+        from missy.providers.registry import ProviderRegistry
 
         registry = ProviderRegistry()
         config = ProviderConfig(
@@ -1834,8 +1832,8 @@ class TestProviderRegistryRotateKey:
         assert provider._api_key == "key2"
 
     def test_rotate_wraps_around_to_first_key(self):
-        from missy.providers.registry import ProviderRegistry
         from missy.providers.anthropic_provider import AnthropicProvider
+        from missy.providers.registry import ProviderRegistry
 
         registry = ProviderRegistry()
         config = ProviderConfig(
@@ -1853,8 +1851,8 @@ class TestProviderRegistryRotateKey:
         assert provider._api_key == "key1"
 
     def test_rotate_skips_when_single_key(self):
-        from missy.providers.registry import ProviderRegistry
         from missy.providers.anthropic_provider import AnthropicProvider
+        from missy.providers.registry import ProviderRegistry
 
         registry = ProviderRegistry()
         config = ProviderConfig(
@@ -1872,8 +1870,8 @@ class TestProviderRegistryRotateKey:
         assert provider._api_key == "only_key"
 
     def test_rotate_skips_when_no_api_keys(self):
-        from missy.providers.registry import ProviderRegistry
         from missy.providers.anthropic_provider import AnthropicProvider
+        from missy.providers.registry import ProviderRegistry
 
         registry = ProviderRegistry()
         config = ProviderConfig(
@@ -1936,7 +1934,7 @@ class TestProviderRegistryFromConfigExtended:
                 )
             }
         )
-        registry = ProviderRegistry.from_config(config)
+        ProviderRegistry.from_config(config)
         assert "my-ollama-host.local" in config.network.provider_allowed_hosts
 
     def test_base_url_not_duplicated_if_already_in_allowed_hosts(self):
@@ -1970,8 +1968,8 @@ class TestProviderRegistryFromConfigExtended:
         assert registry.get("ollama") is not None
 
     def test_constructor_exception_skips_provider(self):
-        from missy.providers.registry import ProviderRegistry, _PROVIDER_CLASSES
         from missy.providers.base import BaseProvider
+        from missy.providers.registry import _PROVIDER_CLASSES, ProviderRegistry
 
         class BrokenProvider(BaseProvider):
             name = "broken"
@@ -2005,8 +2003,8 @@ class TestProviderRegistryFromConfigExtended:
 
 class TestProviderRegistryFromConfigWithAnthropicAndOpenAI:
     def test_registers_anthropic_provider(self):
-        from missy.providers.registry import ProviderRegistry
         from missy.providers.anthropic_provider import AnthropicProvider
+        from missy.providers.registry import ProviderRegistry
 
         config = _missy_config(
             providers={
@@ -2022,8 +2020,8 @@ class TestProviderRegistryFromConfigWithAnthropicAndOpenAI:
         assert isinstance(provider, AnthropicProvider)
 
     def test_registers_openai_provider(self):
-        from missy.providers.registry import ProviderRegistry
         from missy.providers.openai_provider import OpenAIProvider
+        from missy.providers.registry import ProviderRegistry
 
         config = _missy_config(
             providers={
@@ -2039,8 +2037,8 @@ class TestProviderRegistryFromConfigWithAnthropicAndOpenAI:
         assert isinstance(provider, OpenAIProvider)
 
     def test_registers_codex_provider(self):
-        from missy.providers.registry import ProviderRegistry
         from missy.providers.codex_provider import CodexProvider
+        from missy.providers.registry import ProviderRegistry
 
         config = _missy_config(
             providers={

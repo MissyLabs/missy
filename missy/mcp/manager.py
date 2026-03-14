@@ -5,7 +5,6 @@ import json
 import logging
 import threading
 from pathlib import Path
-from typing import Optional
 
 from missy.mcp.client import McpClient
 
@@ -47,7 +46,7 @@ class McpManager:
             except Exception as exc:
                 logger.warning("MCP: failed to connect %r: %s", name, exc)
 
-    def add_server(self, name: str, command: Optional[str] = None, url: Optional[str] = None) -> McpClient:
+    def add_server(self, name: str, command: str | None = None, url: str | None = None) -> McpClient:
         """Connect to a new MCP server and persist the config."""
         client = McpClient(name=name, command=command, url=url)
         client.connect()

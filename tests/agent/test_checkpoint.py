@@ -70,7 +70,7 @@ class TestCheckpointManagerInit:
     def test_tilde_expansion(self, monkeypatch, tmp_path):
         monkeypatch.setenv("HOME", str(tmp_path))
         db_path = "~/.missy/test_checkpoints.db"
-        cm = CheckpointManager(db_path=db_path)
+        CheckpointManager(db_path=db_path)
         expanded = os.path.expanduser(db_path)
         assert os.path.exists(expanded)
 

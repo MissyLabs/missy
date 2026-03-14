@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from missy.scheduler.parser import parse_schedule
 
 

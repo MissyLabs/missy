@@ -34,7 +34,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Any, Callable, Coroutine, Optional
+from collections.abc import Callable, Coroutine
+from typing import Any
 
 from missy.core.events import AuditEvent, event_bus
 
@@ -89,11 +90,11 @@ class DiscordGatewayClient:
 
         # Runtime state
         self._ws: Any = None  # websockets.WebSocketClientProtocol
-        self._heartbeat_task: Optional[asyncio.Task[None]] = None
-        self._sequence: Optional[int] = None
-        self._discord_session_id: Optional[str] = None
-        self._resume_gateway_url: Optional[str] = None
-        self._bot_user_id: Optional[str] = None
+        self._heartbeat_task: asyncio.Task[None] | None = None
+        self._sequence: int | None = None
+        self._discord_session_id: str | None = None
+        self._resume_gateway_url: str | None = None
+        self._bot_user_id: str | None = None
         self._running: bool = False
 
     # ------------------------------------------------------------------
@@ -101,7 +102,7 @@ class DiscordGatewayClient:
     # ------------------------------------------------------------------
 
     @property
-    def bot_user_id(self) -> Optional[str]:
+    def bot_user_id(self) -> str | None:
         """The Discord user ID of the connected bot, available after READY."""
         return self._bot_user_id
 
@@ -191,8 +192,8 @@ class DiscordGatewayClient:
         """Route a Gateway payload to the appropriate handler."""
         op: int = payload.get("op", -1)
         data: Any = payload.get("d")
-        seq: Optional[int] = payload.get("s")
-        event_name: Optional[str] = payload.get("t")
+        seq: int | None = payload.get("s")
+        event_name: str | None = payload.get("t")
 
         if seq is not None:
             self._sequence = seq
@@ -229,7 +230,7 @@ class DiscordGatewayClient:
         else:
             logger.debug("Gateway: unhandled opcode %d", op)
 
-    async def _handle_dispatch(self, event_name: Optional[str], data: Any) -> None:
+    async def _handle_dispatch(self, event_name: str | None, data: Any) -> None:
         """Handle a DISPATCH (opcode 0) event."""
         if event_name == "READY":
             self._discord_session_id = data.get("session_id")

@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import logging
 import shlex
-from typing import Optional
 
 from missy.config.settings import ShellPolicy
 from missy.core.events import AuditEvent, event_bus
@@ -119,7 +118,7 @@ class ShellPolicyEngine:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _extract_program(command: str) -> Optional[str]:
+    def _extract_program(command: str) -> str | None:
         """Return the program token from a shell command string.
 
         Uses :func:`shlex.split` for POSIX-correct tokenisation.  Returns
@@ -142,7 +141,7 @@ class ShellPolicyEngine:
             return None
         return tokens[0] if tokens else None
 
-    def _match_allowed(self, program: str) -> Optional[str]:
+    def _match_allowed(self, program: str) -> str | None:
         """Return the first ``allowed_commands`` entry matched by *program*.
 
         Matching is performed as a prefix check on the *basename* of the
@@ -182,7 +181,7 @@ class ShellPolicyEngine:
         self,
         command: str,
         result: str,
-        rule: Optional[str],
+        rule: str | None,
         session_id: str,
         task_id: str,
     ) -> None:

@@ -59,11 +59,11 @@ class DateTimeSkill(BaseSkill):
             :class:`~missy.skills.base.SkillResult` whose ``output`` is a
             newline-separated set of key-value pairs.
         """
-        now = datetime.datetime.now(tz=datetime.timezone.utc).astimezone()
+        now = datetime.datetime.now(tz=datetime.UTC).astimezone()
         tz_name = now.tzname() or str(now.utcoffset())
 
         info = {
-            "datetime_utc": datetime.datetime.now(tz=datetime.timezone.utc).isoformat(timespec="seconds"),
+            "datetime_utc": datetime.datetime.now(tz=datetime.UTC).isoformat(timespec="seconds"),
             "datetime_local": now.isoformat(timespec="seconds"),
             "timezone": tz_name,
             "uptime": _parse_uptime(),

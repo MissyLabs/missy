@@ -11,21 +11,21 @@ Covers:
 """
 from __future__ import annotations
 
-import os
 import stat
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from missy.tools.base import ToolResult
-from missy.tools.builtin.file_delete import FileDeleteTool
-from missy.tools.builtin.file_read import FileReadTool, _DEFAULT_ENCODING, _DEFAULT_MAX_BYTES
-from missy.tools.builtin.file_write import FileWriteTool
 from missy.tools.builtin.discord_upload import DiscordUploadTool
-from missy.tools.builtin.list_files import ListFilesTool, _DEFAULT_MAX_ENTRIES
-from missy.tools.builtin.web_fetch import WebFetchTool, _MAX_RESPONSE_BYTES
-
+from missy.tools.builtin.file_delete import FileDeleteTool
+from missy.tools.builtin.file_read import _DEFAULT_ENCODING, _DEFAULT_MAX_BYTES, FileReadTool
+from missy.tools.builtin.file_write import FileWriteTool
+from missy.tools.builtin.list_files import _DEFAULT_MAX_ENTRIES, ListFilesTool
+from missy.tools.builtin.self_create_tool import (
+    SelfCreateTool,  # noqa: F401 — used in type annotation
+)
+from missy.tools.builtin.web_fetch import _MAX_RESPONSE_BYTES, WebFetchTool
 
 # ---------------------------------------------------------------------------
 # FileReadTool
@@ -234,7 +234,7 @@ class TestFileWriteTool:
         )
 
         assert result.success is True
-        assert target.read_bytes() == "caf\u00e9".encode("utf-8")
+        assert target.read_bytes() == "caf\u00e9".encode()
 
     def test_get_schema_structure(self):
         schema = FileWriteTool().get_schema()
@@ -898,6 +898,7 @@ class TestSelfCreateTool:
 
     def test_create_stores_metadata(self, tmp_path: Path):
         import json
+
         import missy.tools.builtin.self_create_tool as mod
 
         with patch.object(mod, "CUSTOM_TOOLS_DIR", tmp_path):
@@ -937,6 +938,7 @@ class TestSelfCreateTool:
 
     def test_list_shows_existing_tools(self, tmp_path: Path):
         import json
+
         import missy.tools.builtin.self_create_tool as mod
 
         tmp_path.mkdir(parents=True, exist_ok=True)

@@ -19,9 +19,10 @@ from __future__ import annotations
 import logging
 import threading
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Callable, Literal
+from datetime import UTC, datetime
+from typing import Any, Literal
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +79,7 @@ class AuditEvent:
         result: EventResult,
         detail: dict[str, Any] | None = None,
         policy_rule: str | None = None,
-    ) -> "AuditEvent":
+    ) -> AuditEvent:
         """Convenience constructor that fills in *timestamp* automatically.
 
         Args:
@@ -94,7 +95,7 @@ class AuditEvent:
             A new :class:`AuditEvent` timestamped to the current UTC time.
         """
         return cls(
-            timestamp=datetime.now(tz=timezone.utc),
+            timestamp=datetime.now(tz=UTC),
             session_id=session_id,
             task_id=task_id,
             event_type=event_type,

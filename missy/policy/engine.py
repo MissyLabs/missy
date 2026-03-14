@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
-from typing import Optional, Union
 
 from missy.config.settings import MissyConfig
 
@@ -77,7 +76,7 @@ class PolicyEngine:
 
     def check_write(
         self,
-        path: Union[str, Path],
+        path: str | Path,
         session_id: str = "",
         task_id: str = "",
     ) -> bool:
@@ -100,7 +99,7 @@ class PolicyEngine:
 
     def check_read(
         self,
-        path: Union[str, Path],
+        path: str | Path,
         session_id: str = "",
         task_id: str = "",
     ) -> bool:
@@ -149,7 +148,7 @@ class PolicyEngine:
 # Module-level singleton
 # ---------------------------------------------------------------------------
 
-_engine: Optional[PolicyEngine] = None
+_engine: PolicyEngine | None = None
 _lock: threading.Lock = threading.Lock()
 
 

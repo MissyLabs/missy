@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import struct
-from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -48,8 +47,8 @@ def _make_voice_channel(*, channel_id: int = 100, name: str = "General"):
 
 def _make_guild(
     guild_id: int = 999,
-    voice_channels: Optional[list] = None,
-    members: Optional[dict] = None,
+    voice_channels: list | None = None,
+    members: dict | None = None,
 ):
     guild = MagicMock()
     guild.id = guild_id

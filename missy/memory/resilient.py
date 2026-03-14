@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -179,7 +178,7 @@ class ResilientMemoryStore:
         self,
         query: str,
         limit: int = 10,
-        session_id: Optional[str] = None,
+        session_id: str | None = None,
     ) -> list:
         """Search conversation history, falling back to keyword scan of cache.
 
@@ -210,7 +209,7 @@ class ResilientMemoryStore:
 
     def get_learnings(
         self,
-        task_type: Optional[str] = None,
+        task_type: str | None = None,
         limit: int = 5,
     ) -> list:
         """Retrieve recent learning lessons, returning empty list on failure.

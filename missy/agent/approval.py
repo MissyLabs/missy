@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Callable, Optional
+from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ class PendingApproval:
         self.reason = reason
         self.timeout = timeout
         self._event = threading.Event()
-        self._approved: Optional[bool] = None
+        self._approved: bool | None = None
 
     def approve(self) -> None:
         self._approved = True
@@ -56,7 +56,7 @@ class ApprovalGate:
         default_timeout: Seconds to wait for approval (default 60).
     """
 
-    def __init__(self, send_fn: Optional[Callable[[str], None]] = None, default_timeout: float = 60.0):
+    def __init__(self, send_fn: Callable[[str], None] | None = None, default_timeout: float = 60.0):
         self._send = send_fn
         self._timeout = default_timeout
         self._pending: dict[str, PendingApproval] = {}

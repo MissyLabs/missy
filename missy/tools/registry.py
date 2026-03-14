@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Optional
 
 from missy.core.events import AuditEvent, event_bus
 from missy.core.exceptions import PolicyViolationError
@@ -61,7 +60,7 @@ class ToolRegistry:
     # Queries
     # ------------------------------------------------------------------
 
-    def get(self, name: str) -> Optional[BaseTool]:
+    def get(self, name: str) -> BaseTool | None:
         """Return the tool registered under *name*, or ``None``.
 
         Args:
@@ -235,7 +234,7 @@ class ToolRegistry:
 # Module-level singleton
 # ---------------------------------------------------------------------------
 
-_registry: Optional[ToolRegistry] = None
+_registry: ToolRegistry | None = None
 _lock: threading.Lock = threading.Lock()
 
 

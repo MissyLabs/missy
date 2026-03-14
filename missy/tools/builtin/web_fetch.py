@@ -14,7 +14,7 @@ Example::
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 from missy.tools.base import BaseTool, ToolPermissions, ToolResult
 
@@ -46,7 +46,7 @@ class WebFetchTool(BaseTool):
         *,
         url: str,
         timeout: int = _DEFAULT_TIMEOUT,
-        headers: Optional[dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
         **_kwargs: Any,
     ) -> ToolResult:
         """Perform an HTTP GET request against *url*.

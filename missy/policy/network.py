@@ -25,7 +25,6 @@ from __future__ import annotations
 import ipaddress
 import logging
 import socket
-from typing import Optional
 
 from missy.config.settings import NetworkPolicy
 from missy.core.events import AuditEvent, event_bus
@@ -170,7 +169,7 @@ class NetworkPolicyEngine:
         except ValueError:
             return False
 
-    def _check_cidr(self, ip_str: str) -> Optional[str]:
+    def _check_cidr(self, ip_str: str) -> str | None:
         """Return the first matching CIDR rule string, or ``None``.
 
         Args:
@@ -193,7 +192,7 @@ class NetworkPolicyEngine:
                 continue
         return None
 
-    def _check_exact_host(self, host: str, category: str = "") -> Optional[str]:
+    def _check_exact_host(self, host: str, category: str = "") -> str | None:
         """Return the matching ``allowed_hosts`` entry, or ``None``.
 
         The comparison is case-insensitive and strips any port suffix from the
@@ -241,7 +240,7 @@ class NetworkPolicyEngine:
             return self._policy.discord_allowed_hosts
         return []
 
-    def _check_domain(self, host: str) -> Optional[str]:
+    def _check_domain(self, host: str) -> str | None:
         """Return the matching ``allowed_domains`` entry, or ``None``.
 
         Pattern semantics:
@@ -275,7 +274,7 @@ class NetworkPolicyEngine:
         self,
         host: str,
         result: str,
-        rule: Optional[str],
+        rule: str | None,
         session_id: str,
         task_id: str,
     ) -> None:

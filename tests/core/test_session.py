@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import threading
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID
 
 import pytest
@@ -18,7 +18,7 @@ from missy.core.session import Session, SessionManager
 class TestSession:
     def test_create_with_timezone_aware_datetime(self):
         sid = SessionManager.generate_session_id()
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         session = Session(id=sid, created_at=now)
         assert session.id == sid
         assert session.created_at == now
@@ -32,7 +32,7 @@ class TestSession:
     def test_metadata_defaults_to_empty_dict(self):
         session = Session(
             id=SessionManager.generate_session_id(),
-            created_at=datetime.now(tz=timezone.utc),
+            created_at=datetime.now(tz=UTC),
         )
         assert session.metadata == {}
 
@@ -40,7 +40,7 @@ class TestSession:
         meta = {"user": "alice", "source": "cli"}
         session = Session(
             id=SessionManager.generate_session_id(),
-            created_at=datetime.now(tz=timezone.utc),
+            created_at=datetime.now(tz=UTC),
             metadata=meta,
         )
         assert session.metadata == meta

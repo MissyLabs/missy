@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Optional
 
 from missy.channels.discord.voice import DiscordVoiceError, DiscordVoiceManager
 
@@ -25,16 +24,16 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class VoiceCommandResult:
     handled: bool
-    reply: Optional[str] = None
+    reply: str | None = None
 
 
 async def maybe_handle_voice_command(
     *,
     content: str,
     channel_id: str,
-    guild_id: Optional[str],
+    guild_id: str | None,
     author_id: str,
-    voice: Optional[DiscordVoiceManager],
+    voice: DiscordVoiceManager | None,
 ) -> VoiceCommandResult:
     """Parse and execute a voice command if applicable.
 

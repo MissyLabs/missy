@@ -4,8 +4,8 @@ from __future__ import annotations
 import logging
 import re
 import threading
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -30,14 +30,14 @@ class HeartbeatRunner:
         interval_seconds: int = 1800,
         workspace: str = "~/workspace",
         active_hours: str = "",
-        report_fn: Optional[Callable[[str], None]] = None,
+        report_fn: Callable[[str], None] | None = None,
     ):
         self._run = agent_run_fn
         self._interval = interval_seconds
         self._workspace = Path(workspace).expanduser()
         self._active_hours = active_hours
         self._report = report_fn
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._runs = 0
         self._skips = 0

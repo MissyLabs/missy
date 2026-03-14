@@ -18,7 +18,8 @@ Example::
 from __future__ import annotations
 
 import logging
-from typing import Any, Iterator
+from collections.abc import Iterator
+from typing import Any
 
 from missy.config.settings import ProviderConfig
 from missy.core.events import AuditEvent, event_bus

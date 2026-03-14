@@ -187,7 +187,7 @@ class TestRedact:
         assert result.count("[REDACTED]") >= 2
 
     def test_redact_preserves_non_secret_content(self, detector):
-        text = f"safe text AKIAIOSFODNN7EXAMPLE more safe text"
+        text = "safe text AKIAIOSFODNN7EXAMPLE more safe text"
         result = detector.redact(text)
         assert "safe text" in result
         assert "more safe text" in result

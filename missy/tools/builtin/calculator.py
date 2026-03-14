@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import ast
 import operator
-from typing import Any, Union
+from typing import Any
 
 from missy.tools.base import BaseTool, ToolPermissions, ToolResult
 
@@ -88,7 +88,7 @@ _UNARY_OPS: dict[type, Any] = {
 _MAX_EXPONENT = 1_000
 
 
-def _safe_eval(node: ast.AST) -> Union[int, float, complex]:
+def _safe_eval(node: ast.AST) -> int | float | complex:
     """Recursively evaluate an AST node from a numeric expression.
 
     Args:

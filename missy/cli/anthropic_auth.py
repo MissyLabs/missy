@@ -45,7 +45,6 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Optional
 
 import click
 from rich.console import Console
@@ -101,7 +100,7 @@ def classify_token(token: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def store_token(token: str, token_type: str, issued_at: Optional[int] = None) -> None:
+def store_token(token: str, token_type: str, issued_at: int | None = None) -> None:
     """Write token data to TOKEN_FILE atomically (mode 0o600)."""
     TOKEN_FILE.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
     data = {
@@ -116,7 +115,7 @@ def store_token(token: str, token_type: str, issued_at: Optional[int] = None) ->
     tmp.replace(TOKEN_FILE)
 
 
-def load_token() -> Optional[dict]:
+def load_token() -> dict | None:
     """Return the stored token dict, or None if not present/readable."""
     if not TOKEN_FILE.exists():
         return None
@@ -157,7 +156,7 @@ def remind_refresh() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _try_store_in_vault(token: str, vault_dir: str = "~/.missy/secrets") -> Optional[str]:
+def _try_store_in_vault(token: str, vault_dir: str = "~/.missy/secrets") -> str | None:
     """Store *token* in the Missy encrypted vault.
 
     Returns the vault reference string (``vault://anthropic_api_key``) on
@@ -178,7 +177,7 @@ def _try_store_in_vault(token: str, vault_dir: str = "~/.missy/secrets") -> Opti
 # ---------------------------------------------------------------------------
 
 
-def run_anthropic_setup_token_flow() -> Optional[str]:
+def run_anthropic_setup_token_flow() -> str | None:
     """Guide the user through the Claude Code setup-token paste flow.
 
     Steps:
@@ -249,7 +248,7 @@ def run_anthropic_setup_token_flow() -> Optional[str]:
                 continue
 
         store_token(raw, token_type="setup_token")
-        console.print(f"  [green]Setup-token accepted[/] (expires in ≈3 hours).")
+        console.print("  [green]Setup-token accepted[/] (expires in ≈3 hours).")
         console.print(f"  [dim]Stored at {TOKEN_FILE}[/]")
         return raw
 
@@ -284,7 +283,7 @@ def run_anthropic_vault_flow(api_key: str, vault_dir: str = "~/.missy/secrets") 
 # ---------------------------------------------------------------------------
 
 
-def get_current_token(vault_dir: str = "~/.missy/secrets") -> Optional[str]:
+def get_current_token(vault_dir: str = "~/.missy/secrets") -> str | None:
     """Return the active Anthropic token/key for runtime use.
 
     Resolution order:

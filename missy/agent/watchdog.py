@@ -4,8 +4,8 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ class Watchdog:
         self._threshold = failure_threshold
         self._checks: dict[str, Callable[[], bool]] = {}
         self._health: dict[str, SubsystemHealth] = {}
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._stop = threading.Event()
 
     def register(self, name: str, check_fn: Callable[[], bool]) -> None:

@@ -4,8 +4,8 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,7 @@ class ConfigWatcher:
         self._poll = poll_interval
         self._last_mtime: float = 0.0
         self._last_change_time: float = 0.0
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._stop = threading.Event()
 
     def start(self) -> None:

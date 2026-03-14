@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Optional
 from urllib.parse import urlparse
 
 from missy.config.settings import MissyConfig, ProviderConfig
@@ -60,7 +59,7 @@ class ProviderRegistry:
     # Mutation
     # ------------------------------------------------------------------
 
-    def register(self, name: str, provider: BaseProvider, config: Optional[ProviderConfig] = None) -> None:
+    def register(self, name: str, provider: BaseProvider, config: ProviderConfig | None = None) -> None:
         """Add *provider* under the given *name*.
 
         A previous registration under the same name is silently replaced.
@@ -109,7 +108,7 @@ class ProviderRegistry:
     # Queries
     # ------------------------------------------------------------------
 
-    def get(self, name: str) -> Optional[BaseProvider]:
+    def get(self, name: str) -> BaseProvider | None:
         """Return the provider registered under *name*, or ``None``.
 
         Args:
@@ -156,7 +155,7 @@ class ProviderRegistry:
     # ------------------------------------------------------------------
 
     @classmethod
-    def from_config(cls, config: MissyConfig) -> "ProviderRegistry":
+    def from_config(cls, config: MissyConfig) -> ProviderRegistry:
         """Build a registry from *config*, skipping providers that cannot be instantiated.
 
         Iterates over ``config.providers`` and attempts to construct a
@@ -268,7 +267,7 @@ class ModelRouter:
 # Module-level singleton
 # ---------------------------------------------------------------------------
 
-_registry: Optional[ProviderRegistry] = None
+_registry: ProviderRegistry | None = None
 _lock: threading.Lock = threading.Lock()
 
 

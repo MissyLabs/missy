@@ -15,11 +15,9 @@ import base64
 import hashlib
 import json
 import time
-from pathlib import Path
-from unittest.mock import MagicMock, call, mock_open, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
-
 
 # ===========================================================================
 # wizard.py — helper functions
@@ -180,7 +178,7 @@ class TestPromptApiKey:
 
 class TestPromptModel:
     def test_ollama_free_form_returns_primary_and_empty_fast_premium(self):
-        from missy.cli.wizard import _prompt_model, _PROVIDERS
+        from missy.cli.wizard import _PROVIDERS, _prompt_model
 
         ollama_info = _PROVIDERS["ollama"]
         with patch("click.prompt", return_value="mistral"):
@@ -190,7 +188,7 @@ class TestPromptModel:
         assert premium == ""
 
     def test_anthropic_numbered_choice_returns_model(self):
-        from missy.cli.wizard import _prompt_model, _PROVIDERS
+        from missy.cli.wizard import _PROVIDERS, _prompt_model
 
         info = _PROVIDERS["anthropic"]
         # Select index 1 for all three tiers (claude-sonnet-4-6)
@@ -204,7 +202,7 @@ class TestPromptModel:
         assert premium == "claude-opus-4-6"
 
     def test_invalid_choice_falls_back_to_default(self):
-        from missy.cli.wizard import _prompt_model, _PROVIDERS
+        from missy.cli.wizard import _PROVIDERS, _prompt_model
 
         info = _PROVIDERS["anthropic"]
         with patch("click.prompt", side_effect=["99", "99", "99"]):
@@ -424,13 +422,12 @@ class TestWriteConfigAtomic:
         assert config_path.exists()
 
     def test_write_failure_does_not_leave_temp_file(self, tmp_path):
+
         from missy.cli.wizard import _write_config_atomic
-        import os
 
         config_path = tmp_path / "config.yaml"
-        with patch("os.replace", side_effect=OSError("disk full")):
-            with pytest.raises(OSError):
-                _write_config_atomic(config_path, "content")
+        with patch("os.replace", side_effect=OSError("disk full")), pytest.raises(OSError):
+            _write_config_atomic(config_path, "content")
         # Temp file should be cleaned up
         temp_files = list(tmp_path.glob(".config_tmp_*"))
         assert len(temp_files) == 0
@@ -882,7 +879,7 @@ class TestBuildAuthUrl:
         assert "my-client" in url
 
     def test_contains_redirect_uri(self):
-        from missy.cli.oauth import _build_auth_url, REDIRECT_URI
+        from missy.cli.oauth import _build_auth_url
 
         url = _build_auth_url("cid", "state", "challenge")
         assert "redirect_uri" in url
@@ -900,7 +897,7 @@ class TestBuildAuthUrl:
         assert "S256" in url
 
     def test_url_starts_with_authorize_endpoint(self):
-        from missy.cli.oauth import _build_auth_url, AUTHORIZE_URL
+        from missy.cli.oauth import AUTHORIZE_URL, _build_auth_url
 
         url = _build_auth_url("cid", "state", "challenge")
         assert url.startswith(AUTHORIZE_URL)
@@ -1479,7 +1476,11 @@ class TestIsTokenExpiring:
         assert is_token_expiring(data) is False
 
     def test_old_setup_token_is_expiring(self):
-        from missy.cli.anthropic_auth import is_token_expiring, SETUP_TOKEN_TTL_SECONDS, REFRESH_WARN_MARGIN
+        from missy.cli.anthropic_auth import (
+            REFRESH_WARN_MARGIN,
+            SETUP_TOKEN_TTL_SECONDS,
+            is_token_expiring,
+        )
 
         # issued far enough in the past that it is within the refresh margin
         issued_at = int(time.time()) - (SETUP_TOKEN_TTL_SECONDS - REFRESH_WARN_MARGIN + 60)

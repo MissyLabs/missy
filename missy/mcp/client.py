@@ -6,7 +6,7 @@ import logging
 import subprocess
 import threading
 import uuid
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -22,11 +22,11 @@ class McpClient:
         url: HTTP endpoint (for HTTP transport; not yet implemented).
     """
 
-    def __init__(self, name: str, command: Optional[str] = None, url: Optional[str] = None):
+    def __init__(self, name: str, command: str | None = None, url: str | None = None):
         self.name = name
         self._command = command
         self._url = url
-        self._proc: Optional[subprocess.Popen] = None
+        self._proc: subprocess.Popen | None = None
         self._lock = threading.Lock()
         self._tools: list[dict] = []
 

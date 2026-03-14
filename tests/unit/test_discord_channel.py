@@ -123,7 +123,6 @@ def _make_channel(account: DiscordAccountConfig, bus: EventBus | None = None) ->
         channel = DiscordChannel(account_config=account)
     if bus is not None:
         # Patch the channel's audit emitter to use our isolated bus.
-        original_emit = channel._emit_audit
 
         def patched_emit(event_type: str, result: str, detail: dict[str, Any]) -> None:
             event = AuditEvent.now(
@@ -184,7 +183,7 @@ class TestDiscordRestClient:
 
     def test_get_gateway_bot_calls_correct_url(self, rest_client: DiscordRestClient, mock_http_client: MagicMock) -> None:
         mock_http_client.get.return_value.json.return_value = {"url": "wss://gateway.discord.gg"}
-        result = rest_client.get_gateway_bot()
+        rest_client.get_gateway_bot()
         call_url = mock_http_client.get.call_args[0][0]
         assert call_url == f"{BASE}/gateway/bot"
 
@@ -217,7 +216,7 @@ class TestDiscordRestClient:
     def test_register_slash_commands_global(self, rest_client: DiscordRestClient, mock_http_client: MagicMock) -> None:
         mock_http_client.put.return_value.json.return_value = [{"name": "ask"}]
         commands = [{"name": "ask", "description": "Ask Missy"}]
-        result = rest_client.register_slash_commands(
+        rest_client.register_slash_commands(
             application_id="app-111",
             commands=commands,
         )

@@ -112,7 +112,7 @@ class _SubsystemsPatch:
 class TestDoctor:
     def test_doctor_exits_zero(self, runner: CliRunner):
         cfg_path = _write_temp_config()
-        with _SubsystemsPatch() as cfg:
+        with _SubsystemsPatch():
             mock_registry = MagicMock()
             mock_registry.list_providers.return_value = []
             mock_mgr = MagicMock()
@@ -126,7 +126,7 @@ class TestDoctor:
 
     def test_doctor_output_contains_config_loaded(self, runner: CliRunner):
         cfg_path = _write_temp_config()
-        with _SubsystemsPatch() as cfg:
+        with _SubsystemsPatch():
             mock_registry = MagicMock()
             mock_registry.list_providers.return_value = []
             mock_mgr = MagicMock()
@@ -140,7 +140,7 @@ class TestDoctor:
 
     def test_doctor_shows_provider_not_available(self, runner: CliRunner):
         cfg_path = _write_temp_config()
-        with _SubsystemsPatch() as cfg:
+        with _SubsystemsPatch():
             mock_provider = MagicMock()
             mock_provider.is_available.return_value = False
             mock_registry = MagicMock()
@@ -584,26 +584,24 @@ class TestAuditRecent:
         cfg_path = _write_temp_config()
         mock_logger = MagicMock()
         mock_logger.get_recent_events.return_value = []
-        with _SubsystemsPatch():
-            with patch(
-                "missy.observability.audit_logger.AuditLogger", return_value=mock_logger
-            ):
-                result = runner.invoke(
-                    cli, ["--config", cfg_path, "audit", "recent"]
-                )
+        with _SubsystemsPatch(), patch(
+            "missy.observability.audit_logger.AuditLogger", return_value=mock_logger
+        ):
+            result = runner.invoke(
+                cli, ["--config", cfg_path, "audit", "recent"]
+            )
         assert result.exit_code == 0
 
     def test_audit_recent_no_events_message(self, runner: CliRunner):
         cfg_path = _write_temp_config()
         mock_logger = MagicMock()
         mock_logger.get_recent_events.return_value = []
-        with _SubsystemsPatch():
-            with patch(
-                "missy.observability.audit_logger.AuditLogger", return_value=mock_logger
-            ):
-                result = runner.invoke(
-                    cli, ["--config", cfg_path, "audit", "recent"]
-                )
+        with _SubsystemsPatch(), patch(
+            "missy.observability.audit_logger.AuditLogger", return_value=mock_logger
+        ):
+            result = runner.invoke(
+                cli, ["--config", cfg_path, "audit", "recent"]
+            )
         assert "No audit events" in result.output
 
     def test_audit_recent_shows_events(self, runner: CliRunner):
@@ -617,13 +615,12 @@ class TestAuditRecent:
         }
         mock_logger = MagicMock()
         mock_logger.get_recent_events.return_value = [event]
-        with _SubsystemsPatch():
-            with patch(
-                "missy.observability.audit_logger.AuditLogger", return_value=mock_logger
-            ):
-                result = runner.invoke(
-                    cli, ["--config", cfg_path, "audit", "recent"]
-                )
+        with _SubsystemsPatch(), patch(
+            "missy.observability.audit_logger.AuditLogger", return_value=mock_logger
+        ):
+            result = runner.invoke(
+                cli, ["--config", cfg_path, "audit", "recent"]
+            )
         assert result.exit_code == 0
         assert "network" in result.output
 
@@ -647,14 +644,13 @@ class TestAuditRecent:
         ]
         mock_logger = MagicMock()
         mock_logger.get_recent_events.return_value = events
-        with _SubsystemsPatch():
-            with patch(
-                "missy.observability.audit_logger.AuditLogger", return_value=mock_logger
-            ):
-                result = runner.invoke(
-                    cli,
-                    ["--config", cfg_path, "audit", "recent", "--category", "shell"],
-                )
+        with _SubsystemsPatch(), patch(
+            "missy.observability.audit_logger.AuditLogger", return_value=mock_logger
+        ):
+            result = runner.invoke(
+                cli,
+                ["--config", cfg_path, "audit", "recent", "--category", "shell"],
+            )
         assert result.exit_code == 0
         assert "shell" in result.output
 
@@ -662,14 +658,13 @@ class TestAuditRecent:
         cfg_path = _write_temp_config()
         mock_logger = MagicMock()
         mock_logger.get_recent_events.return_value = []
-        with _SubsystemsPatch():
-            with patch(
-                "missy.observability.audit_logger.AuditLogger", return_value=mock_logger
-            ):
-                result = runner.invoke(
-                    cli,
-                    ["--config", cfg_path, "audit", "recent", "--limit", "5"],
-                )
+        with _SubsystemsPatch(), patch(
+            "missy.observability.audit_logger.AuditLogger", return_value=mock_logger
+        ):
+            result = runner.invoke(
+                cli,
+                ["--config", cfg_path, "audit", "recent", "--limit", "5"],
+            )
         assert result.exit_code == 0
         # over-fetches by 5× — so called with 25
         mock_logger.get_recent_events.assert_called_once_with(limit=25)
@@ -778,13 +773,12 @@ class TestPatchesList:
         cfg_path = _write_temp_config()
         mock_mgr = MagicMock()
         mock_mgr.list_all.return_value = []
-        with _SubsystemsPatch():
-            with patch(
-                "missy.agent.prompt_patches.PromptPatchManager", return_value=mock_mgr
-            ):
-                result = runner.invoke(
-                    cli, ["--config", cfg_path, "patches", "list"]
-                )
+        with _SubsystemsPatch(), patch(
+            "missy.agent.prompt_patches.PromptPatchManager", return_value=mock_mgr
+        ):
+            result = runner.invoke(
+                cli, ["--config", cfg_path, "patches", "list"]
+            )
         assert result.exit_code == 0
         assert "No patches" in result.output
 
@@ -799,13 +793,12 @@ class TestPatchesList:
         patch_obj.content = "Always be concise."
         mock_mgr = MagicMock()
         mock_mgr.list_all.return_value = [patch_obj]
-        with _SubsystemsPatch():
-            with patch(
-                "missy.agent.prompt_patches.PromptPatchManager", return_value=mock_mgr
-            ):
-                result = runner.invoke(
-                    cli, ["--config", cfg_path, "patches", "list"]
-                )
+        with _SubsystemsPatch(), patch(
+            "missy.agent.prompt_patches.PromptPatchManager", return_value=mock_mgr
+        ):
+            result = runner.invoke(
+                cli, ["--config", cfg_path, "patches", "list"]
+            )
         assert result.exit_code == 0
         assert "patch-001" in result.output
 
@@ -823,13 +816,12 @@ class TestPatchesApprove:
         cfg_path = _write_temp_config()
         mock_mgr = MagicMock()
         mock_mgr.approve.return_value = True
-        with _SubsystemsPatch():
-            with patch(
-                "missy.agent.prompt_patches.PromptPatchManager", return_value=mock_mgr
-            ):
-                result = runner.invoke(
-                    cli, ["--config", cfg_path, "patches", "approve", "patch-001"]
-                )
+        with _SubsystemsPatch(), patch(
+            "missy.agent.prompt_patches.PromptPatchManager", return_value=mock_mgr
+        ):
+            result = runner.invoke(
+                cli, ["--config", cfg_path, "patches", "approve", "patch-001"]
+            )
         assert result.exit_code == 0
         assert "patch-001" in result.output
 
@@ -837,13 +829,12 @@ class TestPatchesApprove:
         cfg_path = _write_temp_config()
         mock_mgr = MagicMock()
         mock_mgr.approve.return_value = False
-        with _SubsystemsPatch():
-            with patch(
-                "missy.agent.prompt_patches.PromptPatchManager", return_value=mock_mgr
-            ):
-                result = runner.invoke(
-                    cli, ["--config", cfg_path, "patches", "approve", "ghost"]
-                )
+        with _SubsystemsPatch(), patch(
+            "missy.agent.prompt_patches.PromptPatchManager", return_value=mock_mgr
+        ):
+            result = runner.invoke(
+                cli, ["--config", cfg_path, "patches", "approve", "ghost"]
+            )
         assert result.exit_code == 0
 
     def test_patches_approve_help_exits_zero(self, runner: CliRunner):
@@ -856,13 +847,12 @@ class TestPatchesReject:
         cfg_path = _write_temp_config()
         mock_mgr = MagicMock()
         mock_mgr.reject.return_value = True
-        with _SubsystemsPatch():
-            with patch(
-                "missy.agent.prompt_patches.PromptPatchManager", return_value=mock_mgr
-            ):
-                result = runner.invoke(
-                    cli, ["--config", cfg_path, "patches", "reject", "patch-002"]
-                )
+        with _SubsystemsPatch(), patch(
+            "missy.agent.prompt_patches.PromptPatchManager", return_value=mock_mgr
+        ):
+            result = runner.invoke(
+                cli, ["--config", cfg_path, "patches", "reject", "patch-002"]
+            )
         assert result.exit_code == 0
         assert "patch-002" in result.output
 
@@ -870,13 +860,12 @@ class TestPatchesReject:
         cfg_path = _write_temp_config()
         mock_mgr = MagicMock()
         mock_mgr.reject.return_value = False
-        with _SubsystemsPatch():
-            with patch(
-                "missy.agent.prompt_patches.PromptPatchManager", return_value=mock_mgr
-            ):
-                result = runner.invoke(
-                    cli, ["--config", cfg_path, "patches", "reject", "ghost"]
-                )
+        with _SubsystemsPatch(), patch(
+            "missy.agent.prompt_patches.PromptPatchManager", return_value=mock_mgr
+        ):
+            result = runner.invoke(
+                cli, ["--config", cfg_path, "patches", "reject", "ghost"]
+            )
         assert result.exit_code == 0
 
     def test_patches_reject_help_exits_zero(self, runner: CliRunner):
@@ -1310,7 +1299,6 @@ class TestVoiceTest:
         nodes = [{"node_id": "node-001-abc", "name": "Test", "room": "test"}]
         reg = _make_mock_registry(nodes)
         mock_tts = MagicMock()
-        import asyncio
 
         async def _raise(*a, **kw):
             raise FileNotFoundError("piper not found")
@@ -1376,14 +1364,13 @@ class TestDiscordAudit:
         cfg_path = _write_temp_config()
         mock_logger = MagicMock()
         mock_logger.get_recent_events.return_value = []
-        with _SubsystemsPatch():
-            with patch(
-                "missy.observability.audit_logger.AuditLogger",
-                return_value=mock_logger,
-            ):
-                result = runner.invoke(
-                    cli, ["--config", cfg_path, "discord", "audit"]
-                )
+        with _SubsystemsPatch(), patch(
+            "missy.observability.audit_logger.AuditLogger",
+            return_value=mock_logger,
+        ):
+            result = runner.invoke(
+                cli, ["--config", cfg_path, "discord", "audit"]
+            )
         assert result.exit_code == 0
         assert "No Discord" in result.output
 
@@ -1400,14 +1387,13 @@ class TestDiscordAudit:
         ]
         mock_logger = MagicMock()
         mock_logger.get_recent_events.return_value = events
-        with _SubsystemsPatch():
-            with patch(
-                "missy.observability.audit_logger.AuditLogger",
-                return_value=mock_logger,
-            ):
-                result = runner.invoke(
-                    cli, ["--config", cfg_path, "discord", "audit"]
-                )
+        with _SubsystemsPatch(), patch(
+            "missy.observability.audit_logger.AuditLogger",
+            return_value=mock_logger,
+        ):
+            result = runner.invoke(
+                cli, ["--config", cfg_path, "discord", "audit"]
+            )
         assert result.exit_code == 0
         assert "discord.message" in result.output
 
@@ -1424,14 +1410,13 @@ class TestDiscordAudit:
         ]
         mock_logger = MagicMock()
         mock_logger.get_recent_events.return_value = events
-        with _SubsystemsPatch():
-            with patch(
-                "missy.observability.audit_logger.AuditLogger",
-                return_value=mock_logger,
-            ):
-                result = runner.invoke(
-                    cli, ["--config", cfg_path, "discord", "audit"]
-                )
+        with _SubsystemsPatch(), patch(
+            "missy.observability.audit_logger.AuditLogger",
+            return_value=mock_logger,
+        ):
+            result = runner.invoke(
+                cli, ["--config", cfg_path, "discord", "audit"]
+            )
         assert result.exit_code == 0
         # non-discord event filtered out → no events message
         assert "No Discord" in result.output
@@ -1628,11 +1613,10 @@ class TestEvolveList:
         cfg_path = _write_temp_config()
         mock_mgr = MagicMock()
         mock_mgr.list_all.return_value = []
-        with _SubsystemsPatch():
-            with patch(
-                "missy.agent.code_evolution.CodeEvolutionManager", return_value=mock_mgr
-            ):
-                result = runner.invoke(cli, ["--config", cfg_path, "evolve", "list"])
+        with _SubsystemsPatch(), patch(
+            "missy.agent.code_evolution.CodeEvolutionManager", return_value=mock_mgr
+        ):
+            result = runner.invoke(cli, ["--config", cfg_path, "evolve", "list"])
         assert result.exit_code == 0
         assert "No evolution" in result.output
 
@@ -1647,11 +1631,10 @@ class TestEvolveList:
         proposal.created_at = "2026-03-12T10:00:00"
         mock_mgr = MagicMock()
         mock_mgr.list_all.return_value = [proposal]
-        with _SubsystemsPatch():
-            with patch(
-                "missy.agent.code_evolution.CodeEvolutionManager", return_value=mock_mgr
-            ):
-                result = runner.invoke(cli, ["--config", cfg_path, "evolve", "list"])
+        with _SubsystemsPatch(), patch(
+            "missy.agent.code_evolution.CodeEvolutionManager", return_value=mock_mgr
+        ):
+            result = runner.invoke(cli, ["--config", cfg_path, "evolve", "list"])
         assert result.exit_code == 0
         assert "evo-001" in result.output
 
@@ -1669,13 +1652,12 @@ class TestEvolveApprove:
         cfg_path = _write_temp_config()
         mock_mgr = MagicMock()
         mock_mgr.approve.return_value = True
-        with _SubsystemsPatch():
-            with patch(
-                "missy.agent.code_evolution.CodeEvolutionManager", return_value=mock_mgr
-            ):
-                result = runner.invoke(
-                    cli, ["--config", cfg_path, "evolve", "approve", "evo-001"]
-                )
+        with _SubsystemsPatch(), patch(
+            "missy.agent.code_evolution.CodeEvolutionManager", return_value=mock_mgr
+        ):
+            result = runner.invoke(
+                cli, ["--config", cfg_path, "evolve", "approve", "evo-001"]
+            )
         assert result.exit_code == 0
         assert "evo-001" in result.output
 
@@ -1683,13 +1665,12 @@ class TestEvolveApprove:
         cfg_path = _write_temp_config()
         mock_mgr = MagicMock()
         mock_mgr.approve.return_value = False
-        with _SubsystemsPatch():
-            with patch(
-                "missy.agent.code_evolution.CodeEvolutionManager", return_value=mock_mgr
-            ):
-                result = runner.invoke(
-                    cli, ["--config", cfg_path, "evolve", "approve", "ghost"]
-                )
+        with _SubsystemsPatch(), patch(
+            "missy.agent.code_evolution.CodeEvolutionManager", return_value=mock_mgr
+        ):
+            result = runner.invoke(
+                cli, ["--config", cfg_path, "evolve", "approve", "ghost"]
+            )
         assert result.exit_code == 0
 
     def test_evolve_approve_help_exits_zero(self, runner: CliRunner):
@@ -1702,13 +1683,12 @@ class TestEvolveReject:
         cfg_path = _write_temp_config()
         mock_mgr = MagicMock()
         mock_mgr.reject.return_value = True
-        with _SubsystemsPatch():
-            with patch(
-                "missy.agent.code_evolution.CodeEvolutionManager", return_value=mock_mgr
-            ):
-                result = runner.invoke(
-                    cli, ["--config", cfg_path, "evolve", "reject", "evo-001"]
-                )
+        with _SubsystemsPatch(), patch(
+            "missy.agent.code_evolution.CodeEvolutionManager", return_value=mock_mgr
+        ):
+            result = runner.invoke(
+                cli, ["--config", cfg_path, "evolve", "reject", "evo-001"]
+            )
         assert result.exit_code == 0
         assert "evo-001" in result.output
 
@@ -1716,13 +1696,12 @@ class TestEvolveReject:
         cfg_path = _write_temp_config()
         mock_mgr = MagicMock()
         mock_mgr.reject.return_value = False
-        with _SubsystemsPatch():
-            with patch(
-                "missy.agent.code_evolution.CodeEvolutionManager", return_value=mock_mgr
-            ):
-                result = runner.invoke(
-                    cli, ["--config", cfg_path, "evolve", "reject", "ghost"]
-                )
+        with _SubsystemsPatch(), patch(
+            "missy.agent.code_evolution.CodeEvolutionManager", return_value=mock_mgr
+        ):
+            result = runner.invoke(
+                cli, ["--config", cfg_path, "evolve", "reject", "ghost"]
+            )
         assert result.exit_code == 0
 
     def test_evolve_reject_help_exits_zero(self, runner: CliRunner):
@@ -1735,13 +1714,12 @@ class TestEvolveShow:
         cfg_path = _write_temp_config()
         mock_mgr = MagicMock()
         mock_mgr.get.return_value = None
-        with _SubsystemsPatch():
-            with patch(
-                "missy.agent.code_evolution.CodeEvolutionManager", return_value=mock_mgr
-            ):
-                result = runner.invoke(
-                    cli, ["--config", cfg_path, "evolve", "show", "ghost"]
-                )
+        with _SubsystemsPatch(), patch(
+            "missy.agent.code_evolution.CodeEvolutionManager", return_value=mock_mgr
+        ):
+            result = runner.invoke(
+                cli, ["--config", cfg_path, "evolve", "show", "ghost"]
+            )
         assert result.exit_code == 0
 
     def test_evolve_show_found(self, runner: CliRunner):
@@ -1761,13 +1739,12 @@ class TestEvolveShow:
         proposal.test_output = None
         mock_mgr = MagicMock()
         mock_mgr.get.return_value = proposal
-        with _SubsystemsPatch():
-            with patch(
-                "missy.agent.code_evolution.CodeEvolutionManager", return_value=mock_mgr
-            ):
-                result = runner.invoke(
-                    cli, ["--config", cfg_path, "evolve", "show", "evo-001"]
-                )
+        with _SubsystemsPatch(), patch(
+            "missy.agent.code_evolution.CodeEvolutionManager", return_value=mock_mgr
+        ):
+            result = runner.invoke(
+                cli, ["--config", cfg_path, "evolve", "show", "evo-001"]
+            )
         assert result.exit_code == 0
         assert "evo-001" in result.output
 
@@ -2011,16 +1988,15 @@ class TestDoctorBranches:
         mock_registry.get.return_value = mock_provider
         mock_mgr = MagicMock()
         mock_mgr.list_jobs.return_value = []
-        with _SubsystemsPatch():
-            with (
-                patch(
-                    "missy.providers.registry.get_registry", return_value=mock_registry
-                ),
-                patch(
-                    "missy.scheduler.manager.SchedulerManager", return_value=mock_mgr
-                ),
-            ):
-                result = runner.invoke(cli, ["--config", cfg_path, "doctor"])
+        with (
+            _SubsystemsPatch(), patch(
+                "missy.providers.registry.get_registry", return_value=mock_registry
+            ),
+            patch(
+                "missy.scheduler.manager.SchedulerManager", return_value=mock_mgr
+            ),
+        ):
+            result = runner.invoke(cli, ["--config", cfg_path, "doctor"])
         assert result.exit_code == 0
         assert "anthropic" in result.output
 

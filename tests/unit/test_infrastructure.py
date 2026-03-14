@@ -17,16 +17,13 @@ import io
 import json
 import threading
 import time
-from pathlib import Path
-from typing import Optional
-from unittest.mock import MagicMock, Mock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 # ---------------------------------------------------------------------------
 # WebhookChannel
 # ---------------------------------------------------------------------------
-
 from missy.channels.base import ChannelMessage
 from missy.channels.webhook import WebhookChannel
 
@@ -129,7 +126,7 @@ class TestWebhookChannelStart:
         mock_thread = MagicMock()
 
         with patch("missy.channels.webhook.HTTPServer", return_value=mock_server) as mock_http, \
-             patch("missy.channels.webhook.threading.Thread", return_value=mock_thread) as mock_t:
+             patch("missy.channels.webhook.threading.Thread", return_value=mock_thread):
             ch.start()
 
         mock_http.assert_called_once_with(("127.0.0.1", 0), mock_http.call_args[0][1])
@@ -143,7 +140,6 @@ class TestWebhookHandlerDoPost:
 
     def _make_handler(self, body: bytes, headers: dict, channel: WebhookChannel):
         """Return a Handler instance wired to write into a BytesIO sink."""
-        from missy.channels.webhook import WebhookChannel as WH
 
         # Build a minimal handler by invoking start() and extracting the Handler class
         # by patching HTTPServer to capture the handler class argument.
@@ -277,7 +273,7 @@ class TestConfigWatcherInit:
     def test_attributes_set(self, tmp_path):
         cfg = tmp_path / "config.yaml"
         cfg.write_text("key: value")
-        fn = lambda c: None
+        def fn(c): pass
         watcher = ConfigWatcher(str(cfg), fn, debounce_seconds=1.5, poll_interval=0.5)
         assert watcher._path == cfg
         assert watcher._reload_fn is fn
@@ -285,13 +281,13 @@ class TestConfigWatcherInit:
         assert watcher._poll == 0.5
 
     def test_tilde_expanded_in_path(self):
-        fn = lambda c: None
+        def fn(c): pass
         watcher = ConfigWatcher("~/.missy/config.yaml", fn)
         assert not str(watcher._path).startswith("~")
 
     def test_initial_mtime_is_zero(self, tmp_path):
         cfg = tmp_path / "config.yaml"
-        fn = lambda c: None
+        def fn(c): pass
         watcher = ConfigWatcher(str(cfg), fn)
         assert watcher._last_mtime == 0.0
         assert watcher._thread is None

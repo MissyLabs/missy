@@ -5,8 +5,8 @@ from __future__ import annotations
 import re
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 
 @dataclass
@@ -43,11 +43,11 @@ class ScheduledJob:
     task: str = ""
     provider: str = "anthropic"
     enabled: bool = True
-    created_at: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
-    last_run: Optional[datetime] = None
-    next_run: Optional[datetime] = None
+    created_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
+    last_run: datetime | None = None
+    next_run: datetime | None = None
     run_count: int = 0
-    last_result: Optional[str] = None
+    last_result: str | None = None
 
     # ------------------------------------------------------------------
     # Retry configuration
@@ -166,7 +166,7 @@ class ScheduledJob:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ScheduledJob":
+    def from_dict(cls, data: dict[str, Any]) -> ScheduledJob:
         """Deserialise a job from a dictionary previously produced by :meth:`to_dict`.
 
         Missing keys fall back to safe defaults so that existing ``jobs.json``
@@ -181,7 +181,7 @@ class ScheduledJob:
             A new :class:`ScheduledJob` instance.
         """
 
-        def _parse_dt(value: Optional[str]) -> Optional[datetime]:
+        def _parse_dt(value: str | None) -> datetime | None:
             if value is None:
                 return None
             return datetime.fromisoformat(value)
@@ -194,7 +194,7 @@ class ScheduledJob:
             task=str(data.get("task", "")),
             provider=str(data.get("provider", "anthropic")),
             enabled=bool(data.get("enabled", True)),
-            created_at=_parse_dt(data.get("created_at")) or datetime.now(tz=timezone.utc),
+            created_at=_parse_dt(data.get("created_at")) or datetime.now(tz=UTC),
             last_run=_parse_dt(data.get("last_run")),
             next_run=_parse_dt(data.get("next_run")),
             run_count=int(data.get("run_count", 0)),

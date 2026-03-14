@@ -20,9 +20,8 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Optional
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -108,8 +107,8 @@ class SchedulerManager:
         provider: str = "anthropic",
         description: str = "",
         max_attempts: int = 3,
-        backoff_seconds: Optional[list] = None,
-        retry_on: Optional[list] = None,
+        backoff_seconds: list | None = None,
+        retry_on: list | None = None,
         delete_after_run: bool = False,
         active_hours: str = "",
         timezone: str = "",
@@ -364,7 +363,7 @@ class SchedulerManager:
             result_text = agent.run(job.task, session_id=session_id)
         except Exception as exc:
             logger.exception("Error executing scheduled job %r (id=%s).", job.name, job_id)
-            job.last_run = datetime.now(tz=timezone.utc)
+            job.last_run = datetime.now(tz=UTC)
             job.last_result = f"ERROR: {exc}"
             job.consecutive_failures += 1
             job.last_error = str(exc)
@@ -384,7 +383,7 @@ class SchedulerManager:
                 backoff = job.backoff_seconds[
                     min(failures - 1, len(job.backoff_seconds) - 1)
                 ]
-                retry_run_date = datetime.now(tz=timezone.utc) + timedelta(seconds=backoff)
+                retry_run_date = datetime.now(tz=UTC) + timedelta(seconds=backoff)
                 try:
                     retry_job_id = f"{job_id}_retry_{failures}"
                     self._scheduler.add_job(
@@ -453,7 +452,7 @@ class SchedulerManager:
         # ------------------------------------------------------------------
         # Successful run
         # ------------------------------------------------------------------
-        job.last_run = datetime.now(tz=timezone.utc)
+        job.last_run = datetime.now(tz=UTC)
         job.run_count += 1
         job.last_result = result_text
         job.consecutive_failures = 0

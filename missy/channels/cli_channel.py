@@ -17,7 +17,6 @@ Example::
 from __future__ import annotations
 
 import sys
-from typing import Optional
 
 from .base import BaseChannel, ChannelMessage
 
@@ -40,7 +39,7 @@ class CLIChannel(BaseChannel):
     def __init__(self, prompt: str = "") -> None:
         self._prompt = prompt
 
-    def receive(self) -> Optional[ChannelMessage]:
+    def receive(self) -> ChannelMessage | None:
         """Read one line from stdin and return it as a :class:`ChannelMessage`.
 
         Returns:

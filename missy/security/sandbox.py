@@ -36,7 +36,7 @@ import logging
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -75,8 +75,8 @@ class SandboxResult:
     """Result of a sandboxed command execution."""
 
     success: bool
-    output: Optional[str]
-    error: Optional[str]
+    output: str | None
+    error: str | None
     sandboxed: bool  # True if Docker was used, False for fallback
 
 
@@ -88,9 +88,9 @@ class DockerSandbox:
     (if configured), and read-only root filesystem.
     """
 
-    def __init__(self, config: Optional[SandboxConfig] = None) -> None:
+    def __init__(self, config: SandboxConfig | None = None) -> None:
         self.config = config or SandboxConfig()
-        self._docker_available: Optional[bool] = None
+        self._docker_available: bool | None = None
 
     def is_available(self) -> bool:
         """Check whether Docker is accessible on this host."""
@@ -111,10 +111,10 @@ class DockerSandbox:
         self,
         command: str,
         *,
-        cwd: Optional[str] = None,
-        timeout: Optional[int] = None,
-        bind_mounts: Optional[list[str]] = None,
-        env: Optional[dict[str, str]] = None,
+        cwd: str | None = None,
+        timeout: int | None = None,
+        bind_mounts: list[str] | None = None,
+        env: dict[str, str] | None = None,
         network: bool = False,
     ) -> SandboxResult:
         """Execute *command* inside a Docker container.
@@ -226,7 +226,7 @@ class FallbackSandbox:
     configurable timeout.
     """
 
-    def __init__(self, config: Optional[SandboxConfig] = None) -> None:
+    def __init__(self, config: SandboxConfig | None = None) -> None:
         self.config = config or SandboxConfig()
 
     def is_available(self) -> bool:
@@ -237,8 +237,8 @@ class FallbackSandbox:
         self,
         command: str,
         *,
-        cwd: Optional[str] = None,
-        timeout: Optional[int] = None,
+        cwd: str | None = None,
+        timeout: int | None = None,
         **_kwargs: Any,
     ) -> SandboxResult:
         """Execute *command* via subprocess (no Docker isolation).
@@ -307,7 +307,7 @@ def parse_sandbox_config(data: dict[str, Any]) -> SandboxConfig:
     )
 
 
-def get_sandbox(config: Optional[SandboxConfig] = None) -> DockerSandbox | FallbackSandbox:
+def get_sandbox(config: SandboxConfig | None = None) -> DockerSandbox | FallbackSandbox:
     """Return the best available sandbox implementation.
 
     Returns a :class:`DockerSandbox` when Docker is accessible and sandbox

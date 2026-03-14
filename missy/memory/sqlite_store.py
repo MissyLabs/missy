@@ -6,9 +6,8 @@ import sqlite3
 import threading
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Optional
 
 
 @dataclass
@@ -40,12 +39,12 @@ class ConversationTurn:
         role: str,
         content: str,
         provider: str = "",
-    ) -> "ConversationTurn":
+    ) -> ConversationTurn:
         """Construct a new turn with a generated id and current UTC timestamp."""
         return cls(
             id=str(uuid.uuid4()),
             session_id=session_id,
-            timestamp=datetime.now(timezone.utc).isoformat(),
+            timestamp=datetime.now(UTC).isoformat(),
             role=role,
             content=content,
             provider=provider,
@@ -64,7 +63,7 @@ class ConversationTurn:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "ConversationTurn":
+    def from_dict(cls, data: dict) -> ConversationTurn:
         """Deserialise a turn from a dictionary produced by :meth:`to_dict`."""
         return cls(
             id=data.get("id", str(uuid.uuid4())),
@@ -274,7 +273,7 @@ class SQLiteMemoryStore:
         self,
         query: str,
         limit: int = 10,
-        session_id: Optional[str] = None,
+        session_id: str | None = None,
     ) -> list[ConversationTurn]:
         """Full-text search across conversation history.
 
@@ -332,14 +331,14 @@ class SQLiteMemoryStore:
                 getattr(learning, "outcome", ""),
                 getattr(learning, "lesson", ""),
                 json.dumps(getattr(learning, "approach", [])),
-                getattr(learning, "timestamp", datetime.now(timezone.utc).isoformat()),
+                getattr(learning, "timestamp", datetime.now(UTC).isoformat()),
             ),
         )
         conn.commit()
 
     def get_learnings(
         self,
-        task_type: Optional[str] = None,
+        task_type: str | None = None,
         limit: int = 5,
     ) -> list[str]:
         """Retrieve recent learning lessons for context injection.
@@ -383,7 +382,7 @@ class SQLiteMemoryStore:
             provider: Provider used for this session.
             channel: Channel this session originates from.
         """
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         conn = self._conn()
         conn.execute(
             """INSERT INTO sessions (session_id, name, created_at, updated_at, provider, channel)
@@ -403,7 +402,7 @@ class SQLiteMemoryStore:
         count = conn.execute(
             "SELECT COUNT(*) FROM turns WHERE session_id = ?", (session_id,)
         ).fetchone()[0]
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         conn.execute(
             "UPDATE sessions SET turn_count = ?, updated_at = ? WHERE session_id = ?",
             (count, now, session_id),
@@ -457,7 +456,7 @@ class SQLiteMemoryStore:
             for r in rows
         ]
 
-    def resolve_session_name(self, name: str) -> Optional[str]:
+    def resolve_session_name(self, name: str) -> str | None:
         """Look up a session ID by its friendly name.
 
         Args:
@@ -506,7 +505,7 @@ class SQLiteMemoryStore:
                 prompt_tokens,
                 completion_tokens,
                 cost_usd,
-                datetime.now(timezone.utc).isoformat(),
+                datetime.now(UTC).isoformat(),
             ),
         )
         conn.commit()
@@ -588,7 +587,7 @@ class SQLiteMemoryStore:
         """
         conn = self._conn()
         cutoff = (
-            datetime.now(timezone.utc) - timedelta(days=older_than_days)
+            datetime.now(UTC) - timedelta(days=older_than_days)
         ).isoformat()
         cur = conn.execute("DELETE FROM turns WHERE timestamp < ?", (cutoff,))
         conn.commit()

@@ -21,7 +21,7 @@ import logging
 import random
 import re
 import time
-from typing import Any, Optional
+from typing import Any
 
 from missy.gateway.client import PolicyHTTPClient, create_client
 
@@ -59,7 +59,7 @@ class DiscordRestClient:
     def __init__(
         self,
         bot_token: str,
-        http_client: Optional[PolicyHTTPClient] = None,
+        http_client: PolicyHTTPClient | None = None,
         session_id: str = "discord",
         task_id: str = "rest",
     ) -> None:
@@ -75,7 +75,7 @@ class DiscordRestClient:
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _headers(self, extra: Optional[dict[str, str]] = None) -> dict[str, str]:
+    def _headers(self, extra: dict[str, str] | None = None) -> dict[str, str]:
         """Build request headers with the bot token injected."""
         hdrs: dict[str, str] = {
             "Authorization": self._token,
@@ -126,8 +126,8 @@ class DiscordRestClient:
         self,
         channel_id: str,
         content: str,
-        reply_to_message_id: Optional[str] = None,
-        mention_user_ids: Optional[list[str]] = None,
+        reply_to_message_id: str | None = None,
+        mention_user_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         """Send a text message to a Discord channel.
 
@@ -197,7 +197,7 @@ class DiscordRestClient:
                 response = self._http.post(url, headers=self._headers(), json=body)
 
                 if response.status_code in retry_statuses:
-                    delay: Optional[float] = None
+                    delay: float | None = None
                     if response.status_code == 429:
                         ra = response.headers.get("Retry-After") if hasattr(response, "headers") else None
                         if ra:
@@ -375,7 +375,7 @@ class DiscordRestClient:
         self,
         channel_id: str,
         name: str,
-        message_id: Optional[str] = None,
+        message_id: str | None = None,
         auto_archive_duration: int = 1440,
     ) -> dict[str, Any]:
         """Create a new thread in a Discord channel.
@@ -428,7 +428,7 @@ class DiscordRestClient:
         self,
         application_id: str,
         commands: list[dict[str, Any]],
-        guild_id: Optional[str] = None,
+        guild_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """Register (bulk overwrite) application slash commands.
 

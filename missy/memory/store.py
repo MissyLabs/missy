@@ -27,9 +27,9 @@ import json
 import logging
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from missy.memory.sqlite_store import SQLiteMemoryStore  # re-export
 
@@ -54,7 +54,7 @@ class ConversationTurn:
 
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     session_id: str = ""
-    timestamp: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
+    timestamp: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
     role: str = ""
     content: str = ""
     provider: str = ""
@@ -76,7 +76,7 @@ class ConversationTurn:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ConversationTurn":
+    def from_dict(cls, data: dict[str, Any]) -> ConversationTurn:
         """Deserialise a turn from a dictionary produced by :meth:`to_dict`.
 
         Args:
@@ -87,7 +87,7 @@ class ConversationTurn:
             A new :class:`ConversationTurn` instance.
         """
         raw_ts = data.get("timestamp")
-        timestamp = datetime.fromisoformat(raw_ts) if raw_ts else datetime.now(tz=timezone.utc)
+        timestamp = datetime.fromisoformat(raw_ts) if raw_ts else datetime.now(tz=UTC)
         return cls(
             id=str(data.get("id", str(uuid.uuid4()))),
             session_id=str(data.get("session_id", "")),
@@ -215,7 +215,7 @@ class MemoryStore:
         self,
         query: str,
         limit: int = 10,
-        session_id: Optional[str] = None,
+        session_id: str | None = None,
     ) -> list[ConversationTurn]:
         """Basic case-insensitive keyword search across conversation history.
 
@@ -250,7 +250,7 @@ class MemoryStore:
 
     def get_learnings(
         self,
-        task_type: Optional[str] = None,  # noqa: ARG002
+        task_type: str | None = None,  # noqa: ARG002
         limit: int = 5,  # noqa: ARG002
     ) -> list:
         """No-op stub — learnings require :class:`~missy.memory.sqlite_store.SQLiteMemoryStore`.

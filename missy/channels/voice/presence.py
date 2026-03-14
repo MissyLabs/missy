@@ -29,7 +29,6 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Optional
 
 from missy.channels.voice.registry import DeviceRegistry
 
@@ -60,8 +59,8 @@ class PresenceData:
 
     node_id: str
     room: str
-    occupancy: Optional[bool] = None
-    noise_level: Optional[float] = None
+    occupancy: bool | None = None
+    noise_level: float | None = None
     wake_word_false_positives: int = 0
     updated_at: float = field(default_factory=time.time)
 
@@ -116,8 +115,8 @@ class PresenceStore:
     def update(
         self,
         node_id: str,
-        occupancy: Optional[bool] = None,
-        noise_level: Optional[float] = None,
+        occupancy: bool | None = None,
+        noise_level: float | None = None,
         wake_word_fp: bool = False,
     ) -> None:
         """Update presence data for *node_id* and sync to the registry.
@@ -187,7 +186,7 @@ class PresenceStore:
     # Queries
     # ------------------------------------------------------------------
 
-    def get(self, node_id: str) -> Optional[PresenceData]:
+    def get(self, node_id: str) -> PresenceData | None:
         """Return the :class:`PresenceData` for *node_id*, or ``None``.
 
         Args:

@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Optional
 
 from missy.core.events import AuditEvent, event_bus
 
@@ -64,7 +63,7 @@ class SkillRegistry:
     # Queries
     # ------------------------------------------------------------------
 
-    def get(self, name: str) -> Optional[BaseSkill]:
+    def get(self, name: str) -> BaseSkill | None:
         """Return the skill registered under *name*, or ``None``.
 
         Args:
@@ -183,7 +182,7 @@ class SkillRegistry:
 # Module-level singleton
 # ---------------------------------------------------------------------------
 
-_registry: Optional[SkillRegistry] = None
+_registry: SkillRegistry | None = None
 _lock: threading.Lock = threading.Lock()
 
 
