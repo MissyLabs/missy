@@ -8,15 +8,15 @@
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 4290 |
-| Passed | 4290 |
+| Total tests | 4379 |
+| Passed | 4379 |
 | Failed | 0 |
 | Skipped | 7 |
 | Warnings | 5 |
-| Duration | ~99s |
+| Duration | ~116s |
 | Source files | 123 |
-| Test files | 114 |
-| Coverage | 98% |
+| Test files | 115 |
+| Coverage | 98.3% |
 
 ## Test Distribution
 
@@ -48,7 +48,10 @@
 - **18 voice registry tests**: atomic write failure, purge audio stat/unlink errors, non-file entry handling
 - **77 end-to-end integration tests**: security pipeline, policy enforcement chain, memory lifecycle, circuit breaker, cost tracker, tool registry, scheduler, audit events, config reload, multi-layer security
 
+- **54 incus tools coverage tests**: unreachable fallbacks, network attach/detach, volume operations, profile set/edit, project config, device validation, copy/move flags
+- **35 targeted coverage gap tests**: Discord REST error paths, config api_keys fallback, filesystem policy ValueError, skills registry audit, sandbox exceptions, voice command guards
+
 ## pytest output
 ```
-4290 passed, 7 skipped, 5 warnings in 98.51s
+4379 passed, 7 skipped, 5 warnings in 115.87s
 ```

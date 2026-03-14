@@ -24,7 +24,7 @@ All core phases implemented, parity gaps closed, comprehensive hardening applied
 16. CLI (60+ commands via click + rich, including recover, evolve)
 17. Discord (WebSocket gateway, REST API, threads, slash commands, pairing, access control, voice, interactive setup wizard)
 18. Code self-evolution engine (propose, test, apply, rollback)
-19. Tests (4290 tests, 98% coverage)
+19. Tests (4379 tests, 98.3% coverage)
 20. Documentation (SECURITY.md, OPERATIONS.md, ARCHITECTURE.md, CONFIG_REFERENCE.md, DISCORD.md, TESTING.md, TROUBLESHOOTING.md, 10+ implementation docs)
 21. Audit artifacts (AUDIT_SECURITY.md, AUDIT_CONNECTIVITY.md)
 22. Test artifacts (TEST_RESULTS.md, TEST_EDGE_CASES.md, BUILD_RESULTS.md)
@@ -58,8 +58,8 @@ missy/                          # 123 Python source files
 
 ## Test Results
 
-- 4290 tests passing across 114 test files
-- 98% code coverage (11505 statements, 239 missed)
+- 4379 tests passing across 115 test files
+- 98.3% code coverage (11505 statements, 196 missed)
 - Unit, integration, policy, Discord, security, memory, agent, tools, skills, CLI, voice, scheduler tests
 - 54+ property-based tests (hypothesis) for policy engines, security, and rate limiter
 - 116 security fuzz tests (unicode evasion, encoding bypass, vault corruption)
@@ -76,8 +76,10 @@ missy/                          # 123 Python source files
 - **Voice registry tests** (18 new): atomic write failure with temp cleanup, purge_audio_logs stat/unlink errors, non-file entry filtering, integration round-trips
 - **End-to-end integration tests** (77 new): security pipeline (sanitizer→detector→censor), policy enforcement chain, memory lifecycle, circuit breaker state machine, cost tracker budget enforcement, tool registry with policy, scheduler lifecycle, audit event flow, config mutation, multi-layer security
 - **Error handling hardening**: Replaced 8 bare `except: pass` blocks with `logger.debug()` calls in watchdog, CLI init, browser tools, self_create_tool, x11_tools
-- **Total new tests**: 323 (from 3967 to 4290)
-- **Coverage**: 97% → 98%
+- **Incus tools coverage tests** (54 new): unreachable fallbacks, network attach/detach parsing, volume operations, profile set/edit, project config, device validation, copy/move flags
+- **Targeted coverage gap tests** (35 new): Discord REST error paths, config api_keys fallback, filesystem policy ValueError, skills registry audit errors, sandbox generic exceptions, voice command guards
+- **Total new tests**: 412 (from 3967 to 4379)
+- **Coverage**: 97% → 98.3%
 
 ## Session 8 Additions (2026-03-14)
 
