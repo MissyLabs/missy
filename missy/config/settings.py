@@ -347,6 +347,9 @@ def _parse_providers(data: dict[str, Any]) -> dict[str, ProviderConfig]:
             raise ConfigurationError(f"Provider '{key}' is missing required field 'model'.")
         api_keys = list(raw.get("api_keys", []))
         api_key = raw.get("api_key") or os.environ.get(f"{key.upper()}_API_KEY")
+        # Anthropic also supports ANTHROPIC_AUTH_TOKEN for OAuth/setup-tokens.
+        if not api_key and key == "anthropic":
+            api_key = os.environ.get("ANTHROPIC_AUTH_TOKEN")
         # If api_key is not set but api_keys has entries, use the first one.
         if not api_key and api_keys:
             api_key = api_keys[0]

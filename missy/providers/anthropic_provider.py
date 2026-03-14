@@ -52,7 +52,14 @@ class AnthropicProvider(BaseProvider):
     name = "anthropic"
 
     def __init__(self, config: ProviderConfig) -> None:
-        self._api_key: str | None = config.api_key
+        self._api_key: str | None = None
+        self._auth_token: str | None = None
+        key = config.api_key
+        if key and key.startswith("sk-ant-oat"):
+            # OAuth / setup-token → use Bearer auth.
+            self._auth_token = key
+        else:
+            self._api_key = key
         self._model: str = config.model or _DEFAULT_MODEL
         self._timeout: int = config.timeout
 
@@ -67,7 +74,16 @@ class AnthropicProvider(BaseProvider):
             ``True`` if the ``anthropic`` package is importable and an API
             key is present.
         """
-        return _ANTHROPIC_AVAILABLE and bool(self._api_key)
+        return _ANTHROPIC_AVAILABLE and bool(self._api_key or self._auth_token)
+
+    def _make_client(self) -> Any:
+        """Construct an Anthropic client with the appropriate auth method."""
+        kwargs: dict[str, Any] = {"timeout": float(self._timeout)}
+        if self._auth_token:
+            kwargs["auth_token"] = self._auth_token
+        else:
+            kwargs["api_key"] = self._api_key
+        return _anthropic_sdk.Anthropic(**kwargs)
 
     def complete(self, messages: list[Message], **kwargs: Any) -> CompletionResponse:
         """Send *messages* to the Anthropic Messages API.
@@ -124,10 +140,7 @@ class AnthropicProvider(BaseProvider):
         call_kwargs.update(kwargs)
 
         try:
-            client = _anthropic_sdk.Anthropic(
-                api_key=self._api_key,
-                timeout=float(self._timeout),
-            )
+            client = self._make_client()
             raw_response = client.messages.create(**call_kwargs)
         except _anthropic_sdk.APITimeoutError as exc:
             self._emit_event(session_id, task_id, "error", str(exc))
@@ -243,10 +256,7 @@ class AnthropicProvider(BaseProvider):
             call_kwargs["system"] = system_content
 
         try:
-            client = _anthropic_sdk.Anthropic(
-                api_key=self._api_key,
-                timeout=float(self._timeout),
-            )
+            client = self._make_client()
             raw_response = client.messages.create(**call_kwargs)
         except _anthropic_sdk.APITimeoutError as exc:
             raise ProviderError(
@@ -335,10 +345,7 @@ class AnthropicProvider(BaseProvider):
             call_kwargs["system"] = system_content
 
         try:
-            client = _anthropic_sdk.Anthropic(
-                api_key=self._api_key,
-                timeout=float(self._timeout),
-            )
+            client = self._make_client()
             with client.messages.stream(**call_kwargs) as stream:
                 for text in stream.text_stream:
                     yield text

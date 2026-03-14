@@ -207,7 +207,11 @@ def _verify_anthropic(api_key: str) -> bool:
     try:
         import anthropic
 
-        client = anthropic.Anthropic(api_key=api_key)
+        # Setup-tokens (sk-ant-oat...) use Bearer auth, not x-api-key.
+        if api_key.startswith("sk-ant-oat"):
+            client = anthropic.Anthropic(auth_token=api_key)
+        else:
+            client = anthropic.Anthropic(api_key=api_key)
         client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=1,
