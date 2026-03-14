@@ -1,4 +1,4 @@
-"""Discord channel implementation.
+Discord channel implementation.
 
 :class:`DiscordChannel` wires together the Gateway client, REST client,
 access-control logic, and pairing workflow into a :class:`BaseChannel`
@@ -91,6 +91,9 @@ class DiscordChannel(BaseChannel):
 
         # Pending evolution reactions: message_id -> proposal_id
         self._pending_evolutions: dict[str, str] = {}
+
+        # Optional voice manager (lazy import so text-only deployments don't need voice deps)
+        self._voice = None
 
         token = account_config.resolve_token() or ""
         if not token:
@@ -306,6 +309,17 @@ class DiscordChannel(BaseChannel):
             logger.debug("Discord: ignoring own message (bot_id=%s)", self._bot_user_id)
             return
 
+        # 0. Voice MVP commands (MESSAGE_CREATE) — handled before policy gates.
+        if guild_id and content:
+            handled = await self._maybe_handle_voice_command(
+                guild_id=str(guild_id),
+                channel_id=channel_id,
+                author_id=author_id,
+                content=content,
+            )
+            if handled:
+                return
+
         # 1b. Credential / secrets detection — delete message and warn if secrets found.
         if content:
             try:
@@ -439,6 +453,68 @@ class DiscordChannel(BaseChannel):
             },
         )
         await self._queue.put(msg)
+
+    async def _maybe_handle_voice_command(
+        self,
+        guild_id: str,
+        channel_id: str,
+        author_id: str,
+        content: str,
+    ) -> bool:
+        text = content.strip()
+        if not text.startswith("!"):
+            return False
+
+        cmd, _, rest = text.partition(" ")
+        cmd = cmd.lower()
+
+        if cmd not in ("!join", "!leave", "!say"):
+            return False
+
+        # Lazy init voice manager only if a voice command is used.
+        if self._voice is None:
+            try:
+                from missy.channels.discord.voice import DiscordVoiceManager
+
+                self._voice = DiscordVoiceManager()
+            except Exception as exc:
+                self._rest.send_message(channel_id, f"voice unavailable: {exc}")
+                return True
+
+        try:
+            if cmd == "!join":
+                vc_id = rest.strip()
+                if not vc_id.isdigit():
+                    self._rest.send_message(channel_id, "usage: !join <channel_id>")
+                    return True
+                await self._voice.join(guild_id=guild_id, channel_id=vc_id)
+                self._rest.send_message(channel_id, "joined")
+                logger.info("Discord voice: joined guild=%s vc=%s by=%s", guild_id, vc_id, author_id)
+                return True
+
+            if cmd == "!leave":
+                await self._voice.leave(guild_id=guild_id)
+                self._rest.send_message(channel_id, "left")
+                logger.info("Discord voice: left guild=%s by=%s", guild_id, author_id)
+                return True
+
+            if cmd == "!say":
+                phrase = rest.strip()
+                if not phrase:
+                    self._rest.send_message(channel_id, "usage: !say <text>")
+                    return True
+                await self._voice.say(guild_id=guild_id, text=phrase)
+                self._rest.send_message(channel_id, "speaking")
+                logger.info("Discord voice: speaking guild=%s by=%s chars=%d", guild_id, author_id, len(phrase))
+                return True
+
+        except Exception as exc:
+            msg = str(exc).strip() or "unknown error"
+            self._rest.send_message(channel_id, msg[:180])
+            logger.warning("Discord voice command failed guild=%s cmd=%s err=%s", guild_id, cmd, msg)
+            return True
+
+        return False
 
     async def _handle_interaction(self, data: dict[str, Any]) -> None:
         """Handle a slash command interaction."""

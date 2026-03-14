@@ -1,4 +1,4 @@
-"""Discord REST API client built on top of :class:`PolicyHTTPClient`.
+Discord REST API client built on top of :class:`PolicyHTTPClient`.
 
 All outbound requests to ``discord.com`` are routed through
 :class:`~missy.gateway.client.PolicyHTTPClient` so the framework's
@@ -18,6 +18,9 @@ Example::
 from __future__ import annotations
 
 import logging
+import random
+import re
+import time
 from typing import Any, Optional
 
 from missy.gateway.client import PolicyHTTPClient, create_client
@@ -26,6 +29,14 @@ logger = logging.getLogger(__name__)
 
 #: Discord REST API base URL.
 BASE = "https://discord.com/api/v10"
+
+
+_MENTION_ID_RE = re.compile(r"<@!?(?:\\d+)>|<@&(?:\\d+)>|<#(?:\\d+)>")
+
+
+def _mask_mentions(s: str) -> str:
+    """Redact snowflake IDs inside common mention tokens for safer logging."""
+    return _MENTION_ID_RE.sub(lambda m: re.sub(r"\\d+", "redacted", m.group(0)), s or "")
 
 
 class DiscordRestClient:
@@ -131,18 +142,105 @@ class DiscordRestClient:
 
         Raises:
             PolicyViolationError: If ``discord.com`` is not allowed.
-            httpx.HTTPStatusError: On non-2xx responses.
+            httpx.HTTPStatusError: On non-2xx responses (after retries).
+            RuntimeError: If Discord returns a payload without a message id.
         """
         url = f"{BASE}/channels/{channel_id}/messages"
-        body: dict[str, Any] = {"content": content}
+        body: dict[str, Any] = {
+            "content": content,
+            # Prevent Discord from parsing any mentions in outbound content.
+            "allowed_mentions": {"parse": []},
+        }
         if reply_to_message_id is not None:
             body["message_reference"] = {
                 "message_id": reply_to_message_id,
                 "fail_if_not_exists": False,
             }
-        response = self._http.post(url, headers=self._headers(), json=body)
-        response.raise_for_status()
-        return response.json()
+
+        retry_statuses = {429, 502, 503, 504}
+        backoffs = (1.0, 2.0, 4.0)
+        attempt_count = len(backoffs) + 1
+
+        def _log_final_failure(*, response: Any | None, exc: Exception | None, attempt_index: int) -> None:
+            try:
+                status_code = getattr(response, "status_code", None)
+                response_text = ""
+                if response is not None:
+                    try:
+                        response_text = getattr(response, "text", "") or ""
+                    except Exception:
+                        response_text = ""
+
+                response_body = _mask_mentions(response_text)[:500]
+
+                payload_preview = _mask_mentions(content)[:200]
+                payload_len = len(content) if content is not None else 0
+
+                logger.error(
+                    "Discord send_message final failure (channel_id=%s attempt_count=%d status_code=%s payload_len=%d payload_preview=%r response_body=%r exc=%s)",
+                    channel_id,
+                    attempt_index,
+                    status_code,
+                    payload_len,
+                    payload_preview,
+                    response_body,
+                    repr(exc) if exc else None,
+                )
+            except Exception:
+                logger.exception("Discord send_message final failure logging failed")
+
+        for attempt in range(attempt_count):
+            response = None
+            try:
+                response = self._http.post(url, headers=self._headers(), json=body)
+
+                if response.status_code in retry_statuses:
+                    delay: Optional[float] = None
+                    if response.status_code == 429:
+                        ra = response.headers.get("Retry-After") if hasattr(response, "headers") else None
+                        if ra:
+                            try:
+                                delay = float(ra)
+                            except Exception:
+                                delay = None
+                    if delay is None:
+                        if attempt >= len(backoffs):
+                            response.raise_for_status()
+                        delay = backoffs[attempt]
+
+                    delay = float(delay) + random.uniform(0.0, 0.25)
+                    logger.warning(
+                        "Discord send_message transient HTTP %d; retrying in %.2fs (attempt %d/%d)",
+                        response.status_code,
+                        delay,
+                        attempt + 1,
+                        attempt_count,
+                    )
+                    time.sleep(delay)
+                    continue
+
+                response.raise_for_status()
+                payload = response.json()
+                msg_id = payload.get("id") if isinstance(payload, dict) else None
+                if not msg_id:
+                    raise RuntimeError(f"Discord send_message missing id in response: {payload!r}")
+                return payload
+
+            except Exception as exc:
+                if attempt >= len(backoffs):
+                    _log_final_failure(response=response, exc=exc, attempt_index=attempt_count)
+                    raise
+                delay = backoffs[attempt] + random.uniform(0.0, 0.25)
+                logger.warning(
+                    "Discord send_message exception; retrying in %.2fs (attempt %d/%d): %s",
+                    delay,
+                    attempt + 1,
+                    attempt_count,
+                    exc,
+                )
+                time.sleep(delay)
+
+        raise RuntimeError("Discord send_message failed without exception")
 
     def upload_file(
         self,
@@ -240,7 +338,7 @@ class DiscordRestClient:
 
         Returns:
             True on success (HTTP 204), False if the message was not found
-            (HTTP 404) or the bot lacks permissions (HTTP 403).
+                (HTTP 404) or the bot lacks permissions (HTTP 403).
 
         Raises:
             PolicyViolationError: If discord.com is not in the network policy.
