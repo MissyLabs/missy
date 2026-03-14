@@ -8,38 +8,38 @@
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 2956 |
-| Passed | 2956 |
+| Total tests | 3517 |
+| Passed | 3517 |
 | Failed | 0 |
-| Skipped | 2 |
+| Skipped | 3 |
 | Warnings | 3 (deprecation) |
-| Duration | ~39s |
+| Duration | ~43s |
 | Source files | 123 |
-| Test files | 78 |
-| Coverage | 85% |
+| Test files | 96 |
+| Coverage | 94% |
 
 ## Test Distribution
 
 | Test Area | Tests | Files |
 |-----------|-------|-------|
-| Agent (runtime, circuit breaker, context, etc.) | ~180 | 10 |
-| Channels (CLI, Discord, Webhook, Voice) | ~250 | 12 |
-| CLI commands | ~160 | 3 |
+| Agent (runtime, circuit breaker, context, done criteria, learnings, etc.) | ~350 | 14 |
+| Channels (CLI, Discord, Webhook, Voice) | ~440 | 18 |
+| CLI commands | ~170 | 4 |
 | Config | ~30 | 2 |
-| Core (session, events) | ~20 | 2 |
+| Core (session, events, exceptions) | ~30 | 3 |
 | Integration (policy enforcement) | ~30 | 1 |
-| Memory (SQLite, resilient, sessions, costs) | ~80 | 5 |
-| Observability (audit logger) | ~20 | 1 |
+| Memory (SQLite, resilient, sessions, costs) | ~120 | 6 |
+| Observability (audit logger, OTEL) | ~40 | 3 |
 | Plugins (loader) | ~30 | 1 |
 | Policy (network, filesystem, shell) | ~120 | 4 |
 | Providers (anthropic, openai, ollama, codex, registry, rate limiter) | ~350 | 7 |
-| Scheduler (jobs, parser, manager) | ~80 | 6 |
+| Scheduler (jobs, parser, manager) | ~100 | 7 |
 | Security (sanitizer, secrets, vault, censor, sandbox) | ~100 | 5 |
 | Skills (registry, base, builtins) | ~80 | 3 |
-| Tools (registry, base, builtins, shell_exec, calculator) | ~200 | 5 |
-| Unit (Discord channel, config, gateway) | ~160 | 5 |
+| Tools (registry, base, builtins, shell, incus, file ops) | ~280 | 8 |
+| Unit (Discord channel, config, gateway, infrastructure) | ~170 | 7 |
 
 ## pytest output
 ```
-2956 passed, 2 skipped, 3 warnings in 38.99s
+3517 passed, 3 skipped, 3 warnings in 43.07s
 ```

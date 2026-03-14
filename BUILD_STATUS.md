@@ -24,7 +24,7 @@ All core phases implemented, parity gaps closed systematically.
 16. CLI (60+ commands via click + rich, including recover, evolve)
 17. Discord (WebSocket gateway, REST API, threads, slash commands, pairing, access control, voice, interactive setup wizard)
 18. Code self-evolution engine (propose, test, apply, rollback)
-19. Tests (2956 tests, 85% coverage)
+19. Tests (3517 tests, 94% coverage)
 20. Documentation (SECURITY.md, OPERATIONS.md, ARCHITECTURE.md, CONFIG_REFERENCE.md, DISCORD.md, TESTING.md, TROUBLESHOOTING.md, 10+ implementation docs)
 21. Audit artifacts (AUDIT_SECURITY.md, AUDIT_CONNECTIVITY.md)
 22. Test artifacts (TEST_RESULTS.md, TEST_EDGE_CASES.md, BUILD_RESULTS.md)
@@ -46,7 +46,7 @@ missy/                          # 123 Python source files
   memory/      - sqlite_store (FTS5, sessions, costs tables), resilient_store, json_store
   observability/ - audit_logger, otel_exporter
   security/    - sanitizer, secrets, censor, vault (ChaCha20), sandbox (Docker)
-  channels/    - base, cli, discord (gateway, rest, voice, commands, config, threads), webhook, voice (server, registry, pairing, presence, stt/tts)
+  channels/    - base, cli, discord (gateway, rest, voice, commands, config, threads), webhook, voice (server, registry, pairing, presence, stt/tts, edge_client)
   agent/       - runtime (w/ rate limiting, streaming, budget enforcement, recovery scan),
                  circuit_breaker, context, checkpoint, failure_tracker, done_criteria,
                  learnings, prompt_patches, sub_agent, approval, proactive,
@@ -58,34 +58,29 @@ missy/                          # 123 Python source files
 
 ## Test Results
 
-- 2956 tests passing across 78 test files
-- 85% code coverage (up from 44% at start of session - target reached!)
+- 3517 tests passing across 96 test files
+- 94% code coverage (up from 85% in previous session)
 - Unit, integration, policy, Discord, security, memory, agent, tools, skills, CLI, voice, scheduler tests
 
-## Session 6 Additions (2026-03-14)
+## Session 7 Additions (2026-03-14)
 
-- **Lint fixes**: Fixed all 63 F401 (unused imports) and I001 (import sorting) issues
-- **Security tests** (55 new): Vault encrypt/decrypt/set/get/delete/resolve, censor response redaction
-- **Skills tests** (50+ new): All 6 builtin skills fully tested
-- **Tools tests** (70+ new): FileRead/Write/Delete, ListFiles, WebFetch, DiscordUpload, SelfCreateTool
-- **Provider tests** (200+ new): Anthropic, OpenAI, Codex, Registry, base classes
-- **Scheduler tests** (49 new): _run_job (success, error, retry, active hours, delete), schedule variants, parser edge cases, persistence
-- **Voice channel tests** (47 new): DeviceRegistry CRUD/persistence/tokens/pairing/audio purge, PresenceStore
-- **CLI tests** (162 new): All CLI command groups tested with CliRunner
-- **Discord tests** (91 new): Gateway WebSocket, heartbeat, REST API, reconnection
-- **Agent module tests**: Learnings, prompt patches, sub-agent, watchdog, heartbeat, approval
-- **Infrastructure tests**: Webhook, hotreload, MCP, resilient memory, OTEL
-- **Tool/skill registry tests**: Execute with policy checks, singleton pattern, error handling
-- **Total new tests**: 1594 (from 1362 to 2956)
+- **Lint fixes**: Fixed all F841, E741, E731, F821, F401, I001 errors across 91 files
+- **Agent coverage tests** (89 new): runtime tool execution, context, streaming, events, done criteria (→100%), circuit breaker (→100%), exceptions (→100%)
+- **Tool/memory coverage tests** (71 new): shell exec sandbox/truncation/errors, sqlite store search/cleanup/learnings, file ops error paths, audit logger error handling
+- **Discord/channel coverage tests** (66 new): commands (→100%), config (→100%), channel policy/events (→90%), voice channel lifecycle (→94%), events (→100%)
+- **Scheduler/OAuth/evolution tests** (43 new): manager (→99%), OAuth (→100%), code evolution (→99%)
+- **Voice/Incus tests** (202 new): edge client (0%→79%), voice server (21%→improved), discord voice (55%→77%), ffmpeg (43%→100%), incus tools (78%→improved)
+- **Total new tests**: 482 (from 3035 to 3517)
+- **Coverage**: 86% → 94%
 
 ## Remaining Tasks
 
-- Coverage target of 85% REACHED (from 44% to 85% in this session)
+- Coverage target of 85% exceeded (94% achieved)
 - Discord multi-account support (P3, low demand)
 - Web UI / dashboard (P4, intentionally deferred)
 
 ## Next Actions
 
-- Consider adding integration tests for voice server WebSocket protocol
+- Consider adding more runtime integration tests for full agent loops
+- Consider adding WebSocket protocol conformance tests for voice server
 - Consider adding browser/X11/atspi tool tests with process mocking
-- Consider wiring streaming into CLI channel for real-time output

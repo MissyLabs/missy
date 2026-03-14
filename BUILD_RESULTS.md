@@ -8,13 +8,13 @@
 | Metric | Value |
 |--------|-------|
 | Source files | 123 Python modules |
-| Test files | 69 test files |
-| Total tests | 2956 |
-| Tests passing | 2956 |
+| Test files | 96 test files |
+| Total tests | 3517 |
+| Tests passing | 3517 |
 | Tests failing | 0 |
-| Tests skipped | 2 |
-| Coverage | 85% |
-| Lint errors | 1 (false positive: pyatspi availability check) |
+| Tests skipped | 3 |
+| Coverage | 94% |
+| Lint errors | 0 critical (E501 line-length only) |
 
 ## Architecture
 
@@ -34,7 +34,7 @@ missy/                          # 123 Python source files
   observability/ - audit_logger, otel_exporter
   security/    - sanitizer, secrets, censor, vault (ChaCha20), sandbox (Docker)
   channels/    - base, cli, discord (gateway, rest, voice, commands, config, threads),
-                 webhook, voice (server, registry, pairing, presence, stt, tts)
+                 webhook, voice (server, registry, pairing, presence, stt, tts, edge_client)
   agent/       - runtime (streaming, budget, recovery), circuit_breaker, context,
                  checkpoint, failure_tracker, done_criteria, learnings, prompt_patches,
                  sub_agent, approval, proactive, cost_tracker, watchdog, heartbeat,
@@ -67,9 +67,11 @@ missy evolve list/approve/reject/show
 
 - Policy engine: 3-layer default-deny (network, filesystem, shell)
 - Providers: Anthropic, OpenAI, Ollama, Codex with fallback/tiering/rotation
-- Channels: CLI, Discord (full WebSocket + REST), Webhook, Voice
+- Channels: CLI, Discord (full WebSocket + REST + voice), Webhook, Voice
 - Agent: Multi-step tool loop, streaming, budget enforcement, checkpointing
 - Security: Input sanitizer, secrets detector, censor, vault, Docker sandbox
 - Memory: SQLite FTS5 with sessions, costs, learnings
 - Scheduler: APScheduler with retry, timezone, active hours
 - Observability: JSONL audit log + OpenTelemetry
+- MCP: Server management with auto-restart health checks
+- Code evolution: Propose, test, apply, rollback with approval workflow
