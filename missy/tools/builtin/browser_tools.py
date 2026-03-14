@@ -56,10 +56,10 @@ class BrowserSession:
     def _start(self) -> None:
         try:
             from playwright.sync_api import sync_playwright
-        except ImportError:
+        except ImportError as exc:
             raise RuntimeError(
                 "playwright not installed — run: pip install playwright && playwright install firefox"
-            )
+            ) from exc
         self._ensure_display()
         self._pw = sync_playwright().start()
         self._context = self._pw.firefox.launch_persistent_context(

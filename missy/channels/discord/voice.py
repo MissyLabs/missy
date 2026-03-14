@@ -214,8 +214,10 @@ class DiscordVoiceManager:
         self._client_task = asyncio.create_task(self._client.start(raw_token))
         try:
             await asyncio.wait_for(self._ready.wait(), timeout=30.0)
-        except TimeoutError:
-            raise DiscordVoiceError("Discord voice client did not become ready within 30 seconds.")
+        except TimeoutError as exc:
+            raise DiscordVoiceError(
+                "Discord voice client did not become ready within 30 seconds."
+            ) from exc
 
     async def stop(self) -> None:
         """Disconnect all voice connections, unload engines, shut down."""

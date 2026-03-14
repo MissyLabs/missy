@@ -21,11 +21,11 @@ import threading
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
-from enum import Enum
+from enum import Enum, StrEnum
 from pathlib import Path
 
 
-class PatchType(str, Enum):
+class PatchType(StrEnum):
     """Category of a :class:`PromptPatch`."""
 
     TOOL_USAGE_HINT = "tool_usage_hint"
@@ -35,7 +35,7 @@ class PatchType(str, Enum):
     STYLE_PREFERENCE = "style_preference"
 
 
-class PatchStatus(str, Enum):
+class PatchStatus(StrEnum):
     """Lifecycle status of a :class:`PromptPatch`."""
 
     PROPOSED = "proposed"

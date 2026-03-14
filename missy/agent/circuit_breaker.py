@@ -19,10 +19,10 @@ from __future__ import annotations
 
 import threading
 import time
-from enum import Enum
+from enum import Enum, StrEnum
 
 
-class CircuitState(str, Enum):
+class CircuitState(StrEnum):
     """Possible states of a :class:`CircuitBreaker`."""
 
     CLOSED = "closed"

@@ -10,7 +10,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 
-class SessionMode(str, enum.Enum):
+class SessionMode(enum.StrEnum):
     """Capability mode for a session."""
 
     FULL = "full"  # All policy-approved capabilities available.

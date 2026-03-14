@@ -24,11 +24,11 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import Enum, StrEnum
 from typing import Any
 
 
-class DiscordDMPolicy(str, Enum):
+class DiscordDMPolicy(StrEnum):
     """Controls how the bot handles direct messages.
 
     Attributes:
