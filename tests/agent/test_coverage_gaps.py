@@ -11,14 +11,14 @@ Covers:
 
 from __future__ import annotations
 
+import contextlib
 import time
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from missy.providers.base import CompletionResponse, ToolCall, ToolResult
 from missy.providers import registry as registry_module
-
+from missy.providers.base import CompletionResponse, ToolCall
 
 # ---------------------------------------------------------------------------
 # Helpers shared across runtime tests
@@ -451,10 +451,8 @@ class TestCircuitBreakerStateTransition:
 
         breaker = CircuitBreaker("test", threshold=1, base_timeout=0.01)
         # Force into OPEN by failing
-        try:
+        with contextlib.suppress(ValueError):
             breaker.call(lambda: (_ for _ in ()).throw(ValueError("fail")))
-        except ValueError:
-            pass
 
         assert breaker._state == CircuitState.OPEN
 
@@ -469,10 +467,8 @@ class TestCircuitBreakerStateTransition:
         from missy.agent.circuit_breaker import CircuitBreaker, CircuitState
 
         breaker = CircuitBreaker("test", threshold=1, base_timeout=9999.0)
-        try:
+        with contextlib.suppress(ValueError):
             breaker.call(lambda: (_ for _ in ()).throw(ValueError("fail")))
-        except ValueError:
-            pass
 
         assert breaker.state == CircuitState.OPEN
 
@@ -486,10 +482,8 @@ class TestCircuitBreakerOpenRejectsCall:
 
         breaker = CircuitBreaker("test", threshold=1, base_timeout=9999.0)
         # Force open
-        try:
+        with contextlib.suppress(ValueError):
             breaker.call(lambda: (_ for _ in ()).throw(ValueError("fail")))
-        except ValueError:
-            pass
 
         assert breaker._state == CircuitState.OPEN
 
@@ -513,10 +507,8 @@ class TestCircuitBreakerHalfOpenFailure:
         breaker = CircuitBreaker("test", threshold=1, base_timeout=0.01, max_timeout=100.0)
 
         # Force to OPEN
-        try:
+        with contextlib.suppress(ValueError):
             breaker.call(lambda: (_ for _ in ()).throw(ValueError("fail")))
-        except ValueError:
-            pass
         assert breaker._state == CircuitState.OPEN
 
         # Wait for HALF_OPEN
@@ -526,10 +518,8 @@ class TestCircuitBreakerHalfOpenFailure:
         original_timeout = breaker._recovery_timeout
 
         # Fail in HALF_OPEN state
-        try:
+        with contextlib.suppress(ValueError):
             breaker.call(lambda: (_ for _ in ()).throw(ValueError("fail again")))
-        except ValueError:
-            pass
 
         # Should be back to OPEN with doubled timeout
         assert breaker._state == CircuitState.OPEN
@@ -539,18 +529,14 @@ class TestCircuitBreakerHalfOpenFailure:
         from missy.agent.circuit_breaker import CircuitBreaker, CircuitState
 
         breaker = CircuitBreaker("test", threshold=1, base_timeout=0.01)
-        try:
+        with contextlib.suppress(ValueError):
             breaker.call(lambda: (_ for _ in ()).throw(ValueError("fail")))
-        except ValueError:
-            pass
 
         time.sleep(0.05)
         assert breaker.state == CircuitState.HALF_OPEN
 
-        try:
+        with contextlib.suppress(ValueError):
             breaker.call(lambda: (_ for _ in ()).throw(ValueError("probe fail")))
-        except ValueError:
-            pass
 
         assert breaker._state == CircuitState.OPEN
 
@@ -558,10 +544,8 @@ class TestCircuitBreakerHalfOpenFailure:
         from missy.agent.circuit_breaker import CircuitBreaker, CircuitState
 
         breaker = CircuitBreaker("test", threshold=1, base_timeout=0.01)
-        try:
+        with contextlib.suppress(ValueError):
             breaker.call(lambda: (_ for _ in ()).throw(ValueError("fail")))
-        except ValueError:
-            pass
 
         time.sleep(0.05)
         assert breaker.state == CircuitState.HALF_OPEN
@@ -575,10 +559,8 @@ class TestCircuitBreakerHalfOpenFailure:
 
         breaker = CircuitBreaker("test", threshold=3, base_timeout=9999.0)
         for _ in range(3):
-            try:
+            with contextlib.suppress(ValueError):
                 breaker.call(lambda: (_ for _ in ()).throw(ValueError("fail")))
-            except ValueError:
-                pass
 
         assert breaker._state == CircuitState.OPEN
 
@@ -588,10 +570,8 @@ class TestCircuitBreakerHalfOpenFailure:
         breaker = CircuitBreaker("test", threshold=1, base_timeout=0.01, max_timeout=0.02)
 
         # Force open
-        try:
+        with contextlib.suppress(ValueError):
             breaker.call(lambda: (_ for _ in ()).throw(ValueError("fail")))
-        except ValueError:
-            pass
 
         # Wait to get HALF_OPEN
         time.sleep(0.05)
@@ -601,10 +581,8 @@ class TestCircuitBreakerHalfOpenFailure:
         for _ in range(5):
             time.sleep(0.05)
             if breaker.state == CircuitState.HALF_OPEN:
-                try:
+                with contextlib.suppress(ValueError):
                     breaker.call(lambda: (_ for _ in ()).throw(ValueError("fail")))
-                except ValueError:
-                    pass
 
         assert breaker._recovery_timeout <= breaker._max_timeout
 

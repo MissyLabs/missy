@@ -9,13 +9,12 @@ Targets uncovered lines:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone, UTC
-from unittest.mock import MagicMock, patch
+from datetime import UTC, datetime
+from unittest.mock import MagicMock
 
 import pytest
 
 from missy.core.events import AuditEvent, EventBus
-
 
 # ---------------------------------------------------------------------------
 # Helpers

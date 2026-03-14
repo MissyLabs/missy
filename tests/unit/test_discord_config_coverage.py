@@ -7,12 +7,9 @@ Targets uncovered lines 122-129:
 
 from __future__ import annotations
 
-import os
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-from missy.channels.discord.config import DiscordAccountConfig, DiscordDMPolicy
+from missy.channels.discord.config import DiscordAccountConfig
 
 
 class TestResolveToken:

@@ -13,9 +13,8 @@ Targets uncovered lines:
 from __future__ import annotations
 
 import json
-import logging
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -79,7 +78,7 @@ class TestHandleEventWriteFailure:
         al = AuditLogger(log_path=str(tmp_path / "audit.jsonl"), bus=bus)
 
         # AuditLogger uses Path.open (pathlib), not builtins.open
-        with patch.object(Path, "open", side_effect=IOError("disk full")):
+        with patch.object(Path, "open", side_effect=OSError("disk full")):
             # Should not raise
             al._handle_event(_make_event())
 
@@ -87,7 +86,7 @@ class TestHandleEventWriteFailure:
         """logger.error is called when the write fails."""
         al = AuditLogger(log_path=str(tmp_path / "audit.jsonl"), bus=bus)
 
-        with patch.object(Path, "open", side_effect=IOError("no space")):
+        with patch.object(Path, "open", side_effect=OSError("no space")):
             with patch("missy.observability.audit_logger._module_logger") as mock_logger:
                 al._handle_event(_make_event())
                 mock_logger.error.assert_called_once()
@@ -106,7 +105,7 @@ class TestGetRecentEventsReadFailure:
         log_path.write_text("")  # file exists so the .exists() check passes
         al = AuditLogger(log_path=str(log_path), bus=bus)
 
-        with patch.object(Path, "read_text", side_effect=IOError("read error")):
+        with patch.object(Path, "read_text", side_effect=OSError("read error")):
             result = al.get_recent_events()
 
         assert result == []
@@ -116,7 +115,7 @@ class TestGetRecentEventsReadFailure:
         log_path.write_text("")
         al = AuditLogger(log_path=str(log_path), bus=bus)
 
-        with patch.object(Path, "read_text", side_effect=IOError("io err")):
+        with patch.object(Path, "read_text", side_effect=OSError("io err")):
             with patch("missy.observability.audit_logger._module_logger") as mock_logger:
                 al.get_recent_events()
                 mock_logger.error.assert_called_once()
@@ -172,7 +171,7 @@ class TestGetPolicyViolationsReadFailure:
         log_path.write_text("")  # must exist
         al = AuditLogger(log_path=str(log_path), bus=bus)
 
-        with patch.object(Path, "read_text", side_effect=IOError("disk error")):
+        with patch.object(Path, "read_text", side_effect=OSError("disk error")):
             result = al.get_policy_violations()
 
         assert result == []
@@ -182,7 +181,7 @@ class TestGetPolicyViolationsReadFailure:
         log_path.write_text("")
         al = AuditLogger(log_path=str(log_path), bus=bus)
 
-        with patch.object(Path, "read_text", side_effect=IOError("disk err")):
+        with patch.object(Path, "read_text", side_effect=OSError("disk err")):
             with patch("missy.observability.audit_logger._module_logger") as mock_logger:
                 al.get_policy_violations()
                 mock_logger.error.assert_called_once()

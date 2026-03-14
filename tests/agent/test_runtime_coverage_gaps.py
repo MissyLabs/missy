@@ -30,8 +30,7 @@ import pytest
 from missy.agent.runtime import AgentConfig, AgentRuntime
 from missy.core.exceptions import ProviderError
 from missy.providers import registry as registry_module
-from missy.providers.base import CompletionResponse, ToolCall, ToolResult
-
+from missy.providers.base import CompletionResponse, ToolCall
 
 # ---------------------------------------------------------------------------
 # Shared fixtures and helpers

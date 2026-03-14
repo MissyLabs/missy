@@ -19,9 +19,7 @@ Covers the branches not exercised by the existing test_incus_tools.py:
 from __future__ import annotations
 
 import subprocess
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import patch
 
 from missy.tools.builtin.incus_tools import (
     IncusConfigTool,

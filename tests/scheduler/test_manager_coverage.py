@@ -6,6 +6,7 @@ Targets uncovered lines: 70-71, 167-170, 198-199, 226-227, 254-255,
 
 from __future__ import annotations
 
+import contextlib
 import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -27,10 +28,8 @@ def started_manager(tmp_jobs_file: str):
     mgr = SchedulerManager(jobs_file=tmp_jobs_file)
     mgr.start()
     yield mgr
-    try:
+    with contextlib.suppress(Exception):
         mgr.stop()
-    except Exception:
-        pass
 
 
 # ---------------------------------------------------------------------------

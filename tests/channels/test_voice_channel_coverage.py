@@ -21,8 +21,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from missy.channels.voice.channel import VoiceChannel, _build_agent_callback
-
+from missy.channels.voice.channel import VoiceChannel
 
 # ---------------------------------------------------------------------------
 # Helpers

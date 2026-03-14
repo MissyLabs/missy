@@ -34,14 +34,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from missy.channels.discord.channel import DiscordChannel, DiscordSendError
+from missy.channels.discord.channel import DiscordChannel
 from missy.channels.discord.config import (
     DiscordAccountConfig,
     DiscordDMPolicy,
     DiscordGuildPolicy,
 )
-from missy.core.events import AuditEvent, EventBus
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -670,10 +668,7 @@ class TestEmitAuditExceptionSwallowed:
     def test_emit_audit_publishes_to_event_bus(self):
         ch = _make_channel()
 
-        published = []
         from missy.core.events import event_bus as real_bus
-
-        original_publish = real_bus.publish
 
         with patch("missy.channels.discord.channel.event_bus") as mock_bus:
             mock_bus.publish = MagicMock()

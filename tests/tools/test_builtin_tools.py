@@ -738,7 +738,7 @@ class TestDiscordUploadTool:
 class TestSelfCreateTool:
     """Tests for SelfCreateTool.execute with a redirected tools directory."""
 
-    def _tool(self, tools_dir: Path) -> "SelfCreateTool":
+    def _tool(self, tools_dir: Path) -> SelfCreateTool:
         """Return a SelfCreateTool patched to use *tools_dir* as CUSTOM_TOOLS_DIR."""
         from missy.tools.builtin import self_create_tool as mod
 

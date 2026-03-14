@@ -14,8 +14,8 @@ _clean_for_speech, _resample_pcm, and the sink. This module covers:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import struct
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -27,7 +27,6 @@ from missy.channels.discord.voice import (
     _make_sink_class,
     _resample_pcm,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -968,10 +967,8 @@ class TestStart:
                 finally:
                     if mgr._client_task:
                         mgr._client_task.cancel()
-                        try:
+                        with contextlib.suppress(asyncio.CancelledError, Exception):
                             await mgr._client_task
-                        except (asyncio.CancelledError, Exception):
-                            pass
 
             loop.run_until_complete(run())
 
@@ -1012,10 +1009,8 @@ class TestStart:
                 finally:
                     if mgr._client_task:
                         mgr._client_task.cancel()
-                        try:
+                        with contextlib.suppress(asyncio.CancelledError, Exception):
                             await mgr._client_task
-                        except (asyncio.CancelledError, Exception):
-                            pass
 
             with patch.dict(
                 _sys.modules,

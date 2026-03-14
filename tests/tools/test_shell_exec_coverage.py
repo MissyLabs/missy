@@ -8,12 +8,9 @@ Targets uncovered lines:
 
 from __future__ import annotations
 
-import subprocess
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-from missy.tools.builtin.shell_exec import ShellExecTool, _MAX_OUTPUT_BYTES
+from missy.tools.builtin.shell_exec import _MAX_OUTPUT_BYTES, ShellExecTool
 
 
 class TestSandboxConfigImportFails:

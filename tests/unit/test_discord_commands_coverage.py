@@ -9,22 +9,18 @@ Targets uncovered lines:
 
 from __future__ import annotations
 
-import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from missy.channels.discord.commands import (
     SLASH_COMMANDS,
     _get_option,
-    handle_slash_command,
-    _handle_model,
     _handle_ask,
-    _handle_status,
-    _handle_help,
+    _handle_model,
+    handle_slash_command,
 )
 from missy.channels.discord.config import DiscordAccountConfig, DiscordDMPolicy
-
 
 # ---------------------------------------------------------------------------
 # Helpers

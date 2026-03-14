@@ -7,7 +7,6 @@ Targets uncovered lines: 58-67, 474-479, 573-581, 610, 630-631,
 from __future__ import annotations
 
 import subprocess
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -15,10 +14,8 @@ import pytest
 from missy.agent.code_evolution import (
     CodeEvolutionManager,
     EvolutionStatus,
-    EvolutionTrigger,
     FileDiff,
 )
-
 
 # ---------------------------------------------------------------------------
 # Shared fixtures

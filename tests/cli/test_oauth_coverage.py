@@ -11,9 +11,6 @@ import time
 from http.server import HTTPServer
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-
 # ---------------------------------------------------------------------------
 # Line 124: _CallbackHandler.log_message silences access log
 # ---------------------------------------------------------------------------
@@ -132,7 +129,7 @@ class TestWaitForCallback:
 
 class TestRefreshTokenIfNeededStalePath:
     def test_returns_stale_token_when_no_refresh_token(self, tmp_path):
-        from missy.cli.oauth import TOKEN_FILE, refresh_token_if_needed
+        from missy.cli.oauth import refresh_token_if_needed
 
         token_data = {
             "provider": "openai-oauth",

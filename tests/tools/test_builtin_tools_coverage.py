@@ -24,13 +24,10 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from missy.tools.builtin.file_delete import FileDeleteTool
 from missy.tools.builtin.file_read import FileReadTool
 from missy.tools.builtin.file_write import FileWriteTool
 from missy.tools.builtin.list_files import ListFilesTool
-
 
 # ---------------------------------------------------------------------------
 # ListFilesTool — uncovered lines
@@ -180,7 +177,7 @@ class TestFileWriteToolCoverageGaps:
 
         # Patch Path.open to raise a non-PermissionError so the generic
         # except clause (lines 90-91) is exercised
-        with patch.object(Path, "open", side_effect=IOError("disk full")):
+        with patch.object(Path, "open", side_effect=OSError("disk full")):
             result = FileWriteTool().execute(path=str(target), content="data")
 
         assert result.success is False

@@ -20,8 +20,6 @@ import subprocess
 import sys
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from missy.tools.builtin.x11_tools import (
     X11ClickTool,
     X11KeyTool,
@@ -35,7 +33,6 @@ from missy.tools.builtin.x11_tools import (
     _get_vision_token,
     _load_oauth_token,
 )
-
 
 # ---------------------------------------------------------------------------
 # _extract_account_id — lines 56-65

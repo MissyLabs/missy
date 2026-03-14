@@ -11,6 +11,7 @@ Modules covered:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import threading
 import time
@@ -1240,10 +1241,8 @@ class TestApprovalGate:
         from missy.agent.approval import ApprovalGate
 
         gate = ApprovalGate(default_timeout=0.05)
-        try:
+        with contextlib.suppress(Exception):
             gate.request("action")
-        except Exception:
-            pass
         assert len(gate._pending) == 0
 
     def test_handle_response_approves_matching_id(self):

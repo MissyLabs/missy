@@ -7,16 +7,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import signal
 import subprocess
 import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-import logging
 
 import missy.channels.voice.edge_client as ec
 from missy.channels.voice.edge_client import (
@@ -29,7 +28,6 @@ from missy.channels.voice.edge_client import (
     _save_config,
     _voice_loop,
 )
-
 
 # ---------------------------------------------------------------------------
 # _ensure_runtime_dir
@@ -238,7 +236,7 @@ class TestRecordAudio:
     @patch("missy.channels.voice.edge_client.subprocess.Popen")
     def test_reads_pcm_from_valid_wav_file(self, mock_popen, mock_sleep, tmp_path) -> None:
         """Lines 109-111: pw-record succeeds and wav file is read via wave module."""
-        import wave, struct
+        import wave
 
         # Write a minimal valid WAV file (100ms of silence at 16kHz mono).
         wav_path = tmp_path / "audio.wav"
@@ -480,8 +478,7 @@ class TestVoiceLoop:
         assert not input_called[0]
 
     def test_response_handling_transcript_and_text(self) -> None:
-        pcm_data = b"\x00\x01" * 8192  # 16384 bytes > 0
-        responses_after_auth = [
+        [
             json.dumps({"type": "transcript", "text": "hello", "confidence": 0.9}),
             json.dumps({"type": "response_text", "text": "Hi there"}),
             json.dumps({"type": "audio_start"}),

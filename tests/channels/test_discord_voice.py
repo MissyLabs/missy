@@ -10,6 +10,7 @@ Covers:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import struct
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -744,10 +745,8 @@ class TestListenWatchdog:
             task = asyncio.ensure_future(mgr._listen_watchdog(1))
             await asyncio.sleep(0.05)
             task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await task
-            except asyncio.CancelledError:
-                pass
             vmod._WATCHDOG_INTERVAL_S = original
 
         mgr._loop.run_until_complete(_run_one_tick())
@@ -791,10 +790,8 @@ class TestListenWatchdog:
             task = asyncio.ensure_future(mgr._listen_watchdog(1))
             await asyncio.sleep(0.05)
             task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await task
-            except asyncio.CancelledError:
-                pass
             vmod._WATCHDOG_INTERVAL_S = original
 
         mgr._loop.run_until_complete(_run_one_tick())
