@@ -54,11 +54,12 @@ class AnthropicProvider(BaseProvider):
     def __init__(self, config: ProviderConfig) -> None:
         key = config.api_key
         if key and key.startswith("sk-ant-oat"):
-            raise ProviderError(
-                "Setup-tokens (sk-ant-oat...) from 'claude setup-token' are not "
-                "supported by the Anthropic Messages API. You need a regular API "
-                "key (sk-ant-api...) from https://console.anthropic.com/settings/keys"
+            logger.error(
+                "Setup-tokens (sk-ant-oat...) are not supported by the "
+                "Anthropic Messages API. Get an API key from "
+                "https://console.anthropic.com/settings/keys"
             )
+            key = None  # Mark as unavailable.
         self._api_key: str | None = key
         self._model: str = config.model or _DEFAULT_MODEL
         self._timeout: int = config.timeout
