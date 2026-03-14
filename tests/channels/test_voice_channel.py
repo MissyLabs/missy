@@ -17,9 +17,11 @@ class TestBuildAgentCallback:
         runtime.run_async = AsyncMock(return_value="async result")
         cb = _build_agent_callback(runtime)
         assert asyncio.iscoroutinefunction(cb)
-        result = asyncio.get_event_loop().run_until_complete(
-            cb("hello", "sess", {})
-        )
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(cb("hello", "sess", {}))
+        finally:
+            loop.close()
         assert result == "async result"
         runtime.run_async.assert_awaited_once()
 
@@ -31,9 +33,11 @@ class TestBuildAgentCallback:
         del runtime.run_async
         cb = _build_agent_callback(runtime)
         assert asyncio.iscoroutinefunction(cb)
-        result = asyncio.get_event_loop().run_until_complete(
-            cb("hello", "sess", {})
-        )
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(cb("hello", "sess", {}))
+        finally:
+            loop.close()
         assert result == "sync result"
 
 
