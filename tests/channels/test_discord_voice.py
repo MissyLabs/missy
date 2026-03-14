@@ -542,3 +542,68 @@ class TestSpeechCollectorSink:
         assert len(sink._buffers) == 0
         assert len(sink._timers) == 0
         loop.close()
+
+
+# ---------------------------------------------------------------------------
+# _clean_for_speech
+# ---------------------------------------------------------------------------
+
+
+class TestCleanForSpeech:
+    def test_strips_code_blocks(self):
+        from missy.channels.discord.voice import _clean_for_speech
+
+        text = "Here is code:\n```python\nprint('hi')\n```\nDone."
+        assert "```" not in _clean_for_speech(text)
+        assert "Done." in _clean_for_speech(text)
+
+    def test_strips_inline_code(self):
+        from missy.channels.discord.voice import _clean_for_speech
+
+        assert _clean_for_speech("Run `pip install foo` now") == "Run pip install foo now"
+
+    def test_strips_markdown_bold(self):
+        from missy.channels.discord.voice import _clean_for_speech
+
+        assert _clean_for_speech("This is **important**") == "This is important"
+
+    def test_strips_markdown_headers(self):
+        from missy.channels.discord.voice import _clean_for_speech
+
+        result = _clean_for_speech("## Title\nSome text")
+        assert "##" not in result
+        assert "Title" in result
+
+    def test_strips_urls(self):
+        from missy.channels.discord.voice import _clean_for_speech
+
+        result = _clean_for_speech("Check https://example.com for details")
+        assert "https://" not in result
+        assert "Check" in result
+
+    def test_truncates_long_responses(self):
+        from missy.channels.discord.voice import _clean_for_speech
+
+        long_text = "This is a sentence. " * 50
+        result = _clean_for_speech(long_text)
+        assert len(result) <= 601  # 600 + possible period
+
+    def test_empty_string(self):
+        from missy.channels.discord.voice import _clean_for_speech
+
+        assert _clean_for_speech("") == ""
+        assert _clean_for_speech("   ") == ""
+
+    def test_preserves_normal_text(self):
+        from missy.channels.discord.voice import _clean_for_speech
+
+        text = "Hello, how are you doing today?"
+        assert _clean_for_speech(text) == text
+
+    def test_strips_markdown_links(self):
+        from missy.channels.discord.voice import _clean_for_speech
+
+        result = _clean_for_speech("See [the docs](https://example.com) for more")
+        assert "the docs" in result
+        assert "https://" not in result
+        assert "[" not in result

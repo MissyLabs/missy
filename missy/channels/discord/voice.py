@@ -44,6 +44,47 @@ _DISCORD_SAMPLE_RATE = 48000
 _WHISPER_SAMPLE_RATE = 16000
 
 
+def _clean_for_speech(text: str) -> str:
+    """Strip markdown, code blocks, and tool artifacts for TTS delivery."""
+    import re
+
+    s = text.strip()
+
+    # Remove code blocks (``` ... ```)
+    s = re.sub(r"```[\s\S]*?```", "", s)
+
+    # Remove inline code (`...`)
+    s = re.sub(r"`([^`]+)`", r"\1", s)
+
+    # Remove markdown bold/italic markers
+    s = re.sub(r"\*{1,3}([^*]+)\*{1,3}", r"\1", s)
+    s = re.sub(r"_{1,3}([^_]+)_{1,3}", r"\1", s)
+
+    # Remove markdown headers
+    s = re.sub(r"^#{1,6}\s+", "", s, flags=re.MULTILINE)
+
+    # Remove markdown links [text](url) → text
+    s = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", s)
+
+    # Remove bare URLs
+    s = re.sub(r"https?://\S+", "", s)
+
+    # Collapse multiple newlines
+    s = re.sub(r"\n{3,}", "\n\n", s)
+
+    # Truncate very long responses for spoken delivery (keep first ~500 chars).
+    if len(s) > 600:
+        # Try to cut at a sentence boundary.
+        cut = s[:600]
+        last_period = cut.rfind(".")
+        if last_period > 200:
+            s = cut[:last_period + 1]
+        else:
+            s = cut.rstrip() + "..."
+
+    return s.strip()
+
+
 class DiscordVoiceError(RuntimeError):
     """Actionable voice-layer error."""
 
@@ -480,12 +521,24 @@ class DiscordVoiceManager:
                 return
 
             session_id = f"voice-{user_id}"
+            voice_ctx = (
+                "[CONTEXT] You are responding via Discord voice chat. "
+                "Your text response will be spoken aloud automatically — "
+                "do NOT use the tts_speak tool or any audio tools. "
+                "Keep your response concise, conversational, and natural "
+                "for spoken delivery. Avoid markdown, code blocks, and long lists."
+            )
             response = await self._agent_callback(
-                f"[Voice from {user_name}]: {transcript}",
+                f"{voice_ctx}\n\n[Voice from {user_name}]: {transcript}",
                 session_id,
             )
 
             if not response or not response.strip():
+                return
+
+            # Clean response for spoken delivery.
+            response = _clean_for_speech(response)
+            if not response:
                 return
 
             logger.info(
