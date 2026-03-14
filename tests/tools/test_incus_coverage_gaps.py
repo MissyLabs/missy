@@ -22,9 +22,7 @@ import pytest
 from missy.tools.base import ToolResult
 from missy.tools.builtin.incus_tools import (
     IncusCopyMoveTool,
-    IncusConfigTool,
     IncusDeviceTool,
-    IncusImageTool,
     IncusNetworkTool,
     IncusProfileTool,
     IncusProjectTool,
@@ -68,8 +66,6 @@ class TestIncusSnapshotToolUnreachable:
         # The valid set currently is {"create", "restore", "delete", "list"}.
         # We extend it so "bogus" passes the guard, but the elif chain has no
         # matching arm, falling through to the else/Unreachable return.
-        original_execute = tool.execute.__func__  # noqa: SLF001
-
         def patched_execute(self_inner, *, instance, action, **kwargs):
             # Temporarily widen the valid set inside the call so "bogus"
             # passes the first guard.
@@ -89,13 +85,7 @@ class TestIncusSnapshotToolUnreachable:
                     )
                 # Now fall through the elif chain with "bogus" — mirrors
                 # the source logic: all elif arms are exhausted → else branch.
-                if action_lower == "list":
-                    pass
-                elif action_lower == "create":
-                    pass
-                elif action_lower == "restore":
-                    pass
-                elif action_lower == "delete":
+                if action_lower == "list" or action_lower == "create" or action_lower == "restore" or action_lower == "delete":
                     pass
                 else:
                     return ToolResult(success=False, output=None, error="Unreachable")
@@ -117,13 +107,7 @@ class TestIncusConfigToolUnreachable:
         action_lower = "bogus"
         valid = {"show", "get", "set", "unset", "bogus"}
         if action_lower in valid:
-            if action_lower == "show":
-                pass
-            elif action_lower == "get":
-                pass
-            elif action_lower == "set":
-                pass
-            elif action_lower == "unset":
+            if action_lower == "show" or action_lower == "get" or action_lower == "set" or action_lower == "unset":
                 pass
             else:
                 result = ToolResult(success=False, output=None, error="Unreachable")
@@ -143,15 +127,7 @@ class TestIncusImageToolUnreachable:
         action_lower = "bogus"
         valid = {"list", "info", "delete", "copy", "alias", "bogus"}
         if action_lower in valid:
-            if action_lower == "list":
-                pass
-            elif action_lower == "info":
-                pass
-            elif action_lower == "delete":
-                pass
-            elif action_lower == "copy":
-                pass
-            elif action_lower == "alias":
+            if action_lower == "list" or action_lower == "info" or action_lower == "delete" or action_lower == "copy" or action_lower == "alias":
                 pass
             else:
                 result = ToolResult(success=False, output=None, error="Unreachable")
@@ -176,19 +152,7 @@ class TestIncusNetworkTool:
         action_lower = "bogus"
         valid = {"list", "create", "delete", "show", "set", "attach", "detach", "bogus"}
         if action_lower in valid:
-            if action_lower == "list":
-                pass
-            elif action_lower == "create":
-                pass
-            elif action_lower == "delete":
-                pass
-            elif action_lower == "show":
-                pass
-            elif action_lower == "set":
-                pass
-            elif action_lower == "attach":
-                pass
-            elif action_lower == "detach":
+            if action_lower == "list" or action_lower == "create" or action_lower == "delete" or action_lower == "show" or action_lower == "set" or action_lower == "attach" or action_lower == "detach":
                 pass
             else:
                 result = ToolResult(success=False, output=None, error="Unreachable")
@@ -217,7 +181,7 @@ class TestIncusNetworkTool:
 
     def test_attach_valid_name_calls_run_incus(self):
         tool = self._tool()
-        with patch(_PATCH_TARGET, _ok) as mock_run:
+        with patch(_PATCH_TARGET, _ok):
             result = tool.execute(action="attach", name="lxdbr0 myinstance")
         assert result.success is True
 

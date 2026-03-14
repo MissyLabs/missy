@@ -16,12 +16,11 @@ import sys
 import threading
 import time
 import types
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from missy.agent.proactive import ProactiveManager, ProactiveTrigger
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -535,9 +534,7 @@ class TestScheduleLoopInnerStopBreak:
 
         def _wait(timeout):
             call_no[0] += 1
-            if call_no[0] == 1:
-                return False  # Enter body on first call.
-            return True  # Exit while on second call.
+            return call_no[0] != 1
 
         with patch.object(mgr._stop_event, "wait", side_effect=_wait):
             mgr._schedule_loop(t)

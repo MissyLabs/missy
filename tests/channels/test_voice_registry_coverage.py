@@ -18,7 +18,6 @@ import pytest
 
 from missy.channels.voice.registry import DeviceRegistry, EdgeNode
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -72,9 +71,8 @@ class TestSaveAtomicWriteFailure:
         registry.add_node(sample_node)  # Populates _nodes but save() is called inside.
 
         # We need to force a second save() to hit the failure path.
-        with patch("os.replace", side_effect=OSError("replace failed")):
-            with pytest.raises(OSError, match="replace failed"):
-                registry.save()
+        with patch("os.replace", side_effect=OSError("replace failed")), pytest.raises(OSError, match="replace failed"):
+            registry.save()
 
     def test_replace_failure_cleans_up_temp_file(self, tmp_path: Path):
         """After os.replace raises, the temporary file is deleted."""
@@ -97,10 +95,9 @@ class TestSaveAtomicWriteFailure:
 
         with (
             patch("tempfile.mkstemp", side_effect=_capturing_mkstemp),
-            patch("os.replace", side_effect=OSError("atomic rename failed")),
+            patch("os.replace", side_effect=OSError("atomic rename failed")),pytest.raises(OSError)
         ):
-            with pytest.raises(OSError):
-                reg.save()
+            reg.save()
 
         # Every temp file created during the failing save must no longer exist.
         for tmp in temp_files_created:
@@ -120,10 +117,9 @@ class TestSaveAtomicWriteFailure:
         with (
             patch("os.replace", side_effect=OSError("rename failed")),
             patch("os.unlink", side_effect=OSError("unlink also failed")),
+            pytest.raises(OSError, match="rename failed"),
         ):
-            # The original OSError from replace must still propagate (not the unlink error).
-            with pytest.raises(OSError, match="rename failed"):
-                reg.save()
+            reg.save()
 
     def test_successful_save_does_not_raise(self, registry: DeviceRegistry, sample_node: EdgeNode):
         """Baseline: a normal save() completes without raising and persists data."""
@@ -157,9 +153,8 @@ class TestSaveAtomicWriteFailure:
             room="R",
             ip_address="5.6.7.8",
         )
-        with patch("os.replace", side_effect=OSError("failed")):
-            with pytest.raises(OSError):
-                reg.save()
+        with patch("os.replace", side_effect=OSError("failed")), pytest.raises(OSError):
+            reg.save()
 
         # Original file must be unchanged.
         assert (tmp_path / "dev3.json").read_text() == original_content

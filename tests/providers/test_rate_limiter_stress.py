@@ -7,18 +7,17 @@ values are kept short (0.05–0.5 s) so the suite runs in a few seconds.
 
 from __future__ import annotations
 
+import contextlib
 import math
 import threading
 import time
-from statistics import mean
 from typing import NamedTuple
 
 import pytest
-from hypothesis import assume, given, settings
+from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from missy.providers.rate_limiter import RateLimiter, RateLimitExceeded
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -212,10 +211,8 @@ class TestRefillAccuracy:
         tpm = 6_000  # 100 tokens/sec
         rl = RateLimiter(requests_per_minute=1_000, tokens_per_minute=tpm, max_wait_seconds=0.05)
 
-        try:
+        with contextlib.suppress(RateLimitExceeded):
             rl.acquire(tokens=tpm)
-        except RateLimitExceeded:
-            pass  # already drained
 
         before = rl.token_capacity
         sleep_s = 0.3
@@ -526,10 +523,8 @@ class TestThreadSafetyInterleaved:
 
         def driver() -> None:
             for _ in range(50):
-                try:
+                with contextlib.suppress(RateLimitExceeded):
                     rl.acquire(tokens=50)
-                except RateLimitExceeded:
-                    pass
                 rl.record_usage(prompt_tokens=30, completion_tokens=20)
 
         sampler_thread = threading.Thread(target=sampler, daemon=True)
@@ -579,10 +574,8 @@ class TestThreadSafetyInterleaved:
         def worker() -> None:
             barrier.wait()  # all threads start simultaneously
             for i in range(10):
-                try:
+                with contextlib.suppress(RateLimitExceeded):
                     rl.acquire(tokens=100)
-                except RateLimitExceeded:
-                    pass
                 if i % 3 == 0:
                     rl.record_usage(prompt_tokens=60, completion_tokens=40)
 
@@ -624,10 +617,8 @@ class TestPropertyBased:
         """Capacity must never exceed the configured RPM ceiling."""
         rl = RateLimiter(requests_per_minute=rpm, tokens_per_minute=0, max_wait_seconds=0.0)
         for _ in range(n):
-            try:
+            with contextlib.suppress(RateLimitExceeded):
                 rl.acquire()
-            except RateLimitExceeded:
-                pass
         assert rl.request_capacity <= float(rpm) + 0.01
 
     @given(tokens=st.integers(min_value=0, max_value=10_000))
@@ -665,10 +656,8 @@ class TestPropertyBased:
         """After draining the token bucket, acquire(tokens=0) must succeed if RPM is available."""
         rl = RateLimiter(requests_per_minute=rpm, tokens_per_minute=tpm, max_wait_seconds=0.1)
         # Drain token budget
-        try:
+        with contextlib.suppress(RateLimitExceeded):
             rl.acquire(tokens=tpm)
-        except RateLimitExceeded:
-            pass
         # tokens=0 bypasses token bucket — must not raise while RPM has capacity
         rl.acquire(tokens=0)
 

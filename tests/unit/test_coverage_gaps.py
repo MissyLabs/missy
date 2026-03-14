@@ -11,12 +11,10 @@ Covers:
 
 from __future__ import annotations
 
-import subprocess
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -263,9 +261,8 @@ class TestLoadConfigOSError:
         from missy.config.settings import load_config
         from missy.core.exceptions import ConfigurationError
 
-        with patch("pathlib.Path.read_text", side_effect=OSError("Permission denied")):
-            with pytest.raises(ConfigurationError, match="Cannot read configuration file"):
-                load_config(str(cfg_file))
+        with patch("pathlib.Path.read_text", side_effect=OSError("Permission denied")), pytest.raises(ConfigurationError, match="Cannot read configuration file"):
+            load_config(str(cfg_file))
 
 
 class TestLoadConfigDiscordSection:
@@ -396,9 +393,8 @@ class TestSkillRegistryEmitEventPublishRaises:
         caught and logged via logger.exception — it must NOT propagate."""
         registry = self._make_registry_with_skill()
 
-        with patch("missy.skills.registry.event_bus.publish", side_effect=RuntimeError("bus down")):
-            with patch("missy.skills.registry.logger") as mock_logger:
-                result = registry.execute("ok_skill")
+        with patch("missy.skills.registry.event_bus.publish", side_effect=RuntimeError("bus down")), patch("missy.skills.registry.logger") as mock_logger:
+            result = registry.execute("ok_skill")
 
         # The skill result is still returned correctly.
         assert result.success is True
@@ -413,9 +409,8 @@ class TestSkillRegistryEmitEventPublishRaises:
 
         registry = SkillRegistry()
 
-        with patch("missy.skills.registry.event_bus.publish", side_effect=RuntimeError("bus down")):
-            with patch("missy.skills.registry.logger") as mock_logger:
-                result = registry.execute("nonexistent")
+        with patch("missy.skills.registry.event_bus.publish", side_effect=RuntimeError("bus down")), patch("missy.skills.registry.logger") as mock_logger:
+            result = registry.execute("nonexistent")
 
         assert result.success is False
         mock_logger.exception.assert_called_once()
@@ -474,7 +469,7 @@ class TestSandboxOutputTruncation:
     def test_docker_sandbox_truncates_large_output(self) -> None:
         """DockerSandbox output that exceeds 32 768 bytes is trimmed and has a
         truncation marker appended."""
-        from missy.security.sandbox import DockerSandbox, SandboxConfig, _MAX_OUTPUT_BYTES
+        from missy.security.sandbox import _MAX_OUTPUT_BYTES, DockerSandbox, SandboxConfig
 
         cfg = SandboxConfig(enabled=True, timeout=10)
         sandbox = DockerSandbox(cfg)
@@ -494,7 +489,7 @@ class TestSandboxOutputTruncation:
 
     def test_fallback_sandbox_truncates_large_output(self) -> None:
         """FallbackSandbox (lines 275-276) also truncates oversized output."""
-        from missy.security.sandbox import FallbackSandbox, SandboxConfig, _MAX_OUTPUT_BYTES
+        from missy.security.sandbox import _MAX_OUTPUT_BYTES, FallbackSandbox, SandboxConfig
 
         cfg = SandboxConfig(timeout=10)
         sandbox = FallbackSandbox(cfg)
@@ -558,8 +553,8 @@ class TestVoiceCommandLeaveError:
 
     @pytest.mark.asyncio
     async def test_leave_discord_voice_error_returned_as_reply(self) -> None:
-        from missy.channels.discord.voice_commands import maybe_handle_voice_command
         from missy.channels.discord.voice import DiscordVoiceError
+        from missy.channels.discord.voice_commands import maybe_handle_voice_command
 
         voice = MagicMock()
         voice.is_ready = True
@@ -643,8 +638,8 @@ class TestVoiceCommandFinalFalseReturn:
     @pytest.mark.asyncio
     async def test_say_voice_error_returned_as_reply(self) -> None:
         """Lines 127-128: !say raises DiscordVoiceError → reply = str(exc)."""
-        from missy.channels.discord.voice_commands import maybe_handle_voice_command
         from missy.channels.discord.voice import DiscordVoiceError
+        from missy.channels.discord.voice_commands import maybe_handle_voice_command
 
         voice = MagicMock()
         voice.is_ready = True
