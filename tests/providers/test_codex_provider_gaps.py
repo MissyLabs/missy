@@ -13,8 +13,6 @@ import json
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from missy.config.settings import ProviderConfig
 
 

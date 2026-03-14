@@ -828,9 +828,8 @@ class TestMainFunction:
                 "--server",
                 "ws://localhost:8765",
             ],
-        ):
-            with patch.object(ec, "_pair_device", new=AsyncMock(return_value="node-xyz")):
-                main()
+        ), patch.object(ec, "_pair_device", new=AsyncMock(return_value="node-xyz")):
+            main()
 
         # Config file should be created with node_id.
         data = json.loads(cfg_path.read_text())
@@ -849,9 +848,8 @@ class TestMainFunction:
                 "--config",
                 str(cfg_path),
             ],
-        ):
-            with patch.object(ec, "_pair_device", new=AsyncMock(return_value=None)):
-                main()
+        ), patch.object(ec, "_pair_device", new=AsyncMock(return_value=None)):
+            main()
 
         assert not cfg_path.exists()
 
@@ -871,9 +869,8 @@ class TestMainFunction:
                 "--config",
                 str(cfg_path),
             ],
-        ):
-            with patch.object(ec, "_voice_loop", new=AsyncMock()) as mock_loop:
-                main()
+        ), patch.object(ec, "_voice_loop", new=AsyncMock()) as mock_loop:
+            main()
 
         mock_loop.assert_awaited_once()
         kwargs = mock_loop.call_args[1]
@@ -920,9 +917,8 @@ class TestMainFunction:
                 "--config",
                 str(cfg_path),
             ],
-        ):
-            with patch.object(ec, "_voice_loop", new=AsyncMock()):
-                main()
+        ), patch.object(ec, "_voice_loop", new=AsyncMock()):
+            main()
 
         data = json.loads(cfg_path.read_text())
         assert data["node_id"] == "node-save"
@@ -946,10 +942,9 @@ class TestMainFunction:
                 str(cfg_path),
                 "--verbose",
             ],
-        ):
-            with patch.object(ec, "_voice_loop", new=AsyncMock()):
-                with patch("logging.basicConfig") as mock_basic:
-                    main()
+        ), patch.object(ec, "_voice_loop", new=AsyncMock()):
+            with patch("logging.basicConfig") as mock_basic:
+                main()
 
         mock_basic.assert_called_once()
         call_kwargs = mock_basic.call_args[1]
@@ -972,9 +967,8 @@ class TestMainFunction:
                 str(cfg_path),
                 "--continuous",
             ],
-        ):
-            with patch.object(ec, "_voice_loop", new=AsyncMock()) as mock_loop:
-                main()
+        ), patch.object(ec, "_voice_loop", new=AsyncMock()) as mock_loop:
+            main()
 
         kwargs = mock_loop.call_args[1]
         assert kwargs["continuous"] is True

@@ -76,9 +76,8 @@ class CircuitBreaker:
             The current :class:`CircuitState`.
         """
         with self._lock:
-            if self._state == CircuitState.OPEN:
-                if time.monotonic() - self._last_failure_time >= self._recovery_timeout:
-                    self._state = CircuitState.HALF_OPEN
+            if self._state == CircuitState.OPEN and time.monotonic() - self._last_failure_time >= self._recovery_timeout:
+                self._state = CircuitState.HALF_OPEN
             return self._state
 
     def call(self, func, *args, **kwargs):

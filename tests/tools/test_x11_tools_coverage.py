@@ -90,16 +90,15 @@ class TestLoadOauthToken:
             "missy.tools.builtin.x11_tools.refresh_token_if_needed",
             return_value="tok_abc",
             create=True,
+        ), patch.dict(
+            "sys.modules",
+            {
+                "missy.cli.oauth": MagicMock(
+                    refresh_token_if_needed=MagicMock(return_value="tok_abc")
+                )
+            },
         ):
-            with patch.dict(
-                "sys.modules",
-                {
-                    "missy.cli.oauth": MagicMock(
-                        refresh_token_if_needed=MagicMock(return_value="tok_abc")
-                    )
-                },
-            ):
-                token = _load_oauth_token()
+            token = _load_oauth_token()
         # May succeed or fall back; just ensure it doesn't raise
         assert token is None or isinstance(token, str)
 

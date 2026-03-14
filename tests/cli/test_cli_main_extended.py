@@ -99,11 +99,10 @@ def _make_mock_config(**overrides) -> MagicMock:
 
 def _cfg_path() -> str:
     """Write a minimal config to a temp file and return the path."""
-    f = tempfile.NamedTemporaryFile(suffix=".yaml", mode="w", delete=False)
-    f.write(_MINIMAL_CONFIG_YAML)
-    f.flush()
-    f.close()
-    return f.name
+    with tempfile.NamedTemporaryFile(suffix=".yaml", mode="w", delete=False) as f:
+        f.write(_MINIMAL_CONFIG_YAML)
+        f.flush()
+        return f.name
 
 
 # ---------------------------------------------------------------------------

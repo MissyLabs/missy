@@ -21,7 +21,6 @@ import pytest
 
 from missy.tools.builtin.code_evolve import CodeEvolveTool
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -168,7 +167,7 @@ class TestProposeMultiValueError:
 class TestShowWithOptionalFields:
     def test_show_diff_with_description_includes_why_line(self, tool, tmp_repo, store_path):
         """Line 340: diff.description is set → 'Why: ...' appended to output."""
-        from missy.agent.code_evolution import CodeEvolutionManager, FileDiff
+        from missy.agent.code_evolution import FileDiff
 
         mgr = _make_mgr(store_path, str(tmp_repo))
         # Propose with a diff description by using propose_multi.
@@ -249,7 +248,6 @@ class TestShowWithOptionalFields:
 class TestApproveReturnsFalse:
     def test_approve_returns_false_when_manager_approve_fails(self, tool, tmp_repo, store_path):
         """Line 390: mgr.approve(proposal_id) returns False → failure ToolResult."""
-        from missy.agent.code_evolution import EvolutionStatus
 
         mgr = MagicMock()
         mock_prop = MagicMock()

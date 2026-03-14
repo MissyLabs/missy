@@ -26,6 +26,11 @@ import pytest
 # ---------------------------------------------------------------------------
 from missy.channels.base import ChannelMessage
 from missy.channels.webhook import WebhookChannel
+from missy.config.hotreload import ConfigWatcher, _apply_config
+from missy.mcp.client import McpClient
+from missy.mcp.manager import McpManager
+from missy.memory.resilient import ResilientMemoryStore
+from missy.observability.otel import OtelExporter, init_otel
 
 
 class TestWebhookChannelInit:
@@ -270,8 +275,6 @@ class TestWebhookHandlerDoPost:
 # ConfigWatcher
 # ---------------------------------------------------------------------------
 
-from missy.config.hotreload import ConfigWatcher, _apply_config
-
 
 class TestConfigWatcherInit:
     def test_attributes_set(self, tmp_path):
@@ -413,8 +416,6 @@ class TestApplyConfig:
 # ---------------------------------------------------------------------------
 # McpClient
 # ---------------------------------------------------------------------------
-
-from missy.mcp.client import McpClient
 
 
 def _make_rpc_response(result=None, error=None, id="test-id"):
@@ -631,8 +632,6 @@ class TestMcpClientNotify:
 # ---------------------------------------------------------------------------
 # McpManager
 # ---------------------------------------------------------------------------
-
-from missy.mcp.manager import McpManager
 
 
 def _mock_client(name="srv", tools=None, alive=True, command="echo", url=None):
@@ -918,8 +917,6 @@ class TestMcpManagerShutdown:
 # ---------------------------------------------------------------------------
 # ResilientMemoryStore
 # ---------------------------------------------------------------------------
-
-from missy.memory.resilient import ResilientMemoryStore
 
 
 def _make_turn(session_id: str = "s1", content: str = "hello", timestamp=None):
@@ -1227,8 +1224,6 @@ class TestResilientMemoryStoreIsHealthy:
 # ---------------------------------------------------------------------------
 # OtelExporter
 # ---------------------------------------------------------------------------
-
-from missy.observability.otel import OtelExporter, init_otel
 
 
 class TestOtelExporterNoPackages:

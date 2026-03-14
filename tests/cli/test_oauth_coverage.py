@@ -295,17 +295,16 @@ class TestAutomaticCallbackWins:
 
                                 with patch.object(
                                     oauth._callback_event, "wait", side_effect=fake_wait
-                                ):
-                                    with patch("missy.cli.oauth.threading.Thread") as MockThread:
-                                        # Make paste_done.is_set() return True to break the loop
-                                        paste_done_mock = MagicMock()
-                                        paste_done_mock.is_set.return_value = False
-                                        # Thread target stored so we can call it
-                                        captured_thread = MagicMock()
-                                        captured_thread.start = MagicMock()
-                                        MockThread.return_value = captured_thread
+                                ), patch("missy.cli.oauth.threading.Thread") as MockThread:
+                                    # Make paste_done.is_set() return True to break the loop
+                                    paste_done_mock = MagicMock()
+                                    paste_done_mock.is_set.return_value = False
+                                    # Thread target stored so we can call it
+                                    captured_thread = MagicMock()
+                                    captured_thread.start = MagicMock()
+                                    MockThread.return_value = captured_thread
 
-                                        result = oauth.run_openai_oauth(client_id="test-client")
+                                    result = oauth.run_openai_oauth(client_id="test-client")
 
         assert result == "auto-access-token"
 

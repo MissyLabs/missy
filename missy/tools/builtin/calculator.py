@@ -124,8 +124,7 @@ def _safe_eval(node: ast.AST) -> int | float | complex:
         if op_fn is None:  # pragma: no cover - covered by _ALLOWED_NODE_TYPES guard
             raise ValueError(f"Unsupported binary operator: {op_type.__name__}")
         # Prevent exponent DoS
-        if isinstance(node.op, ast.Pow):
-            if isinstance(right, (int, float)) and abs(right) > _MAX_EXPONENT:
+        if isinstance(node.op, ast.Pow) and isinstance(right, (int, float)) and abs(right) > _MAX_EXPONENT:
                 raise ValueError(
                     f"Exponent {right} exceeds the maximum allowed value of {_MAX_EXPONENT}."
                 )

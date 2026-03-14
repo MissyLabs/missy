@@ -26,7 +26,7 @@ from __future__ import annotations
 import signal
 import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
@@ -76,11 +76,10 @@ def _make_mock_config(**overrides) -> MagicMock:
 
 
 def _cfg_path() -> str:
-    f = tempfile.NamedTemporaryFile(suffix=".yaml", mode="w", delete=False)
-    f.write(_MINIMAL_CONFIG_YAML)
-    f.flush()
-    f.close()
-    return f.name
+    with tempfile.NamedTemporaryFile(suffix=".yaml", mode="w", delete=False) as f:
+        f.write(_MINIMAL_CONFIG_YAML)
+        f.flush()
+        return f.name
 
 
 # ---------------------------------------------------------------------------
@@ -541,7 +540,6 @@ class TestDoctorWatchdog:
 class TestDoctorVoiceChannelConfigured:
     def test_doctor_voice_channel_configured_shows_details(self, runner: CliRunner, tmp_path):
         """When voice section is present in config YAML, doctor shows stt/tts details."""
-        import yaml as _yaml
 
         voice_yaml = """\
 network:
@@ -599,13 +597,9 @@ voice:
         mock_scheduler = MagicMock()
         mock_scheduler.list_jobs.return_value = []
 
-        import yaml as _yaml
-
-        real_safe_load = _yaml.safe_load
-
         def _raise_on_second(*args, **kwargs):
             # First call is from _load_subsystems (mocked), this one for voice
-            raise IOError("unreadable YAML")
+            raise OSError("unreadable YAML")
 
         with (
             patch("missy.cli.main._load_subsystems", return_value=mock_config),
@@ -613,7 +607,7 @@ voice:
             patch("missy.scheduler.manager.SchedulerManager", return_value=mock_scheduler),
             patch("pathlib.Path.exists", return_value=True),
             # Patch yaml.safe_load to raise so voice channel config read fails
-            patch("yaml.safe_load", side_effect=IOError("unreadable")),
+            patch("yaml.safe_load", side_effect=OSError("unreadable")),
         ):
             result = runner.invoke(cli, ["--config", str(cfg_path), "doctor"])
 

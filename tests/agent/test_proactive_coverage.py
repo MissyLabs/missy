@@ -20,7 +20,6 @@ import pytest
 
 from missy.agent.proactive import ProactiveManager, ProactiveTrigger
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -95,7 +94,7 @@ class TestWatchdogUnavailableBranch:
             # Insert a broken watchdog so import raises ImportError.
             sys.modules["watchdog"] = None  # type: ignore[assignment]
 
-            with patch("logging.Logger.warning") as mock_warn:
+            with patch("logging.Logger.warning"):
                 # Re-import the module; it should catch the ImportError.
                 import importlib
 
@@ -215,7 +214,6 @@ class TestThresholdLoopInnerStopCheck:
 
         mgr._fire_trigger = _intercepted_fire
 
-        import shutil
 
         mock_usage = MagicMock()
         mock_usage.used = 99
@@ -228,8 +226,6 @@ class TestThresholdLoopInnerStopCheck:
         # causing the inner break before t2 is checked.
 
         wait_results = iter([False, True])  # First iteration runs, second exits
-
-        original_is_set = mgr._stop_event.is_set
 
         is_set_calls = [0]
 

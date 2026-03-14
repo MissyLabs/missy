@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from missy.tools.builtin import register_builtin_tools, _ALL_TOOL_CLASSES
+from missy.tools.builtin import _ALL_TOOL_CLASSES, register_builtin_tools
 
 
 class TestRegisterBuiltinToolsWithRegistry:
@@ -74,9 +74,8 @@ class TestRegisterBuiltinToolsWithoutRegistry:
         with patch(
             "missy.tools.registry.get_tool_registry",
             side_effect=RuntimeError("registry not initialised"),
-        ):
-            with pytest.raises(RuntimeError, match="registry not initialised"):
-                register_builtin_tools()
+        ), pytest.raises(RuntimeError, match="registry not initialised"):
+            register_builtin_tools()
 
     def test_none_is_treated_same_as_omitting_registry(self):
         """Explicitly passing registry=None is identical to calling with no argument."""
@@ -105,7 +104,11 @@ class TestAllToolClassesList:
             assert inspect.isclass(cls), f"{cls!r} is not a class"
 
     def test_tts_tools_present(self):
-        from missy.tools.builtin.tts_speak import AudioListDevicesTool, AudioSetVolumeTool, TTSSpeakTool
+        from missy.tools.builtin.tts_speak import (
+            AudioListDevicesTool,
+            AudioSetVolumeTool,
+            TTSSpeakTool,
+        )
 
         assert TTSSpeakTool in _ALL_TOOL_CLASSES
         assert AudioListDevicesTool in _ALL_TOOL_CLASSES

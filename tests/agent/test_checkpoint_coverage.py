@@ -11,16 +11,13 @@ lines based on the full 451-line file):
 
 from __future__ import annotations
 
-import json
 import sqlite3
-import time
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from missy.agent.checkpoint import CheckpointManager, RecoveryResult, scan_for_recovery
 from missy.core.events import event_bus
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

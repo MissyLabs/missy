@@ -965,7 +965,7 @@ class TestRestSendMessageRetry:
 
         mock_http.post.return_value = rate_limit_resp
 
-        with patch("time.sleep"), pytest.raises(Exception):
+        with patch("time.sleep"), pytest.raises(Exception, match="429"):
             client.send_message("chan-1", "hello")
 
     def test_exception_in_send_retries_then_reraises(self):
@@ -1159,7 +1159,7 @@ class TestRestAddReaction:
         mock_response.status_code = 403
         mock_response.raise_for_status.side_effect = Exception("Forbidden")
 
-        with patch("httpx.put", return_value=mock_response), pytest.raises(Exception):
+        with patch("httpx.put", return_value=mock_response), pytest.raises(Exception, match="Forbidden"):
             client.add_reaction("chan-1", "msg-1", "\u2705")
 
 

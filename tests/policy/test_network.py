@@ -28,12 +28,12 @@ def clear_event_bus() -> Generator[None, None, None]:
 
 def make_engine(**kwargs) -> NetworkPolicyEngine:
     """Build a NetworkPolicyEngine from keyword overrides."""
-    defaults = dict(
-        default_deny=True,
-        allowed_cidrs=[],
-        allowed_domains=[],
-        allowed_hosts=[],
-    )
+    defaults = {
+        "default_deny": True,
+        "allowed_cidrs": [],
+        "allowed_domains": [],
+        "allowed_hosts": [],
+    }
     defaults.update(kwargs)
     return NetworkPolicyEngine(NetworkPolicy(**defaults))
 

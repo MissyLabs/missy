@@ -30,12 +30,12 @@ from missy.agent.proactive import ProactiveManager, ProactiveTrigger
 
 
 def _simple_trigger(name: str = "t1", **kwargs) -> ProactiveTrigger:
-    defaults = dict(
-        trigger_type="schedule",
-        interval_seconds=1,
-        cooldown_seconds=0,
-        prompt_template="ping from {trigger_name}",
-    )
+    defaults = {
+        "trigger_type": "schedule",
+        "interval_seconds": 1,
+        "cooldown_seconds": 0,
+        "prompt_template": "ping from {trigger_name}",
+    }
     defaults.update(kwargs)
     return ProactiveTrigger(name=name, **defaults)
 

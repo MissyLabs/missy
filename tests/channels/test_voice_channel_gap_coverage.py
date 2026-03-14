@@ -9,14 +9,12 @@ Targets remaining uncovered lines:
 
 from __future__ import annotations
 
-import asyncio
 import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from missy.channels.voice.channel import VoiceChannel, _build_agent_callback
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -95,7 +93,6 @@ class TestVoiceChannelStartSuccessPath:
 
         mock_server = MagicMock()
         # Make server.start() succeed and _running flip to True then False quickly.
-        call_count = [0]
 
         async def fake_start():
             mock_server._running = True
@@ -140,7 +137,6 @@ class TestVoiceChannelStartSuccessPath:
 
         # After the server starts, set _running to False after a brief delay
         # to let the while loop body (asyncio.sleep(0.25)) execute once.
-        original_running = True
 
         class _RunningDescriptor:
             """Simulate _running flipping after first check in the while loop."""

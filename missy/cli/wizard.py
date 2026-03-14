@@ -561,8 +561,7 @@ def run_wizard(config_path: str) -> None:
                     api_key = run_anthropic_vault_flow(api_key, vault_dir)
 
             # Live verification (skip for vault refs and setup-tokens).
-            if api_key and not api_key.startswith("vault://") and auth_choice != "3":
-                if click.confirm("    Verify API key with a test call?", default=True):
+            if api_key and not api_key.startswith("vault://") and auth_choice != "3" and click.confirm("    Verify API key with a test call?", default=True):
                     console.print("    [dim]Connecting…[/]")
                     ok = _verify_anthropic(api_key)
                     verify_results.append(("anthropic", ok))

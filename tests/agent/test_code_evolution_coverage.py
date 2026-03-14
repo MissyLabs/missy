@@ -81,10 +81,9 @@ class TestRestartProcess:
         """restart_process calls os.execv with the current interpreter and argv."""
         from missy.agent.code_evolution import restart_process
 
-        with patch("os.execv") as mock_execv:
-            with patch("sys.argv", ["missy", "run"]):
-                with patch("sys.executable", "/usr/bin/python3"):
-                    restart_process()
+        with patch("os.execv") as mock_execv, patch("sys.argv", ["missy", "run"]):
+            with patch("sys.executable", "/usr/bin/python3"):
+                restart_process()
 
         mock_execv.assert_called_once_with("/usr/bin/python3", ["/usr/bin/python3", "missy", "run"])
 

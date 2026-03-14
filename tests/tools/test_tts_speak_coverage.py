@@ -14,19 +14,17 @@ from __future__ import annotations
 import os
 import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from missy.tools.builtin.tts_speak import (
-    AudioListDevicesTool,
     AudioSetVolumeTool,
     TTSSpeakTool,
     _ensure_runtime_dir,
     _find_piper_model,
     _synth_piper,
 )
-
 
 # ---------------------------------------------------------------------------
 # _ensure_runtime_dir

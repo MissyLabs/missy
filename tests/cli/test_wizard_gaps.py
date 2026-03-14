@@ -20,10 +20,7 @@ Uncovered lines targeted:
 
 from __future__ import annotations
 
-import tempfile
-from pathlib import Path
 from unittest.mock import MagicMock, patch
-
 
 # ---------------------------------------------------------------------------
 # _prompt_model — ValueError/IndexError branch (lines 191-192)

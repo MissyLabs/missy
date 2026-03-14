@@ -141,11 +141,7 @@ class X11ScreenshotTool(BaseTool):
     def execute(
         self, *, path: str = "/tmp/screenshot.png", region: str = "", **_: Any
     ) -> ToolResult:
-        if region:
-            # scrot -a x,y,w,h <path>
-            cmd = f"scrot -a {region} {path}"
-        else:
-            cmd = f"scrot {path}"
+        cmd = f"scrot -a {region} {path}" if region else f"scrot {path}"
 
         result = _run(cmd)
 

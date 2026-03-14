@@ -56,9 +56,8 @@ class TestAddJobRollbackOnSchedulerError:
             started_manager,
             "_schedule_job",
             side_effect=SchedulerError("apscheduler refused"),
-        ):
-            with pytest.raises(SchedulerError):
-                started_manager.add_job("failing", "every 5 minutes", "task")
+        ), pytest.raises(SchedulerError):
+            started_manager.add_job("failing", "every 5 minutes", "task")
 
         # Job must not persist in memory after rollback
         assert len(started_manager.list_jobs()) == 0

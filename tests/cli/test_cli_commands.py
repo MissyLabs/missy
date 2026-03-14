@@ -1700,20 +1700,19 @@ class TestRun:
     def test_run_exits_on_eof(self, runner: CliRunner):
         """Sending an immediate EOF should terminate the interactive loop cleanly."""
         cfg_path = _write_temp_config()
-        with _SubsystemsPatch():
-            with (
-                patch("missy.agent.runtime.AgentRuntime") as mock_rt_cls,
-                patch("missy.agent.runtime.AgentConfig"),
-                patch("missy.channels.cli_channel.CLIChannel") as mock_ch_cls,
-            ):
-                mock_rt = MagicMock()
-                mock_rt.pending_recovery = []
-                mock_rt_cls.return_value = mock_rt
-                mock_ch = MagicMock()
-                # receive() returning None simulates EOF / Ctrl-D
-                mock_ch.receive.return_value = None
-                mock_ch_cls.return_value = mock_ch
-                result = runner.invoke(cli, ["--config", cfg_path, "run"])
+        with (
+            _SubsystemsPatch(), patch("missy.agent.runtime.AgentRuntime") as mock_rt_cls,
+            patch("missy.agent.runtime.AgentConfig"),
+            patch("missy.channels.cli_channel.CLIChannel") as mock_ch_cls,
+        ):
+            mock_rt = MagicMock()
+            mock_rt.pending_recovery = []
+            mock_rt_cls.return_value = mock_rt
+            mock_ch = MagicMock()
+            # receive() returning None simulates EOF / Ctrl-D
+            mock_ch.receive.return_value = None
+            mock_ch_cls.return_value = mock_ch
+            result = runner.invoke(cli, ["--config", cfg_path, "run"])
         assert result.exit_code == 0
 
     def test_run_quit_command_exits(self, runner: CliRunner):
@@ -1721,19 +1720,18 @@ class TestRun:
         cfg_path = _write_temp_config()
         msg = MagicMock()
         msg.content = "quit"
-        with _SubsystemsPatch():
-            with (
-                patch("missy.agent.runtime.AgentRuntime") as mock_rt_cls,
-                patch("missy.agent.runtime.AgentConfig"),
-                patch("missy.channels.cli_channel.CLIChannel") as mock_ch_cls,
-            ):
-                mock_rt = MagicMock()
-                mock_rt.pending_recovery = []
-                mock_rt_cls.return_value = mock_rt
-                mock_ch = MagicMock()
-                mock_ch.receive.return_value = msg
-                mock_ch_cls.return_value = mock_ch
-                result = runner.invoke(cli, ["--config", cfg_path, "run"])
+        with (
+            _SubsystemsPatch(), patch("missy.agent.runtime.AgentRuntime") as mock_rt_cls,
+            patch("missy.agent.runtime.AgentConfig"),
+            patch("missy.channels.cli_channel.CLIChannel") as mock_ch_cls,
+        ):
+            mock_rt = MagicMock()
+            mock_rt.pending_recovery = []
+            mock_rt_cls.return_value = mock_rt
+            mock_ch = MagicMock()
+            mock_ch.receive.return_value = msg
+            mock_ch_cls.return_value = mock_ch
+            result = runner.invoke(cli, ["--config", cfg_path, "run"])
         assert result.exit_code == 0
 
     def test_run_help_exits_zero(self, runner: CliRunner):
@@ -1859,28 +1857,27 @@ class TestRunMessageProcessing:
         quit_msg = MagicMock()
         quit_msg.content = "quit"
 
-        with _SubsystemsPatch():
-            with (
-                patch("missy.agent.runtime.AgentRuntime") as mock_rt_cls,
-                patch("missy.agent.runtime.AgentConfig"),
-                patch("missy.channels.cli_channel.CLIChannel") as mock_ch_cls,
-                patch("missy.security.sanitizer.sanitizer") as mock_san,
-                patch("missy.security.secrets.secrets_detector") as mock_sec,
-            ):
-                mock_rt = MagicMock()
-                mock_rt.pending_recovery = []
-                mock_rt.run.return_value = "Hello there!"
-                mock_rt_cls.return_value = mock_rt
+        with (
+            _SubsystemsPatch(), patch("missy.agent.runtime.AgentRuntime") as mock_rt_cls,
+            patch("missy.agent.runtime.AgentConfig"),
+            patch("missy.channels.cli_channel.CLIChannel") as mock_ch_cls,
+            patch("missy.security.sanitizer.sanitizer") as mock_san,
+            patch("missy.security.secrets.secrets_detector") as mock_sec,
+        ):
+            mock_rt = MagicMock()
+            mock_rt.pending_recovery = []
+            mock_rt.run.return_value = "Hello there!"
+            mock_rt_cls.return_value = mock_rt
 
-                mock_ch = MagicMock()
-                mock_ch.receive.side_effect = [user_msg, quit_msg]
-                mock_ch_cls.return_value = mock_ch
+            mock_ch = MagicMock()
+            mock_ch.receive.side_effect = [user_msg, quit_msg]
+            mock_ch_cls.return_value = mock_ch
 
-                mock_san.sanitize.return_value = "Hello"
-                mock_san.check_for_injection.return_value = []
-                mock_sec.has_secrets.return_value = False
+            mock_san.sanitize.return_value = "Hello"
+            mock_san.check_for_injection.return_value = []
+            mock_sec.has_secrets.return_value = False
 
-                result = runner.invoke(cli, ["--config", cfg_path, "run"])
+            result = runner.invoke(cli, ["--config", cfg_path, "run"])
 
         assert result.exit_code == 0
         mock_rt.run.assert_called_once()
@@ -1893,19 +1890,18 @@ class TestRunMessageProcessing:
         quit_msg = MagicMock()
         quit_msg.content = "quit"
 
-        with _SubsystemsPatch():
-            with (
-                patch("missy.agent.runtime.AgentRuntime") as mock_rt_cls,
-                patch("missy.agent.runtime.AgentConfig"),
-                patch("missy.channels.cli_channel.CLIChannel") as mock_ch_cls,
-            ):
-                mock_rt = MagicMock()
-                mock_rt.pending_recovery = []
-                mock_rt_cls.return_value = mock_rt
-                mock_ch = MagicMock()
-                mock_ch.receive.side_effect = [empty_msg, quit_msg]
-                mock_ch_cls.return_value = mock_ch
-                result = runner.invoke(cli, ["--config", cfg_path, "run"])
+        with (
+            _SubsystemsPatch(), patch("missy.agent.runtime.AgentRuntime") as mock_rt_cls,
+            patch("missy.agent.runtime.AgentConfig"),
+            patch("missy.channels.cli_channel.CLIChannel") as mock_ch_cls,
+        ):
+            mock_rt = MagicMock()
+            mock_rt.pending_recovery = []
+            mock_rt_cls.return_value = mock_rt
+            mock_ch = MagicMock()
+            mock_ch.receive.side_effect = [empty_msg, quit_msg]
+            mock_ch_cls.return_value = mock_ch
+            result = runner.invoke(cli, ["--config", cfg_path, "run"])
 
         assert result.exit_code == 0
         mock_rt.run.assert_not_called()

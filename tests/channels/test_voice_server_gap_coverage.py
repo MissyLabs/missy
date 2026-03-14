@@ -19,7 +19,6 @@ import websockets.exceptions
 from missy.channels.voice.registry import EdgeNode
 from missy.channels.voice.server import VoiceServer
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
