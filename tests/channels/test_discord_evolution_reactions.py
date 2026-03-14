@@ -189,12 +189,14 @@ class TestSendToReturnsId:
         )
         assert result == "sent-msg-123"
 
-    def test_returns_none_on_error(self, channel: DiscordChannel, mock_rest: MagicMock):
+    def test_raises_on_error(self, channel: DiscordChannel, mock_rest: MagicMock):
+        from missy.channels.discord.channel import DiscordSendError
+
         mock_rest.send_message.side_effect = Exception("fail")
-        result = asyncio.get_event_loop().run_until_complete(
-            channel.send_to("ch-1", "hello")
-        )
-        assert result is None
+        with pytest.raises(DiscordSendError):
+            asyncio.get_event_loop().run_until_complete(
+                channel.send_to("ch-1", "hello")
+            )
 
 
 # ---------------------------------------------------------------------------

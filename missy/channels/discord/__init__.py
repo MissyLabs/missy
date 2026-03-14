@@ -16,7 +16,7 @@ Minimal public exports — callers should import concrete classes directly::
 
 from __future__ import annotations
 
-from missy.channels.discord.channel import DiscordChannel
+from missy.channels.discord.channel import DiscordChannel, DiscordSendError
 from missy.channels.discord.config import (
     DiscordAccountConfig,
     DiscordConfig,
@@ -26,6 +26,7 @@ from missy.channels.discord.config import (
 
 __all__ = [
     "DiscordChannel",
+    "DiscordSendError",
     "DiscordConfig",
     "DiscordAccountConfig",
     "DiscordDMPolicy",

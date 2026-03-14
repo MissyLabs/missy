@@ -1376,8 +1376,14 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                         response = f"Sorry, an error occurred: {exc}"
 
                     try:
-                        reply_to = msg.metadata.get("discord_message_id")
-                        sent_id = await ch.send_to(channel_id, response, reply_to=reply_to)
+                        # Never use Discord reply; for bots, tag them with a mention.
+                        mention_ids: list[str] | None = None
+                        if msg.metadata.get("discord_author_is_bot"):
+                            response = f"<@{msg.sender}> {response}"
+                            mention_ids = [msg.sender]
+                        sent_id = await ch.send_with_retry(
+                            channel_id, response, mention_user_ids=mention_ids,
+                        )
 
                         # Detect evolution proposals and add reaction buttons.
                         if sent_id and "Evolution proposed:" in response:
@@ -1395,7 +1401,22 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                                 _proposal_id = _evo_match.group(1)
                                 ch.add_evolution_reactions(channel_id, sent_id, _proposal_id)
                     except Exception as exc:
-                        logger.error("Discord send error: %s", exc)
+                        logger.error(
+                            "Discord send failed after retries (channel=%s): %s",
+                            channel_id, exc,
+                        )
+                        # Inform the agent that its response was not delivered.
+                        try:
+                            _agent.run(
+                                f"[SYSTEM] Your previous response to channel "
+                                f"{channel_id} FAILED to send after multiple "
+                                f"retries. Error: {exc}. The user did NOT see "
+                                f"your response. You may want to try again or "
+                                f"adjust your response.",
+                                session_id,
+                            )
+                        except Exception:
+                            pass
 
             async def _run_discord():
                 channels = []

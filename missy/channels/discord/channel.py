@@ -1,4 +1,4 @@
-Discord channel implementation.
+"""Discord channel implementation.
 
 :class:`DiscordChannel` wires together the Gateway client, REST client,
 access-control logic, and pairing workflow into a :class:`BaseChannel`
@@ -42,6 +42,21 @@ from missy.channels.discord.rest import DiscordRestClient
 from missy.core.events import AuditEvent, event_bus
 
 logger = logging.getLogger(__name__)
+
+
+class DiscordSendError(Exception):
+    """Raised when a Discord message could not be delivered."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        channel_id: str = "",
+        original_error: Optional[Exception] = None,
+    ) -> None:
+        super().__init__(message)
+        self.channel_id = channel_id
+        self.original_error = original_error
 
 
 class DiscordChannel(BaseChannel):
@@ -204,7 +219,7 @@ class DiscordChannel(BaseChannel):
             return
         try:
             loop = asyncio.get_event_loop()
-            loop.create_task(self.send_to(self._current_channel_id, message))
+            loop.create_task(self.send_with_retry(self._current_channel_id, message))
         except RuntimeError:
             logger.warning("DiscordChannel.send(): no running event loop — message dropped")
 
@@ -214,7 +229,8 @@ class DiscordChannel(BaseChannel):
         message: str,
         reply_to: Optional[str] = None,
         thread_id: Optional[str] = None,
-    ) -> Optional[str]:
+        mention_user_ids: Optional[list[str]] = None,
+    ) -> str:
         """Send *message* to a specific Discord channel asynchronously.
 
         Args:
@@ -223,9 +239,13 @@ class DiscordChannel(BaseChannel):
             reply_to: Optional message ID to reply to.
             thread_id: Optional thread snowflake ID; when set, the message
                 is sent to the thread rather than the parent channel.
+            mention_user_ids: Optional list of user IDs to allow mentions for.
 
         Returns:
-            The snowflake ID of the last message sent, or ``None`` on error.
+            The snowflake ID of the last message sent.
+
+        Raises:
+            DiscordSendError: If the message could not be delivered.
         """
         # Send typing indicator as an in-progress UX signal.
         try:
@@ -246,6 +266,7 @@ class DiscordChannel(BaseChannel):
                     channel_id=target_channel,
                     content=chunk,
                     reply_to_message_id=reply_to if idx == 0 else None,
+                    mention_user_ids=mention_user_ids,
                 )
                 last_message_id = str(result.get("id", "")) if result else None
             self._emit_audit(
@@ -260,7 +281,124 @@ class DiscordChannel(BaseChannel):
                 "error",
                 {"channel_id": channel_id, "error": str(exc)},
             )
+            raise DiscordSendError(
+                f"Failed to send message to channel {channel_id}: {exc}",
+                channel_id=channel_id,
+                original_error=exc,
+            ) from exc
+        if not last_message_id:
+            raise DiscordSendError(
+                f"Discord returned no message ID for channel {channel_id}",
+                channel_id=channel_id,
+            )
         return last_message_id
+
+    async def send_with_retry(
+        self,
+        channel_id: str,
+        message: str,
+        reply_to: Optional[str] = None,
+        thread_id: Optional[str] = None,
+        mention_user_ids: Optional[list[str]] = None,
+        max_attempts: int = 6,
+        max_total_seconds: float = 300.0,
+    ) -> str:
+        """Send a message with exponential backoff retry on failure.
+
+        Retries with delays of 2s, 4s, 8s, 16s, 32s, … (capped at 60s per
+        wait) until the message is delivered or *max_total_seconds* (default
+        5 minutes) has elapsed.
+
+        Args:
+            channel_id: Discord channel snowflake ID.
+            message: Text to send.
+            reply_to: Optional message ID to reply to.
+            thread_id: Optional thread ID.
+            mention_user_ids: Optional user IDs to allow mentions for.
+            max_attempts: Maximum number of send attempts (default 6).
+            max_total_seconds: Give up after this many seconds total
+                (default 300 = 5 minutes).
+
+        Returns:
+            The snowflake ID of the last message sent.
+
+        Raises:
+            DiscordSendError: If all retry attempts are exhausted.
+        """
+        import time as _time
+
+        start = _time.monotonic()
+        base_delay = 2.0
+        last_error: Optional[Exception] = None
+
+        for attempt in range(1, max_attempts + 1):
+            elapsed = _time.monotonic() - start
+            if attempt > 1 and elapsed >= max_total_seconds:
+                break
+
+            try:
+                msg_id = await self.send_to(
+                    channel_id=channel_id,
+                    message=message,
+                    reply_to=reply_to,
+                    thread_id=thread_id,
+                    mention_user_ids=mention_user_ids,
+                )
+                if attempt > 1:
+                    logger.info(
+                        "Discord send_with_retry succeeded on attempt %d/%d "
+                        "after %.1fs (channel=%s)",
+                        attempt, max_attempts, _time.monotonic() - start,
+                        channel_id,
+                    )
+                return msg_id
+            except DiscordSendError as exc:
+                last_error = exc
+                delay = min(base_delay * (2 ** (attempt - 1)), 60.0)
+                remaining = max_total_seconds - (_time.monotonic() - start)
+                if attempt >= max_attempts or remaining <= 0:
+                    break
+                delay = min(delay, remaining)
+                logger.warning(
+                    "Discord send_with_retry attempt %d/%d failed "
+                    "(channel=%s); retrying in %.1fs: %s",
+                    attempt, max_attempts, channel_id, delay, exc,
+                )
+                self._emit_audit(
+                    "discord.channel.send_retry",
+                    "retry",
+                    {
+                        "channel_id": channel_id,
+                        "attempt": attempt,
+                        "max_attempts": max_attempts,
+                        "delay_seconds": delay,
+                        "error": str(exc),
+                    },
+                )
+                await asyncio.sleep(delay)
+
+        total_elapsed = _time.monotonic() - start
+        logger.error(
+            "Discord send_with_retry exhausted all %d attempts over %.1fs "
+            "(channel=%s)",
+            max_attempts, total_elapsed, channel_id,
+        )
+        self._emit_audit(
+            "discord.channel.send_failed",
+            "error",
+            {
+                "channel_id": channel_id,
+                "attempts": max_attempts,
+                "elapsed_seconds": round(total_elapsed, 1),
+                "error": str(last_error),
+            },
+        )
+        raise DiscordSendError(
+            f"Failed to send message to channel {channel_id} after "
+            f"{max_attempts} attempts over {total_elapsed:.1f}s: {last_error}",
+            channel_id=channel_id,
+            original_error=last_error,
+        )
 
     # ------------------------------------------------------------------
     # Gateway event handler
@@ -439,6 +577,7 @@ class DiscordChannel(BaseChannel):
                 "discord_thread_id": effective_thread_id or "",
                 "discord_thread_session_id": thread_session_id,
                 "discord_author": author,
+                "discord_author_is_bot": bool(author.get("bot", False)),
             },
         )
         self._emit_audit(
@@ -465,56 +604,35 @@ class DiscordChannel(BaseChannel):
         if not text.startswith("!"):
             return False
 
-        cmd, _, rest = text.partition(" ")
-        cmd = cmd.lower()
-
+        cmd = text.split()[0].lower()
         if cmd not in ("!join", "!leave", "!say"):
             return False
 
-        # Lazy init voice manager only if a voice command is used.
+        # Lazy-start the voice manager on first voice command.
         if self._voice is None:
             try:
                 from missy.channels.discord.voice import DiscordVoiceManager
 
                 self._voice = DiscordVoiceManager()
+                token = self.account_config.resolve_token() or ""
+                await self._voice.start(token)
             except Exception as exc:
-                self._rest.send_message(channel_id, f"voice unavailable: {exc}")
+                self._voice = None
+                self._rest.send_message(channel_id, f"Voice unavailable: {exc}")
                 return True
 
-        try:
-            if cmd == "!join":
-                vc_id = rest.strip()
-                if not vc_id.isdigit():
-                    self._rest.send_message(channel_id, "usage: !join <channel_id>")
-                    return True
-                await self._voice.join(guild_id=guild_id, channel_id=vc_id)
-                self._rest.send_message(channel_id, "joined")
-                logger.info("Discord voice: joined guild=%s vc=%s by=%s", guild_id, vc_id, author_id)
-                return True
+        from missy.channels.discord.voice_commands import maybe_handle_voice_command
 
-            if cmd == "!leave":
-                await self._voice.leave(guild_id=guild_id)
-                self._rest.send_message(channel_id, "left")
-                logger.info("Discord voice: left guild=%s by=%s", guild_id, author_id)
-                return True
-
-            if cmd == "!say":
-                phrase = rest.strip()
-                if not phrase:
-                    self._rest.send_message(channel_id, "usage: !say <text>")
-                    return True
-                await self._voice.say(guild_id=guild_id, text=phrase)
-                self._rest.send_message(channel_id, "speaking")
-                logger.info("Discord voice: speaking guild=%s by=%s chars=%d", guild_id, author_id, len(phrase))
-                return True
-
-        except Exception as exc:
-            msg = str(exc).strip() or "unknown error"
-            self._rest.send_message(channel_id, msg[:180])
-            logger.warning("Discord voice command failed guild=%s cmd=%s err=%s", guild_id, cmd, msg)
-            return True
-
-        return False
+        result = await maybe_handle_voice_command(
+            content=content,
+            channel_id=channel_id,
+            guild_id=guild_id,
+            author_id=author_id,
+            voice=self._voice,
+        )
+        if result.handled and result.reply:
+            self._rest.send_message(channel_id, result.reply)
+        return result.handled
 
     async def _handle_interaction(self, data: dict[str, Any]) -> None:
         """Handle a slash command interaction."""

@@ -1,4 +1,4 @@
-Discord REST API client built on top of :class:`PolicyHTTPClient`.
+"""Discord REST API client built on top of :class:`PolicyHTTPClient`.
 
 All outbound requests to ``discord.com`` are routed through
 :class:`~missy.gateway.client.PolicyHTTPClient` so the framework's
@@ -127,6 +127,7 @@ class DiscordRestClient:
         channel_id: str,
         content: str,
         reply_to_message_id: Optional[str] = None,
+        mention_user_ids: Optional[list[str]] = None,
     ) -> dict[str, Any]:
         """Send a text message to a Discord channel.
 
@@ -148,8 +149,9 @@ class DiscordRestClient:
         url = f"{BASE}/channels/{channel_id}/messages"
         body: dict[str, Any] = {
             "content": content,
-            # Prevent Discord from parsing any mentions in outbound content.
-            "allowed_mentions": {"parse": []},
+            # Prevent Discord from parsing any mentions in outbound content
+            # unless specific user IDs are explicitly allowlisted.
+            "allowed_mentions": {"parse": [], "users": mention_user_ids or []},
         }
         if reply_to_message_id is not None:
             body["message_reference"] = {
