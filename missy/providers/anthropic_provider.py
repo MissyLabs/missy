@@ -337,8 +337,7 @@ class AnthropicProvider(BaseProvider):
         try:
             client = self._make_client()
             with client.messages.stream(**call_kwargs) as stream:
-                for text in stream.text_stream:
-                    yield text
+                yield from stream.text_stream
         except _anthropic_sdk.APITimeoutError as exc:
             raise ProviderError(
                 f"Anthropic stream timed out after {self._timeout}s: {exc}"

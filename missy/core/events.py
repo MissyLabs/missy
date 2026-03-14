@@ -152,9 +152,8 @@ class EventBus:
             event_type: The event type string.
             callback: The callback to remove.
         """
-        with self._lock:
-            with contextlib.suppress(ValueError):
-                self._subscribers[event_type].remove(callback)
+        with self._lock, contextlib.suppress(ValueError):
+            self._subscribers[event_type].remove(callback)
 
     def publish(self, event: AuditEvent) -> None:
         """Append *event* to the internal log and dispatch it to subscribers.

@@ -119,9 +119,7 @@ class ScheduledJob:
         Returns:
             ``True`` when a retry should be attempted, ``False`` otherwise.
         """
-        if self.consecutive_failures >= self.max_attempts:
-            return False
-        return True
+        return not self.consecutive_failures >= self.max_attempts
 
     # ------------------------------------------------------------------
     # Serialisation

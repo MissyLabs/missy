@@ -472,10 +472,7 @@ class X11ReadScreenTool(BaseTool):
             except Exception:
                 pass
 
-        if region:
-            cmd = f"scrot -a {region} {path}"
-        else:
-            cmd = f"scrot {path}"
+        cmd = f"scrot -a {region} {path}" if region else f"scrot {path}"
         result = _run(cmd)
         if result.returncode != 0:
             err = result.stderr.strip() or result.stdout.strip()

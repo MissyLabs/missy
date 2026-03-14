@@ -59,7 +59,7 @@ class DoneCriteria:
             A list of condition strings whose corresponding *verified* entry
             is ``False``.
         """
-        return [c for c, v in zip(self.conditions, self.verified) if not v]
+        return [c for c, v in zip(self.conditions, self.verified, strict=False) if not v]
 
 
 def is_compound_task(prompt: str) -> bool:

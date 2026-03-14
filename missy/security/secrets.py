@@ -115,10 +115,7 @@ class SecretsDetector:
         Returns:
             ``True`` if at least one secret pattern is found.
         """
-        for pattern in self._patterns.values():
-            if pattern.search(text):
-                return True
-        return False
+        return any(pattern.search(text) for pattern in self._patterns.values())
 
 
 #: Process-level singleton — import and use directly in most cases.

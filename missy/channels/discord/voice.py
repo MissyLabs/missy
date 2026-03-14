@@ -78,10 +78,7 @@ def _clean_for_speech(text: str) -> str:
         # Try to cut at a sentence boundary.
         cut = s[:600]
         last_period = cut.rfind(".")
-        if last_period > 200:
-            s = cut[: last_period + 1]
-        else:
-            s = cut.rstrip() + "..."
+        s = cut[: last_period + 1] if last_period > 200 else cut.rstrip() + "..."
 
     return s.strip()
 
@@ -409,9 +406,8 @@ class DiscordVoiceManager:
         async with state.lock:
             # Stop any currently playing audio.
             vc = state.voice_client
-            if hasattr(vc, "is_playing") and vc.is_playing():
-                if hasattr(vc, "stop"):
-                    vc.stop()
+            if hasattr(vc, "is_playing") and vc.is_playing() and hasattr(vc, "stop"):
+                vc.stop()
 
             # Synthesize to WAV via piper.
             audio_buf = await self._tts_engine.synthesize(text)

@@ -708,9 +708,7 @@ class DiscordChannel(BaseChannel):
     def _is_own_message(self, author_id: str) -> bool:
         """Return True if *author_id* matches this bot's own user ID."""
         own_id = self.bot_user_id or self.account_config.account_id
-        if own_id and author_id == own_id:
-            return True
-        return False
+        return bool(own_id and author_id == own_id)
 
     def _allow_bot_author(
         self,

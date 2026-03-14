@@ -103,7 +103,7 @@ class InputSanitizer:
             matched.  An empty list means the input appears clean.
         """
         matched: list[str] = []
-        for pattern, original in zip(self._patterns, self.INJECTION_PATTERNS):
+        for pattern, original in zip(self._patterns, self.INJECTION_PATTERNS, strict=False):
             if pattern.search(text):
                 matched.append(original)
         return matched

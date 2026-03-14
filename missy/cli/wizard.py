@@ -119,9 +119,7 @@ def _validate_key_format(key: str, prefix: str | None) -> bool:
     """Basic key format check — non-empty and starts with expected prefix."""
     if not key or not key.strip():
         return False
-    if prefix and not key.strip().startswith(prefix):
-        return False
-    return True
+    return not (prefix and not key.strip().startswith(prefix))
 
 
 def _prompt_api_key(provider_name: str, info: dict) -> str | None:

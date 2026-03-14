@@ -183,7 +183,7 @@ class NetworkPolicyEngine:
         except ValueError:
             return None
 
-        for network, cidr_str in zip(self._networks, self._policy.allowed_cidrs):
+        for network, cidr_str in zip(self._networks, self._policy.allowed_cidrs, strict=False):
             try:
                 if addr in network:
                     return f"cidr:{cidr_str}"
