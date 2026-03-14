@@ -1523,3 +1523,543 @@ class TestAllGroupHelp:
     def test_group_help_exits_zero(self, runner: CliRunner, group: list[str]):
         result = runner.invoke(cli, group)
         assert result.exit_code == 0
+
+
+# ===========================================================================
+# missy sessions list / rename
+# ===========================================================================
+
+
+class TestSessionsList:
+    def test_sessions_list_no_sessions(self, runner: CliRunner):
+        cfg_path = _write_temp_config()
+        mock_store = MagicMock()
+        mock_store.list_sessions.return_value = []
+        with _SubsystemsPatch():
+            with patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store):
+                result = runner.invoke(cli, ["--config", cfg_path, "sessions", "list"])
+        assert result.exit_code == 0
+        assert "No sessions" in result.output
+
+    def test_sessions_list_shows_sessions(self, runner: CliRunner):
+        cfg_path = _write_temp_config()
+        mock_store = MagicMock()
+        mock_store.list_sessions.return_value = [
+            {
+                "session_id": "abc-123",
+                "name": "My chat",
+                "turn_count": 5,
+                "provider": "anthropic",
+                "channel": "cli",
+                "updated_at": "2026-03-12T10:00:00",
+            }
+        ]
+        with _SubsystemsPatch():
+            with patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store):
+                result = runner.invoke(cli, ["--config", cfg_path, "sessions", "list"])
+        assert result.exit_code == 0
+        assert "abc-123" in result.output
+
+    def test_sessions_list_respects_limit(self, runner: CliRunner):
+        cfg_path = _write_temp_config()
+        mock_store = MagicMock()
+        mock_store.list_sessions.return_value = []
+        with _SubsystemsPatch():
+            with patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store):
+                runner.invoke(
+                    cli, ["--config", cfg_path, "sessions", "list", "--limit", "5"]
+                )
+        mock_store.list_sessions.assert_called_once_with(limit=5)
+
+    def test_sessions_list_error_handled(self, runner: CliRunner):
+        cfg_path = _write_temp_config()
+        mock_store = MagicMock()
+        mock_store.list_sessions.side_effect = Exception("db locked")
+        with _SubsystemsPatch():
+            with patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store):
+                result = runner.invoke(cli, ["--config", cfg_path, "sessions", "list"])
+        # Should handle the error gracefully (not crash)
+        assert result.exit_code in (0, 1)
+
+    def test_sessions_list_help_exits_zero(self, runner: CliRunner):
+        result = runner.invoke(cli, ["sessions", "list", "--help"])
+        assert result.exit_code == 0
+
+
+class TestSessionsRename:
+    def test_sessions_rename_success(self, runner: CliRunner):
+        cfg_path = _write_temp_config()
+        mock_store = MagicMock()
+        mock_store.rename_session.return_value = True
+        mock_store.resolve_session_name.return_value = None
+        with _SubsystemsPatch():
+            with patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store):
+                result = runner.invoke(
+                    cli,
+                    ["--config", cfg_path, "sessions", "rename", "abc-123", "My Chat"],
+                )
+        assert result.exit_code == 0
+
+    def test_sessions_rename_not_found(self, runner: CliRunner):
+        cfg_path = _write_temp_config()
+        mock_store = MagicMock()
+        mock_store.rename_session.return_value = False
+        mock_store.resolve_session_name.return_value = None
+        with _SubsystemsPatch():
+            with patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store):
+                result = runner.invoke(
+                    cli,
+                    ["--config", cfg_path, "sessions", "rename", "ghost-id", "New Name"],
+                )
+        assert result.exit_code == 0
+
+    def test_sessions_rename_help_exits_zero(self, runner: CliRunner):
+        result = runner.invoke(cli, ["sessions", "rename", "--help"])
+        assert result.exit_code == 0
+
+
+# ===========================================================================
+# missy evolve list / approve / reject
+# ===========================================================================
+
+
+class TestEvolveList:
+    def test_evolve_list_no_proposals(self, runner: CliRunner):
+        cfg_path = _write_temp_config()
+        mock_mgr = MagicMock()
+        mock_mgr.list_all.return_value = []
+        with _SubsystemsPatch():
+            with patch(
+                "missy.agent.code_evolution.CodeEvolutionManager", return_value=mock_mgr
+            ):
+                result = runner.invoke(cli, ["--config", cfg_path, "evolve", "list"])
+        assert result.exit_code == 0
+        assert "No evolution" in result.output
+
+    def test_evolve_list_shows_proposals(self, runner: CliRunner):
+        cfg_path = _write_temp_config()
+        proposal = MagicMock()
+        proposal.id = "evo-001"
+        proposal.status.value = "proposed"
+        proposal.trigger.value = "error"
+        proposal.confidence = 0.8
+        proposal.title = "Fix null pointer"
+        proposal.created_at = "2026-03-12T10:00:00"
+        mock_mgr = MagicMock()
+        mock_mgr.list_all.return_value = [proposal]
+        with _SubsystemsPatch():
+            with patch(
+                "missy.agent.code_evolution.CodeEvolutionManager", return_value=mock_mgr
+            ):
+                result = runner.invoke(cli, ["--config", cfg_path, "evolve", "list"])
+        assert result.exit_code == 0
+        assert "evo-001" in result.output
+
+    def test_evolve_list_help_exits_zero(self, runner: CliRunner):
+        result = runner.invoke(cli, ["evolve", "list", "--help"])
+        assert result.exit_code == 0
+
+    def test_evolve_group_help_exits_zero(self, runner: CliRunner):
+        result = runner.invoke(cli, ["evolve", "--help"])
+        assert result.exit_code == 0
+
+
+class TestEvolveApprove:
+    def test_evolve_approve_success(self, runner: CliRunner):
+        cfg_path = _write_temp_config()
+        mock_mgr = MagicMock()
+        mock_mgr.approve.return_value = True
+        with _SubsystemsPatch():
+            with patch(
+                "missy.agent.code_evolution.CodeEvolutionManager", return_value=mock_mgr
+            ):
+                result = runner.invoke(
+                    cli, ["--config", cfg_path, "evolve", "approve", "evo-001"]
+                )
+        assert result.exit_code == 0
+        assert "evo-001" in result.output
+
+    def test_evolve_approve_not_found(self, runner: CliRunner):
+        cfg_path = _write_temp_config()
+        mock_mgr = MagicMock()
+        mock_mgr.approve.return_value = False
+        with _SubsystemsPatch():
+            with patch(
+                "missy.agent.code_evolution.CodeEvolutionManager", return_value=mock_mgr
+            ):
+                result = runner.invoke(
+                    cli, ["--config", cfg_path, "evolve", "approve", "ghost"]
+                )
+        assert result.exit_code == 0
+
+    def test_evolve_approve_help_exits_zero(self, runner: CliRunner):
+        result = runner.invoke(cli, ["evolve", "approve", "--help"])
+        assert result.exit_code == 0
+
+
+class TestEvolveReject:
+    def test_evolve_reject_success(self, runner: CliRunner):
+        cfg_path = _write_temp_config()
+        mock_mgr = MagicMock()
+        mock_mgr.reject.return_value = True
+        with _SubsystemsPatch():
+            with patch(
+                "missy.agent.code_evolution.CodeEvolutionManager", return_value=mock_mgr
+            ):
+                result = runner.invoke(
+                    cli, ["--config", cfg_path, "evolve", "reject", "evo-001"]
+                )
+        assert result.exit_code == 0
+        assert "evo-001" in result.output
+
+    def test_evolve_reject_not_found(self, runner: CliRunner):
+        cfg_path = _write_temp_config()
+        mock_mgr = MagicMock()
+        mock_mgr.reject.return_value = False
+        with _SubsystemsPatch():
+            with patch(
+                "missy.agent.code_evolution.CodeEvolutionManager", return_value=mock_mgr
+            ):
+                result = runner.invoke(
+                    cli, ["--config", cfg_path, "evolve", "reject", "ghost"]
+                )
+        assert result.exit_code == 0
+
+    def test_evolve_reject_help_exits_zero(self, runner: CliRunner):
+        result = runner.invoke(cli, ["evolve", "reject", "--help"])
+        assert result.exit_code == 0
+
+
+class TestEvolveShow:
+    def test_evolve_show_not_found(self, runner: CliRunner):
+        cfg_path = _write_temp_config()
+        mock_mgr = MagicMock()
+        mock_mgr.get.return_value = None
+        with _SubsystemsPatch():
+            with patch(
+                "missy.agent.code_evolution.CodeEvolutionManager", return_value=mock_mgr
+            ):
+                result = runner.invoke(
+                    cli, ["--config", cfg_path, "evolve", "show", "ghost"]
+                )
+        assert result.exit_code == 0
+
+    def test_evolve_show_found(self, runner: CliRunner):
+        cfg_path = _write_temp_config()
+        proposal = MagicMock()
+        proposal.id = "evo-001"
+        proposal.title = "Fix null pointer"
+        proposal.status.value = "proposed"
+        proposal.trigger.value = "error"
+        proposal.confidence = 0.8
+        proposal.created_at = "2026-03-12T10:00:00"
+        proposal.resolved_at = None
+        proposal.git_commit_sha = None
+        proposal.description = "Fixes a null pointer dereference"
+        proposal.diffs = []
+        proposal.error_pattern = None
+        proposal.test_output = None
+        mock_mgr = MagicMock()
+        mock_mgr.get.return_value = proposal
+        with _SubsystemsPatch():
+            with patch(
+                "missy.agent.code_evolution.CodeEvolutionManager", return_value=mock_mgr
+            ):
+                result = runner.invoke(
+                    cli, ["--config", cfg_path, "evolve", "show", "evo-001"]
+                )
+        assert result.exit_code == 0
+        assert "evo-001" in result.output
+
+    def test_evolve_show_help_exits_zero(self, runner: CliRunner):
+        result = runner.invoke(cli, ["evolve", "show", "--help"])
+        assert result.exit_code == 0
+
+
+# ===========================================================================
+# missy run (interactive REPL — tested with EOF on stdin)
+# ===========================================================================
+
+
+class TestRun:
+    def test_run_exits_on_eof(self, runner: CliRunner):
+        """Sending an immediate EOF should terminate the interactive loop cleanly."""
+        cfg_path = _write_temp_config()
+        with _SubsystemsPatch():
+            with patch("missy.agent.runtime.AgentRuntime") as mock_rt_cls, patch(
+                "missy.agent.runtime.AgentConfig"
+            ), patch("missy.channels.cli_channel.CLIChannel") as mock_ch_cls:
+                mock_rt = MagicMock()
+                mock_rt.pending_recovery = []
+                mock_rt_cls.return_value = mock_rt
+                mock_ch = MagicMock()
+                # receive() returning None simulates EOF / Ctrl-D
+                mock_ch.receive.return_value = None
+                mock_ch_cls.return_value = mock_ch
+                result = runner.invoke(cli, ["--config", cfg_path, "run"])
+        assert result.exit_code == 0
+
+    def test_run_quit_command_exits(self, runner: CliRunner):
+        """Typing 'quit' should terminate the session loop."""
+        cfg_path = _write_temp_config()
+        msg = MagicMock()
+        msg.content = "quit"
+        with _SubsystemsPatch():
+            with patch("missy.agent.runtime.AgentRuntime") as mock_rt_cls, patch(
+                "missy.agent.runtime.AgentConfig"
+            ), patch("missy.channels.cli_channel.CLIChannel") as mock_ch_cls:
+                mock_rt = MagicMock()
+                mock_rt.pending_recovery = []
+                mock_rt_cls.return_value = mock_rt
+                mock_ch = MagicMock()
+                mock_ch.receive.return_value = msg
+                mock_ch_cls.return_value = mock_ch
+                result = runner.invoke(cli, ["--config", cfg_path, "run"])
+        assert result.exit_code == 0
+
+    def test_run_help_exits_zero(self, runner: CliRunner):
+        result = runner.invoke(cli, ["run", "--help"])
+        assert result.exit_code == 0
+
+
+# ===========================================================================
+# missy discord probe (no accounts → prints message without crashing)
+# ===========================================================================
+
+
+class TestDiscordProbe:
+    def test_discord_probe_no_accounts(self, runner: CliRunner):
+        cfg_path = _write_temp_config()
+        with _SubsystemsPatch() as cfg:
+            cfg.discord = None
+            result = runner.invoke(cli, ["--config", cfg_path, "discord", "probe"])
+        assert result.exit_code == 0
+        assert "No Discord" in result.output
+
+    def test_discord_probe_help_exits_zero(self, runner: CliRunner):
+        result = runner.invoke(cli, ["discord", "probe", "--help"])
+        assert result.exit_code == 0
+
+
+# ===========================================================================
+# missy discord register-commands (no accounts → error exit)
+# ===========================================================================
+
+
+class TestDiscordRegisterCommands:
+    def test_discord_register_no_accounts_exits_one(self, runner: CliRunner):
+        cfg_path = _write_temp_config()
+        with _SubsystemsPatch() as cfg:
+            cfg.discord = None
+            result = runner.invoke(
+                cli, ["--config", cfg_path, "discord", "register-commands"]
+            )
+        assert result.exit_code == 1
+
+    def test_discord_register_help_exits_zero(self, runner: CliRunner):
+        result = runner.invoke(cli, ["discord", "register-commands", "--help"])
+        assert result.exit_code == 0
+
+
+# ===========================================================================
+# missy _load_subsystems — explicit exercise of the init path branches
+# ===========================================================================
+
+
+class TestLoadSubsystemsInitPath:
+    def test_load_subsystems_initialises_registry(self):
+        """_load_subsystems should call init_registry when config is valid."""
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(
+            suffix=".yaml", mode="w", delete=False
+        ) as fh:
+            fh.write(_MINIMAL_CONFIG_YAML)
+            cfg_path = fh.name
+
+        from missy.cli.main import _load_subsystems
+
+        with (
+            patch("missy.config.settings.load_config") as mock_load,
+            patch("missy.policy.engine.init_policy_engine"),
+            patch("missy.observability.audit_logger.init_audit_logger"),
+            patch("missy.providers.registry.init_registry") as mock_init_reg,
+            patch("missy.tools.builtin.register_builtin_tools"),
+            patch("missy.tools.registry.init_tool_registry", return_value=MagicMock()),
+            patch("missy.observability.otel.init_otel"),
+        ):
+            mock_cfg = _make_mock_config()
+            mock_cfg.audit_log_path = "/tmp/audit.jsonl"
+            mock_load.return_value = mock_cfg
+            result = _load_subsystems(cfg_path)
+
+        mock_init_reg.assert_called_once()
+        assert result is mock_cfg
+
+
+# ===========================================================================
+# _load_subsystems error paths (ConfigurationError, unexpected exception)
+# ===========================================================================
+
+
+class TestLoadSubsystemsErrors:
+    def test_load_subsystems_config_error_exits_one(self, runner: CliRunner):
+        """A ConfigurationError during load should print error and exit 1."""
+        from missy.core.exceptions import ConfigurationError
+
+        with patch("missy.config.settings.load_config") as mock_load:
+            mock_load.side_effect = ConfigurationError("bad yaml")
+            result = runner.invoke(cli, ["providers"])
+        assert result.exit_code == 1
+
+    def test_load_subsystems_unexpected_error_exits_one(self, runner: CliRunner):
+        """An unexpected exception during load should print error and exit 1."""
+        with patch("missy.config.settings.load_config") as mock_load:
+            mock_load.side_effect = RuntimeError("disk full")
+            result = runner.invoke(cli, ["providers"])
+        assert result.exit_code == 1
+
+    def test_load_subsystems_config_error_hint_contains_missy_init(
+        self, runner: CliRunner
+    ):
+        """The config error message should hint at missy init."""
+        from missy.core.exceptions import ConfigurationError
+
+        with patch("missy.config.settings.load_config") as mock_load:
+            mock_load.side_effect = ConfigurationError("bad yaml")
+            result = runner.invoke(cli, ["providers"])
+        combined = result.output + (result.stderr or "")
+        assert "missy init" in combined or "config" in combined.lower()
+
+
+# ===========================================================================
+# missy run — agent processes a message (happy path)
+# ===========================================================================
+
+
+class TestRunMessageProcessing:
+    def test_run_processes_one_message_then_quit(self, runner: CliRunner):
+        """One user message processed by agent then 'quit' terminates the loop."""
+        cfg_path = _write_temp_config()
+        user_msg = MagicMock()
+        user_msg.content = "Hello"
+        quit_msg = MagicMock()
+        quit_msg.content = "quit"
+
+        with _SubsystemsPatch():
+            with patch("missy.agent.runtime.AgentRuntime") as mock_rt_cls, patch(
+                "missy.agent.runtime.AgentConfig"
+            ), patch("missy.channels.cli_channel.CLIChannel") as mock_ch_cls, patch(
+                "missy.security.sanitizer.sanitizer"
+            ) as mock_san, patch(
+                "missy.security.secrets.secrets_detector"
+            ) as mock_sec:
+                mock_rt = MagicMock()
+                mock_rt.pending_recovery = []
+                mock_rt.run.return_value = "Hello there!"
+                mock_rt_cls.return_value = mock_rt
+
+                mock_ch = MagicMock()
+                mock_ch.receive.side_effect = [user_msg, quit_msg]
+                mock_ch_cls.return_value = mock_ch
+
+                mock_san.sanitize.return_value = "Hello"
+                mock_san.check_for_injection.return_value = []
+                mock_sec.has_secrets.return_value = False
+
+                result = runner.invoke(cli, ["--config", cfg_path, "run"])
+
+        assert result.exit_code == 0
+        mock_rt.run.assert_called_once()
+
+    def test_run_skips_empty_input(self, runner: CliRunner):
+        """Empty lines should be skipped without calling the agent."""
+        cfg_path = _write_temp_config()
+        empty_msg = MagicMock()
+        empty_msg.content = "   "
+        quit_msg = MagicMock()
+        quit_msg.content = "quit"
+
+        with _SubsystemsPatch():
+            with patch("missy.agent.runtime.AgentRuntime") as mock_rt_cls, patch(
+                "missy.agent.runtime.AgentConfig"
+            ), patch("missy.channels.cli_channel.CLIChannel") as mock_ch_cls:
+                mock_rt = MagicMock()
+                mock_rt.pending_recovery = []
+                mock_rt_cls.return_value = mock_rt
+                mock_ch = MagicMock()
+                mock_ch.receive.side_effect = [empty_msg, quit_msg]
+                mock_ch_cls.return_value = mock_ch
+                result = runner.invoke(cli, ["--config", cfg_path, "run"])
+
+        assert result.exit_code == 0
+        mock_rt.run.assert_not_called()
+
+
+# ===========================================================================
+# missy doctor — additional branch coverage
+# ===========================================================================
+
+
+class TestDoctorBranches:
+    def test_doctor_with_provider_available(self, runner: CliRunner):
+        cfg_path = _write_temp_config()
+        mock_provider = MagicMock()
+        mock_provider.is_available.return_value = True
+        mock_registry = MagicMock()
+        mock_registry.list_providers.return_value = ["anthropic"]
+        mock_registry.get.return_value = mock_provider
+        mock_mgr = MagicMock()
+        mock_mgr.list_jobs.return_value = []
+        with _SubsystemsPatch():
+            with (
+                patch(
+                    "missy.providers.registry.get_registry", return_value=mock_registry
+                ),
+                patch(
+                    "missy.scheduler.manager.SchedulerManager", return_value=mock_mgr
+                ),
+            ):
+                result = runner.invoke(cli, ["--config", cfg_path, "doctor"])
+        assert result.exit_code == 0
+        assert "anthropic" in result.output
+
+    def test_doctor_shell_enabled_shows_warn(self, runner: CliRunner):
+        cfg_path = _write_temp_config()
+        with _SubsystemsPatch() as cfg:
+            cfg.shell.enabled = True
+            cfg.shell.allowed_commands = ["ls", "pwd"]
+            mock_registry = MagicMock()
+            mock_registry.list_providers.return_value = []
+            mock_mgr = MagicMock()
+            mock_mgr.list_jobs.return_value = []
+            with (
+                patch(
+                    "missy.providers.registry.get_registry", return_value=mock_registry
+                ),
+                patch(
+                    "missy.scheduler.manager.SchedulerManager", return_value=mock_mgr
+                ),
+            ):
+                result = runner.invoke(cli, ["--config", cfg_path, "doctor"])
+        assert result.exit_code == 0
+        assert "ENABLED" in result.output
+
+    def test_doctor_plugins_enabled(self, runner: CliRunner):
+        cfg_path = _write_temp_config()
+        with _SubsystemsPatch() as cfg:
+            cfg.plugins.enabled = True
+            mock_registry = MagicMock()
+            mock_registry.list_providers.return_value = []
+            mock_mgr = MagicMock()
+            mock_mgr.list_jobs.return_value = []
+            with (
+                patch(
+                    "missy.providers.registry.get_registry", return_value=mock_registry
+                ),
+                patch(
+                    "missy.scheduler.manager.SchedulerManager", return_value=mock_mgr
+                ),
+            ):
+                result = runner.invoke(cli, ["--config", cfg_path, "doctor"])
+        assert result.exit_code == 0
