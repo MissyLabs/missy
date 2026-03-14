@@ -24,7 +24,7 @@ All core phases implemented, parity gaps closed systematically.
 16. CLI (60+ commands via click + rich, including recover, evolve)
 17. Discord (WebSocket gateway, REST API, threads, slash commands, pairing, access control, voice, interactive setup wizard)
 18. Code self-evolution engine (propose, test, apply, rollback)
-19. Tests (3675 tests, 96% coverage)
+19. Tests (3775 tests, 97% coverage)
 20. Documentation (SECURITY.md, OPERATIONS.md, ARCHITECTURE.md, CONFIG_REFERENCE.md, DISCORD.md, TESTING.md, TROUBLESHOOTING.md, 10+ implementation docs)
 21. Audit artifacts (AUDIT_SECURITY.md, AUDIT_CONNECTIVITY.md)
 22. Test artifacts (TEST_RESULTS.md, TEST_EDGE_CASES.md, BUILD_RESULTS.md)
@@ -58,8 +58,8 @@ missy/                          # 123 Python source files
 
 ## Test Results
 
-- 3675 tests passing across 99 test files
-- 96% code coverage (up from 85% in previous session)
+- 3775 tests passing across 106 test files
+- 97% code coverage (up from 85% in previous session)
 - Unit, integration, policy, Discord, security, memory, agent, tools, skills, CLI, voice, scheduler tests
 
 ## Session 7 Additions (2026-03-14)
@@ -72,8 +72,9 @@ missy/                          # 123 Python source files
 - **Voice/Incus tests** (202 new): edge client (0%→79%), voice server (21%→improved), discord voice (55%→77%), ffmpeg (43%→100%), incus tools (78%→improved)
 - **Atspi/X11/runtime tests** (121 new): atspi tools (→98%), x11 tools (→100%), runtime (→98%)
 - **Discord voice/edge client tests** (37 new): discord voice (→88%), edge client (→98%)
-- **Total new tests**: 640 (from 3035 to 3675)
-- **Coverage**: 86% → 96%
+- **TTS/checkpoint/proactive/CLI/wizard/codex tests** (100 new): tts_speak, checkpoint, proactive triggers, CLI doctor/gateway/evolve, wizard guild policies, codex SSE parsing
+- **Total new tests**: 740 (from 3035 to 3775)
+- **Coverage**: 86% → 97%
 - **Code quality**: ruff format applied to all 147 files, contextlib.suppress, StrEnum, raise-from
 - **Coverage threshold**: Raised from 85% to 90% in pyproject.toml
 - **Audit reports**: Comprehensive AUDIT_SECURITY.md and AUDIT_CONNECTIVITY.md rewritten
@@ -81,7 +82,7 @@ missy/                          # 123 Python source files
 
 ## Remaining Tasks
 
-- Coverage target of 90% exceeded (96% achieved)
+- Coverage target of 90% exceeded (97% achieved)
 - Only 4 lint warnings remaining (cosmetic SIM102/SIM108)
 - Zero TODOs/FIXMEs in codebase
 - Discord multi-account support (P3, low demand)
