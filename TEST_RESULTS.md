@@ -8,24 +8,26 @@
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 4379 |
-| Passed | 4379 |
+| Total tests | 4465 |
+| Passed | 4465 |
 | Failed | 0 |
 | Skipped | 7 |
-| Warnings | 5 |
-| Duration | ~116s |
+| Warnings | 7 |
+| Duration | ~101s |
 | Source files | 123 |
-| Test files | 115 |
-| Coverage | 98.3% |
+| Test files | 124 |
+| Statements | 11505 |
+| Missed lines | 124 |
+| Coverage | 98.92% |
 
 ## Test Distribution
 
 | Test Area | Tests | Files |
 |-----------|-------|-------|
-| Agent (runtime, circuit breaker, context, done criteria, learnings, evolution, proactive) | ~520 | 18 |
-| Channels (CLI, Discord, Webhook, Voice, voice registry) | ~540 | 22 |
-| CLI commands | ~185 | 5 |
-| Config | ~30 | 2 |
+| Agent (runtime, circuit breaker, context, done criteria, learnings, evolution, proactive) | ~555 | 20 |
+| Channels (CLI, Discord, Webhook, Voice, voice registry) | ~580 | 24 |
+| CLI commands | ~192 | 6 |
+| Config | ~33 | 2 |
 | Core (session, events, exceptions) | ~30 | 3 |
 | Integration (policy enforcement, end-to-end) | ~107 | 2 |
 | Memory (SQLite, resilient, sessions, costs) | ~120 | 6 |
@@ -36,10 +38,19 @@
 | Scheduler (jobs, parser, manager) | ~100 | 7 |
 | Security (sanitizer, secrets, vault, censor, sandbox, fuzz) | ~216 | 6 |
 | Skills (registry, base, builtins) | ~80 | 3 |
-| Tools (registry, base, builtins, shell, incus, atspi, x11, file ops) | ~420 | 12 |
-| Unit (Discord channel, config, gateway, infrastructure) | ~212 | 8 |
+| Tools (registry, base, builtins, shell, incus, atspi, x11, browser, file ops) | ~442 | 13 |
+| Unit (Discord channel, config, gateway, infrastructure, coverage gaps) | ~233 | 10 |
 
-## Session 9 Additions (323 new tests)
+## Session 10 Additions (86 new tests)
+
+- **46 ruff lint errors fixed**: import ordering, SIM103/105/117, unused variables
+- **7 CLI coverage tests**: proactive callback success/fallback, doctor watchdog/voice/checkpoint exceptions
+- **22 browser tools tests**: display setup, session start/close, page helper, registry edge cases
+- **19 Discord voice tests**: start paths, join channel-id-not-found, start_listening body, watchdog exception, speech handler branches, resample boundary
+- **17 proactive tests**: watchdog import success path, threshold loop inner break, audit publish+exception, file handler with mocked watchdog
+- **21 remaining gap tests**: heartbeat loop fire, overnight active hours, webhook log_message, config watcher OSError, Discord voice callback closure, DM policy fallthrough, mention fallback, gateway heartbeat loop
+
+## Session 9 Additions (412 new tests)
 
 - **116 security fuzz tests**: unicode evasion, encoding bypass, large input stress, secret format variations, vault corruption recovery, hypothesis property-based invariants
 - **48 rate limiter stress tests**: concurrent acquire, token exhaustion, refill accuracy, burst handling, thread safety, hypothesis properties
@@ -47,11 +58,10 @@
 - **37 proactive manager tests**: schedule loop stop, file handler, threshold polling, observer stop exception, cooldown, confirmation gate
 - **18 voice registry tests**: atomic write failure, purge audio stat/unlink errors, non-file entry handling
 - **77 end-to-end integration tests**: security pipeline, policy enforcement chain, memory lifecycle, circuit breaker, cost tracker, tool registry, scheduler, audit events, config reload, multi-layer security
-
 - **54 incus tools coverage tests**: unreachable fallbacks, network attach/detach, volume operations, profile set/edit, project config, device validation, copy/move flags
 - **35 targeted coverage gap tests**: Discord REST error paths, config api_keys fallback, filesystem policy ValueError, skills registry audit, sandbox exceptions, voice command guards
 
 ## pytest output
 ```
-4379 passed, 7 skipped, 5 warnings in 115.87s
+4465 passed, 7 skipped, 7 warnings in 101.08s
 ```

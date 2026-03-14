@@ -1,7 +1,7 @@
 # TEST_EDGE_CASES
 
 - Updated: 2026-03-14
-- Total edge-case tests: 400+
+- Total edge-case tests: 490+
 
 ## Security Policy Edge Cases (tested)
 
@@ -45,7 +45,8 @@
 ## Scheduler Edge Cases (tested)
 
 - Active hours gating (job outside window skipped)
-- Overnight active hours window (22:00-06:00)
+- Overnight active hours window (22:00-06:00) — heartbeat and scheduler
+- Heartbeat loop fire on interval (stop.wait returns False)
 - Retry with exponential backoff after failure
 - Max attempts exhaustion (permanent failure)
 - Delete-after-run one-shot jobs
@@ -59,7 +60,9 @@
 ## Channel Edge Cases (tested)
 
 - Discord DM policy enforcement (allowlist)
+- Discord DM policy fallthrough for unknown policy values
 - Discord require-mention filtering
+- Discord mention fallback when own_id is falsy (uses mentions list)
 - Discord bot loop prevention (ignore own messages)
 - Discord credential message detection and deletion
 - Discord send retry with backoff
@@ -69,6 +72,13 @@
 - Discord reaction handling (reject, already-resolved, exception)
 - Discord config token resolution (direct, env var, vault)
 - Discord ffmpeg audio source creation and cleanup
+- Discord voice join with channel_id not found
+- Discord voice start_listening body (state, watchdog task creation)
+- Discord voice watchdog router exception handling
+- Discord voice speech handler: empty transcript, no agent callback, empty/cleaned response
+- Discord voice resample PCM boundary (last sample without right neighbour)
+- Discord gateway heartbeat loop with jitter and interval
+- Discord voice agent callback closure (run_in_executor)
 - Voice device pairing with PBKDF2 hashed tokens
 - Voice token regeneration invalidates old tokens
 - Voice channel start/stop lifecycle (double-start, double-stop)
@@ -76,6 +86,7 @@
 - Voice edge client WebSocket protocol (connect, auth, send audio, receive)
 - Voice server handler (registration, audio processing, TTS responses)
 - Webhook channel authentication
+- Webhook handler log_message debug output
 
 ## Memory Edge Cases (tested)
 
@@ -97,6 +108,15 @@
 - $ENV_VAR reference resolution
 - Missing vault key or env var error handling
 - Cryptography package unavailable
+
+## Browser Tool Edge Cases (tested)
+
+- Display environment setup (DISPLAY already set, X socket detection, fallback to :0)
+- Browser session start (playwright ImportError, successful launch)
+- Browser page management (auto-start on None context, reuse open pages, new page on all closed)
+- Browser session close (context.close error, pw.stop error, both errors simultaneously)
+- Browser page helper (get_or_create delegation, get_page forwarding)
+- Browser session registry (has_active_session, screenshot_active, close edge cases)
 
 ## Tool Edge Cases (tested)
 
@@ -128,6 +148,20 @@
 - EventBus unsubscribe for unregistered callback (no-op)
 - EventBus publish with raising subscriber (caught, logged, others still run)
 - AuditEvent naive timestamp validation
+
+## Config Edge Cases (tested)
+
+- Config hot-reload OSError on stat (file temporarily unavailable)
+- Doctor command: watchdog check exception, voice config parsing, checkpoint exception
+
+## Proactive Manager Edge Cases (tested)
+
+- Watchdog import success path (module reimport with mock watchdog)
+- Threshold loop inner break (stop event set between triggers)
+- Audit event publish and publish exception swallowing
+- File handler class with mocked watchdog (init, on_any_event, wiring)
+- Proactive callback success (AgentRuntime.run invocation)
+- Proactive callback fallback (AgentRuntime creation failure, logger-only stub)
 
 ## Code Evolution Edge Cases (tested)
 

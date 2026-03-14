@@ -8,13 +8,13 @@
 | Metric | Value |
 |--------|-------|
 | Source files | 123 Python modules |
-| Test files | 106 test files |
-| Total tests | 3775 |
-| Tests passing | 3775 |
+| Test files | 124 test files |
+| Total tests | 4465 |
+| Tests passing | 4465 |
 | Tests failing | 0 |
-| Tests skipped | 3 |
-| Coverage | 97% |
-| Lint errors | 0 critical (E501 line-length only) |
+| Tests skipped | 7 |
+| Coverage | 98.92% (124 lines missed of 11505) |
+| Lint errors | 0 |
 
 ## Architecture
 

@@ -24,7 +24,7 @@ All core phases implemented, parity gaps closed, comprehensive hardening applied
 16. CLI (60+ commands via click + rich, including recover, evolve)
 17. Discord (WebSocket gateway, REST API, threads, slash commands, pairing, access control, voice, interactive setup wizard)
 18. Code self-evolution engine (propose, test, apply, rollback)
-19. Tests (4379 tests, 98.3% coverage)
+19. Tests (4465 tests, 98.92% coverage)
 20. Documentation (SECURITY.md, OPERATIONS.md, ARCHITECTURE.md, CONFIG_REFERENCE.md, DISCORD.md, TESTING.md, TROUBLESHOOTING.md, 10+ implementation docs)
 21. Audit artifacts (AUDIT_SECURITY.md, AUDIT_CONNECTIVITY.md)
 22. Test artifacts (TEST_RESULTS.md, TEST_EDGE_CASES.md, BUILD_RESULTS.md)
@@ -58,14 +58,26 @@ missy/                          # 123 Python source files
 
 ## Test Results
 
-- 4379 tests passing across 115 test files
-- 98.3% code coverage (11505 statements, 196 missed)
+- 4465 tests passing across 124 test files
+- 98.92% code coverage (11505 statements, 124 missed)
 - Unit, integration, policy, Discord, security, memory, agent, tools, skills, CLI, voice, scheduler tests
 - 54+ property-based tests (hypothesis) for policy engines, security, and rate limiter
 - 116 security fuzz tests (unicode evasion, encoding bypass, vault corruption)
 - 48 rate limiter stress tests (concurrent, burst, thread safety)
 - 77 end-to-end integration tests
 - 92 security edge-case tests (injection, secrets, vault)
+
+## Session 10 Additions (2026-03-14)
+
+- **Lint cleanup**: Fixed all 46 ruff errors (import sorting, SIM103/105/117, unused variables)
+- **CLI coverage tests** (7 new): proactive callback success/fallback paths, doctor watchdog/voice/checkpoint exception handling
+- **Browser tools coverage tests** (22 new): display setup, session start/close, page helper, registry edge cases
+- **Discord voice coverage tests** (19 new): start full paths, join channel-id-not-found, start_listening body, watchdog router exception, speech handler branches (empty transcript, no callback, empty response), resample PCM boundary
+- **Proactive manager coverage tests** (17 new): watchdog import success path, threshold loop inner break, audit publish/exception, file handler with mocked watchdog
+- **Remaining gap coverage tests** (21 new): heartbeat loop fire, overnight active hours, webhook log_message, config watcher OSError, Discord voice callback closure, DM policy fallthrough, mention fallback, gateway heartbeat loop
+- **Test ordering fix**: Fixed proactive stub test collision with reimport tests
+- **Total new tests**: 86 (from 4379 to 4465)
+- **Coverage**: 98.3% → 98.92% (196 missed → 124 missed)
 
 ## Session 9 Additions (2026-03-14)
 
@@ -98,15 +110,19 @@ missy/                          # 123 Python source files
 
 ## Remaining Tasks
 
-- Coverage target of 90% exceeded (98% achieved)
+- Coverage target of 90% exceeded (98.92% achieved)
 - Zero ruff lint errors
 - Zero TODOs/FIXMEs in codebase
 - Discord multi-account support (P3, low demand)
 - Web UI / dashboard (P4, intentionally deferred)
 
+## Remaining Coverage Gaps (124 lines)
+
+Most remaining gaps are in complex async integration code (Discord run loop: 64 lines), platform-dependent tools (atspi: 7, incus: 9), and edge-client/wizard live interaction paths.
+
 ## Next Actions
 
 - Project is feature-complete, well-tested, and hardened
 - Consider mutation testing to verify test quality
-- Consider adding more incus tool coverage (currently 94%)
-- Consider adding CLI `run` command integration tests
+- Consider adding CLI `run` command Discord integration tests
+- Consider adding more atspi/incus tool coverage
