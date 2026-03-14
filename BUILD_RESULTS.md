@@ -9,10 +9,11 @@
 |--------|-------|
 | Source files | 123 Python modules |
 | Test files | 69 test files |
-| Total tests | 2500 |
-| Tests passing | 2500 |
+| Total tests | 2956 |
+| Tests passing | 2956 |
 | Tests failing | 0 |
-| Coverage | 70% |
+| Tests skipped | 2 |
+| Coverage | 85% |
 | Lint errors | 1 (false positive: pyatspi availability check) |
 
 ## Architecture

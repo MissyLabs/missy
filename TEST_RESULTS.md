@@ -8,14 +8,15 @@
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 2500 |
-| Passed | 2500 |
+| Total tests | 2956 |
+| Passed | 2956 |
 | Failed | 0 |
+| Skipped | 2 |
 | Warnings | 3 (deprecation) |
-| Duration | ~37s |
+| Duration | ~39s |
 | Source files | 123 |
-| Test files | 69 |
-| Coverage | 70% |
+| Test files | 78 |
+| Coverage | 85% |
 
 ## Test Distribution
 
@@ -40,5 +41,5 @@
 
 ## pytest output
 ```
-2500 passed, 3 warnings in 37.45s
+2956 passed, 2 skipped, 3 warnings in 38.99s
 ```

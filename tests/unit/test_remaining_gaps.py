@@ -708,7 +708,29 @@ class TestPcmToWav:
 
 
 class TestProactiveThresholdLoop:
-    """Exercise _threshold_loop via short-lived background thread."""
+    """Exercise _threshold_loop by patching _stop_event.wait to fire once then stop."""
+
+    def _run_loop_once(self, mgr, triggers, side_effects_fn):
+        """Run _threshold_loop in a thread where stop_event.wait fires once then stops."""
+        call_count = {"n": 0}
+
+        original_wait = mgr._stop_event.wait
+
+        def fake_wait(timeout=None):
+            call_count["n"] += 1
+            if call_count["n"] >= 2:
+                return True  # stop the loop
+            side_effects_fn()
+            return False  # first iteration: don't stop yet
+
+        with patch.object(mgr._stop_event, "wait", side_effect=fake_wait):
+            t = threading.Thread(
+                target=mgr._threshold_loop,
+                args=(triggers,),
+                daemon=True,
+            )
+            t.start()
+            t.join(timeout=3)
 
     def test_disk_threshold_fires_via_loop(self):
         from missy.agent.proactive import ProactiveTrigger, ProactiveManager
@@ -725,7 +747,7 @@ class TestProactiveThresholdLoop:
             disk_path="/",
             disk_threshold_pct=1.0,  # will exceed 1%
             cooldown_seconds=0,
-            interval_seconds=1,
+            interval_seconds=5,
         )
         mgr = ProactiveManager(triggers=[trigger], agent_callback=cb)
 
@@ -733,24 +755,18 @@ class TestProactiveThresholdLoop:
         mock_usage.used = 90
         mock_usage.total = 100  # 90% > 1%
 
+        def setup_mocks():
+            pass
+
         with patch("shutil.disk_usage", return_value=mock_usage):
-            t = threading.Thread(
-                target=mgr._threshold_loop,
-                args=([trigger],),
-                daemon=True,
-            )
-            mgr._stop_event.clear()
-            t.start()
-            time.sleep(0.05)
-            mgr._stop_event.set()
-            t.join(timeout=2)
+            self._run_loop_once(mgr, [trigger], setup_mocks)
 
         with lock:
             assert counter["n"] >= 1
 
     def test_load_threshold_fires_via_loop(self):
         from missy.agent.proactive import ProactiveTrigger, ProactiveManager
-        import os
+        import os as _os
         counter = {"n": 0}
         lock = threading.Lock()
 
@@ -763,24 +779,15 @@ class TestProactiveThresholdLoop:
             trigger_type="load_threshold",
             load_threshold=0.001,  # nearly zero — will always exceed
             cooldown_seconds=0,
-            interval_seconds=1,
+            interval_seconds=5,
         )
         mgr = ProactiveManager(triggers=[trigger], agent_callback=cb)
 
         with (
-            patch.object(os, "getloadavg", return_value=(8.0, 4.0, 2.0)),
-            patch.object(os, "cpu_count", return_value=1),
+            patch.object(_os, "getloadavg", return_value=(8.0, 4.0, 2.0)),
+            patch.object(_os, "cpu_count", return_value=1),
         ):
-            t = threading.Thread(
-                target=mgr._threshold_loop,
-                args=([trigger],),
-                daemon=True,
-            )
-            mgr._stop_event.clear()
-            t.start()
-            time.sleep(0.05)
-            mgr._stop_event.set()
-            t.join(timeout=2)
+            self._run_loop_once(mgr, [trigger], lambda: None)
 
         with lock:
             assert counter["n"] >= 1
@@ -793,21 +800,12 @@ class TestProactiveThresholdLoop:
             disk_path="/bad/path",
             disk_threshold_pct=1.0,
             cooldown_seconds=0,
-            interval_seconds=1,
+            interval_seconds=5,
         )
         mgr = ProactiveManager(triggers=[trigger], agent_callback=lambda p, s: None)
 
         with patch("shutil.disk_usage", side_effect=OSError("no such path")):
-            t = threading.Thread(
-                target=mgr._threshold_loop,
-                args=([trigger],),
-                daemon=True,
-            )
-            mgr._stop_event.clear()
-            t.start()
-            time.sleep(0.05)
-            mgr._stop_event.set()
-            t.join(timeout=2)
+            self._run_loop_once(mgr, [trigger], lambda: None)
         # Thread terminated without propagating the exception — test passes implicitly
 
 
@@ -824,21 +822,25 @@ class TestProactiveScheduleLoop:
         trigger = ProactiveTrigger(
             name="sched-loop",
             trigger_type="schedule",
-            interval_seconds=1,
+            interval_seconds=5,
             cooldown_seconds=0,
         )
         mgr = ProactiveManager(triggers=[trigger], agent_callback=cb)
-        mgr._stop_event.clear()
 
-        t = threading.Thread(
-            target=mgr._schedule_loop,
-            args=(trigger,),
-            daemon=True,
-        )
-        t.start()
-        time.sleep(0.05)
-        mgr._stop_event.set()
-        t.join(timeout=2)
+        call_count = {"n": 0}
+
+        def fake_wait(timeout=None):
+            call_count["n"] += 1
+            return call_count["n"] >= 2  # stop after second call
+
+        with patch.object(mgr._stop_event, "wait", side_effect=fake_wait):
+            t = threading.Thread(
+                target=mgr._schedule_loop,
+                args=(trigger,),
+                daemon=True,
+            )
+            t.start()
+            t.join(timeout=3)
 
         with lock:
             assert counter["n"] >= 1
@@ -1141,7 +1143,7 @@ class TestOllamaCompleteWithToolsErrors:
                 [Message(role="user", content="go")], tools=[]
             )
 
-        assert result.tool_calls[0].id == "my_tool"  # first 8 chars of "my_tool_name"
+        assert result.tool_calls[0].id == "my_tool_"  # first 8 chars of "my_tool_name"
 
 
 class TestOllamaGetToolSchemaNoGetSchema:
