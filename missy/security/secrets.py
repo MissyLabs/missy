@@ -32,13 +32,19 @@ class SecretsDetector:
     SECRET_PATTERNS: dict[str, str] = {
         "api_key": r'(?i)(api[_-]?key|apikey)["\s:=]+[A-Za-z0-9_\-]{20,}',
         "aws_key": r"AKIA[0-9A-Z]{16}",
-        "private_key": r"-----BEGIN (RSA |EC )?PRIVATE KEY-----",
-        "github_token": r"ghp_[A-Za-z0-9]{36}",
+        "aws_secret": r'(?i)(aws_secret_access_key)["\s:=]+[A-Za-z0-9/+=]{40}',
+        "private_key": r"-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----",
+        "github_token": r"gh[ps]_[A-Za-z0-9]{36}",
+        "github_oauth": r"gho_[A-Za-z0-9]{36}",
         "password": r'(?i)(password|passwd|pwd)["\s:=]+\S{8,}',
         "token": r'(?i)(token|secret)["\s:=]+[A-Za-z0-9_\-]{20,}',
-        "stripe_key": r"sk_(live|test)_[A-Za-z0-9]{24,}",
+        "stripe_key": r"[sr]k_(live|test)_[A-Za-z0-9]{24,}",
         "slack_token": r"xox[baprs]-[A-Za-z0-9\-]{10,}",
         "jwt": r"eyJ[A-Za-z0-9_\-]+\.eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+",
+        "anthropic_key": r"sk-ant-[A-Za-z0-9_\-]{20,}",
+        "openai_key": r"sk-[A-Za-z0-9]{20,}",
+        "gcp_key": r"AIza[A-Za-z0-9_\-]{35}",
+        "discord_token": r"[MN][A-Za-z0-9]{23,}\.[A-Za-z0-9_\-]{6}\.[A-Za-z0-9_\-]{27,}",
     }
 
     def __init__(self) -> None:

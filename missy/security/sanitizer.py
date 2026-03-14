@@ -57,6 +57,15 @@ class InputSanitizer:
         r"<\|im_start\|>",
         r"<\|system\|>",
         r"override\s+(your\s+)?(previous\s+)?instructions?",
+        # Roleplay / jailbreak patterns
+        r"do\s+anything\s+now",
+        r"developer\s+mode\s+(enabled|activated|on)",
+        r"jailbreak(ed)?",
+        r"bypass\s+(your\s+)?(safety|security|filter|restriction)",
+        # Delimiter injection (attempt to close/reopen system prompt)
+        r"</?(system|user|assistant)\s*>",
+        r"\[/?INST\]",
+        r"<\|im_end\|>",
     ]
 
     def __init__(self) -> None:
