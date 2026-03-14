@@ -1,264 +1,104 @@
 # AUDIT_SECURITY
 
-- Timestamp: 2026-03-12 23:54:00
+- Timestamp: 2026-03-14
+- Auditor: Automated build analysis
 
-## Expected security artifacts
-- present: SECURITY.md
-- present: OPERATIONS.md
-- present: ARCHITECTURE.md
-- present: CONFIG_REFERENCE.md
-- present: DISCORD.md
+## Security Architecture Summary
 
-## Repository grep
-```
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:252:          "name": "test_emits_audit_event_per_checkpoint",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:253:          "fullName": "tests/agent/test_checkpoint.py::TestScanForRecovery::test_emits_audit_event_per_checkpoint",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:257:          "name": "test_audit_event_has_correct_category",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:258:          "fullName": "tests/agent/test_checkpoint.py::TestScanForRecovery::test_audit_event_has_correct_category",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:262:          "name": "test_audit_event_detail_contains_action",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:263:          "fullName": "tests/agent/test_checkpoint.py::TestScanForRecovery::test_audit_event_detail_contains_action",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:297:          "name": "test_anthropic_sonnet",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:298:          "fullName": "tests/agent/test_cost_tracker.py::TestLookupPricing::test_anthropic_sonnet",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:302:          "name": "test_anthropic_opus",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:303:          "fullName": "tests/agent/test_cost_tracker.py::TestLookupPricing::test_anthropic_opus",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:307:          "name": "test_anthropic_haiku",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:308:          "fullName": "tests/agent/test_cost_tracker.py::TestLookupPricing::test_anthropic_haiku",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:312:          "name": "test_openai_gpt4o",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:313:          "fullName": "tests/agent/test_cost_tracker.py::TestLookupPricing::test_openai_gpt4o",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:317:          "name": "test_openai_gpt4o_mini",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:318:          "fullName": "tests/agent/test_cost_tracker.py::TestLookupPricing::test_openai_gpt4o_mini",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:622:          "name": "test_emit_audit_on_fire",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:623:          "fullName": "tests/agent/test_proactive.py::TestFireTriggerUnit::test_emit_audit_on_fire",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:627:          "name": "test_emit_audit_deny_when_no_gate",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:628:          "fullName": "tests/agent/test_proactive.py::TestFireTriggerUnit::test_emit_audit_deny_when_no_gate",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:742:          "name": "test_default_provider_is_anthropic",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:743:          "fullName": "tests/agent/test_runtime.py::TestAgentConfig::test_default_provider_is_anthropic",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:892:          "name": "test_check_budget_emits_audit_event",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:893:          "fullName": "tests/agent/test_runtime_enhancements.py::TestCheckBudget::test_check_budget_emits_audit_event",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1069:      "moduleId": "tests/channels/test_discord_credential_delete.py",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1073:          "fullName": "tests/channels/test_discord_credential_delete.py::TestDeleteMessage::test_returns_true_on_204",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1078:          "fullName": "tests/channels/test_discord_credential_delete.py::TestDeleteMessage::test_returns_false_on_403",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1083:          "fullName": "tests/channels/test_discord_credential_delete.py::TestDeleteMessage::test_returns_false_on_404",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1088:          "fullName": "tests/channels/test_discord_credential_delete.py::TestDeleteMessage::test_returns_false_on_exception",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1093:          "fullName": "tests/channels/test_discord_credential_delete.py::TestDeleteMessage::test_raises_for_status_on_unexpected_code",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1098:          "fullName": "tests/channels/test_discord_credential_delete.py::TestHandleMessageCredentialDetection::test_secret_message_is_dropped",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1103:          "fullName": "tests/channels/test_discord_credential_delete.py::TestHandleMessageCredentialDetection::test_secret_message_triggers_delete",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1108:          "fullName": "tests/channels/test_discord_credential_delete.py::TestHandleMessageCredentialDetection::test_secret_message_sends_warning_reply",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1112:          "name": "test_audit_event_contains_message_deleted_true",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1113:          "fullName": "tests/channels/test_discord_credential_delete.py::TestHandleMessageCredentialDetection::test_audit_event_contains_message_deleted_true",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1117:          "name": "test_audit_event_message_deleted_false_on_delete_failure",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1118:          "fullName": "tests/channels/test_discord_credential_delete.py::TestHandleMessageCredentialDetection::test_audit_event_message_deleted_false_on_delete_failure",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1123:          "fullName": "tests/channels/test_discord_credential_delete.py::TestHandleMessageCredentialDetection::test_non_secret_message_is_enqueued_normally",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1128:          "fullName": "tests/channels/test_discord_credential_delete.py::TestHandleMessageCredentialDetection::test_secrets_detection_error_does_not_drop_message",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1133:          "fullName": "tests/channels/test_discord_credential_delete.py::TestHandleMessageCredentialDetection::test_own_bot_message_is_filtered_before_credential_check",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1217:          "name": "test_root_help_lists_skills_command",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1218:          "fullName": "tests/cli/test_main.py::TestHelp::test_root_help_lists_skills_command",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1222:          "name": "test_root_help_lists_plugins_command",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1223:          "fullName": "tests/cli/test_main.py::TestHelp::test_root_help_lists_plugins_command",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1232:          "name": "test_root_help_lists_audit_command",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1233:          "fullName": "tests/cli/test_main.py::TestHelp::test_root_help_lists_audit_command",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1247:          "name": "test_audit_help_exits_zero",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1248:          "fullName": "tests/cli/test_main.py::TestHelp::test_audit_help_exits_zero",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1277:          "name": "test_init_audit_file_created",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1278:          "fullName": "tests/cli/test_main.py::TestInit::test_init_audit_file_created",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1327:          "name": "test_skills_exits_zero_with_no_skills",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1328:          "fullName": "tests/cli/test_main.py::TestSkills::test_skills_exits_zero_with_no_skills",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1332:          "name": "test_skills_no_skills_message",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1333:          "fullName": "tests/cli/test_main.py::TestSkills::test_skills_no_skills_message",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1337:          "name": "test_skills_lists_registered_skills",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1338:          "fullName": "tests/cli/test_main.py::TestSkills::test_skills_lists_registered_skills",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1342:          "name": "test_plugins_exits_zero",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1343:          "fullName": "tests/cli/test_main.py::TestPlugins::test_plugins_exits_zero",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1347:          "name": "test_plugins_shows_disabled_status_by_default",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1348:          "fullName": "tests/cli/test_main.py::TestPlugins::test_plugins_shows_disabled_status_by_default",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1352:          "name": "test_plugins_no_plugins_loaded_message",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1353:          "fullName": "tests/cli/test_main.py::TestPlugins::test_plugins_no_plugins_loaded_message",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1357:          "name": "test_plugins_displays_loaded_plugin",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1358:          "fullName": "tests/cli/test_main.py::TestPlugins::test_plugins_displays_loaded_plugin",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1382:          "name": "test_audit_security_exits_zero_no_violations",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1383:          "fullName": "tests/cli/test_main.py::TestAuditSecurity::test_audit_security_exits_zero_no_violations",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1387:          "name": "test_audit_security_no_violations_message",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1388:          "fullName": "tests/cli/test_main.py::TestAuditSecurity::test_audit_security_no_violations_message",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1392:          "name": "test_audit_security_shows_violations",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1393:          "fullName": "tests/cli/test_main.py::TestAuditSecurity::test_audit_security_shows_violations",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1397:          "name": "test_audit_security_respects_limit_option",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1398:          "fullName": "tests/cli/test_main.py::TestAuditSecurity::test_audit_security_respects_limit_option",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1402:          "name": "test_audit_security_help_exits_zero",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1403:          "fullName": "tests/cli/test_main.py::TestAuditSecurity::test_audit_security_help_exits_zero",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1427:          "name": "test_network_default_deny_is_true",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1428:          "fullName": "tests/config/test_settings.py::TestGetDefaultConfig::test_network_default_deny_is_true",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1447:          "name": "test_plugins_disabled_by_default",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1448:          "fullName": "tests/config/test_settings.py::TestGetDefaultConfig::test_plugins_disabled_by_default",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1452:          "name": "test_plugins_allowed_list_empty",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1453:          "fullName": "tests/config/test_settings.py::TestGetDefaultConfig::test_plugins_allowed_list_empty",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1472:          "name": "test_audit_log_path_is_string",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1473:          "fullName": "tests/config/test_settings.py::TestGetDefaultConfig::test_audit_log_path_is_string",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1487:          "name": "test_minimal_yaml_audit_log_path",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1488:          "fullName": "tests/config/test_settings.py::TestLoadConfigMinimal::test_minimal_yaml_audit_log_path",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1497:          "name": "test_default_deny_false",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1498:          "fullName": "tests/config/test_settings.py::TestLoadConfigNetwork::test_default_deny_false",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1622:          "name": "test_network_policy_defaults",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1623:          "fullName": "tests/config/test_settings.py::TestDataclasses::test_network_policy_defaults",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1627:          "name": "test_network_policy_custom_values",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1628:          "fullName": "tests/config/test_settings.py::TestDataclasses::test_network_policy_custom_values",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1632:          "name": "test_filesystem_policy_defaults",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1633:          "fullName": "tests/config/test_settings.py::TestDataclasses::test_filesystem_policy_defaults",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1637:          "name": "test_filesystem_policy_custom_values",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1638:          "fullName": "tests/config/test_settings.py::TestDataclasses::test_filesystem_policy_custom_values",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1642:          "name": "test_shell_policy_defaults",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1643:          "fullName": "tests/config/test_settings.py::TestDataclasses::test_shell_policy_defaults",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1647:          "name": "test_shell_policy_custom_values",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1648:          "fullName": "tests/config/test_settings.py::TestDataclasses::test_shell_policy_custom_values",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1652:          "name": "test_plugin_policy_defaults",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1653:          "fullName": "tests/config/test_settings.py::TestDataclasses::test_plugin_policy_defaults",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1657:          "name": "test_plugin_policy_custom_values",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1658:          "fullName": "tests/config/test_settings.py::TestDataclasses::test_plugin_policy_custom_values",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1677:          "name": "test_network_policy_list_independence",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1678:          "fullName": "tests/config/test_settings.py::TestDataclasses::test_network_policy_list_independence",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1682:          "name": "test_shell_policy_list_independence",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1683:          "fullName": "tests/config/test_settings.py::TestDataclasses::test_shell_policy_list_independence",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1799:      "moduleId": "tests/integration/test_policy_enforcement.py",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1802:          "name": "test_blocked_domain_raises_when_default_deny",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1803:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_blocked_domain_raises_when_default_deny",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1807:          "name": "test_blocked_domain_emits_deny_audit_event",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1808:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_blocked_domain_emits_deny_audit_event",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1813:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_another_blocked_domain",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1817:          "name": "test_blocked_cidr_raises_for_ip_outside_allowlist",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1818:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_blocked_cidr_raises_for_ip_outside_allowlist",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1823:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_blocked_cidr_172_not_in_192_block",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1827:          "name": "test_blocked_cidr_deny_event_carries_ip",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1828:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_blocked_cidr_deny_event_carries_ip",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1833:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_allowed_cidr_passes_for_ip_inside_block",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1838:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_allowed_cidr_emits_allow_event",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1843:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_allowed_cidr_last_octet_boundary",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1848:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_allowed_multiple_cidrs_second_matches",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1853:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_private_localhost_allowed_via_cidr",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1858:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_wildcard_domain_allows_subdomain",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1863:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_wildcard_domain_allows_root_domain",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1868:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_wildcard_domain_allows_deep_subdomain",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1873:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_wildcard_domain_blocks_different_root",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1878:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_exact_domain_match_allowed",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1883:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_exact_domain_blocks_subdomains",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1888:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_wildcard_domain_emits_allow_event_with_rule",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1893:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_allowed_host_exact_match",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1898:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_default_allow_mode_permits_anything",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1903:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_default_allow_mode_emits_allow_event",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1908:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_empty_host_raises_value_error",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1913:          "fullName": "tests/integration/test_policy_enforcement.py::TestNetworkPolicyEnforcement::test_session_and_task_ids_recorded_in_event",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1918:          "fullName": "tests/integration/test_policy_enforcement.py::TestFilesystemPolicyEnforcement::test_write_to_etc_passwd_is_blocked",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1923:          "fullName": "tests/integration/test_policy_enforcement.py::TestFilesystemPolicyEnforcement::test_write_to_system_binary_is_blocked",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1928:          "fullName": "tests/integration/test_policy_enforcement.py::TestFilesystemPolicyEnforcement::test_write_outside_workspace_is_blocked",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1932:          "name": "test_write_denied_emits_deny_audit_event",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1933:          "fullName": "tests/integration/test_policy_enforcement.py::TestFilesystemPolicyEnforcement::test_write_denied_emits_deny_audit_event",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1938:          "fullName": "tests/integration/test_policy_enforcement.py::TestFilesystemPolicyEnforcement::test_path_traversal_attempt_is_blocked",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1943:          "fullName": "tests/integration/test_policy_enforcement.py::TestFilesystemPolicyEnforcement::test_write_inside_workspace_is_allowed",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1948:          "fullName": "tests/integration/test_policy_enforcement.py::TestFilesystemPolicyEnforcement::test_write_to_workspace_root_is_allowed",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1952:          "name": "test_write_allowed_emits_allow_audit_event",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1953:          "fullName": "tests/integration/test_policy_enforcement.py::TestFilesystemPolicyEnforcement::test_write_allowed_emits_allow_audit_event",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1958:          "fullName": "tests/integration/test_policy_enforcement.py::TestFilesystemPolicyEnforcement::test_read_from_etc_passwd_is_blocked",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1962:          "name": "test_read_denied_emits_deny_audit_event",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1963:          "fullName": "tests/integration/test_policy_enforcement.py::TestFilesystemPolicyEnforcement::test_read_denied_emits_deny_audit_event",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1968:          "fullName": "tests/integration/test_policy_enforcement.py::TestFilesystemPolicyEnforcement::test_read_from_workspace_is_allowed",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1973:          "fullName": "tests/integration/test_policy_enforcement.py::TestFilesystemPolicyEnforcement::test_multiple_allowed_read_paths",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1978:          "fullName": "tests/integration/test_policy_enforcement.py::TestFilesystemPolicyEnforcement::test_empty_allowed_write_paths_denies_all",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1983:          "fullName": "tests/integration/test_policy_enforcement.py::TestFilesystemPolicyEnforcement::test_empty_allowed_read_paths_denies_all",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1988:          "fullName": "tests/integration/test_policy_enforcement.py::TestFilesystemPolicyEnforcement::test_session_and_task_ids_in_write_event",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1993:          "fullName": "tests/integration/test_policy_enforcement.py::TestShellPolicyEnforcement::test_shell_disabled_blocks_all_commands",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:1998:          "fullName": "tests/integration/test_policy_enforcement.py::TestShellPolicyEnforcement::test_shell_disabled_blocks_even_allowed_commands",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2002:          "name": "test_shell_disabled_emits_deny_event_with_shell_disabled_rule",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2003:          "fullName": "tests/integration/test_policy_enforcement.py::TestShellPolicyEnforcement::test_shell_disabled_emits_deny_event_with_shell_disabled_rule",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2008:          "fullName": "tests/integration/test_policy_enforcement.py::TestShellPolicyEnforcement::test_shell_disabled_blocks_rm_rf",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2013:          "fullName": "tests/integration/test_policy_enforcement.py::TestShellPolicyEnforcement::test_shell_disabled_blocks_empty_command",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2017:          "name": "test_default_shell_policy_is_disabled",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2018:          "fullName": "tests/integration/test_policy_enforcement.py::TestShellPolicyEnforcement::test_default_shell_policy_is_disabled",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2023:          "fullName": "tests/integration/test_policy_enforcement.py::TestShellPolicyEnforcement::test_allowed_command_git_passes",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2028:          "fullName": "tests/integration/test_policy_enforcement.py::TestShellPolicyEnforcement::test_allowed_command_with_flags_passes",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2033:          "fullName": "tests/integration/test_policy_enforcement.py::TestShellPolicyEnforcement::test_unlisted_command_is_denied_when_shell_enabled",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2037:          "name": "test_empty_allowlist_denies_everything_when_enabled",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2038:          "fullName": "tests/integration/test_policy_enforcement.py::TestShellPolicyEnforcement::test_empty_allowlist_denies_everything_when_enabled",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2043:          "fullName": "tests/integration/test_policy_enforcement.py::TestShellPolicyEnforcement::test_allowed_command_emits_allow_event",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2047:          "name": "test_denied_command_emits_deny_event",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2048:          "fullName": "tests/integration/test_policy_enforcement.py::TestShellPolicyEnforcement::test_denied_command_emits_deny_event",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2053:          "fullName": "tests/integration/test_policy_enforcement.py::TestShellPolicyEnforcement::test_absolute_path_program_matches_basename",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2058:          "fullName": "tests/integration/test_policy_enforcement.py::TestShellPolicyEnforcement::test_similar_name_not_matched",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2063:          "fullName": "tests/integration/test_policy_enforcement.py::TestShellPolicyEnforcement::test_malformed_quoted_command_denied",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2068:          "fullName": "tests/integration/test_policy_enforcement.py::TestShellPolicyEnforcement::test_whitespace_only_command_denied",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2073:          "fullName": "tests/integration/test_policy_enforcement.py::TestShellPolicyEnforcement::test_multiple_allowed_commands",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2077:          "name": "test_plugins_blocked_when_globally_disabled",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2078:          "fullName": "tests/integration/test_policy_enforcement.py::TestPluginPolicyEnforcement::test_plugins_blocked_when_globally_disabled",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2082:          "name": "test_default_config_blocks_plugins",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2083:          "fullName": "tests/integration/test_policy_enforcement.py::TestPluginPolicyEnforcement::test_default_config_blocks_plugins",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2087:          "name": "test_disabled_plugins_emit_deny_event",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2088:          "fullName": "tests/integration/test_policy_enforcement.py::TestPluginPolicyEnforcement::test_disabled_plugins_emit_deny_event",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2092:          "name": "test_plugin_not_in_allowlist_is_blocked",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2093:          "fullName": "tests/integration/test_policy_enforcement.py::TestPluginPolicyEnforcement::test_plugin_not_in_allowlist_is_blocked",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2097:          "name": "test_plugin_not_in_allowlist_emits_deny_event",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2098:          "fullName": "tests/integration/test_policy_enforcement.py::TestPluginPolicyEnforcement::test_plugin_not_in_allowlist_emits_deny_event",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2102:          "name": "test_allowed_plugin_loads_successfully",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2103:          "fullName": "tests/integration/test_policy_enforcement.py::TestPluginPolicyEnforcement::test_allowed_plugin_loads_successfully",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2107:          "name": "test_allowed_plugin_is_enabled_after_load",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2108:          "fullName": "tests/integration/test_policy_enforcement.py::TestPluginPolicyEnforcement::test_allowed_plugin_is_enabled_after_load",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2112:          "name": "test_allowed_plugin_load_emits_allow_event",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2113:          "fullName": "tests/integration/test_policy_enforcement.py::TestPluginPolicyEnforcement::test_allowed_plugin_load_emits_allow_event",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2117:          "name": "test_execute_allowed_plugin_returns_result",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2118:          "fullName": "tests/integration/test_policy_enforcement.py::TestPluginPolicyEnforcement::test_execute_allowed_plugin_returns_result",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2122:          "name": "test_execute_unloaded_plugin_raises_policy_violation",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2123:          "fullName": "tests/integration/test_policy_enforcement.py::TestPluginPolicyEnforcement::test_execute_unloaded_plugin_raises_policy_violation",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2128:          "fullName": "tests/integration/test_policy_enforcement.py::TestPolicyEngineFacade::test_facade_network_allow",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2132:          "name": "test_facade_network_deny",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2133:          "fullName": "tests/integration/test_policy_enforcement.py::TestPolicyEngineFacade::test_facade_network_deny",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2138:          "fullName": "tests/integration/test_policy_enforcement.py::TestPolicyEngineFacade::test_facade_filesystem_write_allow",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2142:          "name": "test_facade_filesystem_write_deny",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2143:          "fullName": "tests/integration/test_policy_enforcement.py::TestPolicyEngineFacade::test_facade_filesystem_write_deny",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2148:          "fullName": "tests/integration/test_policy_enforcement.py::TestPolicyEngineFacade::test_facade_shell_allow",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2152:          "name": "test_facade_shell_deny",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2153:          "fullName": "tests/integration/test_policy_enforcement.py::TestPolicyEngineFacade::test_facade_shell_deny",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2158:          "fullName": "tests/integration/test_policy_enforcement.py::TestPolicyEngineFacade::test_facade_init_and_get_singleton",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2414:      "moduleId": "tests/observability/test_audit_logger.py",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2418:          "fullName": "tests/observability/test_audit_logger.py::TestAuditLoggerInit::test_creates_parent_directory",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2423:          "fullName": "tests/observability/test_audit_logger.py::TestAuditLoggerInit::test_log_path_set_correctly",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2428:          "fullName": "tests/observability/test_audit_logger.py::TestHandleEvent::test_event_written_to_file",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2433:          "fullName": "tests/observability/test_audit_logger.py::TestHandleEvent::test_multiple_events_appended",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2438:          "fullName": "tests/observability/test_audit_logger.py::TestHandleEvent::test_record_contains_all_fields",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2443:          "fullName": "tests/observability/test_audit_logger.py::TestHandleEvent::test_detail_dict_is_preserved",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2448:          "fullName": "tests/observability/test_audit_logger.py::TestHandleEvent::test_existing_subscribers_still_called",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2453:          "fullName": "tests/observability/test_audit_logger.py::TestGetRecentEvents::test_returns_empty_when_file_missing",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2458:          "fullName": "tests/observability/test_audit_logger.py::TestGetRecentEvents::test_returns_all_events_within_limit",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2463:          "fullName": "tests/observability/test_audit_logger.py::TestGetRecentEvents::test_limit_is_applied_newest_first",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2468:          "fullName": "tests/observability/test_audit_logger.py::TestGetRecentEvents::test_result_is_list_of_dicts",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2472:          "name": "test_returns_only_deny_events",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2473:          "fullName": "tests/observability/test_audit_logger.py::TestGetPolicyViolations::test_returns_only_deny_events",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2478:          "fullName": "tests/observability/test_audit_logger.py::TestGetPolicyViolations::test_returns_empty_when_no_denies",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2483:          "fullName": "tests/observability/test_audit_logger.py::TestGetPolicyViolations::test_limit_is_applied",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2488:          "fullName": "tests/observability/test_audit_logger.py::TestGetPolicyViolations::test_returns_empty_when_file_missing",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2493:          "fullName": "tests/observability/test_audit_logger.py::TestGetPolicyViolations::test_violations_returned_in_chronological_order",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2497:          "name": "test_init_audit_logger_returns_audit_logger",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2498:          "fullName": "tests/observability/test_audit_logger.py::TestSingleton::test_init_audit_logger_returns_audit_logger",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2502:          "name": "test_get_audit_logger_returns_same_instance",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2503:          "fullName": "tests/observability/test_audit_logger.py::TestSingleton::test_get_audit_logger_returns_same_instance",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2507:          "name": "test_get_audit_logger_raises_before_init",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2508:          "fullName": "tests/observability/test_audit_logger.py::TestSingleton::test_get_audit_logger_raises_before_init",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2514:      "moduleId": "tests/plugins/test_base.py",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2518:          "fullName": "tests/plugins/test_base.py::TestPluginPermissionsDefaults::test_all_flags_default_false",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2523:          "fullName": "tests/plugins/test_base.py::TestPluginPermissionsDefaults::test_allowed_hosts_defaults_empty",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2528:          "fullName": "tests/plugins/test_base.py::TestPluginPermissionsDefaults::test_allowed_paths_defaults_empty",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2533:          "fullName": "tests/plugins/test_base.py::TestPluginPermissionsDefaults::test_can_set_all_fields",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2538:          "fullName": "tests/plugins/test_base.py::TestBasePlugin::test_default_enabled_is_false",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2543:          "fullName": "tests/plugins/test_base.py::TestBasePlugin::test_default_version",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2548:          "fullName": "tests/plugins/test_base.py::TestBasePlugin::test_initialize_returns_bool",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2553:          "fullName": "tests/plugins/test_base.py::TestBasePlugin::test_execute_returns_value",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2558:          "fullName": "tests/plugins/test_base.py::TestBasePlugin::test_get_manifest_keys",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2563:          "fullName": "tests/plugins/test_base.py::TestBasePlugin::test_get_manifest_values",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2568:          "fullName": "tests/plugins/test_base.py::TestBasePlugin::test_get_manifest_permissions_dict",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2573:          "fullName": "tests/plugins/test_base.py::TestBasePlugin::test_abstract_base_cannot_be_instantiated",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2579:      "moduleId": "tests/plugins/test_loader.py",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2583:          "fullName": "tests/plugins/test_loader.py::TestLoadPlugin::test_load_succeeds_when_allowed",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2588:          "fullName": "tests/plugins/test_loader.py::TestLoadPlugin::test_load_sets_enabled_true",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2592:          "name": "test_load_denied_when_plugins_globally_disabled",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2593:          "fullName": "tests/plugins/test_loader.py::TestLoadPlugin::test_load_denied_when_plugins_globally_disabled",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2598:          "fullName": "tests/plugins/test_loader.py::TestLoadPlugin::test_load_denied_when_not_in_allowed_list",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2603:          "fullName": "tests/plugins/test_loader.py::TestLoadPlugin::test_load_returns_false_when_init_fails",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2608:          "fullName": "tests/plugins/test_loader.py::TestLoadPlugin::test_load_returns_false_when_init_crashes",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2612:          "name": "test_load_denied_emits_deny_audit_event",
-/home/bmerriam/git/missy/.claude/tdd-guard/data/test.json:2613:          "fullName": "tests/plugins/test_loader.py::TestLoadPlugin::test_load_denied_emits_deny_audit_event",
-```
+Missy implements defense-in-depth with 6 security layers:
+
+1. **Input Sanitization** — 13+ prompt injection pattern detectors
+2. **Secrets Detection** — 9 credential patterns (API keys, JWTs, AWS, etc.)
+3. **Output Censoring** — Redacts secrets from all outbound responses
+4. **Policy Enforcement** — 3-layer default-deny (network, filesystem, shell)
+5. **Encrypted Vault** — ChaCha20-Poly1305 key-value store
+6. **Docker Sandbox** — Optional container isolation for shell commands
+
+## Threat Model Coverage
+
+| Threat | Defense | Test Coverage |
+|---|---|---|
+| Prompt injection | InputSanitizer (13 patterns) | 30+ tests |
+| Plugin abuse | Plugin allowlist + disabled by default | 30+ tests |
+| Data exfiltration | Default-deny network + output censoring | 120+ policy tests |
+| SSRF | PolicyHTTPClient blocks unauthorized outbound | 50+ gateway tests |
+| Scheduler abuse | Active hours, max_jobs, policy enforcement | 100+ scheduler tests |
+| Secrets leakage | SecretsDetector + SecretCensor on all output | 55+ security tests |
+| Tool abuse | Tool registry policy checks + approval gate | 280+ tool tests |
+| Channel impersonation | Discord access control (DM/guild/role) | 440+ channel tests |
+
+## Policy Engine Tests
+
+### Network Policy
+
+- Default deny blocks all traffic when no allowlists configured
+- CIDR allowlist correctly matches IP ranges (10.0.0.0/8, 192.168.0.0/16)
+- Domain suffix matching (*.github.com matches api.github.com)
+- Exact hostname matching
+- Per-category host lists (provider, tool, discord)
+- PolicyHTTPClient enforces policy before every HTTP dispatch
+
+### Filesystem Policy
+
+- Write blocked outside allowed_write_paths
+- Read blocked outside allowed_read_paths
+- Path traversal attacks (../) properly normalized and blocked
+- Symlink resolution before policy check
+
+### Shell Policy
+
+- Disabled by default (shell.enabled: false)
+- Only whitelisted commands allowed when enabled
+- Empty allowed_commands blocks all commands
+- Docker sandbox optional isolation
+
+## Secrets Detection Patterns
+
+| Pattern | Description |
+|---|---|
+| API keys | Generic API key patterns (sk-*, key-*) |
+| AWS credentials | AKIA... access key IDs |
+| JWT tokens | eyJ... base64-encoded tokens |
+| GitHub tokens | ghp_*, gho_*, ghs_* patterns |
+| Private keys | BEGIN RSA/DSA/EC PRIVATE KEY |
+| Connection strings | postgresql://, mysql://, mongodb:// |
+| Bearer tokens | Bearer ... in authorization headers |
+| Slack tokens | xoxb-*, xoxp-* patterns |
+| Discord tokens | Bot token patterns |
+
+## Vault Security
+
+- ChaCha20-Poly1305 authenticated encryption
+- Key file stored at ~/.missy/secrets/vault.key (32 bytes)
+- Encrypted data at ~/.missy/secrets/vault.enc
+- vault:// references resolved at config load time
+- Invalid key length rejected
+- Corrupted data detected via authentication tag
+
+## Audit Logging
+
+All privileged actions are logged with:
+- Timestamp (ISO 8601)
+- Task ID
+- Session ID
+- Policy rule applied
+- Result (allow/deny)
+- Category (network, shell, filesystem, plugin, scheduler, provider)
+
+Audit events stored as structured JSONL at ~/.missy/audit.jsonl.
+
+## Security Test Summary
+
+| Category | Tests |
+|---|---|
+| Input sanitizer | 30+ |
+| Secrets detector | 20+ |
+| Secret censor | 10+ |
+| Vault | 20+ |
+| Docker sandbox | 15+ |
+| Network policy | 50+ |
+| Filesystem policy | 30+ |
+| Shell policy | 30+ |
+| Audit logger | 40+ |
+| Discord access control | 35+ |
+| **Total security-related** | **280+** |
