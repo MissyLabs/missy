@@ -7,10 +7,13 @@ at startup. The agent can create bash, python, or node scripts as tools.
 from __future__ import annotations
 
 import json
+import logging
 import stat
 from pathlib import Path
 
 from missy.tools.base import BaseTool, ToolPermissions, ToolResult
+
+logger = logging.getLogger(__name__)
 
 CUSTOM_TOOLS_DIR = Path("~/.missy/custom-tools")
 ALLOWED_LANGUAGES = {"bash": ".sh", "python": ".py", "node": ".js"}
@@ -71,8 +74,8 @@ class SelfCreateTool(BaseTool):
                 try:
                     meta = json.loads(meta_file.read_text())
                     entries.append(f"- {meta.get('name', '?')}: {meta.get('description', '')}")
-                except Exception:
-                    pass
+                except Exception as _meta_exc:
+                    logger.debug("self_create_tool: failed to load %s: %s", meta_file, _meta_exc)
             return ToolResult(
                 success=True, output="\n".join(entries) or "No custom tools defined.", error=None
             )

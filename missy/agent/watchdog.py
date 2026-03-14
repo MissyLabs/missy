@@ -110,8 +110,8 @@ class Watchdog:
                     },
                 )
                 event_bus.publish(event)
-            except Exception:
-                pass
+            except Exception as _audit_exc:
+                logger.debug("Watchdog: audit event publish failed: %s", _audit_exc)
 
     def get_report(self) -> dict:
         """Return a health report for all subsystems."""

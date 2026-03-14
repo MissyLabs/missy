@@ -94,13 +94,13 @@ class BrowserSession:
             try:
                 if self._context:
                     self._context.close()
-            except Exception:
-                pass
+            except Exception as _ctx_exc:
+                logger.debug("browser: context close error: %s", _ctx_exc)
             try:
                 if self._pw:
                     self._pw.stop()
-            except Exception:
-                pass
+            except Exception as _pw_exc:
+                logger.debug("browser: playwright stop error: %s", _pw_exc)
             self._context = None
             self._page = None
             self._pw = None

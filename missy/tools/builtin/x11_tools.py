@@ -62,7 +62,8 @@ def _extract_account_id(token: str) -> str:
         payload = json.loads(base64.urlsafe_b64decode(parts[1] + "=" * padding))
         ns = payload.get("https://api.openai.com/auth", {})
         return ns.get("chatgpt_account_id", "") or payload.get("sub", "")
-    except Exception:
+    except Exception as _jwt_exc:
+        logger.debug("x11: JWT parse failed: %s", _jwt_exc)
         return ""
 
 
@@ -72,7 +73,8 @@ def _load_oauth_token() -> str | None:
         from missy.cli.oauth import refresh_token_if_needed
 
         return refresh_token_if_needed()
-    except Exception:
+    except Exception as _oauth_exc:
+        logger.debug("x11: OAuth token load failed: %s", _oauth_exc)
         return None
 
 
@@ -90,8 +92,8 @@ def _get_ollama_base_url() -> str:
         provider_cfg = cfg.providers.get("ollama")
         if provider_cfg and provider_cfg.base_url:
             return provider_cfg.base_url.rstrip("/")
-    except Exception:
-        pass
+    except Exception as _cfg_exc:
+        logger.debug("x11: Ollama config load failed: %s", _cfg_exc)
     return _OLLAMA_DEFAULT_URL
 
 

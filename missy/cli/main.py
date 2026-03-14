@@ -155,16 +155,16 @@ def _load_subsystems(config_path: str):
 
         tool_registry = init_tool_registry()
         register_builtin_tools(tool_registry)
-    except Exception:
-        pass
+    except Exception as _tool_exc:
+        logger.debug("Tool registry init failed: %s", _tool_exc)
 
     # Initialize OpenTelemetry if configured.
     try:
         from missy.observability.otel import init_otel
 
         init_otel(cfg)
-    except Exception:
-        pass
+    except Exception as _otel_exc:
+        logger.debug("OpenTelemetry init failed: %s", _otel_exc)
 
     return cfg
 
