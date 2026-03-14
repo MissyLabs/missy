@@ -42,10 +42,9 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Optional
 
-from missy.core.events import AuditEvent, event_bus
 from missy.channels.voice.registry import DeviceRegistry, EdgeNode
+from missy.core.events import AuditEvent, event_bus
 
 logger = logging.getLogger(__name__)
 

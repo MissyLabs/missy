@@ -262,6 +262,7 @@ class DiscordRestClient:
         """
         import mimetypes
         from pathlib import Path
+
         import httpx
 
         path = Path(file_path).expanduser()

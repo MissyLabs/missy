@@ -1,9 +1,10 @@
 """Background watchdog that monitors subsystem health."""
 from __future__ import annotations
+
 import logging
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)

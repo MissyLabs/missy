@@ -8,17 +8,13 @@ from __future__ import annotations
 import subprocess
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from missy.security.sandbox import (
     DockerSandbox,
     FallbackSandbox,
     SandboxConfig,
-    SandboxResult,
     get_sandbox,
     parse_sandbox_config,
 )
-
 
 # ---------------------------------------------------------------------------
 # SandboxConfig

@@ -18,14 +18,11 @@ from __future__ import annotations
 
 import threading
 import time
-from dataclasses import dataclass, field
-from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from missy.agent.proactive import ProactiveManager, ProactiveTrigger
-
 
 # ---------------------------------------------------------------------------
 # Helpers

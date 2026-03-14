@@ -10,6 +10,7 @@ Usage::
     key = vault.get("OPENAI_API_KEY")
 """
 from __future__ import annotations
+
 import json
 import os
 import secrets

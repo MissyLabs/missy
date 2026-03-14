@@ -11,7 +11,6 @@ from missy.core.events import event_bus
 from missy.core.exceptions import PolicyViolationError
 from missy.policy.shell import ShellPolicyEngine
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

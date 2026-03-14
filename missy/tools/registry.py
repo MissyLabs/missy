@@ -22,7 +22,7 @@ import threading
 from typing import Optional
 
 from missy.core.events import AuditEvent, event_bus
-from missy.core.exceptions import PolicyViolationError, ProviderError
+from missy.core.exceptions import PolicyViolationError
 from missy.policy.engine import get_policy_engine
 
 from .base import BaseTool, ToolResult

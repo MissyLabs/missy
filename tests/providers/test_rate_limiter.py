@@ -1,6 +1,7 @@
 """Tests for the provider rate limiter."""
-import time
 import threading
+import time
+
 import pytest
 
 from missy.providers.rate_limiter import RateLimiter, RateLimitExceeded

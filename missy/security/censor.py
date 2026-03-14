@@ -6,6 +6,7 @@ Usage::
     safe_text = censor_response(response_text)
 """
 from __future__ import annotations
+
 from missy.security.secrets import SecretsDetector
 
 _detector = SecretsDetector()

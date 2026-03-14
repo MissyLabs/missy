@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from missy.core.events import AuditEvent, event_bus
+from missy.core.events import event_bus
 from missy.skills.base import BaseSkill, SkillPermissions, SkillResult
 from missy.skills.registry import SkillRegistry, get_skill_registry, init_skill_registry
-
 
 # ---------------------------------------------------------------------------
 # Concrete skill implementations for testing

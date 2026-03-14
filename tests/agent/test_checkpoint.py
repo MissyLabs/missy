@@ -5,15 +5,12 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-import tempfile
 import time
-from unittest.mock import patch
 
 import pytest
 
 from missy.agent.checkpoint import CheckpointManager, RecoveryResult, scan_for_recovery
 from missy.core.events import event_bus
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

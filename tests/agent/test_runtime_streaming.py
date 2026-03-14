@@ -1,9 +1,10 @@
 """Tests for AgentRuntime streaming and rate limiting integration."""
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
-from missy.agent.runtime import AgentRuntime, AgentConfig
-from missy.providers.base import Message, CompletionResponse
+import pytest
+
+from missy.agent.runtime import AgentConfig, AgentRuntime
+from missy.providers.base import CompletionResponse
 
 
 @pytest.fixture

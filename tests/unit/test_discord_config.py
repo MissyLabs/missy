@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-
 import pytest
 
 from missy.channels.discord.config import (
@@ -15,7 +13,6 @@ from missy.channels.discord.config import (
     _parse_guild_policy,
     parse_discord_config,
 )
-
 
 # ---------------------------------------------------------------------------
 # DiscordDMPolicy enum

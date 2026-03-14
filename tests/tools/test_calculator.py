@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from missy.tools.builtin.calculator import CalculatorTool
 from missy.tools.base import ToolResult
+from missy.tools.builtin.calculator import CalculatorTool
 
 
 @pytest.fixture()

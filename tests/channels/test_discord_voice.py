@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import struct
-from dataclasses import dataclass
 from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -19,10 +18,8 @@ import pytest
 
 from missy.channels.discord.voice import DiscordVoiceError, DiscordVoiceManager, _make_sink_class
 from missy.channels.discord.voice_commands import (
-    VoiceCommandResult,
     maybe_handle_voice_command,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -620,7 +617,6 @@ class TestListenWatchdog:
         from missy.channels.discord.voice import (
             DiscordVoiceManager,
             _GuildVoiceState,
-            _WATCHDOG_INTERVAL_S,
         )
 
         mgr = DiscordVoiceManager.__new__(DiscordVoiceManager)

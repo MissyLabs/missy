@@ -11,7 +11,6 @@ from missy.core.events import event_bus
 from missy.core.exceptions import ProviderError
 from missy.providers.base import CompletionResponse, Message
 
-
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
 # ---------------------------------------------------------------------------

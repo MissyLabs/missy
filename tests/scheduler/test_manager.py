@@ -3,14 +3,10 @@
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
-from missy.core.exceptions import SchedulerError
 from missy.scheduler.jobs import ScheduledJob
 from missy.scheduler.manager import SchedulerManager
 

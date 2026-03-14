@@ -1,5 +1,6 @@
 """Config hot-reload: watch config.yaml for changes and re-apply policy."""
 from __future__ import annotations
+
 import logging
 import threading
 import time

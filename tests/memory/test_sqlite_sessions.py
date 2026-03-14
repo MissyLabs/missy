@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from missy.memory.sqlite_store import SQLiteMemoryStore, ConversationTurn
+from missy.memory.sqlite_store import ConversationTurn, SQLiteMemoryStore
 
 
 @pytest.fixture

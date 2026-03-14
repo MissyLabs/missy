@@ -15,12 +15,9 @@ import asyncio
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from missy.channels.discord.channel import DiscordChannel
 from missy.channels.discord.config import DiscordAccountConfig, DiscordDMPolicy
 from missy.channels.discord.rest import DiscordRestClient
-
 
 # ---------------------------------------------------------------------------
 # Helpers

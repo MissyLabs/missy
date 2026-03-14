@@ -8,7 +8,6 @@ lists, and plugin gating.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Generator
 
@@ -28,7 +27,6 @@ from missy.plugins.loader import PluginLoader
 from missy.policy.filesystem import FilesystemPolicyEngine
 from missy.policy.network import NetworkPolicyEngine
 from missy.policy.shell import ShellPolicyEngine
-
 
 # ---------------------------------------------------------------------------
 # Shared fixtures

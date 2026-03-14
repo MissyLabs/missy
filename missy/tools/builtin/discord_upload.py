@@ -1,6 +1,8 @@
 """Built-in tool: upload a file to the current Discord channel."""
 from __future__ import annotations
+
 import os
+
 from missy.tools.base import BaseTool, ToolPermissions, ToolResult
 
 

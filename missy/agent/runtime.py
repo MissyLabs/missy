@@ -30,14 +30,13 @@ Example::
 from __future__ import annotations
 
 import logging
-import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 from missy.core.events import AuditEvent, event_bus
 from missy.core.exceptions import ProviderError
 from missy.core.session import Session, SessionManager
-from missy.providers.base import Message, CompletionResponse, ToolCall, ToolResult
+from missy.providers.base import CompletionResponse, Message, ToolCall, ToolResult
 from missy.providers.registry import get_registry
 from missy.tools.registry import get_tool_registry
 

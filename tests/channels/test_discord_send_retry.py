@@ -13,13 +13,12 @@ from __future__ import annotations
 
 import asyncio
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from missy.channels.discord.channel import DiscordChannel, DiscordSendError
 from missy.channels.discord.config import DiscordAccountConfig, DiscordDMPolicy
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

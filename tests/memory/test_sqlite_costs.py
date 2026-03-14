@@ -1,7 +1,6 @@
 """Tests for SQLiteMemoryStore cost tracking."""
+
 import pytest
-import tempfile
-import os
 
 from missy.memory.sqlite_store import SQLiteMemoryStore
 

@@ -12,14 +12,12 @@ from missy.config.settings import (
     MissyConfig,
     NetworkPolicy,
     PluginPolicy,
-    ProviderConfig,
     ShellPolicy,
 )
 from missy.core.events import event_bus
 from missy.core.exceptions import PolicyViolationError
 from missy.policy import engine as engine_module
 from missy.policy.engine import PolicyEngine, get_policy_engine, init_policy_engine
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

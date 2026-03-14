@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import pytest
 
-from missy.config.settings import MissyConfig, PluginPolicy, NetworkPolicy, FilesystemPolicy, ShellPolicy
-from missy.core.events import AuditEvent, event_bus
+from missy.config.settings import (
+    FilesystemPolicy,
+    MissyConfig,
+    NetworkPolicy,
+    PluginPolicy,
+    ShellPolicy,
+)
+from missy.core.events import event_bus
 from missy.core.exceptions import PolicyViolationError
 from missy.plugins.base import BasePlugin, PluginPermissions
 from missy.plugins.loader import PluginLoader, get_plugin_loader, init_plugin_loader
-
 
 # ---------------------------------------------------------------------------
 # Helpers

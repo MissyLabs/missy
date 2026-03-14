@@ -19,7 +19,6 @@ from missy.config.settings import (
 )
 from missy.core.exceptions import ConfigurationError
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
