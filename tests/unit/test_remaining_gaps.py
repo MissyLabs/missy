@@ -943,13 +943,21 @@ class TestProactiveFileHandlerClass:
 
     def test_stub_handler_when_watchdog_unavailable(self):
         """When watchdog absent the stub class is a no-op object."""
-        import missy.agent.proactive as _mod
+        import importlib
+        import sys
 
-        with patch.object(_mod, "_WATCHDOG_AVAILABLE", False):
-            # Re-execute the conditional definition branch
-            # The stub class exists regardless; just instantiate it
+        # Ensure watchdog modules are absent so the stub branch runs.
+        saved = {}
+        for key in list(sys.modules):
+            if key.startswith("watchdog") or key == "missy.agent.proactive":
+                saved[key] = sys.modules.pop(key)
+        try:
+            _mod = importlib.import_module("missy.agent.proactive")
+            assert not _mod._WATCHDOG_AVAILABLE
             handler = _mod._ProactiveFileHandler()
             assert handler is not None
+        finally:
+            sys.modules.update(saved)
 
 
 # ---------------------------------------------------------------------------
