@@ -601,6 +601,9 @@ class DiscordChannel(BaseChannel):
         content: str,
     ) -> bool:
         text = content.strip()
+        # Strip leading bot mentions so "@Missy !join General" works.
+        import re
+        text = re.sub(r"^(<@!?\d+>\s*)+", "", text).strip()
         if not text.startswith("!"):
             return False
 
@@ -624,7 +627,7 @@ class DiscordChannel(BaseChannel):
         from missy.channels.discord.voice_commands import maybe_handle_voice_command
 
         result = await maybe_handle_voice_command(
-            content=content,
+            content=text,
             channel_id=channel_id,
             guild_id=guild_id,
             author_id=author_id,
