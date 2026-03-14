@@ -204,14 +204,16 @@ def _prompt_model(info: dict) -> tuple[str, str, str]:
 
 def _verify_anthropic(api_key: str) -> bool:
     """Send a minimal Anthropic API call to verify the key works."""
+    if api_key.startswith("sk-ant-oat"):
+        console.print(
+            "  [red]Setup-tokens (sk-ant-oat...) are not supported by the Anthropic API.[/]\n"
+            "  Get a regular API key from: [cyan]https://console.anthropic.com/settings/keys[/]"
+        )
+        return False
     try:
         import anthropic
 
-        # Setup-tokens (sk-ant-oat...) use Bearer auth, not x-api-key.
-        if api_key.startswith("sk-ant-oat"):
-            client = anthropic.Anthropic(auth_token=api_key)
-        else:
-            client = anthropic.Anthropic(api_key=api_key)
+        client = anthropic.Anthropic(api_key=api_key)
         client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=1,

@@ -52,14 +52,14 @@ class AnthropicProvider(BaseProvider):
     name = "anthropic"
 
     def __init__(self, config: ProviderConfig) -> None:
-        self._api_key: str | None = None
-        self._auth_token: str | None = None
         key = config.api_key
         if key and key.startswith("sk-ant-oat"):
-            # OAuth / setup-token → use Bearer auth.
-            self._auth_token = key
-        else:
-            self._api_key = key
+            raise ProviderError(
+                "Setup-tokens (sk-ant-oat...) from 'claude setup-token' are not "
+                "supported by the Anthropic Messages API. You need a regular API "
+                "key (sk-ant-api...) from https://console.anthropic.com/settings/keys"
+            )
+        self._api_key: str | None = key
         self._model: str = config.model or _DEFAULT_MODEL
         self._timeout: int = config.timeout
 
@@ -74,16 +74,14 @@ class AnthropicProvider(BaseProvider):
             ``True`` if the ``anthropic`` package is importable and an API
             key is present.
         """
-        return _ANTHROPIC_AVAILABLE and bool(self._api_key or self._auth_token)
+        return _ANTHROPIC_AVAILABLE and bool(self._api_key)
 
     def _make_client(self) -> Any:
-        """Construct an Anthropic client with the appropriate auth method."""
-        kwargs: dict[str, Any] = {"timeout": float(self._timeout)}
-        if self._auth_token:
-            kwargs["auth_token"] = self._auth_token
-        else:
-            kwargs["api_key"] = self._api_key
-        return _anthropic_sdk.Anthropic(**kwargs)
+        """Construct an Anthropic client."""
+        return _anthropic_sdk.Anthropic(
+            api_key=self._api_key,
+            timeout=float(self._timeout),
+        )
 
     def complete(self, messages: list[Message], **kwargs: Any) -> CompletionResponse:
         """Send *messages* to the Anthropic Messages API.
