@@ -249,15 +249,13 @@ class TestFasterWhisperSTTTranscribe:
         """Build silent 16-bit PCM bytes."""
         return struct.pack(f"<{n_samples}h", *([0] * n_samples))
 
-    def test_transcribe_raises_when_not_loaded(self):
+    async def test_transcribe_raises_when_not_loaded(self):
         from missy.channels.voice.stt.whisper import FasterWhisperSTT
         stt = FasterWhisperSTT()
         with pytest.raises(RuntimeError, match="load"):
-            asyncio.get_event_loop().run_until_complete(
-                stt.transcribe(self._make_pcm())
-            )
+            await stt.transcribe(self._make_pcm())
 
-    def test_transcribe_returns_result(self):
+    async def test_transcribe_returns_result(self):
         np_mod, extra = _make_numpy_mock()
         stt = self._loaded_stt()
 
@@ -269,16 +267,14 @@ class TestFasterWhisperSTTTranscribe:
         stt._model.transcribe.return_value = (iter([seg]), info)
 
         with patch.dict("sys.modules", {"numpy": np_mod, **extra}):
-            result = asyncio.get_event_loop().run_until_complete(
-                stt.transcribe(self._make_pcm())
-            )
+            result = await stt.transcribe(self._make_pcm())
 
         assert result.text == "hello world"
         assert result.language == "en"
         assert 0.0 <= result.confidence <= 1.0
         assert result.processing_ms >= 0
 
-    def test_transcribe_confidence_no_speech_prob(self):
+    async def test_transcribe_confidence_no_speech_prob(self):
         np_mod, extra = _make_numpy_mock()
         stt = self._loaded_stt()
 
@@ -290,13 +286,11 @@ class TestFasterWhisperSTTTranscribe:
         stt._model.transcribe.return_value = (iter([seg]), info)
 
         with patch.dict("sys.modules", {"numpy": np_mod, **extra}):
-            result = asyncio.get_event_loop().run_until_complete(
-                stt.transcribe(self._make_pcm())
-            )
+            result = await stt.transcribe(self._make_pcm())
 
         assert abs(result.confidence - 0.8) < 0.001
 
-    def test_transcribe_confidence_minus_one_when_no_prob(self):
+    async def test_transcribe_confidence_minus_one_when_no_prob(self):
         np_mod, extra = _make_numpy_mock()
         stt = self._loaded_stt()
 
@@ -307,13 +301,11 @@ class TestFasterWhisperSTTTranscribe:
         stt._model.transcribe.return_value = (iter([seg]), info)
 
         with patch.dict("sys.modules", {"numpy": np_mod, **extra}):
-            result = asyncio.get_event_loop().run_until_complete(
-                stt.transcribe(self._make_pcm())
-            )
+            result = await stt.transcribe(self._make_pcm())
 
         assert result.confidence == -1.0
 
-    def test_transcribe_multichannel_mixdown(self):
+    async def test_transcribe_multichannel_mixdown(self):
         np_mod, extra = _make_numpy_mock()
         stt = self._loaded_stt()
 
@@ -324,28 +316,24 @@ class TestFasterWhisperSTTTranscribe:
         stereo_pcm = struct.pack("<8h", 100, -100, 200, -200, 50, -50, 80, -80)
 
         with patch.dict("sys.modules", {"numpy": np_mod, **extra}):
-            result = asyncio.get_event_loop().run_until_complete(
-                stt.transcribe(stereo_pcm, channels=2)
-            )
+            result = await stt.transcribe(stereo_pcm, channels=2)
 
         assert result.text == ""
         # Verify that transcribe was actually called — proves mix-down code ran
         stt._model.transcribe.assert_called_once()
 
-    def test_transcribe_raises_import_error_without_numpy(self):
+    async def test_transcribe_raises_import_error_without_numpy(self):
         stt = self._loaded_stt()
         import sys
         saved = sys.modules.pop("numpy", None)
         try:
             with pytest.raises(ImportError, match="numpy"):
-                asyncio.get_event_loop().run_until_complete(
-                    stt.transcribe(self._make_pcm())
-                )
+                await stt.transcribe(self._make_pcm())
         finally:
             if saved is not None:
                 sys.modules["numpy"] = saved
 
-    def test_transcribe_emits_audit_event(self):
+    async def test_transcribe_emits_audit_event(self):
         np_mod, extra = _make_numpy_mock()
         stt = self._loaded_stt()
 
@@ -357,16 +345,14 @@ class TestFasterWhisperSTTTranscribe:
             patch.dict("sys.modules", {"numpy": np_mod, **extra}),
             patch("missy.channels.voice.stt.whisper.event_bus") as mock_bus,
         ):
-            asyncio.get_event_loop().run_until_complete(
-                stt.transcribe(self._make_pcm())
-            )
+            await stt.transcribe(self._make_pcm())
 
         mock_bus.publish.assert_called_once()
         event = mock_bus.publish.call_args.args[0]
         assert event.event_type == "voice.stt.complete"
         assert event.detail["language"] == "fr"
 
-    def test_transcribe_audit_failure_is_swallowed(self):
+    async def test_transcribe_audit_failure_is_swallowed(self):
         """Audit emit errors must not propagate to callers."""
         np_mod, extra = _make_numpy_mock()
         stt = self._loaded_stt()
@@ -381,9 +367,7 @@ class TestFasterWhisperSTTTranscribe:
         ):
             mock_bus.publish.side_effect = RuntimeError("bus down")
             # Should not raise
-            asyncio.get_event_loop().run_until_complete(
-                stt.transcribe(self._make_pcm())
-            )
+            await stt.transcribe(self._make_pcm())
 
 
 # ---------------------------------------------------------------------------
@@ -548,6 +532,7 @@ class TestPiperTTSListVoices:
         assert voices == ["voice"]
 
 
+@pytest.mark.asyncio
 class TestPiperTTSSynthesize:
     def _loaded_tts(self, tmp_path):
         from missy.channels.voice.tts.piper import PiperTTS
@@ -562,14 +547,14 @@ class TestPiperTTSSynthesize:
     def _fake_pcm(self, n_samples: int = 22050) -> bytes:
         return b"\x00\x00" * n_samples
 
-    def test_synthesize_raises_when_not_loaded(self):
+    async def test_synthesize_raises_when_not_loaded(self):
         from missy.channels.voice.tts.piper import PiperTTS
         tts = PiperTTS()
 
         with pytest.raises(RuntimeError, match="load"):
-            asyncio.get_event_loop().run_until_complete(tts.synthesize("hello"))
+            await tts.synthesize("hello")
 
-    def test_synthesize_returns_audio_buffer(self, tmp_path):
+    async def test_synthesize_returns_audio_buffer(self, tmp_path):
         from missy.channels.voice.tts.base import AudioBuffer
         tts = self._loaded_tts(tmp_path)
         pcm = self._fake_pcm()
@@ -579,41 +564,36 @@ class TestPiperTTSSynthesize:
         mock_proc.communicate = AsyncMock(return_value=(pcm, b""))
 
         with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=mock_proc)):
-            buffer = asyncio.get_event_loop().run_until_complete(tts.synthesize("hello world"))
+            buffer = await tts.synthesize("hello world")
 
         assert isinstance(buffer, AudioBuffer)
         assert buffer.format == "wav"
         assert buffer.sample_rate == 22050
         assert len(buffer.data) > 0
 
-    def test_synthesize_raises_on_nonzero_exit_code(self, tmp_path):
+    async def test_synthesize_raises_on_nonzero_exit_code(self, tmp_path):
         tts = self._loaded_tts(tmp_path)
 
         mock_proc = AsyncMock()
         mock_proc.returncode = 1
         mock_proc.communicate = AsyncMock(return_value=(b"", b"model error"))
 
-        with (
-            patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=mock_proc)),
-            pytest.raises(RuntimeError, match="Piper exited"),
-        ):
-            asyncio.get_event_loop().run_until_complete(tts.synthesize("hello"))
+        with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=mock_proc)):
+            with pytest.raises(RuntimeError, match="Piper exited"):
+                await tts.synthesize("hello")
 
-    def test_synthesize_raises_when_no_audio_output(self, tmp_path):
+    async def test_synthesize_raises_when_no_audio_output(self, tmp_path):
         tts = self._loaded_tts(tmp_path)
 
         mock_proc = AsyncMock()
         mock_proc.returncode = 0
         mock_proc.communicate = AsyncMock(return_value=(b"", b""))
 
-        with (
-            patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=mock_proc)),
-            pytest.raises(RuntimeError, match="no audio"),
-        ):
-            asyncio.get_event_loop().run_until_complete(tts.synthesize("hello"))
+        with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=mock_proc)):
+            with pytest.raises(RuntimeError, match="no audio"):
+                await tts.synthesize("hello")
 
-    def test_synthesize_with_override_voice(self, tmp_path):
-        from missy.channels.voice.tts.piper import PiperTTS
+    async def test_synthesize_with_override_voice(self, tmp_path):
         tts = self._loaded_tts(tmp_path)
         # Create a model for the override voice
         override_model = tmp_path / "other_voice.onnx"
@@ -628,13 +608,11 @@ class TestPiperTTSSynthesize:
             patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=mock_proc)),
             patch("missy.channels.voice.tts.piper._DEFAULT_VOICES_DIR", tmp_path),
         ):
-            buffer = asyncio.get_event_loop().run_until_complete(
-                tts.synthesize("hi", voice="other_voice")
-            )
+            buffer = await tts.synthesize("hi", voice="other_voice")
 
         assert buffer.format == "wav"
 
-    def test_synthesize_emits_audit_event(self, tmp_path):
+    async def test_synthesize_emits_audit_event(self, tmp_path):
         tts = self._loaded_tts(tmp_path)
         pcm = self._fake_pcm()
 
@@ -646,13 +624,13 @@ class TestPiperTTSSynthesize:
             patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=mock_proc)),
             patch("missy.channels.voice.tts.piper.event_bus") as mock_bus,
         ):
-            asyncio.get_event_loop().run_until_complete(tts.synthesize("hello"))
+            await tts.synthesize("hello")
 
         mock_bus.publish.assert_called_once()
         event = mock_bus.publish.call_args.args[0]
         assert event.event_type == "voice.tts.complete"
 
-    def test_synthesize_audit_failure_swallowed(self, tmp_path):
+    async def test_synthesize_audit_failure_swallowed(self, tmp_path):
         tts = self._loaded_tts(tmp_path)
         pcm = self._fake_pcm()
 
@@ -666,7 +644,7 @@ class TestPiperTTSSynthesize:
         ):
             mock_bus.publish.side_effect = RuntimeError("bus down")
             # Must not raise
-            asyncio.get_event_loop().run_until_complete(tts.synthesize("hello"))
+            await tts.synthesize("hello")
 
 
 class TestPiperSubprocessEnv:
