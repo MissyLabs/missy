@@ -8,23 +8,23 @@
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 3517 |
-| Passed | 3517 |
+| Total tests | 3675 |
+| Passed | 3675 |
 | Failed | 0 |
 | Skipped | 3 |
-| Warnings | 3 (deprecation) |
-| Duration | ~43s |
+| Warnings | 4 (deprecation) |
+| Duration | ~44s |
 | Source files | 123 |
-| Test files | 96 |
-| Coverage | 94% |
+| Test files | 99 |
+| Coverage | 96% |
 
 ## Test Distribution
 
 | Test Area | Tests | Files |
 |-----------|-------|-------|
-| Agent (runtime, circuit breaker, context, done criteria, learnings, etc.) | ~350 | 14 |
-| Channels (CLI, Discord, Webhook, Voice) | ~440 | 18 |
-| CLI commands | ~170 | 4 |
+| Agent (runtime, circuit breaker, context, done criteria, learnings, evolution) | ~480 | 17 |
+| Channels (CLI, Discord, Webhook, Voice) | ~520 | 21 |
+| CLI commands | ~185 | 5 |
 | Config | ~30 | 2 |
 | Core (session, events, exceptions) | ~30 | 3 |
 | Integration (policy enforcement) | ~30 | 1 |
@@ -36,10 +36,10 @@
 | Scheduler (jobs, parser, manager) | ~100 | 7 |
 | Security (sanitizer, secrets, vault, censor, sandbox) | ~100 | 5 |
 | Skills (registry, base, builtins) | ~80 | 3 |
-| Tools (registry, base, builtins, shell, incus, file ops) | ~280 | 8 |
+| Tools (registry, base, builtins, shell, incus, atspi, x11, file ops) | ~420 | 12 |
 | Unit (Discord channel, config, gateway, infrastructure) | ~170 | 7 |
 
 ## pytest output
 ```
-3517 passed, 3 skipped, 3 warnings in 43.07s
+3675 passed, 3 skipped, 4 warnings in 44.27s
 ```

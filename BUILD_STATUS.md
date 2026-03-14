@@ -24,7 +24,7 @@ All core phases implemented, parity gaps closed systematically.
 16. CLI (60+ commands via click + rich, including recover, evolve)
 17. Discord (WebSocket gateway, REST API, threads, slash commands, pairing, access control, voice, interactive setup wizard)
 18. Code self-evolution engine (propose, test, apply, rollback)
-19. Tests (3517 tests, 94% coverage)
+19. Tests (3675 tests, 96% coverage)
 20. Documentation (SECURITY.md, OPERATIONS.md, ARCHITECTURE.md, CONFIG_REFERENCE.md, DISCORD.md, TESTING.md, TROUBLESHOOTING.md, 10+ implementation docs)
 21. Audit artifacts (AUDIT_SECURITY.md, AUDIT_CONNECTIVITY.md)
 22. Test artifacts (TEST_RESULTS.md, TEST_EDGE_CASES.md, BUILD_RESULTS.md)
@@ -58,8 +58,8 @@ missy/                          # 123 Python source files
 
 ## Test Results
 
-- 3517 tests passing across 96 test files
-- 94% code coverage (up from 85% in previous session)
+- 3675 tests passing across 99 test files
+- 96% code coverage (up from 85% in previous session)
 - Unit, integration, policy, Discord, security, memory, agent, tools, skills, CLI, voice, scheduler tests
 
 ## Session 7 Additions (2026-03-14)
@@ -70,12 +70,14 @@ missy/                          # 123 Python source files
 - **Discord/channel coverage tests** (66 new): commands (→100%), config (→100%), channel policy/events (→90%), voice channel lifecycle (→94%), events (→100%)
 - **Scheduler/OAuth/evolution tests** (43 new): manager (→99%), OAuth (→100%), code evolution (→99%)
 - **Voice/Incus tests** (202 new): edge client (0%→79%), voice server (21%→improved), discord voice (55%→77%), ffmpeg (43%→100%), incus tools (78%→improved)
-- **Total new tests**: 482 (from 3035 to 3517)
-- **Coverage**: 86% → 94%
+- **Atspi/X11/runtime tests** (121 new): atspi tools (→98%), x11 tools (→100%), runtime (→98%)
+- **Discord voice/edge client tests** (37 new): discord voice (→88%), edge client (→98%)
+- **Total new tests**: 640 (from 3035 to 3675)
+- **Coverage**: 86% → 96%
 
 ## Remaining Tasks
 
-- Coverage target of 85% exceeded (94% achieved)
+- Coverage target of 85% exceeded (96% achieved)
 - Discord multi-account support (P3, low demand)
 - Web UI / dashboard (P4, intentionally deferred)
 
