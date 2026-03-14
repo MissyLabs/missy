@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from missy.channels.discord.voice import DiscordVoiceError, DiscordVoiceManager
+from missy.channels.discord.voice import DiscordVoiceError, DiscordVoiceManager, _make_sink_class
 from missy.channels.discord.voice_commands import (
     VoiceCommandResult,
     maybe_handle_voice_command,
@@ -480,13 +480,20 @@ class TestResamplePcm:
 
 
 class TestSpeechCollectorSink:
-    def test_buffers_audio_per_user(self):
-        from missy.channels.discord.voice import _SpeechCollectorSink
+    def _make_sink_cls(self):
+        """Create a sink class with a mock AudioSink base."""
+        mock_voice_recv = MagicMock()
+        mock_voice_recv.AudioSink = type("AudioSink", (), {
+            "__init__": lambda self: None,
+        })
+        return _make_sink_class(mock_voice_recv)
 
+    def test_buffers_audio_per_user(self):
+        SinkClass = self._make_sink_cls()
         collected = []
         loop = asyncio.new_event_loop()
 
-        sink = _SpeechCollectorSink(
+        sink = SinkClass(
             loop=loop,
             on_speech_done=lambda uid, pcm, sr: collected.append((uid, pcm, sr)),
             bot_user_id=999,
@@ -502,10 +509,9 @@ class TestSpeechCollectorSink:
         loop.close()
 
     def test_ignores_bot_audio(self):
-        from missy.channels.discord.voice import _SpeechCollectorSink
-
+        SinkClass = self._make_sink_cls()
         loop = asyncio.new_event_loop()
-        sink = _SpeechCollectorSink(
+        sink = SinkClass(
             loop=loop,
             on_speech_done=lambda uid, pcm, sr: None,
             bot_user_id=999,
@@ -520,10 +526,9 @@ class TestSpeechCollectorSink:
         loop.close()
 
     def test_cleanup_clears_state(self):
-        from missy.channels.discord.voice import _SpeechCollectorSink
-
+        SinkClass = self._make_sink_cls()
         loop = asyncio.new_event_loop()
-        sink = _SpeechCollectorSink(
+        sink = SinkClass(
             loop=loop,
             on_speech_done=lambda uid, pcm, sr: None,
             bot_user_id=0,

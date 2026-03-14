@@ -419,7 +419,8 @@ class DiscordVoiceManager:
             return
 
         state.listening = True
-        sink = _SpeechCollectorSink(
+        SinkClass = _make_sink_class(self._voice_recv)
+        sink = SinkClass(
             loop=self._loop,
             on_speech_done=lambda user_id, pcm, sr: asyncio.run_coroutine_threadsafe(
                 self._handle_speech(guild_id, user_id, pcm, sr),
@@ -531,91 +532,101 @@ class DiscordVoiceManager:
 # ======================================================================
 
 
-class _SpeechCollectorSink:
-    """AudioSink that buffers PCM per user and fires a callback on silence.
+def _make_sink_class(voice_recv_module: Any) -> type:
+    """Dynamically create a sink class inheriting from voice_recv.AudioSink.
 
-    This runs on discord.py's voice receive thread. The callback is
-    dispatched to the asyncio event loop via run_coroutine_threadsafe.
+    This is necessary because discord-ext-voice-recv is a lazy import and
+    AudioSink must be the base class for the sink to be accepted.
     """
 
-    def __init__(
-        self,
-        *,
-        loop: asyncio.AbstractEventLoop,
-        on_speech_done: Callable[[int, bytes, int], Any],
-        bot_user_id: int = 0,
-    ) -> None:
-        self._loop = loop
-        self._on_speech_done = on_speech_done
-        self._bot_user_id = bot_user_id
+    class _SpeechCollectorSink(voice_recv_module.AudioSink):
+        """AudioSink that buffers PCM per user and fires a callback on silence.
 
-        # Per-user audio buffers: user_id -> list of PCM chunks.
-        self._buffers: Dict[int, list[bytes]] = defaultdict(list)
-        # Per-user last-packet timestamp.
-        self._last_packet_time: Dict[int, float] = {}
-        # Per-user silence timer handles.
-        self._timers: Dict[int, asyncio.TimerHandle] = {}
-        self._lock = threading.Lock()
+        Runs on discord.py's voice receive thread. The callback is
+        dispatched to the asyncio event loop via run_coroutine_threadsafe.
+        """
 
-    def wants_opus(self) -> bool:
-        """We want decoded PCM, not raw Opus."""
-        return False
+        def __init__(
+            self,
+            *,
+            loop: asyncio.AbstractEventLoop,
+            on_speech_done: Callable[[int, bytes, int], Any],
+            bot_user_id: int = 0,
+        ) -> None:
+            super().__init__()
+            self._loop = loop
+            self._on_speech_done = on_speech_done
+            self._bot_user_id = bot_user_id
 
-    def write(self, user: Any, data: Any) -> None:
-        """Called by discord-ext-voice-recv for each audio packet."""
-        if user is None:
-            return
-        user_id = user.id if hasattr(user, "id") else int(user)
+            # Per-user audio buffers: user_id -> list of PCM chunks.
+            self._buffers: Dict[int, list[bytes]] = defaultdict(list)
+            # Per-user last-packet timestamp.
+            self._last_packet_time: Dict[int, float] = {}
+            # Per-user silence timer handles.
+            self._timers: Dict[int, asyncio.TimerHandle] = {}
+            self._lock = threading.Lock()
 
-        # Ignore our own audio (echo prevention).
-        if user_id == self._bot_user_id:
-            return
+        def wants_opus(self) -> bool:
+            """We want decoded PCM, not raw Opus."""
+            return False
 
-        pcm = data.pcm if hasattr(data, "pcm") else data
-        if not pcm:
-            return
+        def write(self, user: Any, data: Any) -> None:
+            """Called by discord-ext-voice-recv for each audio packet."""
+            if user is None:
+                return
+            user_id = user.id if hasattr(user, "id") else int(user)
 
-        now = time.monotonic()
-        with self._lock:
-            self._buffers[user_id].append(pcm)
-            self._last_packet_time[user_id] = now
+            # Ignore our own audio (echo prevention).
+            if user_id == self._bot_user_id:
+                return
 
-            # Reset the silence timer for this user.
-            old_timer = self._timers.pop(user_id, None)
-            if old_timer is not None:
-                old_timer.cancel()
+            pcm = data.pcm if hasattr(data, "pcm") else data
+            if not pcm:
+                return
 
-            self._timers[user_id] = self._loop.call_later(
-                _SILENCE_TIMEOUT_S,
-                self._on_silence,
-                user_id,
-            )
+            now = time.monotonic()
+            with self._lock:
+                self._buffers[user_id].append(pcm)
+                self._last_packet_time[user_id] = now
 
-    def _on_silence(self, user_id: int) -> None:
-        """Called when a user has been silent for _SILENCE_TIMEOUT_S."""
-        with self._lock:
-            chunks = self._buffers.pop(user_id, [])
-            self._last_packet_time.pop(user_id, None)
-            self._timers.pop(user_id, None)
+                # Reset the silence timer for this user.
+                old_timer = self._timers.pop(user_id, None)
+                if old_timer is not None:
+                    old_timer.cancel()
 
-        if not chunks:
-            return
+                self._timers[user_id] = self._loop.call_later(
+                    _SILENCE_TIMEOUT_S,
+                    self._on_silence,
+                    user_id,
+                )
 
-        pcm = b"".join(chunks)
-        # Fire the callback (which schedules an async coroutine).
-        try:
-            self._on_speech_done(user_id, pcm, _DISCORD_SAMPLE_RATE)
-        except Exception as exc:
-            logger.error("_SpeechCollectorSink callback error: %s", exc)
+        def _on_silence(self, user_id: int) -> None:
+            """Called when a user has been silent for _SILENCE_TIMEOUT_S."""
+            with self._lock:
+                chunks = self._buffers.pop(user_id, [])
+                self._last_packet_time.pop(user_id, None)
+                self._timers.pop(user_id, None)
 
-    def cleanup(self) -> None:
-        """Called when the sink is removed."""
-        with self._lock:
-            for timer in self._timers.values():
-                timer.cancel()
-            self._timers.clear()
-            self._buffers.clear()
-            self._last_packet_time.clear()
+            if not chunks:
+                return
+
+            pcm = b"".join(chunks)
+            # Fire the callback (which schedules an async coroutine).
+            try:
+                self._on_speech_done(user_id, pcm, _DISCORD_SAMPLE_RATE)
+            except Exception as exc:
+                logger.error("_SpeechCollectorSink callback error: %s", exc)
+
+        def cleanup(self) -> None:
+            """Called when the sink is removed."""
+            with self._lock:
+                for timer in self._timers.values():
+                    timer.cancel()
+                self._timers.clear()
+                self._buffers.clear()
+                self._last_packet_time.clear()
+
+    return _SpeechCollectorSink
 
 
 # ======================================================================
