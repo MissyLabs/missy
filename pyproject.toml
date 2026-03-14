@@ -47,7 +47,7 @@ voice = [
 # Discord voice transport/session. Requires system ffmpeg installed.
 discord_voice = [
     "discord.py[voice]>=2.3.0",
-    "discord-ext-voice-recv>=0.5.0",
+    "discord-ext-voice-recv>=0.5.0a167",
 ]
 # Browser automation (Firefox via Playwright) and GTK/X11 accessibility tools.
 # After installing playwright, run: playwright install firefox
