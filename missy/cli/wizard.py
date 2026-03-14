@@ -15,6 +15,7 @@ Designed to work *before* a config file exists — it does not call
 
 from __future__ import annotations
 
+import contextlib
 import os
 import tempfile
 from pathlib import Path
@@ -383,10 +384,8 @@ def _write_config_atomic(config_path: Path, content: str) -> None:
             fh.write(content)
         os.replace(tmp, config_path)
     except Exception:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp)
-        except OSError:
-            pass
         raise
 
 

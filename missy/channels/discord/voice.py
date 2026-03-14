@@ -17,6 +17,7 @@ Dependencies:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import struct
@@ -222,31 +223,21 @@ class DiscordVoiceManager:
     async def stop(self) -> None:
         """Disconnect all voice connections, unload engines, shut down."""
         for guild_id in list(self._guild_states):
-            try:
+            with contextlib.suppress(Exception):
                 await self.leave(guild_id)
-            except Exception:
-                pass
         if self._stt_engine is not None:
-            try:
+            with contextlib.suppress(Exception):
                 self._stt_engine.unload()
-            except Exception:
-                pass
         if self._tts_engine is not None:
-            try:
+            with contextlib.suppress(Exception):
                 self._tts_engine.unload()
-            except Exception:
-                pass
         if self._client is not None:
-            try:
+            with contextlib.suppress(Exception):
                 await self._client.close()
-            except Exception:
-                pass
         if self._client_task is not None:
             self._client_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._client_task
-            except (asyncio.CancelledError, Exception):
-                pass
 
     @property
     def is_ready(self) -> bool:
@@ -375,18 +366,14 @@ class DiscordVoiceManager:
         # Cancel watchdog.
         if state.watchdog_task is not None:
             state.watchdog_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await state.watchdog_task
-            except (asyncio.CancelledError, Exception):
-                pass
 
         # Stop listening.
         if state.listen_task is not None:
             state.listen_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await state.listen_task
-            except (asyncio.CancelledError, Exception):
-                pass
 
         async with state.lock:
             try:
@@ -456,10 +443,8 @@ class DiscordVoiceManager:
                     logger.warning("TTS playback timed out")
             finally:
                 if path:
-                    try:
+                    with contextlib.suppress(FileNotFoundError):
                         os.remove(path)
-                    except FileNotFoundError:
-                        pass
 
     # ------------------------------------------------------------------
     # Listening / STT / conversation loop

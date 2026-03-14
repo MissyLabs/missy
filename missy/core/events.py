@@ -16,6 +16,7 @@ Example::
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import threading
 from collections import defaultdict
@@ -152,10 +153,8 @@ class EventBus:
             callback: The callback to remove.
         """
         with self._lock:
-            try:
+            with contextlib.suppress(ValueError):
                 self._subscribers[event_type].remove(callback)
-            except ValueError:
-                pass
 
     def publish(self, event: AuditEvent) -> None:
         """Append *event* to the internal log and dispatch it to subscribers.

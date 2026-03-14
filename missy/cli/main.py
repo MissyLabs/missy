@@ -16,6 +16,7 @@ users see a clear, styled message rather than a raw traceback.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import sys
@@ -1408,7 +1409,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                             exc,
                         )
                         # Inform the agent that its response was not delivered.
-                        try:
+                        with contextlib.suppress(Exception):
                             _agent.run(
                                 f"[SYSTEM] Your previous response to channel "
                                 f"{channel_id} FAILED to send after multiple "
@@ -1417,8 +1418,6 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                                 f"adjust your response.",
                                 session_id,
                             )
-                        except Exception:
-                            pass
 
             async def _run_discord():
                 channels = []

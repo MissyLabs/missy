@@ -22,6 +22,7 @@ Example::
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -189,10 +190,8 @@ class DeviceRegistry:
                 os.replace(tmp_path, self._path)
             except Exception:
                 # Best-effort cleanup of the temp file.
-                try:
+                with contextlib.suppress(OSError):
                     os.unlink(tmp_path)
-                except OSError:
-                    pass
                 raise
 
     # ------------------------------------------------------------------

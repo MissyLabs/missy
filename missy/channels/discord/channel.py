@@ -32,6 +32,7 @@ Example::
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from typing import Any
 
@@ -177,10 +178,8 @@ class DiscordChannel(BaseChannel):
         await self._gateway.disconnect()
         if self._gateway_task is not None:
             self._gateway_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._gateway_task
-            except asyncio.CancelledError:
-                pass
             self._gateway_task = None
 
     # ------------------------------------------------------------------
@@ -254,10 +253,8 @@ class DiscordChannel(BaseChannel):
             DiscordSendError: If the message could not be delivered.
         """
         # Send typing indicator as an in-progress UX signal.
-        try:
+        with contextlib.suppress(Exception):
             self._rest.trigger_typing(channel_id)
-        except Exception:
-            pass
 
         target_channel = thread_id if thread_id else channel_id
 
@@ -510,7 +507,7 @@ class DiscordChannel(BaseChannel):
                     )
                     # Send a warning back to the channel.
                     if self._rest is not None:
-                        try:
+                        with contextlib.suppress(Exception):
                             self._rest.send_message(
                                 channel_id,
                                 f"\u26a0\ufe0f <@{author_id}> Your message appeared to contain"
@@ -518,8 +515,6 @@ class DiscordChannel(BaseChannel):
                                 f" {'removed from this channel' if deleted else 'flagged'}."
                                 f" Please rotate any exposed keys immediately.",
                             )
-                        except Exception:
-                            pass
                     # Do NOT enqueue this message — drop it after warning.
                     return
             except Exception as _sec_exc:

@@ -32,6 +32,7 @@ Example::
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from collections.abc import Callable, Coroutine
@@ -134,10 +135,8 @@ class DiscordGatewayClient:
         self._running = False
         if self._heartbeat_task is not None:
             self._heartbeat_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._heartbeat_task
-            except asyncio.CancelledError:
-                pass
             self._heartbeat_task = None
 
         if self._ws is not None:
@@ -276,10 +275,8 @@ class DiscordGatewayClient:
         """Cancel any existing heartbeat task and start a new one."""
         if self._heartbeat_task is not None:
             self._heartbeat_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._heartbeat_task
-            except asyncio.CancelledError:
-                pass
 
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop(interval))
 

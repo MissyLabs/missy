@@ -29,6 +29,7 @@ Example::
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from dataclasses import dataclass
 
@@ -257,10 +258,8 @@ class AgentRuntime:
 
         cost_detail = {}
         if self._cost_tracker is not None:
-            try:
+            with contextlib.suppress(Exception):
                 cost_detail = self._cost_tracker.get_summary()
-            except Exception:
-                pass
 
         self._emit_event(
             session_id=sid,
@@ -538,7 +537,7 @@ class AgentRuntime:
                         # Use the last tc/tr from the loop (they stay in scope)
                         strategy_prompt = failure_tracker.get_strategy_prompt(tc.name, tr.content)
                         loop_messages.append({"role": "user", "content": strategy_prompt})
-                        try:
+                        with contextlib.suppress(Exception):
                             self._emit_event(
                                 session_id=session_id,
                                 task_id=task_id,
@@ -549,18 +548,14 @@ class AgentRuntime:
                                     "failure_count": failure_tracker.threshold,
                                 },
                             )
-                        except Exception:
-                            pass
 
                         # Feature #9: error-driven code evolution analysis
                         self._analyze_for_evolution(tc.name, tr.content, failure_tracker)
 
                     # Feature #8: checkpoint after each round of tool results
                     if _cm is not None and _checkpoint_id is not None:
-                        try:
+                        with contextlib.suppress(Exception):
                             _cm.update(_checkpoint_id, loop_messages, tool_names_used, iteration)
-                        except Exception:
-                            pass
 
                     # Inject verification prompt
                     verification = make_verification_prompt()
@@ -578,19 +573,15 @@ class AgentRuntime:
                 )
                 # Feature #8: mark checkpoint complete on success
                 if _cm is not None and _checkpoint_id is not None:
-                    try:
+                    with contextlib.suppress(Exception):
                         _cm.complete(_checkpoint_id)
-                    except Exception:
-                        pass
                 return final_text, tool_names_used
 
         except Exception:
             # Feature #8: mark checkpoint failed on unhandled exception
             if _cm is not None and _checkpoint_id is not None:
-                try:
+                with contextlib.suppress(Exception):
                     _cm.fail(_checkpoint_id)
-                except Exception:
-                    pass
             raise
 
         # Iteration limit reached: return whatever content we have
@@ -1116,7 +1107,7 @@ class AgentRuntime:
             self._cost_tracker.check_budget()
         except Exception:
             # Emit audit event for budget breach
-            try:
+            with contextlib.suppress(Exception):
                 self._emit_event(
                     session_id=session_id,
                     task_id=task_id,
@@ -1124,8 +1115,6 @@ class AgentRuntime:
                     result="deny",
                     detail=self._cost_tracker.get_summary(),
                 )
-            except Exception:
-                pass
             raise
 
     # ------------------------------------------------------------------

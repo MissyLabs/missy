@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import threading
@@ -124,10 +125,8 @@ class McpManager:
         with self._lock:
             clients = list(self._clients.values())
         for c in clients:
-            try:
+            with contextlib.suppress(Exception):
                 c.disconnect()
-            except Exception:
-                pass
 
     def _save_config(self) -> None:
         with self._lock:
