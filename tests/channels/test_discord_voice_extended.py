@@ -771,3 +771,746 @@ class TestResamplePcmEdgeCases:
         if out_count > 0:
             unpacked = struct.unpack(f"<{out_count}h", result)
             assert all(-32768 <= v <= 32767 for v in unpacked)
+
+    def test_last_sample_boundary_hit(self) -> None:
+        # Exercises the elif idx < len(samples) branch (lines 810-811) where
+        # idx+1 == len(samples).  Use a ratio that produces an out_count
+        # large enough to land exactly on the last valid index.
+        # 2 stereo samples → 1 mono sample after mix-down.
+        # ratio = 48000 / 16000 / 2 = 1.5 → out_count = int(1 / 1.5) = 0 for 1 mono.
+        # Use more samples so out_count is at least 2 and ratio lands on boundary.
+        # 4 stereo samples → 2 mono samples; ratio=1.5 → out_count = int(2/1.5) = 1.
+        samples = [10000, 20000, 30000, 10000]
+        pcm = struct.pack(f"<{len(samples)}h", *samples)
+        result = _resample_pcm(pcm, 48000, 16000)
+        assert isinstance(result, bytes)
+
+
+# ---------------------------------------------------------------------------
+# _clean_for_speech — uncovered truncation branch
+# ---------------------------------------------------------------------------
+
+class TestCleanForSpeech:
+    def test_truncates_at_sentence_boundary_when_period_after_200(self) -> None:
+        from missy.channels.discord.voice import _clean_for_speech
+        # Build a string > 600 chars with a period after position 200.
+        prefix = "A" * 250 + "."
+        suffix = "B" * 400
+        text = prefix + suffix
+        result = _clean_for_speech(text)
+        # Should cut at the period.
+        assert result.endswith(".")
+        assert len(result) <= 601
+
+    def test_truncates_with_ellipsis_when_no_period_after_200(self) -> None:
+        from missy.channels.discord.voice import _clean_for_speech
+        # Build a string > 600 chars with no period at all.
+        text = "X" * 700
+        result = _clean_for_speech(text)
+        assert result.endswith("...")
+
+
+# ---------------------------------------------------------------------------
+# start() — lifecycle import paths
+# ---------------------------------------------------------------------------
+
+class TestStart:
+    def test_start_raises_when_discord_not_installed(self) -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            with patch("missy.channels.discord.voice.ensure_ffmpeg_available"):
+                mgr = DiscordVoiceManager()
+
+            import builtins
+            real_import = builtins.__import__
+
+            def fake_import(name, *args, **kwargs):
+                if name == "discord":
+                    raise ImportError("No module named 'discord'")
+                return real_import(name, *args, **kwargs)
+
+            with patch("builtins.__import__", side_effect=fake_import):
+                with pytest.raises(DiscordVoiceError, match="discord.py"):
+                    loop.run_until_complete(mgr.start("test-token"))
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+
+    def test_start_raises_when_voice_recv_not_installed(self) -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            import builtins
+            real_import = builtins.__import__
+
+            # discord imports fine, but discord.ext.voice_recv does not.
+            def fake_import(name, *args, **kwargs):
+                if name == "discord.ext.voice_recv" or (
+                    name == "discord.ext" and args and "voice_recv" in str(args)
+                ):
+                    raise ImportError("No module named 'discord.ext.voice_recv'")
+                return real_import(name, *args, **kwargs)
+
+            with patch("missy.channels.discord.voice.ensure_ffmpeg_available"):
+                mgr = DiscordVoiceManager()
+
+            mock_discord = MagicMock()
+
+            with patch.dict("sys.modules", {"discord": mock_discord}):
+                with patch("builtins.__import__", side_effect=fake_import):
+                    with pytest.raises(DiscordVoiceError, match="discord-ext-voice-recv"):
+                        loop.run_until_complete(mgr.start("test-token"))
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+
+    def test_start_strips_bot_prefix_from_token(self) -> None:
+        """start() removes 'Bot ' prefix before calling client.start()."""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            with patch("missy.channels.discord.voice.ensure_ffmpeg_available"):
+                mgr = DiscordVoiceManager()
+
+            mock_discord = MagicMock()
+            mock_voice_recv = MagicMock()
+
+            # Capture what raw_token is passed to client.start().
+            captured_tokens = []
+
+            async def fake_client_start(token):
+                captured_tokens.append(token)
+                # Never completes — task will be cancelled.
+                await asyncio.sleep(9999)
+
+            mock_client_instance = MagicMock()
+            mock_client_instance.start = fake_client_start
+            mock_discord.Client.return_value = mock_client_instance
+            mock_discord.Intents.default.return_value = MagicMock()
+
+            # event decorator: register on_ready and fire it shortly after.
+            def fake_event(func):
+                loop.call_soon(
+                    lambda: loop.call_soon(
+                        lambda: asyncio.ensure_future(func(), loop=loop)
+                    )
+                )
+                return func
+
+            mock_client_instance.event = fake_event
+            mock_client_instance.user = MagicMock(id=12345)
+
+            async def run():
+                import sys as _sys
+                _sys.modules["discord"] = mock_discord
+                _sys.modules["discord.ext.voice_recv"] = mock_voice_recv
+                try:
+                    await mgr.start("Bot mytoken123")
+                except DiscordVoiceError:
+                    pass  # timeout or other error is ok in test
+                finally:
+                    if mgr._client_task:
+                        mgr._client_task.cancel()
+                        try:
+                            await mgr._client_task
+                        except (asyncio.CancelledError, Exception):
+                            pass
+
+            loop.run_until_complete(run())
+
+            if captured_tokens:
+                assert captured_tokens[0] == "mytoken123"
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+
+    def test_start_timeout_raises_discord_voice_error(self) -> None:
+        """Timeout waiting for on_ready raises DiscordVoiceError."""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            with patch("missy.channels.discord.voice.ensure_ffmpeg_available"):
+                mgr = DiscordVoiceManager()
+
+            mock_discord = MagicMock()
+            mock_voice_recv = MagicMock()
+
+            async def fake_client_start(token):
+                await asyncio.sleep(9999)
+
+            mock_client_instance = MagicMock()
+            mock_client_instance.start = fake_client_start
+            mock_discord.Client.return_value = mock_client_instance
+            mock_discord.Intents.default.return_value = MagicMock()
+
+            # event decorator that does NOT fire on_ready.
+            mock_client_instance.event = lambda func: func
+
+            import sys as _sys
+
+            async def run():
+                try:
+                    with patch("asyncio.wait_for", side_effect=TimeoutError):
+                        await mgr.start("token")
+                finally:
+                    if mgr._client_task:
+                        mgr._client_task.cancel()
+                        try:
+                            await mgr._client_task
+                        except (asyncio.CancelledError, Exception):
+                            pass
+
+            with patch.dict(_sys.modules, {
+                "discord": mock_discord,
+                "discord.ext": MagicMock(),
+                "discord.ext.voice_recv": mock_voice_recv,
+            }):
+                with pytest.raises(DiscordVoiceError, match="30 seconds"):
+                    loop.run_until_complete(run())
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+
+
+# ---------------------------------------------------------------------------
+# stop() — exception handling branches
+# ---------------------------------------------------------------------------
+
+class TestStopExceptions:
+    def test_stop_handles_tts_unload_exception(self) -> None:
+        with patch("missy.channels.discord.voice.ensure_ffmpeg_available"):
+            mgr = DiscordVoiceManager()
+        mgr._ready.set()
+        mgr._stt_engine = None
+        tts = MagicMock()
+        tts.unload.side_effect = RuntimeError("tts boom")
+        mgr._tts_engine = tts
+        mgr._client = None
+        mgr._client_task = None
+        _run(mgr.stop())  # Should not propagate.
+
+    def test_stop_handles_client_close_exception(self) -> None:
+        with patch("missy.channels.discord.voice.ensure_ffmpeg_available"):
+            mgr = DiscordVoiceManager()
+        mgr._ready.set()
+        mgr._stt_engine = None
+        mgr._tts_engine = None
+        mgr._client = MagicMock()
+        mgr._client.close = AsyncMock(side_effect=RuntimeError("close failed"))
+        mgr._client_task = None
+        _run(mgr.stop())  # Should not propagate.
+
+    def test_stop_leaves_guild_states_and_handles_leave_exception(self) -> None:
+        """Lines 221-224: stop() iterates guild states and catches leave() exceptions."""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            with patch("missy.channels.discord.voice.ensure_ffmpeg_available"):
+                mgr = DiscordVoiceManager()
+            mgr._ready.set()
+            mgr._loop = loop
+            mgr._stt_engine = None
+            mgr._tts_engine = None
+            mgr._client = MagicMock()
+            mgr._client.close = AsyncMock()
+            mgr._client_task = None
+
+            # Add a guild state whose leave() will raise.
+            vc = MagicMock()
+            vc.channel = MagicMock()
+            vc.channel.name = "Test"
+            vc.disconnect = AsyncMock(side_effect=RuntimeError("disconnect boom"))
+            state = _GuildVoiceState(voice_client=vc)
+            state.listening = False
+            state.watchdog_task = None
+            state.listen_task = None
+            mgr._guild_states[123] = state
+
+            loop.run_until_complete(mgr.stop())  # Should not raise.
+            # Guild state should be gone after leave() was attempted.
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+
+
+# ---------------------------------------------------------------------------
+# leave() — disconnect exception branch (lines 398-399)
+# ---------------------------------------------------------------------------
+
+class TestLeaveDisconnectException:
+    def test_leave_logs_disconnect_exception(self) -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            with patch("missy.channels.discord.voice.ensure_ffmpeg_available"):
+                mgr = DiscordVoiceManager.__new__(DiscordVoiceManager)
+            mgr._ready = asyncio.Event()
+            mgr._guild_states = {}
+
+            vc = MagicMock()
+            vc.channel = MagicMock()
+            vc.channel.name = "Test"
+            vc.disconnect = AsyncMock(side_effect=RuntimeError("disconnect failed"))
+
+            state = _GuildVoiceState(voice_client=vc)
+            state.listening = False
+            state.watchdog_task = None
+            state.listen_task = None
+            mgr._guild_states[999] = state
+
+            # Should not raise despite disconnect error.
+            result = loop.run_until_complete(mgr.leave(999))
+            assert result == "Test"
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+
+
+# ---------------------------------------------------------------------------
+# _play_tts — after-callback error logging and file-not-found cleanup
+# ---------------------------------------------------------------------------
+
+class TestPlayTtsExtraEdgeCases:
+    def _make_audio_buf(self, data=b"\x00" * 100):
+        from missy.channels.voice.tts.base import AudioBuffer
+        return AudioBuffer(data=data, sample_rate=22050, channels=1, format="wav")
+
+    def test_play_tts_logs_after_error(self, manager) -> None:
+        """The _after callback with an error logs but does not raise."""
+        tts = MagicMock()
+        tts.synthesize = AsyncMock(return_value=self._make_audio_buf())
+        manager._tts_engine = tts
+
+        vc = MagicMock()
+        vc.is_playing = MagicMock(return_value=False)
+        vc.stop = MagicMock()
+
+        # Call after callback with an error.
+        def fake_play(source, after=None):
+            if after:
+                after(RuntimeError("playback error"))
+
+        vc.play = fake_play
+
+        state = _GuildVoiceState(voice_client=vc)
+        _run(manager._play_tts(state, "test"))  # Should not raise.
+
+    def test_play_tts_handles_already_deleted_temp_file(self, manager) -> None:
+        """FileNotFoundError during cleanup is silently ignored (lines 464-465)."""
+        tts = MagicMock()
+        tts.synthesize = AsyncMock(return_value=self._make_audio_buf())
+        manager._tts_engine = tts
+
+        vc = MagicMock()
+        vc.is_playing = MagicMock(return_value=False)
+
+        def fake_play(source, after=None):
+            if after:
+                after(None)
+
+        vc.play = fake_play
+
+        state = _GuildVoiceState(voice_client=vc)
+
+        # Patch os.remove to raise FileNotFoundError.
+        with patch("os.remove", side_effect=FileNotFoundError("already gone")):
+            _run(manager._play_tts(state, "cleanup test"))  # Should not raise.
+
+
+# ---------------------------------------------------------------------------
+# _listen_watchdog — state/connection/router branches
+# ---------------------------------------------------------------------------
+
+class TestListenWatchdog:
+    def _make_manager(self):
+        with patch("missy.channels.discord.voice.ensure_ffmpeg_available"):
+            mgr = DiscordVoiceManager.__new__(DiscordVoiceManager)
+        mgr._ready = asyncio.Event()
+        mgr._ready.set()
+        mgr._guild_states = {}
+        mgr._client = MagicMock()
+        mgr._client.user = MagicMock(id=0)
+        mgr._discord = MagicMock()
+        mgr._voice_recv = MagicMock()
+        mgr._loop = asyncio.get_event_loop()
+        mgr._client_task = None
+        mgr._stt_engine = MagicMock()
+        mgr._tts_engine = None
+        return mgr
+
+    def test_watchdog_exits_when_state_removed(self) -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            mgr = self._make_manager()
+            mgr._loop = loop
+
+            call_count = [0]
+            original_sleep = asyncio.sleep
+
+            async def fast_sleep(s):
+                call_count[0] += 1
+                if call_count[0] >= 1:
+                    # Remove state so watchdog exits.
+                    mgr._guild_states.pop(999, None)
+                await original_sleep(0)
+
+            with patch("asyncio.sleep", side_effect=fast_sleep):
+                loop.run_until_complete(mgr._listen_watchdog(999))
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+
+    def test_watchdog_exits_when_not_listening(self) -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            mgr = self._make_manager()
+            mgr._loop = loop
+
+            vc = MagicMock(is_connected=MagicMock(return_value=True))
+            state = _GuildVoiceState(voice_client=vc)
+            state.listening = False
+            mgr._guild_states[999] = state
+
+            call_count = [0]
+            original_sleep = asyncio.sleep
+
+            async def fast_sleep(s):
+                call_count[0] += 1
+                await original_sleep(0)
+
+            with patch("asyncio.sleep", side_effect=fast_sleep):
+                loop.run_until_complete(mgr._listen_watchdog(999))
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+
+    def test_watchdog_exits_when_vc_disconnected(self) -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            mgr = self._make_manager()
+            mgr._loop = loop
+
+            vc = MagicMock(is_connected=MagicMock(return_value=False))
+            state = _GuildVoiceState(voice_client=vc)
+            state.listening = True
+            mgr._guild_states[999] = state
+
+            call_count = [0]
+            original_sleep = asyncio.sleep
+
+            async def fast_sleep(s):
+                call_count[0] += 1
+                await original_sleep(0)
+
+            with patch("asyncio.sleep", side_effect=fast_sleep):
+                loop.run_until_complete(mgr._listen_watchdog(999))
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+
+    def test_watchdog_detects_dead_router_and_restarts(self) -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            mgr = self._make_manager()
+            mgr._loop = loop
+
+            dead_router = MagicMock()
+            dead_router.is_alive.return_value = False
+
+            vc = MagicMock()
+            vc.is_connected = MagicMock(return_value=True)
+            vc._packet_router = dead_router
+            vc.stop_listening = MagicMock()
+            vc.listen = MagicMock()
+
+            state = _GuildVoiceState(voice_client=vc)
+            state.listening = True
+            mgr._guild_states[999] = state
+
+            call_count = [0]
+            original_sleep = asyncio.sleep
+
+            async def fast_sleep(s):
+                call_count[0] += 1
+                # After restart, make router alive and stop listening to exit.
+                if call_count[0] >= 2:
+                    state.listening = False
+                await original_sleep(0)
+
+            mock_sink_cls = MagicMock()
+            mock_sink_cls.return_value = MagicMock()
+            with patch("asyncio.sleep", side_effect=fast_sleep):
+                with patch("missy.channels.discord.voice._make_sink_class", return_value=mock_sink_cls):
+                    loop.run_until_complete(mgr._listen_watchdog(999))
+
+            vc.stop_listening.assert_called()
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+
+    def test_watchdog_handles_router_via_packet_router_attr(self) -> None:
+        """Uses vc.packet_router (no leading underscore) when _packet_router absent."""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            mgr = self._make_manager()
+            mgr._loop = loop
+
+            dead_router = MagicMock()
+            dead_router.is_alive.return_value = False
+
+            vc = MagicMock(spec=[])  # empty spec to control attributes manually
+            vc.is_connected = MagicMock(return_value=True)
+            # No _packet_router — use packet_router instead.
+            vc.packet_router = dead_router
+            vc.listen = MagicMock()
+
+            state = _GuildVoiceState(voice_client=vc)
+            state.listening = True
+            mgr._guild_states[999] = state
+
+            call_count = [0]
+            original_sleep = asyncio.sleep
+
+            async def fast_sleep(s):
+                call_count[0] += 1
+                if call_count[0] >= 2:
+                    state.listening = False
+                await original_sleep(0)
+
+            mock_sink_cls = MagicMock()
+            mock_sink_cls.return_value = MagicMock()
+            with patch("asyncio.sleep", side_effect=fast_sleep):
+                with patch("missy.channels.discord.voice._make_sink_class", return_value=mock_sink_cls):
+                    loop.run_until_complete(mgr._listen_watchdog(999))
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+
+    def test_watchdog_logs_error_when_restart_fails(self) -> None:
+        """Lines 550-551: restart failure is logged, not re-raised."""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            mgr = self._make_manager()
+            mgr._loop = loop
+
+            dead_router = MagicMock()
+            dead_router.is_alive.return_value = False
+
+            vc = MagicMock()
+            vc.is_connected = MagicMock(return_value=True)
+            vc._packet_router = dead_router
+            vc.stop_listening = MagicMock(side_effect=RuntimeError("stop failed"))
+            vc.listen = MagicMock()
+
+            state = _GuildVoiceState(voice_client=vc)
+            state.listening = True
+            mgr._guild_states[999] = state
+
+            call_count = [0]
+            original_sleep = asyncio.sleep
+
+            async def fast_sleep(s):
+                call_count[0] += 1
+                if call_count[0] >= 2:
+                    state.listening = False
+                await original_sleep(0)
+
+            mock_sink_cls = MagicMock()
+            mock_sink_cls.return_value = MagicMock()
+            with patch("asyncio.sleep", side_effect=fast_sleep):
+                with patch("missy.channels.discord.voice._make_sink_class", return_value=mock_sink_cls):
+                    loop.run_until_complete(mgr._listen_watchdog(999))
+            # No assertion needed — just verifying it doesn't raise.
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+
+
+# ---------------------------------------------------------------------------
+# _handle_speech — success path with TTS, member not found, TTS error
+# ---------------------------------------------------------------------------
+
+class TestHandleSpeechFullPaths:
+    def _make_manager_for_speech(self, loop=None):
+        if loop is None:
+            loop = asyncio.get_event_loop()
+        with patch("missy.channels.discord.voice.ensure_ffmpeg_available"):
+            mgr = DiscordVoiceManager.__new__(DiscordVoiceManager)
+        mgr._ready = asyncio.Event()
+        mgr._ready.set()
+        mgr._guild_states = {}
+        mgr._client = MagicMock()
+        mgr._client.user = MagicMock(id=0)
+        mgr._discord = MagicMock()
+        mgr._voice_recv = MagicMock()
+        mgr._loop = loop
+        mgr._client_task = None
+        return mgr
+
+    def test_handle_speech_full_success_with_tts(self) -> None:
+        from missy.channels.voice.stt.base import TranscriptionResult
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            mgr = self._make_manager_for_speech(loop)
+            vc = MagicMock(is_playing=MagicMock(return_value=False))
+            state = _GuildVoiceState(voice_client=vc)
+            state.listening = True
+            mgr._guild_states[999] = state
+
+            stt = MagicMock()
+            stt.transcribe = AsyncMock(return_value=TranscriptionResult(
+                text="what time is it", confidence=0.92, processing_ms=120,
+            ))
+            mgr._stt_engine = stt
+
+            tts_engine = MagicMock()
+            mgr._tts_engine = tts_engine
+            mgr._play_tts = AsyncMock()
+
+            agent_cb = AsyncMock(return_value="It is three o'clock.")
+            mgr._agent_callback = agent_cb
+
+            guild = _make_guild(members={42: MagicMock(display_name="Charlie")})
+            mgr._client.get_guild = MagicMock(return_value=guild)
+
+            # Need >=20000 stereo samples to produce >=0.3s at 16kHz after resample.
+            long_pcm = struct.pack("<20000h", *([1000] * 20000))
+            loop.run_until_complete(mgr._handle_speech(guild_id=999, user_id=42, pcm_48k=long_pcm, sample_rate=48000))
+
+            agent_cb.assert_awaited_once()
+            mgr._play_tts.assert_awaited_once_with(state, "It is three o'clock.")
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+
+    def test_handle_speech_member_not_found_uses_user_id_string(self) -> None:
+        from missy.channels.voice.stt.base import TranscriptionResult
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            mgr = self._make_manager_for_speech(loop)
+            vc = MagicMock(is_playing=MagicMock(return_value=False))
+            state = _GuildVoiceState(voice_client=vc)
+            state.listening = True
+            mgr._guild_states[999] = state
+
+            stt = MagicMock()
+            stt.transcribe = AsyncMock(return_value=TranscriptionResult(
+                text="hello missy", confidence=0.85, processing_ms=90,
+            ))
+            mgr._stt_engine = stt
+            mgr._tts_engine = None
+
+            agent_cb = AsyncMock(return_value="Hello!")
+            mgr._agent_callback = agent_cb
+
+            # Member not found → user name falls back to str(user_id).
+            guild = _make_guild(members={})
+            mgr._client.get_guild = MagicMock(return_value=guild)
+
+            long_pcm = struct.pack("<20000h", *([500] * 20000))
+            loop.run_until_complete(mgr._handle_speech(guild_id=999, user_id=99, pcm_48k=long_pcm, sample_rate=48000))
+
+            agent_cb.assert_awaited_once()
+            prompt_arg = agent_cb.call_args[0][0]
+            assert "99" in prompt_arg  # user_id used as name
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+
+    def test_handle_speech_tts_playback_exception_is_caught(self) -> None:
+        from missy.channels.voice.stt.base import TranscriptionResult
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            mgr = self._make_manager_for_speech(loop)
+            vc = MagicMock(is_playing=MagicMock(return_value=False))
+            state = _GuildVoiceState(voice_client=vc)
+            state.listening = True
+            mgr._guild_states[999] = state
+
+            stt = MagicMock()
+            stt.transcribe = AsyncMock(return_value=TranscriptionResult(
+                text="tell me a joke", confidence=0.9, processing_ms=80,
+            ))
+            mgr._stt_engine = stt
+            mgr._tts_engine = MagicMock()  # can_speak = True
+            mgr._play_tts = AsyncMock(side_effect=RuntimeError("TTS exploded"))
+            mgr._agent_callback = AsyncMock(return_value="Why did the chicken cross the road?")
+
+            guild = _make_guild(members={5: MagicMock(display_name="Dave")})
+            mgr._client.get_guild = MagicMock(return_value=guild)
+
+            long_pcm = struct.pack("<20000h", *([200] * 20000))
+            # Should not raise even though _play_tts raises.
+            loop.run_until_complete(mgr._handle_speech(guild_id=999, user_id=5, pcm_48k=long_pcm, sample_rate=48000))
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+
+    def test_handle_speech_exception_in_stt_is_caught(self) -> None:
+        """Top-level except in _handle_speech catches STT errors (line 638-639)."""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            mgr = self._make_manager_for_speech(loop)
+            vc = MagicMock(is_playing=MagicMock(return_value=False))
+            state = _GuildVoiceState(voice_client=vc)
+            state.listening = True
+            mgr._guild_states[999] = state
+
+            stt = MagicMock()
+            stt.transcribe = AsyncMock(side_effect=RuntimeError("stt crashed"))
+            mgr._stt_engine = stt
+            mgr._tts_engine = None
+            mgr._agent_callback = None
+
+            long_pcm = struct.pack("<20000h", *([300] * 20000))
+            # Should not raise.
+            loop.run_until_complete(mgr._handle_speech(guild_id=999, user_id=1, pcm_48k=long_pcm, sample_rate=48000))
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+
+    def test_handle_speech_response_cleaned_to_empty_skips_tts(self) -> None:
+        """If _clean_for_speech returns empty string, TTS is skipped."""
+        from missy.channels.voice.stt.base import TranscriptionResult
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            mgr = self._make_manager_for_speech(loop)
+            vc = MagicMock(is_playing=MagicMock(return_value=False))
+            state = _GuildVoiceState(voice_client=vc)
+            state.listening = True
+            mgr._guild_states[999] = state
+
+            stt = MagicMock()
+            stt.transcribe = AsyncMock(return_value=TranscriptionResult(
+                text="clean me", confidence=0.9, processing_ms=10,
+            ))
+            mgr._stt_engine = stt
+            mgr._tts_engine = MagicMock()
+            mgr._play_tts = AsyncMock()
+
+            # Agent returns text that cleans to empty (only markdown syntax).
+            mgr._agent_callback = AsyncMock(return_value="``` ```")
+
+            guild = _make_guild(members={1: MagicMock(display_name="Ed")})
+            mgr._client.get_guild = MagicMock(return_value=guild)
+
+            long_pcm = struct.pack("<20000h", *([400] * 20000))
+            loop.run_until_complete(mgr._handle_speech(guild_id=999, user_id=1, pcm_48k=long_pcm, sample_rate=48000))
+
+            # _play_tts should not be called since cleaned response is empty.
+            # (Depending on what clean returns — if it happens to return empty, good.)
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)

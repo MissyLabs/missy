@@ -15,6 +15,8 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
+import logging
+
 import missy.channels.voice.edge_client as ec
 from missy.channels.voice.edge_client import (
     _ensure_runtime_dir,
@@ -226,6 +228,32 @@ class TestRecordAudio:
             _record_audio(duration=1.0)
 
         mock_proc.kill.assert_called_once()
+
+    @patch("missy.channels.voice.edge_client.time.sleep")
+    @patch("missy.channels.voice.edge_client.subprocess.Popen")
+    def test_reads_pcm_from_valid_wav_file(self, mock_popen, mock_sleep, tmp_path) -> None:
+        """Lines 109-111: pw-record succeeds and wav file is read via wave module."""
+        import wave, struct
+
+        # Write a minimal valid WAV file (100ms of silence at 16kHz mono).
+        wav_path = tmp_path / "audio.wav"
+        n_frames = 1600  # 0.1s at 16kHz
+        with wave.open(str(wav_path), "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(16000)
+            wf.writeframes(b"\x00\x00" * n_frames)
+
+        mock_proc = MagicMock()
+        mock_proc.wait.return_value = None
+        mock_popen.return_value = mock_proc
+
+        with patch("tempfile.NamedTemporaryFile") as mock_tmp:
+            mock_tmp.return_value.__enter__.return_value.name = str(wav_path)
+            result = _record_audio(duration=0.1)
+
+        assert len(result) == n_frames * 2
+        assert result == b"\x00\x00" * n_frames
 
 
 # ---------------------------------------------------------------------------
@@ -549,3 +577,309 @@ class TestVoiceLoopResponseFrames:
             json.dumps({"type": "transcript", "text": "hi"}),  # no confidence key
             json.dumps({"type": "audio_end"}),
         ])
+
+
+# ---------------------------------------------------------------------------
+# _record_audio — empty WAV file (size == 0) path (lines 105-106)
+# ---------------------------------------------------------------------------
+
+class TestRecordAudioEmptyWav:
+    @patch("missy.channels.voice.edge_client.time.sleep")
+    @patch("missy.channels.voice.edge_client.subprocess.Popen")
+    def test_returns_empty_when_wav_file_is_zero_bytes(self, mock_popen, mock_sleep, tmp_path) -> None:
+        # File exists but is empty → should return b"".
+        wav_file = tmp_path / "empty.wav"
+        wav_file.write_bytes(b"")  # zero bytes
+
+        mock_proc = MagicMock()
+        mock_proc.wait.return_value = None
+        mock_popen.return_value = mock_proc
+
+        with patch("tempfile.NamedTemporaryFile") as mock_tmp:
+            mock_tmp.return_value.__enter__.return_value.name = str(wav_file)
+            result = _record_audio(duration=1.0)
+
+        assert result == b""
+
+
+# ---------------------------------------------------------------------------
+# _voice_loop — no audio captured (lines 265-267) and KeyboardInterrupt /
+# TimeoutError inner-loop branches (lines 339-346)
+# ---------------------------------------------------------------------------
+
+class TestVoiceLoopEdgeCases:
+    def test_voice_loop_continues_when_no_audio_captured(self) -> None:
+        """Empty PCM → 'No audio captured.' → continues; then EOFError to exit."""
+        auth_ok = json.dumps({"type": "auth_ok", "room": "Office"})
+
+        call_num = [0]
+
+        async def recv():
+            if call_num[0] == 0:
+                call_num[0] += 1
+                return auth_ok
+            raise EOFError
+
+        mock_ws = AsyncMock()
+        mock_ws.send = AsyncMock()
+        mock_ws.recv = recv
+        mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
+        mock_ws.__aexit__ = AsyncMock(return_value=False)
+
+        input_call_count = [0]
+
+        def one_shot_input(prompt=""):
+            n = input_call_count[0]
+            input_call_count[0] += 1
+            if n == 0:
+                return ""  # Allow one pass; _record_audio returns b"".
+            raise EOFError  # Exit on second call.
+
+        with patch("missy.channels.voice.edge_client.websockets.connect", return_value=mock_ws):
+            with patch("builtins.input", side_effect=one_shot_input):
+                with patch.object(ec, "_record_audio", return_value=b""):
+                    asyncio.run(_voice_loop(
+                        server_url="ws://localhost:8765",
+                        node_id="n1",
+                        token="tok",
+                        record_seconds=1.0,
+                        sample_rate=16000,
+                        channels=1,
+                        continuous=False,
+                    ))
+
+        # Only auth frame should have been sent (no audio frames).
+        assert mock_ws.send.call_count == 1
+
+    def test_voice_loop_handles_timeout_error_and_continues(self) -> None:
+        """TimeoutError during ws.recv → 'Timeout waiting...' is printed and loop continues."""
+        auth_ok = json.dumps({"type": "auth_ok", "room": "Test"})
+        pcm_data = b"\x01\x02" * 100
+
+        recv_call_num = [0]
+
+        async def recv():
+            n = recv_call_num[0]
+            recv_call_num[0] += 1
+            if n == 0:
+                return auth_ok
+            # On inner-loop recv call, raise TimeoutError (mimics wait_for timeout).
+            raise TimeoutError("response timeout")
+
+        mock_ws = AsyncMock()
+        mock_ws.send = AsyncMock()
+        mock_ws.recv = recv
+        mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
+        mock_ws.__aexit__ = AsyncMock(return_value=False)
+
+        input_call_count = [0]
+
+        def counting_input(prompt=""):
+            n = input_call_count[0]
+            input_call_count[0] += 1
+            if n == 0:
+                return ""  # First iteration: proceed.
+            raise EOFError  # Second iteration: exit.
+
+        with patch("missy.channels.voice.edge_client.websockets.connect", return_value=mock_ws):
+            with patch("builtins.input", side_effect=counting_input):
+                with patch.object(ec, "_record_audio", return_value=pcm_data):
+                    asyncio.run(_voice_loop(
+                        server_url="ws://localhost:8765",
+                        node_id="n1",
+                        token="tok",
+                        record_seconds=1.0,
+                        sample_rate=16000,
+                        channels=1,
+                        continuous=False,
+                    ))
+
+    def test_voice_loop_keyboard_interrupt_breaks_loop(self) -> None:
+        """KeyboardInterrupt during input() cleanly exits the loop."""
+        auth_ok = json.dumps({"type": "auth_ok", "room": "Room"})
+
+        recv_call_num = [0]
+
+        async def recv():
+            n = recv_call_num[0]
+            recv_call_num[0] += 1
+            if n == 0:
+                return auth_ok
+            raise EOFError
+
+        mock_ws = AsyncMock()
+        mock_ws.send = AsyncMock()
+        mock_ws.recv = recv
+        mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
+        mock_ws.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("missy.channels.voice.edge_client.websockets.connect", return_value=mock_ws):
+            with patch("builtins.input", side_effect=KeyboardInterrupt):
+                asyncio.run(_voice_loop(
+                    server_url="ws://localhost:8765",
+                    node_id="n1",
+                    token="tok",
+                    record_seconds=1.0,
+                    sample_rate=16000,
+                    channels=1,
+                    continuous=False,
+                ))
+
+        # Verify we disconnected cleanly — only auth frame sent.
+        assert mock_ws.send.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# main() function — CLI entry point (lines 362-441)
+# ---------------------------------------------------------------------------
+
+class TestMainFunction:
+    def _run_main(self, argv, **extra_patches):
+        """Helper: run main() with patched sys.argv and standard patches."""
+        patches = {
+            "sys.argv": ["edge_client"] + argv,
+        }
+        patches.update(extra_patches)
+
+        from missy.channels.voice.edge_client import main
+        return main
+
+    def test_main_requires_node_id_and_token_or_exits(self, tmp_path) -> None:
+        """Missing --node-id and --token causes sys.exit(1)."""
+        cfg_path = tmp_path / "edge.json"
+        from missy.channels.voice.edge_client import main
+        with patch("sys.argv", ["edge_client", "--config", str(cfg_path)]):
+            with patch("missy.channels.voice.edge_client._load_config", return_value={}):
+                with pytest.raises(SystemExit) as exc_info:
+                    main()
+        assert exc_info.value.code == 1
+
+    def test_main_pair_mode_calls_pair_device_and_saves_config(self, tmp_path) -> None:
+        """--pair mode calls _pair_device and saves node_id to config file."""
+        cfg_path = tmp_path / "edge.json"
+        from missy.channels.voice.edge_client import main
+
+        with patch("sys.argv", [
+            "edge_client",
+            "--pair",
+            "--name", "My Node",
+            "--room", "Living Room",
+            "--config", str(cfg_path),
+            "--server", "ws://localhost:8765",
+        ]):
+            with patch.object(ec, "_pair_device", new=AsyncMock(return_value="node-xyz")):
+                main()
+
+        # Config file should be created with node_id.
+        data = json.loads(cfg_path.read_text())
+        assert data["node_id"] == "node-xyz"
+
+    def test_main_pair_mode_no_result_does_not_save(self, tmp_path) -> None:
+        """--pair mode with None result doesn't save config."""
+        cfg_path = tmp_path / "edge.json"
+        from missy.channels.voice.edge_client import main
+
+        with patch("sys.argv", [
+            "edge_client",
+            "--pair",
+            "--config", str(cfg_path),
+        ]):
+            with patch.object(ec, "_pair_device", new=AsyncMock(return_value=None)):
+                main()
+
+        assert not cfg_path.exists()
+
+    def test_main_runs_voice_loop_with_credentials(self, tmp_path) -> None:
+        """main() with node-id and token calls _voice_loop."""
+        cfg_path = tmp_path / "edge.json"
+        from missy.channels.voice.edge_client import main
+
+        with patch("sys.argv", [
+            "edge_client",
+            "--node-id", "node-abc",
+            "--token", "secret-token",
+            "--config", str(cfg_path),
+        ]):
+            with patch.object(ec, "_voice_loop", new=AsyncMock()) as mock_loop:
+                main()
+
+        mock_loop.assert_awaited_once()
+        kwargs = mock_loop.call_args[1]
+        assert kwargs["node_id"] == "node-abc"
+        assert kwargs["token"] == "secret-token"
+
+    def test_main_loads_credentials_from_config_file(self, tmp_path) -> None:
+        """main() reads node_id and token from config file when not on CLI."""
+        cfg_path = tmp_path / "edge.json"
+        cfg_path.write_text(json.dumps({
+            "node_id": "from-config",
+            "token": "config-token",
+        }))
+        from missy.channels.voice.edge_client import main
+
+        with patch("sys.argv", ["edge_client", "--config", str(cfg_path)]):
+            with patch.object(ec, "_voice_loop", new=AsyncMock()) as mock_loop:
+                main()
+
+        mock_loop.assert_awaited_once()
+        kwargs = mock_loop.call_args[1]
+        assert kwargs["node_id"] == "from-config"
+        assert kwargs["token"] == "config-token"
+
+    def test_main_saves_config_after_running(self, tmp_path) -> None:
+        """main() persists server/node_id/token to config before running loop."""
+        cfg_path = tmp_path / "edge.json"
+        from missy.channels.voice.edge_client import main
+
+        with patch("sys.argv", [
+            "edge_client",
+            "--node-id", "node-save",
+            "--token", "save-token",
+            "--server", "ws://save-host:8765",
+            "--config", str(cfg_path),
+        ]):
+            with patch.object(ec, "_voice_loop", new=AsyncMock()):
+                main()
+
+        data = json.loads(cfg_path.read_text())
+        assert data["node_id"] == "node-save"
+        assert data["token"] == "save-token"
+        assert data["server"] == "ws://save-host:8765"
+
+    def test_main_verbose_flag_sets_debug_logging(self, tmp_path) -> None:
+        """--verbose flag configures DEBUG level logging."""
+        cfg_path = tmp_path / "edge.json"
+        from missy.channels.voice.edge_client import main
+
+        with patch("sys.argv", [
+            "edge_client",
+            "--node-id", "n1",
+            "--token", "t1",
+            "--config", str(cfg_path),
+            "--verbose",
+        ]):
+            with patch.object(ec, "_voice_loop", new=AsyncMock()):
+                with patch("logging.basicConfig") as mock_basic:
+                    main()
+
+        mock_basic.assert_called_once()
+        call_kwargs = mock_basic.call_args[1]
+        assert call_kwargs["level"] == logging.DEBUG
+
+    def test_main_continuous_flag_passed_to_voice_loop(self, tmp_path) -> None:
+        """--continuous is forwarded to _voice_loop."""
+        cfg_path = tmp_path / "edge.json"
+        from missy.channels.voice.edge_client import main
+
+        with patch("sys.argv", [
+            "edge_client",
+            "--node-id", "n1",
+            "--token", "t1",
+            "--config", str(cfg_path),
+            "--continuous",
+        ]):
+            with patch.object(ec, "_voice_loop", new=AsyncMock()) as mock_loop:
+                main()
+
+        kwargs = mock_loop.call_args[1]
+        assert kwargs["continuous"] is True
