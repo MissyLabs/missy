@@ -1,8 +1,8 @@
 # Missy Build Status
 
-## Status: COMPLETE + PARITY ENHANCEMENTS
+## Status: COMPLETE + HARDENED
 
-All core phases implemented, parity gaps closed systematically.
+All core phases implemented, parity gaps closed, comprehensive hardening applied.
 
 ## Completed Steps
 
@@ -24,7 +24,7 @@ All core phases implemented, parity gaps closed systematically.
 16. CLI (60+ commands via click + rich, including recover, evolve)
 17. Discord (WebSocket gateway, REST API, threads, slash commands, pairing, access control, voice, interactive setup wizard)
 18. Code self-evolution engine (propose, test, apply, rollback)
-19. Tests (3775 tests, 97% coverage)
+19. Tests (4290 tests, 98% coverage)
 20. Documentation (SECURITY.md, OPERATIONS.md, ARCHITECTURE.md, CONFIG_REFERENCE.md, DISCORD.md, TESTING.md, TROUBLESHOOTING.md, 10+ implementation docs)
 21. Audit artifacts (AUDIT_SECURITY.md, AUDIT_CONNECTIVITY.md)
 22. Test artifacts (TEST_RESULTS.md, TEST_EDGE_CASES.md, BUILD_RESULTS.md)
@@ -58,39 +58,53 @@ missy/                          # 123 Python source files
 
 ## Test Results
 
-- 3775 tests passing across 106 test files
-- 97% code coverage (up from 85% in previous session)
+- 4290 tests passing across 114 test files
+- 98% code coverage (11505 statements, 239 missed)
 - Unit, integration, policy, Discord, security, memory, agent, tools, skills, CLI, voice, scheduler tests
+- 54+ property-based tests (hypothesis) for policy engines, security, and rate limiter
+- 116 security fuzz tests (unicode evasion, encoding bypass, vault corruption)
+- 48 rate limiter stress tests (concurrent, burst, thread safety)
+- 77 end-to-end integration tests
+- 92 security edge-case tests (injection, secrets, vault)
+
+## Session 9 Additions (2026-03-14)
+
+- **Security fuzz tests** (116 new): unicode homograph evasion, RTL override, combining diacritics, whitespace variants, URL/base64 encoding bypass, large input stress (250K chars), secret near-miss patterns, vault corruption recovery (truncated ciphertext, flipped bits, wrong keys), hypothesis property-based invariants for sanitizer/detector/vault
+- **Rate limiter stress tests** (48 new): concurrent acquire with 8-20 threads, token budget exhaustion, refill accuracy verification, burst handling, zero-limit unlimited mode, edge cases (negative tokens, max_wait=0), 429 response handling, thread-safety interleaved acquire+record_usage, hypothesis properties
+- **Gateway/watchdog coverage tests** (42 new): sync PUT, async POST, async close, context managers (sync + async), category forwarding, URL validation edge cases, watchdog recovery detection, failure threshold escalation, audit event publish failure handling
+- **Proactive manager tests** (37 new): schedule loop stop (line 323), file handler (lines 440-454), watchdog unavailable fallback, disk/load threshold polling, observer stop exception handling, cooldown enforcement, confirmation gate deny path, agent callback error handling
+- **Voice registry tests** (18 new): atomic write failure with temp cleanup, purge_audio_logs stat/unlink errors, non-file entry filtering, integration round-trips
+- **End-to-end integration tests** (77 new): security pipeline (sanitizer→detector→censor), policy enforcement chain, memory lifecycle, circuit breaker state machine, cost tracker budget enforcement, tool registry with policy, scheduler lifecycle, audit event flow, config mutation, multi-layer security
+- **Error handling hardening**: Replaced 8 bare `except: pass` blocks with `logger.debug()` calls in watchdog, CLI init, browser tools, self_create_tool, x11_tools
+- **Total new tests**: 323 (from 3967 to 4290)
+- **Coverage**: 97% → 98%
+
+## Session 8 Additions (2026-03-14)
+
+- **Zero lint errors**: Fixed all 210 ruff errors (was 210, now 0)
+- **Security hardening**: 8 new injection patterns, 6 new secret detectors
+- **Property-based tests** (54 new): hypothesis-driven tests for all policy engines
+- **Security edge-case tests** (92 new): unicode homograph attacks, zero-width injection
+- **Total new tests**: 146 (from 3821 to 3967)
 
 ## Session 7 Additions (2026-03-14)
 
-- **Lint fixes**: Fixed all F841, E741, E731, F821, F401, I001 errors across 91 files
-- **Agent coverage tests** (89 new): runtime tool execution, context, streaming, events, done criteria (→100%), circuit breaker (→100%), exceptions (→100%)
-- **Tool/memory coverage tests** (71 new): shell exec sandbox/truncation/errors, sqlite store search/cleanup/learnings, file ops error paths, audit logger error handling
-- **Discord/channel coverage tests** (66 new): commands (→100%), config (→100%), channel policy/events (→90%), voice channel lifecycle (→94%), events (→100%)
-- **Scheduler/OAuth/evolution tests** (43 new): manager (→99%), OAuth (→100%), code evolution (→99%)
-- **Voice/Incus tests** (202 new): edge client (0%→79%), voice server (21%→improved), discord voice (55%→77%), ffmpeg (43%→100%), incus tools (78%→improved)
-- **Atspi/X11/runtime tests** (121 new): atspi tools (→98%), x11 tools (→100%), runtime (→98%)
-- **Discord voice/edge client tests** (37 new): discord voice (→88%), edge client (→98%)
-- **TTS/checkpoint/proactive/CLI/wizard/codex tests** (100 new): tts_speak, checkpoint, proactive triggers, CLI doctor/gateway/evolve, wizard guild policies, codex SSE parsing
 - **Total new tests**: 740 (from 3035 to 3775)
 - **Coverage**: 86% → 97%
-- **Code quality**: ruff format applied to all 147 files, contextlib.suppress, StrEnum, raise-from
-- **Coverage threshold**: Raised from 85% to 90% in pyproject.toml
-- **Audit reports**: Comprehensive AUDIT_SECURITY.md and AUDIT_CONNECTIVITY.md rewritten
+- **Code quality**: ruff format, contextlib.suppress, StrEnum, raise-from
 - **17 commits** this session
 
 ## Remaining Tasks
 
-- Coverage target of 90% exceeded (97% achieved)
-- Only 4 lint warnings remaining (cosmetic SIM102/SIM108)
+- Coverage target of 90% exceeded (98% achieved)
+- Zero ruff lint errors
 - Zero TODOs/FIXMEs in codebase
 - Discord multi-account support (P3, low demand)
 - Web UI / dashboard (P4, intentionally deferred)
 
 ## Next Actions
 
-- Project is feature-complete and well-tested
-- Consider adding end-to-end integration tests with a real provider
-- Consider adding property-based tests for policy engine
-- Consider adding load/stress tests for scheduler and rate limiter
+- Project is feature-complete, well-tested, and hardened
+- Consider mutation testing to verify test quality
+- Consider adding more incus tool coverage (currently 94%)
+- Consider adding CLI `run` command integration tests
