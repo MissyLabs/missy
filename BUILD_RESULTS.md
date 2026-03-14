@@ -1,271 +1,74 @@
 # BUILD_RESULTS
 
-- Timestamp: 2026-03-12 23:53:54
-- Python version:
-Python 3.12.3
+- Timestamp: 2026-03-14
+- Python version: 3.12.3
 
-## Repository snapshot
+## Build Summary
+
+| Metric | Value |
+|--------|-------|
+| Source files | 123 Python modules |
+| Test files | 69 test files |
+| Total tests | 2500 |
+| Tests passing | 2500 |
+| Tests failing | 0 |
+| Coverage | 70% |
+| Lint errors | 1 (false positive: pyatspi availability check) |
+
+## Architecture
+
 ```
-/home/bmerriam/git/missy/ARCHITECTURE.md
-/home/bmerriam/git/missy/AUDIT_CONNECTIVITY.md
-/home/bmerriam/git/missy/AUDIT_SECURITY.md
-/home/bmerriam/git/missy/build_log.txt
-/home/bmerriam/git/missy/BUILD_RESULTS.md
-/home/bmerriam/git/missy/BUILD_STATUS.md
-/home/bmerriam/git/missy/CLAUDE.md
-/home/bmerriam/git/missy/COMPLETE.md
-/home/bmerriam/git/missy/CONFIG_REFERENCE.md
-/home/bmerriam/git/missy/.coverage
-/home/bmerriam/git/missy/DISCORD.md
-/home/bmerriam/git/missy/docs/edge-node-client.md
-/home/bmerriam/git/missy/docs/implementation/agent-loop.md
-/home/bmerriam/git/missy/docs/implementation/audit-events.md
-/home/bmerriam/git/missy/docs/implementation/discord-channel.md
-/home/bmerriam/git/missy/docs/implementation/manifest-schema.md
-/home/bmerriam/git/missy/docs/implementation/module-map.md
-/home/bmerriam/git/missy/docs/implementation/network-client.md
-/home/bmerriam/git/missy/docs/implementation/persistence-schema.md
-/home/bmerriam/git/missy/docs/implementation/policy-engine.md
-/home/bmerriam/git/missy/docs/implementation/provider-abstraction.md
-/home/bmerriam/git/missy/docs/implementation/scheduler-execution.md
-/home/bmerriam/git/missy/docs/THREAT_MODEL.md
-/home/bmerriam/git/missy/.embedded_prompt.txt
-/home/bmerriam/git/missy/examples/config.yaml
-/home/bmerriam/git/missy/examples/discord-configs.yaml
-/home/bmerriam/git/missy/examples/systemd/missy-gateway.service
-/home/bmerriam/git/missy/examples/systemd/README.md
-/home/bmerriam/git/missy/gaps.md
-/home/bmerriam/git/missy/.git/COMMIT_EDITMSG
-/home/bmerriam/git/missy/.git/config
-/home/bmerriam/git/missy/.git/description
-/home/bmerriam/git/missy/.git/FETCH_HEAD
-/home/bmerriam/git/missy/.git/HEAD
-/home/bmerriam/git/missy/.git/hooks/applypatch-msg.sample
-/home/bmerriam/git/missy/.git/hooks/commit-msg.sample
-/home/bmerriam/git/missy/.git/hooks/fsmonitor-watchman.sample
-/home/bmerriam/git/missy/.git/hooks/post-update.sample
-/home/bmerriam/git/missy/.git/hooks/pre-applypatch.sample
-/home/bmerriam/git/missy/.git/hooks/pre-commit.sample
-/home/bmerriam/git/missy/.git/hooks/pre-merge-commit.sample
-/home/bmerriam/git/missy/.git/hooks/prepare-commit-msg.sample
-/home/bmerriam/git/missy/.git/hooks/pre-push.sample
-/home/bmerriam/git/missy/.git/hooks/pre-rebase.sample
-/home/bmerriam/git/missy/.git/hooks/pre-receive.sample
-/home/bmerriam/git/missy/.git/hooks/push-to-checkout.sample
-/home/bmerriam/git/missy/.git/hooks/sendemail-validate.sample
-/home/bmerriam/git/missy/.git/hooks/update.sample
-/home/bmerriam/git/missy/.gitignore
-/home/bmerriam/git/missy/.git/index
-/home/bmerriam/git/missy/.git/info/exclude
-/home/bmerriam/git/missy/.git/logs/HEAD
-/home/bmerriam/git/missy/.git/ORIG_HEAD
-/home/bmerriam/git/missy/.git/packed-refs
-/home/bmerriam/git/missy/IMPLEMENTATION.md
-/home/bmerriam/git/missy/LAST_SESSION_SUMMARY.md
-/home/bmerriam/git/missy/LOOP_HEALTH.md
-/home/bmerriam/git/missy/LOOP_INSTRUCTIONS.md
-/home/bmerriam/git/missy/MEMORY_AND_PERSISTENCE.md
-/home/bmerriam/git/missy/missy/agent/approval.py
-/home/bmerriam/git/missy/missy/agent/checkpoint.py
-/home/bmerriam/git/missy/missy/agent/circuit_breaker.py
-/home/bmerriam/git/missy/missy/agent/context.py
-/home/bmerriam/git/missy/missy/agent/cost_tracker.py
-/home/bmerriam/git/missy/missy/agent/done_criteria.py
-/home/bmerriam/git/missy/missy/agent/failure_tracker.py
-/home/bmerriam/git/missy/missy/agent/heartbeat.py
-/home/bmerriam/git/missy/missy/agent/__init__.py
-/home/bmerriam/git/missy/missy/agent/learnings.py
-/home/bmerriam/git/missy/missy/agent/proactive.py
-/home/bmerriam/git/missy/missy/agent/prompt_patches.py
-/home/bmerriam/git/missy/missy/agent/runtime.py
-/home/bmerriam/git/missy/missy/agent/sub_agent.py
-/home/bmerriam/git/missy/missy/agent/watchdog.py
-/home/bmerriam/git/missy/missy/channels/base.py
-/home/bmerriam/git/missy/missy/channels/cli_channel.py
-/home/bmerriam/git/missy/missy/channels/__init__.py
-/home/bmerriam/git/missy/missy/channels/webhook.py
-/home/bmerriam/git/missy/missy/cli/anthropic_auth.py
-/home/bmerriam/git/missy/missy/cli/__init__.py
-/home/bmerriam/git/missy/missy/cli/main.py
-/home/bmerriam/git/missy/missy/cli/oauth.py
-/home/bmerriam/git/missy/missy/cli/wizard.py
-/home/bmerriam/git/missy/missy/config/hotreload.py
-/home/bmerriam/git/missy/missy/config/__init__.py
-/home/bmerriam/git/missy/missy/config/settings.py
-/home/bmerriam/git/missy/missy/core/events.py
-/home/bmerriam/git/missy/missy/core/exceptions.py
-/home/bmerriam/git/missy/missy/core/__init__.py
-/home/bmerriam/git/missy/missy/core/session.py
-/home/bmerriam/git/missy/missy.egg-info/dependency_links.txt
-/home/bmerriam/git/missy/missy.egg-info/entry_points.txt
-/home/bmerriam/git/missy/missy.egg-info/PKG-INFO
-/home/bmerriam/git/missy/missy.egg-info/requires.txt
-/home/bmerriam/git/missy/missy.egg-info/SOURCES.txt
-/home/bmerriam/git/missy/missy.egg-info/top_level.txt
-/home/bmerriam/git/missy/missy/gateway/client.py
-/home/bmerriam/git/missy/missy/gateway/__init__.py
-/home/bmerriam/git/missy/missy/__init__.py
-/home/bmerriam/git/missy/missy/mcp/client.py
-/home/bmerriam/git/missy/missy/mcp/__init__.py
-/home/bmerriam/git/missy/missy/mcp/manager.py
-/home/bmerriam/git/missy/missy/memory/__init__.py
-/home/bmerriam/git/missy/missy/memory/resilient.py
-/home/bmerriam/git/missy/missy/memory/sqlite_store.py
-/home/bmerriam/git/missy/missy/memory/store.py
-/home/bmerriam/git/missy/missy/observability/audit_logger.py
-/home/bmerriam/git/missy/missy/observability/__init__.py
-/home/bmerriam/git/missy/missy/observability/otel.py
-/home/bmerriam/git/missy/missy/plugins/base.py
-/home/bmerriam/git/missy/missy/plugins/__init__.py
-/home/bmerriam/git/missy/missy/plugins/loader.py
-/home/bmerriam/git/missy/missy/policy/engine.py
-/home/bmerriam/git/missy/missy/policy/filesystem.py
-/home/bmerriam/git/missy/missy/policy/__init__.py
-/home/bmerriam/git/missy/missy/policy/network.py
-/home/bmerriam/git/missy/missy/policy/shell.py
-/home/bmerriam/git/missy/missy/providers/anthropic_provider.py
-/home/bmerriam/git/missy/missy/providers/base.py
-/home/bmerriam/git/missy/missy/providers/codex_provider.py
-/home/bmerriam/git/missy/missy/providers/__init__.py
-/home/bmerriam/git/missy/missy/providers/ollama_provider.py
-/home/bmerriam/git/missy/missy/providers/openai_provider.py
-/home/bmerriam/git/missy/missy/providers/rate_limiter.py
-/home/bmerriam/git/missy/missy/providers/registry.py
-/home/bmerriam/git/missy/missy/__pycache__/__init__.cpython-312.pyc
-/home/bmerriam/git/missy/missy/scheduler/__init__.py
-/home/bmerriam/git/missy/missy/scheduler/jobs.py
-/home/bmerriam/git/missy/missy/scheduler/manager.py
-/home/bmerriam/git/missy/missy/scheduler/parser.py
-/home/bmerriam/git/missy/missy/security/censor.py
-/home/bmerriam/git/missy/missy/security/__init__.py
-/home/bmerriam/git/missy/missy/security/sandbox.py
-/home/bmerriam/git/missy/missy/security/sanitizer.py
-/home/bmerriam/git/missy/missy/security/secrets.py
-/home/bmerriam/git/missy/missy/security/vault.py
-/home/bmerriam/git/missy/missy/skills/base.py
-/home/bmerriam/git/missy/missy/skills/__init__.py
-/home/bmerriam/git/missy/missy/skills/registry.py
-/home/bmerriam/git/missy/missy/tools/base.py
-/home/bmerriam/git/missy/missy/tools/__init__.py
-/home/bmerriam/git/missy/missy/tools/registry.py
-/home/bmerriam/git/missy/OPENCLAW_GAP_ANALYSIS.md
-/home/bmerriam/git/missy/OPERATIONS.md
-/home/bmerriam/git/missy/prompt.md
-/home/bmerriam/git/missy/PROVIDERS.md
-/home/bmerriam/git/missy/pyproject.toml
-/home/bmerriam/git/missy/.pytest_cache/CACHEDIR.TAG
-/home/bmerriam/git/missy/.pytest_cache/.gitignore
-/home/bmerriam/git/missy/.pytest_cache/README.md
-/home/bmerriam/git/missy/README.md
-/home/bmerriam/git/missy/.ruff_cache/0.15.4/4953465771804875596
-/home/bmerriam/git/missy/.ruff_cache/CACHEDIR.TAG
-/home/bmerriam/git/missy/.ruff_cache/.gitignore
-/home/bmerriam/git/missy/SCHEDULER.md
-/home/bmerriam/git/missy/SECURITY.md
-/home/bmerriam/git/missy/SKILLS_AND_PLUGINS.md
-/home/bmerriam/git/missy/.stagnation_count
-/home/bmerriam/git/missy/TEST_EDGE_CASES.md
-/home/bmerriam/git/missy/TESTING.md
-/home/bmerriam/git/missy/TEST_RESULTS.md
-/home/bmerriam/git/missy/tests/agent/__init__.py
-/home/bmerriam/git/missy/tests/agent/test_checkpoint.py
-/home/bmerriam/git/missy/tests/agent/test_cost_tracker.py
-/home/bmerriam/git/missy/tests/agent/test_failure_tracker.py
-/home/bmerriam/git/missy/tests/agent/test_proactive.py
-/home/bmerriam/git/missy/tests/agent/test_runtime_enhancements.py
-/home/bmerriam/git/missy/tests/agent/test_runtime.py
-/home/bmerriam/git/missy/tests/agent/test_runtime_streaming.py
-/home/bmerriam/git/missy/tests/channels/__init__.py
-/home/bmerriam/git/missy/tests/channels/test_cli_channel.py
-/home/bmerriam/git/missy/tests/channels/test_discord_credential_delete.py
-/home/bmerriam/git/missy/tests/cli/__init__.py
-/home/bmerriam/git/missy/tests/cli/test_cost_recover.py
-/home/bmerriam/git/missy/tests/cli/test_main.py
-/home/bmerriam/git/missy/tests/config/__init__.py
-/home/bmerriam/git/missy/tests/config/test_settings.py
-/home/bmerriam/git/missy/tests/core/__init__.py
-/home/bmerriam/git/missy/tests/core/test_session.py
-/home/bmerriam/git/missy/tests/__init__.py
-/home/bmerriam/git/missy/tests/integration/__init__.py
-/home/bmerriam/git/missy/tests/integration/test_policy_enforcement.py
-/home/bmerriam/git/missy/tests/memory/__init__.py
-/home/bmerriam/git/missy/tests/memory/test_sqlite_costs.py
-/home/bmerriam/git/missy/tests/memory/test_sqlite_sessions.py
-/home/bmerriam/git/missy/tests/memory/test_store.py
-/home/bmerriam/git/missy/tests/observability/__init__.py
-/home/bmerriam/git/missy/tests/observability/test_audit_logger.py
-/home/bmerriam/git/missy/tests/plugins/__init__.py
-/home/bmerriam/git/missy/tests/plugins/test_base.py
-/home/bmerriam/git/missy/tests/plugins/test_loader.py
-/home/bmerriam/git/missy/tests/policy/__init__.py
-/home/bmerriam/git/missy/tests/policy/test_engine.py
-/home/bmerriam/git/missy/tests/policy/test_filesystem.py
-/home/bmerriam/git/missy/tests/policy/test_network.py
-/home/bmerriam/git/missy/tests/policy/test_shell.py
-/home/bmerriam/git/missy/tests/providers/__init__.py
-/home/bmerriam/git/missy/tests/providers/test_anthropic.py
-/home/bmerriam/git/missy/tests/providers/test_base.py
-/home/bmerriam/git/missy/tests/providers/test_ollama.py
-/home/bmerriam/git/missy/tests/providers/test_openai.py
-/home/bmerriam/git/missy/tests/providers/test_rate_limiter.py
-/home/bmerriam/git/missy/tests/providers/test_registry.py
-/home/bmerriam/git/missy/tests/__pycache__/__init__.cpython-312.pyc
-/home/bmerriam/git/missy/tests/scheduler/__init__.py
-/home/bmerriam/git/missy/tests/scheduler/test_jobs.py
-/home/bmerriam/git/missy/tests/scheduler/test_manager.py
-/home/bmerriam/git/missy/tests/scheduler/test_parser.py
-/home/bmerriam/git/missy/tests/security/__init__.py
-/home/bmerriam/git/missy/tests/security/test_sandbox.py
-/home/bmerriam/git/missy/tests/security/test_sanitizer.py
-/home/bmerriam/git/missy/tests/security/test_secrets.py
-/home/bmerriam/git/missy/tests/skills/__init__.py
-/home/bmerriam/git/missy/tests/skills/test_base.py
-/home/bmerriam/git/missy/tests/skills/test_registry.py
-/home/bmerriam/git/missy/tests/tools/__init__.py
-/home/bmerriam/git/missy/tests/tools/test_calculator.py
-/home/bmerriam/git/missy/tests/tools/test_registry.py
-/home/bmerriam/git/missy/tests/tools/test_shell_exec.py
-/home/bmerriam/git/missy/tests/unit/__init__.py
-/home/bmerriam/git/missy/tests/unit/test_discord_channel.py
-/home/bmerriam/git/missy/tests/unit/test_discord_config.py
-/home/bmerriam/git/missy/tests/unit/test_gateway_client.py
-/home/bmerriam/git/missy/TROUBLESHOOTING.md
-/home/bmerriam/git/missy/UPSTREAM_GAPS.md
-/home/bmerriam/git/missy/.venv/bin/activate
-/home/bmerriam/git/missy/.venv/bin/activate.bat
-/home/bmerriam/git/missy/.venv/bin/activate.csh
-/home/bmerriam/git/missy/.venv/bin/activate.fish
-/home/bmerriam/git/missy/.venv/bin/activate.nu
-/home/bmerriam/git/missy/.venv/bin/activate.ps1
-/home/bmerriam/git/missy/.venv/bin/activate_this.py
-/home/bmerriam/git/missy/.venv/bin/black
-/home/bmerriam/git/missy/.venv/bin/blackd
-/home/bmerriam/git/missy/.venv/bin/coverage
-/home/bmerriam/git/missy/.venv/bin/coverage3
-/home/bmerriam/git/missy/.venv/bin/coverage-3.12
-/home/bmerriam/git/missy/.venv/bin/deactivate.bat
-/home/bmerriam/git/missy/.venv/bin/distro
-/home/bmerriam/git/missy/.venv/bin/dmypy
-/home/bmerriam/git/missy/.venv/bin/dotenv
-/home/bmerriam/git/missy/.venv/bin/httpx
-/home/bmerriam/git/missy/.venv/bin/markdown-it
-/home/bmerriam/git/missy/.venv/bin/missy
-/home/bmerriam/git/missy/.venv/bin/mypy
-/home/bmerriam/git/missy/.venv/bin/mypyc
-/home/bmerriam/git/missy/.venv/bin/openai
-/home/bmerriam/git/missy/.venv/bin/playwright
-/home/bmerriam/git/missy/.venv/bin/pydoc.bat
-/home/bmerriam/git/missy/.venv/bin/pygmentize
-/home/bmerriam/git/missy/.venv/bin/py.test
-/home/bmerriam/git/missy/.venv/bin/pytest
-/home/bmerriam/git/missy/.venv/bin/ruff
-/home/bmerriam/git/missy/.venv/bin/stubgen
-/home/bmerriam/git/missy/.venv/bin/stubtest
-/home/bmerriam/git/missy/.venv/bin/tqdm
-/home/bmerriam/git/missy/.venv/bin/watchmedo
-/home/bmerriam/git/missy/.venv/bin/websockets
-/home/bmerriam/git/missy/.venv/CACHEDIR.TAG
-/home/bmerriam/git/missy/.venv/.gitignore
-/home/bmerriam/git/missy/.venv/.lock
-/home/bmerriam/git/missy/.venv/pyvenv.cfg
+missy/                          # 123 Python source files
+  core/        - session, events, exceptions
+  config/      - settings, YAML loading, hot-reload (watchdog)
+  policy/      - network (CIDR/domain/per-category), filesystem, shell + facade
+  gateway/     - PolicyHTTPClient
+  providers/   - base, anthropic, openai, ollama, codex, registry, rate_limiter
+  tools/       - base, registry, 15+ builtin tools (shell, file, web, browser,
+                 atspi, x11, calculator, tts, code_evolve, incus, self_create_tool)
+  skills/      - base, registry, 6 builtin skills
+  plugins/     - base, loader
+  scheduler/   - jobs, parser, manager (retry, timezone)
+  memory/      - sqlite_store (FTS5, sessions, costs), resilient_store, json_store
+  observability/ - audit_logger, otel_exporter
+  security/    - sanitizer, secrets, censor, vault (ChaCha20), sandbox (Docker)
+  channels/    - base, cli, discord (gateway, rest, voice, commands, config, threads),
+                 webhook, voice (server, registry, pairing, presence, stt, tts)
+  agent/       - runtime (streaming, budget, recovery), circuit_breaker, context,
+                 checkpoint, failure_tracker, done_criteria, learnings, prompt_patches,
+                 sub_agent, approval, proactive, cost_tracker, watchdog, heartbeat,
+                 code_evolution
+  cli/         - main (60+ commands via click + rich), wizard, oauth, anthropic_auth
+  mcp/         - manager, client (MCP server integration)
 ```
+
+## CLI Commands (60+)
+
+```
+missy init, setup, doctor, ask, run, providers, skills, plugins
+missy schedule add/list/pause/resume/remove
+missy audit security/recent
+missy discord status/probe/register-commands/audit
+missy gateway start/status
+missy vault set/get/list/delete
+missy sessions cleanup/list/rename
+missy approvals list
+missy patches list/approve/reject
+missy mcp list/add/remove
+missy devices list/pair/unpair/status/policy
+missy voice status/test
+missy cost (--session)
+missy recover (--abandon-all)
+missy evolve list/approve/reject/show
+```
+
+## Subsystems Verified
+
+- Policy engine: 3-layer default-deny (network, filesystem, shell)
+- Providers: Anthropic, OpenAI, Ollama, Codex with fallback/tiering/rotation
+- Channels: CLI, Discord (full WebSocket + REST), Webhook, Voice
+- Agent: Multi-step tool loop, streaming, budget enforcement, checkpointing
+- Security: Input sanitizer, secrets detector, censor, vault, Docker sandbox
+- Memory: SQLite FTS5 with sessions, costs, learnings
+- Scheduler: APScheduler with retry, timezone, active hours
+- Observability: JSONL audit log + OpenTelemetry

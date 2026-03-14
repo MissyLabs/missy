@@ -1,30 +1,44 @@
 # TEST_RESULTS
 
-- Timestamp: 2026-03-12 23:53:54
+- Timestamp: 2026-03-14
+- Test framework: pytest 8.4.1
+- Python: 3.12.3
 
-## pytest
+## Summary
+
+| Metric | Value |
+|--------|-------|
+| Total tests | 2500 |
+| Passed | 2500 |
+| Failed | 0 |
+| Warnings | 3 (deprecation) |
+| Duration | ~37s |
+| Source files | 123 |
+| Test files | 69 |
+| Coverage | 70% |
+
+## Test Distribution
+
+| Test Area | Tests | Files |
+|-----------|-------|-------|
+| Agent (runtime, circuit breaker, context, etc.) | ~180 | 10 |
+| Channels (CLI, Discord, Webhook, Voice) | ~250 | 12 |
+| CLI commands | ~160 | 3 |
+| Config | ~30 | 2 |
+| Core (session, events) | ~20 | 2 |
+| Integration (policy enforcement) | ~30 | 1 |
+| Memory (SQLite, resilient, sessions, costs) | ~80 | 5 |
+| Observability (audit logger) | ~20 | 1 |
+| Plugins (loader) | ~30 | 1 |
+| Policy (network, filesystem, shell) | ~120 | 4 |
+| Providers (anthropic, openai, ollama, codex, registry, rate limiter) | ~350 | 7 |
+| Scheduler (jobs, parser, manager) | ~80 | 6 |
+| Security (sanitizer, secrets, vault, censor, sandbox) | ~100 | 5 |
+| Skills (registry, base, builtins) | ~80 | 3 |
+| Tools (registry, base, builtins, shell_exec, calculator) | ~200 | 5 |
+| Unit (Discord channel, config, gateway) | ~160 | 5 |
+
+## pytest output
 ```
-........................................................................ [  6%]
-........................................................................ [ 13%]
-........................................................................ [ 19%]
-........................................................................ [ 26%]
-........................................................................ [ 32%]
-........................................................................ [ 39%]
-........................................................................ [ 45%]
-........................................................................ [ 52%]
-........................................................................ [ 59%]
-........................................................................ [ 65%]
-........................................................................ [ 72%]
-........................................................................ [ 78%]
-........................................................................ [ 85%]
-........................................................................ [ 91%]
-........................................................................ [ 98%]
-.................                                                        [100%]
-=============================== warnings summary ===============================
-tests/channels/test_discord_credential_delete.py::TestHandleMessageCredentialDetection::test_secret_message_is_dropped
-  /home/bmerriam/git/missy/tests/channels/test_discord_credential_delete.py:130: DeprecationWarning: There is no current event loop
-    return asyncio.get_event_loop().run_until_complete(coro)
-
--- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-1097 passed, 1 warning in 5.32s
+2500 passed, 3 warnings in 37.45s
 ```
