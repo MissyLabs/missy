@@ -196,13 +196,9 @@ class TestDeleteAfterRunFailure:
         self, mock_uuid, started_manager: SchedulerManager
     ):
         mock_uuid.uuid4.return_value = "sess"
-        job = started_manager.add_job(
-            "oneshot", "every 5 minutes", "task", delete_after_run=True
-        )
+        job = started_manager.add_job("oneshot", "every 5 minutes", "task", delete_after_run=True)
 
-        with patch.object(
-            started_manager, "remove_job", side_effect=Exception("cannot remove")
-        ):
+        with patch.object(started_manager, "remove_job", side_effect=Exception("cannot remove")):
             with patch("missy.agent.runtime.AgentRuntime") as MockRuntime:
                 MockRuntime.return_value.run.return_value = "ok"
                 # Should not raise despite remove_job failing

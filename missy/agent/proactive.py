@@ -277,9 +277,7 @@ class ProactiveManager:
                     "trigger_type": trigger.trigger_type,
                     "enabled": trigger.enabled,
                     "last_fired": (
-                        datetime.fromtimestamp(last, tz=UTC).isoformat()
-                        if last
-                        else None
+                        datetime.fromtimestamp(last, tz=UTC).isoformat() if last else None
                     ),
                 }
             )
@@ -315,9 +313,7 @@ class ProactiveManager:
                         if normalised > trigger.load_threshold:
                             self._fire_trigger(trigger)
                 except Exception as exc:
-                    logger.debug(
-                        "proactive: threshold check error for '%s': %s", trigger.name, exc
-                    )
+                    logger.debug("proactive: threshold check error for '%s': %s", trigger.name, exc)
 
     def _schedule_loop(self, trigger: ProactiveTrigger) -> None:
         """Fire *trigger* on a repeating interval until the stop event is set."""
@@ -385,9 +381,7 @@ class ProactiveManager:
                     risk="medium",
                 )
             except Exception as exc:
-                logger.info(
-                    "proactive: trigger '%s' denied or timed out: %s", trigger.name, exc
-                )
+                logger.info("proactive: trigger '%s' denied or timed out: %s", trigger.name, exc)
                 self._emit_audit(
                     trigger,
                     "deny",
@@ -404,9 +398,7 @@ class ProactiveManager:
         try:
             self._agent_callback(prompt, session_id)
         except Exception as exc:
-            logger.error(
-                "proactive: agent_callback error for trigger '%s': %s", trigger.name, exc
-            )
+            logger.error("proactive: agent_callback error for trigger '%s': %s", trigger.name, exc)
 
     def _emit_audit(
         self,

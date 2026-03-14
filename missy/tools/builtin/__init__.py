@@ -12,6 +12,7 @@ Example::
     registry = init_tool_registry()
     register_builtin_tools(registry)
 """
+
 from missy.tools.builtin.atspi_tools import (
     AtSpiClickTool,
     AtSpiGetTextTool,

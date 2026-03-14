@@ -1,4 +1,5 @@
 """Background watchdog that monitors subsystem health."""
+
 from __future__ import annotations
 
 import logging
@@ -64,6 +65,7 @@ class Watchdog:
 
     def _check_all(self) -> None:
         from missy.core.events import AuditEvent, event_bus
+
         for name, fn in self._checks.items():
             h = self._health[name]
             prev_healthy = h.healthy
@@ -83,8 +85,16 @@ class Watchdog:
                 h.consecutive_failures += 1
                 h.last_error = str(exc)
                 h.last_checked = time.monotonic()
-                level = logging.ERROR if h.consecutive_failures >= self._threshold else logging.WARNING
-                logger.log(level, "Watchdog: %s unhealthy (failures=%d): %s", name, h.consecutive_failures, exc)
+                level = (
+                    logging.ERROR if h.consecutive_failures >= self._threshold else logging.WARNING
+                )
+                logger.log(
+                    level,
+                    "Watchdog: %s unhealthy (failures=%d): %s",
+                    name,
+                    h.consecutive_failures,
+                    exc,
+                )
 
             try:
                 event = AuditEvent.now(
@@ -93,7 +103,11 @@ class Watchdog:
                     event_type="watchdog.health_check",
                     category="plugin",
                     result="allow" if h.healthy else "error",
-                    detail={"subsystem": name, "healthy": h.healthy, "failures": h.consecutive_failures},
+                    detail={
+                        "subsystem": name,
+                        "healthy": h.healthy,
+                        "failures": h.consecutive_failures,
+                    },
                 )
                 event_bus.publish(event)
             except Exception:

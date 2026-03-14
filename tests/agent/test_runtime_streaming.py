@@ -1,4 +1,5 @@
 """Tests for AgentRuntime streaming and rate limiting integration."""
+
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -32,8 +33,10 @@ def mock_registry():
 class TestRunStream:
     def test_run_stream_yields_chunks(self, mock_registry):
         registry, provider = mock_registry
-        with patch("missy.agent.runtime.get_registry", return_value=registry), \
-             patch("missy.agent.runtime.get_tool_registry", side_effect=RuntimeError):
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", side_effect=RuntimeError),
+        ):
             agent = AgentRuntime(AgentConfig(provider="test"))
             chunks = list(agent.run_stream("Hello"))
             assert len(chunks) == 3
@@ -42,8 +45,10 @@ class TestRunStream:
     def test_run_stream_falls_back_on_error(self, mock_registry):
         registry, provider = mock_registry
         provider.stream.side_effect = Exception("Stream failed")
-        with patch("missy.agent.runtime.get_registry", return_value=registry), \
-             patch("missy.agent.runtime.get_tool_registry", side_effect=RuntimeError):
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", side_effect=RuntimeError),
+        ):
             agent = AgentRuntime(AgentConfig(provider="test"))
             chunks = list(agent.run_stream("Hello"))
             assert len(chunks) == 1
@@ -65,8 +70,10 @@ class TestRunStream:
             finish_reason="stop",
         )
 
-        with patch("missy.agent.runtime.get_registry", return_value=registry), \
-             patch("missy.agent.runtime.get_tool_registry", return_value=tool_registry):
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_registry),
+        ):
             agent = AgentRuntime(AgentConfig(provider="test", max_iterations=5))
             chunks = list(agent.run_stream("What is 2+2?"))
             # Falls back to run() which returns full response as single chunk
@@ -77,15 +84,19 @@ class TestRunStream:
 class TestRateLimitIntegration:
     def test_rate_limiter_created(self, mock_registry):
         registry, _ = mock_registry
-        with patch("missy.agent.runtime.get_registry", return_value=registry), \
-             patch("missy.agent.runtime.get_tool_registry", side_effect=RuntimeError):
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", side_effect=RuntimeError),
+        ):
             agent = AgentRuntime(AgentConfig(provider="test"))
             assert agent._rate_limiter is not None
 
     def test_rate_limiter_called_before_completion(self, mock_registry):
         registry, provider = mock_registry
-        with patch("missy.agent.runtime.get_registry", return_value=registry), \
-             patch("missy.agent.runtime.get_tool_registry", side_effect=RuntimeError):
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", side_effect=RuntimeError),
+        ):
             agent = AgentRuntime(AgentConfig(provider="test"))
             rl_mock = MagicMock()
             agent._rate_limiter = rl_mock
@@ -96,8 +107,10 @@ class TestRateLimitIntegration:
 class TestCostPersistence:
     def test_record_cost_passes_session_id(self, mock_registry):
         registry, provider = mock_registry
-        with patch("missy.agent.runtime.get_registry", return_value=registry), \
-             patch("missy.agent.runtime.get_tool_registry", side_effect=RuntimeError):
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", side_effect=RuntimeError),
+        ):
             agent = AgentRuntime(AgentConfig(provider="test"))
             memory_store = MagicMock()
             memory_store.get_session_turns.return_value = []

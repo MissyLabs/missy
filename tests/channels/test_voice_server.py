@@ -2,6 +2,7 @@
 
 All external I/O (websockets, STT, TTS, audit events, registry) is mocked.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -18,6 +19,7 @@ from missy.channels.voice.server import VoiceServer, _emit
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
 # ---------------------------------------------------------------------------
+
 
 def _make_edge_node(
     node_id: str = "node-1",
@@ -41,30 +43,36 @@ def _make_edge_node(
 
 def _make_stt_engine(transcript_text: str = "hello world", confidence: float = 0.95):
     from missy.channels.voice.stt.base import TranscriptionResult
+
     engine = MagicMock()
     engine.name = "mock-stt"
     engine.load = MagicMock()
     engine.unload = MagicMock()
-    engine.transcribe = AsyncMock(return_value=TranscriptionResult(
-        text=transcript_text,
-        confidence=confidence,
-        processing_ms=50,
-    ))
+    engine.transcribe = AsyncMock(
+        return_value=TranscriptionResult(
+            text=transcript_text,
+            confidence=confidence,
+            processing_ms=50,
+        )
+    )
     return engine
 
 
 def _make_tts_engine(audio_data: bytes = b"\x00" * 4096):
     from missy.channels.voice.tts.base import AudioBuffer
+
     engine = MagicMock()
     engine.name = "mock-tts"
     engine.load = MagicMock()
     engine.unload = MagicMock()
-    engine.synthesize = AsyncMock(return_value=AudioBuffer(
-        data=audio_data,
-        sample_rate=22050,
-        channels=1,
-        format="wav",
-    ))
+    engine.synthesize = AsyncMock(
+        return_value=AudioBuffer(
+            data=audio_data,
+            sample_rate=22050,
+            channels=1,
+            format="wav",
+        )
+    )
     return engine
 
 
@@ -117,6 +125,7 @@ def _make_server(
 # _emit helper
 # ---------------------------------------------------------------------------
 
+
 class TestEmit:
     def test_emit_publishes_event_without_raising(self) -> None:
         with patch("missy.channels.voice.server.event_bus") as mock_bus:
@@ -139,6 +148,7 @@ class TestEmit:
 # ---------------------------------------------------------------------------
 # VoiceServer — lifecycle
 # ---------------------------------------------------------------------------
+
 
 class TestVoiceServerLifecycle:
     def test_initial_state(self) -> None:
@@ -240,6 +250,7 @@ class TestVoiceServerLifecycle:
 # VoiceServer — get_status
 # ---------------------------------------------------------------------------
 
+
 class TestGetStatus:
     def test_status_when_not_running(self) -> None:
         server = _make_server()
@@ -264,12 +275,13 @@ class TestGetStatus:
 # VoiceServer — _handle_connection
 # ---------------------------------------------------------------------------
 
+
 class TestHandleConnection:
     @pytest.mark.asyncio
     async def test_rejects_binary_first_frame(self) -> None:
         server = _make_server()
         ws = _make_websocket()
-        ws.recv = AsyncMock(return_value=b"\xFF\xFE")  # binary frame
+        ws.recv = AsyncMock(return_value=b"\xff\xfe")  # binary frame
 
         with patch("missy.channels.voice.server._emit"):
             await server._handle_connection(ws)
@@ -301,6 +313,7 @@ class TestHandleConnection:
     @pytest.mark.asyncio
     async def test_handles_connection_closed_before_first_frame(self) -> None:
         import websockets.exceptions as wsexc
+
         server = _make_server()
         ws = _make_websocket()
         ws.recv = AsyncMock(side_effect=wsexc.ConnectionClosed(None, None))
@@ -312,19 +325,24 @@ class TestHandleConnection:
     async def test_handles_pair_request(self) -> None:
         server = _make_server()
         ws = _make_websocket()
-        ws.recv = AsyncMock(return_value=json.dumps({
-            "type": "pair_request",
-            "friendly_name": "New Node",
-            "room": "Kitchen",
-            "hardware_profile": {"platform": "linux"},
-        }))
+        ws.recv = AsyncMock(
+            return_value=json.dumps(
+                {
+                    "type": "pair_request",
+                    "friendly_name": "New Node",
+                    "room": "Kitchen",
+                    "hardware_profile": {"platform": "linux"},
+                }
+            )
+        )
 
         with patch("missy.channels.voice.server._emit"):
             await server._handle_connection(ws)
 
         # pair_pending should have been sent.
-        sent_frames = [json.loads(c[0][0]) for c in ws.send.call_args_list
-                       if not isinstance(c[0][0], bytes)]
+        sent_frames = [
+            json.loads(c[0][0]) for c in ws.send.call_args_list if not isinstance(c[0][0], bytes)
+        ]
         types = [f.get("type") for f in sent_frames]
         assert "pair_pending" in types
 
@@ -342,6 +360,7 @@ class TestHandleConnection:
 # ---------------------------------------------------------------------------
 # VoiceServer — _handle_auth
 # ---------------------------------------------------------------------------
+
 
 class TestHandleAuth:
     @pytest.mark.asyncio
@@ -413,6 +432,7 @@ class TestHandleAuth:
 # VoiceServer — _handle_pair_request
 # ---------------------------------------------------------------------------
 
+
 class TestHandlePairRequest:
     @pytest.mark.asyncio
     async def test_pair_request_sends_pair_pending(self) -> None:
@@ -471,6 +491,7 @@ class TestHandlePairRequest:
 # VoiceServer — _message_loop
 # ---------------------------------------------------------------------------
 
+
 class TestMessageLoop:
     @pytest.mark.asyncio
     async def test_binary_outside_audio_session_is_ignored(self) -> None:
@@ -479,7 +500,7 @@ class TestMessageLoop:
         ws = _make_websocket()
 
         async def fake_aiter():
-            yield b"\xFF\xFE"
+            yield b"\xff\xfe"
 
         ws.__aiter__ = lambda _self: fake_aiter()
 
@@ -533,12 +554,14 @@ class TestMessageLoop:
         ws = _make_websocket()
 
         async def fake_aiter():
-            yield json.dumps({
-                "type": "heartbeat",
-                "occupancy": True,
-                "noise_level": 0.3,
-                "wake_word_fp": False,
-            })
+            yield json.dumps(
+                {
+                    "type": "heartbeat",
+                    "occupancy": True,
+                    "noise_level": 0.3,
+                    "wake_word_fp": False,
+                }
+            )
 
         ws.__aiter__ = lambda _self: fake_aiter()
 
@@ -592,7 +615,7 @@ class TestMessageLoop:
         server = _make_server(node=node)
         ws = _make_websocket()
 
-        big_chunk = b"\xFF" * (11 * 1024 * 1024)  # 11 MB > 10 MB limit
+        big_chunk = b"\xff" * (11 * 1024 * 1024)  # 11 MB > 10 MB limit
 
         async def fake_aiter():
             yield json.dumps({"type": "audio_start", "sample_rate": 16000, "channels": 1})
@@ -609,6 +632,7 @@ class TestMessageLoop:
 # ---------------------------------------------------------------------------
 # VoiceServer — _handle_audio
 # ---------------------------------------------------------------------------
+
 
 class TestHandleAudio:
     @pytest.mark.asyncio
@@ -627,13 +651,16 @@ class TestHandleAudio:
     @pytest.mark.asyncio
     async def test_empty_transcript_skips_agent_call(self) -> None:
         from missy.channels.voice.stt.base import TranscriptionResult
+
         node = _make_edge_node()
         server = _make_server(node=node)
-        server._stt.transcribe = AsyncMock(return_value=TranscriptionResult(
-            text="   ",  # empty after strip
-            confidence=0.0,
-            processing_ms=10,
-        ))
+        server._stt.transcribe = AsyncMock(
+            return_value=TranscriptionResult(
+                text="   ",  # empty after strip
+                confidence=0.0,
+                processing_ms=10,
+            )
+        )
         ws = _make_websocket()
 
         with patch("missy.channels.voice.server._emit"):
@@ -651,8 +678,7 @@ class TestHandleAudio:
             await server._handle_audio(ws, node=node, audio_buffer=b"\x00" * 100, sample_rate=16000)
 
         # Filter out binary frames (audio chunks), only parse JSON strings.
-        sent = [json.loads(c[0][0]) for c in ws.send.call_args_list
-                if isinstance(c[0][0], str)]
+        sent = [json.loads(c[0][0]) for c in ws.send.call_args_list if isinstance(c[0][0], str)]
         assert any(f["type"] == "transcript" for f in sent)
 
     @pytest.mark.asyncio
@@ -693,8 +719,9 @@ class TestHandleAudio:
         with patch("missy.channels.voice.server._emit"):
             await server._handle_audio(ws, node=node, audio_buffer=b"\x00" * 100, sample_rate=16000)
 
-        sent = [json.loads(c[0][0]) for c in ws.send.call_args_list
-                if not isinstance(c[0][0], bytes)]
+        sent = [
+            json.loads(c[0][0]) for c in ws.send.call_args_list if not isinstance(c[0][0], bytes)
+        ]
         types = [f["type"] for f in sent]
         assert "response_text" in types
         assert "audio_start" in types
@@ -703,11 +730,13 @@ class TestHandleAudio:
     @pytest.mark.asyncio
     async def test_audio_streamed_in_chunks(self) -> None:
         node = _make_edge_node()
-        audio_data = b"\xAB" * 8192  # 2 chunks of 4096
+        audio_data = b"\xab" * 8192  # 2 chunks of 4096
         server = _make_server(node=node, agent_response="OK")
-        server._tts.synthesize = AsyncMock(return_value=__import__(
-            "missy.channels.voice.tts.base", fromlist=["AudioBuffer"]
-        ).AudioBuffer(data=audio_data, sample_rate=22050, channels=1, format="wav"))
+        server._tts.synthesize = AsyncMock(
+            return_value=__import__(
+                "missy.channels.voice.tts.base", fromlist=["AudioBuffer"]
+            ).AudioBuffer(data=audio_data, sample_rate=22050, channels=1, format="wav")
+        )
         ws = _make_websocket()
 
         with patch("missy.channels.voice.server._emit"):
@@ -736,6 +765,7 @@ class TestHandleAudio:
 # VoiceServer — _handle_heartbeat
 # ---------------------------------------------------------------------------
 
+
 class TestHandleHeartbeat:
     @pytest.mark.asyncio
     async def test_heartbeat_calls_mark_online(self) -> None:
@@ -746,9 +776,7 @@ class TestHandleHeartbeat:
         data = {"type": "heartbeat", "occupancy": False, "noise_level": 0.1}
         await server._handle_heartbeat(ws, node=node, data=data)
 
-        server._registry.mark_online.assert_called_once_with(
-            node.node_id, ip_address="192.168.1.5"
-        )
+        server._registry.mark_online.assert_called_once_with(node.node_id, ip_address="192.168.1.5")
 
     @pytest.mark.asyncio
     async def test_heartbeat_presence_exception_is_logged(self) -> None:
@@ -790,6 +818,7 @@ class TestHandleHeartbeat:
 # VoiceServer — _log_audio_to_disk
 # ---------------------------------------------------------------------------
 
+
 class TestLogAudioToDisk:
     @pytest.mark.asyncio
     async def test_creates_pcm_file(self, tmp_path) -> None:
@@ -798,11 +827,11 @@ class TestLogAudioToDisk:
         server = _make_server(node=node)
 
         with patch("missy.channels.voice.server._emit"):
-            await server._log_audio_to_disk(node, b"\xFF" * 512, 16000, 1)
+            await server._log_audio_to_disk(node, b"\xff" * 512, 16000, 1)
 
         pcm_files = list(log_dir.glob("*.pcm"))
         assert len(pcm_files) == 1
-        assert pcm_files[0].read_bytes() == b"\xFF" * 512
+        assert pcm_files[0].read_bytes() == b"\xff" * 512
 
     @pytest.mark.asyncio
     async def test_handles_write_failure_gracefully(self) -> None:

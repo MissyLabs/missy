@@ -17,6 +17,7 @@ Targets uncovered lines:
   667-668: AtSpiSetValueTool.execute — element not found
   698-699: AtSpiSetValueTool.execute — outer exception
 """
+
 from __future__ import annotations
 
 import sys
@@ -46,8 +47,9 @@ def _make_pyatspi_mock():
     return mock
 
 
-def _make_accessible(name="TestApp", role_name="application", child_count=0,
-                     states=None, text=None):
+def _make_accessible(
+    name="TestApp", role_name="application", child_count=0, states=None, text=None
+):
     """Return a mock AT-SPI accessible node."""
     node = MagicMock()
     node.name = name
@@ -270,9 +272,13 @@ class TestAtSpiGetTreeToolCoverage:
         from missy.tools.builtin.atspi_tools import AtSpiGetTreeTool
 
         mock_pyatspi = _make_pyatspi_mock()
-        with patch.dict(sys.modules, {"pyatspi": mock_pyatspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop",
-                   side_effect=Exception("dbus not available")):
+        with (
+            patch.dict(sys.modules, {"pyatspi": mock_pyatspi}),
+            patch(
+                "missy.tools.builtin.atspi_tools._get_desktop",
+                side_effect=Exception("dbus not available"),
+            ),
+        ):
             result = AtSpiGetTreeTool().execute()
 
         assert result.success is False
@@ -286,8 +292,10 @@ class TestAtSpiGetTreeToolCoverage:
         desktop = MagicMock()
         desktop.childCount = 0
 
-        with patch.dict(sys.modules, {"pyatspi": mock_pyatspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=desktop):
+        with (
+            patch.dict(sys.modules, {"pyatspi": mock_pyatspi}),
+            patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=desktop),
+        ):
             result = AtSpiGetTreeTool().execute(app_name="NoSuchApp")
 
         assert result.success is False
@@ -301,8 +309,10 @@ class TestAtSpiGetTreeToolCoverage:
         desktop = MagicMock()
         desktop.childCount = 0
 
-        with patch.dict(sys.modules, {"pyatspi": mock_pyatspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=desktop):
+        with (
+            patch.dict(sys.modules, {"pyatspi": mock_pyatspi}),
+            patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=desktop),
+        ):
             result = AtSpiGetTreeTool().execute()
 
         assert result.success is False
@@ -315,13 +325,17 @@ class TestAtSpiGetTreeToolCoverage:
         mock_pyatspi = _make_pyatspi_mock()
         app = _make_accessible("App")
 
-        with patch.dict(sys.modules, {"pyatspi": mock_pyatspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop",
-                   return_value=MagicMock(childCount=0)), \
-             patch("missy.tools.builtin.atspi_tools._get_focused_application",
-                   return_value=app), \
-             patch("missy.tools.builtin.atspi_tools._walk_tree",
-                   side_effect=RuntimeError("tree walk exploded")):
+        with (
+            patch.dict(sys.modules, {"pyatspi": mock_pyatspi}),
+            patch(
+                "missy.tools.builtin.atspi_tools._get_desktop", return_value=MagicMock(childCount=0)
+            ),
+            patch("missy.tools.builtin.atspi_tools._get_focused_application", return_value=app),
+            patch(
+                "missy.tools.builtin.atspi_tools._walk_tree",
+                side_effect=RuntimeError("tree walk exploded"),
+            ),
+        ):
             result = AtSpiGetTreeTool().execute()
 
         assert result.success is False
@@ -334,14 +348,17 @@ class TestAtSpiGetTreeToolCoverage:
         mock_pyatspi = _make_pyatspi_mock()
         app = _make_accessible("MyApp")
 
-        with patch.dict(sys.modules, {"pyatspi": mock_pyatspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop",
-                   return_value=MagicMock(childCount=0)), \
-             patch("missy.tools.builtin.atspi_tools._get_focused_application",
-                   return_value=app), \
-             patch("missy.tools.builtin.atspi_tools._walk_tree",
-                   return_value=[{"depth": 0, "role": "application", "name": "MyApp",
-                                  "states": []}]):
+        with (
+            patch.dict(sys.modules, {"pyatspi": mock_pyatspi}),
+            patch(
+                "missy.tools.builtin.atspi_tools._get_desktop", return_value=MagicMock(childCount=0)
+            ),
+            patch("missy.tools.builtin.atspi_tools._get_focused_application", return_value=app),
+            patch(
+                "missy.tools.builtin.atspi_tools._walk_tree",
+                return_value=[{"depth": 0, "role": "application", "name": "MyApp", "states": []}],
+            ),
+        ):
             result = AtSpiGetTreeTool().execute()
 
         assert result.success is True
@@ -377,12 +394,14 @@ class TestAtSpiClickToolCoverage:
         mock_pyatspi = _make_pyatspi_mock()
         app = _make_accessible("App")
 
-        with patch.dict(sys.modules, {"pyatspi": mock_pyatspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop",
-                   return_value=MagicMock(childCount=0)), \
-             patch("missy.tools.builtin.atspi_tools._get_focused_application",
-                   return_value=app), \
-             patch("missy.tools.builtin.atspi_tools._find_element", return_value=None):
+        with (
+            patch.dict(sys.modules, {"pyatspi": mock_pyatspi}),
+            patch(
+                "missy.tools.builtin.atspi_tools._get_desktop", return_value=MagicMock(childCount=0)
+            ),
+            patch("missy.tools.builtin.atspi_tools._get_focused_application", return_value=app),
+            patch("missy.tools.builtin.atspi_tools._find_element", return_value=None),
+        ):
             result = AtSpiClickTool().execute(name="NonExistentButton")
 
         assert result.success is False
@@ -397,12 +416,14 @@ class TestAtSpiClickToolCoverage:
         action_iface = MagicMock()
         element.queryAction.return_value = action_iface
 
-        with patch.dict(sys.modules, {"pyatspi": mock_pyatspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop",
-                   return_value=MagicMock(childCount=0)), \
-             patch("missy.tools.builtin.atspi_tools._get_focused_application",
-                   return_value=app), \
-             patch("missy.tools.builtin.atspi_tools._find_element", return_value=element):
+        with (
+            patch.dict(sys.modules, {"pyatspi": mock_pyatspi}),
+            patch(
+                "missy.tools.builtin.atspi_tools._get_desktop", return_value=MagicMock(childCount=0)
+            ),
+            patch("missy.tools.builtin.atspi_tools._get_focused_application", return_value=app),
+            patch("missy.tools.builtin.atspi_tools._find_element", return_value=element),
+        ):
             result = AtSpiClickTool().execute(name="OK")
 
         assert result.success is True
@@ -421,9 +442,11 @@ class TestAtSpiClickToolCoverage:
         desktop.childCount = 1
         desktop.getChildAtIndex.return_value = app
 
-        with patch.dict(sys.modules, {"pyatspi": mock_pyatspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=desktop), \
-             patch("missy.tools.builtin.atspi_tools._find_element", return_value=element):
+        with (
+            patch.dict(sys.modules, {"pyatspi": mock_pyatspi}),
+            patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=desktop),
+            patch("missy.tools.builtin.atspi_tools._find_element", return_value=element),
+        ):
             result = AtSpiClickTool().execute(name="Close", app_name="Firefox")
 
         assert result.success is True
@@ -435,8 +458,10 @@ class TestAtSpiClickToolCoverage:
         desktop = MagicMock()
         desktop.childCount = 0
 
-        with patch.dict(sys.modules, {"pyatspi": mock_pyatspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=desktop):
+        with (
+            patch.dict(sys.modules, {"pyatspi": mock_pyatspi}),
+            patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=desktop),
+        ):
             result = AtSpiClickTool().execute(name="OK", app_name="NoSuchApp")
 
         assert result.success is False
@@ -450,12 +475,14 @@ class TestAtSpiClickToolCoverage:
         element = _make_accessible("Btn", role_name="push button")
         element.queryAction.side_effect = Exception("action error")
 
-        with patch.dict(sys.modules, {"pyatspi": mock_pyatspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop",
-                   return_value=MagicMock(childCount=0)), \
-             patch("missy.tools.builtin.atspi_tools._get_focused_application",
-                   return_value=app), \
-             patch("missy.tools.builtin.atspi_tools._find_element", return_value=element):
+        with (
+            patch.dict(sys.modules, {"pyatspi": mock_pyatspi}),
+            patch(
+                "missy.tools.builtin.atspi_tools._get_desktop", return_value=MagicMock(childCount=0)
+            ),
+            patch("missy.tools.builtin.atspi_tools._get_focused_application", return_value=app),
+            patch("missy.tools.builtin.atspi_tools._find_element", return_value=element),
+        ):
             result = AtSpiClickTool().execute(name="Btn")
 
         assert result.success is False
@@ -489,9 +516,10 @@ class TestAtSpiGetTextToolCoverage:
         from missy.tools.builtin.atspi_tools import AtSpiGetTextTool
 
         mock_pyatspi = _make_pyatspi_mock()
-        with patch.dict(sys.modules, {"pyatspi": mock_pyatspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop",
-                   side_effect=Exception("no dbus")):
+        with (
+            patch.dict(sys.modules, {"pyatspi": mock_pyatspi}),
+            patch("missy.tools.builtin.atspi_tools._get_desktop", side_effect=Exception("no dbus")),
+        ):
             result = AtSpiGetTextTool().execute(name="label")
 
         assert result.success is False
@@ -505,8 +533,10 @@ class TestAtSpiGetTextToolCoverage:
         desktop = MagicMock()
         desktop.childCount = 0
 
-        with patch.dict(sys.modules, {"pyatspi": mock_pyatspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=desktop):
+        with (
+            patch.dict(sys.modules, {"pyatspi": mock_pyatspi}),
+            patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=desktop),
+        ):
             result = AtSpiGetTextTool().execute(name="label", app_name="Ghost")
 
         assert result.success is False
@@ -520,8 +550,10 @@ class TestAtSpiGetTextToolCoverage:
         desktop = MagicMock()
         desktop.childCount = 0
 
-        with patch.dict(sys.modules, {"pyatspi": mock_pyatspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=desktop):
+        with (
+            patch.dict(sys.modules, {"pyatspi": mock_pyatspi}),
+            patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=desktop),
+        ):
             result = AtSpiGetTextTool().execute(name="label")
 
         assert result.success is False
@@ -534,12 +566,14 @@ class TestAtSpiGetTextToolCoverage:
         mock_pyatspi = _make_pyatspi_mock()
         app = _make_accessible("App")
 
-        with patch.dict(sys.modules, {"pyatspi": mock_pyatspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop",
-                   return_value=MagicMock(childCount=0)), \
-             patch("missy.tools.builtin.atspi_tools._get_focused_application",
-                   return_value=app), \
-             patch("missy.tools.builtin.atspi_tools._find_element", return_value=None):
+        with (
+            patch.dict(sys.modules, {"pyatspi": mock_pyatspi}),
+            patch(
+                "missy.tools.builtin.atspi_tools._get_desktop", return_value=MagicMock(childCount=0)
+            ),
+            patch("missy.tools.builtin.atspi_tools._get_focused_application", return_value=app),
+            patch("missy.tools.builtin.atspi_tools._find_element", return_value=None),
+        ):
             result = AtSpiGetTextTool().execute(name="ghost_label")
 
         assert result.success is False
@@ -552,13 +586,17 @@ class TestAtSpiGetTextToolCoverage:
         mock_pyatspi = _make_pyatspi_mock()
         app = _make_accessible("App")
 
-        with patch.dict(sys.modules, {"pyatspi": mock_pyatspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop",
-                   return_value=MagicMock(childCount=0)), \
-             patch("missy.tools.builtin.atspi_tools._get_focused_application",
-                   return_value=app), \
-             patch("missy.tools.builtin.atspi_tools._find_element",
-                   side_effect=RuntimeError("deep failure")):
+        with (
+            patch.dict(sys.modules, {"pyatspi": mock_pyatspi}),
+            patch(
+                "missy.tools.builtin.atspi_tools._get_desktop", return_value=MagicMock(childCount=0)
+            ),
+            patch("missy.tools.builtin.atspi_tools._get_focused_application", return_value=app),
+            patch(
+                "missy.tools.builtin.atspi_tools._find_element",
+                side_effect=RuntimeError("deep failure"),
+            ),
+        ):
             result = AtSpiGetTextTool().execute(name="lbl")
 
         assert result.success is False
@@ -572,12 +610,14 @@ class TestAtSpiGetTextToolCoverage:
         app = _make_accessible("App")
         element = _make_accessible("StatusLabel", text="Hello world")
 
-        with patch.dict(sys.modules, {"pyatspi": mock_pyatspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop",
-                   return_value=MagicMock(childCount=0)), \
-             patch("missy.tools.builtin.atspi_tools._get_focused_application",
-                   return_value=app), \
-             patch("missy.tools.builtin.atspi_tools._find_element", return_value=element):
+        with (
+            patch.dict(sys.modules, {"pyatspi": mock_pyatspi}),
+            patch(
+                "missy.tools.builtin.atspi_tools._get_desktop", return_value=MagicMock(childCount=0)
+            ),
+            patch("missy.tools.builtin.atspi_tools._get_focused_application", return_value=app),
+            patch("missy.tools.builtin.atspi_tools._find_element", return_value=element),
+        ):
             result = AtSpiGetTextTool().execute(name="Status")
 
         assert result.success is True
@@ -592,12 +632,14 @@ class TestAtSpiGetTextToolCoverage:
         element = _make_accessible("MyLabel")
         element.queryText.side_effect = Exception("no text iface")
 
-        with patch.dict(sys.modules, {"pyatspi": mock_pyatspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop",
-                   return_value=MagicMock(childCount=0)), \
-             patch("missy.tools.builtin.atspi_tools._get_focused_application",
-                   return_value=app), \
-             patch("missy.tools.builtin.atspi_tools._find_element", return_value=element):
+        with (
+            patch.dict(sys.modules, {"pyatspi": mock_pyatspi}),
+            patch(
+                "missy.tools.builtin.atspi_tools._get_desktop", return_value=MagicMock(childCount=0)
+            ),
+            patch("missy.tools.builtin.atspi_tools._get_focused_application", return_value=app),
+            patch("missy.tools.builtin.atspi_tools._find_element", return_value=element),
+        ):
             result = AtSpiGetTextTool().execute(name="MyLabel")
 
         assert result.success is True
@@ -622,9 +664,12 @@ class TestAtSpiSetValueToolCoverage:
         from missy.tools.builtin.atspi_tools import AtSpiSetValueTool
 
         mock_pyatspi = _make_pyatspi_mock()
-        with patch.dict(sys.modules, {"pyatspi": mock_pyatspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop",
-                   side_effect=Exception("dbus gone")):
+        with (
+            patch.dict(sys.modules, {"pyatspi": mock_pyatspi}),
+            patch(
+                "missy.tools.builtin.atspi_tools._get_desktop", side_effect=Exception("dbus gone")
+            ),
+        ):
             result = AtSpiSetValueTool().execute(name="field", value="hi")
 
         assert result.success is False
@@ -638,11 +683,11 @@ class TestAtSpiSetValueToolCoverage:
         desktop = MagicMock()
         desktop.childCount = 0
 
-        with patch.dict(sys.modules, {"pyatspi": mock_pyatspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=desktop):
-            result = AtSpiSetValueTool().execute(
-                name="input", value="text", app_name="Ghost"
-            )
+        with (
+            patch.dict(sys.modules, {"pyatspi": mock_pyatspi}),
+            patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=desktop),
+        ):
+            result = AtSpiSetValueTool().execute(name="input", value="text", app_name="Ghost")
 
         assert result.success is False
         assert "not found" in result.error
@@ -655,8 +700,10 @@ class TestAtSpiSetValueToolCoverage:
         desktop = MagicMock()
         desktop.childCount = 0
 
-        with patch.dict(sys.modules, {"pyatspi": mock_pyatspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=desktop):
+        with (
+            patch.dict(sys.modules, {"pyatspi": mock_pyatspi}),
+            patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=desktop),
+        ):
             result = AtSpiSetValueTool().execute(name="field", value="v")
 
         assert result.success is False
@@ -669,12 +716,14 @@ class TestAtSpiSetValueToolCoverage:
         mock_pyatspi = _make_pyatspi_mock()
         app = _make_accessible("App")
 
-        with patch.dict(sys.modules, {"pyatspi": mock_pyatspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop",
-                   return_value=MagicMock(childCount=0)), \
-             patch("missy.tools.builtin.atspi_tools._get_focused_application",
-                   return_value=app), \
-             patch("missy.tools.builtin.atspi_tools._find_element", return_value=None):
+        with (
+            patch.dict(sys.modules, {"pyatspi": mock_pyatspi}),
+            patch(
+                "missy.tools.builtin.atspi_tools._get_desktop", return_value=MagicMock(childCount=0)
+            ),
+            patch("missy.tools.builtin.atspi_tools._get_focused_application", return_value=app),
+            patch("missy.tools.builtin.atspi_tools._find_element", return_value=None),
+        ):
             result = AtSpiSetValueTool().execute(name="no_field", value="v")
 
         assert result.success is False
@@ -687,13 +736,17 @@ class TestAtSpiSetValueToolCoverage:
         mock_pyatspi = _make_pyatspi_mock()
         app = _make_accessible("App")
 
-        with patch.dict(sys.modules, {"pyatspi": mock_pyatspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop",
-                   return_value=MagicMock(childCount=0)), \
-             patch("missy.tools.builtin.atspi_tools._get_focused_application",
-                   return_value=app), \
-             patch("missy.tools.builtin.atspi_tools._find_element",
-                   side_effect=RuntimeError("unexpected")):
+        with (
+            patch.dict(sys.modules, {"pyatspi": mock_pyatspi}),
+            patch(
+                "missy.tools.builtin.atspi_tools._get_desktop", return_value=MagicMock(childCount=0)
+            ),
+            patch("missy.tools.builtin.atspi_tools._get_focused_application", return_value=app),
+            patch(
+                "missy.tools.builtin.atspi_tools._find_element",
+                side_effect=RuntimeError("unexpected"),
+            ),
+        ):
             result = AtSpiSetValueTool().execute(name="field", value="v")
 
         assert result.success is False
@@ -721,12 +774,14 @@ class TestAtSpiSetValueToolCoverage:
         component = MagicMock()
         element.queryComponent.return_value = component
 
-        with patch.dict(sys.modules, {"pyatspi": mock_pyatspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop",
-                   return_value=MagicMock(childCount=0)), \
-             patch("missy.tools.builtin.atspi_tools._get_focused_application",
-                   return_value=app), \
-             patch("missy.tools.builtin.atspi_tools._find_element", return_value=element):
+        with (
+            patch.dict(sys.modules, {"pyatspi": mock_pyatspi}),
+            patch(
+                "missy.tools.builtin.atspi_tools._get_desktop", return_value=MagicMock(childCount=0)
+            ),
+            patch("missy.tools.builtin.atspi_tools._get_focused_application", return_value=app),
+            patch("missy.tools.builtin.atspi_tools._find_element", return_value=element),
+        ):
             result = AtSpiSetValueTool().execute(name="Username", value="admin")
 
         assert result.success is True
@@ -750,12 +805,14 @@ class TestAtSpiSetValueToolCoverage:
         element.queryValue.return_value = value_iface
         element.queryComponent.side_effect = Exception("no component")
 
-        with patch.dict(sys.modules, {"pyatspi": mock_pyatspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop",
-                   return_value=MagicMock(childCount=0)), \
-             patch("missy.tools.builtin.atspi_tools._get_focused_application",
-                   return_value=app), \
-             patch("missy.tools.builtin.atspi_tools._find_element", return_value=element):
+        with (
+            patch.dict(sys.modules, {"pyatspi": mock_pyatspi}),
+            patch(
+                "missy.tools.builtin.atspi_tools._get_desktop", return_value=MagicMock(childCount=0)
+            ),
+            patch("missy.tools.builtin.atspi_tools._get_focused_application", return_value=app),
+            patch("missy.tools.builtin.atspi_tools._find_element", return_value=element),
+        ):
             result = AtSpiSetValueTool().execute(name="Spinner", value="42")
 
         assert result.success is True
@@ -775,12 +832,14 @@ class TestAtSpiSetValueToolCoverage:
         element.queryValue.side_effect = Exception("no value")
         element.queryComponent.side_effect = Exception("no component")
 
-        with patch.dict(sys.modules, {"pyatspi": mock_pyatspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop",
-                   return_value=MagicMock(childCount=0)), \
-             patch("missy.tools.builtin.atspi_tools._get_focused_application",
-                   return_value=app), \
-             patch("missy.tools.builtin.atspi_tools._find_element", return_value=element):
+        with (
+            patch.dict(sys.modules, {"pyatspi": mock_pyatspi}),
+            patch(
+                "missy.tools.builtin.atspi_tools._get_desktop", return_value=MagicMock(childCount=0)
+            ),
+            patch("missy.tools.builtin.atspi_tools._get_focused_application", return_value=app),
+            patch("missy.tools.builtin.atspi_tools._find_element", return_value=element),
+        ):
             result = AtSpiSetValueTool().execute(name="ReadOnly", value="x")
 
         assert result.success is False

@@ -12,6 +12,7 @@ Example::
     result = tool.execute(url="https://example.com")
     assert result.success
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -36,8 +37,7 @@ class WebFetchTool(BaseTool):
 
     name = "web_fetch"
     description = (
-        "Fetch a URL via HTTP GET. "
-        "The destination must be permitted by the network policy."
+        "Fetch a URL via HTTP GET. The destination must be permitted by the network policy."
     )
     permissions = ToolPermissions(network=True)
 

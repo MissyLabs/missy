@@ -75,7 +75,9 @@ class TestRunJob:
         assert retry_job is not None
 
     @patch("missy.scheduler.manager.uuid")
-    def test_run_job_no_retry_after_max_attempts(self, mock_uuid, started_manager: SchedulerManager):
+    def test_run_job_no_retry_after_max_attempts(
+        self, mock_uuid, started_manager: SchedulerManager
+    ):
         mock_uuid.uuid4.return_value = "sess"
         job = started_manager.add_job("maxed", "every 5 minutes", "task", max_attempts=1)
         # Set failures to max
@@ -92,9 +94,7 @@ class TestRunJob:
     @patch("missy.scheduler.manager.uuid")
     def test_run_job_delete_after_run(self, mock_uuid, started_manager: SchedulerManager):
         mock_uuid.uuid4.return_value = "sess"
-        job = started_manager.add_job(
-            "oneshot", "every 5 minutes", "task", delete_after_run=True
-        )
+        job = started_manager.add_job("oneshot", "every 5 minutes", "task", delete_after_run=True)
 
         with patch("missy.agent.runtime.AgentRuntime") as MockRuntime:
             MockRuntime.return_value.run.return_value = "ok"
@@ -105,7 +105,9 @@ class TestRunJob:
 
     def test_run_job_active_hours_gate(self, started_manager: SchedulerManager):
         """Job outside active hours should be skipped."""
-        job = started_manager.add_job("gated", "every 5 minutes", "task", active_hours="00:00-00:01")
+        job = started_manager.add_job(
+            "gated", "every 5 minutes", "task", active_hours="00:00-00:01"
+        )
         # Patch datetime.now to return a time outside the window
         with patch("missy.scheduler.jobs.datetime") as mock_dt:
             mock_dt.now.return_value = datetime(2026, 3, 14, 12, 0, 0)
@@ -138,9 +140,7 @@ class TestScheduleJobVariants:
         assert job.id in started_manager._jobs
 
     def test_schedule_with_timezone(self, started_manager: SchedulerManager):
-        job = started_manager.add_job(
-            "tz", "daily at 09:00", "task", timezone="America/New_York"
-        )
+        job = started_manager.add_job("tz", "daily at 09:00", "task", timezone="America/New_York")
         assert job.timezone == "America/New_York"
 
 
@@ -211,7 +211,9 @@ class TestStopErrorHandling:
 class TestEmitEvent:
     def test_emit_event_exception_handled(self, started_manager: SchedulerManager):
         """_emit_event should not raise even if event_bus fails."""
-        with patch("missy.scheduler.manager.event_bus.publish", side_effect=Exception("bus broken")):
+        with patch(
+            "missy.scheduler.manager.event_bus.publish", side_effect=Exception("bus broken")
+        ):
             started_manager._emit_event(
                 event_type="test.event", result="allow", detail={}
             )  # should not raise

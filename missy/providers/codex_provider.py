@@ -65,6 +65,7 @@ def _load_oauth_token() -> str | None:
     """Load the stored OAuth access token, refreshing if needed."""
     try:
         from missy.cli.oauth import refresh_token_if_needed
+
         return refresh_token_if_needed()
     except Exception:
         return None
@@ -77,12 +78,14 @@ def _messages_to_input(messages: list[Message]) -> list[dict]:
         if msg.role == "system":
             continue  # system prompt goes in ``instructions``
         role = "user" if msg.role == "user" else "assistant"
-        result.append({
-            "role": role,
-            "content": [{"type": "input_text", "text": msg.content}]
-            if role == "user"
-            else [{"type": "output_text", "text": msg.content}],
-        })
+        result.append(
+            {
+                "role": role,
+                "content": [{"type": "input_text", "text": msg.content}]
+                if role == "user"
+                else [{"type": "output_text", "text": msg.content}],
+            }
+        )
     return result
 
 
@@ -205,10 +208,14 @@ class CodexProvider(BaseProvider):
                         if delta:
                             yield delta
                     elif etype in ("response.failed", "error"):
-                        msg = event.get("message") or event.get("error", {}).get("message", "unknown")
+                        msg = event.get("message") or event.get("error", {}).get(
+                            "message", "unknown"
+                        )
                         raise ProviderError(f"openai-codex stream error: {msg}")
         except httpx.HTTPStatusError as exc:
-            raise ProviderError(f"openai-codex HTTP {exc.response.status_code}: {exc.response.text[:200]}") from exc
+            raise ProviderError(
+                f"openai-codex HTTP {exc.response.status_code}: {exc.response.text[:200]}"
+            ) from exc
 
     def complete_with_tools(
         self,
@@ -221,7 +228,9 @@ class CodexProvider(BaseProvider):
         token = self._get_token()
         account_id = _extract_account_id(token)
         # Convert BaseTool instances → schema dicts if needed.
-        tool_schemas = self.get_tool_schema(tools) if tools and not isinstance(tools[0], dict) else tools
+        tool_schemas = (
+            self.get_tool_schema(tools) if tools and not isinstance(tools[0], dict) else tools
+        )
         body = self._build_body(messages, tools=tool_schemas)
 
         tool_calls: list[ToolCall] = []
@@ -261,24 +270,32 @@ class CodexProvider(BaseProvider):
                                 "arguments": item.get("arguments", ""),
                             }
                     elif etype == "response.function_call_arguments.delta":
-                        current_fn["arguments"] = current_fn.get("arguments", "") + event.get("delta", "")
+                        current_fn["arguments"] = current_fn.get("arguments", "") + event.get(
+                            "delta", ""
+                        )
                     elif etype == "response.function_call_arguments.done":
                         if current_fn.get("name"):
                             try:
                                 args = json.loads(current_fn.get("arguments", "{}"))
                             except json.JSONDecodeError:
                                 args = {}
-                            tool_calls.append(ToolCall(
-                                id=current_fn["id"],
-                                name=current_fn["name"],
-                                arguments=args,
-                            ))
+                            tool_calls.append(
+                                ToolCall(
+                                    id=current_fn["id"],
+                                    name=current_fn["name"],
+                                    arguments=args,
+                                )
+                            )
                             current_fn = {}
                     elif etype in ("response.failed", "error"):
-                        msg = event.get("message") or event.get("error", {}).get("message", "unknown")
+                        msg = event.get("message") or event.get("error", {}).get(
+                            "message", "unknown"
+                        )
                         raise ProviderError(f"openai-codex stream error: {msg}")
         except httpx.HTTPStatusError as exc:
-            raise ProviderError(f"openai-codex HTTP {exc.response.status_code}: {exc.response.text[:200]}") from exc
+            raise ProviderError(
+                f"openai-codex HTTP {exc.response.status_code}: {exc.response.text[:200]}"
+            ) from exc
 
         finish_reason = "tool_calls" if tool_calls else "stop"
         return CompletionResponse(
@@ -299,16 +316,21 @@ class CodexProvider(BaseProvider):
                 schemas.append(tool)
                 continue
             base = tool.get_schema() if hasattr(tool, "get_schema") else {}
-            schemas.append({
-                "type": "function",
-                "name": getattr(tool, "name", ""),
-                "description": getattr(tool, "description", ""),
-                "parameters": base.get("parameters", {
-                    "type": "object",
-                    "properties": getattr(tool, "parameters", {}),
-                    "required": [],
-                }),
-            })
+            schemas.append(
+                {
+                    "type": "function",
+                    "name": getattr(tool, "name", ""),
+                    "description": getattr(tool, "description", ""),
+                    "parameters": base.get(
+                        "parameters",
+                        {
+                            "type": "object",
+                            "properties": getattr(tool, "parameters", {}),
+                            "required": [],
+                        },
+                    ),
+                }
+            )
         return schemas
 
     def is_available(self) -> bool:

@@ -286,14 +286,16 @@ class TestAnalyzeErrorRelativeToValueError:
         # Construct a traceback that looks like it's in missy/ but the path
         # will not be relative_to the repo_root (simulated via mock)
         traceback = (
-            'Traceback (most recent call last):\n'
+            "Traceback (most recent call last):\n"
             '  File "/some/other/root/missy/module.py", line 10, in func\n'
             '    raise ValueError("oops")\n'
-            'ValueError: oops'
+            "ValueError: oops"
         )
 
         # Make relative_to always raise ValueError
-        with patch("missy.agent.code_evolution.Path.relative_to", side_effect=ValueError("not relative")):
+        with patch(
+            "missy.agent.code_evolution.Path.relative_to", side_effect=ValueError("not relative")
+        ):
             result = mgr.analyze_error_for_evolution(
                 error_message="ValueError: oops",
                 traceback_text=traceback,
@@ -308,10 +310,10 @@ class TestAnalyzeErrorRelativeToValueError:
         """IndexError/ValueError in path extraction is silently skipped."""
         # Traceback line that has 'missy/' but malformed so split fails
         traceback = (
-            'Traceback (most recent call last):\n'
-            '  File missy/broken_no_quotes, line 1\n'
-            '    code\n'
-            'TypeError: bad'
+            "Traceback (most recent call last):\n"
+            "  File missy/broken_no_quotes, line 1\n"
+            "    code\n"
+            "TypeError: bad"
         )
         result = mgr.analyze_error_for_evolution(
             error_message="TypeError: bad",
@@ -326,11 +328,7 @@ class TestAnalyzeErrorRelativeToValueError:
         """Lines with 'File "' but no closing quote trigger IndexError, which is swallowed."""
         # This line has 'File "' but splits in a way that produces IndexError
         # on the second split operation.
-        traceback = (
-            'Traceback (most recent call last):\n'
-            '  File "missy/noclose\n'
-            'TypeError: trouble'
-        )
+        traceback = 'Traceback (most recent call last):\n  File "missy/noclose\nTypeError: trouble'
         result = mgr.analyze_error_for_evolution(
             error_message="TypeError: trouble",
             traceback_text=traceback,

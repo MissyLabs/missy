@@ -58,8 +58,10 @@ from missy.channels.discord.rest import BASE, DiscordRestClient, _mask_mentions
 def _make_gateway(on_message=None) -> DiscordGatewayClient:
     """Return a DiscordGatewayClient with a no-op on_message callback."""
     if on_message is None:
+
         async def _noop(payload: dict) -> None:
             pass
+
         on_message = _noop
     return DiscordGatewayClient(bot_token="testtoken", on_message=on_message)
 
@@ -412,12 +414,14 @@ class TestGatewayHandlePayloadDispatch:
 
         gw._handle_dispatch = _fake_dispatch  # type: ignore[method-assign]
 
-        await gw._handle_payload({
-            "op": _OP_DISPATCH,
-            "t": "MESSAGE_CREATE",
-            "d": {"content": "hi"},
-            "s": 7,
-        })
+        await gw._handle_payload(
+            {
+                "op": _OP_DISPATCH,
+                "t": "MESSAGE_CREATE",
+                "d": {"content": "hi"},
+                "s": 7,
+            }
+        )
 
         assert len(dispatched) == 1
         assert dispatched[0] == ("MESSAGE_CREATE", {"content": "hi"})
@@ -529,11 +533,14 @@ class TestGatewayHandleDispatch:
         audit_details: list[dict] = []
         gw._emit_audit = lambda et, r, d: audit_details.append(d)  # type: ignore[method-assign]
 
-        await gw._handle_dispatch("READY", {
-            "session_id": "s",
-            "resume_gateway_url": "wss://r",
-            "user": {"id": "u-42", "username": "Bot", "discriminator": "0"},
-        })
+        await gw._handle_dispatch(
+            "READY",
+            {
+                "session_id": "s",
+                "resume_gateway_url": "wss://r",
+                "user": {"id": "u-42", "username": "Bot", "discriminator": "0"},
+            },
+        )
 
         assert any(d.get("bot_user_id") == "u-42" for d in audit_details)
 
@@ -994,9 +1001,7 @@ class TestRestSendMessageRetry:
         resp.raise_for_status.return_value = None
         mock_http.post.return_value = resp
 
-        result = client.send_message(
-            "chan-1", "hello <@user-42>", mention_user_ids=["user-42"]
-        )
+        result = client.send_message("chan-1", "hello <@user-42>", mention_user_ids=["user-42"])
 
         call_kwargs = mock_http.post.call_args[1]
         assert "user-42" in call_kwargs["json"]["allowed_mentions"]["users"]

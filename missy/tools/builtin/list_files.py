@@ -10,6 +10,7 @@ Example::
     result = tool.execute(path="/tmp")
     assert result.success
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -80,9 +81,7 @@ class ListFilesTool(BaseTool):
                 all_entries = sorted(p.rglob("*"), key=lambda x: str(x))
             else:
                 # Show directories first, then files, both alphabetically.
-                all_entries = sorted(
-                    p.iterdir(), key=lambda x: (x.is_file(), x.name.lower())
-                )
+                all_entries = sorted(p.iterdir(), key=lambda x: (x.is_file(), x.name.lower()))
 
             lines: list[str] = []
             for entry in all_entries[:max_entries]:

@@ -97,12 +97,8 @@ class ScheduledJob:
             return True
 
         now = datetime.now()
-        start = now.replace(
-            hour=int(m.group(1)), minute=int(m.group(2)), second=0, microsecond=0
-        )
-        end = now.replace(
-            hour=int(m.group(3)), minute=int(m.group(4)), second=0, microsecond=0
-        )
+        start = now.replace(hour=int(m.group(1)), minute=int(m.group(2)), second=0, microsecond=0)
+        end = now.replace(hour=int(m.group(3)), minute=int(m.group(4)), second=0, microsecond=0)
 
         if end < start:  # overnight window (e.g. 22:00-06:00)
             return now >= start or now <= end

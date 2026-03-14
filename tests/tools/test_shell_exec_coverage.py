@@ -5,6 +5,7 @@ Targets uncovered lines:
   140    : output truncation when combined bytes exceed _MAX_OUTPUT_BYTES
   151-160: FileNotFoundError, PermissionError, generic Exception in _execute_direct
 """
+
 from __future__ import annotations
 
 import subprocess
@@ -61,9 +62,7 @@ class TestOutputTruncation:
 
         with patch("subprocess.run", return_value=mock_proc):
             tool = ShellExecTool()
-            result = tool._execute_direct(
-                command="echo big", cwd=None, timeout=30
-            )
+            result = tool._execute_direct(command="echo big", cwd=None, timeout=30)
 
         assert result.success is True
         # Output should contain the truncation notice
@@ -82,9 +81,7 @@ class TestOutputTruncation:
 
         with patch("subprocess.run", return_value=mock_proc):
             tool = ShellExecTool()
-            result = tool._execute_direct(
-                command="echo exact", cwd=None, timeout=30
-            )
+            result = tool._execute_direct(command="echo exact", cwd=None, timeout=30)
 
         assert result.success is True
         assert "[Output truncated]" not in result.output
@@ -99,9 +96,7 @@ class TestOutputTruncation:
 
         with patch("subprocess.run", return_value=mock_proc):
             tool = ShellExecTool()
-            result = tool._execute_direct(
-                command="cmd", cwd=None, timeout=30
-            )
+            result = tool._execute_direct(command="cmd", cwd=None, timeout=30)
 
         assert result.success is True
         assert "[Output truncated]" in result.output
@@ -114,9 +109,7 @@ class TestDirectExecuteExceptions:
         """Lines 151-156: FileNotFoundError → 'Command not found'."""
         with patch("subprocess.run", side_effect=FileNotFoundError("no such file")):
             tool = ShellExecTool()
-            result = tool._execute_direct(
-                command="nonexistent_binary", cwd=None, timeout=30
-            )
+            result = tool._execute_direct(command="nonexistent_binary", cwd=None, timeout=30)
 
         assert result.success is False
         assert result.output is None
@@ -127,9 +120,7 @@ class TestDirectExecuteExceptions:
         exc = PermissionError("access denied to /usr/sbin/example")
         with patch("subprocess.run", side_effect=exc):
             tool = ShellExecTool()
-            result = tool._execute_direct(
-                command="/usr/sbin/example", cwd=None, timeout=30
-            )
+            result = tool._execute_direct(command="/usr/sbin/example", cwd=None, timeout=30)
 
         assert result.success is False
         assert result.output is None
@@ -141,9 +132,7 @@ class TestDirectExecuteExceptions:
         exc = OSError("kernel panic")
         with patch("subprocess.run", side_effect=exc):
             tool = ShellExecTool()
-            result = tool._execute_direct(
-                command="bad", cwd=None, timeout=30
-            )
+            result = tool._execute_direct(command="bad", cwd=None, timeout=30)
 
         assert result.success is False
         assert result.output is None
@@ -158,9 +147,7 @@ class TestDirectExecuteExceptions:
 
         with patch("subprocess.run", return_value=mock_proc):
             tool = ShellExecTool()
-            result = tool._execute_direct(
-                command="false", cwd=None, timeout=30
-            )
+            result = tool._execute_direct(command="false", cwd=None, timeout=30)
 
         assert result.success is False
         assert "Exit code: 2" in result.error

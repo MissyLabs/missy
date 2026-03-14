@@ -12,6 +12,7 @@ Example::
     result = tool.execute(path="/tmp/scratch.txt")
     assert result.success
 """
+
 from __future__ import annotations
 
 from pathlib import Path

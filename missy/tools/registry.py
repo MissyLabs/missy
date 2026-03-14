@@ -135,8 +135,7 @@ class ToolRegistry:
             return ToolResult(success=False, output=None, error=str(exc))
 
         # Strip registry-internal keys that tools don't accept.
-        tool_kwargs = {k: v for k, v in kwargs.items()
-                       if k not in ("session_id", "task_id")}
+        tool_kwargs = {k: v for k, v in kwargs.items() if k not in ("session_id", "task_id")}
         try:
             result = tool.execute(**tool_kwargs)
         except Exception as exc:

@@ -35,6 +35,7 @@ _OLLAMA_DEFAULT_URL = "http://localhost:11434"
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _display_env() -> dict[str, str]:
     """Return an environment dict with DISPLAY set."""
     return {**os.environ, "DISPLAY": os.environ.get("DISPLAY", ":0")}
@@ -69,6 +70,7 @@ def _load_oauth_token() -> str | None:
     """Load the stored OAuth access token, refreshing if needed."""
     try:
         from missy.cli.oauth import refresh_token_if_needed
+
         return refresh_token_if_needed()
     except Exception:
         return None
@@ -83,6 +85,7 @@ def _get_ollama_base_url() -> str:
     """Return the Ollama base URL from config or default."""
     try:
         from missy.config.settings import load_config
+
         cfg = load_config()
         provider_cfg = cfg.providers.get("ollama")
         if provider_cfg and provider_cfg.base_url:
@@ -96,6 +99,7 @@ def _get_ollama_base_url() -> str:
 # Button map helper
 # ---------------------------------------------------------------------------
 
+
 def _button_num(button: str) -> str:
     """Map a human-friendly button name to the xdotool button number."""
     mapping = {"left": "1", "middle": "2", "right": "3"}
@@ -105,6 +109,7 @@ def _button_num(button: str) -> str:
 # ---------------------------------------------------------------------------
 # Tool implementations
 # ---------------------------------------------------------------------------
+
 
 class X11ScreenshotTool(BaseTool):
     """Take a screenshot of the X11 desktop and save it to a file.
@@ -128,13 +133,14 @@ class X11ScreenshotTool(BaseTool):
         "region": {
             "type": "string",
             "description": (
-                "Optional region to capture as 'x,y,w,h'. "
-                "When omitted the full screen is captured."
+                "Optional region to capture as 'x,y,w,h'. When omitted the full screen is captured."
             ),
         },
     }
 
-    def execute(self, *, path: str = "/tmp/screenshot.png", region: str = "", **_: Any) -> ToolResult:
+    def execute(
+        self, *, path: str = "/tmp/screenshot.png", region: str = "", **_: Any
+    ) -> ToolResult:
         if region:
             # scrot -a x,y,w,h <path>
             cmd = f"scrot -a {region} {path}"
@@ -247,8 +253,7 @@ class X11TypeTool(BaseTool):
 
     name = "x11_type"
     description = (
-        "Type text into the currently focused window. "
-        "Optionally focus a window first by name."
+        "Type text into the currently focused window. Optionally focus a window first by name."
     )
     permissions = ToolPermissions(shell=True)
 
@@ -376,9 +381,13 @@ class X11WindowListTool(BaseTool):
             for line in wmctrl_result.stdout.splitlines():
                 parts = line.split(None, 3)
                 if len(parts) >= 4:
-                    windows.append({"id": parts[0], "desktop": parts[1], "host": parts[2], "name": parts[3]})
+                    windows.append(
+                        {"id": parts[0], "desktop": parts[1], "host": parts[2], "name": parts[3]}
+                    )
                 elif len(parts) == 3:
-                    windows.append({"id": parts[0], "desktop": parts[1], "host": parts[2], "name": ""})
+                    windows.append(
+                        {"id": parts[0], "desktop": parts[1], "host": parts[2], "name": ""}
+                    )
             return ToolResult(success=True, output={"windows": windows, "count": len(windows)})
 
         # Fallback: xdotool search for all visible windows then get names.
@@ -457,6 +466,7 @@ class X11ReadScreenTool(BaseTool):
         if not region:
             try:
                 from missy.tools.builtin.browser_tools import _registry as browser_registry
+
                 if browser_registry.screenshot_active(path):
                     return None
             except Exception:

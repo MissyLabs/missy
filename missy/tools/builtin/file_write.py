@@ -10,6 +10,7 @@ Example::
     result = tool.execute(path="/tmp/hello.txt", content="hello world\\n")
     assert result.success
 """
+
 from __future__ import annotations
 
 from pathlib import Path

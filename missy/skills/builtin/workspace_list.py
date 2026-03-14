@@ -3,6 +3,7 @@
 Lists files in the configured workspace directory.
 Requires filesystem read access to the workspace (enforced by policy).
 """
+
 from __future__ import annotations
 
 from pathlib import Path

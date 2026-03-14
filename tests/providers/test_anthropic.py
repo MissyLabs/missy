@@ -25,7 +25,9 @@ def _make_config(api_key: str | None = "sk-ant-test") -> ProviderConfig:
     )
 
 
-def _make_sdk_response(content: str = "Hello!", model: str = "claude-3-5-sonnet-20241022") -> MagicMock:
+def _make_sdk_response(
+    content: str = "Hello!", model: str = "claude-3-5-sonnet-20241022"
+) -> MagicMock:
     """Build a mock Anthropic SDK response object."""
     resp = MagicMock()
     block = MagicMock()
@@ -135,8 +137,8 @@ class TestComplete:
         import missy.providers.anthropic_provider as mod
 
         sdk_mock = _make_sdk_module()
-        sdk_mock.Anthropic.return_value.messages.create.return_value = (
-            _make_sdk_response(content="Claude says hi!")
+        sdk_mock.Anthropic.return_value.messages.create.return_value = _make_sdk_response(
+            content="Claude says hi!"
         )
         original_sdk = mod._anthropic_sdk
         original_avail = mod._ANTHROPIC_AVAILABLE
@@ -170,9 +172,7 @@ class TestComplete:
         import missy.providers.anthropic_provider as mod
 
         sdk_mock = _make_sdk_module()
-        sdk_mock.Anthropic.return_value.messages.create.return_value = (
-            _make_sdk_response()
-        )
+        sdk_mock.Anthropic.return_value.messages.create.return_value = _make_sdk_response()
         original_sdk = mod._anthropic_sdk
         original_avail = mod._ANTHROPIC_AVAILABLE
         try:
@@ -236,8 +236,8 @@ class TestCompleteErrors:
         import missy.providers.anthropic_provider as mod
 
         sdk_mock = _make_sdk_module()
-        sdk_mock.Anthropic.return_value.messages.create.side_effect = (
-            sdk_mock.AuthenticationError("bad key")
+        sdk_mock.Anthropic.return_value.messages.create.side_effect = sdk_mock.AuthenticationError(
+            "bad key"
         )
         original_sdk = mod._anthropic_sdk
         original_avail = mod._ANTHROPIC_AVAILABLE
@@ -253,8 +253,8 @@ class TestCompleteErrors:
         import missy.providers.anthropic_provider as mod
 
         sdk_mock = _make_sdk_module()
-        sdk_mock.Anthropic.return_value.messages.create.side_effect = (
-            sdk_mock.APIError("server error")
+        sdk_mock.Anthropic.return_value.messages.create.side_effect = sdk_mock.APIError(
+            "server error"
         )
         original_sdk = mod._anthropic_sdk
         original_avail = mod._ANTHROPIC_AVAILABLE
@@ -270,8 +270,8 @@ class TestCompleteErrors:
         import missy.providers.anthropic_provider as mod
 
         sdk_mock = _make_sdk_module()
-        sdk_mock.Anthropic.return_value.messages.create.side_effect = (
-            sdk_mock.APITimeoutError("timed out")
+        sdk_mock.Anthropic.return_value.messages.create.side_effect = sdk_mock.APITimeoutError(
+            "timed out"
         )
         original_sdk = mod._anthropic_sdk
         original_avail = mod._ANTHROPIC_AVAILABLE
@@ -287,9 +287,7 @@ class TestCompleteErrors:
         import missy.providers.anthropic_provider as mod
 
         sdk_mock = _make_sdk_module()
-        sdk_mock.Anthropic.return_value.messages.create.side_effect = RuntimeError(
-            "unexpected"
-        )
+        sdk_mock.Anthropic.return_value.messages.create.side_effect = RuntimeError("unexpected")
         original_sdk = mod._anthropic_sdk
         original_avail = mod._ANTHROPIC_AVAILABLE
         try:
@@ -304,9 +302,7 @@ class TestCompleteErrors:
         import missy.providers.anthropic_provider as mod
 
         sdk_mock = _make_sdk_module()
-        sdk_mock.Anthropic.return_value.messages.create.side_effect = (
-            sdk_mock.APIError("boom")
-        )
+        sdk_mock.Anthropic.return_value.messages.create.side_effect = sdk_mock.APIError("boom")
         original_sdk = mod._anthropic_sdk
         original_avail = mod._ANTHROPIC_AVAILABLE
         try:

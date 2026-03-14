@@ -177,11 +177,15 @@ class PromptPatchManager:
                 confidence=confidence,
             )
             # Auto-approve low-risk patches with high confidence
-            if patch_type in (
-                PatchType.TOOL_USAGE_HINT,
-                PatchType.DOMAIN_KNOWLEDGE,
-                PatchType.STYLE_PREFERENCE,
-            ) and confidence >= 0.8:
+            if (
+                patch_type
+                in (
+                    PatchType.TOOL_USAGE_HINT,
+                    PatchType.DOMAIN_KNOWLEDGE,
+                    PatchType.STYLE_PREFERENCE,
+                )
+                and confidence >= 0.8
+            ):
                 patch.status = PatchStatus.APPROVED
             self._patches.append(patch)
             self._save()

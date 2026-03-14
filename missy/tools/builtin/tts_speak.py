@@ -90,8 +90,10 @@ def _synth_piper(text: str, wav_path: str, voice: str, speed: float) -> str | No
     env = _piper_env()
     cmd = [
         str(_PIPER_BIN),
-        "--model", str(model),
-        "--output_file", wav_path,
+        "--model",
+        str(model),
+        "--output_file",
+        wav_path,
     ]
     if speed != 1.0:
         cmd.extend(["--length_scale", str(1.0 / speed)])
@@ -116,16 +118,21 @@ def _synth_piper(text: str, wav_path: str, voice: str, speed: float) -> str | No
         return "piper timed out"
 
 
-def _synth_espeak(text: str, wav_path: str, speed: int, pitch: int, voice: str, env: dict) -> str | None:
+def _synth_espeak(
+    text: str, wav_path: str, speed: int, pitch: int, voice: str, env: dict
+) -> str | None:
     """Synthesize with espeak-ng. Returns None on success, error string on failure."""
     try:
         synth = subprocess.run(
             [
                 "espeak-ng",
                 "--stdout",
-                "-s", str(speed),
-                "-p", str(pitch),
-                "-v", voice,
+                "-s",
+                str(speed),
+                "-p",
+                str(pitch),
+                "-v",
+                voice,
                 text,
             ],
             capture_output=True,
@@ -152,11 +159,16 @@ def _play_wav(wav_path: str, env: dict) -> str | None:
         play = subprocess.run(
             [
                 "gst-launch-1.0",
-                "filesrc", f"location={wav_path}",
-                "!", "wavparse",
-                "!", "audioconvert",
-                "!", "audioresample",
-                "!", "pipewiresink",
+                "filesrc",
+                f"location={wav_path}",
+                "!",
+                "wavparse",
+                "!",
+                "audioconvert",
+                "!",
+                "audioresample",
+                "!",
+                "pipewiresink",
             ],
             capture_output=True,
             env=env,
@@ -240,7 +252,9 @@ class TTSSpeakTool(BaseTool):
                 espeak_speed = max(80, min(450, int(160 * speed)))
                 err = _synth_espeak(text, wav_path, espeak_speed, 50, espeak_voice, env)
                 if err is not None:
-                    return ToolResult(success=False, output=None, error=f"TTS synthesis failed: {err}")
+                    return ToolResult(
+                        success=False, output=None, error=f"TTS synthesis failed: {err}"
+                    )
 
             # 3. Play via GStreamer + PipeWire.
             play_err = _play_wav(wav_path, env)
@@ -259,6 +273,7 @@ class TTSSpeakTool(BaseTool):
             return ToolResult(success=False, output=None, error=f"Required binary not found: {exc}")
         finally:
             import contextlib
+
             with contextlib.suppress(OSError):
                 os.unlink(wav_path)
 
@@ -294,7 +309,14 @@ class AudioListDevicesTool(BaseTool):
                 for line in lines:
                     if line.strip().startswith("Audio"):
                         in_audio = True
-                    elif in_audio and line.strip() and not line.startswith(" ") and not line.startswith("│") and not line.startswith("├") and not line.startswith("└"):
+                    elif (
+                        in_audio
+                        and line.strip()
+                        and not line.startswith(" ")
+                        and not line.startswith("│")
+                        and not line.startswith("├")
+                        and not line.startswith("└")
+                    ):
                         break
                     if in_audio:
                         audio_lines.append(line)
@@ -317,7 +339,9 @@ class AudioListDevicesTool(BaseTool):
         except (FileNotFoundError, subprocess.TimeoutExpired):
             pass
 
-        return ToolResult(success=False, output=None, error="No audio listing tools available (wpctl or aplay).")
+        return ToolResult(
+            success=False, output=None, error="No audio listing tools available (wpctl or aplay)."
+        )
 
 
 class AudioSetVolumeTool(BaseTool):
@@ -393,7 +417,8 @@ class AudioSetVolumeTool(BaseTool):
 
         except FileNotFoundError:
             return ToolResult(
-                success=False, output=None,
+                success=False,
+                output=None,
                 error="wpctl not found. Install wireplumber: sudo apt install wireplumber",
             )
         except subprocess.TimeoutExpired:

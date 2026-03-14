@@ -246,9 +246,7 @@ class PiperTTS(TTSEngine):
                 is produced.
         """
         if not self._loaded or self._piper_bin is None or self._model_file is None:
-            raise RuntimeError(
-                "PiperTTS.load() must be called before synthesize()."
-            )
+            raise RuntimeError("PiperTTS.load() must be called before synthesize().")
 
         # Resolve model for override voice, or use the loaded default.
         if voice is not None and voice != self._voice:
@@ -260,7 +258,8 @@ class PiperTTS(TTSEngine):
 
         cmd = [
             self._piper_bin,
-            "--model", str(model_file),
+            "--model",
+            str(model_file),
             "--output_raw",
             "--quiet",
         ]
@@ -284,9 +283,7 @@ class PiperTTS(TTSEngine):
 
         if proc.returncode != 0:
             stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip()
-            raise RuntimeError(
-                f"Piper exited with code {proc.returncode}: {stderr_text}"
-            )
+            raise RuntimeError(f"Piper exited with code {proc.returncode}: {stderr_text}")
 
         if not pcm_bytes:
             raise RuntimeError(
@@ -331,9 +328,7 @@ class PiperTTS(TTSEngine):
         if self._model_path_arg is not None:
             path = Path(self._model_path_arg).expanduser().resolve()
             if not path.is_file():
-                raise RuntimeError(
-                    f"Piper model file not found: {path}"
-                )
+                raise RuntimeError(f"Piper model file not found: {path}")
             return path
 
         return self._resolve_model_for_voice(self._voice)

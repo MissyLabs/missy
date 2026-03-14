@@ -1,4 +1,5 @@
 """Built-in tool: launch an X11 application and wait for its window."""
+
 from __future__ import annotations
 
 import os
@@ -31,7 +32,7 @@ class X11LaunchTool(BaseTool):
         "window_name_hint": {
             "type": "string",
             "description": "Partial window name to wait for, e.g. 'Firefox' or 'gedit'. "
-                           "Defaults to the first word of the command.",
+            "Defaults to the first word of the command.",
         },
         "wait_seconds": {
             "type": "integer",

@@ -150,7 +150,9 @@ class TestDateTimeSkill:
 
     def test_utc_timestamp_is_iso8601(self, skill):
         result = skill.execute()
-        utc_line = next(line for line in result.output.splitlines() if line.startswith("datetime_utc:"))
+        utc_line = next(
+            line for line in result.output.splitlines() if line.startswith("datetime_utc:")
+        )
         ts_str = utc_line.split(": ", 1)[1].strip()
         # Should parse without error.
         parsed = datetime.datetime.fromisoformat(ts_str)
@@ -578,9 +580,7 @@ class TestHealthCheckSkill:
 
     def test_all_present_and_valid_returns_success(self, skill, tmp_path):
         config = tmp_path / "config.yaml"
-        config.write_text(
-            "providers:\n  anthropic:\n    model: claude-sonnet-4-6\n"
-        )
+        config.write_text("providers:\n  anthropic:\n    model: claude-sonnet-4-6\n")
         memory = tmp_path / "memory.db"
         memory.write_bytes(b"data")
         audit = tmp_path / "audit.jsonl"

@@ -139,8 +139,8 @@ class TestComplete:
         import missy.providers.openai_provider as mod
 
         sdk_mock = _make_sdk_module()
-        sdk_mock.OpenAI.return_value.chat.completions.create.return_value = (
-            _make_sdk_response(content="GPT says hello!")
+        sdk_mock.OpenAI.return_value.chat.completions.create.return_value = _make_sdk_response(
+            content="GPT says hello!"
         )
         original_sdk = mod._openai_sdk
         original_avail = mod._OPENAI_AVAILABLE
@@ -170,9 +170,7 @@ class TestComplete:
         import missy.providers.openai_provider as mod
 
         sdk_mock = _make_sdk_module()
-        sdk_mock.OpenAI.return_value.chat.completions.create.return_value = (
-            _make_sdk_response()
-        )
+        sdk_mock.OpenAI.return_value.chat.completions.create.return_value = _make_sdk_response()
         original_sdk = mod._openai_sdk
         original_avail = mod._OPENAI_AVAILABLE
         try:
@@ -271,8 +269,8 @@ class TestCompleteErrors:
         import missy.providers.openai_provider as mod
 
         sdk_mock = _make_sdk_module()
-        sdk_mock.OpenAI.return_value.chat.completions.create.side_effect = (
-            sdk_mock.APIError("server error")
+        sdk_mock.OpenAI.return_value.chat.completions.create.side_effect = sdk_mock.APIError(
+            "server error"
         )
         original_sdk = mod._openai_sdk
         original_avail = mod._OPENAI_AVAILABLE
@@ -288,8 +286,8 @@ class TestCompleteErrors:
         import missy.providers.openai_provider as mod
 
         sdk_mock = _make_sdk_module()
-        sdk_mock.OpenAI.return_value.chat.completions.create.side_effect = (
-            sdk_mock.APITimeoutError("timeout")
+        sdk_mock.OpenAI.return_value.chat.completions.create.side_effect = sdk_mock.APITimeoutError(
+            "timeout"
         )
         original_sdk = mod._openai_sdk
         original_avail = mod._OPENAI_AVAILABLE
@@ -305,9 +303,7 @@ class TestCompleteErrors:
         import missy.providers.openai_provider as mod
 
         sdk_mock = _make_sdk_module()
-        sdk_mock.OpenAI.return_value.chat.completions.create.side_effect = (
-            RuntimeError("boom")
-        )
+        sdk_mock.OpenAI.return_value.chat.completions.create.side_effect = RuntimeError("boom")
         original_sdk = mod._openai_sdk
         original_avail = mod._OPENAI_AVAILABLE
         try:
@@ -322,9 +318,7 @@ class TestCompleteErrors:
         import missy.providers.openai_provider as mod
 
         sdk_mock = _make_sdk_module()
-        sdk_mock.OpenAI.return_value.chat.completions.create.side_effect = (
-            sdk_mock.APIError("boom")
-        )
+        sdk_mock.OpenAI.return_value.chat.completions.create.side_effect = sdk_mock.APIError("boom")
         original_sdk = mod._openai_sdk
         original_avail = mod._OPENAI_AVAILABLE
         try:

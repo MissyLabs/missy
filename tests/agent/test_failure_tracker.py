@@ -112,7 +112,7 @@ class TestRecordSuccess:
         tracker = FailureTracker(threshold=2)
         tracker.record_failure("t", "e")
         tracker.record_failure("t", "e")  # threshold hit
-        tracker.record_success("t")       # reset
+        tracker.record_success("t")  # reset
         # After success, needs another 2 failures to trigger again
         assert tracker.record_failure("t", "e") is False
         assert tracker.record_failure("t", "e") is True
@@ -179,7 +179,11 @@ class TestGetStrategyPrompt:
         tracker.record_failure("t", "e")
         tracker.record_failure("t", "e")
         prompt = tracker.get_strategy_prompt("t", "e")
-        assert "3 alternative" in prompt.lower() or "three alternative" in prompt.lower() or "3" in prompt
+        assert (
+            "3 alternative" in prompt.lower()
+            or "three alternative" in prompt.lower()
+            or "3" in prompt
+        )
 
     def test_prompt_instructs_not_to_retry_tool(self):
         tracker = FailureTracker(threshold=2)
@@ -251,10 +255,10 @@ class TestGetStats:
 
     def test_tracks_consecutive_and_total_separately(self):
         tracker = FailureTracker(threshold=10)
-        tracker.record_failure("t", "e")   # consecutive=1, total=1
-        tracker.record_failure("t", "e")   # consecutive=2, total=2
-        tracker.record_success("t")         # consecutive=0, total=2
-        tracker.record_failure("t", "e")   # consecutive=1, total=3
+        tracker.record_failure("t", "e")  # consecutive=1, total=1
+        tracker.record_failure("t", "e")  # consecutive=2, total=2
+        tracker.record_success("t")  # consecutive=0, total=2
+        tracker.record_failure("t", "e")  # consecutive=1, total=3
         stats = tracker.get_stats()
         assert stats["t"]["failures"] == 1
         assert stats["t"]["total_failures"] == 3

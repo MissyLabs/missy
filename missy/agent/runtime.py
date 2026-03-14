@@ -433,6 +433,7 @@ class AgentRuntime:
         # --- Feature #7: failure tracker (graceful degradation) ---
         try:
             from missy.agent.failure_tracker import FailureTracker as _FailureTracker
+
             failure_tracker: _FailureTracker | None = _FailureTracker(threshold=3)
         except ImportError:
             failure_tracker = None
@@ -442,6 +443,7 @@ class AgentRuntime:
         _checkpoint_id = None
         try:
             from missy.agent.checkpoint import CheckpointManager as _CheckpointManager
+
             _cm = _CheckpointManager()
             _checkpoint_id = _cm.create(session_id, task_id, user_input)
         except Exception:
@@ -551,9 +553,7 @@ class AgentRuntime:
                             pass
 
                         # Feature #9: error-driven code evolution analysis
-                        self._analyze_for_evolution(
-                            tc.name, tr.content, failure_tracker
-                        )
+                        self._analyze_for_evolution(tc.name, tr.content, failure_tracker)
 
                     # Feature #8: checkpoint after each round of tool results
                     if _cm is not None and _checkpoint_id is not None:
@@ -656,11 +656,21 @@ class AgentRuntime:
     # ------------------------------------------------------------------
 
     # Safe tools allowed in safe-chat mode (read-only, no side effects)
-    _SAFE_CHAT_TOOLS = frozenset({
-        "calculator", "file_read", "list_files", "web_fetch",
-        "browser_get_content", "browser_get_url", "browser_screenshot",
-        "x11_screenshot", "x11_window_list", "atspi_get_tree", "atspi_get_text",
-    })
+    _SAFE_CHAT_TOOLS = frozenset(
+        {
+            "calculator",
+            "file_read",
+            "list_files",
+            "web_fetch",
+            "browser_get_content",
+            "browser_get_url",
+            "browser_screenshot",
+            "x11_screenshot",
+            "x11_window_list",
+            "atspi_get_tree",
+            "atspi_get_text",
+        }
+    )
 
     def _get_tools(self) -> list:
         """Return registered tools, or an empty list when unavailable.
@@ -713,8 +723,7 @@ class AgentRuntime:
             # Strip session_id/task_id from tool args to avoid colliding
             # with the explicit kwargs we pass to registry.execute().
             tool_args = {
-                k: v for k, v in tool_call.arguments.items()
-                if k not in ("session_id", "task_id")
+                k: v for k, v in tool_call.arguments.items() if k not in ("session_id", "task_id")
             }
             result = registry.execute(
                 tool_call.name,
@@ -805,9 +814,7 @@ class AgentRuntime:
             logger.debug("Failed to load history from memory store: %s", exc)
             return []
 
-    def _save_turn(
-        self, session_id: str, role: str, content: str, provider: str = ""
-    ) -> None:
+    def _save_turn(self, session_id: str, role: str, content: str, provider: str = "") -> None:
         """Persist a conversation turn to the memory store.
 
         Args:
@@ -916,9 +923,7 @@ class AgentRuntime:
     # Message format conversion
     # ------------------------------------------------------------------
 
-    def _dicts_to_messages(
-        self, system_prompt: str, message_dicts: list[dict]
-    ) -> list[Message]:
+    def _dicts_to_messages(self, system_prompt: str, message_dicts: list[dict]) -> list[Message]:
         """Convert context-manager message dicts to provider Message objects.
 
         Prepends the system prompt as a Message with ``role="system"``.
@@ -940,9 +945,7 @@ class AgentRuntime:
             if role == "tool":
                 # Represent tool results as user messages for providers that
                 # don't support native tool_result role
-                content_str = (
-                    f"[Tool result for {d.get('name', 'unknown')}]: {content}"
-                )
+                content_str = f"[Tool result for {d.get('name', 'unknown')}]: {content}"
                 if d.get("is_error"):
                     content_str = f"[Tool error for {d.get('name', 'unknown')}]: {content}"
                 result.append(Message(role="user", content=content_str))
@@ -967,6 +970,7 @@ class AgentRuntime:
         """
         try:
             from missy.agent.circuit_breaker import CircuitBreaker
+
             return CircuitBreaker(name=provider_name)
         except Exception:
             return _NoOpCircuitBreaker()
@@ -981,6 +985,7 @@ class AgentRuntime:
         """
         try:
             from missy.agent.context import ContextManager
+
             return ContextManager()
         except Exception:
             return None
@@ -995,6 +1000,7 @@ class AgentRuntime:
         """
         try:
             from missy.memory.store import MemoryStore
+
             return MemoryStore()
         except Exception:
             return None
@@ -1010,6 +1016,7 @@ class AgentRuntime:
         """
         try:
             from missy.agent.cost_tracker import CostTracker
+
             return CostTracker(max_spend_usd=self.config.max_spend_usd)
         except Exception:
             return None
@@ -1024,6 +1031,7 @@ class AgentRuntime:
         """
         try:
             from missy.providers.rate_limiter import RateLimiter
+
             return RateLimiter(requests_per_minute=60, tokens_per_minute=100_000)
         except Exception:
             return None
@@ -1039,6 +1047,7 @@ class AgentRuntime:
         """
         try:
             from missy.agent.checkpoint import scan_for_recovery
+
             results = scan_for_recovery()
             if results:
                 logger.info(
@@ -1228,6 +1237,7 @@ class AgentRuntime:
 # ---------------------------------------------------------------------------
 # No-op circuit breaker stub for graceful degradation
 # ---------------------------------------------------------------------------
+
 
 class _NoOpCircuitBreaker:
     """Passthrough stub used when the circuit_breaker module is unavailable."""

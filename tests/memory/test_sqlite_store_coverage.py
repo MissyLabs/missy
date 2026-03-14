@@ -11,6 +11,7 @@ Targets uncovered lines:
   588-594: cleanup — deletes old turns, returns count
   602     : _row_to_turn — metadata parsing from None value
 """
+
 from __future__ import annotations
 
 import sqlite3

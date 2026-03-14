@@ -1,4 +1,5 @@
 """Heartbeat system: periodic agent invocation from HEARTBEAT.md checklist."""
+
 from __future__ import annotations
 
 import logging
@@ -93,7 +94,8 @@ class HeartbeatRunner:
 
     def _in_active_hours(self) -> bool:
         from datetime import datetime
-        m = re.match(r'(\d{2}):(\d{2})-(\d{2}):(\d{2})', self._active_hours)
+
+        m = re.match(r"(\d{2}):(\d{2})-(\d{2}):(\d{2})", self._active_hours)
         if not m:
             return True
         now = datetime.now()

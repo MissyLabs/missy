@@ -75,9 +75,7 @@ class PluginLoader:
             PolicyViolationError: When the plugin is denied by policy.
         """
         if not self.config.plugins.enabled:
-            detail_msg = (
-                f"Plugin {plugin.name!r} denied: plugins are disabled in configuration."
-            )
+            detail_msg = f"Plugin {plugin.name!r} denied: plugins are disabled in configuration."
             self._emit_event(
                 event_type="plugin.load",
                 result="deny",
@@ -93,9 +91,7 @@ class PluginLoader:
             )
 
         if plugin.name not in self.config.plugins.allowed_plugins:
-            detail_msg = (
-                f"Plugin {plugin.name!r} denied: not in allowed_plugins list."
-            )
+            detail_msg = f"Plugin {plugin.name!r} denied: not in allowed_plugins list."
             self._emit_event(
                 event_type="plugin.load",
                 result="deny",

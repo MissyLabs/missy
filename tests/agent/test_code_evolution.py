@@ -33,26 +33,30 @@ def tmp_repo(tmp_path):
     subprocess.run(["git", "init"], cwd=str(repo), capture_output=True, check=True)
     subprocess.run(
         ["git", "config", "user.email", "test@test.com"],
-        cwd=str(repo), capture_output=True, check=True,
+        cwd=str(repo),
+        capture_output=True,
+        check=True,
     )
     subprocess.run(
         ["git", "config", "user.name", "Test"],
-        cwd=str(repo), capture_output=True, check=True,
+        cwd=str(repo),
+        capture_output=True,
+        check=True,
     )
 
     # Create a missy package structure
     pkg = repo / "missy"
     pkg.mkdir()
     (pkg / "__init__.py").write_text("")
-    (pkg / "example.py").write_text(
-        "def greet():\n    return 'hello'\n"
-    )
+    (pkg / "example.py").write_text("def greet():\n    return 'hello'\n")
 
     # Initial commit
     subprocess.run(["git", "add", "."], cwd=str(repo), capture_output=True, check=True)
     subprocess.run(
         ["git", "commit", "-m", "initial"],
-        cwd=str(repo), capture_output=True, check=True,
+        cwd=str(repo),
+        capture_output=True,
+        check=True,
     )
 
     return repo
@@ -178,20 +182,23 @@ class TestPropose:
     def test_propose_capacity_limit(self, mgr, tmp_repo):
         mgr.MAX_PROPOSALS = 2
         mgr.propose(
-            title="1", description="t",
+            title="1",
+            description="t",
             file_path="missy/example.py",
             original_code="return 'hello'",
             proposed_code="return 'hi'",
         )
         mgr.propose(
-            title="2", description="t",
+            title="2",
+            description="t",
             file_path="missy/example.py",
             original_code="return 'hello'",
             proposed_code="return 'hi'",
         )
         with pytest.raises(ValueError, match="capacity"):
             mgr.propose(
-                title="3", description="t",
+                title="3",
+                description="t",
                 file_path="missy/example.py",
                 original_code="return 'hello'",
                 proposed_code="return 'hi'",
@@ -206,7 +213,8 @@ class TestPropose:
 class TestApproveReject:
     def test_approve(self, mgr):
         prop = mgr.propose(
-            title="T", description="D",
+            title="T",
+            description="D",
             file_path="missy/example.py",
             original_code="return 'hello'",
             proposed_code="return 'hi'",
@@ -219,7 +227,8 @@ class TestApproveReject:
 
     def test_approve_already_applied(self, mgr):
         prop = mgr.propose(
-            title="T", description="D",
+            title="T",
+            description="D",
             file_path="missy/example.py",
             original_code="return 'hello'",
             proposed_code="return 'hi'",
@@ -231,7 +240,8 @@ class TestApproveReject:
 
     def test_reject(self, mgr):
         prop = mgr.propose(
-            title="T", description="D",
+            title="T",
+            description="D",
             file_path="missy/example.py",
             original_code="return 'hello'",
             proposed_code="return 'hi'",
@@ -241,7 +251,8 @@ class TestApproveReject:
 
     def test_reject_approved(self, mgr):
         prop = mgr.propose(
-            title="T", description="D",
+            title="T",
+            description="D",
             file_path="missy/example.py",
             original_code="return 'hello'",
             proposed_code="return 'hi'",
@@ -275,13 +286,16 @@ class TestApply:
         # Verify commit exists
         git_log = subprocess.run(
             ["git", "log", "--oneline", "-1"],
-            cwd=str(tmp_repo), capture_output=True, text=True,
+            cwd=str(tmp_repo),
+            capture_output=True,
+            text=True,
         )
         assert "[missy-evolve]" in git_log.stdout
 
     def test_apply_not_approved(self, mgr):
         prop = mgr.propose(
-            title="T", description="D",
+            title="T",
+            description="D",
             file_path="missy/example.py",
             original_code="return 'hello'",
             proposed_code="return 'hi'",
@@ -315,7 +329,8 @@ class TestApply:
         # Make uncommitted changes to an unrelated file
         (tmp_repo / "missy" / "__init__.py").write_text("# dirty\n")
         prop = mgr.propose(
-            title="T", description="D",
+            title="T",
+            description="D",
             file_path="missy/example.py",
             original_code="return 'hello'",
             proposed_code="return 'hi'",
@@ -340,7 +355,8 @@ class TestApply:
 class TestRollback:
     def test_rollback_success(self, mgr, tmp_repo):
         prop = mgr.propose(
-            title="T", description="D",
+            title="T",
+            description="D",
             file_path="missy/example.py",
             original_code="return 'hello'",
             proposed_code="return 'hi'",
@@ -358,7 +374,8 @@ class TestRollback:
 
     def test_rollback_not_applied(self, mgr):
         prop = mgr.propose(
-            title="T", description="D",
+            title="T",
+            description="D",
             file_path="missy/example.py",
             original_code="return 'hello'",
             proposed_code="return 'hi'",
@@ -379,13 +396,15 @@ class TestRollback:
 class TestQueries:
     def test_list_all(self, mgr):
         mgr.propose(
-            title="A", description="D",
+            title="A",
+            description="D",
             file_path="missy/example.py",
             original_code="return 'hello'",
             proposed_code="return 'hi'",
         )
         mgr.propose(
-            title="B", description="D",
+            title="B",
+            description="D",
             file_path="missy/example.py",
             original_code="return 'hello'",
             proposed_code="return 'hi'",
@@ -394,13 +413,15 @@ class TestQueries:
 
     def test_list_pending(self, mgr):
         p1 = mgr.propose(
-            title="A", description="D",
+            title="A",
+            description="D",
             file_path="missy/example.py",
             original_code="return 'hello'",
             proposed_code="return 'hi'",
         )
         p2 = mgr.propose(
-            title="B", description="D",
+            title="B",
+            description="D",
             file_path="missy/example.py",
             original_code="return 'hello'",
             proposed_code="return 'hi'",
@@ -413,7 +434,8 @@ class TestQueries:
 
     def test_list_applied(self, mgr):
         prop = mgr.propose(
-            title="A", description="D",
+            title="A",
+            description="D",
             file_path="missy/example.py",
             original_code="return 'hello'",
             proposed_code="return 'hi'",
@@ -435,8 +457,10 @@ class TestQueries:
 class TestErrorAnalysis:
     def test_ignores_low_failure_count(self, mgr):
         result = mgr.analyze_error_for_evolution(
-            "some error", "traceback with missy/example.py",
-            tool_name="shell_exec", failure_count=2,
+            "some error",
+            "traceback with missy/example.py",
+            tool_name="shell_exec",
+            failure_count=2,
         )
         assert result is None
 
@@ -452,10 +476,10 @@ class TestErrorAnalysis:
     def test_creates_skeleton_for_missy_error(self, mgr, tmp_repo):
         missy_path = str(tmp_repo / "missy" / "example.py")
         traceback = (
-            f'Traceback (most recent call last):\n'
+            f"Traceback (most recent call last):\n"
             f'  File "{missy_path}", line 2, in greet\n'
             f'    return "hello"\n'
-            f'TypeError: bad return type'
+            f"TypeError: bad return type"
         )
         result = mgr.analyze_error_for_evolution(
             "TypeError: bad return type",

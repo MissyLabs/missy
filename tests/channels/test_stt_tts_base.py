@@ -52,6 +52,7 @@ class TestSTTEngineInterface:
     def test_is_abstract(self):
         # STTEngine cannot be instantiated directly
         import pytest
+
         with pytest.raises(TypeError):
             STTEngine()
 
@@ -59,5 +60,6 @@ class TestSTTEngineInterface:
 class TestTTSEngineInterface:
     def test_is_abstract(self):
         import pytest
+
         with pytest.raises(TypeError):
             TTSEngine()

@@ -1,4 +1,5 @@
 """MCP server lifecycle manager."""
+
 from __future__ import annotations
 
 import json
@@ -46,7 +47,9 @@ class McpManager:
             except Exception as exc:
                 logger.warning("MCP: failed to connect %r: %s", name, exc)
 
-    def add_server(self, name: str, command: str | None = None, url: str | None = None) -> McpClient:
+    def add_server(
+        self, name: str, command: str | None = None, url: str | None = None
+    ) -> McpClient:
         """Connect to a new MCP server and persist the config."""
         client = McpClient(name=name, command=command, url=url)
         client.connect()

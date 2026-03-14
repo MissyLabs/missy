@@ -1,4 +1,5 @@
 """Resilient memory store with in-memory fallback on primary failure."""
+
 from __future__ import annotations
 
 import logging

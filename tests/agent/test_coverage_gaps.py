@@ -44,9 +44,7 @@ def _make_registry(providers=None):
     reg = MagicMock()
     providers = providers or {}
     reg.get.side_effect = lambda n: providers.get(n)
-    reg.get_available.side_effect = lambda: [
-        p for p in providers.values() if p.is_available()
-    ]
+    reg.get_available.side_effect = lambda: [p for p in providers.values() if p.is_available()]
     return reg
 
 
@@ -366,9 +364,7 @@ class TestPolicyViolationErrorRepr:
     def test_repr_contains_class_name(self):
         from missy.core.exceptions import PolicyViolationError
 
-        exc = PolicyViolationError(
-            "blocked", category="network", detail="host not allowed"
-        )
+        exc = PolicyViolationError("blocked", category="network", detail="host not allowed")
         r = repr(exc)
         assert "PolicyViolationError" in r
 
@@ -644,10 +640,15 @@ class TestRuntimeCapabilityMode:
 
         tool_reg = MagicMock()
         tool_reg.list_tools.return_value = ["calculator", "shell_exec"]
-        tool_reg.get.side_effect = lambda n: {"calculator": safe_tool, "shell_exec": unsafe_tool}.get(n)
+        tool_reg.get.side_effect = lambda n: {
+            "calculator": safe_tool,
+            "shell_exec": unsafe_tool,
+        }.get(n)
 
-        with patch("missy.agent.runtime.get_registry", return_value=reg), \
-             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg):
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
             runtime = AgentRuntime(AgentConfig(provider="fake", capability_mode="safe-chat"))
             tools = runtime._get_tools()
 
@@ -670,8 +671,10 @@ class TestRuntimeCapabilityMode:
         tool_reg.list_tools.return_value = ["shell_exec", "calculator"]
         tool_reg.get.side_effect = lambda n: {"shell_exec": tool_a, "calculator": tool_b}.get(n)
 
-        with patch("missy.agent.runtime.get_registry", return_value=reg), \
-             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg):
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
             runtime = AgentRuntime(AgentConfig(provider="fake", capability_mode="full"))
             tools = runtime._get_tools()
 
@@ -683,8 +686,10 @@ class TestRuntimeCapabilityMode:
         provider = _make_provider()
         reg = _make_registry({"fake": provider})
 
-        with patch("missy.agent.runtime.get_registry", return_value=reg), \
-             patch("missy.agent.runtime.get_tool_registry", side_effect=RuntimeError("not init")):
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", side_effect=RuntimeError("not init")),
+        ):
             runtime = AgentRuntime(AgentConfig(provider="fake"))
             tools = runtime._get_tools()
 
@@ -703,8 +708,10 @@ class TestRuntimeExecuteTool:
         tool_reg = MagicMock()
         tool_reg.execute.side_effect = KeyError("no_such_tool")
 
-        with patch("missy.agent.runtime.get_registry", return_value=reg), \
-             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg):
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
             runtime = AgentRuntime(AgentConfig(provider="fake"))
             tc = ToolCall(id="1", name="no_such_tool", arguments={})
             result = runtime._execute_tool(tc)
@@ -721,8 +728,10 @@ class TestRuntimeExecuteTool:
         tool_reg = MagicMock()
         tool_reg.execute.side_effect = RuntimeError("registry gone")
 
-        with patch("missy.agent.runtime.get_registry", return_value=reg), \
-             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg):
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
             runtime = AgentRuntime(AgentConfig(provider="fake"))
             tc = ToolCall(id="2", name="some_tool", arguments={})
             result = runtime._execute_tool(tc)
@@ -739,8 +748,10 @@ class TestRuntimeExecuteTool:
         tool_reg = MagicMock()
         tool_reg.execute.side_effect = Exception("boom")
 
-        with patch("missy.agent.runtime.get_registry", return_value=reg), \
-             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg):
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
             runtime = AgentRuntime(AgentConfig(provider="fake"))
             tc = ToolCall(id="3", name="broken_tool", arguments={})
             result = runtime._execute_tool(tc)
@@ -762,8 +773,10 @@ class TestRuntimeExecuteTool:
         tool_reg = MagicMock()
         tool_reg.execute.return_value = tool_result_mock
 
-        with patch("missy.agent.runtime.get_registry", return_value=reg), \
-             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg):
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
             runtime = AgentRuntime(AgentConfig(provider="fake"))
             tc = ToolCall(id="4", name="calculator", arguments={"expr": "6*7"})
             result = runtime._execute_tool(tc)
@@ -785,8 +798,10 @@ class TestRuntimeExecuteTool:
         tool_reg = MagicMock()
         tool_reg.execute.return_value = tool_result_mock
 
-        with patch("missy.agent.runtime.get_registry", return_value=reg), \
-             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg):
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
             runtime = AgentRuntime(AgentConfig(provider="fake"))
             tc = ToolCall(id="5", name="file_write", arguments={"path": "/etc/hosts"})
             result = runtime._execute_tool(tc)
@@ -808,8 +823,10 @@ class TestRuntimeExecuteTool:
         tool_reg = MagicMock()
         tool_reg.execute.return_value = tool_result_mock
 
-        with patch("missy.agent.runtime.get_registry", return_value=reg), \
-             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg):
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
             runtime = AgentRuntime(AgentConfig(provider="fake"))
             tc = ToolCall(
                 id="6",
@@ -832,9 +849,7 @@ class TestRuntimeDictsToMessages:
         from missy.agent.runtime import AgentConfig, AgentRuntime
 
         runtime = AgentRuntime(AgentConfig())
-        dicts = [
-            {"role": "tool", "name": "calculator", "content": "42", "is_error": False}
-        ]
+        dicts = [{"role": "tool", "name": "calculator", "content": "42", "is_error": False}]
         messages = runtime._dicts_to_messages("sys", dicts)
         # system + tool-as-user
         assert len(messages) == 2
@@ -845,9 +860,7 @@ class TestRuntimeDictsToMessages:
         from missy.agent.runtime import AgentConfig, AgentRuntime
 
         runtime = AgentRuntime(AgentConfig())
-        dicts = [
-            {"role": "tool", "name": "shell_exec", "content": "boom", "is_error": True}
-        ]
+        dicts = [{"role": "tool", "name": "shell_exec", "content": "boom", "is_error": True}]
         messages = runtime._dicts_to_messages("sys", dicts)
         assert "Tool error for shell_exec" in messages[1].content
 
@@ -1217,8 +1230,10 @@ class TestRuntimeToolLoop:
         tool_reg.get.return_value = calc_tool
         tool_reg.execute.return_value = tool_result_mock
 
-        with patch("missy.agent.runtime.get_registry", return_value=reg), \
-             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg):
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
             runtime = AgentRuntime(AgentConfig(provider="fake", max_iterations=5))
             result = runtime.run("What is 6 * 7?")
 
@@ -1240,8 +1255,10 @@ class TestRuntimeToolLoop:
         calc_tool.name = "calculator"
         tool_reg.get.return_value = calc_tool
 
-        with patch("missy.agent.runtime.get_registry", return_value=reg), \
-             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg):
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
             runtime = AgentRuntime(AgentConfig(provider="fake", max_iterations=5))
             result = runtime.run("What is 6 * 7?")
 
@@ -1269,8 +1286,10 @@ class TestRuntimeToolLoop:
         tool_reg.get.return_value = calc_tool
         tool_reg.execute.return_value = tool_result_mock
 
-        with patch("missy.agent.runtime.get_registry", return_value=reg), \
-             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg):
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
             runtime = AgentRuntime(AgentConfig(provider="fake", max_iterations=2))
             result = runtime.run("loop forever")
 

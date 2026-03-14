@@ -10,6 +10,7 @@ Example::
     result = tool.execute(path="/etc/hostname")
     assert result.success
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -31,10 +32,7 @@ class FileReadTool(BaseTool):
     """
 
     name = "file_read"
-    description = (
-        "Read the contents of a file. "
-        "The file must be within a policy-allowed read path."
-    )
+    description = "Read the contents of a file. The file must be within a policy-allowed read path."
     permissions = ToolPermissions(filesystem_read=True)
 
     def execute(

@@ -347,19 +347,25 @@ class TestPromptPatchManagerPropose:
     def test_propose_auto_approves_high_confidence_tool_hint(self, patch_manager):
         from missy.agent.prompt_patches import PatchStatus, PatchType
 
-        patch = patch_manager.propose(PatchType.TOOL_USAGE_HINT, "Always verify paths.", confidence=0.9)
+        patch = patch_manager.propose(
+            PatchType.TOOL_USAGE_HINT, "Always verify paths.", confidence=0.9
+        )
         assert patch.status == PatchStatus.APPROVED
 
     def test_propose_auto_approves_high_confidence_domain_knowledge(self, patch_manager):
         from missy.agent.prompt_patches import PatchStatus, PatchType
 
-        patch = patch_manager.propose(PatchType.DOMAIN_KNOWLEDGE, "Python uses indentation.", confidence=0.85)
+        patch = patch_manager.propose(
+            PatchType.DOMAIN_KNOWLEDGE, "Python uses indentation.", confidence=0.85
+        )
         assert patch.status == PatchStatus.APPROVED
 
     def test_propose_auto_approves_high_confidence_style_preference(self, patch_manager):
         from missy.agent.prompt_patches import PatchStatus, PatchType
 
-        patch = patch_manager.propose(PatchType.STYLE_PREFERENCE, "Use concise responses.", confidence=0.8)
+        patch = patch_manager.propose(
+            PatchType.STYLE_PREFERENCE, "Use concise responses.", confidence=0.8
+        )
         assert patch.status == PatchStatus.APPROVED
 
     def test_propose_does_not_auto_approve_low_confidence(self, patch_manager):

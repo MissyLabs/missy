@@ -229,7 +229,10 @@ class PolicyHTTPClient:
                 "Ensure the URL includes a scheme (e.g. https://)."
             )
         get_policy_engine().check_network(
-            host, self.session_id, self.task_id, category=self.category,
+            host,
+            self.session_id,
+            self.task_id,
+            category=self.category,
         )
 
     def _get_sync_client(self) -> httpx.Client:
@@ -293,5 +296,8 @@ def create_client(
         A configured :class:`PolicyHTTPClient` instance.
     """
     return PolicyHTTPClient(
-        session_id=session_id, task_id=task_id, timeout=timeout, category=category,
+        session_id=session_id,
+        task_id=task_id,
+        timeout=timeout,
+        category=category,
     )

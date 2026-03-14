@@ -1,4 +1,5 @@
 """Tests for Incus container/VM management tools."""
+
 from __future__ import annotations
 
 import json
@@ -389,7 +390,9 @@ class TestIncusSnapshotTool:
     def test_create(self, mock_run: MagicMock) -> None:
         mock_run.return_value = _make_proc()
         result = self.tool.execute(
-            instance="test", action="create", snapshot_name="snap1",
+            instance="test",
+            action="create",
+            snapshot_name="snap1",
         )
         assert result.success
         cmd = mock_run.call_args[0][0]
@@ -399,7 +402,10 @@ class TestIncusSnapshotTool:
     def test_create_stateful(self, mock_run: MagicMock) -> None:
         mock_run.return_value = _make_proc()
         self.tool.execute(
-            instance="test", action="create", snapshot_name="snap1", stateful=True,
+            instance="test",
+            action="create",
+            snapshot_name="snap1",
+            stateful=True,
         )
         cmd = mock_run.call_args[0][0]
         assert "--stateful" in cmd
@@ -585,7 +591,10 @@ class TestIncusStorageTool:
     def test_volume_attach(self, mock_run: MagicMock) -> None:
         mock_run.return_value = _make_proc()
         self.tool.execute(
-            action="volume-attach", pool="default", volume="data", instance="test",
+            action="volume-attach",
+            pool="default",
+            volume="data",
+            instance="test",
         )
         cmd = mock_run.call_args[0][0]
         assert "attach" in cmd
@@ -631,7 +640,9 @@ class TestIncusProfileTool:
     def test_set(self, mock_run: MagicMock) -> None:
         mock_run.return_value = _make_proc()
         self.tool.execute(
-            action="set", name="default", config={"limits.cpu": "2"},
+            action="set",
+            name="default",
+            config={"limits.cpu": "2"},
         )
         cmd = mock_run.call_args[0][0]
         assert "limits.cpu" in cmd
@@ -697,7 +708,13 @@ class TestIncusDeviceTool:
         )
         cmd = mock_run.call_args[0][0]
         assert cmd == [
-            "incus", "config", "device", "add", "test", "mygpu", "gpu",
+            "incus",
+            "config",
+            "device",
+            "add",
+            "test",
+            "mygpu",
+            "gpu",
         ]
 
     @patch("missy.tools.builtin.incus_tools.subprocess.run")
@@ -726,7 +743,9 @@ class TestIncusDeviceTool:
 
     def test_add_missing_type(self) -> None:
         result = self.tool.execute(
-            instance="test", action="add", device_name="foo",
+            instance="test",
+            action="add",
+            device_name="foo",
         )
         assert not result.success
 
@@ -757,7 +776,8 @@ class TestIncusCopyMoveTool:
     def test_copy_to_different_project(self, mock_run: MagicMock) -> None:
         mock_run.return_value = _make_proc()
         self.tool.execute(
-            source="test", destination="test-copy",
+            source="test",
+            destination="test-copy",
             target_project="staging",
         )
         cmd = mock_run.call_args[0][0]

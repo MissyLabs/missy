@@ -139,9 +139,7 @@ class TestDockerSandbox:
         cfg = SandboxConfig(enabled=True, network_disabled=False)
         sandbox = DockerSandbox(cfg)
         with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(
-                returncode=0, stdout=b"ok", stderr=b""
-            )
+            mock_run.return_value = MagicMock(returncode=0, stdout=b"ok", stderr=b"")
             sandbox.execute("curl example.com", network=True)
             call_args = mock_run.call_args[0][0]
             assert "--network=none" not in call_args
@@ -150,9 +148,7 @@ class TestDockerSandbox:
         cfg = SandboxConfig(enabled=True, network_disabled=True)
         sandbox = DockerSandbox(cfg)
         with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(
-                returncode=0, stdout=b"ok", stderr=b""
-            )
+            mock_run.return_value = MagicMock(returncode=0, stdout=b"ok", stderr=b"")
             sandbox.execute("curl example.com", network=True)
             call_args = mock_run.call_args[0][0]
             assert "--network=none" in call_args
@@ -161,9 +157,7 @@ class TestDockerSandbox:
         cfg = SandboxConfig(enabled=True, read_only_root=False)
         sandbox = DockerSandbox(cfg)
         with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(
-                returncode=0, stdout=b"ok", stderr=b""
-            )
+            mock_run.return_value = MagicMock(returncode=0, stdout=b"ok", stderr=b"")
             sandbox.execute("echo hello")
             call_args = mock_run.call_args[0][0]
             assert "--read-only" not in call_args
@@ -171,9 +165,7 @@ class TestDockerSandbox:
     def test_execute_with_env(self) -> None:
         sandbox = DockerSandbox(SandboxConfig(enabled=True))
         with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(
-                returncode=0, stdout=b"ok", stderr=b""
-            )
+            mock_run.return_value = MagicMock(returncode=0, stdout=b"ok", stderr=b"")
             sandbox.execute("env", env={"FOO": "bar"})
             call_args = mock_run.call_args[0][0]
             assert "-e" in call_args
@@ -183,9 +175,7 @@ class TestDockerSandbox:
     def test_execute_with_cwd(self) -> None:
         sandbox = DockerSandbox(SandboxConfig(enabled=True))
         with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(
-                returncode=0, stdout=b"ok", stderr=b""
-            )
+            mock_run.return_value = MagicMock(returncode=0, stdout=b"ok", stderr=b"")
             sandbox.execute("ls", cwd="/opt/app")
             call_args = mock_run.call_args[0][0]
             idx = call_args.index("--workdir")
@@ -198,9 +188,7 @@ class TestDockerSandbox:
         )
         sandbox = DockerSandbox(cfg)
         with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(
-                returncode=0, stdout=b"ok", stderr=b""
-            )
+            mock_run.return_value = MagicMock(returncode=0, stdout=b"ok", stderr=b"")
             sandbox.execute("ls", bind_mounts=["/tmp/work:/data"])
             call_args = mock_run.call_args[0][0]
             assert "-v" in call_args
@@ -212,9 +200,7 @@ class TestDockerSandbox:
         )
         sandbox = DockerSandbox(cfg)
         with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(
-                returncode=0, stdout=b"ok", stderr=b""
-            )
+            mock_run.return_value = MagicMock(returncode=0, stdout=b"ok", stderr=b"")
             sandbox.execute("ls", bind_mounts=["/etc/passwd:/data"])
             call_args = mock_run.call_args[0][0]
             assert "-v" not in call_args
@@ -234,9 +220,7 @@ class TestDockerSandbox:
     def test_timeout_capped_at_300(self) -> None:
         sandbox = DockerSandbox(SandboxConfig(enabled=True))
         with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(
-                returncode=0, stdout=b"ok", stderr=b""
-            )
+            mock_run.return_value = MagicMock(returncode=0, stdout=b"ok", stderr=b"")
             sandbox.execute("echo test", timeout=999)
             call_kwargs = mock_run.call_args[1]
             assert call_kwargs["timeout"] == 300
@@ -261,9 +245,7 @@ class TestFallbackSandbox:
     def test_execute_success(self) -> None:
         sandbox = FallbackSandbox()
         with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(
-                returncode=0, stdout=b"hello\n", stderr=b""
-            )
+            mock_run.return_value = MagicMock(returncode=0, stdout=b"hello\n", stderr=b"")
             result = sandbox.execute("echo hello")
             assert result.success
             assert result.output == "hello\n"

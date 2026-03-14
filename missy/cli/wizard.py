@@ -131,8 +131,7 @@ def _prompt_api_key(provider_name: str, info: dict) -> str | None:
     existing = _detect_env_key(env_var) if env_var else None
     if existing:
         console.print(
-            f"  [green]Detected[/] [bold]{env_var}[/] in environment: "
-            f"[dim]{_mask_key(existing)}[/]"
+            f"  [green]Detected[/] [bold]{env_var}[/] in environment: [dim]{_mask_key(existing)}[/]"
         )
         if click.confirm("  Use this key?", default=True):
             return None  # None → use env var; don't embed in config
@@ -154,7 +153,9 @@ def _prompt_api_key(provider_name: str, info: dict) -> str | None:
         key = key.strip()
         if not _validate_key_format(key, prefix):
             hint = f" (should start with '{prefix}')" if prefix else ""
-            console.print(f"  [yellow]Key format looks unusual{hint} — double-check and re-enter.[/]")
+            console.print(
+                f"  [yellow]Key format looks unusual{hint} — double-check and re-enter.[/]"
+            )
             if not click.confirm("  Use this key anyway?", default=False):
                 continue
         console.print(f"  [dim]Key accepted: {_mask_key(key)}[/]")
@@ -179,9 +180,7 @@ def _prompt_model(info: dict) -> tuple[str, str, str]:
         console.print(f"    [bold]{i}[/]. {desc}  [dim]({model_id})[/]")
 
     def _pick(label: str, default_id: str) -> str:
-        default_idx = next(
-            (i for i, (m, _) in enumerate(choices, 1) if m == default_id), 1
-        )
+        default_idx = next((i for i, (m, _) in enumerate(choices, 1) if m == default_id), 1)
         raw = click.prompt(
             f"  {label} model [1-{len(choices)}]",
             default=str(default_idx),
@@ -305,7 +304,7 @@ def _build_config_yaml(
     for p in providers_cfg:
         name = p["name"]
         lines.append(f"  {name}:")
-        lines.append(f'    name: {name}')
+        lines.append(f"    name: {name}")
         lines.append(f'    model: "{p["model"]}"')
         if p.get("fast_model"):
             lines.append(f'    fast_model: "{p["fast_model"]}"')
@@ -315,7 +314,7 @@ def _build_config_yaml(
             lines.append(f'    api_key: "{p["api_key"]}"')
         if p.get("base_url"):
             lines.append(f'    base_url: "{p["base_url"]}"')
-        lines.append('    timeout: 30')
+        lines.append("    timeout: 30")
 
     # Discord section (optional)
     if discord_cfg:
@@ -325,7 +324,7 @@ def _build_config_yaml(
             lines.append(f'      token: "{discord_cfg["bot_token"]}"')
         if discord_cfg.get("application_id"):
             lines.append(f'      application_id: "{discord_cfg["application_id"]}"')
-        lines.append(f'      dm_policy: {discord_cfg["dm_policy"]}')
+        lines.append(f"      dm_policy: {discord_cfg['dm_policy']}")
         if discord_cfg.get("dm_allowlist"):
             lines.append("      dm_allowlist:")
             for uid in discord_cfg["dm_allowlist"]:
@@ -334,15 +333,15 @@ def _build_config_yaml(
             lines.append("      dm_allowlist: []")
         if discord_cfg.get("ack_reaction"):
             lines.append(f'      ack_reaction: "{discord_cfg["ack_reaction"]}"')
-        lines.append(f'      ignore_bots: {str(discord_cfg.get("ignore_bots", True)).lower()}')
+        lines.append(f"      ignore_bots: {str(discord_cfg.get('ignore_bots', True)).lower()}")
         guild_policies = discord_cfg.get("guild_policies", [])
         if guild_policies:
             lines.append("      guild_policies:")
             for gp in guild_policies:
                 lines.append(f'        "{gp["guild_id"]}":')
-                lines.append('          enabled: true')
-                lines.append(f'          require_mention: {str(gp["require_mention"]).lower()}')
-                lines.append(f'          mode: {gp["mode"]}')
+                lines.append("          enabled: true")
+                lines.append(f"          require_mention: {str(gp['require_mention']).lower()}")
+                lines.append(f"          mode: {gp['mode']}")
                 if gp.get("allowed_channels"):
                     lines.append("          allowed_channels:")
                     for ch in gp["allowed_channels"]:
@@ -360,12 +359,12 @@ def _build_config_yaml(
         "heartbeat:",
         "  enabled: false",
         "  interval_seconds: 1800",
-        "  active_hours: \"\"",
+        '  active_hours: ""',
         "",
         "observability:",
         "  otel_enabled: false",
-        "  otel_endpoint: \"http://localhost:4317\"",
-        "  log_level: \"warning\"",
+        '  otel_endpoint: "http://localhost:4317"',
+        '  log_level: "warning"',
         "",
         "vault:",
         "  enabled: false",
@@ -415,9 +414,7 @@ def run_wizard(config_path: str) -> None:
     )
 
     if config_file.exists():
-        console.print(
-            f"\n[yellow]A config file already exists at {config_file}.[/]"
-        )
+        console.print(f"\n[yellow]A config file already exists at {config_file}.[/]")
         if not click.confirm("Overwrite it?", default=False):
             console.print("[dim]Aborted. Existing config unchanged.[/]")
             return
@@ -472,9 +469,7 @@ def run_wizard(config_path: str) -> None:
         console.print(f"\n[bold]  Configuring {info['label']}[/]")
 
         if pkey == "ollama":
-            base_url = click.prompt(
-                "    Ollama base URL", default="http://localhost:11434"
-            )
+            base_url = click.prompt("    Ollama base URL", default="http://localhost:11434")
             model_name = click.prompt("    Default model", default="llama3")
             if click.confirm("    Verify Ollama connectivity?", default=True):
                 ok = _verify_ollama(base_url, model_name)
@@ -504,6 +499,7 @@ def run_wizard(config_path: str) -> None:
 
             if auth_choice == "2":
                 from missy.cli.oauth import run_openai_oauth
+
                 console.print(
                     "\n    [dim]Starting OAuth flow. A browser window will open.[/]\n"
                     "    [dim]For headless/remote: run  ssh -L 1455:localhost:1455 user@host[/]"
@@ -520,7 +516,9 @@ def run_wizard(config_path: str) -> None:
                         "Provider set to [bold]openai-codex[/] (chatgpt.com backend)."
                     )
                 else:
-                    console.print("    [yellow]OAuth flow failed or was skipped — falling back to API key.[/]")
+                    console.print(
+                        "    [yellow]OAuth flow failed or was skipped — falling back to API key.[/]"
+                    )
                     api_key = _prompt_api_key(pkey, info)
             else:
                 api_key = _prompt_api_key(pkey, info)
@@ -531,18 +529,25 @@ def run_wizard(config_path: str) -> None:
                     if ok:
                         console.print("    [green]Connection successful.[/]")
                     else:
-                        console.print("    [yellow]Verification failed — key will still be saved.[/]")
+                        console.print(
+                            "    [yellow]Verification failed — key will still be saved.[/]"
+                        )
         else:
             # Anthropic: three auth paths.
             console.print("    Auth method:")
             console.print("      [bold]1[/]. API key  (sk-ant-api…)  [green][recommended][/]")
-            console.print("      [bold]2[/]. API key + vault  (encrypted, config references vault://)")
-            console.print("      [bold]3[/]. Claude Code setup-token  (sk-ant-oat…)  [yellow][ToS risk][/]")
+            console.print(
+                "      [bold]2[/]. API key + vault  (encrypted, config references vault://)"
+            )
+            console.print(
+                "      [bold]3[/]. Claude Code setup-token  (sk-ant-oat…)  [yellow][ToS risk][/]"
+            )
             auth_choice = click.prompt("    Selection", default="1")
 
             if auth_choice == "3":
                 # Setup-token paste flow — ToS warning included inside.
                 from missy.cli.anthropic_auth import run_anthropic_setup_token_flow
+
                 setup_tok = run_anthropic_setup_token_flow()
                 if setup_tok:
                     api_key = setup_tok
@@ -554,6 +559,7 @@ def run_wizard(config_path: str) -> None:
                 api_key = _prompt_api_key(pkey, info)
                 if api_key and auth_choice == "2":
                     from missy.cli.anthropic_auth import run_anthropic_vault_flow
+
                     vault_dir = str(Path("~/.missy/secrets").expanduser())
                     api_key = run_anthropic_vault_flow(api_key, vault_dir)
 
@@ -566,7 +572,9 @@ def run_wizard(config_path: str) -> None:
                     if ok:
                         console.print("    [green]Connection successful.[/]")
                     else:
-                        console.print("    [yellow]Verification failed — key will still be saved.[/]")
+                        console.print(
+                            "    [yellow]Verification failed — key will still be saved.[/]"
+                        )
 
         # Use updated pkey's info for model choices (e.g. openai-codex after OAuth).
         primary, fast, premium = _prompt_model(_PROVIDERS.get(pkey, info))
@@ -604,7 +612,11 @@ def run_wizard(config_path: str) -> None:
             "    • Application ID from discord.com/developers/applications\n"
         )
 
-        bot_token = click.prompt("  Bot token (from discord.com/developers → Bot → Reset Token)", hide_input=True, default="").strip()
+        bot_token = click.prompt(
+            "  Bot token (from discord.com/developers → Bot → Reset Token)",
+            hide_input=True,
+            default="",
+        ).strip()
         # Strip "Bot " prefix if user included it — we store the raw token
         if bot_token.lower().startswith("bot "):
             bot_token = bot_token[4:].strip()
@@ -634,21 +646,29 @@ def run_wizard(config_path: str) -> None:
                 if not guild_id:
                     break
                 require_mention = click.confirm("    Require @mention to respond?", default=True)
-                raw_channels = click.prompt("    Allowed channels (comma-separated, blank=all)", default="").strip()
+                raw_channels = click.prompt(
+                    "    Allowed channels (comma-separated, blank=all)", default=""
+                ).strip()
                 allowed_channels = [c.strip() for c in raw_channels.split(",") if c.strip()]
-                console.print("    Mode: [bold]1[/]=full  [bold]2[/]=safe-chat  [bold]3[/]=no-tools")
+                console.print(
+                    "    Mode: [bold]1[/]=full  [bold]2[/]=safe-chat  [bold]3[/]=no-tools"
+                )
                 mode_map = {"1": "full", "2": "safe_chat_only", "3": "no_tools"}
                 mode = mode_map.get(click.prompt("    Mode", default="1"), "full")
-                guild_policies.append({
-                    "guild_id": guild_id,
-                    "require_mention": require_mention,
-                    "allowed_channels": allowed_channels,
-                    "mode": mode,
-                })
+                guild_policies.append(
+                    {
+                        "guild_id": guild_id,
+                        "require_mention": require_mention,
+                        "allowed_channels": allowed_channels,
+                        "mode": mode,
+                    }
+                )
                 if not click.confirm("    Add another guild?", default=False):
                     break
 
-        ack_reaction = click.prompt("\n  Acknowledgement reaction emoji (blank to disable)", default="eyes").strip()
+        ack_reaction = click.prompt(
+            "\n  Acknowledgement reaction emoji (blank to disable)", default="eyes"
+        ).strip()
         ignore_bots = click.confirm("  Ignore messages from other bots?", default=True)
 
         discord_cfg = {
@@ -687,7 +707,9 @@ def run_wizard(config_path: str) -> None:
             key_display = key
         elif p["name"] == "openai" and any(r[0] == "openai-oauth" for r in verify_results):
             key_display = "(OAuth token)"
-        elif p["name"] == "anthropic" and any(r[0] == "anthropic-setup-token" for r in verify_results):
+        elif p["name"] == "anthropic" and any(
+            r[0] == "anthropic-setup-token" for r in verify_results
+        ):
             key_display = "(setup-token)"
         else:
             key_display = _mask_key(key)
@@ -695,7 +717,11 @@ def run_wizard(config_path: str) -> None:
     for pname, ok in verify_results:
         table.add_row(f"Verified: {pname}", "[green]OK[/]" if ok else "[red]FAILED[/]")
     if discord_cfg:
-        tok_display = _mask_key(discord_cfg["bot_token"]) if discord_cfg.get("bot_token") else f"env:{discord_cfg['token_env_var']}"
+        tok_display = (
+            _mask_key(discord_cfg["bot_token"])
+            if discord_cfg.get("bot_token")
+            else f"env:{discord_cfg['token_env_var']}"
+        )
         table.add_row("Discord", f"token={tok_display}  dm={discord_cfg['dm_policy']}")
     console.print(table)
 

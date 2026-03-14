@@ -80,9 +80,7 @@ class AuditLogger:
             try:
                 self._handle_event(event)
             except Exception:
-                _module_logger.exception(
-                    "AuditLogger failed to handle event %r", event.event_type
-                )
+                _module_logger.exception("AuditLogger failed to handle event %r", event.event_type)
 
         # Bind the patched method onto the bus instance so it replaces the
         # original for all callers sharing the same bus object.

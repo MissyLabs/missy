@@ -79,8 +79,14 @@ class CodeEvolveTool(BaseTool):
                 "approve, reject, apply, rollback"
             ),
             "enum": [
-                "propose", "propose_multi", "list", "show",
-                "approve", "reject", "apply", "rollback",
+                "propose",
+                "propose_multi",
+                "list",
+                "show",
+                "approve",
+                "reject",
+                "apply",
+                "rollback",
             ],
             "required": True,
         },
@@ -304,9 +310,7 @@ class CodeEvolveTool(BaseTool):
     def _show(self, mgr, kwargs: dict) -> ToolResult:
         proposal_id = kwargs.get("proposal_id", "")
         if not proposal_id:
-            return ToolResult(
-                success=False, output=None, error="proposal_id is required for show."
-            )
+            return ToolResult(success=False, output=None, error="proposal_id is required for show.")
 
         prop = mgr.get(proposal_id)
         if not prop:
@@ -448,10 +452,7 @@ class CodeEvolveTool(BaseTool):
 
                 from missy.agent.code_evolution import restart_process
 
-                msg = (
-                    result["message"]
-                    + "\n\nRestarting process to load evolved code..."
-                )
+                msg = result["message"] + "\n\nRestarting process to load evolved code..."
 
                 with contextlib.suppress(SystemExit):
                     restart_process()

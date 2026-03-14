@@ -118,18 +118,28 @@ class TestSendWithRetry:
             return {"id": "msg-recovered"}
 
         mock_rest.send_message.side_effect = _fail_then_succeed
-        result = _run(channel.send_with_retry(
-            "ch-1", "hello", max_attempts=5, max_total_seconds=30.0,
-        ))
+        result = _run(
+            channel.send_with_retry(
+                "ch-1",
+                "hello",
+                max_attempts=5,
+                max_total_seconds=30.0,
+            )
+        )
         assert result == "msg-recovered"
         assert call_count == 3
 
     def test_gives_up_after_max_attempts(self, channel: DiscordChannel, mock_rest: MagicMock):
         mock_rest.send_message.side_effect = Exception("permanent")
         with pytest.raises(DiscordSendError) as exc_info:
-            _run(channel.send_with_retry(
-                "ch-1", "hello", max_attempts=3, max_total_seconds=60.0,
-            ))
+            _run(
+                channel.send_with_retry(
+                    "ch-1",
+                    "hello",
+                    max_attempts=3,
+                    max_total_seconds=60.0,
+                )
+            )
         assert "3 attempts" in str(exc_info.value)
         assert exc_info.value.channel_id == "ch-1"
         # Should have tried exactly 3 times.
@@ -139,9 +149,14 @@ class TestSendWithRetry:
         mock_rest.send_message.side_effect = Exception("fail")
         start = time.monotonic()
         with pytest.raises(DiscordSendError):
-            _run(channel.send_with_retry(
-                "ch-1", "hello", max_attempts=20, max_total_seconds=3.0,
-            ))
+            _run(
+                channel.send_with_retry(
+                    "ch-1",
+                    "hello",
+                    max_attempts=20,
+                    max_total_seconds=3.0,
+                )
+            )
         elapsed = time.monotonic() - start
         # Should give up around the 3s mark, not run all 20 attempts.
         assert elapsed < 10.0
@@ -159,9 +174,14 @@ class TestSendWithRetry:
         mock_rest.send_message.side_effect = Exception("fail")
 
         with pytest.raises(DiscordSendError):
-            _run(channel.send_with_retry(
-                "ch-1", "hello", max_attempts=3, max_total_seconds=30.0,
-            ))
+            _run(
+                channel.send_with_retry(
+                    "ch-1",
+                    "hello",
+                    max_attempts=3,
+                    max_total_seconds=30.0,
+                )
+            )
 
         retry_events = [e for e in audit_events if e[0] == "discord.channel.send_retry"]
         failed_events = [e for e in audit_events if e[0] == "discord.channel.send_failed"]

@@ -127,13 +127,20 @@ class TestLoadSubsystemsBranches:
                 patch("missy.policy.engine.init_policy_engine"),
                 patch("missy.observability.audit_logger.init_audit_logger"),
                 patch("missy.providers.registry.init_registry"),
-                patch("missy.tools.builtin.register_builtin_tools", side_effect=RuntimeError("tool boom")),
-                patch("missy.providers.registry.get_registry", return_value=MagicMock(list_providers=list)),
+                patch(
+                    "missy.tools.builtin.register_builtin_tools",
+                    side_effect=RuntimeError("tool boom"),
+                ),
+                patch(
+                    "missy.providers.registry.get_registry",
+                    return_value=MagicMock(list_providers=list),
+                ),
             ):
                 result = runner.invoke(cli, ["--config", cfg_path, "providers"])
             assert result.exit_code == 0
         finally:
             import os
+
             os.unlink(cfg_path)
 
     def test_otel_init_exception_is_swallowed(self, runner: CliRunner):
@@ -146,12 +153,16 @@ class TestLoadSubsystemsBranches:
                 patch("missy.observability.audit_logger.init_audit_logger"),
                 patch("missy.providers.registry.init_registry"),
                 patch("missy.observability.otel.init_otel", side_effect=RuntimeError("otel boom")),
-                patch("missy.providers.registry.get_registry", return_value=MagicMock(list_providers=list)),
+                patch(
+                    "missy.providers.registry.get_registry",
+                    return_value=MagicMock(list_providers=list),
+                ),
             ):
                 result = runner.invoke(cli, ["--config", cfg_path, "providers"])
             assert result.exit_code == 0
         finally:
             import os
+
             os.unlink(cfg_path)
 
 
@@ -166,12 +177,14 @@ class TestDebugFlag:
         cfg_path = _cfg_path()
         try:
             with patch("missy.cli.main._load_subsystems", return_value=_make_mock_config()):
-                with patch("missy.providers.registry.get_registry", return_value=MagicMock(list_providers=list)):
-                    result = runner.invoke(
-                        cli, ["--debug", "--config", cfg_path, "providers"]
-                    )
+                with patch(
+                    "missy.providers.registry.get_registry",
+                    return_value=MagicMock(list_providers=list),
+                ):
+                    result = runner.invoke(cli, ["--debug", "--config", cfg_path, "providers"])
         finally:
             import os
+
             os.unlink(cfg_path)
         # Root logger level should have been set to DEBUG; exit 0 suffices as
         # a smoke test without inspecting logger state.
@@ -228,6 +241,7 @@ class TestSetup:
             mock_wizard.assert_called_once()
         finally:
             import os
+
             os.unlink(cfg_path)
         assert result.exit_code == 0
 
@@ -238,6 +252,7 @@ class TestSetup:
                 result = runner.invoke(cli, ["--config", cfg_path, "setup"])
         finally:
             import os
+
             os.unlink(cfg_path)
         assert result.exit_code == 0
         assert "aborted" in result.output.lower()
@@ -249,6 +264,7 @@ class TestSetup:
                 result = runner.invoke(cli, ["--config", cfg_path, "setup"])
         finally:
             import os
+
             os.unlink(cfg_path)
         assert result.exit_code == 0
 
@@ -301,6 +317,7 @@ class TestAskBranches:
                 result = runner.invoke(cli, ["--config", cfg_path, "ask", prompt])
         finally:
             import os
+
             os.unlink(cfg_path)
         return result
 
@@ -377,6 +394,7 @@ class TestRunBranches:
                 result = runner.invoke(cli, ["--config", cfg_path, "run"])
         finally:
             import os
+
             os.unlink(cfg_path)
 
         combined = result.output + (result.stderr or "")
@@ -405,6 +423,7 @@ class TestRunBranches:
                 result = runner.invoke(cli, ["--config", cfg_path, "run"])
         finally:
             import os
+
             os.unlink(cfg_path)
 
         combined = result.output + (result.stderr or "")
@@ -435,6 +454,7 @@ class TestRunBranches:
                 result = runner.invoke(cli, ["--config", cfg_path, "run"])
         finally:
             import os
+
             os.unlink(cfg_path)
 
         # Run exits 0 (loop continues after ProviderError, then EOF breaks)
@@ -465,6 +485,7 @@ class TestRunBranches:
                 result = runner.invoke(cli, ["--config", cfg_path, "run"])
         finally:
             import os
+
             os.unlink(cfg_path)
 
         assert result.exit_code == 0
@@ -501,6 +522,7 @@ class TestRunBranches:
                 result = runner.invoke(cli, ["--config", cfg_path, "run"])
         finally:
             import os
+
             os.unlink(cfg_path)
 
         assert result.exit_code == 0
@@ -535,6 +557,7 @@ class TestRunBranches:
                 result = runner.invoke(cli, ["--config", cfg_path, "run"])
         finally:
             import os
+
             os.unlink(cfg_path)
 
         assert result.exit_code == 0
@@ -563,6 +586,7 @@ class TestScheduleErrorBranches:
                     result = runner.invoke(cli, ["--config", cfg_path] + args)
         finally:
             import os
+
             os.unlink(cfg_path)
         return result
 
@@ -611,6 +635,7 @@ class TestProvidersNotLoaded:
                 result = runner.invoke(cli, ["--config", cfg_path, "providers"])
         finally:
             import os
+
             os.unlink(cfg_path)
 
         assert result.exit_code == 0
@@ -640,6 +665,7 @@ class TestPluginsAllowedList:
                 result = runner.invoke(cli, ["--config", cfg_path, "plugins"])
         finally:
             import os
+
             os.unlink(cfg_path)
 
         assert result.exit_code == 0
@@ -678,6 +704,7 @@ class TestDiscordProbeBranches:
                 result = runner.invoke(cli, ["--config", cfg_path, "discord", "probe"])
         finally:
             import os
+
             os.unlink(cfg_path)
 
         assert result.exit_code == 0
@@ -708,6 +735,7 @@ class TestDiscordProbeBranches:
                 result = runner.invoke(cli, ["--config", cfg_path, "discord", "probe"])
         finally:
             import os
+
             os.unlink(cfg_path)
 
         assert result.exit_code == 0  # probe does not exit(1) on REST failure
@@ -731,6 +759,7 @@ class TestDiscordProbeBranches:
                 result = runner.invoke(cli, ["--config", cfg_path, "discord", "probe"])
         finally:
             import os
+
             os.unlink(cfg_path)
 
         assert result.exit_code == 0
@@ -767,6 +796,7 @@ class TestDiscordRegisterCommandsBranches:
                 )
         finally:
             import os
+
             os.unlink(cfg_path)
 
         assert result.exit_code == 1
@@ -778,11 +808,10 @@ class TestDiscordRegisterCommandsBranches:
             mock_cfg.discord = self._base_discord_cfg(token=None, app_id="999")
 
             with patch("missy.cli.main._load_subsystems", return_value=mock_cfg):
-                result = runner.invoke(
-                    cli, ["--config", cfg_path, "discord", "register-commands"]
-                )
+                result = runner.invoke(cli, ["--config", cfg_path, "discord", "register-commands"])
         finally:
             import os
+
             os.unlink(cfg_path)
 
         assert result.exit_code == 1
@@ -794,11 +823,10 @@ class TestDiscordRegisterCommandsBranches:
             mock_cfg.discord = self._base_discord_cfg(token="tok", app_id=None)
 
             with patch("missy.cli.main._load_subsystems", return_value=mock_cfg):
-                result = runner.invoke(
-                    cli, ["--config", cfg_path, "discord", "register-commands"]
-                )
+                result = runner.invoke(cli, ["--config", cfg_path, "discord", "register-commands"])
         finally:
             import os
+
             os.unlink(cfg_path)
 
         assert result.exit_code == 1
@@ -819,11 +847,10 @@ class TestDiscordRegisterCommandsBranches:
                 patch("missy.gateway.client.create_client", return_value=mock_http),
                 patch("missy.channels.discord.commands.SLASH_COMMANDS", []),
             ):
-                result = runner.invoke(
-                    cli, ["--config", cfg_path, "discord", "register-commands"]
-                )
+                result = runner.invoke(cli, ["--config", cfg_path, "discord", "register-commands"])
         finally:
             import os
+
             os.unlink(cfg_path)
 
         assert result.exit_code == 1
@@ -844,11 +871,10 @@ class TestDiscordRegisterCommandsBranches:
                 patch("missy.gateway.client.create_client", return_value=mock_http),
                 patch("missy.channels.discord.commands.SLASH_COMMANDS", []),
             ):
-                result = runner.invoke(
-                    cli, ["--config", cfg_path, "discord", "register-commands"]
-                )
+                result = runner.invoke(cli, ["--config", cfg_path, "discord", "register-commands"])
         finally:
             import os
+
             os.unlink(cfg_path)
 
         assert result.exit_code == 0
@@ -890,6 +916,7 @@ class TestGatewayStartIdleMode:
                 result = runner.invoke(cli, ["--config", cfg_path, "gateway", "start"])
         finally:
             import os
+
             os.unlink(cfg_path)
 
         # Exit 0 (SystemExit(0) is treated as exit code 0 by CliRunner)
@@ -917,11 +944,15 @@ class TestGatewayStartIdleMode:
                 patch("missy.agent.runtime.AgentRuntime", return_value=mock_runtime),
                 patch("missy.agent.runtime.AgentConfig"),
                 patch("time.sleep", side_effect=fake_sleep),
-                patch("missy.channels.voice.channel.VoiceChannel", side_effect=RuntimeError("no piper")),
+                patch(
+                    "missy.channels.voice.channel.VoiceChannel",
+                    side_effect=RuntimeError("no piper"),
+                ),
             ):
                 result = runner.invoke(cli, ["--config", cfg_path, "gateway", "start"])
         finally:
             import os
+
             os.unlink(cfg_path)
 
         assert result.exit_code == 0
@@ -959,6 +990,7 @@ class TestGatewayStatusDiscordBranch:
                 result = runner.invoke(cli, ["--config", cfg_path, "gateway", "status"])
         finally:
             import os
+
             os.unlink(cfg_path)
 
         assert result.exit_code == 0
@@ -1004,13 +1036,12 @@ class TestDoctorBranchesExtended:
                     with contextlib.ExitStack() as stack:
                         for p in extra_patches:
                             stack.enter_context(p)
-                        result = runner.invoke(
-                            cli, ["--config", cfg_path, "doctor"]
-                        )
+                        result = runner.invoke(cli, ["--config", cfg_path, "doctor"])
                 else:
                     result = runner.invoke(cli, ["--config", cfg_path, "doctor"])
         finally:
             import os
+
             os.unlink(cfg_path)
         return result
 
@@ -1031,6 +1062,7 @@ class TestDoctorBranchesExtended:
                 result = runner.invoke(cli, ["--config", cfg_path, "doctor"])
         finally:
             import os
+
             os.unlink(cfg_path)
 
         assert result.exit_code == 0
@@ -1052,6 +1084,7 @@ class TestDoctorBranchesExtended:
                 result = runner.invoke(cli, ["--config", cfg_path, "doctor"])
         finally:
             import os
+
             os.unlink(cfg_path)
 
         assert result.exit_code == 0
@@ -1076,6 +1109,7 @@ class TestDoctorBranchesExtended:
                 result = runner.invoke(cli, ["--config", cfg_path, "doctor"])
         finally:
             import os
+
             os.unlink(cfg_path)
 
         assert result.exit_code == 0
@@ -1105,6 +1139,7 @@ class TestDoctorBranchesExtended:
                 result = runner.invoke(cli, ["--config", cfg_path, "doctor"])
         finally:
             import os
+
             os.unlink(cfg_path)
 
         assert result.exit_code == 0
@@ -1134,6 +1169,7 @@ class TestDoctorBranchesExtended:
                 result = runner.invoke(cli, ["--config", cfg_path, "doctor"])
         finally:
             import os
+
             os.unlink(cfg_path)
 
         assert result.exit_code == 0
@@ -1164,6 +1200,7 @@ class TestDoctorBranchesExtended:
                 result = runner.invoke(cli, ["--config", cfg_path, "doctor"])
         finally:
             import os
+
             os.unlink(cfg_path)
 
         assert result.exit_code == 0
@@ -1192,6 +1229,7 @@ class TestDoctorBranchesExtended:
                     result = runner.invoke(cli, ["--config", cfg_path, "doctor"])
         finally:
             import os
+
             os.unlink(cfg_path)
 
         assert result.exit_code == 0
@@ -1205,7 +1243,10 @@ class TestDoctorBranchesExtended:
                 patch("missy.cli.main._load_subsystems", return_value=mock_cfg),
                 patch("missy.scheduler.manager.SchedulerManager") as mock_mgr_cls,
                 patch("missy.providers.registry.get_registry") as mock_reg,
-                patch("missy.memory.sqlite_store.SQLiteMemoryStore", side_effect=RuntimeError("db error")),
+                patch(
+                    "missy.memory.sqlite_store.SQLiteMemoryStore",
+                    side_effect=RuntimeError("db error"),
+                ),
             ):
                 from pathlib import Path
 
@@ -1215,6 +1256,7 @@ class TestDoctorBranchesExtended:
                     result = runner.invoke(cli, ["--config", cfg_path, "doctor"])
         finally:
             import os
+
             os.unlink(cfg_path)
 
         assert result.exit_code == 0
@@ -1232,7 +1274,9 @@ class TestCostSessionException:
 
         with (
             patch("missy.cli.main._load_subsystems", return_value=mock_cfg),
-            patch("missy.memory.sqlite_store.SQLiteMemoryStore", side_effect=RuntimeError("db gone")),
+            patch(
+                "missy.memory.sqlite_store.SQLiteMemoryStore", side_effect=RuntimeError("db gone")
+            ),
         ):
             result = runner.invoke(cli, ["cost", "--session", "bad-session"])
 
@@ -1286,11 +1330,10 @@ class TestSessionsCleanupNoMethod:
                 patch("missy.cli.main._load_subsystems", return_value=_make_mock_config()),
                 patch("missy.memory.store.MemoryStore", return_value=mock_store),
             ):
-                result = runner.invoke(
-                    cli, ["--config", cfg_path, "sessions", "cleanup"]
-                )
+                result = runner.invoke(cli, ["--config", cfg_path, "sessions", "cleanup"])
         finally:
             import os
+
             os.unlink(cfg_path)
 
         assert result.exit_code == 0
@@ -1316,10 +1359,18 @@ class TestSessionsRename:
             ):
                 result = runner.invoke(
                     cli,
-                    ["--config", cfg_path, "sessions", "rename", "some-uuid-session-id", "My Session"],
+                    [
+                        "--config",
+                        cfg_path,
+                        "sessions",
+                        "rename",
+                        "some-uuid-session-id",
+                        "My Session",
+                    ],
                 )
         finally:
             import os
+
             os.unlink(cfg_path)
 
         assert result.exit_code == 0
@@ -1342,6 +1393,7 @@ class TestSessionsRename:
                 )
         finally:
             import os
+
             os.unlink(cfg_path)
 
         assert result.exit_code == 0
@@ -1365,6 +1417,7 @@ class TestSessionsRename:
                 )
         finally:
             import os
+
             os.unlink(cfg_path)
 
         assert result.exit_code == 0
@@ -1386,6 +1439,7 @@ class TestSessionsRename:
                 )
         finally:
             import os
+
             os.unlink(cfg_path)
 
         assert result.exit_code == 0
@@ -1412,6 +1466,7 @@ class TestSessionsList:
                 result = runner.invoke(cli, ["--config", cfg_path, "sessions", "list"])
         finally:
             import os
+
             os.unlink(cfg_path)
 
         assert result.exit_code == 0
@@ -1439,6 +1494,7 @@ class TestSessionsList:
                 result = runner.invoke(cli, ["--config", cfg_path, "sessions", "list"])
         finally:
             import os
+
             os.unlink(cfg_path)
 
         assert result.exit_code == 0
@@ -1457,6 +1513,7 @@ class TestSessionsList:
                 result = runner.invoke(cli, ["--config", cfg_path, "sessions", "list"])
         finally:
             import os
+
             os.unlink(cfg_path)
 
         assert result.exit_code == 0
@@ -1497,11 +1554,10 @@ class TestEvolveApply:
                 patch("missy.cli.main._load_subsystems", return_value=_make_mock_config()),
                 patch("missy.agent.code_evolution.CodeEvolutionManager", return_value=mock_mgr),
             ):
-                result = runner.invoke(
-                    cli, ["--config", cfg_path, "evolve", "apply", "prop-9999"]
-                )
+                result = runner.invoke(cli, ["--config", cfg_path, "evolve", "apply", "prop-9999"])
         finally:
             import os
+
             os.unlink(cfg_path)
 
         assert result.exit_code == 0
@@ -1518,11 +1574,10 @@ class TestEvolveApply:
                 patch("missy.cli.main._load_subsystems", return_value=_make_mock_config()),
                 patch("missy.agent.code_evolution.CodeEvolutionManager", return_value=mock_mgr),
             ):
-                result = runner.invoke(
-                    cli, ["--config", cfg_path, "evolve", "apply", "prop-1234"]
-                )
+                result = runner.invoke(cli, ["--config", cfg_path, "evolve", "apply", "prop-1234"])
         finally:
             import os
+
             os.unlink(cfg_path)
 
         assert result.exit_code == 0
@@ -1547,6 +1602,7 @@ class TestEvolveApply:
                 )
         finally:
             import os
+
             os.unlink(cfg_path)
 
         assert result.exit_code == 0
@@ -1566,11 +1622,10 @@ class TestEvolveApply:
                 patch("missy.agent.code_evolution.CodeEvolutionManager", return_value=mock_mgr),
                 patch("missy.agent.code_evolution.restart_process", mock_restart),
             ):
-                result = runner.invoke(
-                    cli, ["--config", cfg_path, "evolve", "apply", "prop-1234"]
-                )
+                result = runner.invoke(cli, ["--config", cfg_path, "evolve", "apply", "prop-1234"])
         finally:
             import os
+
             os.unlink(cfg_path)
 
         assert result.exit_code == 0
@@ -1591,11 +1646,10 @@ class TestEvolveApply:
                 patch("missy.cli.main._load_subsystems", return_value=_make_mock_config()),
                 patch("missy.agent.code_evolution.CodeEvolutionManager", return_value=mock_mgr),
             ):
-                result = runner.invoke(
-                    cli, ["--config", cfg_path, "evolve", "apply", "prop-1234"]
-                )
+                result = runner.invoke(cli, ["--config", cfg_path, "evolve", "apply", "prop-1234"])
         finally:
             import os
+
             os.unlink(cfg_path)
 
         assert result.exit_code == 0
@@ -1615,11 +1669,10 @@ class TestEvolveApply:
                 patch("missy.cli.main._load_subsystems", return_value=_make_mock_config()),
                 patch("missy.agent.code_evolution.CodeEvolutionManager", return_value=mock_mgr),
             ):
-                result = runner.invoke(
-                    cli, ["--config", cfg_path, "evolve", "apply", "prop-1234"]
-                )
+                result = runner.invoke(cli, ["--config", cfg_path, "evolve", "apply", "prop-1234"])
         finally:
             import os
+
             os.unlink(cfg_path)
 
         assert result.exit_code == 0
@@ -1652,6 +1705,7 @@ class TestEvolveRollback:
                 )
         finally:
             import os
+
             os.unlink(cfg_path)
 
         assert result.exit_code == 0
@@ -1675,6 +1729,7 @@ class TestEvolveRollback:
                 )
         finally:
             import os
+
             os.unlink(cfg_path)
 
         assert result.exit_code == 0
@@ -1854,9 +1909,7 @@ class TestVoiceTestBranches:
             patch("missy.channels.voice.registry.DeviceRegistry", return_value=mock_reg),
             patch("missy.channels.voice.tts.piper.PiperTTS", return_value=mock_tts),
         ):
-            result = runner.invoke(
-                cli, ["voice", "test", "testnode", "--text", "hello world"]
-            )
+            result = runner.invoke(cli, ["voice", "test", "testnode", "--text", "hello world"])
 
         assert result.exit_code == 0
         assert "synthesis" in result.output.lower() or "bytes" in result.output.lower()
@@ -1874,9 +1927,7 @@ class TestVoiceTestBranches:
             patch("missy.channels.voice.registry.DeviceRegistry", return_value=mock_reg),
             patch("missy.channels.voice.tts.piper.PiperTTS", return_value=mock_tts),
         ):
-            result = runner.invoke(
-                cli, ["voice", "test", "testnode", "--text", "hello"]
-            )
+            result = runner.invoke(cli, ["voice", "test", "testnode", "--text", "hello"])
 
         assert result.exit_code == 1
         combined = result.output + (result.stderr or "")

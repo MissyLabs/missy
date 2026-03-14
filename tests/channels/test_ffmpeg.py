@@ -1,4 +1,5 @@
 """Tests for missy/channels/discord/ffmpeg.py — 100% coverage."""
+
 from __future__ import annotations
 
 from unittest.mock import patch
@@ -20,7 +21,9 @@ class TestEnsureFfmpegAvailable:
                 ensure_ffmpeg_available()
 
     def test_returned_path_is_string(self) -> None:
-        with patch("missy.channels.discord.ffmpeg.shutil.which", return_value="/usr/local/bin/ffmpeg"):
+        with patch(
+            "missy.channels.discord.ffmpeg.shutil.which", return_value="/usr/local/bin/ffmpeg"
+        ):
             result = ensure_ffmpeg_available()
         assert isinstance(result, str)
 

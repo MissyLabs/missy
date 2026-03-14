@@ -9,6 +9,7 @@ Covers:
     - DiscordUploadTool (missy/tools/builtin/discord_upload.py)
     - SelfCreateTool (missy/tools/builtin/self_create_tool.py)
 """
+
 from __future__ import annotations
 
 import stat
@@ -65,7 +66,7 @@ class TestFileReadTool:
         assert result.success is True
         assert "Truncated" in result.output
         assert "200" in result.output  # total size mentioned
-        assert "50" in result.output   # limit mentioned
+        assert "50" in result.output  # limit mentioned
 
     def test_read_no_truncation_notice_when_within_limit(self, tmp_path: Path):
         target = tmp_path / "small.txt"
@@ -186,9 +187,7 @@ class TestFileWriteTool:
         assert target.read_text() == "line1\nline2\n"
 
     def test_invalid_mode_rejected(self, tmp_path: Path):
-        result = FileWriteTool().execute(
-            path=str(tmp_path / "f.txt"), content="x", mode="truncate"
-        )
+        result = FileWriteTool().execute(path=str(tmp_path / "f.txt"), content="x", mode="truncate")
 
         assert result.success is False
         assert result.output is None
@@ -218,9 +217,7 @@ class TestFileWriteTool:
         readonly_dir.chmod(0o555)
 
         try:
-            result = FileWriteTool().execute(
-                path=str(readonly_dir / "blocked.txt"), content="nope"
-            )
+            result = FileWriteTool().execute(path=str(readonly_dir / "blocked.txt"), content="nope")
             assert result.success is False
             assert "permission denied" in result.error.lower()
         finally:
@@ -229,9 +226,7 @@ class TestFileWriteTool:
     def test_write_respects_encoding(self, tmp_path: Path):
         target = tmp_path / "encoded.txt"
 
-        result = FileWriteTool().execute(
-            path=str(target), content="caf\u00e9", encoding="utf-8"
-        )
+        result = FileWriteTool().execute(path=str(target), content="caf\u00e9", encoding="utf-8")
 
         assert result.success is True
         assert target.read_bytes() == "caf\u00e9".encode()
@@ -542,9 +537,7 @@ class TestWebFetchTool:
             result = WebFetchTool().execute(url="https://api.example.com", headers=headers)
 
         assert result.success is True
-        mock_client.get.assert_called_once_with(
-            "https://api.example.com", headers=headers
-        )
+        mock_client.get.assert_called_once_with("https://api.example.com", headers=headers)
 
     def test_no_headers_argument_omitted(self):
         """When headers=None, no 'headers' kwarg should be passed to get()."""
@@ -566,9 +559,7 @@ class TestWebFetchTool:
         with patch("missy.gateway.client.create_client", return_value=mock_client) as mock_cc:
             WebFetchTool().execute(url="https://example.com", timeout=60)
 
-        mock_cc.assert_called_once_with(
-            session_id="web_fetch_tool", task_id="fetch", timeout=60
-        )
+        mock_cc.assert_called_once_with(session_id="web_fetch_tool", task_id="fetch", timeout=60)
 
     def test_get_schema_structure(self):
         schema = WebFetchTool().get_schema()
@@ -615,9 +606,7 @@ class TestDiscordUploadTool:
     def test_no_bot_token_returns_error(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.delenv("DISCORD_BOT_TOKEN", raising=False)
 
-        result = DiscordUploadTool().execute(
-            file_path="/tmp/file.png", channel_id="123456"
-        )
+        result = DiscordUploadTool().execute(file_path="/tmp/file.png", channel_id="123456")
 
         assert result.success is False
         assert result.output is None
@@ -661,9 +650,7 @@ class TestDiscordUploadTool:
             "missy.channels.discord.rest.DiscordRestClient",
             return_value=mock_rest,
         ):
-            result = DiscordUploadTool().execute(
-                file_path=str(target), channel_id="777"
-            )
+            result = DiscordUploadTool().execute(file_path=str(target), channel_id="777")
 
         assert result.success is True
         mock_rest.upload_file.assert_called_once_with(
@@ -674,9 +661,7 @@ class TestDiscordUploadTool:
         monkeypatch.setenv("DISCORD_BOT_TOKEN", "Bot token123")
 
         mock_rest = MagicMock()
-        mock_rest.upload_file.side_effect = FileNotFoundError(
-            "No such file: /nonexistent/path.png"
-        )
+        mock_rest.upload_file.side_effect = FileNotFoundError("No such file: /nonexistent/path.png")
 
         with patch(
             "missy.channels.discord.rest.DiscordRestClient",
@@ -700,18 +685,14 @@ class TestDiscordUploadTool:
             "missy.channels.discord.rest.DiscordRestClient",
             return_value=mock_rest,
         ):
-            result = DiscordUploadTool().execute(
-                file_path="/some/file.txt", channel_id="321"
-            )
+            result = DiscordUploadTool().execute(file_path="/some/file.txt", channel_id="321")
 
         assert result.success is False
         assert result.output is None
         assert "Upload failed" in result.error
         assert "Discord API exploded" in result.error
 
-    def test_bot_token_passed_to_rest_client(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
+    def test_bot_token_passed_to_rest_client(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         token = "Bot supersecret"
         monkeypatch.setenv("DISCORD_BOT_TOKEN", token)
         target = tmp_path / "f.txt"
@@ -743,9 +724,7 @@ class TestDiscordUploadTool:
             "missy.channels.discord.rest.DiscordRestClient",
             return_value=mock_rest,
         ):
-            result = DiscordUploadTool().execute(
-                file_path=str(target), channel_id="1"
-            )
+            result = DiscordUploadTool().execute(file_path=str(target), channel_id="1")
 
         assert result.success is True
         assert "?" in result.output
@@ -945,9 +924,7 @@ class TestSelfCreateTool:
         (tmp_path / "tool_a.json").write_text(
             json.dumps({"name": "tool_a", "description": "Alpha"})
         )
-        (tmp_path / "tool_b.json").write_text(
-            json.dumps({"name": "tool_b", "description": "Beta"})
-        )
+        (tmp_path / "tool_b.json").write_text(json.dumps({"name": "tool_b", "description": "Beta"}))
 
         with patch.object(mod, "CUSTOM_TOOLS_DIR", tmp_path):
             result = mod.SelfCreateTool().execute(action="list")
@@ -982,9 +959,7 @@ class TestSelfCreateTool:
         meta.write_text('{"name": "to_remove"}')
 
         with patch.object(mod, "CUSTOM_TOOLS_DIR", tmp_path):
-            result = mod.SelfCreateTool().execute(
-                action="delete", tool_name="to_remove"
-            )
+            result = mod.SelfCreateTool().execute(action="delete", tool_name="to_remove")
 
         assert result.success is True
         assert "to_remove" in result.output
@@ -999,9 +974,7 @@ class TestSelfCreateTool:
         (tmp_path / "multi.sh").write_text("#!/bin/bash")
 
         with patch.object(mod, "CUSTOM_TOOLS_DIR", tmp_path):
-            result = mod.SelfCreateTool().execute(
-                action="delete", tool_name="multi"
-            )
+            result = mod.SelfCreateTool().execute(action="delete", tool_name="multi")
 
         assert result.success is True
         assert not (tmp_path / "multi.py").exists()
@@ -1011,9 +984,7 @@ class TestSelfCreateTool:
         import missy.tools.builtin.self_create_tool as mod
 
         with patch.object(mod, "CUSTOM_TOOLS_DIR", tmp_path):
-            result = mod.SelfCreateTool().execute(
-                action="delete", tool_name="does_not_exist"
-            )
+            result = mod.SelfCreateTool().execute(action="delete", tool_name="does_not_exist")
 
         assert result.success is False
         assert "not found" in result.error.lower()

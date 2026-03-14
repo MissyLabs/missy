@@ -1,4 +1,5 @@
 """OpenTelemetry integration for Missy audit events."""
+
 from __future__ import annotations
 
 import logging
@@ -18,7 +19,12 @@ class OtelExporter:
         service_name: Service name for span attributes.
     """
 
-    def __init__(self, endpoint: str = "http://localhost:4317", protocol: str = "grpc", service_name: str = "missy"):
+    def __init__(
+        self,
+        endpoint: str = "http://localhost:4317",
+        protocol: str = "grpc",
+        service_name: str = "missy",
+    ):
         self._endpoint = endpoint
         self._protocol = protocol
         self._service_name = service_name
@@ -38,10 +44,12 @@ class OtelExporter:
             if self._protocol == "grpc":
                 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
                 from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
                 exporter = OTLPSpanExporter(endpoint=self._endpoint)
             else:
                 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
                 from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
                 exporter = OTLPSpanExporter(endpoint=self._endpoint)
 
             provider.add_span_processor(BatchSpanProcessor(exporter))
@@ -78,9 +86,7 @@ class OtelExporter:
             from missy.core.events import event_bus
 
             def _handler(event):
-                self.export_event(
-                    event.__dict__ if hasattr(event, "__dict__") else {}
-                )
+                self.export_event(event.__dict__ if hasattr(event, "__dict__") else {})
 
             event_bus.subscribe(_handler)
             logger.debug("OtelExporter: subscribed to event bus")

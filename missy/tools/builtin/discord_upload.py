@@ -1,4 +1,5 @@
 """Built-in tool: upload a file to the current Discord channel."""
+
 from __future__ import annotations
 
 import os
@@ -47,6 +48,7 @@ class DiscordUploadTool(BaseTool):
 
         try:
             from missy.channels.discord.rest import DiscordRestClient
+
             rest = DiscordRestClient(bot_token=bot_token)
             result = rest.upload_file(channel_id=channel_id, file_path=file_path, caption=caption)
             return ToolResult(

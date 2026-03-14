@@ -15,6 +15,7 @@ Covers the branches not exercised by the existing test_incus_tools.py:
 - IncusInfoTool: project flag
 - IncusExecTool: group flag, project flag
 """
+
 from __future__ import annotations
 
 import subprocess
@@ -53,12 +54,14 @@ def _make_proc(stdout: str = "", stderr: str = "", returncode: int = 0):
 
 def _json_proc(data):
     import json
+
     return _make_proc(stdout=json.dumps(data))
 
 
 # ---------------------------------------------------------------------------
 # _run_incus — generic exception handling
 # ---------------------------------------------------------------------------
+
 
 class TestRunIncusGenericException:
     @patch("missy.tools.builtin.incus_tools.subprocess.run")
@@ -72,6 +75,7 @@ class TestRunIncusGenericException:
 # ---------------------------------------------------------------------------
 # IncusListTool — project/all_projects combinations
 # ---------------------------------------------------------------------------
+
 
 class TestIncusListToolExtended:
     def setup_method(self) -> None:
@@ -90,6 +94,7 @@ class TestIncusListToolExtended:
 # IncusLaunchTool — project flag
 # ---------------------------------------------------------------------------
 
+
 class TestIncusLaunchToolExtended:
     @patch("missy.tools.builtin.incus_tools.subprocess.run")
     def test_launch_with_project(self, mock_run) -> None:
@@ -104,6 +109,7 @@ class TestIncusLaunchToolExtended:
 # ---------------------------------------------------------------------------
 # IncusInstanceActionTool — project flag + pause action
 # ---------------------------------------------------------------------------
+
 
 class TestIncusInstanceActionToolExtended:
     @patch("missy.tools.builtin.incus_tools.subprocess.run")
@@ -144,6 +150,7 @@ class TestIncusInstanceActionToolExtended:
 # IncusInfoTool — project flag
 # ---------------------------------------------------------------------------
 
+
 class TestIncusInfoToolExtended:
     @patch("missy.tools.builtin.incus_tools.subprocess.run")
     def test_info_with_project(self, mock_run) -> None:
@@ -158,6 +165,7 @@ class TestIncusInfoToolExtended:
 # ---------------------------------------------------------------------------
 # IncusExecTool — group flag, project flag
 # ---------------------------------------------------------------------------
+
 
 class TestIncusExecToolExtended:
     @patch("missy.tools.builtin.incus_tools.subprocess.run")
@@ -182,6 +190,7 @@ class TestIncusExecToolExtended:
 # IncusFileTool — project flag, list action
 # ---------------------------------------------------------------------------
 
+
 class TestIncusFileToolExtended:
     @patch("missy.tools.builtin.incus_tools.subprocess.run")
     def test_push_with_project(self, mock_run) -> None:
@@ -201,6 +210,7 @@ class TestIncusFileToolExtended:
 # ---------------------------------------------------------------------------
 # IncusSnapshotTool — restore without name, invalid action, project
 # ---------------------------------------------------------------------------
+
 
 class TestIncusSnapshotToolExtended:
     def setup_method(self) -> None:
@@ -228,7 +238,10 @@ class TestIncusSnapshotToolExtended:
     def test_create_with_project(self, mock_run) -> None:
         mock_run.return_value = _make_proc()
         self.tool.execute(
-            instance="test", action="create", snapshot_name="snap1", project="dev",
+            instance="test",
+            action="create",
+            snapshot_name="snap1",
+            project="dev",
         )
         cmd = mock_run.call_args[0][0]
         assert "--project" in cmd
@@ -244,6 +257,7 @@ class TestIncusSnapshotToolExtended:
 # ---------------------------------------------------------------------------
 # IncusConfigTool — invalid action, project flag, unset with project
 # ---------------------------------------------------------------------------
+
 
 class TestIncusConfigToolExtended:
     def setup_method(self) -> None:
@@ -277,6 +291,7 @@ class TestIncusConfigToolExtended:
 # ---------------------------------------------------------------------------
 # IncusImageTool — delete, info, alias, copy without alias, project
 # ---------------------------------------------------------------------------
+
 
 class TestIncusImageToolExtended:
     def setup_method(self) -> None:
@@ -341,6 +356,7 @@ class TestIncusImageToolExtended:
 # IncusNetworkTool — extended paths
 # ---------------------------------------------------------------------------
 
+
 class TestIncusNetworkToolExtended:
     def setup_method(self) -> None:
         self.tool = IncusNetworkTool()
@@ -370,7 +386,9 @@ class TestIncusNetworkToolExtended:
     def test_set_config(self, mock_run) -> None:
         mock_run.return_value = _make_proc()
         result = self.tool.execute(
-            action="set", name="br0", config={"ipv4.address": "10.0.0.1/24"},
+            action="set",
+            name="br0",
+            config={"ipv4.address": "10.0.0.1/24"},
         )
         assert result.success
 
@@ -378,7 +396,9 @@ class TestIncusNetworkToolExtended:
     def test_set_config_fails_on_error(self, mock_run) -> None:
         mock_run.return_value = _make_proc(returncode=1, stderr="Error: not found")
         result = self.tool.execute(
-            action="set", name="br0", config={"bad.key": "value"},
+            action="set",
+            name="br0",
+            config={"bad.key": "value"},
         )
         assert not result.success
 
@@ -414,7 +434,8 @@ class TestIncusNetworkToolExtended:
     def test_create_with_config(self, mock_run) -> None:
         mock_run.return_value = _make_proc()
         self.tool.execute(
-            action="create", name="testnet",
+            action="create",
+            name="testnet",
             config={"ipv4.address": "10.1.0.1/24", "ipv4.nat": "true"},
         )
         cmd = mock_run.call_args[0][0]
@@ -424,6 +445,7 @@ class TestIncusNetworkToolExtended:
 # ---------------------------------------------------------------------------
 # IncusStorageTool — extended paths
 # ---------------------------------------------------------------------------
+
 
 class TestIncusStorageToolExtended:
     def setup_method(self) -> None:
@@ -492,6 +514,7 @@ class TestIncusStorageToolExtended:
 # IncusProfileTool — extended paths
 # ---------------------------------------------------------------------------
 
+
 class TestIncusProfileToolExtended:
     def setup_method(self) -> None:
         self.tool = IncusProfileTool()
@@ -541,6 +564,7 @@ class TestIncusProfileToolExtended:
 # IncusProjectTool — extended paths
 # ---------------------------------------------------------------------------
 
+
 class TestIncusProjectToolExtended:
     def setup_method(self) -> None:
         self.tool = IncusProjectTool()
@@ -581,6 +605,7 @@ class TestIncusProjectToolExtended:
 # IncusDeviceTool — invalid action, project
 # ---------------------------------------------------------------------------
 
+
 class TestIncusDeviceToolExtended:
     def setup_method(self) -> None:
         self.tool = IncusDeviceTool()
@@ -605,6 +630,7 @@ class TestIncusDeviceToolExtended:
 # IncusCopyMoveTool — extended paths
 # ---------------------------------------------------------------------------
 
+
 class TestIncusCopyMoveToolExtended:
     def setup_method(self) -> None:
         self.tool = IncusCopyMoveTool()
@@ -612,7 +638,9 @@ class TestIncusCopyMoveToolExtended:
     @patch("missy.tools.builtin.incus_tools.subprocess.run")
     def test_copy_to_remote(self, mock_run) -> None:
         mock_run.return_value = _make_proc()
-        result = self.tool.execute(source="test", destination="remote:test-copy", target_remote="remote")
+        result = self.tool.execute(
+            source="test", destination="remote:test-copy", target_remote="remote"
+        )
         assert result.success
         cmd = mock_run.call_args[0][0]
         assert "copy" in cmd

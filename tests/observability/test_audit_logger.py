@@ -74,8 +74,16 @@ class TestHandleEvent:
     ):
         _publish(bus, "test.event", "scheduler", "error", key="value")
         record = json.loads(Path(log_path).read_text().strip())
-        for field in ("timestamp", "session_id", "task_id", "event_type",
-                      "category", "result", "detail", "policy_rule"):
+        for field in (
+            "timestamp",
+            "session_id",
+            "task_id",
+            "event_type",
+            "category",
+            "result",
+            "detail",
+            "policy_rule",
+        ):
             assert field in record, f"Missing field: {field}"
 
     def test_detail_dict_is_preserved(
@@ -85,9 +93,7 @@ class TestHandleEvent:
         record = json.loads(Path(log_path).read_text().strip())
         assert record["detail"]["path"] == "/tmp/x.txt"
 
-    def test_existing_subscribers_still_called(
-        self, bus: EventBus, log_path: str
-    ):
+    def test_existing_subscribers_still_called(self, bus: EventBus, log_path: str):
         received = []
         bus.subscribe("test.event", received.append)
         AuditLogger(log_path=log_path, bus=bus)
@@ -100,17 +106,13 @@ class TestGetRecentEvents:
         al = AuditLogger(log_path=str(tmp_path / "missing.jsonl"), bus=bus)
         assert al.get_recent_events() == []
 
-    def test_returns_all_events_within_limit(
-        self, audit_logger: AuditLogger, bus: EventBus
-    ):
+    def test_returns_all_events_within_limit(self, audit_logger: AuditLogger, bus: EventBus):
         for i in range(5):
             _publish(bus, f"ev.{i}", "network", "allow")
         events = audit_logger.get_recent_events(limit=10)
         assert len(events) == 5
 
-    def test_limit_is_applied_newest_first(
-        self, audit_logger: AuditLogger, bus: EventBus
-    ):
+    def test_limit_is_applied_newest_first(self, audit_logger: AuditLogger, bus: EventBus):
         for i in range(10):
             _publish(bus, f"ev.{i}", "network", "allow")
         events = audit_logger.get_recent_events(limit=3)
@@ -126,9 +128,7 @@ class TestGetRecentEvents:
 
 
 class TestGetPolicyViolations:
-    def test_returns_only_deny_events(
-        self, audit_logger: AuditLogger, bus: EventBus
-    ):
+    def test_returns_only_deny_events(self, audit_logger: AuditLogger, bus: EventBus):
         _publish(bus, "net.req", "network", "allow")
         _publish(bus, "shell.exec", "shell", "deny", cmd="rm -rf /")
         _publish(bus, "fs.write", "filesystem", "deny", path="/etc/hosts")
@@ -137,9 +137,7 @@ class TestGetPolicyViolations:
         for v in violations:
             assert v["result"] == "deny"
 
-    def test_returns_empty_when_no_denies(
-        self, audit_logger: AuditLogger, bus: EventBus
-    ):
+    def test_returns_empty_when_no_denies(self, audit_logger: AuditLogger, bus: EventBus):
         _publish(bus, "ev.ok", "network", "allow")
         assert audit_logger.get_policy_violations() == []
 
@@ -174,6 +172,7 @@ class TestSingleton:
 
     def test_get_audit_logger_raises_before_init(self, monkeypatch):
         import missy.observability.audit_logger as mod
+
         monkeypatch.setattr(mod, "_audit_logger", None)
         with pytest.raises(RuntimeError, match="AuditLogger has not been initialised"):
             get_audit_logger()

@@ -116,9 +116,7 @@ class TestAgentRuntimeRun:
         provider = _make_provider(reply="Hello, world!")
         mock_registry = _make_registry({"fake": provider})
 
-        with patch(
-            "missy.agent.runtime.get_registry", return_value=mock_registry
-        ):
+        with patch("missy.agent.runtime.get_registry", return_value=mock_registry):
             runtime = AgentRuntime(AgentConfig(provider="fake"))
             result = runtime.run("Hi")
 
@@ -128,9 +126,7 @@ class TestAgentRuntimeRun:
         provider = _make_provider(reply="response text")
         mock_registry = _make_registry({"fake": provider})
 
-        with patch(
-            "missy.agent.runtime.get_registry", return_value=mock_registry
-        ):
+        with patch("missy.agent.runtime.get_registry", return_value=mock_registry):
             runtime = AgentRuntime(AgentConfig(provider="fake"))
             result = runtime.run("question")
 
@@ -140,9 +136,7 @@ class TestAgentRuntimeRun:
         provider = _make_provider()
         mock_registry = _make_registry({"fake": provider})
 
-        with patch(
-            "missy.agent.runtime.get_registry", return_value=mock_registry
-        ):
+        with patch("missy.agent.runtime.get_registry", return_value=mock_registry):
             runtime = AgentRuntime(AgentConfig(provider="fake"))
             runtime.run("Hello")
 
@@ -153,9 +147,7 @@ class TestAgentRuntimeRun:
         provider = _make_provider()
         mock_registry = _make_registry({"fake": provider})
 
-        with patch(
-            "missy.agent.runtime.get_registry", return_value=mock_registry
-        ):
+        with patch("missy.agent.runtime.get_registry", return_value=mock_registry):
             runtime = AgentRuntime(AgentConfig(provider="fake"))
             runtime.run("Hello")
 
@@ -166,12 +158,8 @@ class TestAgentRuntimeRun:
         provider = _make_provider()
         mock_registry = _make_registry({"fake": provider})
 
-        with patch(
-            "missy.agent.runtime.get_registry", return_value=mock_registry
-        ):
-            runtime = AgentRuntime(
-                AgentConfig(provider="fake", system_prompt="Custom prompt.")
-            )
+        with patch("missy.agent.runtime.get_registry", return_value=mock_registry):
+            runtime = AgentRuntime(AgentConfig(provider="fake", system_prompt="Custom prompt."))
             runtime.run("question")
 
         call_args = provider.complete.call_args
@@ -184,9 +172,7 @@ class TestAgentRuntimeRun:
         provider = _make_provider()
         mock_registry = _make_registry({"fake": provider})
 
-        with patch(
-            "missy.agent.runtime.get_registry", return_value=mock_registry
-        ):
+        with patch("missy.agent.runtime.get_registry", return_value=mock_registry):
             runtime = AgentRuntime(AgentConfig(provider="fake"))
             runtime.run("user question here")
 
@@ -200,9 +186,7 @@ class TestAgentRuntimeRun:
         provider = _make_provider()
         mock_registry = _make_registry({"fake": provider})
 
-        with patch(
-            "missy.agent.runtime.get_registry", return_value=mock_registry
-        ):
+        with patch("missy.agent.runtime.get_registry", return_value=mock_registry):
             runtime = AgentRuntime(AgentConfig(provider="fake", temperature=0.3))
             runtime.run("hi")
 
@@ -213,9 +197,7 @@ class TestAgentRuntimeRun:
         provider = _make_provider()
         mock_registry = _make_registry({"fake": provider})
 
-        with patch(
-            "missy.agent.runtime.get_registry", return_value=mock_registry
-        ):
+        with patch("missy.agent.runtime.get_registry", return_value=mock_registry):
             runtime = AgentRuntime(AgentConfig(provider="fake", model="gpt-4o"))
             runtime.run("hi")
 
@@ -226,9 +208,7 @@ class TestAgentRuntimeRun:
         provider = _make_provider()
         mock_registry = _make_registry({"fake": provider})
 
-        with patch(
-            "missy.agent.runtime.get_registry", return_value=mock_registry
-        ):
+        with patch("missy.agent.runtime.get_registry", return_value=mock_registry):
             runtime = AgentRuntime(AgentConfig(provider="fake", model=None))
             runtime.run("hi")
 
@@ -239,9 +219,7 @@ class TestAgentRuntimeRun:
         provider = _make_provider()
         mock_registry = _make_registry({"fake": provider})
 
-        with patch(
-            "missy.agent.runtime.get_registry", return_value=mock_registry
-        ):
+        with patch("missy.agent.runtime.get_registry", return_value=mock_registry):
             runtime = AgentRuntime(AgentConfig(provider="fake"))
             runtime.run("first")
             runtime.run("second")
@@ -264,9 +242,7 @@ class TestProviderResolution:
         fallback = _make_provider("fallback", available=True, reply="fallback reply")
         mock_registry = _make_registry({"primary": primary, "fallback": fallback})
 
-        with patch(
-            "missy.agent.runtime.get_registry", return_value=mock_registry
-        ):
+        with patch("missy.agent.runtime.get_registry", return_value=mock_registry):
             runtime = AgentRuntime(AgentConfig(provider="primary"))
             result = runtime.run("hi")
 
@@ -275,9 +251,7 @@ class TestProviderResolution:
     def test_no_providers_available_raises_provider_error(self):
         mock_registry = _make_registry(providers={})
 
-        with patch(
-            "missy.agent.runtime.get_registry", return_value=mock_registry
-        ):
+        with patch("missy.agent.runtime.get_registry", return_value=mock_registry):
             runtime = AgentRuntime(AgentConfig(provider="missing"))
             with pytest.raises(ProviderError):
                 runtime.run("hi")
@@ -285,9 +259,7 @@ class TestProviderResolution:
     def test_no_providers_emits_error_event(self):
         mock_registry = _make_registry(providers={})
 
-        with patch(
-            "missy.agent.runtime.get_registry", return_value=mock_registry
-        ):
+        with patch("missy.agent.runtime.get_registry", return_value=mock_registry):
             runtime = AgentRuntime(AgentConfig(provider="missing"))
             with pytest.raises(ProviderError):
                 runtime.run("hi")
@@ -307,9 +279,7 @@ class TestCompletionErrors:
         provider.complete.side_effect = ProviderError("API down")
         mock_registry = _make_registry({"fake": provider})
 
-        with patch(
-            "missy.agent.runtime.get_registry", return_value=mock_registry
-        ):
+        with patch("missy.agent.runtime.get_registry", return_value=mock_registry):
             runtime = AgentRuntime(AgentConfig(provider="fake"))
             with pytest.raises(ProviderError, match="API down"):
                 runtime.run("hi")
@@ -319,9 +289,7 @@ class TestCompletionErrors:
         provider.complete.side_effect = ProviderError("API down")
         mock_registry = _make_registry({"fake": provider})
 
-        with patch(
-            "missy.agent.runtime.get_registry", return_value=mock_registry
-        ):
+        with patch("missy.agent.runtime.get_registry", return_value=mock_registry):
             runtime = AgentRuntime(AgentConfig(provider="fake"))
             with pytest.raises(ProviderError):
                 runtime.run("hi")
@@ -334,9 +302,7 @@ class TestCompletionErrors:
         provider.complete.side_effect = ValueError("unexpected crash")
         mock_registry = _make_registry({"fake": provider})
 
-        with patch(
-            "missy.agent.runtime.get_registry", return_value=mock_registry
-        ):
+        with patch("missy.agent.runtime.get_registry", return_value=mock_registry):
             runtime = AgentRuntime(AgentConfig(provider="fake"))
             with pytest.raises(ProviderError, match="Unexpected"):
                 runtime.run("hi")

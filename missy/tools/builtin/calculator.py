@@ -113,9 +113,7 @@ def _safe_eval(node: ast.AST) -> int | float | complex:
 
     if isinstance(node, ast.Constant):
         if not isinstance(node.value, (int, float, complex)):
-            raise ValueError(
-                f"Non-numeric literal {node.value!r} is not permitted."
-            )
+            raise ValueError(f"Non-numeric literal {node.value!r} is not permitted.")
         return node.value
 
     if isinstance(node, ast.BinOp):

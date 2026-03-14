@@ -66,6 +66,7 @@ def restart_process() -> None:
         print(f"[missy-evolve] Restart failed ({exc}). Please restart manually.")
         sys.exit(75)  # EX_TEMPFAIL
 
+
 # Root of the Missy package — the only directory we allow edits in
 _PACKAGE_ROOT = Path(__file__).resolve().parent.parent
 
@@ -463,10 +464,7 @@ class CodeEvolutionManager:
             if not prop:
                 raise ValueError(f"Proposal {proposal_id!r} not found.")
             if prop.status != EvolutionStatus.APPROVED:
-                raise ValueError(
-                    f"Proposal {proposal_id!r} is {prop.status.value}, "
-                    "not approved."
-                )
+                raise ValueError(f"Proposal {proposal_id!r} is {prop.status.value}, not approved.")
 
         # Validate diffs still match current source
         try:
@@ -651,7 +649,8 @@ class CodeEvolutionManager:
         """Return proposals awaiting review."""
         with self._lock:
             return [
-                p for p in self._proposals
+                p
+                for p in self._proposals
                 if p.status in (EvolutionStatus.PROPOSED, EvolutionStatus.APPROVED)
             ]
 

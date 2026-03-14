@@ -71,7 +71,10 @@ class PolicyEngine:
             ValueError: When *host* is empty.
         """
         return self.network.check_host(
-            host, session_id=session_id, task_id=task_id, category=category,
+            host,
+            session_id=session_id,
+            task_id=task_id,
+            category=category,
         )
 
     def check_write(

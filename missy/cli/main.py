@@ -151,6 +151,7 @@ def _load_subsystems(config_path: str):
     try:
         from missy.tools.builtin import register_builtin_tools
         from missy.tools.registry import init_tool_registry
+
         tool_registry = init_tool_registry()
         register_builtin_tools(tool_registry)
     except Exception:
@@ -159,6 +160,7 @@ def _load_subsystems(config_path: str):
     # Initialize OpenTelemetry if configured.
     try:
         from missy.observability.otel import init_otel
+
         init_otel(cfg)
     except Exception:
         pass
@@ -171,16 +173,12 @@ def _print_error(message: str, hint: str | None = None) -> None:
     body = message
     if hint:
         body += f"\n\n[dim]{hint}[/]"
-    err_console.print(
-        Panel(body, title="[red]Error[/]", border_style="red", expand=False)
-    )
+    err_console.print(Panel(body, title="[red]Error[/]", border_style="red", expand=False))
 
 
 def _print_success(message: str) -> None:
     """Render a styled success panel to stdout."""
-    console.print(
-        Panel(message, title="[green]Success[/]", border_style="green", expand=False)
-    )
+    console.print(Panel(message, title="[green]Success[/]", border_style="green", expand=False))
 
 
 # ---------------------------------------------------------------------------
@@ -238,9 +236,7 @@ def init(ctx: click.Context) -> None:
 
     config_file = missy_dir / "config.yaml"
     if config_file.exists():
-        console.print(
-            f"[yellow]Config already exists at [bold]{config_file}[/] — skipping.[/]"
-        )
+        console.print(f"[yellow]Config already exists at [bold]{config_file}[/] — skipping.[/]")
     else:
         config_file.write_text(_DEFAULT_CONFIG_YAML, encoding="utf-8")
         console.print(f"[green]Created[/] {config_file}")
@@ -265,9 +261,7 @@ def init(ctx: click.Context) -> None:
         workspace.mkdir(parents=True, exist_ok=True)
         console.print(f"[green]Created[/] workspace at {workspace}")
     except OSError:
-        console.print(
-            f"[yellow]Could not create workspace at {workspace} — create it manually.[/]"
-        )
+        console.print(f"[yellow]Could not create workspace at {workspace} — create it manually.[/]")
 
     _print_success(
         f"Missy initialised.\n\n"
@@ -297,7 +291,9 @@ def setup(ctx: click.Context) -> None:
     """
     from missy.cli.wizard import run_wizard
 
-    config_path = ctx.obj.get("config_path", "~/.missy/config.yaml") if ctx.obj else "~/.missy/config.yaml"
+    config_path = (
+        ctx.obj.get("config_path", "~/.missy/config.yaml") if ctx.obj else "~/.missy/config.yaml"
+    )
     try:
         run_wizard(config_path)
     except (KeyboardInterrupt, click.Abort):
@@ -314,9 +310,14 @@ def setup(ctx: click.Context) -> None:
 @click.argument("prompt")
 @click.option("--provider", default=None, help="Provider to use (overrides config default).")
 @click.option("--session", default=None, help="Session ID for conversation continuity.")
-@click.option("--mode", "capability_mode", default="full",
-              type=click.Choice(["full", "safe-chat", "no-tools"], case_sensitive=False),
-              show_default=True, help="Capability mode: full (all tools), safe-chat (read-only tools), no-tools (pure chat).")
+@click.option(
+    "--mode",
+    "capability_mode",
+    default="full",
+    type=click.Choice(["full", "safe-chat", "no-tools"], case_sensitive=False),
+    show_default=True,
+    help="Capability mode: full (all tools), safe-chat (read-only tools), no-tools (pure chat).",
+)
 @click.pass_context
 def ask(
     ctx: click.Context,
@@ -406,11 +407,20 @@ def ask(
 
 @cli.command()
 @click.option("--provider", default=None, help="Provider to use.")
-@click.option("--session", default="default", show_default=True,
-              help="Session ID for conversation continuity. Use 'default' to persist memory across runs.")
-@click.option("--mode", "capability_mode", default="full",
-              type=click.Choice(["full", "safe-chat", "no-tools"], case_sensitive=False),
-              show_default=True, help="Capability mode: full (all tools), safe-chat (read-only tools), no-tools (pure chat).")
+@click.option(
+    "--session",
+    default="default",
+    show_default=True,
+    help="Session ID for conversation continuity. Use 'default' to persist memory across runs.",
+)
+@click.option(
+    "--mode",
+    "capability_mode",
+    default="full",
+    type=click.Choice(["full", "safe-chat", "no-tools"], case_sensitive=False),
+    show_default=True,
+    help="Capability mode: full (all tools), safe-chat (read-only tools), no-tools (pure chat).",
+)
 @click.pass_context
 def run(ctx: click.Context, provider: str | None, session: str, capability_mode: str) -> None:
     """Start an interactive session with Missy.
@@ -438,7 +448,11 @@ def run(ctx: click.Context, provider: str | None, session: str, capability_mode:
     agent = AgentRuntime(agent_cfg)
     channel = CLIChannel()
 
-    mode_label = {"full": "full (all tools)", "safe-chat": "safe-chat (read-only)", "no-tools": "no-tools (pure chat)"}
+    mode_label = {
+        "full": "full (all tools)",
+        "safe-chat": "safe-chat (read-only)",
+        "no-tools": "no-tools (pure chat)",
+    }
     console.print(
         Panel(
             "[bold cyan]Missy[/] interactive session\n\n"
@@ -497,9 +511,7 @@ def run(ctx: click.Context, provider: str | None, session: str, capability_mode:
         clean_text = sanitizer.sanitize(user_text)
         injection_matches = sanitizer.check_for_injection(clean_text)
         if injection_matches:
-            console.print(
-                f"[yellow]Warning:[/] Injection patterns detected: {injection_matches}"
-            )
+            console.print(f"[yellow]Warning:[/] Injection patterns detected: {injection_matches}")
 
         with console.status("[bold cyan]Thinking...[/]", spinner="dots"):
             try:
@@ -606,12 +618,8 @@ def schedule_list(ctx: click.Context) -> None:
 
     for job in jobs:
         enabled_text = Text("yes", style="green") if job.enabled else Text("no", style="red")
-        last_run = (
-            job.last_run.strftime("%Y-%m-%d %H:%M") if job.last_run else "[dim]never[/]"
-        )
-        next_run = (
-            job.next_run.strftime("%Y-%m-%d %H:%M") if job.next_run else "[dim]—[/]"
-        )
+        last_run = job.last_run.strftime("%Y-%m-%d %H:%M") if job.last_run else "[dim]never[/]"
+        next_run = job.next_run.strftime("%Y-%m-%d %H:%M") if job.next_run else "[dim]—[/]"
         table.add_row(
             job.id[:8] + "…",
             job.name,
@@ -902,9 +910,7 @@ def skills_list(ctx: click.Context) -> None:
 
     if not skill_names:
         console.print("[dim]No skills are currently registered.[/]")
-        console.print(
-            "[dim]Skills are registered programmatically at application startup.[/]"
-        )
+        console.print("[dim]Skills are registered programmatically at application startup.[/]")
         return
 
     table = Table(title="Registered Skills")
@@ -940,9 +946,7 @@ def plugins_list(ctx: click.Context) -> None:
     console.print(f"Plugin system: {enabled_label}")
 
     if cfg.plugins.allowed_plugins:
-        console.print(
-            f"Allowed plugins: [bold]{', '.join(cfg.plugins.allowed_plugins)}[/]"
-        )
+        console.print(f"Allowed plugins: [bold]{', '.join(cfg.plugins.allowed_plugins)}[/]")
     else:
         console.print("[dim]No plugins on the allow-list.[/]")
 
@@ -958,9 +962,7 @@ def plugins_list(ctx: click.Context) -> None:
 
     for manifest in manifests:
         enabled_text = (
-            Text("yes", style="green")
-            if manifest.get("enabled")
-            else Text("no", style="red")
+            Text("yes", style="green") if manifest.get("enabled") else Text("no", style="red")
         )
         table.add_row(
             manifest.get("name", ""),
@@ -997,9 +999,7 @@ def discord_status(ctx: click.Context) -> None:
         console.print("[dim]No Discord accounts configured.[/]")
         return
 
-    enabled_text = (
-        "[green]enabled[/]" if discord_cfg.enabled else "[red]disabled[/]"
-    )
+    enabled_text = "[green]enabled[/]" if discord_cfg.enabled else "[red]disabled[/]"
     console.print(f"Discord integration: {enabled_text}")
 
     table = Table(title="Discord Accounts", show_lines=True)
@@ -1150,9 +1150,9 @@ def discord_audit(ctx: click.Context, limit: int) -> None:
     al = AuditLogger(log_path=cfg.audit_log_path)
     all_events = al.get_recent_events(limit=limit * 10)
 
-    discord_events = [
-        e for e in all_events if str(e.get("event_type", "")).startswith("discord.")
-    ][-limit:]
+    discord_events = [e for e in all_events if str(e.get("event_type", "")).startswith("discord.")][
+        -limit:
+    ]
 
     if not discord_events:
         console.print("[dim]No Discord audit events found.[/]")
@@ -1258,7 +1258,9 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
             try:
                 from missy.agent.runtime import AgentConfig, AgentRuntime
 
-                _provider_name = next(iter(cfg.providers), "anthropic") if cfg.providers else "anthropic"
+                _provider_name = (
+                    next(iter(cfg.providers), "anthropic") if cfg.providers else "anthropic"
+                )
                 _agent_cfg = AgentConfig(provider=_provider_name)
                 _runtime = AgentRuntime(_agent_cfg)
 
@@ -1377,18 +1379,22 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                             response = f"<@{msg.sender}> {response}"
                             mention_ids = [msg.sender]
                         sent_id = await ch.send_with_retry(
-                            channel_id, response, mention_user_ids=mention_ids,
+                            channel_id,
+                            response,
+                            mention_user_ids=mention_ids,
                         )
 
                         # Detect evolution proposals and add reaction buttons.
                         if sent_id and "Evolution proposed:" in response:
                             import re
+
                             _evo_match = re.search(r"Evolution proposed:\s*(\S+)", response)
                             if _evo_match:
                                 _proposal_id = _evo_match.group(1)
                                 ch.add_evolution_reactions(channel_id, sent_id, _proposal_id)
                         elif sent_id and "Multi-file evolution proposed:" in response:
                             import re
+
                             _evo_match = re.search(
                                 r"Multi-file evolution proposed:\s*(\S+)", response
                             )
@@ -1398,7 +1404,8 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                     except Exception as exc:
                         logger.error(
                             "Discord send failed after retries (channel=%s): %s",
-                            channel_id, exc,
+                            channel_id,
+                            exc,
                         )
                         # Inform the agent that its response was not delivered.
                         try:
@@ -1436,6 +1443,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
         else:
             console.print("[dim]No Discord channels configured. Running in idle service mode.[/]")
             import time
+
             while not stop_event:
                 time.sleep(1)
     finally:
@@ -1469,7 +1477,11 @@ def gateway_status(ctx: click.Context) -> None:
     if cfg.discord and cfg.discord.enabled and cfg.discord.accounts:
         for i, account in enumerate(cfg.discord.accounts):
             token_set = bool(account.resolve_token())
-            status = Text("configured", style="green") if token_set else Text("token missing", style="red")
+            status = (
+                Text("configured", style="green")
+                if token_set
+                else Text("token missing", style="red")
+            )
             table.add_row(
                 f"discord[{i}]",
                 status,
@@ -1485,9 +1497,12 @@ def gateway_status(ctx: click.Context) -> None:
 
     # Providers
     from missy.providers.registry import get_registry
+
     registry = get_registry()
     provider_names = registry.list_providers()
-    console.print(f"\n[bold]Providers registered:[/] {', '.join(provider_names) if provider_names else '[dim]none[/]'}")
+    console.print(
+        f"\n[bold]Providers registered:[/] {', '.join(provider_names) if provider_names else '[dim]none[/]'}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1565,7 +1580,9 @@ def doctor(ctx: click.Context) -> None:
             except Exception:
                 avail = False
             status = ok if avail else fail
-            table.add_row(f"provider:{name}", status, "api key present" if avail else "not available")
+            table.add_row(
+                f"provider:{name}", status, "api key present" if avail else "not available"
+            )
 
     # 7. Shell policy
     shell_status = warn if cfg.shell.enabled else ok
@@ -1707,6 +1724,7 @@ def cost(ctx: click.Context, session: str | None) -> None:
     if session:
         try:
             from missy.memory.sqlite_store import SQLiteMemoryStore
+
             store = SQLiteMemoryStore()
             turns = store.get_session_turns(session, limit=1000)
             table.add_row("Session", session)
@@ -1824,6 +1842,7 @@ def vault() -> None:
 def vault_set(ctx: click.Context, key: str, value: str) -> None:
     """Store a secret in the encrypted vault."""
     from missy.security.vault import Vault, VaultError
+
     cfg = _load_subsystems(ctx.obj["config_path"])
     vault_dir = getattr(getattr(cfg, "vault", None), "vault_dir", "~/.missy/secrets")
     try:
@@ -1841,6 +1860,7 @@ def vault_set(ctx: click.Context, key: str, value: str) -> None:
 def vault_get(ctx: click.Context, key: str) -> None:
     """Retrieve a secret from the vault (prints to stdout)."""
     from missy.security.vault import Vault, VaultError
+
     cfg = _load_subsystems(ctx.obj["config_path"])
     vault_dir = getattr(getattr(cfg, "vault", None), "vault_dir", "~/.missy/secrets")
     try:
@@ -1860,6 +1880,7 @@ def vault_get(ctx: click.Context, key: str) -> None:
 def vault_list(ctx: click.Context) -> None:
     """List all key names in the vault."""
     from missy.security.vault import Vault, VaultError
+
     cfg = _load_subsystems(ctx.obj["config_path"])
     vault_dir = getattr(getattr(cfg, "vault", None), "vault_dir", "~/.missy/secrets")
     try:
@@ -1881,6 +1902,7 @@ def vault_list(ctx: click.Context) -> None:
 def vault_delete(ctx: click.Context, key: str) -> None:
     """Delete a secret from the vault."""
     from missy.security.vault import Vault, VaultError
+
     cfg = _load_subsystems(ctx.obj["config_path"])
     vault_dir = getattr(getattr(cfg, "vault", None), "vault_dir", "~/.missy/secrets")
     try:
@@ -1906,12 +1928,17 @@ def sessions() -> None:
 
 
 @sessions.command("cleanup")
-@click.option("--older-than", default=30, show_default=True, help="Delete history older than N days.")
-@click.option("--dry-run", is_flag=True, default=False, help="Show what would be deleted without deleting.")
+@click.option(
+    "--older-than", default=30, show_default=True, help="Delete history older than N days."
+)
+@click.option(
+    "--dry-run", is_flag=True, default=False, help="Show what would be deleted without deleting."
+)
 @click.pass_context
 def sessions_cleanup(ctx: click.Context, older_than: int, dry_run: bool) -> None:
     """Delete old conversation history from the memory store."""
     from missy.memory.store import MemoryStore
+
     _load_subsystems(ctx.obj["config_path"])
     store = MemoryStore()
     if dry_run:
@@ -2002,7 +2029,9 @@ def approvals() -> None:
 @click.pass_context
 def approvals_list(ctx: click.Context) -> None:
     """List pending approval requests (for the current gateway session)."""
-    console.print("[dim]No active gateway session; approvals are processed during missy gateway start.[/]")
+    console.print(
+        "[dim]No active gateway session; approvals are processed during missy gateway start.[/]"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2020,6 +2049,7 @@ def evolve() -> None:
 def evolve_list(ctx: click.Context) -> None:
     """List all evolution proposals."""
     from missy.agent.code_evolution import CodeEvolutionManager
+
     _load_subsystems(ctx.obj["config_path"])
     mgr = CodeEvolutionManager()
     proposals = mgr.list_all()
@@ -2059,6 +2089,7 @@ def evolve_list(ctx: click.Context) -> None:
 def evolve_show(ctx: click.Context, proposal_id: str) -> None:
     """Show full details of an evolution proposal."""
     from missy.agent.code_evolution import CodeEvolutionManager
+
     _load_subsystems(ctx.obj["config_path"])
     mgr = CodeEvolutionManager()
     prop = mgr.get(proposal_id)
@@ -2097,10 +2128,13 @@ def evolve_show(ctx: click.Context, proposal_id: str) -> None:
 def evolve_approve(ctx: click.Context, proposal_id: str) -> None:
     """Approve an evolution proposal for application."""
     from missy.agent.code_evolution import CodeEvolutionManager
+
     _load_subsystems(ctx.obj["config_path"])
     mgr = CodeEvolutionManager()
     if mgr.approve(proposal_id):
-        _print_success(f"Proposal [bold]{proposal_id}[/] approved. Use `missy evolve apply {proposal_id}` to apply.")
+        _print_success(
+            f"Proposal [bold]{proposal_id}[/] approved. Use `missy evolve apply {proposal_id}` to apply."
+        )
     else:
         _print_error(f"Proposal {proposal_id!r} not found or not in proposed status.")
 
@@ -2111,6 +2145,7 @@ def evolve_approve(ctx: click.Context, proposal_id: str) -> None:
 def evolve_reject(ctx: click.Context, proposal_id: str) -> None:
     """Reject an evolution proposal."""
     from missy.agent.code_evolution import CodeEvolutionManager
+
     _load_subsystems(ctx.obj["config_path"])
     mgr = CodeEvolutionManager()
     if mgr.reject(proposal_id):
@@ -2121,7 +2156,12 @@ def evolve_reject(ctx: click.Context, proposal_id: str) -> None:
 
 @evolve.command("apply")
 @click.argument("proposal_id")
-@click.option("--no-restart", is_flag=True, default=False, help="Skip automatic process restart after successful apply.")
+@click.option(
+    "--no-restart",
+    is_flag=True,
+    default=False,
+    help="Skip automatic process restart after successful apply.",
+)
 @click.pass_context
 def evolve_apply(ctx: click.Context, proposal_id: str, no_restart: bool) -> None:
     """Apply an approved evolution (runs tests, commits on success).
@@ -2130,6 +2170,7 @@ def evolve_apply(ctx: click.Context, proposal_id: str, no_restart: bool) -> None
     takes effect immediately.  Pass --no-restart to skip the restart.
     """
     from missy.agent.code_evolution import CodeEvolutionManager, restart_process
+
     _load_subsystems(ctx.obj["config_path"])
     mgr = CodeEvolutionManager()
     prop = mgr.get(proposal_id)
@@ -2144,14 +2185,18 @@ def evolve_apply(ctx: click.Context, proposal_id: str, no_restart: bool) -> None
     if result["success"]:
         _print_success(result["message"])
         if no_restart:
-            console.print("[dim]Skipping restart (--no-restart). Restart manually to load changes.[/]")
+            console.print(
+                "[dim]Skipping restart (--no-restart). Restart manually to load changes.[/]"
+            )
         else:
             console.print("[bold cyan]Restarting to load evolved code...[/]")
             restart_process()
     else:
         _print_error(result["message"])
         if result.get("test_output"):
-            console.print(Panel(result["test_output"][-1000:], title="Test Output", border_style="red"))
+            console.print(
+                Panel(result["test_output"][-1000:], title="Test Output", border_style="red")
+            )
 
 
 @evolve.command("rollback")
@@ -2160,6 +2205,7 @@ def evolve_apply(ctx: click.Context, proposal_id: str, no_restart: bool) -> None
 def evolve_rollback(ctx: click.Context, proposal_id: str) -> None:
     """Rollback a previously applied evolution via git revert."""
     from missy.agent.code_evolution import CodeEvolutionManager
+
     _load_subsystems(ctx.obj["config_path"])
     mgr = CodeEvolutionManager()
     result = mgr.rollback(proposal_id)
@@ -2184,6 +2230,7 @@ def patches() -> None:
 def patches_list(ctx: click.Context) -> None:
     """List all prompt patches."""
     from missy.agent.prompt_patches import PromptPatchManager
+
     _load_subsystems(ctx.obj["config_path"])
     mgr = PromptPatchManager()
     all_patches = mgr.list_all()
@@ -2208,6 +2255,7 @@ def patches_list(ctx: click.Context) -> None:
 def patches_approve(ctx: click.Context, patch_id: str) -> None:
     """Approve a proposed patch."""
     from missy.agent.prompt_patches import PromptPatchManager
+
     _load_subsystems(ctx.obj["config_path"])
     mgr = PromptPatchManager()
     if mgr.approve(patch_id):
@@ -2222,6 +2270,7 @@ def patches_approve(ctx: click.Context, patch_id: str) -> None:
 def patches_reject(ctx: click.Context, patch_id: str) -> None:
     """Reject a proposed patch."""
     from missy.agent.prompt_patches import PromptPatchManager
+
     _load_subsystems(ctx.obj["config_path"])
     mgr = PromptPatchManager()
     if mgr.reject(patch_id):
@@ -2245,6 +2294,7 @@ def mcp() -> None:
 def mcp_list(ctx: click.Context) -> None:
     """List configured MCP servers."""
     from missy.mcp.manager import McpManager
+
     _load_subsystems(ctx.obj["config_path"])
     mgr = McpManager()
     servers = mgr.list_servers()
@@ -2269,6 +2319,7 @@ def mcp_list(ctx: click.Context) -> None:
 def mcp_add(ctx: click.Context, name: str, command: str | None, url: str | None) -> None:
     """Connect to a new MCP server."""
     from missy.mcp.manager import McpManager
+
     _load_subsystems(ctx.obj["config_path"])
     mgr = McpManager()
     try:
@@ -2285,6 +2336,7 @@ def mcp_add(ctx: click.Context, name: str, command: str | None, url: str | None)
 def mcp_remove(ctx: click.Context, name: str) -> None:
     """Disconnect and remove an MCP server."""
     from missy.mcp.manager import McpManager
+
     _load_subsystems(ctx.obj["config_path"])
     mgr = McpManager()
     mgr.remove_server(name)
@@ -2313,7 +2365,9 @@ def devices_list(ctx: click.Context) -> None:
     reg.load()
     nodes = reg.all()
     if not nodes:
-        console.print("[dim]No edge nodes registered. Use a node's pair command to initiate pairing.[/]")
+        console.print(
+            "[dim]No edge nodes registered. Use a node's pair command to initiate pairing.[/]"
+        )
         return
     table = Table(title="Edge Nodes", show_lines=True)
     table.add_column("Node ID", style="bold")
@@ -2345,7 +2399,9 @@ def devices_list(ctx: click.Context) -> None:
 
 
 @devices.command("pair")
-@click.option("--node-id", default=None, help="Node ID to approve (omit to list pending and prompt).")
+@click.option(
+    "--node-id", default=None, help="Node ID to approve (omit to list pending and prompt)."
+)
 @click.pass_context
 def devices_pair(ctx: click.Context, node_id: str | None) -> None:
     """Approve a pending edge node pairing request.
@@ -2367,7 +2423,9 @@ def devices_pair(ctx: click.Context, node_id: str | None) -> None:
             return
         console.print("[bold]Pending nodes:[/]")
         for i, node in enumerate(pending):
-            console.print(f"  [{i}] {node.get('node_id', '')[:8]}  {node.get('name', '')}  {node.get('room', '')}")
+            console.print(
+                f"  [{i}] {node.get('node_id', '')[:8]}  {node.get('name', '')}  {node.get('room', '')}"
+            )
         idx = click.prompt("Select index to approve", type=int)
         if idx < 0 or idx >= len(pending):
             _print_error("Invalid selection.")

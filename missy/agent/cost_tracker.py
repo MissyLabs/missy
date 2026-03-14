@@ -30,9 +30,7 @@ class BudgetExceededError(Exception):
     def __init__(self, spent: float, limit: float) -> None:
         self.spent = spent
         self.limit = limit
-        super().__init__(
-            f"Budget exceeded: ${spent:.4f} spent against ${limit:.4f} limit."
-        )
+        super().__init__(f"Budget exceeded: ${spent:.4f} spent against ${limit:.4f} limit.")
 
 
 # ---------------------------------------------------------------------------
@@ -259,9 +257,7 @@ class CostTracker:
         """
         with self._lock:
             remaining = (
-                max(0.0, self.max_spend_usd - self._total_cost)
-                if self.max_spend_usd > 0
-                else None
+                max(0.0, self.max_spend_usd - self._total_cost) if self.max_spend_usd > 0 else None
             )
             return {
                 "total_cost_usd": round(self._total_cost, 6),

@@ -186,7 +186,9 @@ class TestVoiceChannelStop:
         real_loop = asyncio.new_event_loop()
         ch._loop = real_loop
 
-        bg = threading.Thread(target=lambda: real_loop.run_until_complete(asyncio.sleep(0.3)), daemon=True)
+        bg = threading.Thread(
+            target=lambda: real_loop.run_until_complete(asyncio.sleep(0.3)), daemon=True
+        )
         bg.start()
 
         with caplog.at_level(logging.WARNING, logger="missy.channels.voice.channel"):
@@ -217,7 +219,9 @@ class TestVoiceChannelStop:
         ch._thread = mock_thread
 
         # Patch Future.result to raise TimeoutError
-        with patch.object(concurrent.futures.Future, "result", side_effect=TimeoutError("timed out")):
+        with patch.object(
+            concurrent.futures.Future, "result", side_effect=TimeoutError("timed out")
+        ):
             bg = threading.Thread(
                 target=lambda: real_loop.run_until_complete(asyncio.sleep(0.3)), daemon=True
             )
@@ -230,7 +234,9 @@ class TestVoiceChannelStop:
             if not real_loop.is_closed():
                 real_loop.close()
 
-        assert any("timed out" in r.message or "stop timed out" in r.message for r in caplog.records)
+        assert any(
+            "timed out" in r.message or "stop timed out" in r.message for r in caplog.records
+        )
 
 
 # ---------------------------------------------------------------------------

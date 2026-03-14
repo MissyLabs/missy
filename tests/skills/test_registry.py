@@ -137,6 +137,7 @@ class TestSkillRegistrySingleton:
 
     def test_get_before_init_raises(self, monkeypatch):
         import missy.skills.registry as mod
+
         monkeypatch.setattr(mod, "_registry", None)
         with pytest.raises(RuntimeError, match="SkillRegistry has not been initialised"):
             get_skill_registry()

@@ -10,6 +10,7 @@ _clean_for_speech, _resample_pcm, and the sink. This module covers:
 - _start_listening / _attach_sink
 - _listen_watchdog edge cases
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -31,6 +32,7 @@ from missy.channels.discord.voice import (
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _run(coro):
     return asyncio.new_event_loop().run_until_complete(coro)
@@ -100,6 +102,7 @@ def _make_sink_cls():
 # __init__ — ffmpeg check
 # ---------------------------------------------------------------------------
 
+
 class TestDiscordVoiceManagerInit:
     def test_raises_on_missing_ffmpeg(self) -> None:
         with patch(
@@ -110,7 +113,9 @@ class TestDiscordVoiceManagerInit:
                 DiscordVoiceManager()
 
     def test_ok_with_ffmpeg_present(self) -> None:
-        with patch("missy.channels.discord.voice.ensure_ffmpeg_available", return_value="/usr/bin/ffmpeg"):
+        with patch(
+            "missy.channels.discord.voice.ensure_ffmpeg_available", return_value="/usr/bin/ffmpeg"
+        ):
             mgr = DiscordVoiceManager()
         assert mgr._client is None
         assert not mgr.is_ready
@@ -127,6 +132,7 @@ class TestDiscordVoiceManagerInit:
 # ---------------------------------------------------------------------------
 # is_ready / can_listen / can_speak properties
 # ---------------------------------------------------------------------------
+
 
 class TestProperties:
     def test_is_ready_false_before_start(self, manager) -> None:
@@ -158,6 +164,7 @@ class TestProperties:
 # ---------------------------------------------------------------------------
 # is_connected / is_listening / current_channel_name
 # ---------------------------------------------------------------------------
+
 
 class TestStatusHelpers:
     def test_is_connected_no_state(self, manager) -> None:
@@ -196,6 +203,7 @@ class TestStatusHelpers:
 # _get_guild / find_voice_channel edge cases
 # ---------------------------------------------------------------------------
 
+
 class TestGetGuild:
     def test_raises_when_client_is_none(self, manager) -> None:
         manager._client = None
@@ -224,6 +232,7 @@ class TestGetGuild:
 # ---------------------------------------------------------------------------
 # join — already connected paths
 # ---------------------------------------------------------------------------
+
 
 class TestJoinAlreadyConnected:
     def test_join_same_channel_starts_listening_if_not_already(self, manager) -> None:
@@ -268,6 +277,7 @@ class TestJoinAlreadyConnected:
 # leave — lifecycle
 # ---------------------------------------------------------------------------
 
+
 class TestLeaveExtended:
     def test_leave_cancels_watchdog_and_listen_task(self, manager) -> None:
         loop = asyncio.new_event_loop()
@@ -299,6 +309,7 @@ class TestLeaveExtended:
 # ---------------------------------------------------------------------------
 # stop
 # ---------------------------------------------------------------------------
+
 
 class TestStop:
     def test_stop_disconnects_all_guilds_and_shuts_down(self, manager) -> None:
@@ -350,6 +361,7 @@ class TestStop:
 # say
 # ---------------------------------------------------------------------------
 
+
 class TestSay:
     def test_say_raises_when_no_text(self, manager) -> None:
         with pytest.raises(DiscordVoiceError, match="No text"):
@@ -383,9 +395,11 @@ class TestSay:
 # _play_tts
 # ---------------------------------------------------------------------------
 
+
 class TestPlayTts:
     def _make_audio_buf(self, data=b"\x00" * 100):
         from missy.channels.voice.tts.base import AudioBuffer
+
         return AudioBuffer(data=data, sample_rate=22050, channels=1, format="wav")
 
     def test_play_tts_stops_playing_first(self, manager) -> None:
@@ -475,6 +489,7 @@ class TestPlayTts:
 # _handle_speech
 # ---------------------------------------------------------------------------
 
+
 class TestHandleSpeech:
     def _make_manager_for_speech(self):
         loop = asyncio.new_event_loop()
@@ -500,7 +515,9 @@ class TestHandleSpeech:
         # No guild state — should return without error.
         pcm = struct.pack("<200h", *([100] * 200))
         try:
-            loop.run_until_complete(mgr._handle_speech(guild_id=999, user_id=42, pcm_48k=pcm, sample_rate=48000))
+            loop.run_until_complete(
+                mgr._handle_speech(guild_id=999, user_id=42, pcm_48k=pcm, sample_rate=48000)
+            )
         finally:
             loop.close()
 
@@ -514,7 +531,9 @@ class TestHandleSpeech:
 
         pcm = struct.pack("<200h", *([100] * 200))
         try:
-            loop.run_until_complete(mgr._handle_speech(guild_id=999, user_id=42, pcm_48k=pcm, sample_rate=48000))
+            loop.run_until_complete(
+                mgr._handle_speech(guild_id=999, user_id=42, pcm_48k=pcm, sample_rate=48000)
+            )
         finally:
             loop.close()
 
@@ -529,12 +548,15 @@ class TestHandleSpeech:
 
         pcm = struct.pack("<200h", *([100] * 200))
         try:
-            loop.run_until_complete(mgr._handle_speech(guild_id=999, user_id=42, pcm_48k=pcm, sample_rate=48000))
+            loop.run_until_complete(
+                mgr._handle_speech(guild_id=999, user_id=42, pcm_48k=pcm, sample_rate=48000)
+            )
         finally:
             loop.close()
 
     def test_handle_speech_skips_short_audio(self) -> None:
         from missy.channels.voice.stt.base import TranscriptionResult
+
         mgr, loop = self._make_manager_for_speech()
         vc = MagicMock(is_playing=MagicMock(return_value=False))
         state = _GuildVoiceState(voice_client=vc)
@@ -542,16 +564,22 @@ class TestHandleSpeech:
         mgr._guild_states[999] = state
 
         stt = MagicMock()
-        stt.transcribe = AsyncMock(return_value=TranscriptionResult(
-            text="hi", confidence=1.0, processing_ms=5,
-        ))
+        stt.transcribe = AsyncMock(
+            return_value=TranscriptionResult(
+                text="hi",
+                confidence=1.0,
+                processing_ms=5,
+            )
+        )
         mgr._stt_engine = stt
         mgr._agent_callback = AsyncMock(return_value="")
 
         # Very short PCM — less than _MIN_SPEECH_S (0.3s) at 16kHz mono.
         short_pcm = struct.pack("<8h", *([100] * 8))  # just 8 stereo samples
         try:
-            loop.run_until_complete(mgr._handle_speech(guild_id=999, user_id=42, pcm_48k=short_pcm, sample_rate=48000))
+            loop.run_until_complete(
+                mgr._handle_speech(guild_id=999, user_id=42, pcm_48k=short_pcm, sample_rate=48000)
+            )
         finally:
             loop.close()
 
@@ -559,6 +587,7 @@ class TestHandleSpeech:
 
     def test_handle_speech_skips_empty_transcript(self) -> None:
         from missy.channels.voice.stt.base import TranscriptionResult
+
         mgr, loop = self._make_manager_for_speech()
         vc = MagicMock(is_playing=MagicMock(return_value=False))
         state = _GuildVoiceState(voice_client=vc)
@@ -566,15 +595,21 @@ class TestHandleSpeech:
         mgr._guild_states[999] = state
 
         stt = MagicMock()
-        stt.transcribe = AsyncMock(return_value=TranscriptionResult(
-            text="   ", confidence=0.0, processing_ms=5,
-        ))
+        stt.transcribe = AsyncMock(
+            return_value=TranscriptionResult(
+                text="   ",
+                confidence=0.0,
+                processing_ms=5,
+            )
+        )
         mgr._stt_engine = stt
         mgr._agent_callback = AsyncMock(return_value="")
 
         long_pcm = struct.pack("<5000h", *([100] * 5000))
         try:
-            loop.run_until_complete(mgr._handle_speech(guild_id=999, user_id=42, pcm_48k=long_pcm, sample_rate=48000))
+            loop.run_until_complete(
+                mgr._handle_speech(guild_id=999, user_id=42, pcm_48k=long_pcm, sample_rate=48000)
+            )
         finally:
             loop.close()
 
@@ -582,6 +617,7 @@ class TestHandleSpeech:
 
     def test_handle_speech_skips_when_no_agent_callback(self) -> None:
         from missy.channels.voice.stt.base import TranscriptionResult
+
         mgr, loop = self._make_manager_for_speech()
         vc = MagicMock(is_playing=MagicMock(return_value=False))
         state = _GuildVoiceState(voice_client=vc)
@@ -589,9 +625,13 @@ class TestHandleSpeech:
         mgr._guild_states[999] = state
 
         stt = MagicMock()
-        stt.transcribe = AsyncMock(return_value=TranscriptionResult(
-            text="hello there", confidence=0.9, processing_ms=50,
-        ))
+        stt.transcribe = AsyncMock(
+            return_value=TranscriptionResult(
+                text="hello there",
+                confidence=0.9,
+                processing_ms=50,
+            )
+        )
         mgr._stt_engine = stt
         mgr._agent_callback = None
 
@@ -600,12 +640,15 @@ class TestHandleSpeech:
 
         long_pcm = struct.pack("<5000h", *([1000] * 5000))
         try:
-            loop.run_until_complete(mgr._handle_speech(guild_id=999, user_id=42, pcm_48k=long_pcm, sample_rate=48000))
+            loop.run_until_complete(
+                mgr._handle_speech(guild_id=999, user_id=42, pcm_48k=long_pcm, sample_rate=48000)
+            )
         finally:
             loop.close()
 
     def test_handle_speech_skips_empty_agent_response(self) -> None:
         from missy.channels.voice.stt.base import TranscriptionResult
+
         mgr, loop = self._make_manager_for_speech()
         vc = MagicMock(is_playing=MagicMock(return_value=False))
         state = _GuildVoiceState(voice_client=vc)
@@ -613,9 +656,13 @@ class TestHandleSpeech:
         mgr._guild_states[999] = state
 
         stt = MagicMock()
-        stt.transcribe = AsyncMock(return_value=TranscriptionResult(
-            text="hello", confidence=0.9, processing_ms=50,
-        ))
+        stt.transcribe = AsyncMock(
+            return_value=TranscriptionResult(
+                text="hello",
+                confidence=0.9,
+                processing_ms=50,
+            )
+        )
         mgr._stt_engine = stt
         mgr._agent_callback = AsyncMock(return_value="   ")  # whitespace only
         mgr._tts_engine = None
@@ -625,7 +672,9 @@ class TestHandleSpeech:
 
         long_pcm = struct.pack("<5000h", *([1000] * 5000))
         try:
-            loop.run_until_complete(mgr._handle_speech(guild_id=999, user_id=42, pcm_48k=long_pcm, sample_rate=48000))
+            loop.run_until_complete(
+                mgr._handle_speech(guild_id=999, user_id=42, pcm_48k=long_pcm, sample_rate=48000)
+            )
         finally:
             loop.close()
 
@@ -633,6 +682,7 @@ class TestHandleSpeech:
 # ---------------------------------------------------------------------------
 # _SpeechCollectorSink — on_silence and wants_opus
 # ---------------------------------------------------------------------------
+
 
 class TestSpeechCollectorSinkOnSilence:
     def _make_sink(self, callback=None, bot_user_id=0):
@@ -741,6 +791,7 @@ class TestSpeechCollectorSinkOnSilence:
 # _resample_pcm — edge cases
 # ---------------------------------------------------------------------------
 
+
 class TestResamplePcmEdgeCases:
     def test_single_sample_stereo(self) -> None:
         # 2 int16 values = 1 stereo frame.
@@ -790,9 +841,11 @@ class TestResamplePcmEdgeCases:
 # _clean_for_speech — uncovered truncation branch
 # ---------------------------------------------------------------------------
 
+
 class TestCleanForSpeech:
     def test_truncates_at_sentence_boundary_when_period_after_200(self) -> None:
         from missy.channels.discord.voice import _clean_for_speech
+
         # Build a string > 600 chars with a period after position 200.
         prefix = "A" * 250 + "."
         suffix = "B" * 400
@@ -804,6 +857,7 @@ class TestCleanForSpeech:
 
     def test_truncates_with_ellipsis_when_no_period_after_200(self) -> None:
         from missy.channels.discord.voice import _clean_for_speech
+
         # Build a string > 600 chars with no period at all.
         text = "X" * 700
         result = _clean_for_speech(text)
@@ -814,6 +868,7 @@ class TestCleanForSpeech:
 # start() — lifecycle import paths
 # ---------------------------------------------------------------------------
 
+
 class TestStart:
     def test_start_raises_when_discord_not_installed(self) -> None:
         loop = asyncio.new_event_loop()
@@ -823,6 +878,7 @@ class TestStart:
                 mgr = DiscordVoiceManager()
 
             import builtins
+
             real_import = builtins.__import__
 
             def fake_import(name, *args, **kwargs):
@@ -842,6 +898,7 @@ class TestStart:
         asyncio.set_event_loop(loop)
         try:
             import builtins
+
             real_import = builtins.__import__
 
             # discord imports fine, but discord.ext.voice_recv does not.
@@ -892,9 +949,7 @@ class TestStart:
             # event decorator: register on_ready and fire it shortly after.
             def fake_event(func):
                 loop.call_soon(
-                    lambda: loop.call_soon(
-                        lambda: asyncio.ensure_future(func(), loop=loop)
-                    )
+                    lambda: loop.call_soon(lambda: asyncio.ensure_future(func(), loop=loop))
                 )
                 return func
 
@@ -903,6 +958,7 @@ class TestStart:
 
             async def run():
                 import sys as _sys
+
                 _sys.modules["discord"] = mock_discord
                 _sys.modules["discord.ext.voice_recv"] = mock_voice_recv
                 try:
@@ -961,11 +1017,14 @@ class TestStart:
                         except (asyncio.CancelledError, Exception):
                             pass
 
-            with patch.dict(_sys.modules, {
-                "discord": mock_discord,
-                "discord.ext": MagicMock(),
-                "discord.ext.voice_recv": mock_voice_recv,
-            }):
+            with patch.dict(
+                _sys.modules,
+                {
+                    "discord": mock_discord,
+                    "discord.ext": MagicMock(),
+                    "discord.ext.voice_recv": mock_voice_recv,
+                },
+            ):
                 with pytest.raises(DiscordVoiceError, match="30 seconds"):
                     loop.run_until_complete(run())
         finally:
@@ -976,6 +1035,7 @@ class TestStart:
 # ---------------------------------------------------------------------------
 # stop() — exception handling branches
 # ---------------------------------------------------------------------------
+
 
 class TestStopExceptions:
     def test_stop_handles_tts_unload_exception(self) -> None:
@@ -1038,6 +1098,7 @@ class TestStopExceptions:
 # leave() — disconnect exception branch (lines 398-399)
 # ---------------------------------------------------------------------------
 
+
 class TestLeaveDisconnectException:
     def test_leave_logs_disconnect_exception(self) -> None:
         loop = asyncio.new_event_loop()
@@ -1071,9 +1132,11 @@ class TestLeaveDisconnectException:
 # _play_tts — after-callback error logging and file-not-found cleanup
 # ---------------------------------------------------------------------------
 
+
 class TestPlayTtsExtraEdgeCases:
     def _make_audio_buf(self, data=b"\x00" * 100):
         from missy.channels.voice.tts.base import AudioBuffer
+
         return AudioBuffer(data=data, sample_rate=22050, channels=1, format="wav")
 
     def test_play_tts_logs_after_error(self, manager) -> None:
@@ -1121,6 +1184,7 @@ class TestPlayTtsExtraEdgeCases:
 # ---------------------------------------------------------------------------
 # _listen_watchdog — state/connection/router branches
 # ---------------------------------------------------------------------------
+
 
 class TestListenWatchdog:
     def _make_manager(self):
@@ -1245,7 +1309,9 @@ class TestListenWatchdog:
             mock_sink_cls = MagicMock()
             mock_sink_cls.return_value = MagicMock()
             with patch("asyncio.sleep", side_effect=fast_sleep):
-                with patch("missy.channels.discord.voice._make_sink_class", return_value=mock_sink_cls):
+                with patch(
+                    "missy.channels.discord.voice._make_sink_class", return_value=mock_sink_cls
+                ):
                     loop.run_until_complete(mgr._listen_watchdog(999))
 
             vc.stop_listening.assert_called()
@@ -1286,7 +1352,9 @@ class TestListenWatchdog:
             mock_sink_cls = MagicMock()
             mock_sink_cls.return_value = MagicMock()
             with patch("asyncio.sleep", side_effect=fast_sleep):
-                with patch("missy.channels.discord.voice._make_sink_class", return_value=mock_sink_cls):
+                with patch(
+                    "missy.channels.discord.voice._make_sink_class", return_value=mock_sink_cls
+                ):
                     loop.run_until_complete(mgr._listen_watchdog(999))
         finally:
             loop.close()
@@ -1325,7 +1393,9 @@ class TestListenWatchdog:
             mock_sink_cls = MagicMock()
             mock_sink_cls.return_value = MagicMock()
             with patch("asyncio.sleep", side_effect=fast_sleep):
-                with patch("missy.channels.discord.voice._make_sink_class", return_value=mock_sink_cls):
+                with patch(
+                    "missy.channels.discord.voice._make_sink_class", return_value=mock_sink_cls
+                ):
                     loop.run_until_complete(mgr._listen_watchdog(999))
             # No assertion needed — just verifying it doesn't raise.
         finally:
@@ -1336,6 +1406,7 @@ class TestListenWatchdog:
 # ---------------------------------------------------------------------------
 # _handle_speech — success path with TTS, member not found, TTS error
 # ---------------------------------------------------------------------------
+
 
 class TestHandleSpeechFullPaths:
     def _make_manager_for_speech(self, loop=None):
@@ -1356,6 +1427,7 @@ class TestHandleSpeechFullPaths:
 
     def test_handle_speech_full_success_with_tts(self) -> None:
         from missy.channels.voice.stt.base import TranscriptionResult
+
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
@@ -1366,9 +1438,13 @@ class TestHandleSpeechFullPaths:
             mgr._guild_states[999] = state
 
             stt = MagicMock()
-            stt.transcribe = AsyncMock(return_value=TranscriptionResult(
-                text="what time is it", confidence=0.92, processing_ms=120,
-            ))
+            stt.transcribe = AsyncMock(
+                return_value=TranscriptionResult(
+                    text="what time is it",
+                    confidence=0.92,
+                    processing_ms=120,
+                )
+            )
             mgr._stt_engine = stt
 
             tts_engine = MagicMock()
@@ -1383,7 +1459,9 @@ class TestHandleSpeechFullPaths:
 
             # Need >=20000 stereo samples to produce >=0.3s at 16kHz after resample.
             long_pcm = struct.pack("<20000h", *([1000] * 20000))
-            loop.run_until_complete(mgr._handle_speech(guild_id=999, user_id=42, pcm_48k=long_pcm, sample_rate=48000))
+            loop.run_until_complete(
+                mgr._handle_speech(guild_id=999, user_id=42, pcm_48k=long_pcm, sample_rate=48000)
+            )
 
             agent_cb.assert_awaited_once()
             mgr._play_tts.assert_awaited_once_with(state, "It is three o'clock.")
@@ -1393,6 +1471,7 @@ class TestHandleSpeechFullPaths:
 
     def test_handle_speech_member_not_found_uses_user_id_string(self) -> None:
         from missy.channels.voice.stt.base import TranscriptionResult
+
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
@@ -1403,9 +1482,13 @@ class TestHandleSpeechFullPaths:
             mgr._guild_states[999] = state
 
             stt = MagicMock()
-            stt.transcribe = AsyncMock(return_value=TranscriptionResult(
-                text="hello missy", confidence=0.85, processing_ms=90,
-            ))
+            stt.transcribe = AsyncMock(
+                return_value=TranscriptionResult(
+                    text="hello missy",
+                    confidence=0.85,
+                    processing_ms=90,
+                )
+            )
             mgr._stt_engine = stt
             mgr._tts_engine = None
 
@@ -1417,7 +1500,9 @@ class TestHandleSpeechFullPaths:
             mgr._client.get_guild = MagicMock(return_value=guild)
 
             long_pcm = struct.pack("<20000h", *([500] * 20000))
-            loop.run_until_complete(mgr._handle_speech(guild_id=999, user_id=99, pcm_48k=long_pcm, sample_rate=48000))
+            loop.run_until_complete(
+                mgr._handle_speech(guild_id=999, user_id=99, pcm_48k=long_pcm, sample_rate=48000)
+            )
 
             agent_cb.assert_awaited_once()
             prompt_arg = agent_cb.call_args[0][0]
@@ -1428,6 +1513,7 @@ class TestHandleSpeechFullPaths:
 
     def test_handle_speech_tts_playback_exception_is_caught(self) -> None:
         from missy.channels.voice.stt.base import TranscriptionResult
+
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
@@ -1438,9 +1524,13 @@ class TestHandleSpeechFullPaths:
             mgr._guild_states[999] = state
 
             stt = MagicMock()
-            stt.transcribe = AsyncMock(return_value=TranscriptionResult(
-                text="tell me a joke", confidence=0.9, processing_ms=80,
-            ))
+            stt.transcribe = AsyncMock(
+                return_value=TranscriptionResult(
+                    text="tell me a joke",
+                    confidence=0.9,
+                    processing_ms=80,
+                )
+            )
             mgr._stt_engine = stt
             mgr._tts_engine = MagicMock()  # can_speak = True
             mgr._play_tts = AsyncMock(side_effect=RuntimeError("TTS exploded"))
@@ -1451,7 +1541,9 @@ class TestHandleSpeechFullPaths:
 
             long_pcm = struct.pack("<20000h", *([200] * 20000))
             # Should not raise even though _play_tts raises.
-            loop.run_until_complete(mgr._handle_speech(guild_id=999, user_id=5, pcm_48k=long_pcm, sample_rate=48000))
+            loop.run_until_complete(
+                mgr._handle_speech(guild_id=999, user_id=5, pcm_48k=long_pcm, sample_rate=48000)
+            )
         finally:
             loop.close()
             asyncio.set_event_loop(None)
@@ -1475,7 +1567,9 @@ class TestHandleSpeechFullPaths:
 
             long_pcm = struct.pack("<20000h", *([300] * 20000))
             # Should not raise.
-            loop.run_until_complete(mgr._handle_speech(guild_id=999, user_id=1, pcm_48k=long_pcm, sample_rate=48000))
+            loop.run_until_complete(
+                mgr._handle_speech(guild_id=999, user_id=1, pcm_48k=long_pcm, sample_rate=48000)
+            )
         finally:
             loop.close()
             asyncio.set_event_loop(None)
@@ -1483,6 +1577,7 @@ class TestHandleSpeechFullPaths:
     def test_handle_speech_response_cleaned_to_empty_skips_tts(self) -> None:
         """If _clean_for_speech returns empty string, TTS is skipped."""
         from missy.channels.voice.stt.base import TranscriptionResult
+
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
@@ -1493,9 +1588,13 @@ class TestHandleSpeechFullPaths:
             mgr._guild_states[999] = state
 
             stt = MagicMock()
-            stt.transcribe = AsyncMock(return_value=TranscriptionResult(
-                text="clean me", confidence=0.9, processing_ms=10,
-            ))
+            stt.transcribe = AsyncMock(
+                return_value=TranscriptionResult(
+                    text="clean me",
+                    confidence=0.9,
+                    processing_ms=10,
+                )
+            )
             mgr._stt_engine = stt
             mgr._tts_engine = MagicMock()
             mgr._play_tts = AsyncMock()
@@ -1507,7 +1606,9 @@ class TestHandleSpeechFullPaths:
             mgr._client.get_guild = MagicMock(return_value=guild)
 
             long_pcm = struct.pack("<20000h", *([400] * 20000))
-            loop.run_until_complete(mgr._handle_speech(guild_id=999, user_id=1, pcm_48k=long_pcm, sample_rate=48000))
+            loop.run_until_complete(
+                mgr._handle_speech(guild_id=999, user_id=1, pcm_48k=long_pcm, sample_rate=48000)
+            )
 
             # _play_tts should not be called since cleaned response is empty.
             # (Depending on what clean returns — if it happens to return empty, good.)

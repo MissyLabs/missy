@@ -398,6 +398,7 @@ class TestDeviceRegistryPurgeAudioLogs:
         # Make old_file appear 10 days old.
         old_mtime = time.time() - (10 * 86400)
         import os
+
         os.utime(old_file, (old_mtime, old_mtime))
 
         node = EdgeNode(
@@ -806,9 +807,7 @@ class TestPresenceStoreUpdate:
         with pytest.raises(KeyError):
             store.update("ghost", occupancy=True)
 
-    def test_update_creates_entry_for_node_added_after_init(
-        self, registry: DeviceRegistry
-    ):
+    def test_update_creates_entry_for_node_added_after_init(self, registry: DeviceRegistry):
         store = PresenceStore(registry)
         # Add a node AFTER the store was seeded.
         registry.add_node(_make_node(node_id="late"))
@@ -950,11 +949,13 @@ class TestSTTEngineAbstractContract:
 
     def test_concrete_subclass_must_implement_all_methods(self):
         """A subclass that omits any abstract method still can't be instantiated."""
+
         class IncompleteSTT(STTEngine):
             name = "incomplete"
 
             def load(self): ...
             def unload(self): ...
+
             # Missing is_loaded and transcribe.
 
         with pytest.raises(TypeError):
@@ -964,9 +965,15 @@ class TestSTTEngineAbstractContract:
         class DummySTT(STTEngine):
             name = "dummy"
 
-            def load(self): pass
-            def unload(self): pass
-            def is_loaded(self): return True
+            def load(self):
+                pass
+
+            def unload(self):
+                pass
+
+            def is_loaded(self):
+                return True
+
             async def transcribe(self, audio, sample_rate=16000, channels=1):
                 return TranscriptionResult(text="ok", confidence=1.0, processing_ms=1)
 
@@ -979,9 +986,15 @@ class TestSTTEngineAbstractContract:
         class DummySTT(STTEngine):
             name = "dummy"
 
-            def load(self): pass
-            def unload(self): pass
-            def is_loaded(self): return True
+            def load(self):
+                pass
+
+            def unload(self):
+                pass
+
+            def is_loaded(self):
+                return True
+
             async def transcribe(self, audio, sample_rate=16000, channels=1):
                 return TranscriptionResult(text="hello", confidence=0.9, processing_ms=10)
 
@@ -1030,6 +1043,7 @@ class TestAudioBuffer:
     def test_duration_ms_not_in_init(self):
         """duration_ms is derived, not accepted as a constructor argument."""
         import dataclasses
+
         init_fields = {f.name for f in dataclasses.fields(AudioBuffer) if f.init}
         assert "duration_ms" not in init_fields
 
@@ -1050,6 +1064,7 @@ class TestTTSEngineAbstractContract:
 
             def load(self): ...
             def unload(self): ...
+
             # Missing is_loaded, list_voices, synthesize.
 
         with pytest.raises(TypeError):
@@ -1059,10 +1074,18 @@ class TestTTSEngineAbstractContract:
         class DummyTTS(TTSEngine):
             name = "dummy"
 
-            def load(self): pass
-            def unload(self): pass
-            def is_loaded(self): return True
-            def list_voices(self): return ["en_US-lessac-medium"]
+            def load(self):
+                pass
+
+            def unload(self):
+                pass
+
+            def is_loaded(self):
+                return True
+
+            def list_voices(self):
+                return ["en_US-lessac-medium"]
+
             async def synthesize(self, text, voice=None):
                 data = bytes(3200)  # 100 ms at 16 kHz mono.
                 return AudioBuffer(data=data, sample_rate=16000, channels=1, format="pcm_s16le")
@@ -1077,12 +1100,22 @@ class TestTTSEngineAbstractContract:
         class DummyTTS(TTSEngine):
             name = "dummy"
 
-            def load(self): pass
-            def unload(self): pass
-            def is_loaded(self): return True
-            def list_voices(self): return []
+            def load(self):
+                pass
+
+            def unload(self):
+                pass
+
+            def is_loaded(self):
+                return True
+
+            def list_voices(self):
+                return []
+
             async def synthesize(self, text, voice=None):
-                return AudioBuffer(data=bytes(3200), sample_rate=16000, channels=1, format="pcm_s16le")
+                return AudioBuffer(
+                    data=bytes(3200), sample_rate=16000, channels=1, format="pcm_s16le"
+                )
 
         engine = DummyTTS()
         buf = asyncio.run(engine.synthesize("hi"))
@@ -1092,10 +1125,18 @@ class TestTTSEngineAbstractContract:
         class DummyTTS(TTSEngine):
             name = "dummy"
 
-            def load(self): pass
-            def unload(self): pass
-            def is_loaded(self): return True
-            def list_voices(self): return ["voice-a", "voice-b"]
+            def load(self):
+                pass
+
+            def unload(self):
+                pass
+
+            def is_loaded(self):
+                return True
+
+            def list_voices(self):
+                return ["voice-a", "voice-b"]
+
             async def synthesize(self, text, voice=None):
                 return AudioBuffer(data=b"", sample_rate=16000, channels=1, format="wav")
 
@@ -1120,6 +1161,7 @@ class TestVoicePackagePublicAPI:
             VoiceChannel,
             VoiceServer,
         )
+
         # Simply verifying imports succeed and are the expected types.
         assert DeviceRegistry is not None
         assert EdgeNode is not None

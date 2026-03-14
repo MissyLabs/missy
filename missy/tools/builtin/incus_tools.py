@@ -7,6 +7,7 @@ profiles, and snapshots via the ``incus`` CLI.  All commands use
 Requires ``shell=True`` permission — the policy engine must whitelist
 the ``incus`` command.
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -57,12 +58,14 @@ def _run_incus(
         return ToolResult(success=success, output=output, error=error)
     except subprocess.TimeoutExpired:
         return ToolResult(
-            success=False, output=None,
+            success=False,
+            output=None,
             error=f"Command timed out after {timeout}s",
         )
     except FileNotFoundError:
         return ToolResult(
-            success=False, output=None,
+            success=False,
+            output=None,
             error="incus binary not found — is Incus installed?",
         )
     except Exception as exc:
@@ -162,7 +165,7 @@ class IncusLaunchTool(BaseTool):
             args.append("--ephemeral")
         if project:
             args.extend(["--project", project])
-        for p in (profiles or []):
+        for p in profiles or []:
             args.extend(["--profile", p])
         for k, v in (config or {}).items():
             args.extend(["--config", f"{k}={v}"])
@@ -250,13 +253,15 @@ class IncusInstanceActionTool(BaseTool):
         valid = {"start", "stop", "restart", "pause", "delete", "rename"}
         if action not in valid:
             return ToolResult(
-                success=False, output=None,
+                success=False,
+                output=None,
                 error=f"Invalid action '{action}'. Must be one of: {', '.join(sorted(valid))}",
             )
         if action == "rename":
             if not new_name:
                 return ToolResult(
-                    success=False, output=None,
+                    success=False,
+                    output=None,
                     error="new_name is required for rename action",
                 )
             args = ["rename", instance, new_name]
@@ -486,7 +491,8 @@ class IncusFileTool(BaseTool):
         action = action.lower()
         if action not in {"push", "pull"}:
             return ToolResult(
-                success=False, output=None,
+                success=False,
+                output=None,
                 error="action must be 'push' or 'pull'",
             )
         instance_ref = f"{instance}{instance_path}"
@@ -576,7 +582,8 @@ class IncusSnapshotTool(BaseTool):
         valid = {"create", "restore", "delete", "list"}
         if action not in valid:
             return ToolResult(
-                success=False, output=None,
+                success=False,
+                output=None,
                 error=f"Invalid action '{action}'. Must be one of: {', '.join(sorted(valid))}",
             )
         if action == "list":
@@ -586,7 +593,8 @@ class IncusSnapshotTool(BaseTool):
             return _run_incus(args, timeout=timeout)
         if action in {"create", "delete"} and not snapshot_name:
             return ToolResult(
-                success=False, output=None,
+                success=False,
+                output=None,
                 error=f"snapshot_name is required for {action}",
             )
         if action == "create":
@@ -672,7 +680,8 @@ class IncusConfigTool(BaseTool):
         valid = {"show", "get", "set", "unset"}
         if action not in valid:
             return ToolResult(
-                success=False, output=None,
+                success=False,
+                output=None,
                 error=f"Invalid action '{action}'. Must be one of: {', '.join(sorted(valid))}",
             )
         if action == "show":
@@ -680,20 +689,25 @@ class IncusConfigTool(BaseTool):
         elif action == "get":
             if not key:
                 return ToolResult(
-                    success=False, output=None, error="key is required for get",
+                    success=False,
+                    output=None,
+                    error="key is required for get",
                 )
             args = ["config", "get", instance, key]
         elif action == "set":
             if not key or value is None:
                 return ToolResult(
-                    success=False, output=None,
+                    success=False,
+                    output=None,
                     error="key and value are required for set",
                 )
             args = ["config", "set", instance, key, value]
         elif action == "unset":
             if not key:
                 return ToolResult(
-                    success=False, output=None, error="key is required for unset",
+                    success=False,
+                    output=None,
+                    error="key is required for unset",
                 )
             args = ["config", "unset", instance, key]
         else:
@@ -768,7 +782,8 @@ class IncusImageTool(BaseTool):
         valid = {"list", "info", "delete", "copy", "alias"}
         if action not in valid:
             return ToolResult(
-                success=False, output=None,
+                success=False,
+                output=None,
                 error=f"Invalid action '{action}'. Must be one of: {', '.join(sorted(valid))}",
             )
         if action == "list":
@@ -777,19 +792,25 @@ class IncusImageTool(BaseTool):
         elif action == "info":
             if not image:
                 return ToolResult(
-                    success=False, output=None, error="image is required for info",
+                    success=False,
+                    output=None,
+                    error="image is required for info",
                 )
             args = ["image", "info", image]
         elif action == "delete":
             if not image:
                 return ToolResult(
-                    success=False, output=None, error="image is required for delete",
+                    success=False,
+                    output=None,
+                    error="image is required for delete",
                 )
             args = ["image", "delete", image]
         elif action == "copy":
             if not image:
                 return ToolResult(
-                    success=False, output=None, error="image is required for copy",
+                    success=False,
+                    output=None,
+                    error="image is required for copy",
                 )
             dest = "local:"
             args = ["image", "copy", image, dest]
@@ -798,7 +819,8 @@ class IncusImageTool(BaseTool):
         elif action == "alias":
             if not image or not alias:
                 return ToolResult(
-                    success=False, output=None,
+                    success=False,
+                    output=None,
                     error="image and alias are required for alias action",
                 )
             args = ["image", "alias", "create", alias, image]
@@ -873,7 +895,8 @@ class IncusNetworkTool(BaseTool):
         valid = {"list", "create", "delete", "show", "set", "attach", "detach"}
         if action not in valid:
             return ToolResult(
-                success=False, output=None,
+                success=False,
+                output=None,
                 error=f"Invalid action '{action}'. Must be one of: {', '.join(sorted(valid))}",
             )
         if action == "list":
@@ -881,7 +904,9 @@ class IncusNetworkTool(BaseTool):
         elif action == "create":
             if not name:
                 return ToolResult(
-                    success=False, output=None, error="name is required for create",
+                    success=False,
+                    output=None,
+                    error="name is required for create",
                 )
             args = ["network", "create", name]
             if network_type:
@@ -891,19 +916,24 @@ class IncusNetworkTool(BaseTool):
         elif action == "delete":
             if not name:
                 return ToolResult(
-                    success=False, output=None, error="name is required for delete",
+                    success=False,
+                    output=None,
+                    error="name is required for delete",
                 )
             args = ["network", "delete", name]
         elif action == "show":
             if not name:
                 return ToolResult(
-                    success=False, output=None, error="name is required for show",
+                    success=False,
+                    output=None,
+                    error="name is required for show",
                 )
             args = ["network", "show", name]
         elif action == "set":
             if not name or not config:
                 return ToolResult(
-                    success=False, output=None,
+                    success=False,
+                    output=None,
                     error="name and config are required for set",
                 )
             for k, v in config.items():
@@ -914,26 +944,30 @@ class IncusNetworkTool(BaseTool):
         elif action == "attach":
             if not name:
                 return ToolResult(
-                    success=False, output=None,
+                    success=False,
+                    output=None,
                     error="name is required for attach (format: 'network_name instance_name')",
                 )
             parts = name.split()
             if len(parts) < 2:
                 return ToolResult(
-                    success=False, output=None,
+                    success=False,
+                    output=None,
                     error="For attach, name should be 'network_name instance_name'.",
                 )
             args = ["network", "attach", parts[0], parts[1]]
         elif action == "detach":
             if not name:
                 return ToolResult(
-                    success=False, output=None,
+                    success=False,
+                    output=None,
                     error="name is required for detach (format: 'network_name instance_name')",
                 )
             parts = name.split()
             if len(parts) < 2:
                 return ToolResult(
-                    success=False, output=None,
+                    success=False,
+                    output=None,
                     error="For detach, name should be 'network_name instance_name'.",
                 )
             args = ["network", "detach", parts[0], parts[1]]
@@ -1010,13 +1044,20 @@ class IncusStorageTool(BaseTool):
     ) -> ToolResult:
         action = action.lower()
         valid = {
-            "list", "create", "delete", "show",
-            "volume-list", "volume-create", "volume-delete",
-            "volume-attach", "volume-detach",
+            "list",
+            "create",
+            "delete",
+            "show",
+            "volume-list",
+            "volume-create",
+            "volume-delete",
+            "volume-attach",
+            "volume-detach",
         }
         if action not in valid:
             return ToolResult(
-                success=False, output=None,
+                success=False,
+                output=None,
                 error=f"Invalid action '{action}'. Must be one of: {', '.join(sorted(valid))}",
             )
 
@@ -1025,7 +1066,8 @@ class IncusStorageTool(BaseTool):
         elif action == "create":
             if not pool or not driver:
                 return ToolResult(
-                    success=False, output=None,
+                    success=False,
+                    output=None,
                     error="pool and driver are required for create",
                 )
             args = ["storage", "create", pool, driver]
@@ -1036,26 +1078,32 @@ class IncusStorageTool(BaseTool):
         elif action == "delete":
             if not pool:
                 return ToolResult(
-                    success=False, output=None, error="pool is required for delete",
+                    success=False,
+                    output=None,
+                    error="pool is required for delete",
                 )
             args = ["storage", "delete", pool]
         elif action == "show":
             if not pool:
                 return ToolResult(
-                    success=False, output=None, error="pool is required for show",
+                    success=False,
+                    output=None,
+                    error="pool is required for show",
                 )
             args = ["storage", "show", pool]
         elif action == "volume-list":
             if not pool:
                 return ToolResult(
-                    success=False, output=None,
+                    success=False,
+                    output=None,
                     error="pool is required for volume-list",
                 )
             args = ["storage", "volume", "list", pool, "--format", "json"]
         elif action == "volume-create":
             if not pool or not volume:
                 return ToolResult(
-                    success=False, output=None,
+                    success=False,
+                    output=None,
                     error="pool and volume are required for volume-create",
                 )
             args = ["storage", "volume", "create", pool, volume]
@@ -1066,21 +1114,24 @@ class IncusStorageTool(BaseTool):
         elif action == "volume-delete":
             if not pool or not volume:
                 return ToolResult(
-                    success=False, output=None,
+                    success=False,
+                    output=None,
                     error="pool and volume are required for volume-delete",
                 )
             args = ["storage", "volume", "delete", pool, volume]
         elif action == "volume-attach":
             if not pool or not volume or not instance:
                 return ToolResult(
-                    success=False, output=None,
+                    success=False,
+                    output=None,
                     error="pool, volume, and instance are required for volume-attach",
                 )
             args = ["storage", "volume", "attach", pool, volume, instance]
         elif action == "volume-detach":
             if not pool or not volume or not instance:
                 return ToolResult(
-                    success=False, output=None,
+                    success=False,
+                    output=None,
                     error="pool, volume, and instance are required for volume-detach",
                 )
             args = ["storage", "volume", "detach", pool, volume, instance]
@@ -1100,9 +1151,15 @@ class IncusStorageTool(BaseTool):
                     "action": {
                         "type": "string",
                         "enum": [
-                            "list", "create", "delete", "show",
-                            "volume-list", "volume-create", "volume-delete",
-                            "volume-attach", "volume-detach",
+                            "list",
+                            "create",
+                            "delete",
+                            "show",
+                            "volume-list",
+                            "volume-create",
+                            "volume-delete",
+                            "volume-attach",
+                            "volume-detach",
                         ],
                         "description": "Storage action.",
                     },
@@ -1169,7 +1226,8 @@ class IncusProfileTool(BaseTool):
         valid = {"list", "show", "create", "delete", "set", "edit"}
         if action not in valid:
             return ToolResult(
-                success=False, output=None,
+                success=False,
+                output=None,
                 error=f"Invalid action '{action}'. Must be one of: {', '.join(sorted(valid))}",
             )
         if action == "list":
@@ -1177,25 +1235,32 @@ class IncusProfileTool(BaseTool):
         elif action == "show":
             if not name:
                 return ToolResult(
-                    success=False, output=None, error="name is required for show",
+                    success=False,
+                    output=None,
+                    error="name is required for show",
                 )
             args = ["profile", "show", name]
         elif action == "create":
             if not name:
                 return ToolResult(
-                    success=False, output=None, error="name is required for create",
+                    success=False,
+                    output=None,
+                    error="name is required for create",
                 )
             args = ["profile", "create", name]
         elif action == "delete":
             if not name:
                 return ToolResult(
-                    success=False, output=None, error="name is required for delete",
+                    success=False,
+                    output=None,
+                    error="name is required for delete",
                 )
             args = ["profile", "delete", name]
         elif action == "set":
             if not name or not config:
                 return ToolResult(
-                    success=False, output=None,
+                    success=False,
+                    output=None,
                     error="name and config are required for set",
                 )
             for k, v in config.items():
@@ -1206,7 +1271,8 @@ class IncusProfileTool(BaseTool):
         elif action == "edit":
             if not name or not yaml_content:
                 return ToolResult(
-                    success=False, output=None,
+                    success=False,
+                    output=None,
                     error="name and yaml_content are required for edit",
                 )
             args = ["profile", "edit", name]
@@ -1280,7 +1346,8 @@ class IncusProjectTool(BaseTool):
         valid = {"list", "create", "delete", "show", "switch"}
         if action not in valid:
             return ToolResult(
-                success=False, output=None,
+                success=False,
+                output=None,
                 error=f"Invalid action '{action}'. Must be one of: {', '.join(sorted(valid))}",
             )
         if action == "list":
@@ -1288,7 +1355,9 @@ class IncusProjectTool(BaseTool):
         elif action == "create":
             if not name:
                 return ToolResult(
-                    success=False, output=None, error="name is required for create",
+                    success=False,
+                    output=None,
+                    error="name is required for create",
                 )
             args = ["project", "create", name]
             for k, v in (config or {}).items():
@@ -1296,19 +1365,25 @@ class IncusProjectTool(BaseTool):
         elif action == "delete":
             if not name:
                 return ToolResult(
-                    success=False, output=None, error="name is required for delete",
+                    success=False,
+                    output=None,
+                    error="name is required for delete",
                 )
             args = ["project", "delete", name]
         elif action == "show":
             if not name:
                 return ToolResult(
-                    success=False, output=None, error="name is required for show",
+                    success=False,
+                    output=None,
+                    error="name is required for show",
                 )
             args = ["project", "show", name]
         elif action == "switch":
             if not name:
                 return ToolResult(
-                    success=False, output=None, error="name is required for switch",
+                    success=False,
+                    output=None,
+                    error="name is required for switch",
                 )
             args = ["project", "switch", name]
         else:
@@ -1370,7 +1445,8 @@ class IncusDeviceTool(BaseTool):
         valid = {"list", "add", "remove", "show"}
         if action not in valid:
             return ToolResult(
-                success=False, output=None,
+                success=False,
+                output=None,
                 error=f"Invalid action '{action}'. Must be one of: {', '.join(sorted(valid))}",
             )
         if action == "list":
@@ -1378,14 +1454,16 @@ class IncusDeviceTool(BaseTool):
         elif action == "show":
             if not device_name:
                 return ToolResult(
-                    success=False, output=None,
+                    success=False,
+                    output=None,
                     error="device_name is required for show",
                 )
             args = ["config", "device", "show", instance]
         elif action == "add":
             if not device_name or not device_type:
                 return ToolResult(
-                    success=False, output=None,
+                    success=False,
+                    output=None,
                     error="device_name and device_type are required for add",
                 )
             args = ["config", "device", "add", instance, device_name, device_type]
@@ -1394,7 +1472,8 @@ class IncusDeviceTool(BaseTool):
         elif action == "remove":
             if not device_name:
                 return ToolResult(
-                    success=False, output=None,
+                    success=False,
+                    output=None,
                     error="device_name is required for remove",
                 )
             args = ["config", "device", "remove", instance, device_name]
@@ -1427,9 +1506,17 @@ class IncusDeviceTool(BaseTool):
                     "device_type": {
                         "type": "string",
                         "enum": [
-                            "disk", "gpu", "infiniband", "nic", "pci",
-                            "proxy", "tpm", "unix-block", "unix-char",
-                            "unix-hotplug", "usb",
+                            "disk",
+                            "gpu",
+                            "infiniband",
+                            "nic",
+                            "pci",
+                            "proxy",
+                            "tpm",
+                            "unix-block",
+                            "unix-char",
+                            "unix-hotplug",
+                            "usb",
                         ],
                         "description": "Device type (for add).",
                     },
@@ -1482,7 +1569,8 @@ class IncusCopyMoveTool(BaseTool):
         action = action.lower()
         if action not in {"copy", "move"}:
             return ToolResult(
-                success=False, output=None,
+                success=False,
+                output=None,
                 error="action must be 'copy' or 'move'",
             )
         args = [action, source, destination]

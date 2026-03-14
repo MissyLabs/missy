@@ -163,7 +163,9 @@ class DiscordRestClient:
         backoffs = (1.0, 2.0, 4.0)
         attempt_count = len(backoffs) + 1
 
-        def _log_final_failure(*, response: Any | None, exc: Exception | None, attempt_index: int) -> None:
+        def _log_final_failure(
+            *, response: Any | None, exc: Exception | None, attempt_index: int
+        ) -> None:
             try:
                 status_code = getattr(response, "status_code", None)
                 response_text = ""
@@ -199,7 +201,11 @@ class DiscordRestClient:
                 if response.status_code in retry_statuses:
                     delay: float | None = None
                     if response.status_code == 429:
-                        ra = response.headers.get("Retry-After") if hasattr(response, "headers") else None
+                        ra = (
+                            response.headers.get("Retry-After")
+                            if hasattr(response, "headers")
+                            else None
+                        )
                         if ra:
                             try:
                                 delay = float(ra)

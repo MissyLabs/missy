@@ -59,17 +59,20 @@ class TestToolResult:
 
 class TestCompletionResponse:
     def test_default_finish_reason(self):
-        cr = CompletionResponse(
-            content="x", model="m", provider="p", usage={}, raw={}
-        )
+        cr = CompletionResponse(content="x", model="m", provider="p", usage={}, raw={})
         assert cr.finish_reason == "stop"
         assert cr.tool_calls == []
 
     def test_with_tool_calls(self):
         tc = ToolCall(id="1", name="t", arguments={})
         cr = CompletionResponse(
-            content="", model="m", provider="p", usage={}, raw={},
-            tool_calls=[tc], finish_reason="tool_calls"
+            content="",
+            model="m",
+            provider="p",
+            usage={},
+            raw={},
+            tool_calls=[tc],
+            finish_reason="tool_calls",
         )
         assert len(cr.tool_calls) == 1
         assert cr.finish_reason == "tool_calls"
@@ -80,6 +83,7 @@ class TestBaseProviderDefaultMethods:
         class FakeTool:
             name = "echo"
             description = "Echo text"
+
             def get_schema(self):
                 return {
                     "name": self.name,

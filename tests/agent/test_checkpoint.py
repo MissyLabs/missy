@@ -138,9 +138,9 @@ class TestUpdate:
         cid = cm.create("s", "t", "p")
         cm.update(cid, [], ["tool_x", "tool_y"], iteration=0)
         conn = sqlite3.connect(tmp_db)
-        raw = conn.execute(
-            "SELECT tool_names_used FROM checkpoints WHERE id=?", (cid,)
-        ).fetchone()[0]
+        raw = conn.execute("SELECT tool_names_used FROM checkpoints WHERE id=?", (cid,)).fetchone()[
+            0
+        ]
         conn.close()
         assert json.loads(raw) == ["tool_x", "tool_y"]
 

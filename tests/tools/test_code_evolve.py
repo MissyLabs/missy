@@ -19,11 +19,15 @@ def tmp_repo(tmp_path):
     subprocess.run(["git", "init"], cwd=str(repo), capture_output=True, check=True)
     subprocess.run(
         ["git", "config", "user.email", "test@test.com"],
-        cwd=str(repo), capture_output=True, check=True,
+        cwd=str(repo),
+        capture_output=True,
+        check=True,
     )
     subprocess.run(
         ["git", "config", "user.name", "Test"],
-        cwd=str(repo), capture_output=True, check=True,
+        cwd=str(repo),
+        capture_output=True,
+        check=True,
     )
     pkg = repo / "missy"
     pkg.mkdir()
@@ -32,7 +36,9 @@ def tmp_repo(tmp_path):
     subprocess.run(["git", "add", "."], cwd=str(repo), capture_output=True, check=True)
     subprocess.run(
         ["git", "commit", "-m", "initial"],
-        cwd=str(repo), capture_output=True, check=True,
+        cwd=str(repo),
+        capture_output=True,
+        check=True,
     )
     return repo
 
@@ -57,6 +63,7 @@ def _patch_mgr(store_path, repo_root):
 
 def _make_mgr(store_path, repo_root):
     from missy.agent.code_evolution import CodeEvolutionManager
+
     return CodeEvolutionManager(
         store_path=store_path,
         repo_root=repo_root,
@@ -113,20 +120,23 @@ class TestProposeMulti:
         subprocess.run(["git", "add", "."], cwd=str(tmp_repo), capture_output=True)
         subprocess.run(
             ["git", "commit", "-m", "add second"],
-            cwd=str(tmp_repo), capture_output=True,
+            cwd=str(tmp_repo),
+            capture_output=True,
         )
-        diffs_json = json.dumps([
-            {
-                "file_path": "missy/example.py",
-                "original_code": "return 'hello'",
-                "proposed_code": "return 'hi'",
-            },
-            {
-                "file_path": "missy/second.py",
-                "original_code": "val = 42",
-                "proposed_code": "val = 99",
-            },
-        ])
+        diffs_json = json.dumps(
+            [
+                {
+                    "file_path": "missy/example.py",
+                    "original_code": "return 'hello'",
+                    "proposed_code": "return 'hi'",
+                },
+                {
+                    "file_path": "missy/second.py",
+                    "original_code": "val = 42",
+                    "proposed_code": "val = 99",
+                },
+            ]
+        )
         with _patch_mgr(store_path, str(tmp_repo)):
             result = tool.execute(
                 action="propose_multi",
@@ -250,7 +260,8 @@ class TestApprove:
     def test_approve_already_approved(self, tool, tmp_repo, store_path):
         mgr = _make_mgr(store_path, str(tmp_repo))
         prop = mgr.propose(
-            title="T", description="D",
+            title="T",
+            description="D",
             file_path="missy/example.py",
             original_code="return 'hello'",
             proposed_code="return 'hi'",
@@ -316,7 +327,8 @@ class TestApply:
     def test_apply_not_approved(self, tool, tmp_repo, store_path):
         mgr = _make_mgr(store_path, str(tmp_repo))
         prop = mgr.propose(
-            title="T", description="D",
+            title="T",
+            description="D",
             file_path="missy/example.py",
             original_code="return 'hello'",
             proposed_code="return 'hi'",
@@ -332,17 +344,21 @@ class TestApply:
     def test_apply_approved_success(self, tool, tmp_repo, store_path):
         mgr = _make_mgr(store_path, str(tmp_repo))
         prop = mgr.propose(
-            title="T", description="D",
+            title="T",
+            description="D",
             file_path="missy/example.py",
             original_code="return 'hello'",
             proposed_code="return 'hi'",
         )
         mgr.approve(prop.id)
-        with patch(
-            "missy.agent.code_evolution.CodeEvolutionManager",
-            return_value=mgr,
-        ), patch(
-            "missy.agent.code_evolution.restart_process",
+        with (
+            patch(
+                "missy.agent.code_evolution.CodeEvolutionManager",
+                return_value=mgr,
+            ),
+            patch(
+                "missy.agent.code_evolution.restart_process",
+            ),
         ):
             result = tool.execute(action="apply", proposal_id=prop.id)
         assert result.success
@@ -362,7 +378,8 @@ class TestRollback:
     def test_rollback_not_applied(self, tool, tmp_repo, store_path):
         mgr = _make_mgr(store_path, str(tmp_repo))
         prop = mgr.propose(
-            title="T", description="D",
+            title="T",
+            description="D",
             file_path="missy/example.py",
             original_code="return 'hello'",
             proposed_code="return 'hi'",
@@ -377,18 +394,22 @@ class TestRollback:
     def test_rollback_success(self, tool, tmp_repo, store_path):
         mgr = _make_mgr(store_path, str(tmp_repo))
         prop = mgr.propose(
-            title="T", description="D",
+            title="T",
+            description="D",
             file_path="missy/example.py",
             original_code="return 'hello'",
             proposed_code="return 'hi'",
         )
         mgr.approve(prop.id)
         mgr.apply(prop.id)
-        with patch(
-            "missy.agent.code_evolution.CodeEvolutionManager",
-            return_value=mgr,
-        ), patch(
-            "missy.agent.code_evolution.restart_process",
+        with (
+            patch(
+                "missy.agent.code_evolution.CodeEvolutionManager",
+                return_value=mgr,
+            ),
+            patch(
+                "missy.agent.code_evolution.restart_process",
+            ),
         ):
             result = tool.execute(action="rollback", proposal_id=prop.id)
         assert result.success

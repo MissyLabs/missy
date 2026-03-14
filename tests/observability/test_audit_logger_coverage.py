@@ -9,6 +9,7 @@ Targets uncovered lines:
   191    : get_policy_violations skips empty lines
   194-195: get_policy_violations skips malformed JSON lines
 """
+
 from __future__ import annotations
 
 import json
@@ -45,9 +46,7 @@ def _make_event(event_type: str = "test.event", result: str = "allow") -> AuditE
 class TestSubscribePatchedPublishExceptionHandling:
     """When _handle_event raises, the patched publish method catches it and logs."""
 
-    def test_publish_does_not_propagate_handle_event_exception(
-        self, bus: EventBus, tmp_path: Path
-    ):
+    def test_publish_does_not_propagate_handle_event_exception(self, bus: EventBus, tmp_path: Path):
         """Exception in _handle_event is silently swallowed by the wrapper."""
         al = AuditLogger(log_path=str(tmp_path / "audit.jsonl"), bus=bus)
 
@@ -62,9 +61,7 @@ class TestSubscribePatchedPublishExceptionHandling:
         al = AuditLogger(log_path=str(tmp_path / "audit.jsonl"), bus=bus)
 
         with patch.object(al, "_handle_event", side_effect=ValueError("bad event")):
-            with patch(
-                "missy.observability.audit_logger._module_logger"
-            ) as mock_logger:
+            with patch("missy.observability.audit_logger._module_logger") as mock_logger:
                 bus.publish(_make_event())
                 mock_logger.exception.assert_called_once()
 
@@ -91,9 +88,7 @@ class TestHandleEventWriteFailure:
         al = AuditLogger(log_path=str(tmp_path / "audit.jsonl"), bus=bus)
 
         with patch.object(Path, "open", side_effect=IOError("no space")):
-            with patch(
-                "missy.observability.audit_logger._module_logger"
-            ) as mock_logger:
+            with patch("missy.observability.audit_logger._module_logger") as mock_logger:
                 al._handle_event(_make_event())
                 mock_logger.error.assert_called_once()
 
@@ -122,9 +117,7 @@ class TestGetRecentEventsReadFailure:
         al = AuditLogger(log_path=str(log_path), bus=bus)
 
         with patch.object(Path, "read_text", side_effect=IOError("io err")):
-            with patch(
-                "missy.observability.audit_logger._module_logger"
-            ) as mock_logger:
+            with patch("missy.observability.audit_logger._module_logger") as mock_logger:
                 al.get_recent_events()
                 mock_logger.error.assert_called_once()
 
@@ -153,9 +146,7 @@ class TestGetRecentEventsMalformedJSON:
         log_path.write_text("{broken json\n")
         al = AuditLogger(log_path=str(log_path), bus=bus)
 
-        with patch(
-            "missy.observability.audit_logger._module_logger"
-        ) as mock_logger:
+        with patch("missy.observability.audit_logger._module_logger") as mock_logger:
             al.get_recent_events()
             mock_logger.warning.assert_called_once()
 
@@ -192,9 +183,7 @@ class TestGetPolicyViolationsReadFailure:
         al = AuditLogger(log_path=str(log_path), bus=bus)
 
         with patch.object(Path, "read_text", side_effect=IOError("disk err")):
-            with patch(
-                "missy.observability.audit_logger._module_logger"
-            ) as mock_logger:
+            with patch("missy.observability.audit_logger._module_logger") as mock_logger:
                 al.get_policy_violations()
                 mock_logger.error.assert_called_once()
 

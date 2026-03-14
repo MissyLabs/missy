@@ -60,17 +60,21 @@ class TestVoiceChannelInit:
         assert ch is not None
 
     def test_receive_raises_not_implemented(self):
-        with patch("missy.channels.voice.channel.FasterWhisperSTT"), \
-             patch("missy.channels.voice.channel.PiperTTS"), \
-             patch("missy.channels.voice.channel.DeviceRegistry"):
+        with (
+            patch("missy.channels.voice.channel.FasterWhisperSTT"),
+            patch("missy.channels.voice.channel.PiperTTS"),
+            patch("missy.channels.voice.channel.DeviceRegistry"),
+        ):
             ch = VoiceChannel(host="0.0.0.0", port=8765)
             with pytest.raises(NotImplementedError):
                 ch.receive()
 
     def test_send_raises_not_implemented(self):
-        with patch("missy.channels.voice.channel.FasterWhisperSTT"), \
-             patch("missy.channels.voice.channel.PiperTTS"), \
-             patch("missy.channels.voice.channel.DeviceRegistry"):
+        with (
+            patch("missy.channels.voice.channel.FasterWhisperSTT"),
+            patch("missy.channels.voice.channel.PiperTTS"),
+            patch("missy.channels.voice.channel.DeviceRegistry"),
+        ):
             ch = VoiceChannel(host="0.0.0.0", port=8765)
             msg = MagicMock()
             with pytest.raises(NotImplementedError):

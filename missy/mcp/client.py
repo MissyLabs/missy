@@ -1,4 +1,5 @@
 """MCP client: stdio subprocess and HTTP transports."""
+
 from __future__ import annotations
 
 import json
@@ -34,6 +35,7 @@ class McpClient:
         """Start the MCP server process and perform the initialize handshake."""
         if self._command:
             import shlex
+
             self._proc = subprocess.Popen(
                 shlex.split(self._command),
                 stdin=subprocess.PIPE,
@@ -45,11 +47,14 @@ class McpClient:
             raise NotImplementedError("HTTP MCP transport not yet implemented")
 
     def _initialize(self) -> None:
-        resp = self._rpc("initialize", {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": {"name": "missy", "version": "0.1.0"},
-        })
+        resp = self._rpc(
+            "initialize",
+            {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "missy", "version": "0.1.0"},
+            },
+        )
         if resp.get("error"):
             raise RuntimeError(f"MCP init failed: {resp['error']}")
         self._notify("notifications/initialized")

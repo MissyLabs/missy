@@ -527,9 +527,7 @@ class DeviceRegistry:
                     try:
                         entry.unlink()
                         deleted_total += 1
-                        logger.debug(
-                            "purge_audio_logs: deleted %s (node %r).", entry, node.node_id
-                        )
+                        logger.debug("purge_audio_logs: deleted %s (node %r).", entry, node.node_id)
                     except OSError:
                         logger.warning(
                             "purge_audio_logs: could not delete %s for node %r.",

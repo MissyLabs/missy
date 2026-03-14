@@ -125,8 +125,10 @@ class TestWebhookChannelStart:
         mock_server = MagicMock()
         mock_thread = MagicMock()
 
-        with patch("missy.channels.webhook.HTTPServer", return_value=mock_server) as mock_http, \
-             patch("missy.channels.webhook.threading.Thread", return_value=mock_thread):
+        with (
+            patch("missy.channels.webhook.HTTPServer", return_value=mock_server) as mock_http,
+            patch("missy.channels.webhook.threading.Thread", return_value=mock_thread),
+        ):
             ch.start()
 
         mock_http.assert_called_once_with(("127.0.0.1", 0), mock_http.call_args[0][1])
@@ -150,8 +152,10 @@ class TestWebhookHandlerDoPost:
             server = MagicMock()
             return server
 
-        with patch("missy.channels.webhook.HTTPServer", side_effect=fake_httpserver), \
-             patch("missy.channels.webhook.threading.Thread"):
+        with (
+            patch("missy.channels.webhook.HTTPServer", side_effect=fake_httpserver),
+            patch("missy.channels.webhook.threading.Thread"),
+        ):
             channel.start()
 
         HandlerClass = captured["handler"]
@@ -273,7 +277,10 @@ class TestConfigWatcherInit:
     def test_attributes_set(self, tmp_path):
         cfg = tmp_path / "config.yaml"
         cfg.write_text("key: value")
-        def fn(c): pass
+
+        def fn(c):
+            pass
+
         watcher = ConfigWatcher(str(cfg), fn, debounce_seconds=1.5, poll_interval=0.5)
         assert watcher._path == cfg
         assert watcher._reload_fn is fn
@@ -281,13 +288,18 @@ class TestConfigWatcherInit:
         assert watcher._poll == 0.5
 
     def test_tilde_expanded_in_path(self):
-        def fn(c): pass
+        def fn(c):
+            pass
+
         watcher = ConfigWatcher("~/.missy/config.yaml", fn)
         assert not str(watcher._path).startswith("~")
 
     def test_initial_mtime_is_zero(self, tmp_path):
         cfg = tmp_path / "config.yaml"
-        def fn(c): pass
+
+        def fn(c):
+            pass
+
         watcher = ConfigWatcher(str(cfg), fn)
         assert watcher._last_mtime == 0.0
         assert watcher._thread is None
@@ -389,8 +401,10 @@ class TestApplyConfig:
     def test_apply_config_calls_init_functions(self):
         fake_config = object()
         # Both are imported inside _apply_config; patch at their source modules
-        with patch("missy.policy.engine.init_policy_engine") as mock_pe, \
-             patch("missy.providers.registry.init_registry") as mock_reg:
+        with (
+            patch("missy.policy.engine.init_policy_engine") as mock_pe,
+            patch("missy.providers.registry.init_registry") as mock_reg,
+        ):
             _apply_config(fake_config)
         mock_pe.assert_called_once_with(fake_config)
         mock_reg.assert_called_once_with(fake_config)
@@ -622,8 +636,9 @@ from missy.mcp.manager import McpManager
 
 
 def _mock_client(name="srv", tools=None, alive=True, command="echo", url=None):
-    client = MagicMock(spec=["name", "tools", "is_alive", "connect", "disconnect",
-                              "_command", "_url", "call_tool"])
+    client = MagicMock(
+        spec=["name", "tools", "is_alive", "connect", "disconnect", "_command", "_url", "call_tool"]
+    )
     client.name = name
     client.tools = tools or []
     client.is_alive.return_value = alive
@@ -673,10 +688,14 @@ class TestMcpManagerConnectAll:
 
     def test_failed_server_connection_is_skipped(self, tmp_path):
         cfg = tmp_path / "mcp.json"
-        cfg.write_text(json.dumps([
-            {"name": "good", "command": "echo good"},
-            {"name": "bad", "command": "bad-cmd"},
-        ]))
+        cfg.write_text(
+            json.dumps(
+                [
+                    {"name": "good", "command": "echo good"},
+                    {"name": "bad", "command": "bad-cmd"},
+                ]
+            )
+        )
         mgr = McpManager(config_path=str(cfg))
 
         good_client = _mock_client(name="good", tools=[])
@@ -994,8 +1013,8 @@ class TestResilientMemoryStoreHealthTracking:
         store = ResilientMemoryStore(primary, max_failures=3)
         turn1 = _make_turn(session_id="s1", content="first")
         turn2 = _make_turn(session_id="s1", content="second")
-        store.add_turn(turn1)   # fails; turn1 cached
-        store.add_turn(turn2)   # succeeds; turn2 also in cache before write, then sync replays both
+        store.add_turn(turn1)  # fails; turn1 cached
+        store.add_turn(turn2)  # succeeds; turn2 also in cache before write, then sync replays both
         # call_count:
         #   1  — turn1 primary write (fails)
         #   1  — turn2 primary write (succeeds, triggers _on_success -> sync)
@@ -1351,9 +1370,7 @@ class TestOtelExporterExportEvent:
         exporter._enabled = True
         mock_tracer = MagicMock()
         mock_span = MagicMock()
-        mock_tracer.start_as_current_span.return_value.__enter__ = MagicMock(
-            return_value=mock_span
-        )
+        mock_tracer.start_as_current_span.return_value.__enter__ = MagicMock(return_value=mock_span)
         mock_tracer.start_as_current_span.return_value.__exit__ = MagicMock(return_value=False)
         exporter._tracer = mock_tracer
         return exporter, mock_tracer, mock_span
@@ -1427,7 +1444,9 @@ class TestOtelExporterSubscribe:
         fake_event = MagicMock()
         fake_event.__dict__ = {"event_type": "tool_call", "session_id": "s1"}
         captured_handler[0](fake_event)
-        exporter.export_event.assert_called_once_with({"event_type": "tool_call", "session_id": "s1"})
+        exporter.export_event.assert_called_once_with(
+            {"event_type": "tool_call", "session_id": "s1"}
+        )
 
     def test_subscribe_failure_does_not_propagate(self):
         exporter = OtelExporter.__new__(OtelExporter)

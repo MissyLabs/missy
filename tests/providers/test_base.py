@@ -85,12 +85,8 @@ class TestCompletionResponse:
 
     def test_completion_response_equality(self):
         usage = {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
-        r1 = CompletionResponse(
-            content="X", model="m", provider="p", usage=usage, raw={}
-        )
-        r2 = CompletionResponse(
-            content="X", model="m", provider="p", usage=usage, raw={}
-        )
+        r1 = CompletionResponse(content="X", model="m", provider="p", usage=usage, raw={})
+        r2 = CompletionResponse(content="X", model="m", provider="p", usage=usage, raw={})
         assert r1 == r2
 
 

@@ -28,7 +28,9 @@ class TestConversationTurnToDict:
         assert turn.to_dict()["timestamp"] == ts.isoformat()
 
     def test_values_match_attributes(self):
-        turn = ConversationTurn(session_id="abc", role="assistant", content="hello", provider="openai")
+        turn = ConversationTurn(
+            session_id="abc", role="assistant", content="hello", provider="openai"
+        )
         d = turn.to_dict()
         assert d["session_id"] == "abc"
         assert d["role"] == "assistant"

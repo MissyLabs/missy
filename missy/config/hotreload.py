@@ -1,4 +1,5 @@
 """Config hot-reload: watch config.yaml for changes and re-apply policy."""
+
 from __future__ import annotations
 
 import logging
@@ -75,6 +76,7 @@ class ConfigWatcher:
         logger.info("ConfigWatcher: reloading %s", self._path)
         try:
             from missy.config.settings import load_config
+
             new_config = load_config(str(self._path))
             self._reload_fn(new_config)
             logger.info("ConfigWatcher: reload complete")
@@ -86,6 +88,7 @@ def _apply_config(new_config) -> None:
     """Re-initialise subsystems with updated config."""
     from missy.policy.engine import init_policy_engine
     from missy.providers.registry import init_registry
+
     init_policy_engine(new_config)
     init_registry(new_config)
     logger.info("ConfigWatcher: policy engine and provider registry updated")

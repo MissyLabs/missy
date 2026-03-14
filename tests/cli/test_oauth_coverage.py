@@ -283,7 +283,10 @@ class TestAutomaticCallbackWins:
             with patch("missy.cli.oauth.webbrowser.open"):
                 with patch("missy.cli.oauth._exchange_code", return_value=token_resp):
                     with patch("missy.cli.oauth._save_token"):
-                        with patch("missy.cli.oauth._extract_account_metadata", return_value=("uid", "user@example.com")):
+                        with patch(
+                            "missy.cli.oauth._extract_account_metadata",
+                            return_value=("uid", "user@example.com"),
+                        ):
                             with patch("missy.cli.oauth.console"):
                                 # Make _callback_event.wait return True immediately
                                 # and set callback result
@@ -293,7 +296,9 @@ class TestAutomaticCallbackWins:
                                     oauth._callback_event.set()
                                     return True
 
-                                with patch.object(oauth._callback_event, "wait", side_effect=fake_wait):
+                                with patch.object(
+                                    oauth._callback_event, "wait", side_effect=fake_wait
+                                ):
                                     with patch("missy.cli.oauth.threading.Thread") as MockThread:
                                         # Make paste_done.is_set() return True to break the loop
                                         paste_done_mock = MagicMock()
@@ -334,7 +339,9 @@ class TestPasteResultFallback:
             with patch("missy.cli.oauth.webbrowser.open"):
                 with patch("missy.cli.oauth._exchange_code", return_value=token_resp):
                     with patch("missy.cli.oauth._save_token"):
-                        with patch("missy.cli.oauth._extract_account_metadata", return_value=("", "")):
+                        with patch(
+                            "missy.cli.oauth._extract_account_metadata", return_value=("", "")
+                        ):
                             with patch("missy.cli.oauth.console"):
                                 with patch("missy.cli.oauth.threading.Thread") as MockThread:
                                     # Simulate paste thread: appends URL and sets paste_done
@@ -350,7 +357,9 @@ class TestPasteResultFallback:
 
                                     MockThread.side_effect = make_thread
 
-                                    with patch("missy.cli.oauth.click.prompt", return_value=redirect_url):
+                                    with patch(
+                                        "missy.cli.oauth.click.prompt", return_value=redirect_url
+                                    ):
                                         # callback_event never fires (timeout=0 effectively)
                                         with patch.object(
                                             oauth._callback_event,

@@ -19,6 +19,7 @@ Targets uncovered lines:
   1028-1029: _make_rate_limiter — RateLimiter import fails → None
   1049-1050: _scan_checkpoints — scan_for_recovery raises → []
 """
+
 from __future__ import annotations
 
 import sys
@@ -79,8 +80,7 @@ def reset_registry():
 # ---------------------------------------------------------------------------
 
 
-def _build_runtime(provider, max_iterations=1, capability_mode="no-tools",
-                   max_spend_usd=0.0):
+def _build_runtime(provider, max_iterations=1, capability_mode="no-tools", max_spend_usd=0.0):
     """Create an AgentRuntime with a mocked registry and lazy subsystems disabled."""
     reg = _make_registry(provider)
     cfg = AgentConfig(
@@ -89,8 +89,10 @@ def _build_runtime(provider, max_iterations=1, capability_mode="no-tools",
         capability_mode=capability_mode,
         max_spend_usd=max_spend_usd,
     )
-    with patch("missy.agent.runtime.get_registry", return_value=reg), \
-         patch("missy.agent.runtime.get_tool_registry", side_effect=RuntimeError):
+    with (
+        patch("missy.agent.runtime.get_registry", return_value=reg),
+        patch("missy.agent.runtime.get_tool_registry", side_effect=RuntimeError),
+    ):
         runtime = AgentRuntime(cfg)
     runtime._rate_limiter = None  # disable rate limiting in tests
     runtime._memory_store = None
@@ -137,8 +139,10 @@ class TestRunStreamProviderError:
         reg.get.return_value = None
         reg.get_available.return_value = []
 
-        with patch("missy.agent.runtime.get_registry", return_value=reg), \
-             patch("missy.agent.runtime.get_tool_registry", side_effect=RuntimeError):
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", side_effect=RuntimeError),
+        ):
             runtime = AgentRuntime(cfg)
 
         with patch("missy.agent.runtime.get_registry", return_value=reg):
@@ -164,9 +168,11 @@ class TestToolLoopFailureTrackerImportError:
         tool_reg.list_tools.return_value = ["calculator"]
         tool_reg.get.return_value = tool
 
-        with patch("missy.agent.runtime.get_registry", return_value=reg), \
-             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg), \
-             patch.dict(sys.modules, {"missy.agent.failure_tracker": None}):
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+            patch.dict(sys.modules, {"missy.agent.failure_tracker": None}),
+        ):
             result = runtime.run("compute something")
 
         assert result == "done"
@@ -192,13 +198,15 @@ class TestToolLoopCheckpointManagerException:
         checkpoint_mgr = MagicMock()
         checkpoint_mgr.create.side_effect = Exception("DB not available")
 
-        with patch("missy.agent.runtime.get_registry", return_value=reg), \
-             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg), \
-             patch(
-                 "missy.agent.checkpoint.CheckpointManager",
-                 return_value=checkpoint_mgr,
-                 create=True,
-             ):
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+            patch(
+                "missy.agent.checkpoint.CheckpointManager",
+                return_value=checkpoint_mgr,
+                create=True,
+            ),
+        ):
             result = runtime.run("do something")
 
         assert result == "done"
@@ -209,8 +217,9 @@ class TestToolLoopCheckpointManagerException:
 # ---------------------------------------------------------------------------
 
 
-def _make_tool_call_response(tool_name="calculator", tool_id="tc1", args=None,
-                             finish_reason="tool_calls"):
+def _make_tool_call_response(
+    tool_name="calculator", tool_id="tc1", args=None, finish_reason="tool_calls"
+):
     tc = ToolCall(id=tool_id, name=tool_name, arguments=args or {})
     return CompletionResponse(
         content="",
@@ -249,9 +258,7 @@ class TestToolLoopWithToolCalls:
         tool_reg = MagicMock()
         tool_reg.list_tools.return_value = ["calculator"]
         tool_reg.get.return_value = tool
-        tool_reg.execute.return_value = MagicMock(
-            success=True, output="42", error=None
-        )
+        tool_reg.execute.return_value = MagicMock(success=True, output="42", error=None)
 
         reg = _make_registry(provider)
         cfg = AgentConfig(
@@ -260,8 +267,10 @@ class TestToolLoopWithToolCalls:
             capability_mode="full",
         )
 
-        with patch("missy.agent.runtime.get_registry", return_value=reg), \
-             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg):
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
             runtime = AgentRuntime(cfg)
         runtime._rate_limiter = None
         runtime._memory_store = None
@@ -275,8 +284,10 @@ class TestToolLoopWithToolCalls:
         stop_response = _make_stop_response("done")
         runtime, reg, tool_reg = self._setup_tool_loop([tc_response], stop_response)
 
-        with patch("missy.agent.runtime.get_registry", return_value=reg), \
-             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg):
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
             result = runtime.run("calculate")
 
         assert result == "done"
@@ -292,8 +303,10 @@ class TestToolLoopWithToolCalls:
             success=False, output=None, error="division by zero"
         )
 
-        with patch("missy.agent.runtime.get_registry", return_value=reg), \
-             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg):
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
             result = runtime.run("calculate badly")
 
         assert result == "done after error"
@@ -311,12 +324,12 @@ class TestToolLoopWithToolCalls:
         )
 
         # All tool executions fail
-        tool_reg.execute.return_value = MagicMock(
-            success=False, output=None, error="tool error"
-        )
+        tool_reg.execute.return_value = MagicMock(success=False, output=None, error="tool error")
 
-        with patch("missy.agent.runtime.get_registry", return_value=reg), \
-             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg):
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
             result = runtime.run("do failing thing")
 
         # Loop completes even with repeated failures
@@ -335,10 +348,13 @@ class TestToolLoopWithToolCalls:
 
         runtime._pending_recovery = []
 
-        with patch("missy.agent.runtime.get_registry", return_value=reg), \
-             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg), \
-             patch("missy.agent.checkpoint.CheckpointManager",
-                   return_value=checkpoint_mgr, create=True):
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+            patch(
+                "missy.agent.checkpoint.CheckpointManager", return_value=checkpoint_mgr, create=True
+            ),
+        ):
             result = runtime.run("task")
 
         assert result == "ok"
@@ -352,10 +368,13 @@ class TestToolLoopWithToolCalls:
         checkpoint_mgr.create.return_value = "ckpt-2"
         checkpoint_mgr.complete.side_effect = Exception("complete failed")
 
-        with patch("missy.agent.runtime.get_registry", return_value=reg), \
-             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg), \
-             patch("missy.agent.checkpoint.CheckpointManager",
-                   return_value=checkpoint_mgr, create=True):
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+            patch(
+                "missy.agent.checkpoint.CheckpointManager", return_value=checkpoint_mgr, create=True
+            ),
+        ):
             result = runtime.run("task")
 
         assert result == "ok"
@@ -383,8 +402,10 @@ class TestToolLoopCheckpointFailOnException:
         reg = _make_registry(provider)
         cfg = AgentConfig(provider="fake", max_iterations=3, capability_mode="full")
 
-        with patch("missy.agent.runtime.get_registry", return_value=reg), \
-             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg):
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
             runtime = AgentRuntime(cfg)
         runtime._rate_limiter = None
         runtime._memory_store = None
@@ -396,12 +417,15 @@ class TestToolLoopCheckpointFailOnException:
 
         # Patch the checkpoint module that runtime.py imports at call time
         import missy.agent.checkpoint as _ckpt_mod
+
         original_cls = getattr(_ckpt_mod, "CheckpointManager", None)
         _ckpt_mod.CheckpointManager = MagicMock(return_value=checkpoint_mgr)
 
         try:
-            with patch("missy.agent.runtime.get_registry", return_value=reg), \
-                 patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg):
+            with (
+                patch("missy.agent.runtime.get_registry", return_value=reg),
+                patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+            ):
                 # RuntimeError gets wrapped in ProviderError by run()
                 with pytest.raises(ProviderError):
                     runtime.run("do task")
@@ -446,16 +470,20 @@ class TestToolLoopIterationLimit:
         reg = _make_registry(provider)
         cfg = AgentConfig(provider="fake", max_iterations=2, capability_mode="full")
 
-        with patch("missy.agent.runtime.get_registry", return_value=reg), \
-             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg):
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
             runtime = AgentRuntime(cfg)
         runtime._rate_limiter = None
         runtime._memory_store = None
         runtime._cost_tracker = None
         runtime._context_manager = None
 
-        with patch("missy.agent.runtime.get_registry", return_value=reg), \
-             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg):
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
             result = runtime.run("loop forever")
 
         assert "iteration limit" in result
@@ -495,16 +523,20 @@ class TestToolLoopIterationLimit:
         reg = _make_registry(provider)
         cfg = AgentConfig(provider="fake", max_iterations=2, capability_mode="full")
 
-        with patch("missy.agent.runtime.get_registry", return_value=reg), \
-             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg):
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
             runtime = AgentRuntime(cfg)
         runtime._rate_limiter = None
         runtime._memory_store = None
         runtime._cost_tracker = None
         runtime._context_manager = None
 
-        with patch("missy.agent.runtime.get_registry", return_value=reg), \
-             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg):
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
             result = runtime.run("loop but fallback works")
 
         assert result == "fallback response"
@@ -565,9 +597,7 @@ class TestLazyFactoryFallbacks:
         mock_checkpoint_module = MagicMock()
         mock_checkpoint_module.scan_for_recovery.return_value = [mock_result]
 
-        with patch.dict(sys.modules, {
-            "missy.agent.checkpoint": mock_checkpoint_module
-        }):
+        with patch.dict(sys.modules, {"missy.agent.checkpoint": mock_checkpoint_module}):
             results = AgentRuntime._scan_checkpoints()
 
         assert results == [mock_result]
@@ -611,8 +641,10 @@ class TestToolLoopFallbackToSingleTurn:
         reg = _make_registry(provider)
         cfg = AgentConfig(provider="fake", max_iterations=3, capability_mode="full")
 
-        with patch("missy.agent.runtime.get_registry", return_value=reg), \
-             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg):
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
             runtime = AgentRuntime(cfg)
         runtime._rate_limiter = None
         runtime._memory_store = None
@@ -620,8 +652,10 @@ class TestToolLoopFallbackToSingleTurn:
         runtime._context_manager = None
         runtime._circuit_breaker = cb
 
-        with patch("missy.agent.runtime.get_registry", return_value=reg), \
-             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg):
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
             result = runtime.run("hello")
 
         assert result == "fallback ok"
@@ -638,8 +672,10 @@ class TestRunLoopGeneralException:
         provider = _make_provider()
         runtime, reg = _build_runtime(provider)
 
-        with patch.object(runtime, "_run_loop", side_effect=ValueError("unexpected")), \
-             patch("missy.agent.runtime.get_registry", return_value=reg):
+        with (
+            patch.object(runtime, "_run_loop", side_effect=ValueError("unexpected")),
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+        ):
             with pytest.raises(ProviderError, match="Unexpected error"):
                 runtime.run("hello")
 
@@ -655,9 +691,10 @@ class TestRunLoopProviderError:
         provider = _make_provider()
         runtime, reg = _build_runtime(provider)
 
-        with patch.object(runtime, "_run_loop",
-                          side_effect=ProviderError("provider died")), \
-             patch("missy.agent.runtime.get_registry", return_value=reg):
+        with (
+            patch.object(runtime, "_run_loop", side_effect=ProviderError("provider died")),
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+        ):
             with pytest.raises(ProviderError, match="provider died"):
                 runtime.run("hello")
 
@@ -699,24 +736,27 @@ class TestToolLoopNoFailureTracker:
         tool_reg = MagicMock()
         tool_reg.list_tools.return_value = ["calc"]
         tool_reg.get.return_value = tool
-        tool_reg.execute.return_value = MagicMock(success=False, output=None,
-                                                   error="err")
+        tool_reg.execute.return_value = MagicMock(success=False, output=None, error="err")
 
         reg = _make_registry(provider)
         cfg = AgentConfig(provider="fake", max_iterations=5, capability_mode="full")
 
-        with patch("missy.agent.runtime.get_registry", return_value=reg), \
-             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg), \
-             patch.dict(sys.modules, {"missy.agent.failure_tracker": None}):
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+            patch.dict(sys.modules, {"missy.agent.failure_tracker": None}),
+        ):
             runtime = AgentRuntime(cfg)
         runtime._rate_limiter = None
         runtime._memory_store = None
         runtime._cost_tracker = None
         runtime._context_manager = None
 
-        with patch("missy.agent.runtime.get_registry", return_value=reg), \
-             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg), \
-             patch.dict(sys.modules, {"missy.agent.failure_tracker": None}):
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+            patch.dict(sys.modules, {"missy.agent.failure_tracker": None}),
+        ):
             result = runtime.run("task with failing tool")
 
         assert result == "finished"

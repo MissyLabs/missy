@@ -136,9 +136,7 @@ class TestHandleMessageCredentialDetection:
             patch.object(ch, "_emit_audit") as mock_audit,
         ):
             self._run(
-                ch._handle_message(
-                    _message_payload("My AWS key is AKIAIOSFODNN7EXAMPLE123456")
-                )
+                ch._handle_message(_message_payload("My AWS key is AKIAIOSFODNN7EXAMPLE123456"))
             )
 
         assert ch._queue.empty(), "Secret message must not be enqueued"
@@ -177,9 +175,7 @@ class TestHandleMessageCredentialDetection:
             patch.object(ch, "_emit_audit"),
         ):
             self._run(
-                ch._handle_message(
-                    _message_payload("AKIA1234567890ABCDEF", channel_id="CH2")
-                )
+                ch._handle_message(_message_payload("AKIA1234567890ABCDEF", channel_id="CH2"))
             )
 
         # send_message should have been called with a warning.
@@ -201,13 +197,11 @@ class TestHandleMessageCredentialDetection:
             patch.object(ch._rest, "send_message", return_value={}),
             patch.object(ch, "_emit_audit", side_effect=_capture_audit),
         ):
-            self._run(
-                ch._handle_message(
-                    _message_payload("sk_live_abcdefghijklmnopqrstuvwx")
-                )
-            )
+            self._run(ch._handle_message(_message_payload("sk_live_abcdefghijklmnopqrstuvwx")))
 
-        cred_events = [e for e in captured if e["event_type"] == "discord.channel.credential_detected"]
+        cred_events = [
+            e for e in captured if e["event_type"] == "discord.channel.credential_detected"
+        ]
         assert cred_events, "credential_detected audit event must be emitted"
         assert cred_events[0]["detail"]["message_deleted"] is True
 
@@ -224,13 +218,11 @@ class TestHandleMessageCredentialDetection:
             patch.object(ch._rest, "send_message", return_value={}),
             patch.object(ch, "_emit_audit", side_effect=_capture_audit),
         ):
-            self._run(
-                ch._handle_message(
-                    _message_payload("AKIAIOSFODNN7EXAMPLE")
-                )
-            )
+            self._run(ch._handle_message(_message_payload("AKIAIOSFODNN7EXAMPLE")))
 
-        cred_events = [e for e in captured if e["event_type"] == "discord.channel.credential_detected"]
+        cred_events = [
+            e for e in captured if e["event_type"] == "discord.channel.credential_detected"
+        ]
         assert cred_events
         assert cred_events[0]["detail"]["message_deleted"] is False
 

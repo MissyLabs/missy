@@ -22,6 +22,7 @@ def _make_provider(name="fake", reply="ok"):
     provider.is_available.return_value = True
 
     from missy.providers.base import CompletionResponse
+
     provider.complete.return_value = CompletionResponse(
         content=reply,
         model="fake-model-1",
@@ -36,9 +37,7 @@ def _make_registry(providers=None):
     reg = MagicMock()
     providers = providers or {}
     reg.get.side_effect = lambda n: providers.get(n)
-    reg.get_available.side_effect = lambda: [
-        p for p in providers.values() if p.is_available()
-    ]
+    reg.get_available.side_effect = lambda: [p for p in providers.values() if p.is_available()]
     return reg
 
 
@@ -160,6 +159,7 @@ class TestCheckpointRecoveryScan:
 class TestMissyConfigMaxSpend:
     def test_default_config_has_max_spend(self):
         from missy.config.settings import get_default_config
+
         cfg = get_default_config()
         assert cfg.max_spend_usd == 0.0
 
@@ -176,5 +176,6 @@ class TestMissyConfigMaxSpend:
             "max_spend_usd: 3.50\n"
         )
         from missy.config.settings import load_config
+
         cfg = load_config(str(config_file))
         assert cfg.max_spend_usd == 3.50

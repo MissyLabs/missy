@@ -3,6 +3,7 @@
 Reports basic system information (OS, hostname, Python version).
 Safe local automation with no network access and no write access.
 """
+
 from __future__ import annotations
 
 import platform

@@ -177,9 +177,7 @@ def _exchange_code(client_id: str, code: str, verifier: str) -> dict:
     }
     resp = httpx.post(TOKEN_URL, data=payload, timeout=30)
     if resp.status_code != 200:
-        raise RuntimeError(
-            f"Token exchange failed: HTTP {resp.status_code} — {resp.text[:200]}"
-        )
+        raise RuntimeError(f"Token exchange failed: HTTP {resp.status_code} — {resp.text[:200]}")
     return resp.json()
 
 
@@ -197,9 +195,7 @@ def _do_refresh(client_id: str, refresh_token: str) -> dict:
     }
     resp = httpx.post(TOKEN_URL, data=payload, timeout=30)
     if resp.status_code != 200:
-        raise RuntimeError(
-            f"Token refresh failed: HTTP {resp.status_code} — {resp.text[:200]}"
-        )
+        raise RuntimeError(f"Token refresh failed: HTTP {resp.status_code} — {resp.text[:200]}")
     return resp.json()
 
 

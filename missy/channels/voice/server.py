@@ -210,9 +210,7 @@ class VoiceServer:
             self._port,
         )
         self._running = True
-        logger.info(
-            "VoiceServer: listening on ws://%s:%d", self._host, self._port
-        )
+        logger.info("VoiceServer: listening on ws://%s:%d", self._host, self._port)
 
     async def stop(self) -> None:
         """Close all connections and unload STT/TTS engines.
@@ -239,9 +237,7 @@ class VoiceServer:
     # Connection handler
     # ------------------------------------------------------------------
 
-    async def _handle_connection(
-        self, websocket: WebSocketServerProtocol
-    ) -> None:
+    async def _handle_connection(self, websocket: WebSocketServerProtocol) -> None:
         """Coroutine invoked by the websockets library for each new connection.
 
         The first message must be ``auth`` or ``pair_request``.  Any other
@@ -263,7 +259,9 @@ class VoiceServer:
             try:
                 raw_first = await websocket.recv()
             except websockets.exceptions.ConnectionClosed:
-                logger.debug("VoiceServer: connection from %s closed before first frame.", remote_addr)
+                logger.debug(
+                    "VoiceServer: connection from %s closed before first frame.", remote_addr
+                )
                 return
 
             if isinstance(raw_first, bytes):
@@ -321,7 +319,10 @@ class VoiceServer:
                         "reason": f"unexpected first message type: {msg_type!r}",
                     },
                 )
-                await self._send_json(websocket, {"type": "error", "message": "First message must be auth or pair_request"})
+                await self._send_json(
+                    websocket,
+                    {"type": "error", "message": "First message must be auth or pair_request"},
+                )
                 await websocket.close(1008, "Protocol violation")
                 return
 
@@ -344,7 +345,9 @@ class VoiceServer:
                 try:
                     self._registry.mark_offline(node.node_id)
                 except Exception:
-                    logger.debug("VoiceServer: mark_offline failed for %s", node.node_id, exc_info=True)
+                    logger.debug(
+                        "VoiceServer: mark_offline failed for %s", node.node_id, exc_info=True
+                    )
 
         except websockets.exceptions.ConnectionClosed:
             if node is not None:
@@ -358,7 +361,9 @@ class VoiceServer:
                 exc_info=True,
             )
             try:
-                await self._send_json(websocket, {"type": "error", "message": "Internal server error"})
+                await self._send_json(
+                    websocket, {"type": "error", "message": "Internal server error"}
+                )
                 await websocket.close(1011, "Internal error")
             except Exception:
                 pass
@@ -687,9 +692,7 @@ class VoiceServer:
                 channels=channels,
             )
         except Exception:
-            logger.error(
-                "VoiceServer: STT failed for node %s", node.node_id, exc_info=True
-            )
+            logger.error("VoiceServer: STT failed for node %s", node.node_id, exc_info=True)
             await self._send_json(
                 websocket,
                 {"type": "error", "message": "Speech recognition failed"},
@@ -724,9 +727,7 @@ class VoiceServer:
             "language": transcript.language,
         }
         try:
-            response_text: str = await self._agent_callback(
-                transcript.text, node.node_id, metadata
-            )
+            response_text: str = await self._agent_callback(transcript.text, node.node_id, metadata)
         except Exception:
             logger.error(
                 "VoiceServer: agent_callback failed for node %s", node.node_id, exc_info=True
@@ -747,7 +748,9 @@ class VoiceServer:
             audio_buf = await self._tts.synthesize(response_text)
         except Exception:
             logger.error(
-                "VoiceServer: TTS failed for node %s — sending text only.", node.node_id, exc_info=True
+                "VoiceServer: TTS failed for node %s — sending text only.",
+                node.node_id,
+                exc_info=True,
             )
             # response_text already sent above; skip audio streaming gracefully.
             return
@@ -800,6 +803,7 @@ class VoiceServer:
 
         loop = asyncio.get_event_loop()
         try:
+
             def _write() -> None:
                 log_dir.mkdir(parents=True, exist_ok=True)
                 filename.write_bytes(audio_buffer)
@@ -865,9 +869,7 @@ class VoiceServer:
             ip = str(remote_addr[0]) if remote_addr else node.ip_address
             self._registry.mark_online(node.node_id, ip_address=ip)
         except Exception:
-            logger.debug(
-                "VoiceServer: mark_online failed for node %s", node.node_id, exc_info=True
-            )
+            logger.debug("VoiceServer: mark_online failed for node %s", node.node_id, exc_info=True)
 
     # ------------------------------------------------------------------
     # Helpers

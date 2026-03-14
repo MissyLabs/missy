@@ -61,9 +61,8 @@ def _build_agent_callback(agent_runtime: Any) -> Callable[..., Any]:
         An async callable with signature
         ``async (prompt: str, session_id: str, metadata: dict) -> str``.
     """
-    if hasattr(agent_runtime, "run_async") and asyncio.iscoroutinefunction(
-        agent_runtime.run_async
-    ):
+    if hasattr(agent_runtime, "run_async") and asyncio.iscoroutinefunction(agent_runtime.run_async):
+
         async def _async_cb(prompt: str, session_id: str, metadata: dict) -> str:
             return await agent_runtime.run_async(prompt, session_id, metadata)
 
@@ -152,9 +151,7 @@ class VoiceChannel(BaseChannel):
         Raises:
             NotImplementedError: Always.
         """
-        raise NotImplementedError(
-            "VoiceChannel is event-driven; use start(agent_runtime) instead"
-        )
+        raise NotImplementedError("VoiceChannel is event-driven; use start(agent_runtime) instead")
 
     def send(self, message: str) -> None:
         """Not applicable to the voice channel.
@@ -165,9 +162,7 @@ class VoiceChannel(BaseChannel):
         Raises:
             NotImplementedError: Always.
         """
-        raise NotImplementedError(
-            "VoiceChannel is event-driven; use start(agent_runtime) instead"
-        )
+        raise NotImplementedError("VoiceChannel is event-driven; use start(agent_runtime) instead")
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -270,11 +265,11 @@ class VoiceChannel(BaseChannel):
         if error_holder:
             self._thread = None
             self._server = None
-            raise RuntimeError(f"VoiceChannel failed to start: {error_holder[0]}") from error_holder[0]
+            raise RuntimeError(
+                f"VoiceChannel failed to start: {error_holder[0]}"
+            ) from error_holder[0]
 
-        logger.info(
-            "VoiceChannel: started on ws://%s:%d", self._host, self._port
-        )
+        logger.info("VoiceChannel: started on ws://%s:%d", self._host, self._port)
 
     def stop(self) -> None:
         """Stop the WebSocket server and join the background thread.

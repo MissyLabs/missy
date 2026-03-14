@@ -47,9 +47,12 @@ class TestPresenceData:
 
     def test_all_fields(self):
         pd = PresenceData(
-            node_id="n2", room="Bedroom",
-            occupancy=True, noise_level=0.5,
-            wake_word_false_positives=3, updated_at=12345.0,
+            node_id="n2",
+            room="Bedroom",
+            occupancy=True,
+            noise_level=0.5,
+            wake_word_false_positives=3,
+            updated_at=12345.0,
         )
         assert pd.occupancy is True
         assert pd.noise_level == 0.5
@@ -63,10 +66,12 @@ class TestPresenceStoreInit:
         assert store.get_all() == []
 
     def test_seeded_from_registry(self):
-        reg = _make_mock_registry([
-            {"node_id": "a", "room": "Living Room", "sensor_data": {"occupancy": True}},
-            {"node_id": "b", "room": "Kitchen", "sensor_data": {"noise_level": 0.3}},
-        ])
+        reg = _make_mock_registry(
+            [
+                {"node_id": "a", "room": "Living Room", "sensor_data": {"occupancy": True}},
+                {"node_id": "b", "room": "Kitchen", "sensor_data": {"noise_level": 0.3}},
+            ]
+        )
         store = PresenceStore(reg)
         assert len(store.get_all()) == 2
         assert store.get("a").occupancy is True
@@ -114,9 +119,7 @@ class TestPresenceStoreUpdate:
         reg = _make_mock_registry([{"node_id": "n1", "room": "Room"}])
         store = PresenceStore(reg)
         store.update("n1", occupancy=True, noise_level=0.5)
-        reg.update_sensor_data.assert_called_once_with(
-            "n1", occupancy=True, noise_level=0.5
-        )
+        reg.update_sensor_data.assert_called_once_with("n1", occupancy=True, noise_level=0.5)
 
     def test_update_registry_sync_failure_logged(self):
         """If registry.update_sensor_data raises KeyError, it's handled."""
@@ -149,11 +152,13 @@ class TestPresenceStoreQueries:
         assert store.get("nope") is None
 
     def test_get_occupied_rooms(self):
-        reg = _make_mock_registry([
-            {"node_id": "a", "room": "Living Room"},
-            {"node_id": "b", "room": "Kitchen"},
-            {"node_id": "c", "room": "Bedroom"},
-        ])
+        reg = _make_mock_registry(
+            [
+                {"node_id": "a", "room": "Living Room"},
+                {"node_id": "b", "room": "Kitchen"},
+                {"node_id": "c", "room": "Bedroom"},
+            ]
+        )
         store = PresenceStore(reg)
         store.update("a", occupancy=True)
         store.update("b", occupancy=False)
@@ -166,11 +171,13 @@ class TestPresenceStoreQueries:
         assert store.get_context_summary() == "(no nodes registered)"
 
     def test_get_context_summary_mixed(self):
-        reg = _make_mock_registry([
-            {"node_id": "a", "room": "Living Room"},
-            {"node_id": "b", "room": "Kitchen"},
-            {"node_id": "c", "room": "Bedroom"},
-        ])
+        reg = _make_mock_registry(
+            [
+                {"node_id": "a", "room": "Living Room"},
+                {"node_id": "b", "room": "Kitchen"},
+                {"node_id": "c", "room": "Bedroom"},
+            ]
+        )
         store = PresenceStore(reg)
         store.update("a", occupancy=True)
         store.update("b", occupancy=False)

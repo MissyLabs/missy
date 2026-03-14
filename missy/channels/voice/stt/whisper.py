@@ -99,9 +99,7 @@ class FasterWhisperSTT(STTEngine):
         try:
             from faster_whisper import WhisperModel  # type: ignore[import]
         except ImportError as exc:
-            raise ImportError(
-                "Install faster-whisper: pip install faster-whisper"
-            ) from exc
+            raise ImportError("Install faster-whisper: pip install faster-whisper") from exc
 
         device, compute_type = self._resolve_device_and_compute()
         self._resolved_device = device
@@ -173,16 +171,12 @@ class FasterWhisperSTT(STTEngine):
             ImportError: If ``numpy`` is not available.
         """
         if self._model is None:
-            raise RuntimeError(
-                "FasterWhisperSTT.load() must be called before transcribe()."
-            )
+            raise RuntimeError("FasterWhisperSTT.load() must be called before transcribe().")
 
         try:
             import numpy as np  # type: ignore[import]
         except ImportError as exc:
-            raise ImportError(
-                "numpy is required for audio conversion: pip install numpy"
-            ) from exc
+            raise ImportError("numpy is required for audio conversion: pip install numpy") from exc
 
         # Convert raw PCM-16 bytes → float32 array normalised to [-1.0, 1.0].
         audio_array = np.frombuffer(audio, dtype=np.int16).astype(np.float32) / 32768.0

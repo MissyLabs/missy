@@ -334,9 +334,7 @@ class SchedulerManager:
         # Active-hours gate
         # ------------------------------------------------------------------
         if not job.should_run_now():
-            logger.info(
-                "Job %s outside active_hours %s; skipping.", job.id, job.active_hours
-            )
+            logger.info("Job %s outside active_hours %s; skipping.", job.id, job.active_hours)
             return
 
         session_id = str(uuid.uuid4())
@@ -380,9 +378,7 @@ class SchedulerManager:
                 # Calculate backoff delay using the failure index (clamped to
                 # the length of the backoff list).
                 failures = job.consecutive_failures
-                backoff = job.backoff_seconds[
-                    min(failures - 1, len(job.backoff_seconds) - 1)
-                ]
+                backoff = job.backoff_seconds[min(failures - 1, len(job.backoff_seconds) - 1)]
                 retry_run_date = datetime.now(tz=UTC) + timedelta(seconds=backoff)
                 try:
                     retry_job_id = f"{job_id}_retry_{failures}"
@@ -414,9 +410,7 @@ class SchedulerManager:
                         },
                     )
                 except Exception as retry_exc:
-                    logger.error(
-                        "Failed to schedule retry for job %r: %s", job.name, retry_exc
-                    )
+                    logger.error("Failed to schedule retry for job %r: %s", job.name, retry_exc)
             else:
                 # Maximum attempts exhausted.
                 logger.error(
@@ -488,9 +482,7 @@ class SchedulerManager:
             try:
                 self.remove_job(job_id)
             except Exception as exc:
-                logger.warning(
-                    "Failed to remove one-shot job %r after run: %s", job_id, exc
-                )
+                logger.warning("Failed to remove one-shot job %r after run: %s", job_id, exc)
 
     # ------------------------------------------------------------------
     # Persistence

@@ -200,9 +200,7 @@ class TestAsk:
         function body, so we must patch them in their home module
         (``missy.agent.runtime``) rather than on ``missy.cli.main``.
         """
-        with tempfile.NamedTemporaryFile(
-            suffix=".yaml", mode="w", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(suffix=".yaml", mode="w", delete=False) as f:
             f.write(_MINIMAL_CONFIG_YAML)
             cfg_path = f.name
 
@@ -237,17 +235,13 @@ class TestAsk:
         assert "Paris" in result.output
 
     def test_ask_calls_agent_run(self, runner: CliRunner):
-        with tempfile.NamedTemporaryFile(
-            suffix=".yaml", mode="w", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(suffix=".yaml", mode="w", delete=False) as f:
             f.write(_MINIMAL_CONFIG_YAML)
             cfg_path = f.name
 
         try:
             with patch("missy.cli.main._load_subsystems") as mock_load:
-                mock_cfg = _make_mock_config(
-                    providers={"anthropic": MagicMock(model="m")}
-                )
+                mock_cfg = _make_mock_config(providers={"anthropic": MagicMock(model="m")})
                 mock_load.return_value = mock_cfg
 
                 with patch("missy.agent.runtime.AgentRuntime") as mock_runtime_cls:
@@ -270,17 +264,13 @@ class TestAsk:
         assert result.exit_code != 0
 
     def test_ask_with_provider_option(self, runner: CliRunner):
-        with tempfile.NamedTemporaryFile(
-            suffix=".yaml", mode="w", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(suffix=".yaml", mode="w", delete=False) as f:
             f.write(_MINIMAL_CONFIG_YAML)
             cfg_path = f.name
 
         try:
             with patch("missy.cli.main._load_subsystems") as mock_load:
-                mock_cfg = _make_mock_config(
-                    providers={"openai": MagicMock(model="gpt-4o")}
-                )
+                mock_cfg = _make_mock_config(providers={"openai": MagicMock(model="gpt-4o")})
                 mock_load.return_value = mock_cfg
 
                 with patch("missy.agent.runtime.AgentRuntime") as mock_runtime_cls:
@@ -323,9 +313,7 @@ class TestProviders:
         return cfg
 
     def test_providers_exits_zero(self, runner: CliRunner):
-        with tempfile.NamedTemporaryFile(
-            suffix=".yaml", mode="w", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(suffix=".yaml", mode="w", delete=False) as f:
             f.write(_MINIMAL_CONFIG_YAML)
             cfg_path = f.name
 
@@ -347,9 +335,7 @@ class TestProviders:
         assert result.exit_code == 0
 
     def test_providers_output_contains_provider_name(self, runner: CliRunner):
-        with tempfile.NamedTemporaryFile(
-            suffix=".yaml", mode="w", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(suffix=".yaml", mode="w", delete=False) as f:
             f.write(_MINIMAL_CONFIG_YAML)
             cfg_path = f.name
 
@@ -371,9 +357,7 @@ class TestProviders:
         assert "anthropic" in result.output
 
     def test_providers_no_providers_configured(self, runner: CliRunner):
-        with tempfile.NamedTemporaryFile(
-            suffix=".yaml", mode="w", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(suffix=".yaml", mode="w", delete=False) as f:
             f.write(_MINIMAL_CONFIG_YAML)
             cfg_path = f.name
 
@@ -398,9 +382,7 @@ class TestProviders:
 
 class TestSkills:
     def test_skills_exits_zero_with_no_skills(self, runner: CliRunner):
-        with tempfile.NamedTemporaryFile(
-            suffix=".yaml", mode="w", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(suffix=".yaml", mode="w", delete=False) as f:
             f.write(_MINIMAL_CONFIG_YAML)
             cfg_path = f.name
 
@@ -420,9 +402,7 @@ class TestSkills:
         assert result.exit_code == 0
 
     def test_skills_no_skills_message(self, runner: CliRunner):
-        with tempfile.NamedTemporaryFile(
-            suffix=".yaml", mode="w", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(suffix=".yaml", mode="w", delete=False) as f:
             f.write(_MINIMAL_CONFIG_YAML)
             cfg_path = f.name
 
@@ -442,9 +422,7 @@ class TestSkills:
         assert "No skills" in result.output
 
     def test_skills_lists_registered_skills(self, runner: CliRunner):
-        with tempfile.NamedTemporaryFile(
-            suffix=".yaml", mode="w", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(suffix=".yaml", mode="w", delete=False) as f:
             f.write(_MINIMAL_CONFIG_YAML)
             cfg_path = f.name
 
@@ -473,9 +451,7 @@ class TestSkills:
 
 class TestPlugins:
     def test_plugins_exits_zero(self, runner: CliRunner):
-        with tempfile.NamedTemporaryFile(
-            suffix=".yaml", mode="w", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(suffix=".yaml", mode="w", delete=False) as f:
             f.write(_MINIMAL_CONFIG_YAML)
             cfg_path = f.name
 
@@ -494,9 +470,7 @@ class TestPlugins:
         assert result.exit_code == 0
 
     def test_plugins_shows_disabled_status_by_default(self, runner: CliRunner):
-        with tempfile.NamedTemporaryFile(
-            suffix=".yaml", mode="w", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(suffix=".yaml", mode="w", delete=False) as f:
             f.write(_MINIMAL_CONFIG_YAML)
             cfg_path = f.name
 
@@ -515,9 +489,7 @@ class TestPlugins:
         assert "disabled" in result.output.lower()
 
     def test_plugins_no_plugins_loaded_message(self, runner: CliRunner):
-        with tempfile.NamedTemporaryFile(
-            suffix=".yaml", mode="w", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(suffix=".yaml", mode="w", delete=False) as f:
             f.write(_MINIMAL_CONFIG_YAML)
             cfg_path = f.name
 
@@ -536,9 +508,7 @@ class TestPlugins:
         assert "No plugins" in result.output
 
     def test_plugins_displays_loaded_plugin(self, runner: CliRunner):
-        with tempfile.NamedTemporaryFile(
-            suffix=".yaml", mode="w", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(suffix=".yaml", mode="w", delete=False) as f:
             f.write(_MINIMAL_CONFIG_YAML)
             cfg_path = f.name
 
@@ -572,9 +542,7 @@ class TestPlugins:
 
 class TestScheduleList:
     def test_schedule_list_exits_zero_no_jobs(self, runner: CliRunner):
-        with tempfile.NamedTemporaryFile(
-            suffix=".yaml", mode="w", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(suffix=".yaml", mode="w", delete=False) as f:
             f.write(_MINIMAL_CONFIG_YAML)
             cfg_path = f.name
 
@@ -594,9 +562,7 @@ class TestScheduleList:
         assert result.exit_code == 0
 
     def test_schedule_list_no_jobs_message(self, runner: CliRunner):
-        with tempfile.NamedTemporaryFile(
-            suffix=".yaml", mode="w", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(suffix=".yaml", mode="w", delete=False) as f:
             f.write(_MINIMAL_CONFIG_YAML)
             cfg_path = f.name
 
@@ -616,9 +582,7 @@ class TestScheduleList:
         assert "No scheduled jobs" in result.output
 
     def test_schedule_list_shows_jobs(self, runner: CliRunner):
-        with tempfile.NamedTemporaryFile(
-            suffix=".yaml", mode="w", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(suffix=".yaml", mode="w", delete=False) as f:
             f.write(_MINIMAL_CONFIG_YAML)
             cfg_path = f.name
 
@@ -663,9 +627,7 @@ class TestScheduleList:
 
 class TestAuditSecurity:
     def test_audit_security_exits_zero_no_violations(self, runner: CliRunner):
-        with tempfile.NamedTemporaryFile(
-            suffix=".yaml", mode="w", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(suffix=".yaml", mode="w", delete=False) as f:
             f.write(_MINIMAL_CONFIG_YAML)
             cfg_path = f.name
 
@@ -685,9 +647,7 @@ class TestAuditSecurity:
         assert result.exit_code == 0
 
     def test_audit_security_no_violations_message(self, runner: CliRunner):
-        with tempfile.NamedTemporaryFile(
-            suffix=".yaml", mode="w", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(suffix=".yaml", mode="w", delete=False) as f:
             f.write(_MINIMAL_CONFIG_YAML)
             cfg_path = f.name
 
@@ -707,9 +667,7 @@ class TestAuditSecurity:
         assert "No policy violations" in result.output
 
     def test_audit_security_shows_violations(self, runner: CliRunner):
-        with tempfile.NamedTemporaryFile(
-            suffix=".yaml", mode="w", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(suffix=".yaml", mode="w", delete=False) as f:
             f.write(_MINIMAL_CONFIG_YAML)
             cfg_path = f.name
 
@@ -738,9 +696,7 @@ class TestAuditSecurity:
         assert "network" in result.output
 
     def test_audit_security_respects_limit_option(self, runner: CliRunner):
-        with tempfile.NamedTemporaryFile(
-            suffix=".yaml", mode="w", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(suffix=".yaml", mode="w", delete=False) as f:
             f.write(_MINIMAL_CONFIG_YAML)
             cfg_path = f.name
 

@@ -23,10 +23,7 @@ from missy.tools.base import BaseTool, ToolPermissions, ToolResult
 
 logger = logging.getLogger(__name__)
 
-_PYATSPI_MISSING = (
-    "pyatspi is not installed. "
-    "Install it with: pip install pyatspi"
-)
+_PYATSPI_MISSING = "pyatspi is not installed. Install it with: pip install pyatspi"
 
 # ---------------------------------------------------------------------------
 # Internal helpers

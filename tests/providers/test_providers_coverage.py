@@ -78,6 +78,7 @@ def _make_openai_sdk() -> MagicMock:
 @contextmanager
 def _patch_anthropic_sdk(sdk_mock: MagicMock):
     import missy.providers.anthropic_provider as mod
+
     old_sdk, old_avail = mod._anthropic_sdk, mod._ANTHROPIC_AVAILABLE
     mod._anthropic_sdk = sdk_mock
     mod._ANTHROPIC_AVAILABLE = True
@@ -91,6 +92,7 @@ def _patch_anthropic_sdk(sdk_mock: MagicMock):
 @contextmanager
 def _patch_openai_sdk(sdk_mock: MagicMock):
     import missy.providers.openai_provider as mod
+
     old_sdk, old_avail = mod._openai_sdk, mod._OPENAI_AVAILABLE
     mod._openai_sdk = sdk_mock
     mod._OPENAI_AVAILABLE = True
@@ -126,9 +128,7 @@ class TestAnthropicProviderSetupTokenRejection:
     def test_setup_token_is_rejected_and_key_set_to_none(self):
         from missy.providers.anthropic_provider import AnthropicProvider
 
-        provider = AnthropicProvider(
-            _provider_config(api_key="sk-ant-oat--supersecretoauthtoken")
-        )
+        provider = AnthropicProvider(_provider_config(api_key="sk-ant-oat--supersecretoauthtoken"))
         assert provider._api_key is None
 
     def test_setup_token_makes_provider_unavailable(self):
@@ -138,9 +138,7 @@ class TestAnthropicProviderSetupTokenRejection:
         old = mod._ANTHROPIC_AVAILABLE
         try:
             mod._ANTHROPIC_AVAILABLE = True
-            provider = AnthropicProvider(
-                _provider_config(api_key="sk-ant-oat--sometoken")
-            )
+            provider = AnthropicProvider(_provider_config(api_key="sk-ant-oat--sometoken"))
             assert provider.is_available() is False
         finally:
             mod._ANTHROPIC_AVAILABLE = old
@@ -224,9 +222,7 @@ class TestAnthropicProviderCompleteWithTools:
         with _patch_anthropic_sdk(sdk_mock):
             sdk_mock.Anthropic.return_value.messages.create.return_value = resp
             provider = AnthropicProvider(_provider_config())
-            result = provider.complete_with_tools(
-                [Message(role="user", content="Hello")], []
-            )
+            result = provider.complete_with_tools([Message(role="user", content="Hello")], [])
 
         assert result.content == "Here is my answer."
         assert result.finish_reason == "stop"
@@ -345,8 +341,8 @@ class TestAnthropicProviderCompleteWithTools:
         from missy.providers.anthropic_provider import AnthropicProvider
 
         sdk_mock = _make_anthropic_sdk()
-        sdk_mock.Anthropic.return_value.messages.create.side_effect = (
-            sdk_mock.APITimeoutError("timed out")
+        sdk_mock.Anthropic.return_value.messages.create.side_effect = sdk_mock.APITimeoutError(
+            "timed out"
         )
         with _patch_anthropic_sdk(sdk_mock):
             provider = AnthropicProvider(_provider_config())
@@ -357,8 +353,8 @@ class TestAnthropicProviderCompleteWithTools:
         from missy.providers.anthropic_provider import AnthropicProvider
 
         sdk_mock = _make_anthropic_sdk()
-        sdk_mock.Anthropic.return_value.messages.create.side_effect = (
-            sdk_mock.AuthenticationError("bad key")
+        sdk_mock.Anthropic.return_value.messages.create.side_effect = sdk_mock.AuthenticationError(
+            "bad key"
         )
         with _patch_anthropic_sdk(sdk_mock):
             provider = AnthropicProvider(_provider_config())
@@ -369,8 +365,8 @@ class TestAnthropicProviderCompleteWithTools:
         from missy.providers.anthropic_provider import AnthropicProvider
 
         sdk_mock = _make_anthropic_sdk()
-        sdk_mock.Anthropic.return_value.messages.create.side_effect = (
-            sdk_mock.APIError("server error")
+        sdk_mock.Anthropic.return_value.messages.create.side_effect = sdk_mock.APIError(
+            "server error"
         )
         with _patch_anthropic_sdk(sdk_mock):
             provider = AnthropicProvider(_provider_config())
@@ -493,8 +489,8 @@ class TestAnthropicProviderStream:
         from missy.providers.anthropic_provider import AnthropicProvider
 
         sdk_mock = _make_anthropic_sdk()
-        sdk_mock.Anthropic.return_value.messages.stream.side_effect = (
-            sdk_mock.APITimeoutError("timed out")
+        sdk_mock.Anthropic.return_value.messages.stream.side_effect = sdk_mock.APITimeoutError(
+            "timed out"
         )
         with _patch_anthropic_sdk(sdk_mock):
             provider = AnthropicProvider(_provider_config())
@@ -505,8 +501,8 @@ class TestAnthropicProviderStream:
         from missy.providers.anthropic_provider import AnthropicProvider
 
         sdk_mock = _make_anthropic_sdk()
-        sdk_mock.Anthropic.return_value.messages.stream.side_effect = (
-            sdk_mock.AuthenticationError("bad key")
+        sdk_mock.Anthropic.return_value.messages.stream.side_effect = sdk_mock.AuthenticationError(
+            "bad key"
         )
         with _patch_anthropic_sdk(sdk_mock):
             provider = AnthropicProvider(_provider_config())
@@ -517,8 +513,8 @@ class TestAnthropicProviderStream:
         from missy.providers.anthropic_provider import AnthropicProvider
 
         sdk_mock = _make_anthropic_sdk()
-        sdk_mock.Anthropic.return_value.messages.stream.side_effect = (
-            sdk_mock.APIError("server error")
+        sdk_mock.Anthropic.return_value.messages.stream.side_effect = sdk_mock.APIError(
+            "server error"
         )
         with _patch_anthropic_sdk(sdk_mock):
             provider = AnthropicProvider(_provider_config())
@@ -620,9 +616,7 @@ class TestAnthropicCompleteKwargs:
         with _patch_anthropic_sdk(sdk_mock):
             sdk_mock.Anthropic.return_value.messages.create.return_value = resp
             provider = AnthropicProvider(_provider_config())
-            provider.complete(
-                [Message(role="user", content="hi")], model="claude-opus-4-6"
-            )
+            provider.complete([Message(role="user", content="hi")], model="claude-opus-4-6")
             call_kwargs = sdk_mock.Anthropic.return_value.messages.create.call_args[1]
 
         assert call_kwargs["model"] == "claude-opus-4-6"
@@ -785,16 +779,14 @@ class TestOpenAIProviderCompleteWithTools:
         from missy.providers.openai_provider import OpenAIProvider
 
         sdk_mock = _make_openai_sdk()
-        sdk_mock.OpenAI.return_value.chat.completions.create.return_value = (
-            self._make_response(content="plain text response")
+        sdk_mock.OpenAI.return_value.chat.completions.create.return_value = self._make_response(
+            content="plain text response"
         )
         with _patch_openai_sdk(sdk_mock):
             provider = OpenAIProvider(
                 _provider_config(name="openai", model="gpt-4o", api_key="sk-test")
             )
-            result = provider.complete_with_tools(
-                [Message(role="user", content="hi")], []
-            )
+            result = provider.complete_with_tools([Message(role="user", content="hi")], [])
 
         assert result.content == "plain text response"
         assert result.tool_calls == []
@@ -809,12 +801,10 @@ class TestOpenAIProviderCompleteWithTools:
         raw_tc.function.arguments = json.dumps({"query": "python"})
 
         sdk_mock = _make_openai_sdk()
-        sdk_mock.OpenAI.return_value.chat.completions.create.return_value = (
-            self._make_response(
-                content="",
-                tool_calls=[raw_tc],
-                finish_reason="tool_calls",
-            )
+        sdk_mock.OpenAI.return_value.chat.completions.create.return_value = self._make_response(
+            content="",
+            tool_calls=[raw_tc],
+            finish_reason="tool_calls",
         )
         with _patch_openai_sdk(sdk_mock):
             provider = OpenAIProvider(
@@ -841,12 +831,10 @@ class TestOpenAIProviderCompleteWithTools:
         raw_tc.function.arguments = "not valid json {{{"
 
         sdk_mock = _make_openai_sdk()
-        sdk_mock.OpenAI.return_value.chat.completions.create.return_value = (
-            self._make_response(
-                content="",
-                tool_calls=[raw_tc],
-                finish_reason="tool_calls",
-            )
+        sdk_mock.OpenAI.return_value.chat.completions.create.return_value = self._make_response(
+            content="",
+            tool_calls=[raw_tc],
+            finish_reason="tool_calls",
         )
         with _patch_openai_sdk(sdk_mock):
             provider = OpenAIProvider(
@@ -876,9 +864,7 @@ class TestOpenAIProviderCompleteWithTools:
             provider = OpenAIProvider(
                 _provider_config(name="openai", model="gpt-4o", api_key="sk-test")
             )
-            result = provider.complete_with_tools(
-                [Message(role="user", content="hi")], []
-            )
+            result = provider.complete_with_tools([Message(role="user", content="hi")], [])
 
         assert result.content == ""
         assert result.finish_reason == "stop"
@@ -887,8 +873,8 @@ class TestOpenAIProviderCompleteWithTools:
         from missy.providers.openai_provider import OpenAIProvider
 
         sdk_mock = _make_openai_sdk()
-        sdk_mock.OpenAI.return_value.chat.completions.create.return_value = (
-            self._make_response(content="ok")
+        sdk_mock.OpenAI.return_value.chat.completions.create.return_value = self._make_response(
+            content="ok"
         )
         with _patch_openai_sdk(sdk_mock):
             provider = OpenAIProvider(
@@ -909,8 +895,8 @@ class TestOpenAIProviderCompleteWithTools:
         from missy.providers.openai_provider import OpenAIProvider
 
         sdk_mock = _make_openai_sdk()
-        sdk_mock.OpenAI.return_value.chat.completions.create.return_value = (
-            self._make_response(content="ok")
+        sdk_mock.OpenAI.return_value.chat.completions.create.return_value = self._make_response(
+            content="ok"
         )
         with _patch_openai_sdk(sdk_mock):
             provider = OpenAIProvider(
@@ -949,8 +935,8 @@ class TestOpenAIProviderCompleteWithTools:
         from missy.providers.openai_provider import OpenAIProvider
 
         sdk_mock = _make_openai_sdk()
-        sdk_mock.OpenAI.return_value.chat.completions.create.side_effect = (
-            sdk_mock.APITimeoutError("timed out")
+        sdk_mock.OpenAI.return_value.chat.completions.create.side_effect = sdk_mock.APITimeoutError(
+            "timed out"
         )
         with _patch_openai_sdk(sdk_mock):
             provider = OpenAIProvider(
@@ -977,8 +963,8 @@ class TestOpenAIProviderCompleteWithTools:
         from missy.providers.openai_provider import OpenAIProvider
 
         sdk_mock = _make_openai_sdk()
-        sdk_mock.OpenAI.return_value.chat.completions.create.side_effect = (
-            sdk_mock.APIError("server error")
+        sdk_mock.OpenAI.return_value.chat.completions.create.side_effect = sdk_mock.APIError(
+            "server error"
         )
         with _patch_openai_sdk(sdk_mock):
             provider = OpenAIProvider(
@@ -991,9 +977,7 @@ class TestOpenAIProviderCompleteWithTools:
         from missy.providers.openai_provider import OpenAIProvider
 
         sdk_mock = _make_openai_sdk()
-        sdk_mock.OpenAI.return_value.chat.completions.create.side_effect = RuntimeError(
-            "kaboom"
-        )
+        sdk_mock.OpenAI.return_value.chat.completions.create.side_effect = RuntimeError("kaboom")
         with _patch_openai_sdk(sdk_mock):
             provider = OpenAIProvider(
                 _provider_config(name="openai", model="gpt-4o", api_key="sk-test")
@@ -1005,16 +989,14 @@ class TestOpenAIProviderCompleteWithTools:
         from missy.providers.openai_provider import OpenAIProvider
 
         sdk_mock = _make_openai_sdk()
-        sdk_mock.OpenAI.return_value.chat.completions.create.return_value = (
-            self._make_response(content="ok", finish_reason="content_filter")
+        sdk_mock.OpenAI.return_value.chat.completions.create.return_value = self._make_response(
+            content="ok", finish_reason="content_filter"
         )
         with _patch_openai_sdk(sdk_mock):
             provider = OpenAIProvider(
                 _provider_config(name="openai", model="gpt-4o", api_key="sk-test")
             )
-            result = provider.complete_with_tools(
-                [Message(role="user", content="hi")], []
-            )
+            result = provider.complete_with_tools([Message(role="user", content="hi")], [])
 
         assert result.finish_reason == "stop"
 
@@ -1022,16 +1004,14 @@ class TestOpenAIProviderCompleteWithTools:
         from missy.providers.openai_provider import OpenAIProvider
 
         sdk_mock = _make_openai_sdk()
-        sdk_mock.OpenAI.return_value.chat.completions.create.return_value = (
-            self._make_response(content="ok", finish_reason="length")
+        sdk_mock.OpenAI.return_value.chat.completions.create.return_value = self._make_response(
+            content="ok", finish_reason="length"
         )
         with _patch_openai_sdk(sdk_mock):
             provider = OpenAIProvider(
                 _provider_config(name="openai", model="gpt-4o", api_key="sk-test")
             )
-            result = provider.complete_with_tools(
-                [Message(role="user", content="hi")], []
-            )
+            result = provider.complete_with_tools([Message(role="user", content="hi")], [])
 
         assert result.finish_reason == "length"
 
@@ -1091,9 +1071,7 @@ class TestOpenAIProviderStream:
             provider = OpenAIProvider(
                 _provider_config(name="openai", model="gpt-4o", api_key="sk-test")
             )
-            list(
-                provider.stream([Message(role="user", content="hi")], system="Be concise.")
-            )
+            list(provider.stream([Message(role="user", content="hi")], system="Be concise."))
             call_kwargs = sdk_mock.OpenAI.return_value.chat.completions.create.call_args[1]
 
         messages_sent = call_kwargs["messages"]
@@ -1119,8 +1097,8 @@ class TestOpenAIProviderStream:
         from missy.providers.openai_provider import OpenAIProvider
 
         sdk_mock = _make_openai_sdk()
-        sdk_mock.OpenAI.return_value.chat.completions.create.side_effect = (
-            sdk_mock.APITimeoutError("timed out")
+        sdk_mock.OpenAI.return_value.chat.completions.create.side_effect = sdk_mock.APITimeoutError(
+            "timed out"
         )
         with _patch_openai_sdk(sdk_mock):
             provider = OpenAIProvider(
@@ -1147,8 +1125,8 @@ class TestOpenAIProviderStream:
         from missy.providers.openai_provider import OpenAIProvider
 
         sdk_mock = _make_openai_sdk()
-        sdk_mock.OpenAI.return_value.chat.completions.create.side_effect = (
-            sdk_mock.APIError("server error")
+        sdk_mock.OpenAI.return_value.chat.completions.create.side_effect = sdk_mock.APIError(
+            "server error"
         )
         with _patch_openai_sdk(sdk_mock):
             provider = OpenAIProvider(
@@ -1194,12 +1172,11 @@ class TestCodexExtractAccountId:
         from missy.providers.codex_provider import _extract_account_id
 
         payload = {
-            "https://api.openai.com/auth": {
-                "chatgpt_account_id": "acct_123"
-            },
+            "https://api.openai.com/auth": {"chatgpt_account_id": "acct_123"},
             "sub": "user_456",
         }
         import base64
+
         encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).rstrip(b"=").decode()
         token = f"header.{encoded}.signature"
         assert _extract_account_id(token) == "acct_123"
@@ -1212,6 +1189,7 @@ class TestCodexExtractAccountId:
             "sub": "user_789",
         }
         import base64
+
         encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).rstrip(b"=").decode()
         token = f"header.{encoded}.signature"
         assert _extract_account_id(token) == "user_789"
@@ -1226,6 +1204,7 @@ class TestCodexExtractAccountId:
         import base64
 
         from missy.providers.codex_provider import _extract_account_id
+
         bad_b64 = base64.urlsafe_b64encode(b"not-json").decode()
         token = f"header.{bad_b64}.signature"
         assert _extract_account_id(token) == ""
@@ -1290,9 +1269,7 @@ class TestCodexProviderInit:
     def test_init_with_config_sets_attributes(self):
         from missy.providers.codex_provider import CodexProvider
 
-        config = ProviderConfig(
-            name="openai-codex", model="gpt-5.2", api_key="tok_abc", timeout=60
-        )
+        config = ProviderConfig(name="openai-codex", model="gpt-5.2", api_key="tok_abc", timeout=60)
         provider = CodexProvider(config)
         assert provider._api_key == "tok_abc"
         assert provider._model == "gpt-5.2"
@@ -1428,10 +1405,12 @@ class TestCodexProviderStream:
             return list(provider.stream([Message(role="user", content="hi")]))
 
     def test_stream_yields_text_deltas(self):
-        lines = _make_sse_lines([
-            {"type": "response.output_text.delta", "delta": "Hello"},
-            {"type": "response.output_text.delta", "delta": " world"},
-        ])
+        lines = _make_sse_lines(
+            [
+                {"type": "response.output_text.delta", "delta": "Hello"},
+                {"type": "response.output_text.delta", "delta": " world"},
+            ]
+        )
         result = self._run_stream(lines)
         assert result == ["Hello", " world"]
 
@@ -1446,18 +1425,22 @@ class TestCodexProviderStream:
         assert result == ["hi"]
 
     def test_stream_skips_empty_delta(self):
-        lines = _make_sse_lines([
-            {"type": "response.output_text.delta", "delta": ""},
-            {"type": "response.output_text.delta", "delta": "real"},
-        ])
+        lines = _make_sse_lines(
+            [
+                {"type": "response.output_text.delta", "delta": ""},
+                {"type": "response.output_text.delta", "delta": "real"},
+            ]
+        )
         result = self._run_stream(lines)
         assert result == ["real"]
 
     def test_stream_skips_unknown_event_types(self):
-        lines = _make_sse_lines([
-            {"type": "response.created"},
-            {"type": "response.output_text.delta", "delta": "text"},
-        ])
+        lines = _make_sse_lines(
+            [
+                {"type": "response.created"},
+                {"type": "response.output_text.delta", "delta": "text"},
+            ]
+        )
         result = self._run_stream(lines)
         assert result == ["text"]
 
@@ -1467,9 +1450,11 @@ class TestCodexProviderStream:
         config = ProviderConfig(name="openai-codex", model="gpt-5.2", api_key="tok")
         provider = CodexProvider(config)
 
-        lines = _make_sse_lines([
-            {"type": "response.failed", "message": "rate limit exceeded"},
-        ])
+        lines = _make_sse_lines(
+            [
+                {"type": "response.failed", "message": "rate limit exceeded"},
+            ]
+        )
         mock_resp = MagicMock()
         mock_resp.__enter__ = MagicMock(return_value=mock_resp)
         mock_resp.__exit__ = MagicMock(return_value=False)
@@ -1486,9 +1471,11 @@ class TestCodexProviderStream:
         config = ProviderConfig(name="openai-codex", model="gpt-5.2", api_key="tok")
         provider = CodexProvider(config)
 
-        lines = _make_sse_lines([
-            {"type": "error", "error": {"message": "internal server error"}},
-        ])
+        lines = _make_sse_lines(
+            [
+                {"type": "error", "error": {"message": "internal server error"}},
+            ]
+        )
         mock_resp = MagicMock()
         mock_resp.__enter__ = MagicMock(return_value=mock_resp)
         mock_resp.__exit__ = MagicMock(return_value=False)
@@ -1510,9 +1497,7 @@ class TestCodexProviderStream:
         mock_resp_obj = MagicMock()
         mock_resp_obj.status_code = 401
         mock_resp_obj.text = "Unauthorized"
-        http_error = httpx.HTTPStatusError(
-            "401", request=MagicMock(), response=mock_resp_obj
-        )
+        http_error = httpx.HTTPStatusError("401", request=MagicMock(), response=mock_resp_obj)
 
         mock_resp = MagicMock()
         mock_resp.__enter__ = MagicMock(return_value=mock_resp)
@@ -1581,27 +1566,31 @@ class TestCodexProviderCompleteWithTools:
             )
 
     def test_plain_text_only_sets_finish_reason_stop(self):
-        lines = _make_sse_lines([
-            {"type": "response.output_text.delta", "delta": "Here is the answer."},
-        ])
+        lines = _make_sse_lines(
+            [
+                {"type": "response.output_text.delta", "delta": "Here is the answer."},
+            ]
+        )
         result = self._run(lines)
         assert result.content == "Here is the answer."
         assert result.finish_reason == "stop"
         assert result.tool_calls == []
 
     def test_tool_call_with_inline_arguments(self):
-        lines = _make_sse_lines([
-            {
-                "type": "response.output_item.added",
-                "item": {
-                    "type": "function_call",
-                    "call_id": "call_999",
-                    "name": "search",
-                    "arguments": json.dumps({"query": "test"}),
+        lines = _make_sse_lines(
+            [
+                {
+                    "type": "response.output_item.added",
+                    "item": {
+                        "type": "function_call",
+                        "call_id": "call_999",
+                        "name": "search",
+                        "arguments": json.dumps({"query": "test"}),
+                    },
                 },
-            },
-            {"type": "response.function_call_arguments.done"},
-        ])
+                {"type": "response.function_call_arguments.done"},
+            ]
+        )
         result = self._run(lines)
         assert result.finish_reason == "tool_calls"
         assert len(result.tool_calls) == 1
@@ -1610,49 +1599,55 @@ class TestCodexProviderCompleteWithTools:
         assert tc.arguments == {"query": "test"}
 
     def test_tool_call_with_streaming_argument_deltas(self):
-        lines = _make_sse_lines([
-            {
-                "type": "response.output_item.added",
-                "item": {
-                    "type": "function_call",
-                    "call_id": "call_111",
-                    "name": "calculator",
-                    "arguments": "",
+        lines = _make_sse_lines(
+            [
+                {
+                    "type": "response.output_item.added",
+                    "item": {
+                        "type": "function_call",
+                        "call_id": "call_111",
+                        "name": "calculator",
+                        "arguments": "",
+                    },
                 },
-            },
-            {"type": "response.function_call_arguments.delta", "delta": '{"n'},
-            {"type": "response.function_call_arguments.delta", "delta": 'um": 42}'},
-            {"type": "response.function_call_arguments.done"},
-        ])
+                {"type": "response.function_call_arguments.delta", "delta": '{"n'},
+                {"type": "response.function_call_arguments.delta", "delta": 'um": 42}'},
+                {"type": "response.function_call_arguments.done"},
+            ]
+        )
         result = self._run(lines)
         assert result.finish_reason == "tool_calls"
         assert len(result.tool_calls) == 1
         assert result.tool_calls[0].arguments == {"num": 42}
 
     def test_invalid_json_arguments_yields_empty_dict(self):
-        lines = _make_sse_lines([
-            {
-                "type": "response.output_item.added",
-                "item": {
-                    "type": "function_call",
-                    "call_id": "call_bad",
-                    "name": "broken",
-                    "arguments": "not json",
+        lines = _make_sse_lines(
+            [
+                {
+                    "type": "response.output_item.added",
+                    "item": {
+                        "type": "function_call",
+                        "call_id": "call_bad",
+                        "name": "broken",
+                        "arguments": "not json",
+                    },
                 },
-            },
-            {"type": "response.function_call_arguments.done"},
-        ])
+                {"type": "response.function_call_arguments.done"},
+            ]
+        )
         result = self._run(lines)
         assert result.tool_calls[0].arguments == {}
 
     def test_non_function_call_output_item_ignored(self):
-        lines = _make_sse_lines([
-            {
-                "type": "response.output_item.added",
-                "item": {"type": "message", "content": []},
-            },
-            {"type": "response.output_text.delta", "delta": "answer"},
-        ])
+        lines = _make_sse_lines(
+            [
+                {
+                    "type": "response.output_item.added",
+                    "item": {"type": "message", "content": []},
+                },
+                {"type": "response.output_text.delta", "delta": "answer"},
+            ]
+        )
         result = self._run(lines)
         assert result.finish_reason == "stop"
         assert result.tool_calls == []
@@ -1668,9 +1663,7 @@ class TestCodexProviderCompleteWithTools:
         mock_resp_obj = MagicMock()
         mock_resp_obj.status_code = 403
         mock_resp_obj.text = "Forbidden"
-        http_error = httpx.HTTPStatusError(
-            "403", request=MagicMock(), response=mock_resp_obj
-        )
+        http_error = httpx.HTTPStatusError("403", request=MagicMock(), response=mock_resp_obj)
         mock_resp = MagicMock()
         mock_resp.__enter__ = MagicMock(return_value=mock_resp)
         mock_resp.__exit__ = MagicMock(return_value=False)
@@ -1678,9 +1671,7 @@ class TestCodexProviderCompleteWithTools:
 
         with patch("missy.providers.codex_provider.httpx.stream", return_value=mock_resp):
             with pytest.raises(ProviderError, match="403"):
-                provider.complete_with_tools(
-                    [Message(role="user", content="hi")], []
-                )
+                provider.complete_with_tools([Message(role="user", content="hi")], [])
 
     def test_response_failed_event_raises_provider_error(self):
         from missy.providers.codex_provider import CodexProvider
@@ -1688,9 +1679,11 @@ class TestCodexProviderCompleteWithTools:
         config = ProviderConfig(name="openai-codex", model="gpt-5.2", api_key="tok")
         provider = CodexProvider(config)
 
-        lines = _make_sse_lines([
-            {"type": "response.failed", "message": "quota exceeded"},
-        ])
+        lines = _make_sse_lines(
+            [
+                {"type": "response.failed", "message": "quota exceeded"},
+            ]
+        )
         mock_resp = MagicMock()
         mock_resp.__enter__ = MagicMock(return_value=mock_resp)
         mock_resp.__exit__ = MagicMock(return_value=False)
@@ -1699,14 +1692,14 @@ class TestCodexProviderCompleteWithTools:
 
         with patch("missy.providers.codex_provider.httpx.stream", return_value=mock_resp):
             with pytest.raises(ProviderError, match="quota exceeded"):
-                provider.complete_with_tools(
-                    [Message(role="user", content="hi")], []
-                )
+                provider.complete_with_tools([Message(role="user", content="hi")], [])
 
     def test_accepts_prebuilt_dict_tools(self):
-        lines = _make_sse_lines([
-            {"type": "response.output_text.delta", "delta": "ok"},
-        ])
+        lines = _make_sse_lines(
+            [
+                {"type": "response.output_text.delta", "delta": "ok"},
+            ]
+        )
         tool_dict = {"type": "function", "name": "helper"}
         result = self._run(lines, tools=[tool_dict])
         assert result.content == "ok"

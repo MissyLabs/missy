@@ -110,9 +110,7 @@ class AnthropicProvider(BaseProvider):
                 API error, or timeout.
         """
         if not _ANTHROPIC_AVAILABLE:
-            raise ProviderError(
-                "anthropic SDK is not installed. Run: pip install anthropic"
-            )
+            raise ProviderError("anthropic SDK is not installed. Run: pip install anthropic")
 
         session_id = kwargs.pop("session_id", "")
         task_id = kwargs.pop("task_id", "")
@@ -163,8 +161,7 @@ class AnthropicProvider(BaseProvider):
             "prompt_tokens": getattr(usage_obj, "input_tokens", 0),
             "completion_tokens": getattr(usage_obj, "output_tokens", 0),
             "total_tokens": (
-                getattr(usage_obj, "input_tokens", 0)
-                + getattr(usage_obj, "output_tokens", 0)
+                getattr(usage_obj, "input_tokens", 0) + getattr(usage_obj, "output_tokens", 0)
             ),
         }
 
@@ -229,9 +226,7 @@ class AnthropicProvider(BaseProvider):
             ProviderError: On SDK import failure or API error.
         """
         if not _ANTHROPIC_AVAILABLE:
-            raise ProviderError(
-                "anthropic SDK is not installed. Run: pip install anthropic"
-            )
+            raise ProviderError("anthropic SDK is not installed. Run: pip install anthropic")
 
         tool_schemas = self.get_tool_schema(tools)
 
@@ -284,17 +279,14 @@ class AnthropicProvider(BaseProvider):
                     )
                 )
 
-        finish_reason = (
-            "tool_calls" if raw_response.stop_reason == "tool_use" else "stop"
-        )
+        finish_reason = "tool_calls" if raw_response.stop_reason == "tool_use" else "stop"
 
         usage_obj = raw_response.usage
         usage = {
             "prompt_tokens": getattr(usage_obj, "input_tokens", 0),
             "completion_tokens": getattr(usage_obj, "output_tokens", 0),
             "total_tokens": (
-                getattr(usage_obj, "input_tokens", 0)
-                + getattr(usage_obj, "output_tokens", 0)
+                getattr(usage_obj, "input_tokens", 0) + getattr(usage_obj, "output_tokens", 0)
             ),
         }
 
@@ -323,9 +315,7 @@ class AnthropicProvider(BaseProvider):
             ProviderError: On SDK import failure or API error.
         """
         if not _ANTHROPIC_AVAILABLE:
-            raise ProviderError(
-                "anthropic SDK is not installed. Run: pip install anthropic"
-            )
+            raise ProviderError("anthropic SDK is not installed. Run: pip install anthropic")
 
         system_content: str = system
         api_messages: list[dict] = []

@@ -100,9 +100,7 @@ class DiscordChannel(BaseChannel):
         self._channel_message_counts: dict[str, int] = {}
 
         # Auto-thread threshold: create a thread after N messages in a channel.
-        self._auto_thread_threshold: int = getattr(
-            account_config, "auto_thread_threshold", 0
-        )
+        self._auto_thread_threshold: int = getattr(account_config, "auto_thread_threshold", 0)
 
         # Pending evolution reactions: message_id -> proposal_id
         self._pending_evolutions: dict[str, str] = {}
@@ -265,7 +263,9 @@ class DiscordChannel(BaseChannel):
 
         # Discord hard limit is 2000 characters per message. Split if needed.
         _DISCORD_MAX = 1990
-        chunks = [message[i:i + _DISCORD_MAX] for i in range(0, max(len(message), 1), _DISCORD_MAX)]
+        chunks = [
+            message[i : i + _DISCORD_MAX] for i in range(0, max(len(message), 1), _DISCORD_MAX)
+        ]
 
         last_message_id: str | None = None
         try:
@@ -356,7 +356,9 @@ class DiscordChannel(BaseChannel):
                     logger.info(
                         "Discord send_with_retry succeeded on attempt %d/%d "
                         "after %.1fs (channel=%s)",
-                        attempt, max_attempts, _time.monotonic() - start,
+                        attempt,
+                        max_attempts,
+                        _time.monotonic() - start,
                         channel_id,
                     )
                 return msg_id
@@ -370,7 +372,11 @@ class DiscordChannel(BaseChannel):
                 logger.warning(
                     "Discord send_with_retry attempt %d/%d failed "
                     "(channel=%s); retrying in %.1fs: %s",
-                    attempt, max_attempts, channel_id, delay, exc,
+                    attempt,
+                    max_attempts,
+                    channel_id,
+                    delay,
+                    exc,
                 )
                 self._emit_audit(
                     "discord.channel.send_retry",
@@ -387,9 +393,10 @@ class DiscordChannel(BaseChannel):
 
         total_elapsed = _time.monotonic() - start
         logger.error(
-            "Discord send_with_retry exhausted all %d attempts over %.1fs "
-            "(channel=%s)",
-            max_attempts, total_elapsed, channel_id,
+            "Discord send_with_retry exhausted all %d attempts over %.1fs (channel=%s)",
+            max_attempts,
+            total_elapsed,
+            channel_id,
         )
         self._emit_audit(
             "discord.channel.send_failed",
@@ -447,7 +454,10 @@ class DiscordChannel(BaseChannel):
 
         logger.info(
             "Discord: MESSAGE_CREATE guild=%s channel=%s author=%s content=%r",
-            guild_id, channel_id, author_id, content[:80],
+            guild_id,
+            channel_id,
+            author_id,
+            content[:80],
         )
 
         # 1. Filter own-bot messages.
@@ -611,6 +621,7 @@ class DiscordChannel(BaseChannel):
         text = content.strip()
         # Strip leading bot mentions so "@Missy !join General" works.
         import re
+
         text = re.sub(r"^(<@!?\d+>\s*)+", "", text).strip()
         if not text.startswith("!"):
             return False
@@ -632,7 +643,10 @@ class DiscordChannel(BaseChannel):
                     async def _voice_agent_cb(prompt: str, session_id: str) -> str:
                         loop = asyncio.get_event_loop()
                         return await loop.run_in_executor(
-                            None, _rt.run, prompt, session_id,
+                            None,
+                            _rt.run,
+                            prompt,
+                            session_id,
                         )
 
                     agent_cb = _voice_agent_cb
@@ -824,17 +838,19 @@ class DiscordChannel(BaseChannel):
         # Channel allowlist check — match by ID or name.
         if guild_policy.allowed_channels:
             channel_name = str(
-                (data.get("channel") or {}).get("name", "")
-                or data.get("channel_name", "")
+                (data.get("channel") or {}).get("name", "") or data.get("channel_name", "")
             )
             # A message always has channel_id; name may be absent from Gateway events.
-            in_allowlist = (
-                channel_id in guild_policy.allowed_channels
-                or (channel_name and channel_name in guild_policy.allowed_channels)
+            in_allowlist = channel_id in guild_policy.allowed_channels or (
+                channel_name and channel_name in guild_policy.allowed_channels
             )
             logger.debug(
                 "Discord: channel check guild=%s channel_id=%s channel_name=%r allowlist=%s match=%s",
-                guild_id, channel_id, channel_name, guild_policy.allowed_channels, in_allowlist,
+                guild_id,
+                channel_id,
+                channel_name,
+                guild_policy.allowed_channels,
+                in_allowlist,
             )
             if not in_allowlist:
                 self._emit_audit(

@@ -33,15 +33,17 @@ def _make_voice_channel(*, channel_id: int = 100, name: str = "General"):
     ch = MagicMock()
     ch.id = channel_id
     ch.name = name
-    ch.connect = AsyncMock(return_value=MagicMock(
-        is_connected=MagicMock(return_value=True),
-        channel=ch,
-        disconnect=AsyncMock(),
-        move_to=AsyncMock(),
-        is_playing=MagicMock(return_value=False),
-        play=MagicMock(),
-        stop=MagicMock(),
-    ))
+    ch.connect = AsyncMock(
+        return_value=MagicMock(
+            is_connected=MagicMock(return_value=True),
+            channel=ch,
+            disconnect=AsyncMock(),
+            move_to=AsyncMock(),
+            is_playing=MagicMock(return_value=False),
+            play=MagicMock(),
+            stop=MagicMock(),
+        )
+    )
     return ch
 
 
@@ -245,7 +247,8 @@ class TestLeave:
         ch = _make_voice_channel(name="Lounge")
         vc = ch.connect.return_value
         manager._guild_states[999] = MagicMock(
-            voice_client=vc, lock=asyncio.Lock(),
+            voice_client=vc,
+            lock=asyncio.Lock(),
         )
 
         name = _run(manager.leave(999))
@@ -285,49 +288,74 @@ class TestVoiceCommands:
 
     def test_join_no_args_follows_user(self):
         voice = self._make_voice()
-        result = _run(maybe_handle_voice_command(
-            content="!join", channel_id="ch-1", guild_id="999",
-            author_id="42", voice=voice,
-        ))
+        result = _run(
+            maybe_handle_voice_command(
+                content="!join",
+                channel_id="ch-1",
+                guild_id="999",
+                author_id="42",
+                voice=voice,
+            )
+        )
         assert result.handled is True
         assert "General" in result.reply
         voice.join.assert_awaited_once_with(999, user_id=42)
 
     def test_join_by_name(self):
         voice = self._make_voice()
-        result = _run(maybe_handle_voice_command(
-            content="!join Music Room", channel_id="ch-1", guild_id="999",
-            author_id="42", voice=voice,
-        ))
+        result = _run(
+            maybe_handle_voice_command(
+                content="!join Music Room",
+                channel_id="ch-1",
+                guild_id="999",
+                author_id="42",
+                voice=voice,
+            )
+        )
         assert result.handled is True
         assert "Music Room" not in result.reply or "General" in result.reply
         voice.join.assert_awaited_once_with(999, channel_name="Music Room")
 
     def test_join_by_id(self):
         voice = self._make_voice()
-        result = _run(maybe_handle_voice_command(
-            content="!join 12345", channel_id="ch-1", guild_id="999",
-            author_id="42", voice=voice,
-        ))
+        result = _run(
+            maybe_handle_voice_command(
+                content="!join 12345",
+                channel_id="ch-1",
+                guild_id="999",
+                author_id="42",
+                voice=voice,
+            )
+        )
         assert result.handled is True
         voice.join.assert_awaited_once_with(999, channel_id=12345)
 
     def test_join_error_shown(self):
         voice = self._make_voice()
         voice.join = AsyncMock(side_effect=DiscordVoiceError("bad channel"))
-        result = _run(maybe_handle_voice_command(
-            content="!join nonexistent", channel_id="ch-1", guild_id="999",
-            author_id="42", voice=voice,
-        ))
+        result = _run(
+            maybe_handle_voice_command(
+                content="!join nonexistent",
+                channel_id="ch-1",
+                guild_id="999",
+                author_id="42",
+                voice=voice,
+            )
+        )
         assert result.handled is True
         assert "bad channel" in result.reply
 
     def test_leave(self):
         voice = self._make_voice()
-        result = _run(maybe_handle_voice_command(
-            content="!leave", channel_id="ch-1", guild_id="999",
-            author_id="42", voice=voice,
-        ))
+        result = _run(
+            maybe_handle_voice_command(
+                content="!leave",
+                channel_id="ch-1",
+                guild_id="999",
+                author_id="42",
+                voice=voice,
+            )
+        )
         assert result.handled is True
         assert "General" in result.reply
         voice.leave.assert_awaited_once_with(999)
@@ -335,91 +363,141 @@ class TestVoiceCommands:
     def test_leave_not_connected(self):
         voice = self._make_voice()
         voice.leave = AsyncMock(return_value=None)
-        result = _run(maybe_handle_voice_command(
-            content="!leave", channel_id="ch-1", guild_id="999",
-            author_id="42", voice=voice,
-        ))
+        result = _run(
+            maybe_handle_voice_command(
+                content="!leave",
+                channel_id="ch-1",
+                guild_id="999",
+                author_id="42",
+                voice=voice,
+            )
+        )
         assert result.handled is True
         assert "not in" in result.reply.lower()
 
     def test_say(self):
         voice = self._make_voice()
-        result = _run(maybe_handle_voice_command(
-            content="!say hello world", channel_id="ch-1", guild_id="999",
-            author_id="42", voice=voice,
-        ))
+        result = _run(
+            maybe_handle_voice_command(
+                content="!say hello world",
+                channel_id="ch-1",
+                guild_id="999",
+                author_id="42",
+                voice=voice,
+            )
+        )
         assert result.handled is True
         assert result.reply is None  # no text reply on success
         voice.say.assert_awaited_once_with(999, "hello world")
 
     def test_say_no_text(self):
         voice = self._make_voice()
-        result = _run(maybe_handle_voice_command(
-            content="!say", channel_id="ch-1", guild_id="999",
-            author_id="42", voice=voice,
-        ))
+        result = _run(
+            maybe_handle_voice_command(
+                content="!say",
+                channel_id="ch-1",
+                guild_id="999",
+                author_id="42",
+                voice=voice,
+            )
+        )
         assert result.handled is True
         assert "usage" in result.reply.lower()
 
     def test_say_error(self):
         voice = self._make_voice()
         voice.say = AsyncMock(side_effect=DiscordVoiceError("not connected"))
-        result = _run(maybe_handle_voice_command(
-            content="!say hi", channel_id="ch-1", guild_id="999",
-            author_id="42", voice=voice,
-        ))
+        result = _run(
+            maybe_handle_voice_command(
+                content="!say hi",
+                channel_id="ch-1",
+                guild_id="999",
+                author_id="42",
+                voice=voice,
+            )
+        )
         assert result.handled is True
         assert "not connected" in result.reply
 
     def test_non_voice_command_ignored(self):
-        result = _run(maybe_handle_voice_command(
-            content="!foo", channel_id="ch-1", guild_id="999",
-            author_id="42", voice=None,
-        ))
+        result = _run(
+            maybe_handle_voice_command(
+                content="!foo",
+                channel_id="ch-1",
+                guild_id="999",
+                author_id="42",
+                voice=None,
+            )
+        )
         assert result.handled is False
 
     def test_dm_rejected(self):
         voice = self._make_voice()
-        result = _run(maybe_handle_voice_command(
-            content="!join", channel_id="ch-1", guild_id=None,
-            author_id="42", voice=voice,
-        ))
+        result = _run(
+            maybe_handle_voice_command(
+                content="!join",
+                channel_id="ch-1",
+                guild_id=None,
+                author_id="42",
+                voice=voice,
+            )
+        )
         assert result.handled is True
         assert "servers" in result.reply.lower()
 
     def test_voice_not_enabled(self):
-        result = _run(maybe_handle_voice_command(
-            content="!join", channel_id="ch-1", guild_id="999",
-            author_id="42", voice=None,
-        ))
+        result = _run(
+            maybe_handle_voice_command(
+                content="!join",
+                channel_id="ch-1",
+                guild_id="999",
+                author_id="42",
+                voice=None,
+            )
+        )
         assert result.handled is True
         assert "not enabled" in result.reply.lower()
 
     def test_voice_not_ready(self):
         voice = self._make_voice()
         voice.is_ready = False
-        result = _run(maybe_handle_voice_command(
-            content="!join", channel_id="ch-1", guild_id="999",
-            author_id="42", voice=voice,
-        ))
+        result = _run(
+            maybe_handle_voice_command(
+                content="!join",
+                channel_id="ch-1",
+                guild_id="999",
+                author_id="42",
+                voice=voice,
+            )
+        )
         assert result.handled is True
         assert "starting up" in result.reply.lower()
 
     def test_plain_message_ignored(self):
-        result = _run(maybe_handle_voice_command(
-            content="hello world", channel_id="ch-1", guild_id="999",
-            author_id="42", voice=None,
-        ))
+        result = _run(
+            maybe_handle_voice_command(
+                content="hello world",
+                channel_id="ch-1",
+                guild_id="999",
+                author_id="42",
+                voice=None,
+            )
+        )
         assert result.handled is False
 
     def test_join_shows_capabilities(self):
         voice = self._make_voice()
         voice.can_listen = True
         voice.can_speak = True
-        result = _run(maybe_handle_voice_command(
-            content="!join", channel_id="ch-1", guild_id="999",
-            author_id="42", voice=voice,
-        ))
+        result = _run(
+            maybe_handle_voice_command(
+                content="!join",
+                channel_id="ch-1",
+                guild_id="999",
+                author_id="42",
+                voice=voice,
+            )
+        )
         assert "listening" in result.reply.lower()
         assert "speaking" in result.reply.lower()
 
@@ -427,10 +505,15 @@ class TestVoiceCommands:
         voice = self._make_voice()
         voice.can_listen = False
         voice.can_speak = False
-        result = _run(maybe_handle_voice_command(
-            content="!join", channel_id="ch-1", guild_id="999",
-            author_id="42", voice=voice,
-        ))
+        result = _run(
+            maybe_handle_voice_command(
+                content="!join",
+                channel_id="ch-1",
+                guild_id="999",
+                author_id="42",
+                voice=voice,
+            )
+        )
         assert "listening" not in result.reply.lower()
         assert "speaking" not in result.reply.lower()
         assert "General" in result.reply
@@ -479,9 +562,13 @@ class TestSpeechCollectorSink:
     def _make_sink_cls(self):
         """Create a sink class with a mock AudioSink base."""
         mock_voice_recv = MagicMock()
-        mock_voice_recv.AudioSink = type("AudioSink", (), {
-            "__init__": lambda self: None,
-        })
+        mock_voice_recv.AudioSink = type(
+            "AudioSink",
+            (),
+            {
+                "__init__": lambda self: None,
+            },
+        )
         return _make_sink_class(mock_voice_recv)
 
     def test_buffers_audio_per_user(self):
@@ -628,9 +715,13 @@ class TestListenWatchdog:
 
         # Build a mock voice_recv module.
         mock_voice_recv = MagicMock()
-        mock_voice_recv.AudioSink = type("AudioSink", (), {
-            "__init__": lambda self: None,
-        })
+        mock_voice_recv.AudioSink = type(
+            "AudioSink",
+            (),
+            {
+                "__init__": lambda self: None,
+            },
+        )
         mgr._voice_recv = mock_voice_recv
 
         # Mock voice client with dead router thread.
@@ -647,6 +738,7 @@ class TestListenWatchdog:
         # Run the watchdog for one tick.
         async def _run_one_tick():
             import missy.channels.discord.voice as vmod
+
             original = vmod._WATCHDOG_INTERVAL_S
             vmod._WATCHDOG_INTERVAL_S = 0.01
             task = asyncio.ensure_future(mgr._listen_watchdog(1))
@@ -693,6 +785,7 @@ class TestListenWatchdog:
 
         async def _run_one_tick():
             import missy.channels.discord.voice as vmod
+
             original = vmod._WATCHDOG_INTERVAL_S
             vmod._WATCHDOG_INTERVAL_S = 0.01
             task = asyncio.ensure_future(mgr._listen_watchdog(1))

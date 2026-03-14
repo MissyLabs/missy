@@ -13,7 +13,7 @@ from uuid import UUID, uuid4
 class SessionMode(str, enum.Enum):
     """Capability mode for a session."""
 
-    FULL = "full"          # All policy-approved capabilities available.
+    FULL = "full"  # All policy-approved capabilities available.
     NO_TOOLS = "no_tools"  # Tools disabled; LLM chat only.
     SAFE_CHAT = "safe_chat"  # No tools, no skills, no plugins.
 

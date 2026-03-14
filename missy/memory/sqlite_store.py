@@ -1,4 +1,5 @@
 """SQLite-backed memory store with full-text search."""
+
 from __future__ import annotations
 
 import json
@@ -230,9 +231,7 @@ class SQLiteMemoryStore:
     # Read operations
     # ------------------------------------------------------------------
 
-    def get_session_turns(
-        self, session_id: str, limit: int = 100
-    ) -> list[ConversationTurn]:
+    def get_session_turns(self, session_id: str, limit: int = 100) -> list[ConversationTurn]:
         """Return up to *limit* turns for *session_id* in chronological order.
 
         Args:
@@ -586,9 +585,7 @@ class SQLiteMemoryStore:
             Number of rows deleted.
         """
         conn = self._conn()
-        cutoff = (
-            datetime.now(UTC) - timedelta(days=older_than_days)
-        ).isoformat()
+        cutoff = (datetime.now(UTC) - timedelta(days=older_than_days)).isoformat()
         cur = conn.execute("DELETE FROM turns WHERE timestamp < ?", (cutoff,))
         conn.commit()
         return cur.rowcount

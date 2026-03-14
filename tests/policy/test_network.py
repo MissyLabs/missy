@@ -222,10 +222,13 @@ class TestDNSFallback:
 
     def test_dns_failure_falls_through_to_deny(self):
         engine = make_engine(allowed_cidrs=["10.0.0.0/8"])
-        with patch(
-            "missy.policy.network.socket.getaddrinfo",
-            side_effect=OSError("Name or service not known"),
-        ), pytest.raises(PolicyViolationError):
+        with (
+            patch(
+                "missy.policy.network.socket.getaddrinfo",
+                side_effect=OSError("Name or service not known"),
+            ),
+            pytest.raises(PolicyViolationError),
+        ):
             engine.check_host("unresolvable.invalid")
 
     def test_multiple_dns_results_first_match_wins(self):

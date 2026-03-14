@@ -95,9 +95,7 @@ class OpenAIProvider(BaseProvider):
                 API error, or timeout.
         """
         if not _OPENAI_AVAILABLE:
-            raise ProviderError(
-                "openai SDK is not installed. Run: pip install openai"
-            )
+            raise ProviderError("openai SDK is not installed. Run: pip install openai")
 
         session_id = kwargs.pop("session_id", "")
         task_id = kwargs.pop("task_id", "")
@@ -126,9 +124,7 @@ class OpenAIProvider(BaseProvider):
             raw_response = client.chat.completions.create(**call_kwargs)
         except _openai_sdk.APITimeoutError as exc:
             self._emit_event(session_id, task_id, "error", str(exc))
-            raise ProviderError(
-                f"OpenAI request timed out after {self._timeout}s: {exc}"
-            ) from exc
+            raise ProviderError(f"OpenAI request timed out after {self._timeout}s: {exc}") from exc
         except _openai_sdk.AuthenticationError as exc:
             self._emit_event(session_id, task_id, "error", str(exc))
             raise ProviderError(f"OpenAI authentication failed: {exc}") from exc
@@ -211,9 +207,7 @@ class OpenAIProvider(BaseProvider):
             ProviderError: On SDK import failure or API error.
         """
         if not _OPENAI_AVAILABLE:
-            raise ProviderError(
-                "openai SDK is not installed. Run: pip install openai"
-            )
+            raise ProviderError("openai SDK is not installed. Run: pip install openai")
 
         tool_schemas = self.get_tool_schema(tools)
 
@@ -243,9 +237,7 @@ class OpenAIProvider(BaseProvider):
             client = _openai_sdk.OpenAI(**client_kwargs)
             raw_response = client.chat.completions.create(**call_kwargs)
         except _openai_sdk.APITimeoutError as exc:
-            raise ProviderError(
-                f"OpenAI request timed out after {self._timeout}s: {exc}"
-            ) from exc
+            raise ProviderError(f"OpenAI request timed out after {self._timeout}s: {exc}") from exc
         except _openai_sdk.AuthenticationError as exc:
             raise ProviderError(f"OpenAI authentication failed: {exc}") from exc
         except _openai_sdk.APIError as exc:
@@ -308,9 +300,7 @@ class OpenAIProvider(BaseProvider):
             ProviderError: On SDK import failure or API error.
         """
         if not _OPENAI_AVAILABLE:
-            raise ProviderError(
-                "openai SDK is not installed. Run: pip install openai"
-            )
+            raise ProviderError("openai SDK is not installed. Run: pip install openai")
 
         api_messages: list[dict] = []
         has_system = any(m.role == "system" for m in messages)
@@ -338,9 +328,7 @@ class OpenAIProvider(BaseProvider):
                 delta = chunk.choices[0].delta.content if chunk.choices else None
                 yield delta or ""
         except _openai_sdk.APITimeoutError as exc:
-            raise ProviderError(
-                f"OpenAI stream timed out after {self._timeout}s: {exc}"
-            ) from exc
+            raise ProviderError(f"OpenAI stream timed out after {self._timeout}s: {exc}") from exc
         except _openai_sdk.AuthenticationError as exc:
             raise ProviderError(f"OpenAI authentication failed: {exc}") from exc
         except _openai_sdk.APIError as exc:

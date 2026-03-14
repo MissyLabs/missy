@@ -50,8 +50,7 @@ class FSTool(BaseTool):
     name = "fs_tool"
     description = "Needs filesystem"
     permissions = ToolPermissions(
-        filesystem_read=True, filesystem_write=True,
-        allowed_paths=["/tmp/test"]
+        filesystem_read=True, filesystem_write=True, allowed_paths=["/tmp/test"]
     )
 
     def execute(self, **kwargs):
@@ -90,6 +89,7 @@ class TestToolRegistryPolicyChecks:
     def test_policy_not_initialized_skips_gracefully(self):
         """When PolicyEngine is not initialized, execution proceeds."""
         import missy.policy.engine as pe
+
         old = pe._engine
         pe._engine = None
         try:
@@ -103,8 +103,11 @@ class TestToolRegistryPolicyChecks:
     @patch("missy.tools.registry.get_policy_engine")
     def test_policy_violation_returns_failure(self, mock_get_engine):
         from missy.core.exceptions import PolicyViolationError
+
         engine = MagicMock()
-        engine.check_network.side_effect = PolicyViolationError("blocked", category="network", detail="host not allowed")
+        engine.check_network.side_effect = PolicyViolationError(
+            "blocked", category="network", detail="host not allowed"
+        )
         mock_get_engine.return_value = engine
 
         reg = ToolRegistry()
@@ -161,6 +164,7 @@ class TestSingleton:
 
     def test_get_without_init_raises(self):
         import missy.tools.registry as mod
+
         with mod._lock:
             old = mod._registry
             mod._registry = None

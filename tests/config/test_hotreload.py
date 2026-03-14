@@ -52,7 +52,8 @@ class TestConfigWatcherDetectsChanges:
         callback = MagicMock()
 
         w = ConfigWatcher(
-            str(cfg), callback,
+            str(cfg),
+            callback,
             debounce_seconds=0.1,
             poll_interval=0.05,
         )

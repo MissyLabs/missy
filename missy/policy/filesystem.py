@@ -81,9 +81,7 @@ class FilesystemPolicyEngine:
         raise PolicyViolationError(
             f"Filesystem write denied: {str(path)!r} is not within an allowed write path.",
             category="filesystem",
-            detail=(
-                f"Resolved path {str(resolved)!r} is not under any allowed_write_paths entry."
-            ),
+            detail=(f"Resolved path {str(resolved)!r} is not under any allowed_write_paths entry."),
         )
 
     def check_read(
@@ -117,9 +115,7 @@ class FilesystemPolicyEngine:
         raise PolicyViolationError(
             f"Filesystem read denied: {str(path)!r} is not within an allowed read path.",
             category="filesystem",
-            detail=(
-                f"Resolved path {str(resolved)!r} is not under any allowed_read_paths entry."
-            ),
+            detail=(f"Resolved path {str(resolved)!r} is not under any allowed_read_paths entry."),
         )
 
     # ------------------------------------------------------------------

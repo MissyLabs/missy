@@ -119,7 +119,7 @@ class TestSetGet:
 
     def test_value_with_special_characters(self, tmp_path):
         vault = make_vault(tmp_path)
-        special = 'sk-abc!@#$%^&*()_+-={}[]|;\':",./<>?'
+        special = "sk-abc!@#$%^&*()_+-={}[]|;':\",./<>?"
         vault.set("SPECIAL", special)
         assert vault.get("SPECIAL") == special
 
@@ -273,6 +273,7 @@ class TestDecryptionFailure:
         v1.set("SECRET", "value")
         # Replace the key file with a fresh random key
         import secrets as _secrets
+
         v1._key_path.write_bytes(_secrets.token_bytes(32))
         v2 = Vault(vault_dir=vault_dir)
         with pytest.raises(VaultError, match="Cannot decrypt vault"):

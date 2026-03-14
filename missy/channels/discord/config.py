@@ -100,7 +100,7 @@ class DiscordAccountConfig:
     """
 
     token_env_var: str = "DISCORD_BOT_TOKEN"
-    token: str | None = None          # direct token (takes precedence over token_env_var)
+    token: str | None = None  # direct token (takes precedence over token_env_var)
     account_id: str | None = None
     application_id: str = ""
     guild_policies: dict[str, DiscordGuildPolicy] = field(default_factory=dict)
@@ -122,7 +122,8 @@ class DiscordAccountConfig:
             if self.token.startswith("vault://"):
                 try:
                     from missy.security.vault import Vault
-                    key = self.token[len("vault://"):]
+
+                    key = self.token[len("vault://") :]
                     return Vault().get(key)
                 except Exception:
                     pass

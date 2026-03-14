@@ -20,10 +20,10 @@ import re
 from dataclasses import dataclass, field
 
 _COMPOUND_PATTERNS = [
-    re.compile(r'\b(and then|then|after that|followed by|subsequently)\b', re.I),
-    re.compile(r'^\s*\d+[\.\)]\s', re.M),   # numbered list
-    re.compile(r'^\s*[-*]\s', re.M),          # bullet list
-    re.compile(r'\b(first|second|third|finally|lastly)\b', re.I),
+    re.compile(r"\b(and then|then|after that|followed by|subsequently)\b", re.I),
+    re.compile(r"^\s*\d+[\.\)]\s", re.M),  # numbered list
+    re.compile(r"^\s*[-*]\s", re.M),  # bullet list
+    re.compile(r"\b(first|second|third|finally|lastly)\b", re.I),
 ]
 
 

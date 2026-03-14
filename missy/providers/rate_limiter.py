@@ -49,9 +49,7 @@ class RateLimitExceeded(Exception):
 
     def __init__(self, wait_seconds: float) -> None:
         self.wait_seconds = wait_seconds
-        super().__init__(
-            f"Rate limit exceeded; would need to wait {wait_seconds:.1f}s"
-        )
+        super().__init__(f"Rate limit exceeded; would need to wait {wait_seconds:.1f}s")
 
 
 class RateLimiter:

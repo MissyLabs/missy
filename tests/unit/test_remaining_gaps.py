@@ -36,6 +36,7 @@ class TestFasterWhisperSTTLoad:
 
     def _make_stt(self, model_size="base.en", device="cpu", compute_type="int8"):
         from missy.channels.voice.stt.whisper import FasterWhisperSTT
+
         return FasterWhisperSTT(model_size=model_size, device=device, compute_type=compute_type)
 
     def test_load_imports_and_creates_model(self):
@@ -44,7 +45,9 @@ class TestFasterWhisperSTTLoad:
         mock_model_instance = MagicMock()
         mock_model_cls.return_value = mock_model_instance
 
-        with patch.dict("sys.modules", {"faster_whisper": types.SimpleNamespace(WhisperModel=mock_model_cls)}):
+        with patch.dict(
+            "sys.modules", {"faster_whisper": types.SimpleNamespace(WhisperModel=mock_model_cls)}
+        ):
             stt.load()
 
         assert stt.is_loaded() is True
@@ -54,7 +57,9 @@ class TestFasterWhisperSTTLoad:
         stt = self._make_stt()
         mock_model_cls = MagicMock(return_value=MagicMock())
 
-        with patch.dict("sys.modules", {"faster_whisper": types.SimpleNamespace(WhisperModel=mock_model_cls)}):
+        with patch.dict(
+            "sys.modules", {"faster_whisper": types.SimpleNamespace(WhisperModel=mock_model_cls)}
+        ):
             stt.load()
             stt.load()  # second call should be no-op
 
@@ -63,6 +68,7 @@ class TestFasterWhisperSTTLoad:
     def test_load_raises_import_error_when_faster_whisper_missing(self):
         stt = self._make_stt()
         import sys
+
         saved = sys.modules.pop("faster_whisper", None)
         try:
             with pytest.raises(ImportError, match="faster-whisper"):
@@ -75,7 +81,9 @@ class TestFasterWhisperSTTLoad:
         stt = self._make_stt()
         mock_model_cls = MagicMock(return_value=MagicMock())
 
-        with patch.dict("sys.modules", {"faster_whisper": types.SimpleNamespace(WhisperModel=mock_model_cls)}):
+        with patch.dict(
+            "sys.modules", {"faster_whisper": types.SimpleNamespace(WhisperModel=mock_model_cls)}
+        ):
             stt.load()
 
         assert stt.is_loaded() is True
@@ -94,12 +102,14 @@ class TestFasterWhisperSTTAutoDevice:
 
     def _make_stt(self, device="auto", compute_type="auto"):
         from missy.channels.voice.stt.whisper import FasterWhisperSTT
+
         return FasterWhisperSTT(device=device, compute_type=compute_type)
 
     def test_auto_device_falls_back_to_cpu_when_torch_missing(self):
         import sys
 
         from missy.channels.voice.stt.whisper import FasterWhisperSTT
+
         # Remove torch and ctranslate2 so detection falls through to cpu
         saved_torch = sys.modules.pop("torch", None)
         saved_ct2 = sys.modules.pop("ctranslate2", None)
@@ -114,6 +124,7 @@ class TestFasterWhisperSTTAutoDevice:
 
     def test_auto_device_uses_cuda_when_torch_available(self):
         from missy.channels.voice.stt.whisper import FasterWhisperSTT
+
         mock_torch = MagicMock()
         mock_torch.cuda.is_available.return_value = True
         with patch.dict("sys.modules", {"torch": mock_torch}):
@@ -122,9 +133,11 @@ class TestFasterWhisperSTTAutoDevice:
 
     def test_auto_device_uses_cuda_via_ctranslate2_when_torch_missing(self):
         from missy.channels.voice.stt.whisper import FasterWhisperSTT
+
         mock_ct2 = MagicMock()
         mock_ct2.get_cuda_device_count.return_value = 1
         import sys
+
         saved_torch = sys.modules.pop("torch", None)
         try:
             with patch.dict("sys.modules", {"ctranslate2": mock_ct2}):
@@ -136,6 +149,7 @@ class TestFasterWhisperSTTAutoDevice:
 
     def test_auto_compute_type_float16_for_cuda(self):
         from missy.channels.voice.stt.whisper import FasterWhisperSTT
+
         stt = FasterWhisperSTT(device="cuda", compute_type="auto")
         device, compute_type = stt._resolve_device_and_compute()
         assert device == "cuda"
@@ -143,23 +157,29 @@ class TestFasterWhisperSTTAutoDevice:
 
     def test_auto_compute_type_int8_for_cpu(self):
         from missy.channels.voice.stt.whisper import FasterWhisperSTT
+
         stt = FasterWhisperSTT(device="cpu", compute_type="auto")
         device, compute_type = stt._resolve_device_and_compute()
         assert compute_type == "int8"
 
     def test_explicit_compute_type_forwarded_unchanged(self):
         from missy.channels.voice.stt.whisper import FasterWhisperSTT
+
         stt = FasterWhisperSTT(device="cpu", compute_type="float32")
         _, compute_type = stt._resolve_device_and_compute()
         assert compute_type == "float32"
 
     def test_auto_device_resolved_during_load(self):
         from missy.channels.voice.stt.whisper import FasterWhisperSTT
+
         stt = FasterWhisperSTT(device="auto", compute_type="auto")
         mock_model_cls = MagicMock(return_value=MagicMock())
         with (
             patch.object(FasterWhisperSTT, "_detect_device", return_value="cpu"),
-            patch.dict("sys.modules", {"faster_whisper": types.SimpleNamespace(WhisperModel=mock_model_cls)}),
+            patch.dict(
+                "sys.modules",
+                {"faster_whisper": types.SimpleNamespace(WhisperModel=mock_model_cls)},
+            ),
         ):
             stt.load()
         assert stt._resolved_device == "cpu"
@@ -169,6 +189,7 @@ class TestFasterWhisperSTTAutoDevice:
 def _numpy_available() -> bool:
     try:
         import numpy  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -179,6 +200,7 @@ def _make_numpy_mock():
     # If real numpy is present, just use it.
     if _numpy_available():
         import numpy as np
+
         return np, {}
 
     # Build a minimal numpy mock using only stdlib so tests run without numpy.
@@ -190,6 +212,7 @@ def _make_numpy_mock():
         arr = MagicMock(name="ndarray")
         # Store raw values for astype
         import array as arr_mod
+
         raw = arr_mod.array("h")
         raw.frombytes(data[: n * 2])
         int_list = list(raw)
@@ -206,7 +229,7 @@ def _make_numpy_mock():
                 rows, cols = shape[0], shape[1]
                 matrix = []
                 for i in range(rows):
-                    matrix.append(floats[i * cols: (i + 1) * cols])
+                    matrix.append(floats[i * cols : (i + 1) * cols])
                 marr = MagicMock(name="matrix")
                 marr._matrix = matrix
 
@@ -236,6 +259,7 @@ class TestFasterWhisperSTTTranscribe:
 
     def _loaded_stt(self):
         from missy.channels.voice.stt.whisper import FasterWhisperSTT
+
         stt = FasterWhisperSTT(device="cpu", compute_type="int8")
         stt._model = MagicMock()
         stt._resolved_device = "cpu"
@@ -248,6 +272,7 @@ class TestFasterWhisperSTTTranscribe:
 
     async def test_transcribe_raises_when_not_loaded(self):
         from missy.channels.voice.stt.whisper import FasterWhisperSTT
+
         stt = FasterWhisperSTT()
         with pytest.raises(RuntimeError, match="load"):
             await stt.transcribe(self._make_pcm())
@@ -322,6 +347,7 @@ class TestFasterWhisperSTTTranscribe:
     async def test_transcribe_raises_import_error_without_numpy(self):
         stt = self._loaded_stt()
         import sys
+
         saved = sys.modules.pop("numpy", None)
         try:
             with pytest.raises(ImportError, match="numpy"):
@@ -388,6 +414,7 @@ class TestPiperTTSLoad:
 
     def test_load_resolves_binary_from_which(self, tmp_path):
         from missy.channels.voice.tts.piper import PiperTTS
+
         fake_onnx = tmp_path / "en_US-lessac-medium.onnx"
         fake_onnx.touch()
         tts = PiperTTS(piper_bin="piper", voice="en_US-lessac-medium")
@@ -403,6 +430,7 @@ class TestPiperTTSLoad:
 
     def test_load_falls_back_to_local_bin(self, tmp_path):
         from missy.channels.voice.tts.piper import PiperTTS
+
         fake_onnx = tmp_path / "en_US-lessac-medium.onnx"
         fake_onnx.touch()
         fake_bin = tmp_path / "piper"
@@ -421,6 +449,7 @@ class TestPiperTTSLoad:
 
     def test_load_raises_when_binary_not_found(self):
         from missy.channels.voice.tts.piper import PiperTTS
+
         tts = PiperTTS(piper_bin="nonexistent_piper")
         fake_missing_bin = Path("/nonexistent/piper")
 
@@ -433,6 +462,7 @@ class TestPiperTTSLoad:
 
     def test_load_raises_when_model_not_found(self, tmp_path):
         from missy.channels.voice.tts.piper import PiperTTS
+
         tts = PiperTTS(piper_bin="piper", voice="missing-voice")
 
         with (
@@ -444,6 +474,7 @@ class TestPiperTTSLoad:
 
     def test_load_idempotent(self, tmp_path):
         from missy.channels.voice.tts.piper import PiperTTS
+
         fake_onnx = tmp_path / "en_US-lessac-medium.onnx"
         fake_onnx.touch()
         tts = PiperTTS(piper_bin="piper", voice="en_US-lessac-medium")
@@ -459,6 +490,7 @@ class TestPiperTTSLoad:
 
     def test_unload_resets_state(self, tmp_path):
         from missy.channels.voice.tts.piper import PiperTTS
+
         fake_onnx = tmp_path / "en_US-lessac-medium.onnx"
         fake_onnx.touch()
         tts = PiperTTS(piper_bin="piper", voice="en_US-lessac-medium")
@@ -476,6 +508,7 @@ class TestPiperTTSLoad:
 
     def test_load_with_explicit_model_path(self, tmp_path):
         from missy.channels.voice.tts.piper import PiperTTS
+
         model_file = tmp_path / "my_voice.onnx"
         model_file.touch()
         tts = PiperTTS(piper_bin="piper", model_path=str(model_file))
@@ -487,6 +520,7 @@ class TestPiperTTSLoad:
 
     def test_load_raises_when_explicit_model_path_missing(self, tmp_path):
         from missy.channels.voice.tts.piper import PiperTTS
+
         tts = PiperTTS(piper_bin="piper", model_path=str(tmp_path / "nonexistent.onnx"))
 
         with patch("shutil.which", return_value="/usr/bin/piper"):
@@ -497,6 +531,7 @@ class TestPiperTTSLoad:
 class TestPiperTTSListVoices:
     def test_returns_empty_when_voices_dir_missing(self, tmp_path):
         from missy.channels.voice.tts.piper import PiperTTS
+
         tts = PiperTTS()
         missing_dir = tmp_path / "no_voices"
 
@@ -507,6 +542,7 @@ class TestPiperTTSListVoices:
 
     def test_returns_sorted_voice_stems(self, tmp_path):
         from missy.channels.voice.tts.piper import PiperTTS
+
         (tmp_path / "zz_voice.onnx").touch()
         (tmp_path / "aa_voice.onnx").touch()
         (tmp_path / "mm_voice.onnx").touch()
@@ -519,6 +555,7 @@ class TestPiperTTSListVoices:
 
     def test_ignores_non_onnx_files(self, tmp_path):
         from missy.channels.voice.tts.piper import PiperTTS
+
         (tmp_path / "voice.onnx").touch()
         (tmp_path / "config.json").touch()
         tts = PiperTTS()
@@ -533,6 +570,7 @@ class TestPiperTTSListVoices:
 class TestPiperTTSSynthesize:
     def _loaded_tts(self, tmp_path):
         from missy.channels.voice.tts.piper import PiperTTS
+
         fake_onnx = tmp_path / "en_US-lessac-medium.onnx"
         fake_onnx.touch()
         tts = PiperTTS(piper_bin="/usr/bin/piper", voice="en_US-lessac-medium")
@@ -546,6 +584,7 @@ class TestPiperTTSSynthesize:
 
     async def test_synthesize_raises_when_not_loaded(self):
         from missy.channels.voice.tts.piper import PiperTTS
+
         tts = PiperTTS()
 
         with pytest.raises(RuntimeError, match="load"):
@@ -553,6 +592,7 @@ class TestPiperTTSSynthesize:
 
     async def test_synthesize_returns_audio_buffer(self, tmp_path):
         from missy.channels.voice.tts.base import AudioBuffer
+
         tts = self._loaded_tts(tmp_path)
         pcm = self._fake_pcm()
 
@@ -649,6 +689,7 @@ class TestPiperSubprocessEnv:
         import os
 
         from missy.channels.voice.tts.piper import _piper_subprocess_env
+
         with patch.dict(os.environ, {"LD_LIBRARY_PATH": "/usr/lib"}, clear=False):
             env = _piper_subprocess_env()
         assert "LD_LIBRARY_PATH" in env
@@ -659,6 +700,7 @@ class TestPiperSubprocessEnv:
         import os
 
         from missy.channels.voice.tts.piper import _piper_subprocess_env
+
         env_without = {k: v for k, v in os.environ.items() if k != "LD_LIBRARY_PATH"}
         with patch.dict(os.environ, env_without, clear=True):
             env = _piper_subprocess_env()
@@ -668,6 +710,7 @@ class TestPiperSubprocessEnv:
 class TestPcmToWav:
     def test_pcm_to_wav_produces_valid_wav(self):
         from missy.channels.voice.tts.piper import _pcm_to_wav
+
         pcm = b"\x00\x00" * 100  # 100 silent 16-bit samples
         wav = _pcm_to_wav(pcm, sample_rate=22050, channels=1)
         # Parse the WAV header to verify validity
@@ -691,7 +734,6 @@ class TestProactiveThresholdLoop:
         """Run _threshold_loop in a thread where stop_event.wait fires once then stops."""
         call_count = {"n": 0}
 
-
         def fake_wait(timeout=None):
             call_count["n"] += 1
             if call_count["n"] >= 2:
@@ -710,6 +752,7 @@ class TestProactiveThresholdLoop:
 
     def test_disk_threshold_fires_via_loop(self):
         from missy.agent.proactive import ProactiveManager, ProactiveTrigger
+
         counter = {"n": 0}
         lock = threading.Lock()
 
@@ -744,6 +787,7 @@ class TestProactiveThresholdLoop:
         import os as _os
 
         from missy.agent.proactive import ProactiveManager, ProactiveTrigger
+
         counter = {"n": 0}
         lock = threading.Lock()
 
@@ -771,6 +815,7 @@ class TestProactiveThresholdLoop:
 
     def test_threshold_loop_handles_exception_without_crash(self):
         from missy.agent.proactive import ProactiveManager, ProactiveTrigger
+
         trigger = ProactiveTrigger(
             name="disk-err",
             trigger_type="disk_threshold",
@@ -789,6 +834,7 @@ class TestProactiveThresholdLoop:
 class TestProactiveScheduleLoop:
     def test_schedule_loop_fires_callback(self):
         from missy.agent.proactive import ProactiveManager, ProactiveTrigger
+
         counter = {"n": 0}
         lock = threading.Lock()
 
@@ -826,6 +872,7 @@ class TestProactiveScheduleLoop:
 class TestProactiveStopWithObserverError:
     def test_stop_handles_observer_exception(self):
         from missy.agent.proactive import ProactiveManager, ProactiveTrigger
+
         trigger = ProactiveTrigger(name="t", trigger_type="schedule", interval_seconds=10)
         mgr = ProactiveManager(triggers=[trigger], agent_callback=lambda p, s: None)
 
@@ -842,6 +889,7 @@ class TestProactiveStopWithObserverError:
 class TestProactiveManagerStartThresholdTrigger:
     def test_start_creates_threshold_thread(self):
         from missy.agent.proactive import ProactiveManager, ProactiveTrigger
+
         trigger = ProactiveTrigger(
             name="disk-start",
             trigger_type="disk_threshold",
@@ -890,6 +938,7 @@ class TestProactiveFileHandlerClass:
     def test_stub_handler_when_watchdog_unavailable(self):
         """When watchdog absent the stub class is a no-op object."""
         import missy.agent.proactive as _mod
+
         with patch.object(_mod, "_WATCHDOG_AVAILABLE", False):
             # Re-execute the conditional definition branch
             # The stub class exists regardless; just instantiate it
@@ -905,6 +954,7 @@ class TestProactiveFileHandlerClass:
 def _make_ollama_provider():
     from missy.config.settings import ProviderConfig
     from missy.providers.ollama_provider import OllamaProvider
+
     config = ProviderConfig(name="ollama", model="llama3.2", timeout=30)
     return OllamaProvider(config)
 
@@ -924,6 +974,7 @@ class TestOllamaStream:
         with patch("missy.providers.ollama_provider.PolicyHTTPClient") as MockClient:
             MockClient.return_value.post.return_value = mock_resp
             from missy.providers.base import Message
+
             tokens = list(provider.stream([Message(role="user", content="hi")]))
 
         assert tokens == ["Hello", " world"]
@@ -942,6 +993,7 @@ class TestOllamaStream:
         with patch("missy.providers.ollama_provider.PolicyHTTPClient") as MockClient:
             MockClient.return_value.post.return_value = mock_resp
             from missy.providers.base import Message
+
             tokens = list(provider.stream([Message(role="user", content="hi")]))
 
         assert tokens == ["ok"]
@@ -960,6 +1012,7 @@ class TestOllamaStream:
         with patch("missy.providers.ollama_provider.PolicyHTTPClient") as MockClient:
             MockClient.return_value.post.return_value = mock_resp
             from missy.providers.base import Message
+
             tokens = list(provider.stream([Message(role="user", content="hi")]))
 
         assert tokens == ["good"]
@@ -977,6 +1030,7 @@ class TestOllamaStream:
         with patch("missy.providers.ollama_provider.PolicyHTTPClient") as MockClient:
             MockClient.return_value.post.return_value = mock_resp
             from missy.providers.base import Message
+
             list(provider.stream([Message(role="user", content="hi")], system="Be helpful."))
             payload = MockClient.return_value.post.call_args[1]["json"]
 
@@ -985,21 +1039,25 @@ class TestOllamaStream:
 
     def test_stream_raises_provider_error_on_transport_failure(self):
         from missy.core.exceptions import ProviderError
+
         provider = _make_ollama_provider()
 
         with patch("missy.providers.ollama_provider.PolicyHTTPClient") as MockClient:
             MockClient.return_value.post.side_effect = ConnectionError("refused")
             from missy.providers.base import Message
+
             with pytest.raises(ProviderError, match="stream"):
                 list(provider.stream([Message(role="user", content="hi")]))
 
     def test_stream_reraises_provider_error_directly(self):
         from missy.core.exceptions import ProviderError
+
         provider = _make_ollama_provider()
 
         with patch("missy.providers.ollama_provider.PolicyHTTPClient") as MockClient:
             MockClient.return_value.post.side_effect = ProviderError("original")
             from missy.providers.base import Message
+
             with pytest.raises(ProviderError, match="original"):
                 list(provider.stream([Message(role="user", content="hi")]))
 
@@ -1018,6 +1076,7 @@ class TestOllamaStream:
         with patch("missy.providers.ollama_provider.PolicyHTTPClient") as MockClient:
             MockClient.return_value.post.return_value = mock_resp
             from missy.providers.base import Message
+
             tokens = list(provider.stream([Message(role="user", content="hi")]))
 
         assert tokens == ["first"]
@@ -1026,18 +1085,19 @@ class TestOllamaStream:
 class TestOllamaCompleteWithToolsErrors:
     def test_connection_error_raises_provider_error(self):
         from missy.core.exceptions import ProviderError
+
         provider = _make_ollama_provider()
 
         with patch("missy.providers.ollama_provider.PolicyHTTPClient") as MockClient:
             MockClient.return_value.post.side_effect = ConnectionError("refused")
             from missy.providers.base import Message
+
             with pytest.raises(ProviderError, match="Ollama"):
-                provider.complete_with_tools(
-                    [Message(role="user", content="hi")], tools=[]
-                )
+                provider.complete_with_tools([Message(role="user", content="hi")], tools=[])
 
     def test_invalid_json_raises_provider_error(self):
         from missy.core.exceptions import ProviderError
+
         provider = _make_ollama_provider()
 
         mock_resp = MagicMock()
@@ -1047,22 +1107,21 @@ class TestOllamaCompleteWithToolsErrors:
         with patch("missy.providers.ollama_provider.PolicyHTTPClient") as MockClient:
             MockClient.return_value.post.return_value = mock_resp
             from missy.providers.base import Message
+
             with pytest.raises(ProviderError, match="JSON"):
-                provider.complete_with_tools(
-                    [Message(role="user", content="hi")], tools=[]
-                )
+                provider.complete_with_tools([Message(role="user", content="hi")], tools=[])
 
     def test_provider_error_reraised(self):
         from missy.core.exceptions import ProviderError
+
         provider = _make_ollama_provider()
 
         with patch("missy.providers.ollama_provider.PolicyHTTPClient") as MockClient:
             MockClient.return_value.post.side_effect = ProviderError("direct")
             from missy.providers.base import Message
+
             with pytest.raises(ProviderError, match="direct"):
-                provider.complete_with_tools(
-                    [Message(role="user", content="hi")], tools=[]
-                )
+                provider.complete_with_tools([Message(role="user", content="hi")], tools=[])
 
     def test_system_prompt_not_injected_when_already_present(self):
         provider = _make_ollama_provider()
@@ -1079,6 +1138,7 @@ class TestOllamaCompleteWithToolsErrors:
         with patch("missy.providers.ollama_provider.PolicyHTTPClient") as MockClient:
             MockClient.return_value.post.return_value = mock_resp
             from missy.providers.base import Message
+
             provider.complete_with_tools(
                 [
                     Message(role="system", content="existing system"),
@@ -1102,9 +1162,7 @@ class TestOllamaCompleteWithToolsErrors:
             "message": {
                 "role": "assistant",
                 "content": "",
-                "tool_calls": [
-                    {"function": {"name": "my_tool_name", "arguments": {"x": 1}}}
-                ],
+                "tool_calls": [{"function": {"name": "my_tool_name", "arguments": {"x": 1}}}],
             },
             "prompt_eval_count": 5,
             "eval_count": 3,
@@ -1116,9 +1174,8 @@ class TestOllamaCompleteWithToolsErrors:
         with patch("missy.providers.ollama_provider.PolicyHTTPClient") as MockClient:
             MockClient.return_value.post.return_value = mock_resp
             from missy.providers.base import Message
-            result = provider.complete_with_tools(
-                [Message(role="user", content="go")], tools=[]
-            )
+
+            result = provider.complete_with_tools([Message(role="user", content="go")], tools=[])
 
         assert result.tool_calls[0].id == "my_tool_"  # first 8 chars of "my_tool_name"
 
@@ -1160,6 +1217,7 @@ class TestOllamaGetToolSchemaNoGetSchema:
 @pytest.fixture
 def mem_store(tmp_path):
     from missy.memory.store import MemoryStore
+
     return MemoryStore(store_path=str(tmp_path / "memory.json"))
 
 
@@ -1196,6 +1254,7 @@ class TestMemoryStoreCompactSession:
 
     def test_compact_persists_to_file(self, mem_store):
         from missy.memory.store import MemoryStore
+
         for i in range(8):
             mem_store.add_turn("s1", "user", f"msg {i}")
         mem_store.compact_session("s1", keep_recent=3)
@@ -1272,6 +1331,7 @@ class TestMemoryStoreLearningsStubs:
 class TestMemoryStoreLoadEdgeCases:
     def test_non_list_json_starts_empty(self, tmp_path):
         from missy.memory.store import MemoryStore
+
         path = tmp_path / "bad.json"
         path.write_text(json.dumps({"key": "val"}), encoding="utf-8")
         store = MemoryStore(store_path=str(path))
@@ -1279,6 +1339,7 @@ class TestMemoryStoreLoadEdgeCases:
 
     def test_non_dict_records_skipped(self, tmp_path):
         from missy.memory.store import MemoryStore
+
         path = tmp_path / "mixed.json"
         good = {
             "id": "abc",
@@ -1295,6 +1356,7 @@ class TestMemoryStoreLoadEdgeCases:
 
     def test_save_error_does_not_raise(self, tmp_path):
         from missy.memory.store import MemoryStore
+
         store = MemoryStore(store_path=str(tmp_path / "memory.json"))
         store.add_turn("s1", "user", "initial")
 

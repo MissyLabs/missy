@@ -173,7 +173,9 @@ class TestDiscordRestClient:
         client = DiscordRestClient(bot_token="Bot mytoken", http_client=mock_http_client)
         assert client._token == "Bot mytoken"
 
-    def test_get_current_user_calls_correct_url(self, rest_client: DiscordRestClient, mock_http_client: MagicMock) -> None:
+    def test_get_current_user_calls_correct_url(
+        self, rest_client: DiscordRestClient, mock_http_client: MagicMock
+    ) -> None:
         mock_http_client.get.return_value.json.return_value = {"id": "123", "username": "TestBot"}
         result = rest_client.get_current_user()
         mock_http_client.get.assert_called_once()
@@ -181,13 +183,17 @@ class TestDiscordRestClient:
         assert call_url == f"{BASE}/users/@me"
         assert result["username"] == "TestBot"
 
-    def test_get_gateway_bot_calls_correct_url(self, rest_client: DiscordRestClient, mock_http_client: MagicMock) -> None:
+    def test_get_gateway_bot_calls_correct_url(
+        self, rest_client: DiscordRestClient, mock_http_client: MagicMock
+    ) -> None:
         mock_http_client.get.return_value.json.return_value = {"url": "wss://gateway.discord.gg"}
         rest_client.get_gateway_bot()
         call_url = mock_http_client.get.call_args[0][0]
         assert call_url == f"{BASE}/gateway/bot"
 
-    def test_send_message_no_reply(self, rest_client: DiscordRestClient, mock_http_client: MagicMock) -> None:
+    def test_send_message_no_reply(
+        self, rest_client: DiscordRestClient, mock_http_client: MagicMock
+    ) -> None:
         mock_http_client.post.return_value.json.return_value = {"id": "msg-1"}
         rest_client.send_message(channel_id="chan-1", content="Hello!")
         mock_http_client.post.assert_called_once()
@@ -197,7 +203,9 @@ class TestDiscordRestClient:
         assert call_kwargs["json"]["content"] == "Hello!"
         assert "message_reference" not in call_kwargs["json"]
 
-    def test_send_message_with_reply(self, rest_client: DiscordRestClient, mock_http_client: MagicMock) -> None:
+    def test_send_message_with_reply(
+        self, rest_client: DiscordRestClient, mock_http_client: MagicMock
+    ) -> None:
         mock_http_client.post.return_value.json.return_value = {"id": "msg-2"}
         rest_client.send_message(
             channel_id="chan-1",
@@ -207,13 +215,17 @@ class TestDiscordRestClient:
         call_kwargs = mock_http_client.post.call_args[1]
         assert call_kwargs["json"]["message_reference"]["message_id"] == "original-msg"
 
-    def test_trigger_typing_calls_correct_url(self, rest_client: DiscordRestClient, mock_http_client: MagicMock) -> None:
+    def test_trigger_typing_calls_correct_url(
+        self, rest_client: DiscordRestClient, mock_http_client: MagicMock
+    ) -> None:
         mock_http_client.post.return_value.status_code = 204
         rest_client.trigger_typing("chan-1")
         call_url = mock_http_client.post.call_args[0][0]
         assert "chan-1/typing" in call_url
 
-    def test_register_slash_commands_global(self, rest_client: DiscordRestClient, mock_http_client: MagicMock) -> None:
+    def test_register_slash_commands_global(
+        self, rest_client: DiscordRestClient, mock_http_client: MagicMock
+    ) -> None:
         mock_http_client.put.return_value.json.return_value = [{"name": "ask"}]
         commands = [{"name": "ask", "description": "Ask Missy"}]
         rest_client.register_slash_commands(
@@ -224,7 +236,9 @@ class TestDiscordRestClient:
         assert "app-111/commands" in call_url
         assert "guilds" not in call_url
 
-    def test_register_slash_commands_guild(self, rest_client: DiscordRestClient, mock_http_client: MagicMock) -> None:
+    def test_register_slash_commands_guild(
+        self, rest_client: DiscordRestClient, mock_http_client: MagicMock
+    ) -> None:
         mock_http_client.put.return_value.json.return_value = [{"name": "ask"}]
         rest_client.register_slash_commands(
             application_id="app-111",
@@ -234,7 +248,9 @@ class TestDiscordRestClient:
         call_url = mock_http_client.put.call_args[0][0]
         assert "guilds/guild-222/commands" in call_url
 
-    def test_authorization_header_present(self, rest_client: DiscordRestClient, mock_http_client: MagicMock) -> None:
+    def test_authorization_header_present(
+        self, rest_client: DiscordRestClient, mock_http_client: MagicMock
+    ) -> None:
         mock_http_client.get.return_value.json.return_value = {}
         rest_client.get_current_user()
         headers = mock_http_client.get.call_args[1]["headers"]
@@ -470,17 +486,13 @@ class TestGuildPolicy:
             },
         )
         channel = _make_channel(account)
-        result = channel._check_guild_policy(
-            "guild-1", "chan-1", "user-allowed", "hi", {}
-        )
+        result = channel._check_guild_policy("guild-1", "chan-1", "user-allowed", "hi", {})
         assert result is True
 
     def test_require_mention_filters_unmention(self, event_bus_fresh: EventBus) -> None:
         account = DiscordAccountConfig(
             account_id="bot-001",
-            guild_policies={
-                "guild-1": DiscordGuildPolicy(enabled=True, require_mention=True)
-            },
+            guild_policies={"guild-1": DiscordGuildPolicy(enabled=True, require_mention=True)},
         )
         channel = _make_channel(account, bus=event_bus_fresh)
         channel._bot_user_id = "bot-001"
@@ -494,9 +506,7 @@ class TestGuildPolicy:
     def test_require_mention_allows_when_mentioned(self) -> None:
         account = DiscordAccountConfig(
             account_id="bot-001",
-            guild_policies={
-                "guild-1": DiscordGuildPolicy(enabled=True, require_mention=True)
-            },
+            guild_policies={"guild-1": DiscordGuildPolicy(enabled=True, require_mention=True)},
         )
         channel = _make_channel(account)
         channel._bot_user_id = "bot-001"
@@ -719,17 +729,13 @@ class TestAuditEvents:
     def test_require_mention_filtered_emits_event(self, event_bus_fresh: EventBus) -> None:
         account = DiscordAccountConfig(
             account_id="bot-001",
-            guild_policies={
-                "guild-1": DiscordGuildPolicy(enabled=True, require_mention=True)
-            },
+            guild_policies={"guild-1": DiscordGuildPolicy(enabled=True, require_mention=True)},
         )
         channel = _make_channel(account, bus=event_bus_fresh)
         channel._bot_user_id = "bot-001"
         channel._check_guild_policy("guild-1", "c", "user", "no mention", {})
 
-        events = event_bus_fresh.get_events(
-            event_type="discord.channel.require_mention_filtered"
-        )
+        events = event_bus_fresh.get_events(event_type="discord.channel.require_mention_filtered")
         assert len(events) == 1
 
 
@@ -804,16 +810,12 @@ class TestDiscordThreadManagement:
 
         loop = asyncio.new_event_loop()
         try:
-            thread_id = loop.run_until_complete(
-                channel.create_thread("chan-1", "Test Thread")
-            )
+            thread_id = loop.run_until_complete(channel.create_thread("chan-1", "Test Thread"))
             assert thread_id is None
         finally:
             loop.close()
 
-    def test_create_thread_with_message_id(
-        self, open_dm_account: DiscordAccountConfig
-    ) -> None:
+    def test_create_thread_with_message_id(self, open_dm_account: DiscordAccountConfig) -> None:
         channel = _make_channel(open_dm_account)
         channel._rest = MagicMock()
         channel._rest.create_thread.return_value = {"id": "thread-from-msg"}
@@ -840,9 +842,7 @@ class TestDiscordThreadManagement:
         channel = _make_channel(account)
         assert channel._auto_thread_threshold == 5
 
-    def test_channel_message_count_tracking(
-        self, event_bus_fresh: EventBus
-    ) -> None:
+    def test_channel_message_count_tracking(self, event_bus_fresh: EventBus) -> None:
         """Messages in guild channels increment the message count."""
         account = DiscordAccountConfig(
             token_env_var="DISCORD_BOT_TOKEN",
@@ -904,9 +904,7 @@ class TestDiscordRestThreads:
         call_args = mock_http_client.post.call_args
         assert len(call_args[1]["json"]["name"]) == 100
 
-    def test_get_channel(
-        self, rest_client: DiscordRestClient, mock_http_client: MagicMock
-    ) -> None:
+    def test_get_channel(self, rest_client: DiscordRestClient, mock_http_client: MagicMock) -> None:
         mock_http_client.get.return_value.json.return_value = {"id": "chan-1", "type": 0}
         result = rest_client.get_channel("chan-1")
         assert result["id"] == "chan-1"

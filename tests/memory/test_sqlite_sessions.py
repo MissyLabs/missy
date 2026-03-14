@@ -30,9 +30,7 @@ class TestRegisterSession:
         assert len(sessions) == 1
         assert sessions[0]["name"] == "second"
 
-    def test_register_preserves_fields_on_empty_update(
-        self, store: SQLiteMemoryStore
-    ) -> None:
+    def test_register_preserves_fields_on_empty_update(self, store: SQLiteMemoryStore) -> None:
         store.register_session("sess-1", name="keep", provider="anthropic", channel="cli")
         store.register_session("sess-1")  # empty update
         sessions = store.list_sessions()

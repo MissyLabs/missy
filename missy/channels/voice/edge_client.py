@@ -107,6 +107,7 @@ def _record_audio(
 
         # pw-record writes a WAV file. Extract raw PCM from it.
         import wave
+
         with wave.open(wav_path, "rb") as wf:
             return wf.readframes(wf.getnframes())
     except FileNotFoundError:
@@ -129,13 +130,21 @@ def _record_audio_gst(
 
     try:
         cmd = [
-            "gst-launch-1.0", "-q",
-            "pipewiresrc", "do-timestamp=true",
-            "!", f"audio/x-raw,rate={sample_rate},channels={channels},format=S16LE",
-            "!", "audioconvert",
-            "!", "audioresample",
-            "!", f"audio/x-raw,rate={sample_rate},channels={channels},format=S16LE",
-            "!", "filesink", f"location={raw_path}",
+            "gst-launch-1.0",
+            "-q",
+            "pipewiresrc",
+            "do-timestamp=true",
+            "!",
+            f"audio/x-raw,rate={sample_rate},channels={channels},format=S16LE",
+            "!",
+            "audioconvert",
+            "!",
+            "audioresample",
+            "!",
+            f"audio/x-raw,rate={sample_rate},channels={channels},format=S16LE",
+            "!",
+            "filesink",
+            f"location={raw_path}",
         ]
 
         proc = subprocess.Popen(cmd, env=env, stderr=subprocess.PIPE)
@@ -167,12 +176,18 @@ def _play_wav(wav_data: bytes) -> None:
     try:
         subprocess.run(
             [
-                "gst-launch-1.0", "-q",
-                "filesrc", f"location={wav_path}",
-                "!", "wavparse",
-                "!", "audioconvert",
-                "!", "audioresample",
-                "!", "pipewiresink",
+                "gst-launch-1.0",
+                "-q",
+                "filesrc",
+                f"location={wav_path}",
+                "!",
+                "wavparse",
+                "!",
+                "audioconvert",
+                "!",
+                "audioresample",
+                "!",
+                "pipewiresink",
             ],
             env=env,
             timeout=60,
@@ -192,15 +207,19 @@ async def _pair_device(
 ) -> str | None:
     """Send a pair_request to the voice server and return the assigned node_id."""
     async with websockets.connect(server_url) as ws:
-        await ws.send(json.dumps({
-            "type": "pair_request",
-            "friendly_name": friendly_name,
-            "room": room,
-            "hardware_profile": {
-                "platform": sys.platform,
-                "hostname": os.uname().nodename,
-            },
-        }))
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "pair_request",
+                    "friendly_name": friendly_name,
+                    "room": room,
+                    "hardware_profile": {
+                        "platform": sys.platform,
+                        "hostname": os.uname().nodename,
+                    },
+                }
+            )
+        )
 
         raw = await ws.recv()
         msg = json.loads(raw)
@@ -211,7 +230,9 @@ async def _pair_device(
             print("Approve it on the server with:")
             print(f"  missy devices pair --node-id {node_id}")
             print("\nThen run this client with:")
-            print(f"  python -m missy.channels.voice.edge_client --node-id {node_id} --token <TOKEN>")
+            print(
+                f"  python -m missy.channels.voice.edge_client --node-id {node_id} --token <TOKEN>"
+            )
             return node_id
         else:
             print(f"Unexpected response: {msg}", file=sys.stderr)
@@ -230,11 +251,15 @@ async def _voice_loop(
     """Main voice interaction loop."""
     async with websockets.connect(server_url) as ws:
         # Authenticate.
-        await ws.send(json.dumps({
-            "type": "auth",
-            "node_id": node_id,
-            "token": token,
-        }))
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "auth",
+                    "node_id": node_id,
+                    "token": token,
+                }
+            )
+        )
 
         raw = await ws.recv()
         msg = json.loads(raw)
@@ -259,7 +284,11 @@ async def _voice_loop(
                 print("  Listening...")
                 loop = asyncio.get_event_loop()
                 pcm_data = await loop.run_in_executor(
-                    None, _record_audio, record_seconds, sample_rate, channels,
+                    None,
+                    _record_audio,
+                    record_seconds,
+                    sample_rate,
+                    channels,
                 )
 
                 if not pcm_data:
@@ -270,18 +299,22 @@ async def _voice_loop(
                 print(f"  Captured {len(pcm_data)} bytes ({duration_ms:.0f}ms)")
 
                 # Send audio.
-                await ws.send(json.dumps({
-                    "type": "audio_start",
-                    "sample_rate": sample_rate,
-                    "channels": channels,
-                    "format": "pcm_s16le",
-                }))
+                await ws.send(
+                    json.dumps(
+                        {
+                            "type": "audio_start",
+                            "sample_rate": sample_rate,
+                            "channels": channels,
+                            "format": "pcm_s16le",
+                        }
+                    )
+                )
 
                 # Send in chunks.
                 chunk_size = 4096
                 offset = 0
                 while offset < len(pcm_data):
-                    chunk = pcm_data[offset:offset + chunk_size]
+                    chunk = pcm_data[offset : offset + chunk_size]
                     await ws.send(chunk)
                     offset += chunk_size
 
@@ -305,7 +338,7 @@ async def _voice_loop(
                     resp_type = resp.get("type", "")
 
                     if resp_type == "transcript":
-                        print(f"  You said: \"{resp.get('text', '')}\"")
+                        print(f'  You said: "{resp.get("text", "")}"')
                         conf = resp.get("confidence", -1)
                         if conf >= 0:
                             print(f"  Confidence: {conf:.1%}")
@@ -365,27 +398,35 @@ def main() -> None:
         description="Missy voice edge client — captures audio and streams to the voice server.",
     )
     parser.add_argument(
-        "--server", default=_DEFAULT_SERVER_URL,
+        "--server",
+        default=_DEFAULT_SERVER_URL,
         help=f"Voice server WebSocket URL (default: {_DEFAULT_SERVER_URL})",
     )
     parser.add_argument("--node-id", help="Authenticated node ID")
     parser.add_argument("--token", help="Authentication token")
     parser.add_argument(
-        "--config", type=Path, default=_CONFIG_PATH,
+        "--config",
+        type=Path,
+        default=_CONFIG_PATH,
         help=f"Config file path (default: {_CONFIG_PATH})",
     )
 
     # Recording options.
     parser.add_argument(
-        "--duration", type=float, default=_DEFAULT_RECORD_SECONDS,
+        "--duration",
+        type=float,
+        default=_DEFAULT_RECORD_SECONDS,
         help=f"Recording duration in seconds (default: {_DEFAULT_RECORD_SECONDS})",
     )
     parser.add_argument(
-        "--sample-rate", type=int, default=_DEFAULT_SAMPLE_RATE,
+        "--sample-rate",
+        type=int,
+        default=_DEFAULT_SAMPLE_RATE,
         help=f"Sample rate in Hz (default: {_DEFAULT_SAMPLE_RATE})",
     )
     parser.add_argument(
-        "--continuous", action="store_true",
+        "--continuous",
+        action="store_true",
         help="Continuously listen without waiting for Enter",
     )
 
@@ -429,15 +470,17 @@ def main() -> None:
     config.update({"server": server_url, "node_id": node_id, "token": token})
     _save_config(args.config, config)
 
-    asyncio.run(_voice_loop(
-        server_url=server_url,
-        node_id=node_id,
-        token=token,
-        record_seconds=args.duration,
-        sample_rate=args.sample_rate,
-        channels=_DEFAULT_CHANNELS,
-        continuous=args.continuous,
-    ))
+    asyncio.run(
+        _voice_loop(
+            server_url=server_url,
+            node_id=node_id,
+            token=token,
+            record_seconds=args.duration,
+            sample_rate=args.sample_rate,
+            channels=_DEFAULT_CHANNELS,
+            continuous=args.continuous,
+        )
+    )
 
 
 if __name__ == "__main__":

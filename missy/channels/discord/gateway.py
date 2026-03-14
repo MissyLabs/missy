@@ -257,7 +257,9 @@ class DiscordGatewayClient:
 
         # Forward dispatched events to the callback.
         if event_name in (
-            "MESSAGE_CREATE", "GUILD_CREATE", "INTERACTION_CREATE",
+            "MESSAGE_CREATE",
+            "GUILD_CREATE",
+            "INTERACTION_CREATE",
             "MESSAGE_REACTION_ADD",
         ):
             event_payload = {"t": event_name, "d": data}

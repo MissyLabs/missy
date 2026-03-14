@@ -138,9 +138,13 @@ class DockerSandbox:
         effective_timeout = min(timeout or self.config.timeout, 300)
 
         docker_cmd = [
-            "docker", "run", "--rm",
-            "--memory", self.config.memory_limit,
-            "--cpus", str(self.config.cpu_limit),
+            "docker",
+            "run",
+            "--rm",
+            "--memory",
+            self.config.memory_limit,
+            "--cpus",
+            str(self.config.cpu_limit),
         ]
 
         # Network isolation
@@ -155,17 +159,19 @@ class DockerSandbox:
             docker_cmd.extend(["--tmpfs", "/tmp:rw,noexec,nosuid,size=64m"])
 
         # Security: drop all capabilities, no new privileges
-        docker_cmd.extend([
-            "--cap-drop=ALL",
-            "--security-opt=no-new-privileges",
-        ])
+        docker_cmd.extend(
+            [
+                "--cap-drop=ALL",
+                "--security-opt=no-new-privileges",
+            ]
+        )
 
         # Working directory
         workdir = cwd or self.config.workspace_path
         docker_cmd.extend(["--workdir", workdir])
 
         # Bind mounts (only from allowed list)
-        for mount in (bind_mounts or []):
+        for mount in bind_mounts or []:
             host_path = mount.split(":")[0] if ":" in mount else mount
             if not self._is_mount_allowed(host_path):
                 logger.warning("Sandbox: bind mount %r denied by policy", host_path)
@@ -204,9 +210,7 @@ class DockerSandbox:
                 sandboxed=True,
             )
         except Exception as exc:
-            return SandboxResult(
-                success=False, output=None, error=str(exc), sandboxed=True
-            )
+            return SandboxResult(success=False, output=None, error=str(exc), sandboxed=True)
 
     def _is_mount_allowed(self, host_path: str) -> bool:
         """Check if a host path is in the allowed bind mounts list."""
@@ -285,9 +289,7 @@ class FallbackSandbox:
                 sandboxed=False,
             )
         except Exception as exc:
-            return SandboxResult(
-                success=False, output=None, error=str(exc), sandboxed=False
-            )
+            return SandboxResult(success=False, output=None, error=str(exc), sandboxed=False)
 
 
 def parse_sandbox_config(data: dict[str, Any]) -> SandboxConfig:

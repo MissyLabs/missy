@@ -5,6 +5,7 @@ any API key values redacted (first 8 characters visible, remainder replaced
 with ``"..."``).  The raw YAML text is never surfaced verbatim so that
 secrets are not accidentally echoed to the user.
 """
+
 from __future__ import annotations
 
 import re
@@ -42,7 +43,12 @@ def _redact_api_keys(text: str) -> str:
 
     def _replace(match: re.Match) -> str:  # type: ignore[type-arg]
         secret: str = match.group("secret")
-        if len(secret) < _PLACEHOLDER_MIN_LEN or secret.lower() in {"null", "none", "false", "true"}:
+        if len(secret) < _PLACEHOLDER_MIN_LEN or secret.lower() in {
+            "null",
+            "none",
+            "false",
+            "true",
+        }:
             return match.group(0)
         visible = secret[:8]
         return f"{match.group('indent')}{match.group('key')}{match.group('value')}{visible}...{match.group('value')}"

@@ -100,6 +100,7 @@ class CircuitBreaker:
         state = self.state
         if state == CircuitState.OPEN:
             from missy.core.exceptions import MissyError
+
             raise MissyError(f"Circuit breaker '{self.name}' is OPEN; skipping call")
         try:
             result = func(*args, **kwargs)
@@ -123,9 +124,7 @@ class CircuitBreaker:
             self._last_failure_time = time.monotonic()
             if self._state == CircuitState.HALF_OPEN:
                 # Probe failed: back off further and re-open
-                self._recovery_timeout = min(
-                    self._recovery_timeout * 2, self._max_timeout
-                )
+                self._recovery_timeout = min(self._recovery_timeout * 2, self._max_timeout)
                 self._state = CircuitState.OPEN
             elif self._failure_count >= self._threshold:
                 self._state = CircuitState.OPEN

@@ -1,4 +1,5 @@
 """Tests for missy cost and missy recover CLI commands."""
+
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -38,12 +39,15 @@ class TestCostCommand:
     def test_cost_with_session(self, runner, mock_config, tmp_path):
         db_path = str(tmp_path / "test.db")
         from missy.memory.sqlite_store import SQLiteMemoryStore
+
         store = SQLiteMemoryStore(db_path=db_path)
         store.record_cost("test-session", "claude-sonnet-4", 500, 200, 0.0045)
         store.record_cost("test-session", "claude-haiku-4", 100, 50, 0.0003)
 
-        with patch("missy.cli.main._load_subsystems", return_value=mock_config), \
-             patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=store):
+        with (
+            patch("missy.cli.main._load_subsystems", return_value=mock_config),
+            patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=store),
+        ):
             result = runner.invoke(cli, ["cost", "--session", "test-session"])
             assert result.exit_code == 0
             assert "test-session" in result.output
@@ -52,10 +56,13 @@ class TestCostCommand:
     def test_cost_with_session_no_data(self, runner, mock_config, tmp_path):
         db_path = str(tmp_path / "test.db")
         from missy.memory.sqlite_store import SQLiteMemoryStore
+
         store = SQLiteMemoryStore(db_path=db_path)
 
-        with patch("missy.cli.main._load_subsystems", return_value=mock_config), \
-             patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=store):
+        with (
+            patch("missy.cli.main._load_subsystems", return_value=mock_config),
+            patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=store),
+        ):
             result = runner.invoke(cli, ["cost", "--session", "no-such-session"])
             assert result.exit_code == 0
             assert "No cost records" in result.output
@@ -74,6 +81,7 @@ class TestRecoverCommand:
 
     def test_recover_shows_checkpoints(self, runner):
         from missy.agent.checkpoint import RecoveryResult
+
         results = [
             RecoveryResult(
                 checkpoint_id="aaaabbbb-1234-5678-9abc-def012345678",

@@ -61,21 +61,19 @@ def parse_subtasks(prompt: str) -> list[SubTask]:
     tasks: list[SubTask] = []
 
     # Try numbered list pattern first
-    numbered = re.findall(r'^\s*(\d+)[\.\)]\s+(.+)', prompt, re.M)
+    numbered = re.findall(r"^\s*(\d+)[\.\)]\s+(.+)", prompt, re.M)
     if numbered:
         for i, (_, desc) in enumerate(numbered):
             tasks.append(SubTask(id=i, description=desc.strip()))
         return tasks
 
     # Try sequential connective pattern
-    parts = re.split(r'\b(then|and then|after that|finally)\b', prompt, flags=re.I)
+    parts = re.split(r"\b(then|and then|after that|finally)\b", prompt, flags=re.I)
     if len(parts) > 2:
         descs = [
             p.strip()
             for p in parts
-            if p.strip() and not re.match(
-                r'^(then|and then|after that|finally)$', p.strip(), re.I
-            )
+            if p.strip() and not re.match(r"^(then|and then|after that|finally)$", p.strip(), re.I)
         ]
         for i, desc in enumerate(descs):
             tasks.append(

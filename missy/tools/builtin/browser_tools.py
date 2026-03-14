@@ -6,6 +6,7 @@ restore dialogs, proper per-session isolation.
 
 Install: pip install playwright && playwright install firefox
 """
+
 from __future__ import annotations
 
 import logging
@@ -32,6 +33,7 @@ _FIREFOX_PREFS = {
 # Session
 # ---------------------------------------------------------------------------
 
+
 class BrowserSession:
     def __init__(self, session_id: str, headless: bool = False) -> None:
         self.session_id = session_id
@@ -55,7 +57,9 @@ class BrowserSession:
         try:
             from playwright.sync_api import sync_playwright
         except ImportError:
-            raise RuntimeError("playwright not installed — run: pip install playwright && playwright install firefox")
+            raise RuntimeError(
+                "playwright not installed — run: pip install playwright && playwright install firefox"
+            )
         self._ensure_display()
         self._pw = sync_playwright().start()
         self._context = self._pw.firefox.launch_persistent_context(
@@ -155,6 +159,7 @@ def _err(exc: Exception) -> ToolResult:
 # Tools
 # ---------------------------------------------------------------------------
 
+
 class BrowserNavigateTool(BaseTool):
     name = "browser_navigate"
     description = (
@@ -166,16 +171,28 @@ class BrowserNavigateTool(BaseTool):
     parameters = {
         "url": {"type": "string", "description": "Full URL to navigate to.", "required": True},
         "headless": {"type": "boolean", "description": "Hide browser window (default False)."},
-        "wait_until": {"type": "string", "description": "'load', 'domcontentloaded', 'networkidle' (default 'domcontentloaded')."},
+        "wait_until": {
+            "type": "string",
+            "description": "'load', 'domcontentloaded', 'networkidle' (default 'domcontentloaded').",
+        },
         "session_id": {"type": "string", "description": "Session name (default 'default')."},
     }
 
-    def execute(self, *, url: str, headless: bool = False,
-                wait_until: str = "domcontentloaded", session_id: str = "default", **_kw) -> ToolResult:
+    def execute(
+        self,
+        *,
+        url: str,
+        headless: bool = False,
+        wait_until: str = "domcontentloaded",
+        session_id: str = "default",
+        **_kw,
+    ) -> ToolResult:
         try:
             pg = _page(session_id, headless=headless)
             pg.goto(url, wait_until=wait_until, timeout=30_000)
-            return ToolResult(success=True, output=f"URL: {pg.url}\nTitle: {pg.title()}", error=None)
+            return ToolResult(
+                success=True, output=f"URL: {pg.url}\nTitle: {pg.title()}", error=None
+            )
         except Exception as exc:
             return _err(exc)
 
@@ -196,8 +213,17 @@ class BrowserClickTool(BaseTool):
         "session_id": {"type": "string", "description": "Session name (default 'default')."},
     }
 
-    def execute(self, *, text: str = "", selector: str = "", role: str = "",
-                name: str = "", timeout_ms: int = 5000, session_id: str = "default", **_kw) -> ToolResult:
+    def execute(
+        self,
+        *,
+        text: str = "",
+        selector: str = "",
+        role: str = "",
+        name: str = "",
+        timeout_ms: int = 5000,
+        session_id: str = "default",
+        **_kw,
+    ) -> ToolResult:
         try:
             pg = _page(session_id)
             t = timeout_ms
@@ -210,7 +236,9 @@ class BrowserClickTool(BaseTool):
             elif selector:
                 pg.locator(selector).first.click(timeout=t)
             else:
-                return ToolResult(success=False, output=None, error="Provide text, selector, or role.")
+                return ToolResult(
+                    success=False, output=None, error="Provide text, selector, or role."
+                )
             return ToolResult(success=True, output=f"Clicked. URL: {pg.url}", error=None)
         except Exception as exc:
             return _err(exc)
@@ -225,13 +253,24 @@ class BrowserFillTool(BaseTool):
         "selector": {"type": "string", "description": "CSS selector."},
         "label": {"type": "string", "description": "Associated label text."},
         "placeholder": {"type": "string", "description": "Placeholder text."},
-        "press_enter": {"type": "boolean", "description": "Press Enter after filling (default False)."},
+        "press_enter": {
+            "type": "boolean",
+            "description": "Press Enter after filling (default False).",
+        },
         "session_id": {"type": "string", "description": "Session name (default 'default')."},
     }
 
-    def execute(self, *, value: str, selector: str = "", label: str = "",
-                placeholder: str = "", press_enter: bool = False,
-                session_id: str = "default", **_kw) -> ToolResult:
+    def execute(
+        self,
+        *,
+        value: str,
+        selector: str = "",
+        label: str = "",
+        placeholder: str = "",
+        press_enter: bool = False,
+        session_id: str = "default",
+        **_kw,
+    ) -> ToolResult:
         try:
             pg = _page(session_id)
             if label:
@@ -241,7 +280,9 @@ class BrowserFillTool(BaseTool):
             elif selector:
                 loc = pg.locator(selector).first
             else:
-                return ToolResult(success=False, output=None, error="Provide selector, label, or placeholder.")
+                return ToolResult(
+                    success=False, output=None, error="Provide selector, label, or placeholder."
+                )
             loc.fill(value)
             if press_enter:
                 loc.press("Enter")
@@ -255,14 +296,30 @@ class BrowserScreenshotTool(BaseTool):
     description = "Take a screenshot of the current browser page."
     permissions = ToolPermissions(network=True)
     parameters = {
-        "path": {"type": "string", "description": "Save path (default /tmp/browser_screenshot.png)."},
-        "full_page": {"type": "boolean", "description": "Capture full scrollable page (default False)."},
-        "selector": {"type": "string", "description": "CSS selector to screenshot a specific element."},
+        "path": {
+            "type": "string",
+            "description": "Save path (default /tmp/browser_screenshot.png).",
+        },
+        "full_page": {
+            "type": "boolean",
+            "description": "Capture full scrollable page (default False).",
+        },
+        "selector": {
+            "type": "string",
+            "description": "CSS selector to screenshot a specific element.",
+        },
         "session_id": {"type": "string", "description": "Session name (default 'default')."},
     }
 
-    def execute(self, *, path: str = "/tmp/browser_screenshot.png", full_page: bool = False,
-                selector: str = "", session_id: str = "default", **_kw) -> ToolResult:
+    def execute(
+        self,
+        *,
+        path: str = "/tmp/browser_screenshot.png",
+        full_page: bool = False,
+        selector: str = "",
+        session_id: str = "default",
+        **_kw,
+    ) -> ToolResult:
         try:
             pg = _page(session_id)
             if selector:
@@ -270,7 +327,11 @@ class BrowserScreenshotTool(BaseTool):
             else:
                 pg.screenshot(path=path, full_page=full_page)
             size = Path(path).stat().st_size
-            return ToolResult(success=True, output=f"Screenshot: {path} ({size:,} bytes) — {pg.title()}", error=None)
+            return ToolResult(
+                success=True,
+                output=f"Screenshot: {path} ({size:,} bytes) — {pg.title()}",
+                error=None,
+            )
         except Exception as exc:
             return _err(exc)
 
@@ -286,8 +347,15 @@ class BrowserGetContentTool(BaseTool):
         "session_id": {"type": "string", "description": "Session name (default 'default')."},
     }
 
-    def execute(self, *, selector: str = "body", content_type: str = "text",
-                max_length: int = 5000, session_id: str = "default", **_kw) -> ToolResult:
+    def execute(
+        self,
+        *,
+        selector: str = "body",
+        content_type: str = "text",
+        max_length: int = 5000,
+        session_id: str = "default",
+        **_kw,
+    ) -> ToolResult:
         try:
             pg = _page(session_id)
             loc = pg.locator(selector).first
@@ -304,7 +372,11 @@ class BrowserEvaluateTool(BaseTool):
     description = "Run JavaScript in the browser and return the result."
     permissions = ToolPermissions(network=True)
     parameters = {
-        "script": {"type": "string", "description": "JS expression, e.g. 'document.title'.", "required": True},
+        "script": {
+            "type": "string",
+            "description": "JS expression, e.g. 'document.title'.",
+            "required": True,
+        },
         "session_id": {"type": "string", "description": "Session name (default 'default')."},
     }
 
@@ -328,8 +400,16 @@ class BrowserWaitTool(BaseTool):
         "session_id": {"type": "string", "description": "Session name (default 'default')."},
     }
 
-    def execute(self, *, for_selector: str = "", for_url: str = "", for_text: str = "",
-                seconds: float = 2.0, session_id: str = "default", **_kw) -> ToolResult:
+    def execute(
+        self,
+        *,
+        for_selector: str = "",
+        for_url: str = "",
+        for_text: str = "",
+        seconds: float = 2.0,
+        session_id: str = "default",
+        **_kw,
+    ) -> ToolResult:
         try:
             pg = _page(session_id)
             if for_selector:
@@ -351,12 +431,16 @@ class BrowserGetUrlTool(BaseTool):
     name = "browser_get_url"
     description = "Get the current browser URL and page title."
     permissions = ToolPermissions(network=True)
-    parameters = {"session_id": {"type": "string", "description": "Session name (default 'default')."}}
+    parameters = {
+        "session_id": {"type": "string", "description": "Session name (default 'default')."}
+    }
 
     def execute(self, *, session_id: str = "default", **_kw) -> ToolResult:
         try:
             pg = _page(session_id)
-            return ToolResult(success=True, output=f"URL: {pg.url}\nTitle: {pg.title()}", error=None)
+            return ToolResult(
+                success=True, output=f"URL: {pg.url}\nTitle: {pg.title()}", error=None
+            )
         except Exception as exc:
             return _err(exc)
 
@@ -365,7 +449,9 @@ class BrowserCloseTool(BaseTool):
     name = "browser_close"
     description = "Close the browser session."
     permissions = ToolPermissions(network=True)
-    parameters = {"session_id": {"type": "string", "description": "Session name (default 'default')."}}
+    parameters = {
+        "session_id": {"type": "string", "description": "Session name (default 'default')."}
+    }
 
     def execute(self, *, session_id: str = "default", **_kw) -> ToolResult:
         _registry.close(session_id)

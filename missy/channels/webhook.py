@@ -1,4 +1,5 @@
 """Webhook channel: receive agent tasks via HTTP POST."""
+
 from __future__ import annotations
 
 import hashlib
@@ -50,7 +51,9 @@ class WebhookChannel(BaseChannel):
                 # Validate HMAC if secret configured
                 if channel_ref._secret:
                     sig = self.headers.get("X-Missy-Signature", "")
-                    expected = "sha256=" + hmac.new(channel_ref._secret, body, hashlib.sha256).hexdigest()
+                    expected = (
+                        "sha256=" + hmac.new(channel_ref._secret, body, hashlib.sha256).hexdigest()
+                    )
                     if not hmac.compare_digest(sig, expected):
                         self.send_response(401)
                         self.end_headers()

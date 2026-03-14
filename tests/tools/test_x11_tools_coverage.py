@@ -10,6 +10,7 @@ Targets uncovered lines:
   462-463: X11ReadScreenTool._take_screenshot — scrot command not found
   474   : X11ReadScreenTool._take_screenshot — scrot failed generic error
 """
+
 from __future__ import annotations
 
 import base64
@@ -53,23 +54,17 @@ class TestExtractAccountId:
     def test_valid_jwt_with_chatgpt_account_id(self):
         """Valid JWT returns chatgpt_account_id from nested auth namespace."""
         payload = {
-            "https://api.openai.com/auth": {
-                "chatgpt_account_id": "acc_123"
-            },
+            "https://api.openai.com/auth": {"chatgpt_account_id": "acc_123"},
             "sub": "user_456",
         }
-        encoded = base64.urlsafe_b64encode(
-            json.dumps(payload).encode()
-        ).decode().rstrip("=")
+        encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
         token = f"header.{encoded}.signature"
         assert _extract_account_id(token) == "acc_123"
 
     def test_valid_jwt_falls_back_to_sub(self):
         """When chatgpt_account_id missing, falls back to 'sub'."""
         payload = {"sub": "user_999"}
-        encoded = base64.urlsafe_b64encode(
-            json.dumps(payload).encode()
-        ).decode().rstrip("=")
+        encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
         token = f"header.{encoded}.sig"
         assert _extract_account_id(token) == "user_999"
 
@@ -80,9 +75,7 @@ class TestExtractAccountId:
     def test_two_part_token_missing_signature(self):
         """Token with exactly two parts (no signature) still extracts payload."""
         payload = {"sub": "u42"}
-        encoded = base64.urlsafe_b64encode(
-            json.dumps(payload).encode()
-        ).decode().rstrip("=")
+        encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
         token = f"header.{encoded}"
         # len(parts) == 2, parts[1] is valid
         assert _extract_account_id(token) == "u42"
@@ -96,13 +89,19 @@ class TestExtractAccountId:
 class TestLoadOauthToken:
     def test_returns_token_on_success(self):
         """Calls refresh_token_if_needed and returns its result."""
-        with patch("missy.tools.builtin.x11_tools.refresh_token_if_needed",
-                   return_value="tok_abc", create=True):
-            with patch.dict("sys.modules", {
-                "missy.cli.oauth": MagicMock(
-                    refresh_token_if_needed=MagicMock(return_value="tok_abc")
-                )
-            }):
+        with patch(
+            "missy.tools.builtin.x11_tools.refresh_token_if_needed",
+            return_value="tok_abc",
+            create=True,
+        ):
+            with patch.dict(
+                "sys.modules",
+                {
+                    "missy.cli.oauth": MagicMock(
+                        refresh_token_if_needed=MagicMock(return_value="tok_abc")
+                    )
+                },
+            ):
                 token = _load_oauth_token()
         # May succeed or fall back; just ensure it doesn't raise
         assert token is None or isinstance(token, str)
@@ -129,9 +128,10 @@ class TestGetVisionToken:
     def test_falls_back_to_oauth_when_no_env(self):
         """Falls back to _load_oauth_token when env var not set."""
         env = {k: v for k, v in os.environ.items() if k != "OPENAI_API_KEY"}
-        with patch.dict(os.environ, env, clear=True), \
-             patch("missy.tools.builtin.x11_tools._load_oauth_token",
-                   return_value="oauth_token"):
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch("missy.tools.builtin.x11_tools._load_oauth_token", return_value="oauth_token"),
+        ):
             token = _get_vision_token()
         assert token == "oauth_token"
 
@@ -144,8 +144,11 @@ class TestGetVisionToken:
 class TestGetOllamaBaseUrl:
     def test_returns_default_on_exception(self):
         """When load_config raises, returns the default URL."""
-        with patch("missy.tools.builtin.x11_tools.load_config",
-                   side_effect=Exception("no config"), create=True):
+        with patch(
+            "missy.tools.builtin.x11_tools.load_config",
+            side_effect=Exception("no config"),
+            create=True,
+        ):
             url = _get_ollama_base_url()
         assert url == "http://localhost:11434"
 
@@ -169,8 +172,7 @@ class TestGetOllamaBaseUrl:
         cfg = MagicMock()
         cfg.providers = {}
 
-        with patch("missy.tools.builtin.x11_tools.load_config", return_value=cfg,
-                   create=True):
+        with patch("missy.tools.builtin.x11_tools.load_config", return_value=cfg, create=True):
             url = _get_ollama_base_url()
         assert url == "http://localhost:11434"
 
@@ -182,8 +184,7 @@ class TestGetOllamaBaseUrl:
         cfg = MagicMock()
         cfg.providers = {"ollama": provider_cfg}
 
-        with patch("missy.tools.builtin.x11_tools.load_config", return_value=cfg,
-                   create=True):
+        with patch("missy.tools.builtin.x11_tools.load_config", return_value=cfg, create=True):
             url = _get_ollama_base_url()
         assert url == "http://localhost:11434"
 
@@ -230,8 +231,9 @@ class TestX11ScreenshotTool:
         dest_path = tmp_path / "shot.png"
         dest_path.write_bytes(b"PNG")
 
-        with patch("missy.tools.builtin.x11_tools._run",
-                   return_value=_make_completed(0)) as mock_run:
+        with patch(
+            "missy.tools.builtin.x11_tools._run", return_value=_make_completed(0)
+        ) as mock_run:
             result = X11ScreenshotTool().execute(path=dest)
 
         assert result.success is True
@@ -242,8 +244,9 @@ class TestX11ScreenshotTool:
         dest = str(tmp_path / "region.png")
         (tmp_path / "region.png").write_bytes(b"PNG")
 
-        with patch("missy.tools.builtin.x11_tools._run",
-                   return_value=_make_completed(0)) as mock_run:
+        with patch(
+            "missy.tools.builtin.x11_tools._run", return_value=_make_completed(0)
+        ) as mock_run:
             result = X11ScreenshotTool().execute(path=dest, region="10,20,100,200")
 
         assert result.success is True
@@ -277,8 +280,9 @@ class TestX11ScreenshotTool:
 
 class TestX11ClickTool:
     def test_success_left_click(self):
-        with patch("missy.tools.builtin.x11_tools._run",
-                   return_value=_make_completed(0)) as mock_run:
+        with patch(
+            "missy.tools.builtin.x11_tools._run", return_value=_make_completed(0)
+        ) as mock_run:
             result = X11ClickTool().execute(x=100, y=200)
 
         assert result.success is True
@@ -287,16 +291,18 @@ class TestX11ClickTool:
         mock_run.assert_called_once_with("xdotool mousemove 100 200 click 1")
 
     def test_double_click(self):
-        with patch("missy.tools.builtin.x11_tools._run",
-                   return_value=_make_completed(0)) as mock_run:
+        with patch(
+            "missy.tools.builtin.x11_tools._run", return_value=_make_completed(0)
+        ) as mock_run:
             result = X11ClickTool().execute(x=50, y=60, button="double")
 
         assert result.success is True
         mock_run.assert_called_once_with("xdotool mousemove 50 60 click --repeat 2 1")
 
     def test_right_click(self):
-        with patch("missy.tools.builtin.x11_tools._run",
-                   return_value=_make_completed(0)) as mock_run:
+        with patch(
+            "missy.tools.builtin.x11_tools._run", return_value=_make_completed(0)
+        ) as mock_run:
             result = X11ClickTool().execute(x=10, y=20, button="right")
 
         assert result.success is True
@@ -341,8 +347,7 @@ class TestX11ClickTool:
 
 class TestX11TypeTool:
     def test_success_type_text(self):
-        with patch("missy.tools.builtin.x11_tools._run",
-                   return_value=_make_completed(0)):
+        with patch("missy.tools.builtin.x11_tools._run", return_value=_make_completed(0)):
             result = X11TypeTool().execute(text="hello world")
 
         assert result.success is True
@@ -381,8 +386,9 @@ class TestX11TypeTool:
         assert "type" in calls[1]
 
     def test_custom_delay(self):
-        with patch("missy.tools.builtin.x11_tools._run",
-                   return_value=_make_completed(0)) as mock_run:
+        with patch(
+            "missy.tools.builtin.x11_tools._run", return_value=_make_completed(0)
+        ) as mock_run:
             result = X11TypeTool().execute(text="test", delay_ms=50)
 
         assert result.success is True
@@ -414,8 +420,9 @@ class TestX11TypeTool:
 
 class TestX11KeyTool:
     def test_success_send_key(self):
-        with patch("missy.tools.builtin.x11_tools._run",
-                   return_value=_make_completed(0)) as mock_run:
+        with patch(
+            "missy.tools.builtin.x11_tools._run", return_value=_make_completed(0)
+        ) as mock_run:
             result = X11KeyTool().execute(key="Return")
 
         assert result.success is True
@@ -479,8 +486,10 @@ class TestX11KeyTool:
 class TestX11WindowListTool:
     def test_wmctrl_success_four_parts(self):
         wmctrl_output = "0x00400001  0 myhost  Firefox\n0x00400002  1 myhost  Terminal"
-        with patch("missy.tools.builtin.x11_tools._run",
-                   return_value=_make_completed(0, stdout=wmctrl_output)):
+        with patch(
+            "missy.tools.builtin.x11_tools._run",
+            return_value=_make_completed(0, stdout=wmctrl_output),
+        ):
             result = X11WindowListTool().execute()
 
         assert result.success is True
@@ -489,8 +498,10 @@ class TestX11WindowListTool:
 
     def test_wmctrl_success_three_parts(self):
         wmctrl_output = "0x00400001  0 myhost"
-        with patch("missy.tools.builtin.x11_tools._run",
-                   return_value=_make_completed(0, stdout=wmctrl_output)):
+        with patch(
+            "missy.tools.builtin.x11_tools._run",
+            return_value=_make_completed(0, stdout=wmctrl_output),
+        ):
             result = X11WindowListTool().execute()
 
         assert result.success is True
@@ -501,8 +512,7 @@ class TestX11WindowListTool:
         wmctrl_fail = _make_completed(1)
         xdotool_fail = _make_completed(1, stderr="command not found")
 
-        with patch("missy.tools.builtin.x11_tools._run",
-                   side_effect=[wmctrl_fail, xdotool_fail]):
+        with patch("missy.tools.builtin.x11_tools._run", side_effect=[wmctrl_fail, xdotool_fail]):
             result = X11WindowListTool().execute()
 
         assert result.success is False
@@ -513,8 +523,7 @@ class TestX11WindowListTool:
         wmctrl_fail = _make_completed(1)
         xdotool_fail = _make_completed(1, stderr="no windows found")
 
-        with patch("missy.tools.builtin.x11_tools._run",
-                   side_effect=[wmctrl_fail, xdotool_fail]):
+        with patch("missy.tools.builtin.x11_tools._run", side_effect=[wmctrl_fail, xdotool_fail]):
             result = X11WindowListTool().execute()
 
         assert result.success is True
@@ -527,8 +536,10 @@ class TestX11WindowListTool:
         name1 = _make_completed(0, stdout="Firefox")
         name2 = _make_completed(0, stdout="Terminal")
 
-        with patch("missy.tools.builtin.x11_tools._run",
-                   side_effect=[wmctrl_fail, xdotool_ids, name1, name2]):
+        with patch(
+            "missy.tools.builtin.x11_tools._run",
+            side_effect=[wmctrl_fail, xdotool_ids, name1, name2],
+        ):
             result = X11WindowListTool().execute()
 
         assert result.success is True
@@ -571,8 +582,7 @@ class TestX11ReadScreenToolTakeScreenshot:
         tool = X11ReadScreenTool()
         dest = str(tmp_path / "ok.png")
 
-        with patch("missy.tools.builtin.x11_tools._run",
-                   return_value=_make_completed(0)):
+        with patch("missy.tools.builtin.x11_tools._run", return_value=_make_completed(0)):
             error = tool._take_screenshot(dest, "")
 
         assert error is None
@@ -581,8 +591,9 @@ class TestX11ReadScreenToolTakeScreenshot:
         """Region capture uses 'scrot -a region path' command."""
         tool = X11ReadScreenTool()
 
-        with patch("missy.tools.builtin.x11_tools._run",
-                   return_value=_make_completed(0)) as mock_run:
+        with patch(
+            "missy.tools.builtin.x11_tools._run", return_value=_make_completed(0)
+        ) as mock_run:
             tool._take_screenshot("/tmp/r.png", "0,0,100,100")
 
         called_cmd = mock_run.call_args[0][0]
@@ -592,11 +603,10 @@ class TestX11ReadScreenToolTakeScreenshot:
         """Lines 462-463: browser_tools import raises → falls through to scrot."""
         tool = X11ReadScreenTool()
 
-        with patch("missy.tools.builtin.x11_tools._run",
-                   return_value=_make_completed(0)), \
-             patch.dict(sys.modules, {
-                 "missy.tools.builtin.browser_tools": None
-             }):
+        with (
+            patch("missy.tools.builtin.x11_tools._run", return_value=_make_completed(0)),
+            patch.dict(sys.modules, {"missy.tools.builtin.browser_tools": None}),
+        ):
             # No region → tries browser_tools import, which fails, then scrot succeeds
             error = tool._take_screenshot("/tmp/shot.png", "")
 
@@ -633,9 +643,12 @@ class TestX11ReadScreenToolExecute:
         dest = tmp_path / "ok.png"
         dest.write_bytes(b"PNG")
 
-        with patch.object(tool, "_take_screenshot", return_value=None), \
-             patch.object(tool, "_call_ollama_vision",
-                          side_effect=httpx.ConnectError("connection refused")):
+        with (
+            patch.object(tool, "_take_screenshot", return_value=None),
+            patch.object(
+                tool, "_call_ollama_vision", side_effect=httpx.ConnectError("connection refused")
+            ),
+        ):
             result = tool.execute(path=str(dest))
 
         assert result.success is False
@@ -652,12 +665,12 @@ class TestX11ReadScreenToolExecute:
         mock_response = MagicMock()
         mock_response.status_code = 500
         mock_response.text = "Internal Server Error"
-        http_err = httpx.HTTPStatusError(
-            "error", request=MagicMock(), response=mock_response
-        )
+        http_err = httpx.HTTPStatusError("error", request=MagicMock(), response=mock_response)
 
-        with patch.object(tool, "_take_screenshot", return_value=None), \
-             patch.object(tool, "_call_ollama_vision", side_effect=http_err):
+        with (
+            patch.object(tool, "_take_screenshot", return_value=None),
+            patch.object(tool, "_call_ollama_vision", side_effect=http_err),
+        ):
             result = tool.execute(path=str(dest))
 
         assert result.success is False
@@ -669,9 +682,10 @@ class TestX11ReadScreenToolExecute:
         dest = tmp_path / "ok.png"
         dest.write_bytes(b"PNG")
 
-        with patch.object(tool, "_take_screenshot", return_value=None), \
-             patch.object(tool, "_call_ollama_vision",
-                          side_effect=Exception("timeout")):
+        with (
+            patch.object(tool, "_take_screenshot", return_value=None),
+            patch.object(tool, "_call_ollama_vision", side_effect=Exception("timeout")),
+        ):
             result = tool.execute(path=str(dest))
 
         assert result.success is False
@@ -683,9 +697,10 @@ class TestX11ReadScreenToolExecute:
         dest = tmp_path / "screen.png"
         dest.write_bytes(b"PNG")
 
-        with patch.object(tool, "_take_screenshot", return_value=None), \
-             patch.object(tool, "_call_ollama_vision",
-                          return_value="A desktop with Firefox open."):
+        with (
+            patch.object(tool, "_take_screenshot", return_value=None),
+            patch.object(tool, "_call_ollama_vision", return_value="A desktop with Firefox open."),
+        ):
             result = tool.execute(
                 question="What is on screen?",
                 path=str(dest),

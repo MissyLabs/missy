@@ -18,6 +18,7 @@ Targets uncovered lines:
     57-58  : Path() constructor raises (invalid path)
     73-74  : generic Exception in execute
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -192,9 +193,7 @@ class TestFileWriteToolCoverageGaps:
         readonly_dir.chmod(0o555)
 
         try:
-            result = FileWriteTool().execute(
-                path=str(readonly_dir / "blocked.txt"), content="x"
-            )
+            result = FileWriteTool().execute(path=str(readonly_dir / "blocked.txt"), content="x")
             assert result.success is False
             assert "Permission denied" in result.error
         finally:

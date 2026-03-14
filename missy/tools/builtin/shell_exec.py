@@ -13,6 +13,7 @@ Example::
     assert result.success
     assert "hello" in result.output
 """
+
 from __future__ import annotations
 
 import subprocess

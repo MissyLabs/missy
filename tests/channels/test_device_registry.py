@@ -44,8 +44,12 @@ class TestEdgeNode:
 
     def test_serialization_round_trip(self):
         n = EdgeNode(
-            node_id="n1", friendly_name="Test", room="Room",
-            ip_address="10.0.0.1", policy_mode="safe-chat", paired=True,
+            node_id="n1",
+            friendly_name="Test",
+            room="Room",
+            ip_address="10.0.0.1",
+            policy_mode="safe-chat",
+            paired=True,
         )
         d = _node_to_dict(n)
         restored = _node_from_dict(d)
@@ -55,8 +59,11 @@ class TestEdgeNode:
 
     def test_from_dict_ignores_unknown_fields(self):
         d = {
-            "node_id": "n2", "friendly_name": "X", "room": "Y",
-            "ip_address": "0.0.0.0", "unknown_field": "ignored",
+            "node_id": "n2",
+            "friendly_name": "X",
+            "room": "Y",
+            "ip_address": "0.0.0.0",
+            "unknown_field": "ignored",
         }
         n = _node_from_dict(d)
         assert n.node_id == "n2"
@@ -246,6 +253,7 @@ class TestAudioLogPurge:
         old_file = log_dir / "old.wav"
         old_file.write_text("audio")
         import os
+
         old_time = time.time() - 86400 * 30  # 30 days ago
         os.utime(old_file, (old_time, old_time))
         # Create a recent file
@@ -253,8 +261,12 @@ class TestAudioLogPurge:
         new_file.write_text("audio")
 
         node = EdgeNode(
-            node_id="n1", friendly_name="N", room="R", ip_address="1.1.1.1",
-            audio_logging=True, audio_log_dir=str(log_dir),
+            node_id="n1",
+            friendly_name="N",
+            room="R",
+            ip_address="1.1.1.1",
+            audio_logging=True,
+            audio_log_dir=str(log_dir),
             audio_log_retention_days=7,
         )
         registry.add_node(node)
@@ -266,8 +278,12 @@ class TestAudioLogPurge:
     def test_purge_missing_dir_skipped(self, registry):
         registry.load()
         node = EdgeNode(
-            node_id="n1", friendly_name="N", room="R", ip_address="1.1.1.1",
-            audio_logging=True, audio_log_dir="/nonexistent/path",
+            node_id="n1",
+            friendly_name="N",
+            room="R",
+            ip_address="1.1.1.1",
+            audio_logging=True,
+            audio_log_dir="/nonexistent/path",
             audio_log_retention_days=7,
         )
         registry.add_node(node)

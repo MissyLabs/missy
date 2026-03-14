@@ -5,6 +5,7 @@ Verifies the existence and minimal validity of key runtime artefacts
 provider is configured.  Results are returned as a structured pass/warn/fail
 report with no side effects.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -59,7 +60,9 @@ def _check_providers(config_path: Path) -> _Check:
         A :class:`_Check` describing whether providers look configured.
     """
     if not config_path.exists():
-        return _Check("providers_configured", "FAIL", "Config file missing; cannot check providers.")
+        return _Check(
+            "providers_configured", "FAIL", "Config file missing; cannot check providers."
+        )
 
     try:
         text = config_path.read_text(encoding="utf-8")

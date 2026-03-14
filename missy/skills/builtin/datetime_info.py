@@ -5,6 +5,7 @@ name, and the system uptime read from /proc/uptime.  No special permissions
 are required because all information is derived from the standard library and
 a world-readable kernel file.
 """
+
 from __future__ import annotations
 
 import datetime

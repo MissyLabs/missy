@@ -467,7 +467,7 @@ class TestRunWizard:
         ]
         confirms = [
             False,  # configure Discord?
-            True,   # write config?
+            True,  # write config?
         ]
         with patch("click.prompt", side_effect=prompts):
             with patch("click.confirm", side_effect=confirms):
@@ -484,18 +484,18 @@ class TestRunWizard:
         workspace_dir = str(tmp_path / "workspace")
 
         prompts = [
-            workspace_dir,          # workspace
-            "1",                    # provider: anthropic
-            "1",                    # auth method: API key
-            "sk-ant-api03-testkey", # API key
-            "1",                    # primary model
-            "2",                    # fast model
-            "3",                    # premium model
+            workspace_dir,  # workspace
+            "1",  # provider: anthropic
+            "1",  # auth method: API key
+            "sk-ant-api03-testkey",  # API key
+            "1",  # primary model
+            "2",  # fast model
+            "3",  # premium model
         ]
         confirms = [
             False,  # verify API key?
             False,  # configure Discord?
-            True,   # write config?
+            True,  # write config?
         ]
         with patch("click.prompt", side_effect=prompts):
             with patch("click.confirm", side_effect=confirms):
@@ -513,18 +513,18 @@ class TestRunWizard:
         workspace_dir = str(tmp_path / "workspace")
 
         prompts = [
-            workspace_dir,   # workspace
-            "2",             # provider: openai
-            "1",             # auth method: API key
-            "sk-testkey",    # API key
-            "1",             # primary model
-            "2",             # fast model
-            "3",             # premium model
+            workspace_dir,  # workspace
+            "2",  # provider: openai
+            "1",  # auth method: API key
+            "sk-testkey",  # API key
+            "1",  # primary model
+            "2",  # fast model
+            "3",  # premium model
         ]
         confirms = [
             False,  # verify API key?
             False,  # configure Discord?
-            True,   # write config?
+            True,  # write config?
         ]
         with patch("click.prompt", side_effect=prompts):
             with patch("click.confirm", side_effect=confirms):
@@ -542,15 +542,15 @@ class TestRunWizard:
 
         prompts = [
             workspace_dir,  # workspace
-            "2",            # provider: openai
-            "2",            # auth method: OAuth
-            "1",            # primary model
-            "2",            # fast model
-            "3",            # premium model
+            "2",  # provider: openai
+            "2",  # auth method: OAuth
+            "1",  # primary model
+            "2",  # fast model
+            "3",  # premium model
         ]
         confirms = [
             False,  # configure Discord?
-            True,   # write config?
+            True,  # write config?
         ]
         with patch("click.prompt", side_effect=prompts):
             with patch("click.confirm", side_effect=confirms):
@@ -569,17 +569,17 @@ class TestRunWizard:
 
         prompts = [
             workspace_dir,  # workspace
-            "2",            # provider: openai
-            "2",            # auth method: OAuth (fails)
+            "2",  # provider: openai
+            "2",  # auth method: OAuth (fails)
             "sk-fallback",  # fallback API key prompt
-            "1",            # primary model
-            "2",            # fast model
-            "3",            # premium model
+            "1",  # primary model
+            "2",  # fast model
+            "3",  # premium model
         ]
         # OAuth fallback path has no verify confirm (only the else branch does).
         confirms = [
             False,  # configure Discord?
-            True,   # write config?
+            True,  # write config?
         ]
         with patch("click.prompt", side_effect=prompts):
             with patch("click.confirm", side_effect=confirms):
@@ -596,15 +596,15 @@ class TestRunWizard:
 
         prompts = [
             workspace_dir,  # workspace
-            "1",            # provider: anthropic
-            "3",            # auth method: setup-token
-            "1",            # primary model
-            "2",            # fast model
-            "3",            # premium model
+            "1",  # provider: anthropic
+            "3",  # auth method: setup-token
+            "1",  # primary model
+            "2",  # fast model
+            "3",  # premium model
         ]
         confirms = [
             False,  # configure Discord?
-            True,   # write config?
+            True,  # write config?
         ]
         with patch("click.prompt", side_effect=prompts):
             with patch("click.confirm", side_effect=confirms):
@@ -623,19 +623,19 @@ class TestRunWizard:
         workspace_dir = str(tmp_path / "workspace")
 
         prompts = [
-            workspace_dir,          # workspace
-            "1",                    # provider: anthropic
-            "2",                    # auth method: vault
+            workspace_dir,  # workspace
+            "1",  # provider: anthropic
+            "2",  # auth method: vault
             "sk-ant-api03-rawkey",  # API key
-            "1",                    # primary model
-            "2",                    # fast model
-            "3",                    # premium model
+            "1",  # primary model
+            "2",  # fast model
+            "3",  # premium model
         ]
         # run_anthropic_vault_flow is fully mocked so its internal confirm is not called.
         # Verify confirm is also skipped because api_key starts with vault://.
         confirms = [
             False,  # configure Discord?
-            True,   # write config?
+            True,  # write config?
         ]
         with patch("click.prompt", side_effect=prompts):
             with patch("click.confirm", side_effect=confirms):
@@ -656,15 +656,15 @@ class TestRunWizard:
         workspace_dir = str(tmp_path / "workspace")
 
         prompts = [
-            workspace_dir,            # workspace
-            "3",                      # provider: ollama
-            "http://localhost:11434", # ollama base URL
-            "llama3",                 # default model
+            workspace_dir,  # workspace
+            "3",  # provider: ollama
+            "http://localhost:11434",  # ollama base URL
+            "llama3",  # default model
         ]
         confirms = [
             False,  # verify ollama connectivity?
             False,  # configure Discord?
-            True,   # write config?
+            True,  # write config?
         ]
         with patch("click.prompt", side_effect=prompts):
             with patch("click.confirm", side_effect=confirms):
@@ -682,22 +682,26 @@ class TestRunWizard:
         workspace_dir = str(tmp_path / "workspace")
 
         prompts = [
-            workspace_dir,          # workspace
-            "4",                    # provider: anthropic + openai
+            workspace_dir,  # workspace
+            "4",  # provider: anthropic + openai
             # Anthropic
-            "1",                    # auth: API key
-            "sk-ant-api03-akey",    # API key
-            "1", "2", "3",          # model picks
+            "1",  # auth: API key
+            "sk-ant-api03-akey",  # API key
+            "1",
+            "2",
+            "3",  # model picks
             # OpenAI
-            "1",                    # auth: API key
-            "sk-oaikey",            # API key
-            "1", "2", "3",          # model picks
+            "1",  # auth: API key
+            "sk-oaikey",  # API key
+            "1",
+            "2",
+            "3",  # model picks
         ]
         confirms = [
             False,  # verify anthropic?
             False,  # verify openai?
             False,  # configure Discord?
-            True,   # write config?
+            True,  # write config?
         ]
         with patch("click.prompt", side_effect=prompts):
             with patch("click.confirm", side_effect=confirms):
@@ -715,19 +719,19 @@ class TestRunWizard:
 
         prompts = [
             workspace_dir,  # workspace
-            "0",            # provider: skip
+            "0",  # provider: skip
             # Discord setup
             "bottoken123",  # bot token
-            "app_12345",    # application ID
-            "2",            # dm policy: allowlist
-            "111,222",      # allowed user IDs
-            "eyes",         # ack reaction
+            "app_12345",  # application ID
+            "2",  # dm policy: allowlist
+            "111,222",  # allowed user IDs
+            "eyes",  # ack reaction
         ]
         confirms = [
-            True,   # configure Discord?
+            True,  # configure Discord?
             False,  # add guild policy?
-            True,   # ignore bots?
-            True,   # write config?
+            True,  # ignore bots?
+            True,  # write config?
         ]
         with patch("click.prompt", side_effect=prompts):
             with patch("click.confirm", side_effect=confirms):
@@ -746,7 +750,7 @@ class TestRunWizard:
 
         prompts = [
             workspace_dir,  # workspace
-            "0",            # provider: skip
+            "0",  # provider: skip
         ]
         confirms = [
             False,  # configure Discord?
@@ -766,11 +770,11 @@ class TestRunWizard:
 
         prompts = [
             workspace_dir,  # workspace
-            "0",            # provider: skip
+            "0",  # provider: skip
         ]
         confirms = [
             False,  # configure Discord?
-            True,   # write config?
+            True,  # write config?
         ]
         with patch("click.prompt", side_effect=prompts):
             with patch("click.confirm", side_effect=confirms):
@@ -788,11 +792,11 @@ class TestRunWizard:
 
         prompts = [
             workspace_dir,  # workspace
-            "0",            # provider: skip
+            "0",  # provider: skip
         ]
         confirms = [
             False,  # configure Discord?
-            True,   # write config?
+            True,  # write config?
         ]
         with patch("click.prompt", side_effect=prompts):
             with patch("click.confirm", side_effect=confirms):
@@ -811,16 +815,18 @@ class TestRunWizard:
         workspace_dir = str(tmp_path / "workspace")
 
         prompts = [
-            workspace_dir,          # workspace
-            "1",                    # provider: anthropic
-            "1",                    # auth: API key
-            "sk-ant-api03-valid",   # API key
-            "1", "2", "3",          # models
+            workspace_dir,  # workspace
+            "1",  # provider: anthropic
+            "1",  # auth: API key
+            "sk-ant-api03-valid",  # API key
+            "1",
+            "2",
+            "3",  # models
         ]
         confirms = [
-            True,   # verify API key?
+            True,  # verify API key?
             False,  # configure Discord?
-            True,   # write config?
+            True,  # write config?
         ]
         mock_client = MagicMock()
         with patch("click.prompt", side_effect=prompts):
@@ -1700,7 +1706,9 @@ class TestGetCurrentToken:
         try:
             token_file = tmp_path / "anthropic-token.json"
             token_file.write_text(
-                json.dumps({"token": "file-key", "token_type": "api_key", "issued_at": int(time.time())})
+                json.dumps(
+                    {"token": "file-key", "token_type": "api_key", "issued_at": int(time.time())}
+                )
             )
             auth_mod.TOKEN_FILE = token_file
 
@@ -1749,10 +1757,14 @@ class TestGetCurrentToken:
 
         orig = auth_mod.TOKEN_FILE
         try:
-            issued_at = int(time.time()) - (auth_mod.SETUP_TOKEN_TTL_SECONDS - auth_mod.REFRESH_WARN_MARGIN + 60)
+            issued_at = int(time.time()) - (
+                auth_mod.SETUP_TOKEN_TTL_SECONDS - auth_mod.REFRESH_WARN_MARGIN + 60
+            )
             token_file = tmp_path / "anthropic-token.json"
             token_file.write_text(
-                json.dumps({"token": "expiring-tok", "token_type": "setup_token", "issued_at": issued_at})
+                json.dumps(
+                    {"token": "expiring-tok", "token_type": "setup_token", "issued_at": issued_at}
+                )
             )
             auth_mod.TOKEN_FILE = token_file
 

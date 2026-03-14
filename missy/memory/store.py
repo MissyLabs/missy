@@ -198,7 +198,9 @@ class MemoryStore:
         )
 
         # Rebuild the global turn list: drop removed turns, prepend summary
-        remaining = [t for t in self._turns if not (t.session_id == session_id and t.id in to_remove_ids)]
+        remaining = [
+            t for t in self._turns if not (t.session_id == session_id and t.id in to_remove_ids)
+        ]
         # Insert the summary turn before all other turns for this session so
         # it appears first in chronological order.
         insert_pos = next(

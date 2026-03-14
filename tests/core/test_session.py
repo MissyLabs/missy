@@ -136,9 +136,7 @@ class TestSessionManager:
 
         def thread_fn(index: int) -> None:
             try:
-                sessions[index] = manager.create_session(
-                    metadata={"thread": index}
-                )
+                sessions[index] = manager.create_session(metadata={"thread": index})
             except Exception as exc:
                 errors.append(exc)
 

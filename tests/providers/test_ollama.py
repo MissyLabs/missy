@@ -72,32 +72,24 @@ def provider() -> OllamaProvider:
 class TestIsAvailable:
     def test_returns_true_when_api_responds_200(self, provider):
         mock_resp = _make_http_response(200)
-        with patch(
-            "missy.providers.ollama_provider.PolicyHTTPClient"
-        ) as MockClient:
+        with patch("missy.providers.ollama_provider.PolicyHTTPClient") as MockClient:
             MockClient.return_value.get.return_value = mock_resp
             assert provider.is_available() is True
 
     def test_returns_false_when_api_responds_non_200(self, provider):
         mock_resp = _make_http_response(503)
-        with patch(
-            "missy.providers.ollama_provider.PolicyHTTPClient"
-        ) as MockClient:
+        with patch("missy.providers.ollama_provider.PolicyHTTPClient") as MockClient:
             MockClient.return_value.get.return_value = mock_resp
             assert provider.is_available() is False
 
     def test_returns_false_when_connection_error(self, provider):
-        with patch(
-            "missy.providers.ollama_provider.PolicyHTTPClient"
-        ) as MockClient:
+        with patch("missy.providers.ollama_provider.PolicyHTTPClient") as MockClient:
             MockClient.return_value.get.side_effect = ConnectionError("refused")
             assert provider.is_available() is False
 
     def test_is_available_uses_api_tags_endpoint(self, provider):
         mock_resp = _make_http_response(200)
-        with patch(
-            "missy.providers.ollama_provider.PolicyHTTPClient"
-        ) as MockClient:
+        with patch("missy.providers.ollama_provider.PolicyHTTPClient") as MockClient:
             MockClient.return_value.get.return_value = mock_resp
             provider.is_available()
             call_args = MockClient.return_value.get.call_args
@@ -112,9 +104,7 @@ class TestIsAvailable:
 class TestComplete:
     def test_complete_returns_completion_response(self, provider):
         mock_resp = _make_http_response(200, _VALID_CHAT_RESPONSE)
-        with patch(
-            "missy.providers.ollama_provider.PolicyHTTPClient"
-        ) as MockClient:
+        with patch("missy.providers.ollama_provider.PolicyHTTPClient") as MockClient:
             MockClient.return_value.post.return_value = mock_resp
             messages = [Message(role="user", content="Hello")]
             result = provider.complete(messages)
@@ -122,27 +112,21 @@ class TestComplete:
 
     def test_complete_parses_content(self, provider):
         mock_resp = _make_http_response(200, _VALID_CHAT_RESPONSE)
-        with patch(
-            "missy.providers.ollama_provider.PolicyHTTPClient"
-        ) as MockClient:
+        with patch("missy.providers.ollama_provider.PolicyHTTPClient") as MockClient:
             MockClient.return_value.post.return_value = mock_resp
             result = provider.complete([Message(role="user", content="Hi")])
         assert result.content == "Hello from Ollama!"
 
     def test_complete_parses_model(self, provider):
         mock_resp = _make_http_response(200, _VALID_CHAT_RESPONSE)
-        with patch(
-            "missy.providers.ollama_provider.PolicyHTTPClient"
-        ) as MockClient:
+        with patch("missy.providers.ollama_provider.PolicyHTTPClient") as MockClient:
             MockClient.return_value.post.return_value = mock_resp
             result = provider.complete([Message(role="user", content="Hi")])
         assert result.model == "llama3.2"
 
     def test_complete_parses_usage(self, provider):
         mock_resp = _make_http_response(200, _VALID_CHAT_RESPONSE)
-        with patch(
-            "missy.providers.ollama_provider.PolicyHTTPClient"
-        ) as MockClient:
+        with patch("missy.providers.ollama_provider.PolicyHTTPClient") as MockClient:
             MockClient.return_value.post.return_value = mock_resp
             result = provider.complete([Message(role="user", content="Hi")])
         assert result.usage["prompt_tokens"] == 10
@@ -151,18 +135,14 @@ class TestComplete:
 
     def test_complete_sets_provider_name(self, provider):
         mock_resp = _make_http_response(200, _VALID_CHAT_RESPONSE)
-        with patch(
-            "missy.providers.ollama_provider.PolicyHTTPClient"
-        ) as MockClient:
+        with patch("missy.providers.ollama_provider.PolicyHTTPClient") as MockClient:
             MockClient.return_value.post.return_value = mock_resp
             result = provider.complete([Message(role="user", content="Hi")])
         assert result.provider == "ollama"
 
     def test_complete_emits_allow_event(self, provider):
         mock_resp = _make_http_response(200, _VALID_CHAT_RESPONSE)
-        with patch(
-            "missy.providers.ollama_provider.PolicyHTTPClient"
-        ) as MockClient:
+        with patch("missy.providers.ollama_provider.PolicyHTTPClient") as MockClient:
             MockClient.return_value.post.return_value = mock_resp
             provider.complete([Message(role="user", content="Hi")])
         events = event_bus.get_events(event_type="provider_invoke", result="allow")
@@ -170,9 +150,7 @@ class TestComplete:
 
     def test_complete_sends_stream_false(self, provider):
         mock_resp = _make_http_response(200, _VALID_CHAT_RESPONSE)
-        with patch(
-            "missy.providers.ollama_provider.PolicyHTTPClient"
-        ) as MockClient:
+        with patch("missy.providers.ollama_provider.PolicyHTTPClient") as MockClient:
             MockClient.return_value.post.return_value = mock_resp
             provider.complete([Message(role="user", content="Hi")])
             call_kwargs = MockClient.return_value.post.call_args[1]
@@ -180,22 +158,16 @@ class TestComplete:
 
     def test_complete_forwards_temperature(self, provider):
         mock_resp = _make_http_response(200, _VALID_CHAT_RESPONSE)
-        with patch(
-            "missy.providers.ollama_provider.PolicyHTTPClient"
-        ) as MockClient:
+        with patch("missy.providers.ollama_provider.PolicyHTTPClient") as MockClient:
             MockClient.return_value.post.return_value = mock_resp
-            provider.complete(
-                [Message(role="user", content="Hi")], temperature=0.9
-            )
+            provider.complete([Message(role="user", content="Hi")], temperature=0.9)
             payload = MockClient.return_value.post.call_args[1]["json"]
             assert payload["options"]["temperature"] == 0.9
 
     def test_complete_empty_message_gives_empty_content(self, provider):
         data = {"model": "llama3.2", "message": {}, "prompt_eval_count": 0, "eval_count": 0}
         mock_resp = _make_http_response(200, data)
-        with patch(
-            "missy.providers.ollama_provider.PolicyHTTPClient"
-        ) as MockClient:
+        with patch("missy.providers.ollama_provider.PolicyHTTPClient") as MockClient:
             MockClient.return_value.post.return_value = mock_resp
             result = provider.complete([Message(role="user", content="Hi")])
         assert result.content == ""
@@ -209,17 +181,13 @@ class TestComplete:
 class TestCompleteErrors:
     def test_http_error_raises_provider_error(self, provider):
         mock_resp = _make_http_response(500)
-        with patch(
-            "missy.providers.ollama_provider.PolicyHTTPClient"
-        ) as MockClient:
+        with patch("missy.providers.ollama_provider.PolicyHTTPClient") as MockClient:
             MockClient.return_value.post.return_value = mock_resp
             with pytest.raises(ProviderError, match="Ollama"):
                 provider.complete([Message(role="user", content="Hi")])
 
     def test_connection_error_raises_provider_error(self, provider):
-        with patch(
-            "missy.providers.ollama_provider.PolicyHTTPClient"
-        ) as MockClient:
+        with patch("missy.providers.ollama_provider.PolicyHTTPClient") as MockClient:
             MockClient.return_value.post.side_effect = ConnectionError("refused")
             with pytest.raises(ProviderError, match="Ollama"):
                 provider.complete([Message(role="user", content="Hi")])
@@ -228,18 +196,14 @@ class TestCompleteErrors:
         mock_resp = MagicMock()
         mock_resp.raise_for_status.return_value = None
         mock_resp.json.side_effect = ValueError("not JSON")
-        with patch(
-            "missy.providers.ollama_provider.PolicyHTTPClient"
-        ) as MockClient:
+        with patch("missy.providers.ollama_provider.PolicyHTTPClient") as MockClient:
             MockClient.return_value.post.return_value = mock_resp
             with pytest.raises(ProviderError, match="JSON"):
                 provider.complete([Message(role="user", content="Hi")])
 
     def test_http_error_emits_error_event(self, provider):
         mock_resp = _make_http_response(500)
-        with patch(
-            "missy.providers.ollama_provider.PolicyHTTPClient"
-        ) as MockClient:
+        with patch("missy.providers.ollama_provider.PolicyHTTPClient") as MockClient:
             MockClient.return_value.post.return_value = mock_resp
             with pytest.raises(ProviderError):
                 provider.complete([Message(role="user", content="Hi")])
@@ -286,7 +250,11 @@ class _FakeTool:
 
 class TestGetToolSchema:
     def test_returns_ollama_native_format(self, provider):
-        tools = [_FakeTool("greet", "Say hello", {"type": "object", "properties": {"name": {"type": "string"}}})]
+        tools = [
+            _FakeTool(
+                "greet", "Say hello", {"type": "object", "properties": {"name": {"type": "string"}}}
+            )
+        ]
         schemas = provider.get_tool_schema(tools)
         assert len(schemas) == 1
         assert schemas[0]["type"] == "function"
@@ -344,10 +312,14 @@ class TestCompleteWithTools:
         mock_resp = _make_http_response(200, _TOOL_CALL_RESPONSE)
         with patch("missy.providers.ollama_provider.PolicyHTTPClient") as MockClient:
             MockClient.return_value.post.return_value = mock_resp
-            tools = [_FakeTool("tts_speak", "Speak text", {"type": "object", "properties": {"text": {"type": "string"}}})]
-            result = provider.complete_with_tools(
-                [Message(role="user", content="say hi")], tools
-            )
+            tools = [
+                _FakeTool(
+                    "tts_speak",
+                    "Speak text",
+                    {"type": "object", "properties": {"text": {"type": "string"}}},
+                )
+            ]
+            result = provider.complete_with_tools([Message(role="user", content="say hi")], tools)
         assert result.finish_reason == "tool_calls"
         assert len(result.tool_calls) == 1
         assert result.tool_calls[0].name == "tts_speak"
@@ -371,9 +343,7 @@ class TestCompleteWithTools:
         with patch("missy.providers.ollama_provider.PolicyHTTPClient") as MockClient:
             MockClient.return_value.post.return_value = mock_resp
             tools = [_FakeTool("greet", "Say hi")]
-            provider.complete_with_tools(
-                [Message(role="user", content="hi")], tools
-            )
+            provider.complete_with_tools([Message(role="user", content="hi")], tools)
             payload = MockClient.return_value.post.call_args[1]["json"]
             assert "tools" in payload
             assert payload["tools"][0]["type"] == "function"
@@ -411,9 +381,7 @@ class TestCompleteWithTools:
         with patch("missy.providers.ollama_provider.PolicyHTTPClient") as MockClient:
             MockClient.return_value.post.return_value = mock_resp
             tools = [_FakeTool("tool_a", "A"), _FakeTool("tool_b", "B")]
-            result = provider.complete_with_tools(
-                [Message(role="user", content="do both")], tools
-            )
+            result = provider.complete_with_tools([Message(role="user", content="do both")], tools)
         assert len(result.tool_calls) == 2
         assert result.tool_calls[0].name == "tool_a"
         assert result.tool_calls[1].name == "tool_b"
@@ -424,6 +392,4 @@ class TestCompleteWithTools:
             MockClient.return_value.post.return_value = mock_resp
             tools = [_FakeTool("greet", "Say hi")]
             with pytest.raises(ProviderError):
-                provider.complete_with_tools(
-                    [Message(role="user", content="hi")], tools
-                )
+                provider.complete_with_tools([Message(role="user", content="hi")], tools)

@@ -118,9 +118,7 @@ class PairingManager:
         # Idempotency: if the node is already registered, skip.
         existing = self._registry.get_node(node_id)
         if existing is not None:
-            logger.debug(
-                "initiate_pairing: node %r already exists — skipping.", node_id
-            )
+            logger.debug("initiate_pairing: node %r already exists — skipping.", node_id)
             return node_id
 
         node = EdgeNode(

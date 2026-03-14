@@ -59,7 +59,9 @@ class ProviderRegistry:
     # Mutation
     # ------------------------------------------------------------------
 
-    def register(self, name: str, provider: BaseProvider, config: ProviderConfig | None = None) -> None:
+    def register(
+        self, name: str, provider: BaseProvider, config: ProviderConfig | None = None
+    ) -> None:
         """Add *provider* under the given *name*.
 
         A previous registration under the same name is silently replaced.
@@ -91,7 +93,10 @@ class ProviderRegistry:
             return
         keys = getattr(config, "api_keys", [])
         if len(keys) < 2:
-            logger.debug("rotate_key: provider %r has fewer than 2 api_keys; skipping rotation.", provider_name)
+            logger.debug(
+                "rotate_key: provider %r has fewer than 2 api_keys; skipping rotation.",
+                provider_name,
+            )
             return
         current_idx = self._key_indices.get(provider_name, 0)
         next_idx = (current_idx + 1) % len(keys)
@@ -181,7 +186,8 @@ class ProviderRegistry:
                     config.network.provider_allowed_hosts.append(host)
                     existing.add(host.lower())
                     logger.debug(
-                        "Auto-allowed provider host %r from base_url.", host,
+                        "Auto-allowed provider host %r from base_url.",
+                        host,
                     )
 
         for key, provider_config in config.providers.items():
@@ -191,18 +197,14 @@ class ProviderRegistry:
             provider_name = provider_config.name or key
             provider_cls = _PROVIDER_CLASSES.get(provider_name)
             if provider_cls is None:
-                logger.warning(
-                    "Unknown provider name %r (key=%r); skipping.", provider_name, key
-                )
+                logger.warning("Unknown provider name %r (key=%r); skipping.", provider_name, key)
                 continue
             try:
                 instance = provider_cls(provider_config)
                 registry.register(key, instance, config=provider_config)
                 logger.debug("Registered provider %r (%s).", key, provider_cls.__name__)
             except Exception:
-                logger.exception(
-                    "Failed to construct provider %r; skipping.", key
-                )
+                logger.exception("Failed to construct provider %r; skipping.", key)
         return registry
 
 
@@ -214,7 +216,9 @@ class ProviderRegistry:
 class ModelRouter:
     """Routes tasks to fast/primary/premium provider tiers based on complexity."""
 
-    PREMIUM_KEYWORDS = frozenset(["debug", "architect", "refactor", "analyze", "optimize", "complex"])
+    PREMIUM_KEYWORDS = frozenset(
+        ["debug", "architect", "refactor", "analyze", "optimize", "complex"]
+    )
     FAST_INDICATORS = frozenset(["what", "how", "when", "where", "who", "list", "show"])
 
     def score_complexity(self, prompt: str, history_length: int = 0, tool_count: int = 0) -> str:

@@ -132,7 +132,11 @@ class TestHandleReaction:
         )
         # Handle both positional and keyword args
         if not sent_content:
-            sent_content = mock_rest.send_message.call_args[0][1] if len(mock_rest.send_message.call_args[0]) > 1 else ""
+            sent_content = (
+                mock_rest.send_message.call_args[0][1]
+                if len(mock_rest.send_message.call_args[0]) > 1
+                else ""
+            )
         assert "approved" in sent_content.lower()
         assert "msg-1" not in channel._pending_evolutions
 
@@ -184,9 +188,7 @@ class TestHandleReaction:
 
 class TestSendToReturnsId:
     def test_returns_last_message_id(self, channel: DiscordChannel, mock_rest: MagicMock):
-        result = asyncio.get_event_loop().run_until_complete(
-            channel.send_to("ch-1", "hello")
-        )
+        result = asyncio.get_event_loop().run_until_complete(channel.send_to("ch-1", "hello"))
         assert result == "sent-msg-123"
 
     def test_raises_on_error(self, channel: DiscordChannel, mock_rest: MagicMock):
@@ -194,9 +196,7 @@ class TestSendToReturnsId:
 
         mock_rest.send_message.side_effect = Exception("fail")
         with pytest.raises(DiscordSendError):
-            asyncio.get_event_loop().run_until_complete(
-                channel.send_to("ch-1", "hello")
-            )
+            asyncio.get_event_loop().run_until_complete(channel.send_to("ch-1", "hello"))
 
 
 # ---------------------------------------------------------------------------

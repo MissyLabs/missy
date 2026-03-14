@@ -5,6 +5,7 @@ transcript summary.  If no session_id is supplied an empty-session message is
 returned.  If the memory store is unavailable a descriptive error is returned
 rather than raising an exception.
 """
+
 from __future__ import annotations
 
 from typing import Any

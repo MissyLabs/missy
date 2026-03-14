@@ -6,6 +6,7 @@ Usage::
     gate.request("delete all files in /tmp/work", risk="high")
     # Blocks until approved or timeout
 """
+
 from __future__ import annotations
 
 import logging
@@ -76,19 +77,18 @@ class ApprovalGate:
         """
         pending = PendingApproval(action, reason, self._timeout)
         import uuid
+
         approval_id = str(uuid.uuid4())[:8]
 
         with self._lock:
             self._pending[approval_id] = pending
 
-        msg = (
-            f"⚠️ **Approval Required** [ID: {approval_id}]\n"
-            f"Action: {action}\n"
-            f"Risk: {risk}\n"
-        )
+        msg = f"⚠️ **Approval Required** [ID: {approval_id}]\nAction: {action}\nRisk: {risk}\n"
         if reason:
             msg += f"Reason: {reason}\n"
-        msg += f"\nReply `approve {approval_id}` or `deny {approval_id}` within {int(self._timeout)}s."
+        msg += (
+            f"\nReply `approve {approval_id}` or `deny {approval_id}` within {int(self._timeout)}s."
+        )
 
         if self._send:
             try:
@@ -120,4 +120,6 @@ class ApprovalGate:
 
     def list_pending(self) -> list[dict]:
         with self._lock:
-            return [{"id": k, "action": v.action, "reason": v.reason} for k, v in self._pending.items()]
+            return [
+                {"id": k, "action": v.action, "reason": v.reason} for k, v in self._pending.items()
+            ]

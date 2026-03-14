@@ -9,6 +9,7 @@ Usage::
     vault.set("OPENAI_API_KEY", "sk-...")
     key = vault.get("OPENAI_API_KEY")
 """
+
 from __future__ import annotations
 
 import json
@@ -18,6 +19,7 @@ from pathlib import Path
 
 try:
     from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+
     _CRYPTO_AVAILABLE = True
 except ImportError:
     _CRYPTO_AVAILABLE = False
@@ -116,7 +118,7 @@ class Vault:
         anything else → returned as-is
         """
         if ref.startswith("vault://"):
-            key = ref[len("vault://"):]
+            key = ref[len("vault://") :]
             val = self.get(key)
             if val is None:
                 raise VaultError(f"vault://{key} not found in vault")

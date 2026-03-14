@@ -77,6 +77,7 @@ class TestGetTotalCosts:
 
     def test_ordered_by_most_recent(self, store):
         import time
+
         store.record_cost("sess-old", "model", 100, 50, 0.001)
         time.sleep(0.01)
         store.record_cost("sess-new", "model", 200, 100, 0.002)
@@ -87,9 +88,7 @@ class TestGetTotalCosts:
 class TestCostsTableCreation:
     def test_costs_table_exists(self, store):
         conn = store._conn()
-        cursor = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='costs'"
-        )
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='costs'")
         assert cursor.fetchone() is not None
 
     def test_costs_indexes_exist(self, store):

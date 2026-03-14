@@ -164,6 +164,7 @@ def _try_store_in_vault(token: str, vault_dir: str = "~/.missy/secrets") -> str 
     """
     try:
         from missy.security.vault import Vault
+
         v = Vault(vault_dir)
         v.set("anthropic_api_key", token)
         return "vault://anthropic_api_key"
@@ -190,13 +191,16 @@ def run_anthropic_setup_token_flow() -> str | None:
     Returns:
         The setup-token string, or None if aborted.
     """
-    console.print(Panel(TOS_WARNING, title="[yellow bold]! Anthropic ToS Warning[/]", border_style="yellow"))
+    console.print(
+        Panel(TOS_WARNING, title="[yellow bold]! Anthropic ToS Warning[/]", border_style="yellow")
+    )
     if not click.confirm("\n  I understand and accept the ToS risk — continue?", default=False):
         console.print("  [dim]Setup-token flow aborted.[/]")
         return None
 
     # Check for claude CLI.
     import shutil
+
     claude_bin = shutil.which("claude")
     if claude_bin:
         console.print(f"\n  [green]Found Claude Code CLI:[/] {claude_bin}")
@@ -308,6 +312,7 @@ def get_current_token(vault_dir: str = "~/.missy/secrets") -> str | None:
     # 3. Vault.
     try:
         from missy.security.vault import Vault
+
         v = Vault(vault_dir)
         return v.get("anthropic_api_key")
     except Exception:

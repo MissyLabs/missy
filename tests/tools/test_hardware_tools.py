@@ -16,7 +16,10 @@ import pytest
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _completed(returncode: int = 0, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess:
+
+def _completed(
+    returncode: int = 0, stdout: str = "", stderr: str = ""
+) -> subprocess.CompletedProcess:
     """Build a fake subprocess.CompletedProcess."""
     cp = subprocess.CompletedProcess(args=[], returncode=returncode)
     cp.stdout = stdout
@@ -35,6 +38,7 @@ class TestX11ScreenshotTool:
     @pytest.fixture(autouse=True)
     def _tool(self):
         from missy.tools.builtin.x11_tools import X11ScreenshotTool
+
         self.tool = X11ScreenshotTool()
 
     # --- happy path ---
@@ -44,8 +48,10 @@ class TestX11ScreenshotTool:
         # Write a dummy file so os.path.getsize works
         Path(dest).write_bytes(b"\x89PNG" + b"\x00" * 100)
 
-        with patch("missy.tools.builtin.x11_tools.subprocess.run") as mock_run, \
-             patch("missy.tools.builtin.x11_tools.os.path.getsize", return_value=104):
+        with (
+            patch("missy.tools.builtin.x11_tools.subprocess.run") as mock_run,
+            patch("missy.tools.builtin.x11_tools.os.path.getsize", return_value=104),
+        ):
             mock_run.return_value = _completed(returncode=0)
             result = self.tool.execute(path=dest)
 
@@ -60,8 +66,10 @@ class TestX11ScreenshotTool:
     def test_region_screenshot_uses_scrot_dash_a(self, tmp_path):
         dest = str(tmp_path / "region.png")
 
-        with patch("missy.tools.builtin.x11_tools.subprocess.run") as mock_run, \
-             patch("missy.tools.builtin.x11_tools.os.path.getsize", return_value=50):
+        with (
+            patch("missy.tools.builtin.x11_tools.subprocess.run") as mock_run,
+            patch("missy.tools.builtin.x11_tools.os.path.getsize", return_value=50),
+        ):
             mock_run.return_value = _completed(returncode=0)
             result = self.tool.execute(path=dest, region="10,20,300,200")
 
@@ -72,8 +80,10 @@ class TestX11ScreenshotTool:
     def test_screenshot_getsize_oserror_returns_zero(self, tmp_path):
         dest = str(tmp_path / "shot.png")
 
-        with patch("missy.tools.builtin.x11_tools.subprocess.run") as mock_run, \
-             patch("missy.tools.builtin.x11_tools.os.path.getsize", side_effect=OSError):
+        with (
+            patch("missy.tools.builtin.x11_tools.subprocess.run") as mock_run,
+            patch("missy.tools.builtin.x11_tools.os.path.getsize", side_effect=OSError),
+        ):
             mock_run.return_value = _completed(returncode=0)
             result = self.tool.execute(path=dest)
 
@@ -125,6 +135,7 @@ class TestX11ClickTool:
     @pytest.fixture(autouse=True)
     def _tool(self):
         from missy.tools.builtin.x11_tools import X11ClickTool
+
         self.tool = X11ClickTool()
 
     # --- happy path ---
@@ -219,6 +230,7 @@ class TestX11TypeTool:
     @pytest.fixture(autouse=True)
     def _tool(self):
         from missy.tools.builtin.x11_tools import X11TypeTool
+
         self.tool = X11TypeTool()
 
     def test_type_text_success(self):
@@ -238,7 +250,10 @@ class TestX11TypeTool:
 
         called_cmd = mock_run.call_args[0][0]
         # json.dumps wraps in double quotes and escapes inner quotes
-        assert '"say \\"hello\\""' in called_cmd or '"say \\"hello\\""'.replace('\\"', '\\"') in called_cmd
+        assert (
+            '"say \\"hello\\""' in called_cmd
+            or '"say \\"hello\\""'.replace('\\"', '\\"') in called_cmd
+        )
 
     def test_custom_delay_ms(self):
         with patch("missy.tools.builtin.x11_tools.subprocess.run") as mock_run:
@@ -290,6 +305,7 @@ class TestX11KeyTool:
     @pytest.fixture(autouse=True)
     def _tool(self):
         from missy.tools.builtin.x11_tools import X11KeyTool
+
         self.tool = X11KeyTool()
 
     def test_send_return_key(self):
@@ -348,13 +364,12 @@ class TestX11WindowListTool:
     @pytest.fixture(autouse=True)
     def _tool(self):
         from missy.tools.builtin.x11_tools import X11WindowListTool
+
         self.tool = X11WindowListTool()
 
     def test_wmctrl_success_parses_windows(self):
         wmctrl_output = (
-            "0x04000001  0 myhost Firefox\n"
-            "0x04000002  1 myhost Terminal\n"
-            "0x04000003  0 myhost  \n"
+            "0x04000001  0 myhost Firefox\n0x04000002  1 myhost Terminal\n0x04000003  0 myhost  \n"
         )
         with patch("missy.tools.builtin.x11_tools.subprocess.run") as mock_run:
             mock_run.return_value = _completed(returncode=0, stdout=wmctrl_output)
@@ -432,6 +447,7 @@ class TestX11WindowListTool:
 
     def test_xdotool_no_windows_returns_empty_list(self):
         """xdotool returning non-zero when no windows match is treated as empty."""
+
         def side_effect(cmd, **kw):
             if "wmctrl" in cmd:
                 return _completed(returncode=1)
@@ -468,14 +484,19 @@ class TestX11ReadScreenTool:
     @pytest.fixture(autouse=True)
     def _tool(self):
         from missy.tools.builtin.x11_tools import X11ReadScreenTool
+
         self.tool = X11ReadScreenTool()
 
     def test_full_pipeline_success(self, tmp_path):
         dest = str(tmp_path / "screen.png")
         Path(dest).write_bytes(b"FAKEPNG")
 
-        with patch("missy.tools.builtin.x11_tools.subprocess.run") as mock_run, \
-             patch.object(self.tool, "_call_ollama_vision", return_value="A desktop with Firefox open"):
+        with (
+            patch("missy.tools.builtin.x11_tools.subprocess.run") as mock_run,
+            patch.object(
+                self.tool, "_call_ollama_vision", return_value="A desktop with Firefox open"
+            ),
+        ):
             mock_run.return_value = _completed(returncode=0)
             result = self.tool.execute(
                 question="What do you see?",
@@ -508,6 +529,7 @@ class TestX11ReadScreenTool:
 
     def test_ollama_http_error(self, tmp_path):
         import httpx
+
         dest = str(tmp_path / "screen.png")
         Path(dest).write_bytes(b"FAKEPNG")
 
@@ -516,8 +538,10 @@ class TestX11ReadScreenTool:
         mock_response.text = "Internal Server Error"
         http_err = httpx.HTTPStatusError("err", request=MagicMock(), response=mock_response)
 
-        with patch("missy.tools.builtin.x11_tools.subprocess.run") as mock_run, \
-             patch.object(self.tool, "_call_ollama_vision", side_effect=http_err):
+        with (
+            patch("missy.tools.builtin.x11_tools.subprocess.run") as mock_run,
+            patch.object(self.tool, "_call_ollama_vision", side_effect=http_err),
+        ):
             mock_run.return_value = _completed(returncode=0)
             result = self.tool.execute(path=dest)
 
@@ -526,11 +550,16 @@ class TestX11ReadScreenTool:
 
     def test_ollama_connect_error(self, tmp_path):
         import httpx
+
         dest = str(tmp_path / "screen.png")
         Path(dest).write_bytes(b"FAKEPNG")
 
-        with patch("missy.tools.builtin.x11_tools.subprocess.run") as mock_run, \
-             patch.object(self.tool, "_call_ollama_vision", side_effect=httpx.ConnectError("refused")):
+        with (
+            patch("missy.tools.builtin.x11_tools.subprocess.run") as mock_run,
+            patch.object(
+                self.tool, "_call_ollama_vision", side_effect=httpx.ConnectError("refused")
+            ),
+        ):
             mock_run.return_value = _completed(returncode=0)
             result = self.tool.execute(path=dest)
 
@@ -541,8 +570,10 @@ class TestX11ReadScreenTool:
         dest = str(tmp_path / "screen.png")
         Path(dest).write_bytes(b"FAKEPNG")
 
-        with patch("missy.tools.builtin.x11_tools.subprocess.run") as mock_run, \
-             patch.object(self.tool, "_call_ollama_vision", side_effect=RuntimeError("boom")):
+        with (
+            patch("missy.tools.builtin.x11_tools.subprocess.run") as mock_run,
+            patch.object(self.tool, "_call_ollama_vision", side_effect=RuntimeError("boom")),
+        ):
             mock_run.return_value = _completed(returncode=0)
             result = self.tool.execute(path=dest)
 
@@ -564,8 +595,10 @@ class TestX11ReadScreenTool:
         mock_registry = MagicMock()
         mock_registry.screenshot_active.return_value = True
 
-        with patch.dict("sys.modules", {}), \
-             patch("missy.tools.builtin.x11_tools.subprocess.run") as mock_run:
+        with (
+            patch.dict("sys.modules", {}),
+            patch("missy.tools.builtin.x11_tools.subprocess.run") as mock_run,
+        ):
             with patch("missy.tools.builtin.browser_tools._registry", mock_registry):
                 err = self.tool._take_screenshot(dest, "")
 
@@ -579,7 +612,9 @@ class TestX11ReadScreenTool:
         mock_response.json.return_value = {"message": {"content": "a cat"}}
         mock_response.raise_for_status = MagicMock()
 
-        with patch("missy.tools.builtin.x11_tools.httpx.post", return_value=mock_response) as mock_post:
+        with patch(
+            "missy.tools.builtin.x11_tools.httpx.post", return_value=mock_response
+        ) as mock_post:
             text = self.tool._call_ollama_vision("describe this", "AABBCC==")
 
         assert text == "a cat"
@@ -606,6 +641,7 @@ class TestX11LaunchTool:
     @pytest.fixture(autouse=True)
     def _tool(self):
         from missy.tools.builtin.x11_launch import X11LaunchTool
+
         self.tool = X11LaunchTool()
 
     def test_empty_command_fails(self):
@@ -623,10 +659,12 @@ class TestX11LaunchTool:
                 return _completed(returncode=0, stdout="Firefox — Mozilla Firefox")
             return _completed(returncode=0)
 
-        with patch("missy.tools.builtin.x11_launch.subprocess.Popen", return_value=mock_popen), \
-             patch("missy.tools.builtin.x11_launch.subprocess.run", side_effect=fake_run), \
-             patch("missy.tools.builtin.x11_launch.time.sleep"), \
-             patch("missy.tools.builtin.x11_launch.time.time", side_effect=[0, 0, 100]):
+        with (
+            patch("missy.tools.builtin.x11_launch.subprocess.Popen", return_value=mock_popen),
+            patch("missy.tools.builtin.x11_launch.subprocess.run", side_effect=fake_run),
+            patch("missy.tools.builtin.x11_launch.time.sleep"),
+            patch("missy.tools.builtin.x11_launch.time.time", side_effect=[0, 0, 100]),
+        ):
             result = self.tool.execute(command="firefox", wait_seconds=10)
 
         assert result.success is True
@@ -640,17 +678,24 @@ class TestX11LaunchTool:
             # xdotool search never finds anything
             return _completed(returncode=0, stdout="")
 
-        with patch("missy.tools.builtin.x11_launch.subprocess.Popen", return_value=mock_popen), \
-             patch("missy.tools.builtin.x11_launch.subprocess.run", side_effect=fake_run), \
-             patch("missy.tools.builtin.x11_launch.time.sleep"), \
-             patch("missy.tools.builtin.x11_launch.time.time", side_effect=[0, 100]):
+        with (
+            patch("missy.tools.builtin.x11_launch.subprocess.Popen", return_value=mock_popen),
+            patch("missy.tools.builtin.x11_launch.subprocess.run", side_effect=fake_run),
+            patch("missy.tools.builtin.x11_launch.time.sleep"),
+            patch("missy.tools.builtin.x11_launch.time.time", side_effect=[0, 100]),
+        ):
             result = self.tool.execute(command="slowapp", wait_seconds=5)
 
         assert result.success is True
-        assert "no window matching" in result.output.lower() or "still be loading" in result.output.lower()
+        assert (
+            "no window matching" in result.output.lower()
+            or "still be loading" in result.output.lower()
+        )
 
     def test_popen_exception_returns_error(self):
-        with patch("missy.tools.builtin.x11_launch.subprocess.Popen", side_effect=OSError("not found")):
+        with patch(
+            "missy.tools.builtin.x11_launch.subprocess.Popen", side_effect=OSError("not found")
+        ):
             result = self.tool.execute(command="nonexistent_app")
 
         assert result.success is False
@@ -660,10 +705,15 @@ class TestX11LaunchTool:
         mock_popen = MagicMock()
 
         # Always time out immediately
-        with patch("missy.tools.builtin.x11_launch.subprocess.Popen", return_value=mock_popen), \
-             patch("missy.tools.builtin.x11_launch.subprocess.run", return_value=_completed(0, stdout="")), \
-             patch("missy.tools.builtin.x11_launch.time.sleep"), \
-             patch("missy.tools.builtin.x11_launch.time.time", side_effect=[0, 100]):
+        with (
+            patch("missy.tools.builtin.x11_launch.subprocess.Popen", return_value=mock_popen),
+            patch(
+                "missy.tools.builtin.x11_launch.subprocess.run",
+                return_value=_completed(0, stdout=""),
+            ),
+            patch("missy.tools.builtin.x11_launch.time.sleep"),
+            patch("missy.tools.builtin.x11_launch.time.time", side_effect=[0, 100]),
+        ):
             result = self.tool.execute(command="app", wait_seconds=9999)
 
         # Should succeed (returns "no window found" style message) without blocking
@@ -682,10 +732,12 @@ class TestX11LaunchTool:
                 return _completed(returncode=0, stdout="Text Editor")
             return _completed(returncode=0)
 
-        with patch("missy.tools.builtin.x11_launch.subprocess.Popen", return_value=mock_popen), \
-             patch("missy.tools.builtin.x11_launch.subprocess.run", side_effect=fake_run), \
-             patch("missy.tools.builtin.x11_launch.time.sleep"), \
-             patch("missy.tools.builtin.x11_launch.time.time", side_effect=[0, 0, 100]):
+        with (
+            patch("missy.tools.builtin.x11_launch.subprocess.Popen", return_value=mock_popen),
+            patch("missy.tools.builtin.x11_launch.subprocess.run", side_effect=fake_run),
+            patch("missy.tools.builtin.x11_launch.time.sleep"),
+            patch("missy.tools.builtin.x11_launch.time.time", side_effect=[0, 0, 100]),
+        ):
             self.tool.execute(command="gedit myfile.txt", window_name_hint="gedit")
 
         search_cmds = [c for c in captured_cmds if "search" in c]
@@ -703,10 +755,12 @@ class TestX11LaunchTool:
                 return _completed(returncode=0, stdout="Calculator")
             return _completed(returncode=0)
 
-        with patch("missy.tools.builtin.x11_launch.subprocess.Popen", return_value=mock_popen), \
-             patch("missy.tools.builtin.x11_launch.subprocess.run", side_effect=fake_run), \
-             patch("missy.tools.builtin.x11_launch.time.sleep"), \
-             patch("missy.tools.builtin.x11_launch.time.time", side_effect=[0, 0, 100]):
+        with (
+            patch("missy.tools.builtin.x11_launch.subprocess.Popen", return_value=mock_popen),
+            patch("missy.tools.builtin.x11_launch.subprocess.run", side_effect=fake_run),
+            patch("missy.tools.builtin.x11_launch.time.sleep"),
+            patch("missy.tools.builtin.x11_launch.time.time", side_effect=[0, 0, 100]),
+        ):
             self.tool.execute(command="gnome-calculator --mode=basic")
 
         search_cmds = [c for c in captured_cmds if "search" in c]
@@ -735,6 +789,7 @@ class TestBrowserNavigateTool:
     @pytest.fixture(autouse=True)
     def _tool(self):
         from missy.tools.builtin.browser_tools import BrowserNavigateTool
+
         self.tool = BrowserNavigateTool()
 
     def test_navigate_success(self):
@@ -759,14 +814,19 @@ class TestBrowserNavigateTool:
         )
 
     def test_navigate_exception_returns_error(self):
-        with patch("missy.tools.builtin.browser_tools._page", side_effect=RuntimeError("no display")):
+        with patch(
+            "missy.tools.builtin.browser_tools._page", side_effect=RuntimeError("no display")
+        ):
             result = self.tool.execute(url="https://example.com")
 
         assert result.success is False
         assert "no display" in result.error
 
     def test_playwright_not_installed(self):
-        with patch("missy.tools.builtin.browser_tools._page", side_effect=RuntimeError("playwright not installed")):
+        with patch(
+            "missy.tools.builtin.browser_tools._page",
+            side_effect=RuntimeError("playwright not installed"),
+        ):
             result = self.tool.execute(url="https://example.com")
 
         assert result.success is False
@@ -781,6 +841,7 @@ class TestBrowserClickTool:
     @pytest.fixture(autouse=True)
     def _tool(self):
         from missy.tools.builtin.browser_tools import BrowserClickTool
+
         self.tool = BrowserClickTool()
 
     def test_click_by_text(self):
@@ -837,6 +898,7 @@ class TestBrowserFillTool:
     @pytest.fixture(autouse=True)
     def _tool(self):
         from missy.tools.builtin.browser_tools import BrowserFillTool
+
         self.tool = BrowserFillTool()
 
     def test_fill_by_label(self):
@@ -894,6 +956,7 @@ class TestBrowserScreenshotTool:
     @pytest.fixture(autouse=True)
     def _tool(self):
         from missy.tools.builtin.browser_tools import BrowserScreenshotTool
+
         self.tool = BrowserScreenshotTool()
 
     def test_full_page_screenshot(self, tmp_path):
@@ -901,8 +964,10 @@ class TestBrowserScreenshotTool:
         Path(dest).write_bytes(b"\x89PNG" + b"\x00" * 200)
         mock_page = _make_mock_page(title="Test Page")
 
-        with patch("missy.tools.builtin.browser_tools._page", return_value=mock_page), \
-             patch("missy.tools.builtin.browser_tools.Path") as mock_path_cls:
+        with (
+            patch("missy.tools.builtin.browser_tools._page", return_value=mock_page),
+            patch("missy.tools.builtin.browser_tools.Path") as mock_path_cls,
+        ):
             mock_stat = MagicMock()
             mock_stat.st_size = 204
             mock_path_cls.return_value.stat.return_value = mock_stat
@@ -915,8 +980,10 @@ class TestBrowserScreenshotTool:
         dest = str(tmp_path / "elem.png")
         mock_page = _make_mock_page()
 
-        with patch("missy.tools.builtin.browser_tools._page", return_value=mock_page), \
-             patch("missy.tools.builtin.browser_tools.Path") as mock_path_cls:
+        with (
+            patch("missy.tools.builtin.browser_tools._page", return_value=mock_page),
+            patch("missy.tools.builtin.browser_tools.Path") as mock_path_cls,
+        ):
             mock_path_cls.return_value.stat.return_value.st_size = 100
             result = self.tool.execute(path=dest, selector=".hero-image")
 
@@ -936,6 +1003,7 @@ class TestBrowserGetContentTool:
     @pytest.fixture(autouse=True)
     def _tool(self):
         from missy.tools.builtin.browser_tools import BrowserGetContentTool
+
         self.tool = BrowserGetContentTool()
 
     def test_get_text_content(self):
@@ -989,6 +1057,7 @@ class TestBrowserEvaluateTool:
     @pytest.fixture(autouse=True)
     def _tool(self):
         from missy.tools.builtin.browser_tools import BrowserEvaluateTool
+
         self.tool = BrowserEvaluateTool()
 
     def test_evaluate_expression(self):
@@ -1021,6 +1090,7 @@ class TestBrowserWaitTool:
     @pytest.fixture(autouse=True)
     def _tool(self):
         from missy.tools.builtin.browser_tools import BrowserWaitTool
+
         self.tool = BrowserWaitTool()
 
     def test_wait_for_selector(self):
@@ -1050,8 +1120,10 @@ class TestBrowserWaitTool:
 
     def test_fixed_wait(self):
         mock_page = _make_mock_page()
-        with patch("missy.tools.builtin.browser_tools._page", return_value=mock_page), \
-             patch("missy.tools.builtin.browser_tools.time.sleep") as mock_sleep:
+        with (
+            patch("missy.tools.builtin.browser_tools._page", return_value=mock_page),
+            patch("missy.tools.builtin.browser_tools.time.sleep") as mock_sleep,
+        ):
             result = self.tool.execute(seconds=2.0)
 
         assert result.success is True
@@ -1059,8 +1131,10 @@ class TestBrowserWaitTool:
 
     def test_fixed_wait_capped_at_30(self):
         mock_page = _make_mock_page()
-        with patch("missy.tools.builtin.browser_tools._page", return_value=mock_page), \
-             patch("missy.tools.builtin.browser_tools.time.sleep") as mock_sleep:
+        with (
+            patch("missy.tools.builtin.browser_tools._page", return_value=mock_page),
+            patch("missy.tools.builtin.browser_tools.time.sleep") as mock_sleep,
+        ):
             self.tool.execute(seconds=999)
 
         # min(999, 30) = 30
@@ -1079,6 +1153,7 @@ class TestBrowserGetUrlTool:
     @pytest.fixture(autouse=True)
     def _tool(self):
         from missy.tools.builtin.browser_tools import BrowserGetUrlTool
+
         self.tool = BrowserGetUrlTool()
 
     def test_returns_url_and_title(self):
@@ -1101,10 +1176,12 @@ class TestBrowserCloseTool:
     @pytest.fixture(autouse=True)
     def _tool(self):
         from missy.tools.builtin.browser_tools import BrowserCloseTool
+
         self.tool = BrowserCloseTool()
 
     def test_close_named_session(self):
         from missy.tools.builtin import browser_tools
+
         with patch.object(browser_tools._registry, "close") as mock_close:
             result = self.tool.execute(session_id="my_session")
 
@@ -1114,6 +1191,7 @@ class TestBrowserCloseTool:
 
     def test_close_default_session(self):
         from missy.tools.builtin import browser_tools
+
         with patch.object(browser_tools._registry, "close") as mock_close:
             self.tool.execute()
 
@@ -1125,6 +1203,7 @@ class TestBrowserSession:
 
     def test_session_registry_get_or_create_idempotent(self):
         from missy.tools.builtin.browser_tools import _SessionRegistry
+
         reg = _SessionRegistry()
         s1 = reg.get_or_create("test-session")
         s2 = reg.get_or_create("test-session")
@@ -1132,11 +1211,13 @@ class TestBrowserSession:
 
     def test_session_registry_has_active_session_false_when_empty(self):
         from missy.tools.builtin.browser_tools import _SessionRegistry
+
         reg = _SessionRegistry()
         assert reg.has_active_session() is False
 
     def test_session_registry_has_active_session_true_when_context_set(self):
         from missy.tools.builtin.browser_tools import _SessionRegistry
+
         reg = _SessionRegistry()
         session = reg.get_or_create("active")
         session._context = MagicMock()
@@ -1144,17 +1225,20 @@ class TestBrowserSession:
 
     def test_screenshot_active_returns_false_when_no_sessions(self):
         from missy.tools.builtin.browser_tools import _SessionRegistry
+
         reg = _SessionRegistry()
         assert reg.screenshot_active("/tmp/out.png") is False
 
     def test_screenshot_active_returns_false_when_context_is_none(self):
         from missy.tools.builtin.browser_tools import _SessionRegistry
+
         reg = _SessionRegistry()
         reg.get_or_create("s1")  # _context is None by default
         assert reg.screenshot_active("/tmp/out.png") is False
 
     def test_screenshot_active_calls_page_screenshot(self, tmp_path):
         from missy.tools.builtin.browser_tools import _SessionRegistry
+
         reg = _SessionRegistry()
         session = reg.get_or_create("snap")
         mock_ctx = MagicMock()
@@ -1171,6 +1255,7 @@ class TestBrowserSession:
 
     def test_screenshot_active_returns_false_on_exception(self):
         from missy.tools.builtin.browser_tools import _SessionRegistry
+
         reg = _SessionRegistry()
         session = reg.get_or_create("bad")
         mock_ctx = MagicMock()
@@ -1185,6 +1270,7 @@ class TestBrowserSession:
 
     def test_session_close_clears_context(self):
         from missy.tools.builtin.browser_tools import BrowserSession
+
         session = BrowserSession("close-test")
         session._context = MagicMock()
         session._pw = MagicMock()
@@ -1194,6 +1280,7 @@ class TestBrowserSession:
 
     def test_session_registry_close_removes_session(self):
         from missy.tools.builtin.browser_tools import _SessionRegistry
+
         reg = _SessionRegistry()
         reg.get_or_create("to-remove")
         assert "to-remove" in reg._sessions
@@ -1204,6 +1291,7 @@ class TestBrowserSession:
         import os
 
         from missy.tools.builtin.browser_tools import BrowserSession
+
         session = BrowserSession("disp-test")
         with patch.dict("os.environ", {}, clear=True):
             # No DISPLAY set, no X11 sockets
@@ -1213,6 +1301,7 @@ class TestBrowserSession:
 
     def test_start_raises_when_playwright_not_installed(self):
         from missy.tools.builtin.browser_tools import BrowserSession
+
         session = BrowserSession("no-pw")
         with patch.dict("sys.modules", {"playwright": None, "playwright.sync_api": None}):
             with pytest.raises((RuntimeError, ImportError)):
@@ -1228,6 +1317,7 @@ class TestTTSSpeakTool:
     @pytest.fixture(autouse=True)
     def _tool(self):
         from missy.tools.builtin.tts_speak import TTSSpeakTool
+
         self.tool = TTSSpeakTool()
 
     def _piper_success_run(self, cmd, **kw):
@@ -1253,8 +1343,10 @@ class TestTTSSpeakTool:
     def test_piper_success_then_playback(self):
         # Patch _synth_piper and _play_wav directly rather than going through
         # subprocess so the test is independent of cmd[0] type when _PIPER_BIN is mocked.
-        with patch("missy.tools.builtin.tts_speak._synth_piper", return_value=None) as mock_piper, \
-             patch("missy.tools.builtin.tts_speak._play_wav", return_value=None):
+        with (
+            patch("missy.tools.builtin.tts_speak._synth_piper", return_value=None) as mock_piper,
+            patch("missy.tools.builtin.tts_speak._play_wav", return_value=None),
+        ):
             result = self.tool.execute(text="Hello Missy")
 
         assert result.success is True
@@ -1266,10 +1358,11 @@ class TestTTSSpeakTool:
     def test_piper_speed_length_scale_injected(self):
         # Verify that speed=2.0 is forwarded to _synth_piper as speed parameter,
         # then _synth_piper converts it to length_scale=0.5 in the subprocess call.
-        with patch("missy.tools.builtin.tts_speak._PIPER_BIN") as mock_bin, \
-             patch("missy.tools.builtin.tts_speak._find_piper_model") as mock_model, \
-             patch("missy.tools.builtin.tts_speak.subprocess.run") as mock_run:
-
+        with (
+            patch("missy.tools.builtin.tts_speak._PIPER_BIN") as mock_bin,
+            patch("missy.tools.builtin.tts_speak._find_piper_model") as mock_model,
+            patch("missy.tools.builtin.tts_speak.subprocess.run") as mock_run,
+        ):
             mock_bin.is_file.return_value = True
             mock_model.return_value = Path("/fake/voice.onnx")
             captured: list[list] = []
@@ -1280,7 +1373,9 @@ class TestTTSSpeakTool:
                     if "--output_file" in cmd:
                         wav_path = cmd[cmd.index("--output_file") + 1]
                         Path(wav_path).write_bytes(b"RIFF\x00\x00\x00\x00WAVE")
-                return subprocess.CompletedProcess(args=cmd if isinstance(cmd, list) else [], returncode=0, stdout=b"", stderr=b"")
+                return subprocess.CompletedProcess(
+                    args=cmd if isinstance(cmd, list) else [], returncode=0, stdout=b"", stderr=b""
+                )
 
             mock_run.side_effect = run_side_effect
 
@@ -1298,17 +1393,22 @@ class TestTTSSpeakTool:
     # --- piper fallback to espeak ---
 
     def test_piper_not_installed_falls_back_to_espeak(self):
-        with patch("missy.tools.builtin.tts_speak._PIPER_BIN") as mock_bin, \
-             patch("missy.tools.builtin.tts_speak.subprocess.run") as mock_run:
-
+        with (
+            patch("missy.tools.builtin.tts_speak._PIPER_BIN") as mock_bin,
+            patch("missy.tools.builtin.tts_speak.subprocess.run") as mock_run,
+        ):
             mock_bin.is_file.return_value = False
 
             def run_side_effect(cmd, **kw):
                 if isinstance(cmd, list) and cmd[0] == "espeak-ng":
                     kw.get("capture_output")  # not the wav path in espeak case
-                    return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b"RIFF\x00\x00WAVE", stderr=b"")
+                    return subprocess.CompletedProcess(
+                        args=cmd, returncode=0, stdout=b"RIFF\x00\x00WAVE", stderr=b""
+                    )
                 if isinstance(cmd, list) and cmd[0] == "gst-launch-1.0":
-                    return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b"", stderr=b"")
+                    return subprocess.CompletedProcess(
+                        args=cmd, returncode=0, stdout=b"", stderr=b""
+                    )
                 return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b"", stderr=b"")
 
             mock_run.side_effect = run_side_effect
@@ -1319,10 +1419,11 @@ class TestTTSSpeakTool:
         assert "espeak-ng" in result.output
 
     def test_piper_model_missing_falls_back_to_espeak(self):
-        with patch("missy.tools.builtin.tts_speak._PIPER_BIN") as mock_bin, \
-             patch("missy.tools.builtin.tts_speak._find_piper_model", return_value=None), \
-             patch("missy.tools.builtin.tts_speak.subprocess.run") as mock_run:
-
+        with (
+            patch("missy.tools.builtin.tts_speak._PIPER_BIN") as mock_bin,
+            patch("missy.tools.builtin.tts_speak._find_piper_model", return_value=None),
+            patch("missy.tools.builtin.tts_speak.subprocess.run") as mock_run,
+        ):
             mock_bin.is_file.return_value = True
 
             mock_run.return_value = subprocess.CompletedProcess(
@@ -1337,9 +1438,10 @@ class TestTTSSpeakTool:
     # --- both synths fail ---
 
     def test_both_synths_fail_returns_error(self):
-        with patch("missy.tools.builtin.tts_speak._PIPER_BIN") as mock_bin, \
-             patch("missy.tools.builtin.tts_speak.subprocess.run") as mock_run:
-
+        with (
+            patch("missy.tools.builtin.tts_speak._PIPER_BIN") as mock_bin,
+            patch("missy.tools.builtin.tts_speak.subprocess.run") as mock_run,
+        ):
             mock_bin.is_file.return_value = False
 
             mock_run.return_value = subprocess.CompletedProcess(
@@ -1354,8 +1456,13 @@ class TestTTSSpeakTool:
     # --- playback failure ---
 
     def test_playback_failure_returns_error(self):
-        with patch("missy.tools.builtin.tts_speak._synth_piper", return_value=None), \
-             patch("missy.tools.builtin.tts_speak._play_wav", return_value="gst-launch-1.0 not installed"):
+        with (
+            patch("missy.tools.builtin.tts_speak._synth_piper", return_value=None),
+            patch(
+                "missy.tools.builtin.tts_speak._play_wav",
+                return_value="gst-launch-1.0 not installed",
+            ),
+        ):
             result = self.tool.execute(text="hello")
 
         assert result.success is False
@@ -1364,15 +1471,19 @@ class TestTTSSpeakTool:
     # --- speed clamping ---
 
     def test_speed_clamped_below_min(self):
-        with patch("missy.tools.builtin.tts_speak._synth_piper", return_value=None), \
-             patch("missy.tools.builtin.tts_speak._play_wav", return_value=None):
+        with (
+            patch("missy.tools.builtin.tts_speak._synth_piper", return_value=None),
+            patch("missy.tools.builtin.tts_speak._play_wav", return_value=None),
+        ):
             result = self.tool.execute(text="test", speed=0.0)  # clamps to 0.25
 
         assert result.success is True
 
     def test_speed_clamped_above_max(self):
-        with patch("missy.tools.builtin.tts_speak._synth_piper", return_value=None), \
-             patch("missy.tools.builtin.tts_speak._play_wav", return_value=None):
+        with (
+            patch("missy.tools.builtin.tts_speak._synth_piper", return_value=None),
+            patch("missy.tools.builtin.tts_speak._play_wav", return_value=None),
+        ):
             result = self.tool.execute(text="test", speed=100.0)  # clamps to 4.0
 
         assert result.success is True
@@ -1385,9 +1496,11 @@ class TestTTSSpeakTool:
         def fake_unlink(path):
             deleted.append(path)
 
-        with patch("missy.tools.builtin.tts_speak._synth_piper", return_value=None), \
-             patch("missy.tools.builtin.tts_speak._play_wav", return_value=None), \
-             patch("missy.tools.builtin.tts_speak.os.unlink", side_effect=fake_unlink):
+        with (
+            patch("missy.tools.builtin.tts_speak._synth_piper", return_value=None),
+            patch("missy.tools.builtin.tts_speak._play_wav", return_value=None),
+            patch("missy.tools.builtin.tts_speak.os.unlink", side_effect=fake_unlink),
+        ):
             result = self.tool.execute(text="cleanup test")
 
         assert result.success is True
@@ -1400,9 +1513,11 @@ class TestTTSSpeakTool:
         def fake_unlink(path):
             deleted.append(path)
 
-        with patch("missy.tools.builtin.tts_speak._synth_piper", return_value="piper broken"), \
-             patch("missy.tools.builtin.tts_speak._synth_espeak", return_value="espeak broken"), \
-             patch("missy.tools.builtin.tts_speak.os.unlink", side_effect=fake_unlink):
+        with (
+            patch("missy.tools.builtin.tts_speak._synth_piper", return_value="piper broken"),
+            patch("missy.tools.builtin.tts_speak._synth_espeak", return_value="espeak broken"),
+            patch("missy.tools.builtin.tts_speak.os.unlink", side_effect=fake_unlink),
+        ):
             result = self.tool.execute(text="failure cleanup")
 
         assert result.success is False
@@ -1419,6 +1534,7 @@ class TestSynthHelpers:
 
     def test_synth_piper_binary_not_found(self):
         from missy.tools.builtin.tts_speak import _synth_piper
+
         with patch("missy.tools.builtin.tts_speak._PIPER_BIN") as mock_bin:
             mock_bin.is_file.return_value = False
             err = _synth_piper("hello", "/tmp/out.wav", "en_US-lessac-medium", 1.0)
@@ -1426,17 +1542,25 @@ class TestSynthHelpers:
 
     def test_synth_piper_model_not_found(self):
         from missy.tools.builtin.tts_speak import _synth_piper
-        with patch("missy.tools.builtin.tts_speak._PIPER_BIN") as mock_bin, \
-             patch("missy.tools.builtin.tts_speak._find_piper_model", return_value=None):
+
+        with (
+            patch("missy.tools.builtin.tts_speak._PIPER_BIN") as mock_bin,
+            patch("missy.tools.builtin.tts_speak._find_piper_model", return_value=None),
+        ):
             mock_bin.is_file.return_value = True
             err = _synth_piper("hello", "/tmp/out.wav", "missing_voice", 1.0)
         assert "voice model not found" in err
 
     def test_synth_piper_nonzero_returncode(self, tmp_path):
         from missy.tools.builtin.tts_speak import _synth_piper
-        with patch("missy.tools.builtin.tts_speak._PIPER_BIN") as mock_bin, \
-             patch("missy.tools.builtin.tts_speak._find_piper_model", return_value=Path("/fake/v.onnx")), \
-             patch("missy.tools.builtin.tts_speak.subprocess.run") as mock_run:
+
+        with (
+            patch("missy.tools.builtin.tts_speak._PIPER_BIN") as mock_bin,
+            patch(
+                "missy.tools.builtin.tts_speak._find_piper_model", return_value=Path("/fake/v.onnx")
+            ),
+            patch("missy.tools.builtin.tts_speak.subprocess.run") as mock_run,
+        ):
             mock_bin.is_file.return_value = True
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=1, stdout=b"", stderr=b"piper crashed"
@@ -1446,36 +1570,57 @@ class TestSynthHelpers:
 
     def test_synth_piper_empty_output_file(self, tmp_path):
         from missy.tools.builtin.tts_speak import _synth_piper
+
         wav = tmp_path / "empty.wav"
         wav.write_bytes(b"")  # empty file
-        with patch("missy.tools.builtin.tts_speak._PIPER_BIN") as mock_bin, \
-             patch("missy.tools.builtin.tts_speak._find_piper_model", return_value=Path("/fake/v.onnx")), \
-             patch("missy.tools.builtin.tts_speak.subprocess.run") as mock_run:
+        with (
+            patch("missy.tools.builtin.tts_speak._PIPER_BIN") as mock_bin,
+            patch(
+                "missy.tools.builtin.tts_speak._find_piper_model", return_value=Path("/fake/v.onnx")
+            ),
+            patch("missy.tools.builtin.tts_speak.subprocess.run") as mock_run,
+        ):
             mock_bin.is_file.return_value = True
-            mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=b"", stderr=b"")
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=b"", stderr=b""
+            )
             err = _synth_piper("hello", str(wav), "en_US-lessac-medium", 1.0)
         assert "no audio" in err
 
     def test_synth_piper_timeout(self, tmp_path):
         from missy.tools.builtin.tts_speak import _synth_piper
-        with patch("missy.tools.builtin.tts_speak._PIPER_BIN") as mock_bin, \
-             patch("missy.tools.builtin.tts_speak._find_piper_model", return_value=Path("/fake/v.onnx")), \
-             patch("missy.tools.builtin.tts_speak.subprocess.run", side_effect=subprocess.TimeoutExpired("piper", 60)):
+
+        with (
+            patch("missy.tools.builtin.tts_speak._PIPER_BIN") as mock_bin,
+            patch(
+                "missy.tools.builtin.tts_speak._find_piper_model", return_value=Path("/fake/v.onnx")
+            ),
+            patch(
+                "missy.tools.builtin.tts_speak.subprocess.run",
+                side_effect=subprocess.TimeoutExpired("piper", 60),
+            ),
+        ):
             mock_bin.is_file.return_value = True
             err = _synth_piper("hello", str(tmp_path / "out.wav"), "en_US-lessac-medium", 1.0)
         assert "timed out" in err
 
     def test_synth_piper_file_not_found(self, tmp_path):
         from missy.tools.builtin.tts_speak import _synth_piper
-        with patch("missy.tools.builtin.tts_speak._PIPER_BIN") as mock_bin, \
-             patch("missy.tools.builtin.tts_speak._find_piper_model", return_value=Path("/fake/v.onnx")), \
-             patch("missy.tools.builtin.tts_speak.subprocess.run", side_effect=FileNotFoundError):
+
+        with (
+            patch("missy.tools.builtin.tts_speak._PIPER_BIN") as mock_bin,
+            patch(
+                "missy.tools.builtin.tts_speak._find_piper_model", return_value=Path("/fake/v.onnx")
+            ),
+            patch("missy.tools.builtin.tts_speak.subprocess.run", side_effect=FileNotFoundError),
+        ):
             mock_bin.is_file.return_value = True
             err = _synth_piper("hello", str(tmp_path / "out.wav"), "en_US-lessac-medium", 1.0)
         assert "not found" in err
 
     def test_synth_espeak_success(self, tmp_path):
         from missy.tools.builtin.tts_speak import _synth_espeak
+
         wav = str(tmp_path / "out.wav")
         env = {}
         with patch("missy.tools.builtin.tts_speak.subprocess.run") as mock_run:
@@ -1488,6 +1633,7 @@ class TestSynthHelpers:
 
     def test_synth_espeak_failure(self, tmp_path):
         from missy.tools.builtin.tts_speak import _synth_espeak
+
         with patch("missy.tools.builtin.tts_speak.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=1, stdout=b"", stderr=b"no voice"
@@ -1497,33 +1643,44 @@ class TestSynthHelpers:
 
     def test_synth_espeak_not_installed(self, tmp_path):
         from missy.tools.builtin.tts_speak import _synth_espeak
+
         with patch("missy.tools.builtin.tts_speak.subprocess.run", side_effect=FileNotFoundError):
             err = _synth_espeak("hello", str(tmp_path / "out.wav"), 160, 50, "en", {})
         assert "not installed" in err
 
     def test_synth_espeak_timeout(self, tmp_path):
         from missy.tools.builtin.tts_speak import _synth_espeak
-        with patch("missy.tools.builtin.tts_speak.subprocess.run",
-                   side_effect=subprocess.TimeoutExpired("espeak-ng", 30)):
+
+        with patch(
+            "missy.tools.builtin.tts_speak.subprocess.run",
+            side_effect=subprocess.TimeoutExpired("espeak-ng", 30),
+        ):
             err = _synth_espeak("hi", str(tmp_path / "out.wav"), 160, 50, "en", {})
         assert "timed out" in err
 
     def test_synth_espeak_empty_stdout(self, tmp_path):
         from missy.tools.builtin.tts_speak import _synth_espeak
+
         with patch("missy.tools.builtin.tts_speak.subprocess.run") as mock_run:
-            mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=b"", stderr=b"")
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=b"", stderr=b""
+            )
             err = _synth_espeak("hi", str(tmp_path / "out.wav"), 160, 50, "en", {})
         assert "no audio" in err
 
     def test_play_wav_success(self, tmp_path):
         from missy.tools.builtin.tts_speak import _play_wav
+
         with patch("missy.tools.builtin.tts_speak.subprocess.run") as mock_run:
-            mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=b"", stderr=b"")
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=b"", stderr=b""
+            )
             err = _play_wav(str(tmp_path / "audio.wav"), {})
         assert err is None
 
     def test_play_wav_gstreamer_not_installed(self, tmp_path):
         from missy.tools.builtin.tts_speak import _play_wav
+
         with patch("missy.tools.builtin.tts_speak.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=127, stdout=b"", stderr=b"command not found"
@@ -1533,19 +1690,24 @@ class TestSynthHelpers:
 
     def test_play_wav_file_not_found(self, tmp_path):
         from missy.tools.builtin.tts_speak import _play_wav
+
         with patch("missy.tools.builtin.tts_speak.subprocess.run", side_effect=FileNotFoundError):
             err = _play_wav(str(tmp_path / "audio.wav"), {})
         assert "not found" in err
 
     def test_play_wav_timeout(self, tmp_path):
         from missy.tools.builtin.tts_speak import _play_wav
-        with patch("missy.tools.builtin.tts_speak.subprocess.run",
-                   side_effect=subprocess.TimeoutExpired("gst-launch-1.0", 60)):
+
+        with patch(
+            "missy.tools.builtin.tts_speak.subprocess.run",
+            side_effect=subprocess.TimeoutExpired("gst-launch-1.0", 60),
+        ):
             err = _play_wav(str(tmp_path / "audio.wav"), {})
         assert "timed out" in err
 
     def test_play_wav_generic_failure(self, tmp_path):
         from missy.tools.builtin.tts_speak import _play_wav
+
         with patch("missy.tools.builtin.tts_speak.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=1, stdout=b"", stderr=b"device busy"
@@ -1558,6 +1720,7 @@ class TestAudioListDevicesTool:
     @pytest.fixture(autouse=True)
     def _tool(self):
         from missy.tools.builtin.tts_speak import AudioListDevicesTool
+
         self.tool = AudioListDevicesTool()
 
     def test_wpctl_success_returns_audio_section(self):
@@ -1584,7 +1747,9 @@ class TestAudioListDevicesTool:
         def side_effect(cmd, **kw):
             if cmd[0] == "wpctl":
                 raise FileNotFoundError
-            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=aplay_output, stderr="")
+            return subprocess.CompletedProcess(
+                args=cmd, returncode=0, stdout=aplay_output, stderr=""
+            )
 
         with patch("missy.tools.builtin.tts_speak.subprocess.run", side_effect=side_effect):
             result = self.tool.execute()
@@ -1605,7 +1770,9 @@ class TestAudioListDevicesTool:
         def side_effect(cmd, **kw):
             if cmd[0] == "wpctl":
                 raise subprocess.TimeoutExpired("wpctl", 5)
-            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=aplay_output, stderr="")
+            return subprocess.CompletedProcess(
+                args=cmd, returncode=0, stdout=aplay_output, stderr=""
+            )
 
         with patch("missy.tools.builtin.tts_speak.subprocess.run", side_effect=side_effect):
             result = self.tool.execute()
@@ -1617,6 +1784,7 @@ class TestAudioSetVolumeTool:
     @pytest.fixture(autouse=True)
     def _tool(self):
         from missy.tools.builtin.tts_speak import AudioSetVolumeTool
+
         self.tool = AudioSetVolumeTool()
 
     def test_set_absolute_volume(self):
@@ -1655,7 +1823,9 @@ class TestAudioSetVolumeTool:
 
     def test_mute(self):
         with patch("missy.tools.builtin.tts_speak.subprocess.run") as mock_run:
-            mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
             result = self.tool.execute(volume="mute")
 
         assert result.success is True
@@ -1664,7 +1834,9 @@ class TestAudioSetVolumeTool:
 
     def test_unmute(self):
         with patch("missy.tools.builtin.tts_speak.subprocess.run") as mock_run:
-            mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
             result = self.tool.execute(volume="unmute")
 
         assert result.success is True
@@ -1673,7 +1845,9 @@ class TestAudioSetVolumeTool:
 
     def test_custom_device_id(self):
         with patch("missy.tools.builtin.tts_speak.subprocess.run") as mock_run:
-            mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="Volume: 0.5\n", stderr="")
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="Volume: 0.5\n", stderr=""
+            )
             self.tool.execute(volume="50%", device_id="47")
 
         set_cmd = mock_run.call_args_list[0][0][0]
@@ -1701,8 +1875,10 @@ class TestAudioSetVolumeTool:
         assert "wpctl failed" in result.error
 
     def test_wpctl_timeout(self):
-        with patch("missy.tools.builtin.tts_speak.subprocess.run",
-                   side_effect=subprocess.TimeoutExpired("wpctl", 5)):
+        with patch(
+            "missy.tools.builtin.tts_speak.subprocess.run",
+            side_effect=subprocess.TimeoutExpired("wpctl", 5),
+        ):
             result = self.tool.execute(volume="50%")
 
         assert result.success is False
@@ -1748,6 +1924,7 @@ class TestAtSpiGetTreeTool:
     @pytest.fixture(autouse=True)
     def _tool(self):
         from missy.tools.builtin.atspi_tools import AtSpiGetTreeTool
+
         self.tool = AtSpiGetTreeTool()
 
     def test_pyatspi_not_installed(self):
@@ -1759,8 +1936,12 @@ class TestAtSpiGetTreeTool:
 
     def test_desktop_connect_failure(self):
         mock_atspi = _make_mock_pyatspi()
-        with patch.dict("sys.modules", {"pyatspi": mock_atspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop", side_effect=Exception("bus error")):
+        with (
+            patch.dict("sys.modules", {"pyatspi": mock_atspi}),
+            patch(
+                "missy.tools.builtin.atspi_tools._get_desktop", side_effect=Exception("bus error")
+            ),
+        ):
             result = self.tool.execute()
 
         assert result.success is False
@@ -1771,8 +1952,10 @@ class TestAtSpiGetTreeTool:
         mock_desktop = MagicMock()
         mock_desktop.childCount = 0
 
-        with patch.dict("sys.modules", {"pyatspi": mock_atspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=mock_desktop):
+        with (
+            patch.dict("sys.modules", {"pyatspi": mock_atspi}),
+            patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=mock_desktop),
+        ):
             result = self.tool.execute(app_name="NonExistentApp")
 
         assert result.success is False
@@ -1784,8 +1967,10 @@ class TestAtSpiGetTreeTool:
         mock_desktop = MagicMock()
         mock_desktop.childCount = 0
 
-        with patch.dict("sys.modules", {"pyatspi": mock_atspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=mock_desktop):
+        with (
+            patch.dict("sys.modules", {"pyatspi": mock_atspi}),
+            patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=mock_desktop),
+        ):
             result = self.tool.execute()
 
         assert result.success is False
@@ -1799,8 +1984,10 @@ class TestAtSpiGetTreeTool:
         mock_desktop.childCount = 1
         mock_desktop.getChildAtIndex.return_value = mock_app
 
-        with patch.dict("sys.modules", {"pyatspi": mock_atspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=mock_desktop):
+        with (
+            patch.dict("sys.modules", {"pyatspi": mock_atspi}),
+            patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=mock_desktop),
+        ):
             result = self.tool.execute(app_name="gedit")
 
         assert result.success is True
@@ -1818,8 +2005,10 @@ class TestAtSpiGetTreeTool:
         mock_desktop.childCount = 1
         mock_desktop.getChildAtIndex.return_value = mock_app
 
-        with patch.dict("sys.modules", {"pyatspi": mock_atspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=mock_desktop):
+        with (
+            patch.dict("sys.modules", {"pyatspi": mock_atspi}),
+            patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=mock_desktop),
+        ):
             result = self.tool.execute()
 
         assert result.success is True
@@ -1832,14 +2021,21 @@ class TestAtSpiGetTreeTool:
         mock_desktop.childCount = 1
         mock_desktop.getChildAtIndex.return_value = mock_app
 
-        with patch.dict("sys.modules", {"pyatspi": mock_atspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=mock_desktop), \
-             patch("missy.tools.builtin.atspi_tools._walk_tree", return_value=[]) as mock_walk:
+        with (
+            patch.dict("sys.modules", {"pyatspi": mock_atspi}),
+            patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=mock_desktop),
+            patch("missy.tools.builtin.atspi_tools._walk_tree", return_value=[]) as mock_walk,
+        ):
             self.tool.execute(app_name="App", max_depth=100)
 
         # max_depth should be clamped to 5
         call_kwargs = mock_walk.call_args[1]
-        assert call_kwargs.get("max_depth", mock_walk.call_args[0][1] if len(mock_walk.call_args[0]) > 1 else 100) <= 5
+        assert (
+            call_kwargs.get(
+                "max_depth", mock_walk.call_args[0][1] if len(mock_walk.call_args[0]) > 1 else 100
+            )
+            <= 5
+        )
 
     def test_max_depth_minimum_1(self):
         mock_atspi = _make_mock_pyatspi()
@@ -1848,9 +2044,11 @@ class TestAtSpiGetTreeTool:
         mock_desktop.childCount = 1
         mock_desktop.getChildAtIndex.return_value = mock_app
 
-        with patch.dict("sys.modules", {"pyatspi": mock_atspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=mock_desktop), \
-             patch("missy.tools.builtin.atspi_tools._walk_tree", return_value=[]) as mock_walk:
+        with (
+            patch.dict("sys.modules", {"pyatspi": mock_atspi}),
+            patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=mock_desktop),
+            patch("missy.tools.builtin.atspi_tools._walk_tree", return_value=[]) as mock_walk,
+        ):
             self.tool.execute(app_name="App", max_depth=0)
 
         call_arg = mock_walk.call_args[1].get("max_depth") or mock_walk.call_args[0][1]
@@ -1867,6 +2065,7 @@ class TestAtSpiClickTool:
     @pytest.fixture(autouse=True)
     def _tool(self):
         from missy.tools.builtin.atspi_tools import AtSpiClickTool
+
         self.tool = AtSpiClickTool()
 
     def test_pyatspi_not_installed(self):
@@ -1886,8 +2085,12 @@ class TestAtSpiClickTool:
 
     def test_desktop_connect_failure(self):
         mock_atspi = _make_mock_pyatspi()
-        with patch.dict("sys.modules", {"pyatspi": mock_atspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop", side_effect=Exception("dbus error")):
+        with (
+            patch.dict("sys.modules", {"pyatspi": mock_atspi}),
+            patch(
+                "missy.tools.builtin.atspi_tools._get_desktop", side_effect=Exception("dbus error")
+            ),
+        ):
             result = self.tool.execute(name="OK")
 
         assert result.success is False
@@ -1898,8 +2101,10 @@ class TestAtSpiClickTool:
         mock_desktop = MagicMock()
         mock_desktop.childCount = 0
 
-        with patch.dict("sys.modules", {"pyatspi": mock_atspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=mock_desktop):
+        with (
+            patch.dict("sys.modules", {"pyatspi": mock_atspi}),
+            patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=mock_desktop),
+        ):
             result = self.tool.execute(name="OK", app_name="Nonexistent")
 
         assert result.success is False
@@ -1912,8 +2117,10 @@ class TestAtSpiClickTool:
         mock_desktop.childCount = 1
         mock_desktop.getChildAtIndex.return_value = mock_app
 
-        with patch.dict("sys.modules", {"pyatspi": mock_atspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=mock_desktop):
+        with (
+            patch.dict("sys.modules", {"pyatspi": mock_atspi}),
+            patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=mock_desktop),
+        ):
             result = self.tool.execute(name="NonExistentButton", app_name="Calculator")
 
         assert result.success is False
@@ -1932,9 +2139,11 @@ class TestAtSpiClickTool:
         mock_desktop.childCount = 1
         mock_desktop.getChildAtIndex.return_value = mock_app
 
-        with patch.dict("sys.modules", {"pyatspi": mock_atspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=mock_desktop), \
-             patch("missy.tools.builtin.atspi_tools._find_element", return_value=mock_button):
+        with (
+            patch.dict("sys.modules", {"pyatspi": mock_atspi}),
+            patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=mock_desktop),
+            patch("missy.tools.builtin.atspi_tools._find_element", return_value=mock_button),
+        ):
             result = self.tool.execute(name="OK", app_name="Calculator")
 
         assert result.success is True
@@ -1950,9 +2159,11 @@ class TestAtSpiClickTool:
         mock_desktop.childCount = 1
         mock_desktop.getChildAtIndex.return_value = mock_app
 
-        with patch.dict("sys.modules", {"pyatspi": mock_atspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=mock_desktop), \
-             patch("missy.tools.builtin.atspi_tools._find_element", return_value=mock_button):
+        with (
+            patch.dict("sys.modules", {"pyatspi": mock_atspi}),
+            patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=mock_desktop),
+            patch("missy.tools.builtin.atspi_tools._find_element", return_value=mock_button),
+        ):
             result = self.tool.execute(name="Crash", app_name="TestApp")
 
         assert result.success is False
@@ -1963,8 +2174,10 @@ class TestAtSpiClickTool:
         mock_desktop = MagicMock()
         mock_desktop.childCount = 0
 
-        with patch.dict("sys.modules", {"pyatspi": mock_atspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=mock_desktop):
+        with (
+            patch.dict("sys.modules", {"pyatspi": mock_atspi}),
+            patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=mock_desktop),
+        ):
             result = self.tool.execute(name="OK")
 
         assert result.success is False
@@ -1977,8 +2190,10 @@ class TestAtSpiClickTool:
         mock_desktop.childCount = 1
         mock_desktop.getChildAtIndex.return_value = mock_app
 
-        with patch.dict("sys.modules", {"pyatspi": mock_atspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=mock_desktop):
+        with (
+            patch.dict("sys.modules", {"pyatspi": mock_atspi}),
+            patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=mock_desktop),
+        ):
             result = self.tool.execute(name="Save", role="push button", app_name="App")
 
         assert result.success is False
@@ -1997,6 +2212,7 @@ class TestAtSpiGetTextTool:
     @pytest.fixture(autouse=True)
     def _tool(self):
         from missy.tools.builtin.atspi_tools import AtSpiGetTextTool
+
         self.tool = AtSpiGetTextTool()
 
     def test_pyatspi_not_installed(self):
@@ -2026,9 +2242,11 @@ class TestAtSpiGetTextTool:
         mock_desktop.childCount = 1
         mock_desktop.getChildAtIndex.return_value = mock_app
 
-        with patch.dict("sys.modules", {"pyatspi": mock_atspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=mock_desktop), \
-             patch("missy.tools.builtin.atspi_tools._find_element", return_value=mock_label):
+        with (
+            patch.dict("sys.modules", {"pyatspi": mock_atspi}),
+            patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=mock_desktop),
+            patch("missy.tools.builtin.atspi_tools._find_element", return_value=mock_label),
+        ):
             result = self.tool.execute(name="StatusLabel", app_name="StatusApp")
 
         assert result.success is True
@@ -2046,9 +2264,11 @@ class TestAtSpiGetTextTool:
         mock_desktop.childCount = 1
         mock_desktop.getChildAtIndex.return_value = mock_app
 
-        with patch.dict("sys.modules", {"pyatspi": mock_atspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=mock_desktop), \
-             patch("missy.tools.builtin.atspi_tools._find_element", return_value=mock_label):
+        with (
+            patch.dict("sys.modules", {"pyatspi": mock_atspi}),
+            patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=mock_desktop),
+            patch("missy.tools.builtin.atspi_tools._find_element", return_value=mock_label),
+        ):
             result = self.tool.execute(name="FallbackLabel", app_name="App")
 
         assert result.success is True
@@ -2061,8 +2281,10 @@ class TestAtSpiGetTextTool:
         mock_desktop.childCount = 1
         mock_desktop.getChildAtIndex.return_value = mock_app
 
-        with patch.dict("sys.modules", {"pyatspi": mock_atspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=mock_desktop):
+        with (
+            patch.dict("sys.modules", {"pyatspi": mock_atspi}),
+            patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=mock_desktop),
+        ):
             result = self.tool.execute(name="MissingLabel", app_name="App")
 
         assert result.success is False
@@ -2077,6 +2299,7 @@ class TestAtSpiSetValueTool:
     @pytest.fixture(autouse=True)
     def _tool(self):
         from missy.tools.builtin.atspi_tools import AtSpiSetValueTool
+
         self.tool = AtSpiSetValueTool()
 
     def test_pyatspi_not_installed(self):
@@ -2088,8 +2311,10 @@ class TestAtSpiSetValueTool:
 
     def test_desktop_connect_failure(self):
         mock_atspi = _make_mock_pyatspi()
-        with patch.dict("sys.modules", {"pyatspi": mock_atspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop", side_effect=Exception("no bus")):
+        with (
+            patch.dict("sys.modules", {"pyatspi": mock_atspi}),
+            patch("missy.tools.builtin.atspi_tools._get_desktop", side_effect=Exception("no bus")),
+        ):
             result = self.tool.execute(name="field", value="text")
 
         assert result.success is False
@@ -2100,8 +2325,10 @@ class TestAtSpiSetValueTool:
         mock_desktop = MagicMock()
         mock_desktop.childCount = 0
 
-        with patch.dict("sys.modules", {"pyatspi": mock_atspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=mock_desktop):
+        with (
+            patch.dict("sys.modules", {"pyatspi": mock_atspi}),
+            patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=mock_desktop),
+        ):
             result = self.tool.execute(name="field", value="text", app_name="Nonexistent")
 
         assert result.success is False
@@ -2113,8 +2340,10 @@ class TestAtSpiSetValueTool:
         mock_desktop.childCount = 1
         mock_desktop.getChildAtIndex.return_value = mock_app
 
-        with patch.dict("sys.modules", {"pyatspi": mock_atspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=mock_desktop):
+        with (
+            patch.dict("sys.modules", {"pyatspi": mock_atspi}),
+            patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=mock_desktop),
+        ):
             result = self.tool.execute(name="MissingField", value="x", app_name="App")
 
         assert result.success is False
@@ -2135,9 +2364,11 @@ class TestAtSpiSetValueTool:
         mock_desktop.childCount = 1
         mock_desktop.getChildAtIndex.return_value = mock_app
 
-        with patch.dict("sys.modules", {"pyatspi": mock_atspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=mock_desktop), \
-             patch("missy.tools.builtin.atspi_tools._find_element", return_value=mock_input):
+        with (
+            patch.dict("sys.modules", {"pyatspi": mock_atspi}),
+            patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=mock_desktop),
+            patch("missy.tools.builtin.atspi_tools._find_element", return_value=mock_input),
+        ):
             result = self.tool.execute(name="Username", value="admin", app_name="LoginApp")
 
         assert result.success is True
@@ -2159,9 +2390,11 @@ class TestAtSpiSetValueTool:
         mock_desktop.childCount = 1
         mock_desktop.getChildAtIndex.return_value = mock_app
 
-        with patch.dict("sys.modules", {"pyatspi": mock_atspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=mock_desktop), \
-             patch("missy.tools.builtin.atspi_tools._find_element", return_value=mock_spinner):
+        with (
+            patch.dict("sys.modules", {"pyatspi": mock_atspi}),
+            patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=mock_desktop),
+            patch("missy.tools.builtin.atspi_tools._find_element", return_value=mock_spinner),
+        ):
             result = self.tool.execute(name="SpinBox", value="42", app_name="App")
 
         assert result.success is True
@@ -2180,9 +2413,11 @@ class TestAtSpiSetValueTool:
         mock_desktop.childCount = 1
         mock_desktop.getChildAtIndex.return_value = mock_app
 
-        with patch.dict("sys.modules", {"pyatspi": mock_atspi}), \
-             patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=mock_desktop), \
-             patch("missy.tools.builtin.atspi_tools._find_element", return_value=mock_elem):
+        with (
+            patch.dict("sys.modules", {"pyatspi": mock_atspi}),
+            patch("missy.tools.builtin.atspi_tools._get_desktop", return_value=mock_desktop),
+            patch("missy.tools.builtin.atspi_tools._find_element", return_value=mock_elem),
+        ):
             result = self.tool.execute(name="ReadOnly", value="x", app_name="App")
 
         assert result.success is False
@@ -2254,6 +2489,7 @@ class TestAtSpiHelpers:
 
     def test_get_focused_application_returns_active(self):
         from missy.tools.builtin.atspi_tools import _get_focused_application
+
         mock_atspi = _make_mock_pyatspi()
 
         inactive = MagicMock()
@@ -2272,6 +2508,7 @@ class TestAtSpiHelpers:
 
     def test_get_focused_application_fallback_to_first_child(self):
         from missy.tools.builtin.atspi_tools import _get_focused_application
+
         mock_atspi = _make_mock_pyatspi()
 
         child = MagicMock()
@@ -2288,6 +2525,7 @@ class TestAtSpiHelpers:
 
     def test_get_focused_application_returns_none_when_all_fail(self):
         from missy.tools.builtin.atspi_tools import _get_focused_application
+
         mock_atspi = _make_mock_pyatspi()
 
         desktop = MagicMock()
@@ -2301,17 +2539,20 @@ class TestAtSpiHelpers:
 
     def test_walk_tree_returns_empty_for_none_node(self):
         from missy.tools.builtin.atspi_tools import _walk_tree
+
         result = _walk_tree(None, max_depth=3)
         assert result == []
 
     def test_walk_tree_returns_empty_when_depth_exceeded(self):
         from missy.tools.builtin.atspi_tools import _walk_tree
+
         node = MagicMock()
         result = _walk_tree(node, max_depth=2, current_depth=3)
         assert result == []
 
     def test_walk_tree_single_leaf_node(self):
         from missy.tools.builtin.atspi_tools import _walk_tree
+
         mock_atspi = _make_mock_pyatspi()
 
         node = MagicMock()
@@ -2331,6 +2572,7 @@ class TestAtSpiHelpers:
 
     def test_walk_tree_includes_text_content(self):
         from missy.tools.builtin.atspi_tools import _walk_tree
+
         mock_atspi = _make_mock_pyatspi()
 
         node = MagicMock()
@@ -2349,6 +2591,7 @@ class TestAtSpiHelpers:
 
     def test_walk_tree_handles_child_exception(self):
         from missy.tools.builtin.atspi_tools import _walk_tree
+
         mock_atspi = _make_mock_pyatspi()
 
         parent = MagicMock()
@@ -2380,7 +2623,13 @@ class TestAtSpiHelpers:
         from missy.tools.builtin.atspi_tools import _format_tree
 
         nodes = [
-            {"depth": 0, "role": "window", "name": "Main Window", "states": ["visible"], "text": ""},
+            {
+                "depth": 0,
+                "role": "window",
+                "name": "Main Window",
+                "states": ["visible"],
+                "text": "",
+            },
             {"depth": 1, "role": "push button", "name": "OK", "states": ["focusable"], "text": ""},
             {"depth": 2, "role": "label", "name": "", "states": [], "text": "OK label"},
         ]
@@ -2393,6 +2642,7 @@ class TestAtSpiHelpers:
 
     def test_format_tree_empty_nodes(self):
         from missy.tools.builtin.atspi_tools import _format_tree
+
         result = _format_tree([])
         assert result == ""
 

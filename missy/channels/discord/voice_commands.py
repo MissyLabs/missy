@@ -68,21 +68,26 @@ async def maybe_handle_voice_command(
             if not rest:
                 # No argument: join the user's current voice channel.
                 channel_name = await voice.join(
-                    gid, user_id=int(author_id),
+                    gid,
+                    user_id=int(author_id),
                 )
             elif rest.isdigit():
                 # Numeric argument: join by channel ID.
                 channel_name = await voice.join(
-                    gid, channel_id=int(rest),
+                    gid,
+                    channel_id=int(rest),
                 )
             else:
                 # Text argument: join by channel name.
                 channel_name = await voice.join(
-                    gid, channel_name=rest,
+                    gid,
+                    channel_name=rest,
                 )
             logger.info(
                 "Discord voice: joined %r guild=%s by=%s",
-                channel_name, guild_id, author_id,
+                channel_name,
+                guild_id,
+                author_id,
             )
             # Build status message.
             capabilities = []
@@ -91,9 +96,7 @@ async def maybe_handle_voice_command(
             if voice.can_speak:
                 capabilities.append("speaking")
             status = f" ({', '.join(capabilities)})" if capabilities else ""
-            return VoiceCommandResult(
-                True, f"Joined **{channel_name}**{status}"
-            )
+            return VoiceCommandResult(True, f"Joined **{channel_name}**{status}")
         except DiscordVoiceError as exc:
             return VoiceCommandResult(True, str(exc))
 
@@ -116,7 +119,9 @@ async def maybe_handle_voice_command(
             await voice.say(gid, rest)
             logger.info(
                 "Discord voice: spoke %d chars guild=%s by=%s",
-                len(rest), guild_id, author_id,
+                len(rest),
+                guild_id,
+                author_id,
             )
             return VoiceCommandResult(True)
         except DiscordVoiceError as exc:

@@ -149,8 +149,8 @@ class ProviderConfig:
     timeout: int = 30
     enabled: bool = True
     api_keys: list = field(default_factory=list)  # Multiple API keys for rotation
-    fast_model: str = ""      # Model for fast/simple tier (e.g. claude-haiku-4-5)
-    premium_model: str = ""   # Model for premium/complex tier (e.g. claude-opus-4-6)
+    fast_model: str = ""  # Model for fast/simple tier (e.g. claude-haiku-4-5)
+    premium_model: str = ""  # Model for premium/complex tier (e.g. claude-opus-4-6)
 
 
 # ---------------------------------------------------------------------------
@@ -431,9 +431,7 @@ def _parse_proactive_trigger(raw: Any) -> ProactiveTriggerConfig:
 
 def _parse_proactive(data: dict[str, Any]) -> ProactiveConfig:
     """Parse the ``proactive`` section of a Missy config dict."""
-    triggers = [
-        _parse_proactive_trigger(raw) for raw in data.get("triggers", [])
-    ]
+    triggers = [_parse_proactive_trigger(raw) for raw in data.get("triggers", [])]
     return ProactiveConfig(
         enabled=bool(data.get("enabled", False)),
         triggers=triggers,
@@ -483,8 +481,7 @@ def load_config(path: str) -> MissyConfig:
 
     if not isinstance(data, dict):
         raise ConfigurationError(
-            f"Top-level YAML value in '{path}' must be a mapping, "
-            f"got {type(data).__name__}."
+            f"Top-level YAML value in '{path}' must be a mapping, got {type(data).__name__}."
         )
 
     try:
@@ -492,6 +489,7 @@ def load_config(path: str) -> MissyConfig:
         discord_cfg: DiscordConfig | None = None
         if discord_raw is not None:
             from missy.channels.discord.config import parse_discord_config
+
             discord_cfg = parse_discord_config(discord_raw)
 
         return MissyConfig(

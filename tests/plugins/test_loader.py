@@ -238,6 +238,7 @@ class TestSingleton:
 
     def test_get_before_init_raises(self, monkeypatch):
         import missy.plugins.loader as mod
+
         monkeypatch.setattr(mod, "_loader", None)
         with pytest.raises(RuntimeError, match="PluginLoader has not been initialised"):
             get_plugin_loader()
