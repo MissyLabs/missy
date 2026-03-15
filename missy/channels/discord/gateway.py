@@ -283,9 +283,9 @@ class DiscordGatewayClient:
     async def _heartbeat_loop(self, interval: float) -> None:
         """Send heartbeats on the given interval forever."""
         # Jitter: wait a random fraction of the interval before the first beat.
-        import random
+        import secrets
 
-        await asyncio.sleep(interval * random.random())
+        await asyncio.sleep(interval * secrets.SystemRandom().random())
         while True:
             await self._send_heartbeat()
             await asyncio.sleep(interval)

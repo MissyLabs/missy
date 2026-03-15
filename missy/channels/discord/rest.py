@@ -18,8 +18,8 @@ Example::
 from __future__ import annotations
 
 import logging
-import random
 import re
+import secrets
 import time
 from typing import Any
 
@@ -216,7 +216,7 @@ class DiscordRestClient:
                             response.raise_for_status()
                         delay = backoffs[attempt]
 
-                    delay = float(delay) + random.uniform(0.0, 0.25)
+                    delay = float(delay) + secrets.SystemRandom().uniform(0.0, 0.25)
                     logger.warning(
                         "Discord send_message transient HTTP %d; retrying in %.2fs (attempt %d/%d)",
                         response.status_code,
@@ -238,7 +238,7 @@ class DiscordRestClient:
                 if attempt >= len(backoffs):
                     _log_final_failure(response=response, exc=exc, attempt_index=attempt_count)
                     raise
-                delay = backoffs[attempt] + random.uniform(0.0, 0.25)
+                delay = backoffs[attempt] + secrets.SystemRandom().uniform(0.0, 0.25)
                 logger.warning(
                     "Discord send_message exception; retrying in %.2fs (attempt %d/%d): %s",
                     delay,
