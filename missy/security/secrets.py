@@ -42,7 +42,7 @@ class SecretsDetector:
         "slack_token": r"xox[baprs]-[A-Za-z0-9\-]{10,}",
         "jwt": r"eyJ[A-Za-z0-9_\-]+\.eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+",
         "anthropic_key": r"sk-ant-[A-Za-z0-9_\-]{20,}",
-        "openai_key": r"sk-[A-Za-z0-9]{20,}",
+        "openai_key": r"sk-(?:proj-)?[A-Za-z0-9_\-]{20,}",
         "gcp_key": r"AIza[A-Za-z0-9_\-]{35}",
         "discord_token": r"[MN][A-Za-z0-9]{23,}\.[A-Za-z0-9_\-]{6}\.[A-Za-z0-9_\-]{27,}",
     }
