@@ -1,14 +1,14 @@
 # AUDIT_SECURITY
 
-- Timestamp: 2026-03-15 (updated session 25)
+- Timestamp: 2026-03-15 (updated session 26)
 - Auditor: Automated build analysis + security audit agent
 
 ## Security Architecture Summary
 
 Missy implements defense-in-depth with 15 security layers:
 
-1. **Input Sanitization** — 91 prompt injection pattern detectors (including Llama 2/3, GPT, Claude, FIM tokens, multilingual [9 languages incl. Korean], tool abuse, prompt leaking, data URI, unclosed HTML, base64, trigger-based, conditional override, memory poisoning, role confusion, few-shot conversation injection, code-block disguise, payload concatenation, prompt extraction via output/repeat/translate/poem/encoding, forced behavior change, tool-call/result token injection, function_calls XML, urgency-prefixed override, meta-AI instruction, antThinking injection)
-2. **Secrets Detection** — 45 credential patterns (API keys, JWTs, AWS, GitLab, npm, PyPI, SendGrid, Azure, Twilio, Mailgun, HuggingFace, Databricks, DigitalOcean, Linear, Supabase, Vercel, Cloudflare, Shopify, Google OAuth, HashiCorp Vault, Firebase, DB connection strings, Grafana, Confluent, Datadog, New Relic, PagerDuty, SSH keys, Netlify, Sentry DSN, Algolia, age secret key, Doppler)
+1. **Input Sanitization** — 98 prompt injection pattern detectors (including Llama 2/3, GPT, Claude, FIM tokens, multilingual [9 languages incl. Korean], tool abuse, prompt leaking, data URI, unclosed HTML, base64, trigger-based, conditional override, memory poisoning, role confusion, few-shot conversation injection, code-block disguise, payload concatenation, prompt extraction via output/repeat/translate/poem/encoding, forced behavior change, tool-call/result token injection, function_calls XML, urgency-prefixed override, meta-AI instruction, antThinking injection, multimodal token injection [image/audio/video], structural injection [separator/context], authority claim injection)
+2. **Secrets Detection** — 50 credential patterns (API keys, JWTs, AWS, GitLab, npm, PyPI, SendGrid, Azure, Twilio, Mailgun, HuggingFace, Databricks, DigitalOcean, Linear, Supabase, Vercel, Cloudflare, Shopify, Google OAuth, HashiCorp Vault, Firebase, DB connection strings, Grafana, Confluent, Datadog, New Relic, PagerDuty, SSH keys, Netlify, Sentry DSN, Algolia, age secret key, Doppler, PlanetScale, Neon, Postmark, Render, Fly.io)
 3. **Output Censoring** — `censor_response()` applied in agent runtime and audit events; overlapping redaction spans merged
 4. **Tool Output Injection Scanning** — Tool results scanned for prompt injection, warning labels prepended
 5. **Policy Enforcement** — 3-layer default-deny (network, filesystem, shell) with:
@@ -41,18 +41,21 @@ Missy implements defense-in-depth with 15 security layers:
 27. **Code Evolution Path Traversal** — `is_relative_to()` check blocks diff file paths resolving outside repo root (e.g. `../../etc/cron.d/backdoor`)
 28. **Gateway URL Length Limit** — URLs exceeding 8192 chars rejected to prevent URL-bomb memory exhaustion
 29. **Runtime Input Validation** — Empty/whitespace-only user_input rejected at API boundary before reaching LLM
+30. **Token File Atomic Permissions** — OAuth and Anthropic token files created with `os.open(O_CREAT|O_WRONLY|O_TRUNC, 0o600)` to prevent TOCTOU window where files are briefly world-readable
+31. **File Tool O_NOFOLLOW** — File read and delete tools use `O_NOFOLLOW` flag to atomically prevent symlink swap between resolve and open
+32. **MCP Startup Verification** — MCP client checks `proc.poll()` after Popen to detect immediate process exit before attempting handshake
 
 ## Threat Model Coverage
 
 | Threat | Defense | Test Coverage |
 |---|---|---|
-| Prompt injection (user input) | InputSanitizer (40+ patterns, 8 languages, base64 decoding) | 55+ tests |
+| Prompt injection (user input) | InputSanitizer (98 patterns, 9 languages, base64 decoding, multimodal) | 70+ tests |
 | Prompt injection (tool output) | Tool output scanning + warning labels | 22+ tests |
 | Plugin abuse | Plugin allowlist + disabled by default | 30+ tests |
 | Data exfiltration | Default-deny network + output censoring + audit redaction | 120+ policy tests |
 | SSRF | PolicyHTTPClient: scheme restriction, no redirects, kwargs allowlist, DNS rebinding check | 90+ gateway tests |
 | Scheduler abuse | Active hours, max_jobs, policy enforcement, input validation | 100+ scheduler tests |
-| Secrets leakage | SecretsDetector (26 patterns) + SecretCensor on output + audit redaction | 95+ security tests |
+| Secrets leakage | SecretsDetector (50 patterns) + SecretCensor on output + audit redaction | 110+ security tests |
 | Tool abuse | Tool registry policy checks + file path enforcement + approval gate | 290+ tool tests |
 | Channel impersonation | Discord access control (DM/guild/role), webhook HMAC, Content-Type validation | 460+ channel tests |
 | Shell bypass | Here-strings, brace groups, process substitution, heredocs all blocked | 40+ shell tests |

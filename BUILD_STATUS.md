@@ -58,7 +58,7 @@ missy/                          # 123 Python source files
 
 ## Test Results
 
-- 6412 tests passing across 191 test files
+- 6556 tests passing across 195 test files
 - 99%+ code coverage, zero test warnings
 - Unit, integration, policy, Discord, security, memory, agent, tools, skills, CLI, voice, scheduler tests
 - 54+ property-based tests (hypothesis) for policy engines, security, and rate limiter
@@ -66,8 +66,23 @@ missy/                          # 123 Python source files
 - 48 rate limiter stress tests (concurrent, burst, thread safety)
 - 54 concurrency safety tests (checkpoint, cost tracker, registry, memory, circuit breaker)
 - 36 resilience tests (corrupted state files, edge case data, recovery paths)
-- 77 end-to-end integration tests
-- 540+ security edge-case tests (injection, secrets, vault, SSRF, path traversal, tool output injection, webhook hardening, scheme restriction, kwargs allowlist, file policy enforcement, shell brace groups, header filtering, gateway thread safety, cost tracker edge cases, env sanitization, chunked response limits, overlapping redaction, snowflake validation, LShift DoS guard, shell quoting)
+- 135 end-to-end integration tests
+- 570+ security edge-case tests (injection, secrets, vault, SSRF, path traversal, tool output injection, webhook hardening, scheme restriction, kwargs allowlist, file policy enforcement, shell brace groups, header filtering, gateway thread safety, cost tracker edge cases, env sanitization, chunked response limits, overlapping redaction, snowflake validation, LShift DoS guard, shell quoting, multimodal token injection, authority claims)
+
+## Session 26 Additions (2026-03-15)
+
+- **6 security vulnerability fixes from audit**:
+  - Token file TOCTOU: anthropic_auth and oauth now use os.open(O_CREAT|O_WRONLY|O_TRUNC, 0o600) instead of write_text()+chmod() to eliminate window where token file is briefly world-readable
+  - File read tool: O_NOFOLLOW flag atomically prevents symlink swap between resolve() and open()
+  - File delete tool: O_NOFOLLOW verification before unlink prevents symlink swap attacks
+  - Discord bot token logging: Stopped logging first 8 chars of token at INFO level (leaked bot user ID)
+  - AT-SPI tools: 5 silent exception handlers replaced with logger.debug() calls
+  - MCP client: Startup check detects immediate process exit before handshake
+- **7 new injection detection patterns**: Multimodal token injection (<|image|>, <|audio|>, <|video|>), structural injection (<|separator|>, <|context|>), uppercase override mode, authority claim injection. Total: 98 patterns
+- **5 new secret detection patterns**: PlanetScale, Neon, Postmark, Render, Fly.io tokens. Total: 50 patterns
+- **Tests (144 new)**: Security fix tests (22), edge case tests (37), security pattern tests (27), integration pipeline tests (58)
+- **Total new tests**: 144 (from 6412 to 6556) across 4 new test files
+- **7 commits, zero ruff lint errors**
 
 ## Session 25 Additions (2026-03-15)
 
