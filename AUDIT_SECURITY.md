@@ -1,6 +1,6 @@
 # AUDIT_SECURITY
 
-- Timestamp: 2026-03-14
+- Timestamp: 2026-03-15 (updated session 12)
 - Auditor: Automated build analysis
 
 ## Security Architecture Summary
@@ -8,17 +8,20 @@
 Missy implements defense-in-depth with 6 security layers:
 
 1. **Input Sanitization** — 13+ prompt injection pattern detectors
-2. **Secrets Detection** — 9 credential patterns (API keys, JWTs, AWS, etc.)
-3. **Output Censoring** — Redacts secrets from all outbound responses
-4. **Policy Enforcement** — 3-layer default-deny (network, filesystem, shell)
-5. **Encrypted Vault** — ChaCha20-Poly1305 key-value store
-6. **Docker Sandbox** — Optional container isolation for shell commands
+2. **Secrets Detection** — 15 credential patterns (API keys, JWTs, AWS, sk-proj-, etc.)
+3. **Output Censoring** — `censor_response()` applied in agent runtime before output delivery
+4. **Tool Output Injection Scanning** — Tool results scanned for prompt injection, warning labels prepended
+5. **Policy Enforcement** — 3-layer default-deny (network, filesystem, shell) with process substitution blocking
+6. **Encrypted Vault** — ChaCha20-Poly1305 key-value store
+7. **Docker Sandbox** — Optional container isolation for shell commands
+8. **MCP Server Isolation** — Sanitized environment variables, name validation, response timeouts/size limits
 
 ## Threat Model Coverage
 
 | Threat | Defense | Test Coverage |
 |---|---|---|
-| Prompt injection | InputSanitizer (13 patterns) | 30+ tests |
+| Prompt injection (user input) | InputSanitizer (13 patterns) | 30+ tests |
+| Prompt injection (tool output) | Tool output scanning + warning labels | 19+ tests |
 | Plugin abuse | Plugin allowlist + disabled by default | 30+ tests |
 | Data exfiltration | Default-deny network + output censoring | 120+ policy tests |
 | SSRF | PolicyHTTPClient blocks unauthorized outbound | 50+ gateway tests |
@@ -50,6 +53,9 @@ Missy implements defense-in-depth with 6 security layers:
 - Disabled by default (shell.enabled: false)
 - Only whitelisted commands allowed when enabled
 - Empty allowed_commands blocks all commands
+- Compound command detection (&&, ||, ;, |)
+- Process substitution blocked (<(...), >(...), <<(...))
+- Command substitution blocked ($(...), backticks)
 - Docker sandbox optional isolation
 
 ## Secrets Detection Patterns
@@ -101,4 +107,7 @@ Audit events stored as structured JSONL at ~/.missy/audit.jsonl.
 | Shell policy | 30+ |
 | Audit logger | 40+ |
 | Discord access control | 35+ |
-| **Total security-related** | **280+** |
+| MCP server safety | 19+ |
+| Tool output injection | 19+ |
+| Response censoring | 10+ |
+| **Total security-related** | **330+** |

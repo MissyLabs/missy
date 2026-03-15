@@ -58,14 +58,31 @@ missy/                          # 123 Python source files
 
 ## Test Results
 
-- 4891 tests passing across 137 test files
-- 99.06% code coverage (11550 statements, 108 missed)
+- 4911 tests passing across 138 test files
+- 99%+ code coverage
 - Unit, integration, policy, Discord, security, memory, agent, tools, skills, CLI, voice, scheduler tests
 - 54+ property-based tests (hypothesis) for policy engines, security, and rate limiter
 - 116 security fuzz tests (unicode evasion, encoding bypass, vault corruption)
 - 48 rate limiter stress tests (concurrent, burst, thread safety)
 - 77 end-to-end integration tests
-- 180+ security edge-case tests (injection, secrets, vault, SSRF, path traversal)
+- 200+ security edge-case tests (injection, secrets, vault, SSRF, path traversal, tool output injection)
+
+## Session 12 Additions (2026-03-15)
+
+- **Tool output injection scanning**: Agent runtime now scans tool results for prompt injection patterns and prepends security warning labels to suspicious content
+- **Response censoring**: `censor_response()` applied to agent runtime output to prevent secret leakage in final responses
+- **Shell policy hardening**: Added process substitution markers (`<(`, `>(`, `<<(`) to subshell deny list, blocking bash process substitution attacks
+- **MCP security hardening**:
+  - Sanitized subprocess environment (only safe vars like PATH, HOME passed)
+  - Server name validation (rejects `__` to prevent namespace collision)
+  - RPC read timeout (30s) and response size limit (1MB) to prevent DoS
+- **OpenAI key detection**: Extended `sk-proj-...` format detection in SecretsDetector
+- **Subprocess timeouts**: Added 30s timeout to x11_tools._run(), 10s to xdotool polling in x11_launch
+- **Flaky test fix**: Fixed voice channel test race condition (run_forever vs run_until_complete)
+- **Test connection leak fix**: Replaced 23 manual sqlite3 conn.open/close patterns with context managers in checkpoint tests
+- **New tests**: 19 security hardening tests (shell process substitution, MCP name validation, tool output injection, response censoring)
+- **Total new tests**: 19 (from 4892 to 4911)
+- **Warnings reduced**: From 7 to 6 (fixed flaky voice channel warning)
 
 ## Session 11 Additions (2026-03-15)
 
