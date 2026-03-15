@@ -166,4 +166,25 @@ class McpManager:
                 for name, c in self._clients.items()
             ]
         self._config_path.parent.mkdir(parents=True, exist_ok=True)
-        self._config_path.write_text(json.dumps(entries, indent=2))
+        # Write with restrictive permissions (owner read/write only) to
+        # prevent other users from reading server commands or URLs.
+        import os
+        import tempfile
+
+        data = json.dumps(entries, indent=2)
+        dir_path = str(self._config_path.parent)
+        fd, tmp_path = tempfile.mkstemp(dir=dir_path, suffix=".tmp")
+        closed = False
+        try:
+            os.write(fd, data.encode())
+            os.fchmod(fd, 0o600)
+            os.close(fd)
+            closed = True
+            os.replace(tmp_path, str(self._config_path))
+        except Exception:
+            if not closed:
+                with contextlib.suppress(OSError):
+                    os.close(fd)
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_path)
+            raise

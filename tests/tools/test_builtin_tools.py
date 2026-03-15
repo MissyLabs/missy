@@ -532,12 +532,37 @@ class TestWebFetchTool:
         mock_client = MagicMock()
         mock_client.get.return_value = mock_resp
 
-        headers = {"Authorization": "Bearer mytoken", "X-Custom": "value"}
+        # Authorization is now stripped for security (M3 fix); only safe headers pass.
+        headers = {"Accept": "application/json", "X-Custom": "value"}
         with patch("missy.gateway.client.create_client", return_value=mock_client):
             result = WebFetchTool().execute(url="https://api.example.com", headers=headers)
 
         assert result.success is True
         mock_client.get.assert_called_once_with("https://api.example.com", headers=headers)
+
+    def test_sensitive_headers_stripped(self):
+        """Security-sensitive headers like Authorization, Host, Cookie are stripped."""
+        mock_resp = self._make_response(text="ok")
+        mock_client = MagicMock()
+        mock_client.get.return_value = mock_resp
+
+        headers = {
+            "Authorization": "Bearer secret",
+            "Host": "evil.com",
+            "Cookie": "session=abc",
+            "X-Custom": "safe",
+        }
+        with patch("missy.gateway.client.create_client", return_value=mock_client):
+            result = WebFetchTool().execute(url="https://api.example.com", headers=headers)
+
+        assert result.success is True
+        # Only X-Custom should pass through
+        call_kwargs = mock_client.get.call_args
+        passed_headers = call_kwargs.kwargs.get("headers") or call_kwargs[1].get("headers", {})
+        assert "Authorization" not in passed_headers
+        assert "Host" not in passed_headers
+        assert "Cookie" not in passed_headers
+        assert passed_headers.get("X-Custom") == "safe"
 
     def test_no_headers_argument_omitted(self):
         """When headers=None, no 'headers' kwarg should be passed to get()."""

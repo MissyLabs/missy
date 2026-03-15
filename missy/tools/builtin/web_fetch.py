@@ -71,7 +71,21 @@ class WebFetchTool(BaseTool):
             http = create_client(session_id="web_fetch_tool", task_id="fetch", timeout=timeout)
             request_kwargs: dict[str, Any] = {}
             if headers:
-                request_kwargs["headers"] = headers
+                # Strip security-sensitive headers that could enable
+                # Host header injection, credential forwarding, or
+                # proxy/routing manipulation.
+                _BLOCKED_HEADERS = frozenset({
+                    "host", "authorization", "cookie",
+                    "x-forwarded-for", "x-forwarded-host",
+                    "x-forwarded-proto", "x-real-ip",
+                    "proxy-authorization",
+                })
+                safe_headers = {
+                    k: v for k, v in headers.items()
+                    if k.lower() not in _BLOCKED_HEADERS
+                }
+                if safe_headers:
+                    request_kwargs["headers"] = safe_headers
 
             response = http.get(url, **request_kwargs)
             content = response.text
