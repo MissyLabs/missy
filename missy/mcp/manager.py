@@ -32,10 +32,15 @@ class McpManager:
         ]
     """
 
-    def __init__(self, config_path: str = MCP_CONFIG_PATH):
+    def __init__(
+        self,
+        config_path: str = MCP_CONFIG_PATH,
+        block_injection: bool = False,
+    ):
         self._config_path = Path(config_path).expanduser()
         self._clients: dict[str, McpClient] = {}
         self._lock = threading.Lock()
+        self._block_injection = block_injection
 
     def connect_all(self) -> None:
         """Load config and connect to all configured MCP servers."""
@@ -160,6 +165,11 @@ class McpManager:
                     namespaced_name,
                     warnings,
                 )
+                if self._block_injection:
+                    return (
+                        f"[MCP BLOCKED] Tool {namespaced_name!r} output contained "
+                        f"injection patterns and was blocked: {warnings}"
+                    )
                 result = f"[SECURITY WARNING: MCP tool output may contain injection] {result}"
         except Exception:
             pass  # sanitizer import failure should not block MCP tool calls

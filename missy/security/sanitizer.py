@@ -19,9 +19,11 @@ Example::
 from __future__ import annotations
 
 import base64
+import html
 import logging
 import re
 import unicodedata
+from urllib.parse import unquote
 
 logger = logging.getLogger(__name__)
 
@@ -209,6 +211,17 @@ class InputSanitizer:
         r"<\|endofprompt\|>",  # End-of-prompt token variant
         # --- Role confusion attacks ---
         r"you\s+are\s+(the\s+)?(system|root|admin|developer)\s*(prompt|user)?",
+        # --- Few-shot conversation injection ---
+        r"(?:example|sample)\s+(?:conversation|dialog|chat)\s*:",  # Fake few-shot examples
+        r"---\s*(?:user|human|system|assistant)\s*:\s*",  # Separator + role injection
+        # --- URL-encoded injection detection ---
+        r"%(?:69|49)gnore.*%(?:69|49)nstruction",  # URL-encoded "ignore instruction"
+        r"(?:%3C|<)(?:%7C|\|)(?:system|im_start)",  # URL-encoded <|system or <|im_start
+        # --- Markdown/format injection ---
+        r"```\s*(?:system|instruction|prompt)\b",  # Code block disguised as system
+        # --- Payload concatenation attack ---
+        r"continue\s+from\s+where\s+(?:you|I)\s+left\s+off",  # Multi-turn chain attack
+        r"the\s+previous\s+(?:message|response)\s+was\s+(?:wrong|incorrect|a\s+test)",  # Context override
     ]
 
     def __init__(self) -> None:
@@ -268,6 +281,25 @@ class InputSanitizer:
         for pattern, original in zip(self._patterns, self.INJECTION_PATTERNS, strict=False):
             if pattern.search(normalized):
                 matched.append(original)
+
+        # Also scan URL-decoded and HTML-entity-decoded variants to catch
+        # encoded evasion attempts (e.g. %69gnore → ignore).
+        try:
+            url_decoded = unquote(text)
+        except Exception:
+            url_decoded = text
+        try:
+            html_decoded = html.unescape(text)
+        except Exception:
+            html_decoded = text
+        for decoded_variant in (url_decoded, html_decoded):
+            if decoded_variant != text:
+                decoded_norm = _normalize_unicode(_strip_zero_width(decoded_variant))
+                for pattern, original in zip(
+                    self._patterns, self.INJECTION_PATTERNS, strict=False
+                ):
+                    if original not in matched and pattern.search(decoded_norm):
+                        matched.append(original)
 
         # Scan decoded base64 segments for injection payloads
         decoded_b64 = _decode_base64_segments(text)
