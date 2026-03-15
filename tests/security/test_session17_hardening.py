@@ -19,15 +19,11 @@ Tests for fixes applied this session:
 from __future__ import annotations
 
 import json
-import os
-import stat
-import threading
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # 1: Scheduler _load_jobs() permission checks
@@ -639,7 +635,6 @@ class TestMcpResponseIdMismatchRaisesError:
 
     def test_mismatched_id_raises_runtime_error(self):
         """_rpc raises RuntimeError when response ID != request ID."""
-        from missy.mcp.client import McpClient
 
         fixed_req_id = "req-abc-123"
         wrong_resp_id = "resp-xyz-999"
@@ -657,7 +652,6 @@ class TestMcpResponseIdMismatchRaisesError:
 
     def test_mismatched_id_error_message_contains_both_ids(self):
         """The RuntimeError message must include both expected and received IDs."""
-        from missy.mcp.client import McpClient
 
         fixed_req_id = "req-known"
         wrong_resp_id = "resp-unknown"
@@ -668,10 +662,9 @@ class TestMcpResponseIdMismatchRaisesError:
             patch(
                 "missy.mcp.client.uuid.uuid4",
                 return_value=MagicMock(__str__=lambda s: fixed_req_id),
-            ),
+            ),pytest.raises(RuntimeError) as exc_info
         ):
-            with pytest.raises(RuntimeError) as exc_info:
-                client._rpc("tools/list")
+            client._rpc("tools/list")
 
         msg = str(exc_info.value)
         assert fixed_req_id in msg
@@ -679,7 +672,6 @@ class TestMcpResponseIdMismatchRaisesError:
 
     def test_matching_id_does_not_raise(self):
         """_rpc returns the response dict normally when IDs match."""
-        from missy.mcp.client import McpClient
 
         fixed_id = "match-id-42"
         client = self._make_client_with_response(fixed_id)
@@ -695,7 +687,6 @@ class TestMcpResponseIdMismatchRaisesError:
 
     def test_null_response_id_does_not_raise(self):
         """_rpc skips the ID check (and does not raise) when response id is None."""
-        from missy.mcp.client import McpClient
 
         # id=None in the response signals a notification-style message; skip check
         client = self._make_client_with_response(None)
@@ -708,7 +699,6 @@ class TestMcpResponseIdMismatchRaisesError:
 
     def test_mismatched_id_does_not_merely_log_warning(self):
         """The mismatch must raise, not silently log.  Verify no warning-only path."""
-        from missy.mcp.client import McpClient
 
         fixed_req_id = "req-log-check"
         wrong_resp_id = "resp-different"
@@ -721,7 +711,7 @@ class TestMcpResponseIdMismatchRaisesError:
                 "missy.mcp.client.uuid.uuid4",
                 return_value=MagicMock(__str__=lambda s: fixed_req_id),
             ),
-            patch("missy.mcp.client.logger") as mock_logger,
+            patch("missy.mcp.client.logger"),
         ):
             try:
                 client._rpc("tools/list")

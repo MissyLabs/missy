@@ -199,16 +199,21 @@ class ToolRegistry:
                 engine.check_read(path, session_id=session_id, task_id=task_id)
             # … and the actual path from tool kwargs (H2 fix: enforce policy
             # on the real target path, not just the tool's static declarations).
-            actual_path = (kwargs or {}).get("path")
-            if actual_path:
-                engine.check_read(actual_path, session_id=session_id, task_id=task_id)
+            # Check multiple common path parameter names for defense-in-depth.
+            _kw = kwargs or {}
+            for path_key in ("path", "file_path", "target", "destination"):
+                actual_path = _kw.get(path_key)
+                if actual_path:
+                    engine.check_read(actual_path, session_id=session_id, task_id=task_id)
 
         if perms.filesystem_write:
             for path in perms.allowed_paths:
                 engine.check_write(path, session_id=session_id, task_id=task_id)
-            actual_path = (kwargs or {}).get("path")
-            if actual_path:
-                engine.check_write(actual_path, session_id=session_id, task_id=task_id)
+            _kw = kwargs or {}
+            for path_key in ("path", "file_path", "target", "destination"):
+                actual_path = _kw.get(path_key)
+                if actual_path:
+                    engine.check_write(actual_path, session_id=session_id, task_id=task_id)
 
         if perms.shell:
             # Pass the actual command so the policy engine can check it.

@@ -358,6 +358,22 @@ class SchedulerManager:
             # Import lazily to avoid circular imports at module load time.
             from missy.agent.runtime import AgentConfig, AgentRuntime
 
+            # Sanitize the task prompt to detect prompt injection from tampered
+            # jobs files (defense-in-depth with the file permission checks).
+            try:
+                from missy.security.sanitizer import InputSanitizer
+
+                sanitizer = InputSanitizer()
+                warnings = sanitizer.check_for_injection(job.task)
+                if warnings:
+                    logger.warning(
+                        "Injection patterns detected in scheduled job %r task: %s",
+                        job.name,
+                        warnings,
+                    )
+            except Exception:
+                logger.debug("Could not run InputSanitizer on job task", exc_info=True)
+
             agent = AgentRuntime(AgentConfig(provider=job.provider))
             result_text = agent.run(job.task, session_id=session_id)
         except Exception as exc:

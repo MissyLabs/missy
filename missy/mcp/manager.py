@@ -148,7 +148,22 @@ class McpManager:
             client = self._clients.get(server_name)
         if not client:
             return f"[MCP error] server {server_name!r} not connected"
-        return client.call_tool(tool_name, arguments)
+        result = client.call_tool(tool_name, arguments)
+        # Defense-in-depth: scan MCP tool results for prompt injection.
+        try:
+            from missy.security.sanitizer import InputSanitizer
+
+            warnings = InputSanitizer().check_for_injection(result)
+            if warnings:
+                logger.warning(
+                    "MCP tool %r returned content with injection patterns: %s",
+                    namespaced_name,
+                    warnings,
+                )
+                result = f"[SECURITY WARNING: MCP tool output may contain injection] {result}"
+        except Exception:
+            pass  # sanitizer import failure should not block MCP tool calls
+        return result
 
     def list_servers(self) -> list[dict]:
         with self._lock:
