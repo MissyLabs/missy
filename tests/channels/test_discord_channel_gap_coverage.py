@@ -205,6 +205,7 @@ class TestHandleMessageDeleteRaisesWarning:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.filterwarnings("ignore::RuntimeWarning")
 class TestMaybeHandleVoiceCommand:
     @pytest.mark.asyncio
     async def test_content_not_starting_with_exclamation_returns_false(self):

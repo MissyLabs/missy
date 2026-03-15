@@ -61,7 +61,11 @@ from typing import Any
 
 import websockets
 import websockets.exceptions
-from websockets.server import WebSocketServerProtocol
+
+try:
+    from websockets.asyncio.server import ServerConnection as WebSocketServerProtocol
+except ImportError:  # websockets < 13
+    from websockets.server import WebSocketServerProtocol  # type: ignore[assignment]
 
 from missy.channels.voice.pairing import PairingManager
 from missy.channels.voice.presence import PresenceStore

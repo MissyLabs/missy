@@ -68,6 +68,10 @@ include = ["missy*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+filterwarnings = [
+    "ignore:websockets.legacy is deprecated:DeprecationWarning",
+    "ignore::pytest.PytestUnraisableExceptionWarning",
+]
 
 [tool.black]
 line-length = 100

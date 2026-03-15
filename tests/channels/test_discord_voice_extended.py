@@ -34,7 +34,17 @@ from missy.channels.discord.voice import (
 
 
 def _run(coro):
-    return asyncio.new_event_loop().run_until_complete(coro)
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        # Cancel any pending tasks to avoid "coroutine was never awaited" warnings
+        pending = asyncio.all_tasks(loop)
+        for task in pending:
+            task.cancel()
+        if pending:
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        loop.close()
 
 
 @pytest.fixture()
@@ -1184,6 +1194,7 @@ class TestPlayTtsExtraEdgeCases:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.filterwarnings("ignore::RuntimeWarning")
 class TestListenWatchdog:
     def _make_manager(self):
         with patch("missy.channels.discord.voice.ensure_ffmpeg_available"):
