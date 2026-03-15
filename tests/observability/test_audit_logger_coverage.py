@@ -116,11 +116,11 @@ class TestGetRecentEventsReadFailure:
 
     def test_read_error_logs_message(self, bus: EventBus, tmp_path: Path):
         log_path = tmp_path / "audit.jsonl"
-        log_path.write_text("")
+        log_path.write_text('{"event": "test"}\n')
         al = AuditLogger(log_path=str(log_path), bus=bus)
 
         with (
-            patch.object(Path, "read_text", side_effect=OSError("io err")),
+            patch("builtins.open", side_effect=OSError("io err")),
             patch("missy.observability.audit_logger._module_logger") as mock_logger,
         ):
             al.get_recent_events()
@@ -184,11 +184,11 @@ class TestGetPolicyViolationsReadFailure:
 
     def test_read_error_logs_message(self, bus: EventBus, tmp_path: Path):
         log_path = tmp_path / "audit.jsonl"
-        log_path.write_text("")
+        log_path.write_text('{"result": "deny"}\n')
         al = AuditLogger(log_path=str(log_path), bus=bus)
 
         with (
-            patch.object(Path, "read_text", side_effect=OSError("disk err")),
+            patch("builtins.open", side_effect=OSError("disk err")),
             patch("missy.observability.audit_logger._module_logger") as mock_logger,
         ):
             al.get_policy_violations()

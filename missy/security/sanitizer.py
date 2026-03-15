@@ -157,7 +157,7 @@ class InputSanitizer:
         r"you\s+have\s+no\s+(restrictions?|rules?|limitations?|guidelines?)",
         r"(enable|activate|enter)\s+(god|admin|root|unrestricted)\s+mode",
         # --- Hidden instruction vectors ---
-        r"<!--[\s\S]*?-->",                      # HTML comments hiding instructions
+        r"<!--(?:(?!-->)[\s\S])*-->",                  # HTML comments hiding instructions (ReDoS-safe)
         # --- Multi-language injection keywords (OWASP LLM01) ---
         r"ignorar\s+(todas?\s+)?(las?\s+)?instrucciones?\s+(anteriores?|previas?)",  # Spanish
         r"ignorer\s+(toutes?\s+)?(les?\s+)?instructions?\s+(pr[e\u00e9]c[e\u00e9]dentes?|ant[e\u00e9]rieures?)",  # French
@@ -192,7 +192,7 @@ class InputSanitizer:
         r"Human:\s*$",       # Attempting to inject a new Human: turn
         r"Assistant:\s*$",   # Attempting to inject an Assistant: turn
         # --- Prompt leaking / exfiltration ---
-        r"(show|reveal|print|output|display)\s+(\w+\s+)*(system\s+)?(prompt|instructions?)",
+        r"(show|reveal|print|output|display)\s+(?:\w+\s+){0,10}(system\s+)?(prompt|instructions?)",
         r"what\s+(are|is)\s+your\s+(system\s+)?(prompt|instructions?)",
         # --- Japanese injection keywords ---
         r"以前の指示を(無視|忘れ)",  # Japanese: ignore/forget previous instructions

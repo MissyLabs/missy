@@ -54,6 +54,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -212,6 +213,7 @@ class VoiceServer:
             self._handle_connection,
             self._host,
             self._port,
+            max_size=1 * 1024 * 1024,  # 1 MB per frame — prevents memory exhaustion
         )
         self._running = True
         logger.info("VoiceServer: listening on ws://%s:%d", self._host, self._port)
@@ -816,8 +818,12 @@ class VoiceServer:
 
             def _write() -> None:
                 log_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-                filename.write_bytes(audio_buffer)
-                filename.chmod(0o600)
+                # Atomic create with restrictive permissions (avoids TOCTOU)
+                fd = os.open(str(filename), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                try:
+                    os.write(fd, audio_buffer)
+                finally:
+                    os.close(fd)
 
             await loop.run_in_executor(None, _write)
             _emit(

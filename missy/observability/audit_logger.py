@@ -130,6 +130,26 @@ class AuditLogger:
     # Read operations
     # ------------------------------------------------------------------
 
+    def _read_tail_lines(self, limit: int) -> list[str]:
+        """Read the last *limit* non-empty lines from the audit log.
+
+        Uses a seek-from-end strategy to avoid loading the entire file for
+        large audit logs.  Falls back to full read for small files.
+        """
+        file_size = self.log_path.stat().st_size
+        if file_size == 0:
+            return []
+        # Estimate ~1KB per JSON event line; read enough to cover limit.
+        read_size = min(file_size, limit * 2048)
+        with open(self.log_path, "rb") as fh:
+            fh.seek(max(0, file_size - read_size))
+            chunk = fh.read().decode("utf-8", errors="replace")
+        lines = [ln for ln in chunk.splitlines() if ln.strip()]
+        # When we seeked past the start, the first line may be truncated.
+        if file_size > read_size and lines:
+            lines = lines[1:]
+        return lines[-limit:]
+
     def get_recent_events(self, limit: int = 100) -> list[dict[str, Any]]:
         """Return the last *limit* events from the audit log file.
 
@@ -145,16 +165,13 @@ class AuditLogger:
             return []
 
         try:
-            lines = self.log_path.read_text(encoding="utf-8").splitlines()
+            lines = self._read_tail_lines(limit)
         except Exception as exc:
             _module_logger.error("Failed to read audit log %s: %s", self.log_path, exc)
             return []
 
-        # Take the last *limit* non-empty lines.
-        non_empty = [ln for ln in lines if ln.strip()]
-        window = non_empty[-limit:]
         events: list[dict[str, Any]] = []
-        for line in window:
+        for line in lines:
             try:
                 events.append(json.loads(line))
             except json.JSONDecodeError as exc:
@@ -177,7 +194,8 @@ class AuditLogger:
             return []
 
         try:
-            lines = self.log_path.read_text(encoding="utf-8").splitlines()
+            # Read more lines than needed since not all will be violations.
+            lines = self._read_tail_lines(limit * 10)
         except Exception as exc:
             _module_logger.error("Failed to read audit log %s: %s", self.log_path, exc)
             return []
