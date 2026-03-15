@@ -2,19 +2,15 @@
 
 from __future__ import annotations
 
-import json
 import threading
 import time
-from unittest.mock import MagicMock, patch
-
-import pytest
 
 from missy.channels.webhook import (
-    WebhookChannel,
     _MAX_PAYLOAD_BYTES,
     _MAX_QUEUE_SIZE,
     _RATE_LIMIT_REQUESTS,
     _RATE_LIMIT_WINDOW,
+    WebhookChannel,
 )
 
 

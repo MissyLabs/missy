@@ -336,6 +336,29 @@ def _parse_plugins(data: dict[str, Any]) -> PluginPolicy:
     )
 
 
+def _resolve_vault_ref(value: str | None) -> str | None:
+    """Resolve a ``vault://`` or ``$ENV`` reference in a config value.
+
+    Returns the resolved secret string, or the original value unchanged
+    if it is not a vault/env reference.  Returns ``None`` if *value* is
+    ``None``.
+    """
+    if not value:
+        return value
+    if value.startswith(("vault://", "$")):
+        try:
+            from missy.security.vault import Vault
+
+            return Vault().resolve(value)
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).debug(
+                "Failed to resolve secret reference %r", value, exc_info=True
+            )
+    return value
+
+
 def _parse_providers(data: dict[str, Any]) -> dict[str, ProviderConfig]:
     providers: dict[str, ProviderConfig] = {}
     for key, raw in data.items():
@@ -350,6 +373,10 @@ def _parse_providers(data: dict[str, Any]) -> dict[str, ProviderConfig]:
         # If api_key is not set but api_keys has entries, use the first one.
         if not api_key and api_keys:
             api_key = api_keys[0]
+        # Resolve vault:// and $ENV references so providers receive the
+        # actual secret, not the reference string.
+        api_key = _resolve_vault_ref(api_key)
+        api_keys = [_resolve_vault_ref(k) or k for k in api_keys]
         providers[key] = ProviderConfig(
             name=str(raw.get("name", key)),
             model=str(raw["model"]),

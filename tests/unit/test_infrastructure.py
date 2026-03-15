@@ -359,6 +359,7 @@ class TestConfigWatcherDoReload:
     def test_reload_calls_reload_fn_with_new_config(self, tmp_path):
         cfg = tmp_path / "config.yaml"
         cfg.write_text("key: value")
+        cfg.chmod(0o600)  # safety check requires owner-only permissions
         received = []
         watcher = ConfigWatcher(str(cfg), lambda c: received.append(c), poll_interval=100)
 
@@ -372,6 +373,7 @@ class TestConfigWatcherDoReload:
     def test_reload_exception_does_not_propagate(self, tmp_path):
         cfg = tmp_path / "config.yaml"
         cfg.write_text("")
+        cfg.chmod(0o600)  # safety check requires owner-only permissions
         watcher = ConfigWatcher(str(cfg), lambda c: None, poll_interval=100)
 
         with patch("missy.config.settings.load_config", side_effect=RuntimeError("parse error")):
@@ -382,6 +384,7 @@ class TestConfigWatcherDetectsChange:
     def test_reload_triggered_after_debounce(self, tmp_path):
         cfg = tmp_path / "config.yaml"
         cfg.write_text("initial: true")
+        cfg.chmod(0o600)  # safety check requires owner-only permissions
         received = []
         fake_config = object()
 
@@ -395,6 +398,7 @@ class TestConfigWatcherDetectsChange:
             watcher.start()
             time.sleep(0.05)
             cfg.write_text("updated: true")
+            cfg.chmod(0o600)  # re-apply after write
             time.sleep(0.4)
             watcher.stop()
 

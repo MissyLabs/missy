@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import json
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from missy.core.exceptions import PolicyViolationError
 from missy.mcp.manager import McpManager
 from missy.policy.shell import ShellPolicyEngine
 
@@ -20,7 +20,7 @@ class TestShellPolicyProcessSubstitution:
         policy.enabled = True
         policy.allowed_commands = ["diff"]
         engine = ShellPolicyEngine(policy)
-        with pytest.raises(Exception):
+        with pytest.raises(PolicyViolationError):
             engine.check_command("diff <(cat /etc/shadow) <(echo x)")
 
     def test_reject_output_process_substitution(self):
@@ -29,7 +29,7 @@ class TestShellPolicyProcessSubstitution:
         policy.enabled = True
         policy.allowed_commands = ["tee"]
         engine = ShellPolicyEngine(policy)
-        with pytest.raises(Exception):
+        with pytest.raises(PolicyViolationError):
             engine.check_command("echo hello | tee >(cat)")
 
     def test_reject_heredoc_process_substitution(self):
@@ -38,7 +38,7 @@ class TestShellPolicyProcessSubstitution:
         policy.enabled = True
         policy.allowed_commands = ["cat"]
         engine = ShellPolicyEngine(policy)
-        with pytest.raises(Exception):
+        with pytest.raises(PolicyViolationError):
             engine.check_command("cat <<(echo bad)")
 
     def test_still_allows_normal_commands(self):
@@ -87,8 +87,9 @@ class TestMcpClientTimeout:
 
     def test_rpc_timeout_parameter(self):
         """_rpc should accept a timeout parameter."""
-        from missy.mcp.client import McpClient
         import inspect
+
+        from missy.mcp.client import McpClient
 
         sig = inspect.signature(McpClient._rpc)
         assert "timeout" in sig.parameters
@@ -100,7 +101,7 @@ class TestToolOutputInjectionScanning:
 
     def test_runtime_has_sanitizer(self):
         """AgentRuntime should create a sanitizer on init."""
-        from missy.agent.runtime import AgentRuntime, AgentConfig
+        from missy.agent.runtime import AgentConfig, AgentRuntime
 
         config = AgentConfig(provider="anthropic")
         with patch.object(AgentRuntime, "_make_circuit_breaker", return_value=None), \
@@ -170,7 +171,7 @@ class TestShellPolicyExistingFunctionality:
         policy.enabled = True
         policy.allowed_commands = ["echo"]
         engine = ShellPolicyEngine(policy)
-        with pytest.raises(Exception):
+        with pytest.raises(PolicyViolationError):
             engine.check_command("echo $(whoami)")
 
     def test_backtick_still_blocked(self):
@@ -179,7 +180,7 @@ class TestShellPolicyExistingFunctionality:
         policy.enabled = True
         policy.allowed_commands = ["echo"]
         engine = ShellPolicyEngine(policy)
-        with pytest.raises(Exception):
+        with pytest.raises(PolicyViolationError):
             engine.check_command("echo `whoami`")
 
     def test_chain_operators_checked(self):
@@ -188,5 +189,5 @@ class TestShellPolicyExistingFunctionality:
         policy.enabled = True
         policy.allowed_commands = ["ls"]
         engine = ShellPolicyEngine(policy)
-        with pytest.raises(Exception):
+        with pytest.raises(PolicyViolationError):
             engine.check_command("ls && rm -rf /")

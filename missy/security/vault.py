@@ -12,6 +12,7 @@ Usage::
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import secrets
@@ -52,14 +53,30 @@ class Vault:
         self._key = self._load_or_create_key()
 
     def _load_or_create_key(self) -> bytes:
-        if self._key_path.exists():
-            key = self._key_path.read_bytes()
-            if len(key) != 32:
-                raise VaultError("Invalid vault key length; expected 32 bytes.")
+        # Try atomic exclusive create first to avoid TOCTOU race.
+        # O_CREAT | O_EXCL fails if the file already exists, guaranteeing
+        # we never overwrite an existing key and the file is born with 0o600.
+        try:
+            fd = os.open(
+                str(self._key_path),
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+            )
+            try:
+                key = secrets.token_bytes(32)
+                os.write(fd, key)
+            finally:
+                os.close(fd)
             return key
-        key = secrets.token_bytes(32)
-        self._key_path.write_bytes(key)
-        self._key_path.chmod(0o600)
+        except FileExistsError:
+            pass
+
+        # File already exists -- verify it is a regular file, not a symlink.
+        if self._key_path.is_symlink():
+            raise VaultError("Vault key file is a symlink; refusing to read.")
+        key = self._key_path.read_bytes()
+        if len(key) != 32:
+            raise VaultError("Invalid vault key length; expected 32 bytes.")
         return key
 
     def _encrypt(self, data: bytes) -> bytes:
@@ -83,8 +100,26 @@ class Vault:
     def _save_store(self, store: dict) -> None:
         raw = json.dumps(store).encode()
         encrypted = self._encrypt(raw)
-        self._vault_path.write_bytes(encrypted)
-        self._vault_path.chmod(0o600)
+        # Atomic write: create temp file with correct permissions, then rename.
+        # This prevents data loss if the process is interrupted mid-write.
+        import tempfile
+
+        self._vault_path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(
+            dir=str(self._vault_path.parent), suffix=".tmp"
+        )
+        try:
+            os.write(fd, encrypted)
+            os.fsync(fd)
+            os.close(fd)
+            fd = -1  # Mark as closed
+            os.rename(tmp_path, str(self._vault_path))
+        except BaseException:
+            if fd >= 0:
+                os.close(fd)
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_path)
+            raise
 
     def set(self, key: str, value: str) -> None:
         """Store an encrypted secret."""

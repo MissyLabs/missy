@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import stat
 import threading
 import time
 from collections.abc import Callable
@@ -72,8 +74,44 @@ class ConfigWatcher:
                 pending_reload = False
                 self._do_reload()
 
+    def _check_file_safety(self) -> bool:
+        """Verify config file ownership and permissions before reload.
+
+        Returns True if the file is safe to load, False otherwise.
+        Rejects symlinks, files not owned by the current user, and
+        files that are group- or world-writable.
+        """
+        try:
+            if self._path.is_symlink():
+                logger.warning(
+                    "ConfigWatcher: %s is a symlink; refusing to reload", self._path
+                )
+                return False
+            st = self._path.stat()
+            if st.st_uid != os.getuid():
+                logger.warning(
+                    "ConfigWatcher: %s is owned by uid %d, expected %d; refusing to reload",
+                    self._path,
+                    st.st_uid,
+                    os.getuid(),
+                )
+                return False
+            if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+                logger.warning(
+                    "ConfigWatcher: %s is group- or world-writable (mode %o); refusing to reload",
+                    self._path,
+                    st.st_mode,
+                )
+                return False
+        except OSError as exc:
+            logger.warning("ConfigWatcher: cannot stat %s: %s", self._path, exc)
+            return False
+        return True
+
     def _do_reload(self) -> None:
         logger.info("ConfigWatcher: reloading %s", self._path)
+        if not self._check_file_safety():
+            return
         try:
             from missy.config.settings import load_config
 

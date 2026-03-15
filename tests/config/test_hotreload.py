@@ -75,6 +75,7 @@ class TestDoReload:
     def test_reload_calls_fn(self, mock_load, tmp_path):
         cfg = tmp_path / "config.yaml"
         cfg.write_text("test: true")
+        cfg.chmod(0o600)  # safety check requires owner-only permissions
         mock_config = MagicMock()
         mock_load.return_value = mock_config
         callback = MagicMock()
@@ -88,8 +89,31 @@ class TestDoReload:
     def test_reload_handles_exception(self, mock_load, tmp_path):
         cfg = tmp_path / "config.yaml"
         cfg.write_text("bad: yaml")
+        cfg.chmod(0o600)  # safety check requires owner-only permissions
         w = ConfigWatcher(str(cfg), MagicMock())
         w._do_reload()  # should not raise
+
+    def test_reload_rejects_world_writable(self, tmp_path):
+        """Config files with group/world write bits must be rejected."""
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text("test: true")
+        cfg.chmod(0o666)
+        callback = MagicMock()
+        w = ConfigWatcher(str(cfg), callback)
+        w._do_reload()
+        callback.assert_not_called()
+
+    def test_reload_rejects_symlink(self, tmp_path):
+        """Symlinked config files must be rejected."""
+        real = tmp_path / "real.yaml"
+        real.write_text("test: true")
+        real.chmod(0o600)
+        link = tmp_path / "config.yaml"
+        link.symlink_to(real)
+        callback = MagicMock()
+        w = ConfigWatcher(str(link), callback)
+        w._do_reload()
+        callback.assert_not_called()
 
 
 class TestApplyConfig:
