@@ -20,6 +20,17 @@ from missy.tools.base import BaseTool, ToolPermissions, ToolResult
 
 logger = logging.getLogger(__name__)
 
+#: Environment variables safe to pass to browser subprocesses.
+#: Prevents API key leakage to Firefox/Playwright.
+_SAFE_BROWSER_ENV_VARS = frozenset({
+    "PATH", "HOME", "USER", "LOGNAME", "SHELL",
+    "LANG", "LC_ALL", "LC_CTYPE", "LANGUAGE",
+    "TERM", "XDG_RUNTIME_DIR", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME",
+    "TMPDIR", "TMP", "TEMP", "DISPLAY", "WAYLAND_DISPLAY",
+    "DBUS_SESSION_BUS_ADDRESS", "LD_LIBRARY_PATH",
+    "MOZ_ENABLE_WAYLAND", "GDK_BACKEND",
+})
+
 _SESSIONS_DIR = Path("~/.missy/browser_sessions").expanduser()
 _FIREFOX_PREFS = {
     "browser.sessionstore.resume_from_crash": 0,
@@ -76,7 +87,10 @@ class BrowserSession:
             headless=self.headless,
             args=["--no-remote"],
             firefox_user_prefs=_FIREFOX_PREFS,
-            env={**os.environ},
+            env={
+                k: v for k, v in os.environ.items()
+                if k in _SAFE_BROWSER_ENV_VARS
+            },
         )
 
     def get_page(self) -> Any:

@@ -56,7 +56,7 @@ class AuditLogger:
         bus: EventBus | None = None,
     ) -> None:
         self.log_path = Path(log_path).expanduser()
-        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        self.log_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self._bus: EventBus = bus if bus is not None else event_bus
         self._subscribe()
 

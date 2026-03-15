@@ -127,7 +127,7 @@ class DiscordGatewayClient:
 
         url = self._resume_gateway_url or self._gateway_url
         logger.debug("Discord Gateway: connecting to %s", url)
-        self._ws = await websockets.connect(url)
+        self._ws = await websockets.connect(url, max_size=4 * 1024 * 1024)
         self._emit_audit("discord.gateway.connect", "allow", {"url": url})
 
     async def disconnect(self) -> None:

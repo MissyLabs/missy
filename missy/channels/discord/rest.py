@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 BASE = "https://discord.com/api/v10"
 
 
-_MENTION_ID_RE = re.compile(r"<@!?(?:\\d+)>|<@&(?:\\d+)>|<#(?:\\d+)>")
+_MENTION_ID_RE = re.compile(r"<@!?(\d+)>|<@&(\d+)>|<#(\d+)>")
 
 #: Discord snowflake IDs are 64-bit integers (up to 20 digits).
 _SNOWFLAKE_RE = re.compile(r"^\d{1,20}$")
@@ -53,7 +53,7 @@ def _validate_snowflake(value: str, name: str = "id") -> str:
 
 def _mask_mentions(s: str) -> str:
     """Redact snowflake IDs inside common mention tokens for safer logging."""
-    return _MENTION_ID_RE.sub(lambda m: re.sub(r"\\d+", "redacted", m.group(0)), s or "")
+    return _MENTION_ID_RE.sub(lambda m: re.sub(r"\d+", "redacted", m.group(0)), s or "")
 
 
 class DiscordRestClient:

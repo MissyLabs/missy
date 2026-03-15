@@ -112,13 +112,13 @@ class TestGatewayConnect:
         gw = _make_gateway()
         mock_ws = MagicMock()
 
-        async def _fake_connect(url):
+        async def _fake_connect(url, **kwargs):
             return mock_ws
 
         with patch("websockets.connect", side_effect=_fake_connect) as mock_connect:
             await gw.connect()
 
-        mock_connect.assert_called_once_with(gw._gateway_url)
+        mock_connect.assert_called_once_with(gw._gateway_url, max_size=4 * 1024 * 1024)
         assert gw._ws is mock_ws
 
     @pytest.mark.asyncio
@@ -126,13 +126,13 @@ class TestGatewayConnect:
         gw = _make_gateway()
         gw._resume_gateway_url = "wss://resume.discord.gg"
 
-        async def _fake_connect(url):
+        async def _fake_connect(url, **kwargs):
             return MagicMock()
 
         with patch("websockets.connect", side_effect=_fake_connect) as mock_connect:
             await gw.connect()
 
-        mock_connect.assert_called_once_with("wss://resume.discord.gg")
+        mock_connect.assert_called_once_with("wss://resume.discord.gg", max_size=4 * 1024 * 1024)
 
     @pytest.mark.asyncio
     async def test_connect_raises_when_websockets_missing(self):
@@ -154,7 +154,7 @@ class TestGatewayConnect:
 
         gw._emit_audit = _capture  # type: ignore[method-assign]
 
-        async def _fake_connect(url):
+        async def _fake_connect(url, **kwargs):
             return MagicMock()
 
         with patch("websockets.connect", side_effect=_fake_connect):

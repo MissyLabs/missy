@@ -172,7 +172,7 @@ class McpManager:
                     )
                 result = f"[SECURITY WARNING: MCP tool output may contain injection] {result}"
         except Exception:
-            pass  # sanitizer import failure should not block MCP tool calls
+            logger.debug("MCP injection scan failed; tool output passed through", exc_info=True)
         return result
 
     def list_servers(self) -> list[dict]:
