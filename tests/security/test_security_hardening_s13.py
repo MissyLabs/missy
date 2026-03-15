@@ -14,8 +14,6 @@ from __future__ import annotations
 
 import logging
 import os
-import stat
-import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -28,7 +26,6 @@ from missy.gateway.client import PolicyHTTPClient
 from missy.mcp.manager import McpManager
 from missy.policy.shell import ShellPolicyEngine
 from missy.security.secrets import SecretsDetector
-
 
 # ---------------------------------------------------------------------------
 # Helpers

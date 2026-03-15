@@ -13,9 +13,8 @@ Targets uncovered paths in:
 from __future__ import annotations
 
 import asyncio
-import io
+import contextlib
 import struct
-import threading
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -88,8 +87,6 @@ class TestVoiceChannelEventLoopException:
             registry_path=str(tmp_path / "devices.json"),
         )
 
-        started_event = threading.Event()
-
         # Simulate _run_loop's internal behaviour by patching asyncio.new_event_loop
         # to return a loop whose run_until_complete always raises.
         boom_loop = MagicMock(spec=asyncio.AbstractEventLoop)
@@ -99,8 +96,10 @@ class TestVoiceChannelEventLoopException:
         def patched_new_event_loop():
             return boom_loop
 
-        with patch("asyncio.new_event_loop", side_effect=patched_new_event_loop):
-            with patch("asyncio.set_event_loop"):
+        with (
+            patch("asyncio.new_event_loop", side_effect=patched_new_event_loop),
+            patch("asyncio.set_event_loop"),
+        ):
                 # We need to replicate the thread logic with the patched loop.
                 # Build _run_loop equivalent inline and call it directly so we
                 # can inspect state synchronously.
@@ -145,8 +144,10 @@ class TestVoiceChannelEventLoopException:
         boom_loop.run_until_complete.side_effect = RuntimeError("crash")
         boom_loop.close.side_effect = lambda: close_calls.append("closed")
 
-        with patch("asyncio.new_event_loop", return_value=boom_loop):
-            with patch("asyncio.set_event_loop"):
+        with (
+            patch("asyncio.new_event_loop", return_value=boom_loop),
+            patch("asyncio.set_event_loop"),
+        ):
                 def _run_loop_equivalent() -> None:
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
@@ -200,17 +201,18 @@ class TestDiscordVoiceInitException:
         mock_voice_mgr = AsyncMock()
         mock_voice_mgr.start.side_effect = RuntimeError("voice subsystem unavailable")
 
-        with patch(
-            "missy.channels.discord.voice.DiscordVoiceManager",
-            return_value=mock_voice_mgr,
-        ):
-            # Also patch at the import location used by the channel module.
-            with patch(
+        with (
+            patch(
+                "missy.channels.discord.voice.DiscordVoiceManager",
+                return_value=mock_voice_mgr,
+            ),
+            patch(
                 "missy.channels.discord.channel.DiscordVoiceManager",
                 new=lambda **kw: mock_voice_mgr,
                 create=True,
-            ):
-                await channel._maybe_handle_voice_command(
+            ),
+        ):
+            await channel._maybe_handle_voice_command(
                     content="!join General",
                     channel_id="123",
                     guild_id="456",
@@ -253,9 +255,11 @@ class TestMcpClientTimeout:
         client._proc = mock_proc
 
         # Patch select.select to return an empty ready list (timeout expired).
-        with patch("select.select", return_value=([], [], [])):
-            with pytest.raises(TimeoutError, match="did not respond within"):
-                client._rpc("some_method", timeout=0.001)
+        with (
+            patch("select.select", return_value=([], [], [])),
+            pytest.raises(TimeoutError, match="did not respond within"),
+        ):
+            client._rpc("some_method", timeout=0.001)
 
     def test_rpc_skips_select_when_fileno_raises(self) -> None:
         """When stdout.fileno() raises, select is bypassed and readline is used."""
@@ -326,10 +330,8 @@ class TestVoiceServerWebsocketsImportFallback:
                 del sys.modules[mod_key]
             # If websockets.server also lacks the attribute the test will show an
             # ImportError — that is fine; what matters is the fallback is attempted.
-            try:
+            with contextlib.suppress(ImportError, AttributeError):
                 importlib.import_module(mod_key)
-            except (ImportError, AttributeError):
-                pass  # Expected if websockets.server is also absent in test env
         finally:
             # Restore original module state.
             if saved is not None:
@@ -390,8 +392,6 @@ class TestDiscordVoiceResamplingBreak:
         actual_samples = len(result) // 2
         # We should have fewer samples than the naively computed out_count because
         # the loop broke early.
-        ratio = 48000 / 6000 / 2  # = 4.0
-        out_count = int(4 / ratio)  # = int(1.0) = 1
         # When out_count <= len(mono), break may not fire, so just assert correctness.
         assert actual_samples >= 0
 

@@ -11,13 +11,12 @@ Targets uncovered paths in:
 """
 from __future__ import annotations
 
-import asyncio
+import contextlib
 import json
 import os
 import stat
-import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -56,9 +55,9 @@ class TestVaultAtomicWriteFailure:
         with (
             patch("os.rename", side_effect=OSError("rename failed")),
             patch("os.unlink", side_effect=tracking_unlink),
+            pytest.raises(OSError, match="rename failed"),
         ):
-            with pytest.raises(OSError, match="rename failed"):
-                vault.set("KEY", "value")
+            vault.set("KEY", "value")
 
         # The temp .tmp file must have been unlinked during cleanup.
         assert any(p.endswith(".tmp") for p in unlinked), (
@@ -71,9 +70,11 @@ class TestVaultAtomicWriteFailure:
 
         vault = Vault(vault_dir=str(tmp_path))
 
-        with patch("os.rename", side_effect=RuntimeError("disk full")):
-            with pytest.raises(RuntimeError, match="disk full"):
-                vault.set("KEY", "value")
+        with (
+            patch("os.rename", side_effect=RuntimeError("disk full")),
+            pytest.raises(RuntimeError, match="disk full"),
+        ):
+            vault.set("KEY", "value")
 
     def test_fd_closed_when_rename_fails_before_close(self, tmp_path: Path) -> None:
         """If fd is still open when rename raises, os.close(fd) is called."""
@@ -94,10 +95,9 @@ class TestVaultAtomicWriteFailure:
         with (
             patch("os.fsync", side_effect=OSError("fsync failed")),
             patch("os.close", side_effect=tracking_close),
-            patch("os.unlink"),
+            patch("os.unlink"),pytest.raises(OSError, match="fsync failed")
         ):
-            with pytest.raises(OSError, match="fsync failed"):
-                vault.set("KEY", "value")
+            vault.set("KEY", "value")
 
         # os.close should have been called at least once (the cleanup path).
         assert len(closed_fds) >= 1
@@ -400,10 +400,7 @@ class TestAgentRuntimeToolOutputInjection:
         matches = sanitizer.check_for_injection(clean_content)
 
         # No injection detected — content should be left as-is.
-        if matches:
-            result = "[SECURITY WARNING:...]\n" + clean_content
-        else:
-            result = clean_content
+        result = "[SECURITY WARNING:...]\n" + clean_content if matches else clean_content
 
         assert result == clean_content
 
@@ -665,8 +662,8 @@ def _make_async_iterable_ws(messages: list[str]) -> MagicMock:
         async def __anext__(self):
             try:
                 return next(it)
-            except StopIteration:
-                raise StopAsyncIteration
+            except StopIteration as exc:
+                raise StopAsyncIteration from exc
 
     ws = MagicMock()
     ws.__aiter__ = lambda self: _AsyncIter()
@@ -709,11 +706,11 @@ class TestVoiceServerAudioStartNonNumericFallback:
         mock_handle_audio = AsyncMock()
         server._handle_audio = mock_handle_audio
 
-        with patch.object(server, "_send_json", new=AsyncMock()):
-            try:
-                await server._message_loop(websocket, node)
-            except StopAsyncIteration:
-                pass  # expected when the iterator is exhausted
+        with (
+            patch.object(server, "_send_json", new=AsyncMock()),
+            contextlib.suppress(StopAsyncIteration),
+        ):
+            await server._message_loop(websocket, node)
 
         # _handle_audio should have been called with the fallback values.
         mock_handle_audio.assert_called_once()
@@ -739,11 +736,11 @@ class TestVoiceServerAudioStartNonNumericFallback:
         mock_handle_audio = AsyncMock()
         server._handle_audio = mock_handle_audio
 
-        with patch.object(server, "_send_json", new=AsyncMock()):
-            try:
-                await server._message_loop(websocket, node)
-            except StopAsyncIteration:
-                pass
+        with (
+            patch.object(server, "_send_json", new=AsyncMock()),
+            contextlib.suppress(StopAsyncIteration),
+        ):
+            await server._message_loop(websocket, node)
 
         mock_handle_audio.assert_called_once()
         _, kwargs = mock_handle_audio.call_args
@@ -768,11 +765,11 @@ class TestVoiceServerAudioStartNonNumericFallback:
         mock_handle_audio = AsyncMock()
         server._handle_audio = mock_handle_audio
 
-        with patch.object(server, "_send_json", new=AsyncMock()):
-            try:
-                await server._message_loop(websocket, node)
-            except StopAsyncIteration:
-                pass
+        with (
+            patch.object(server, "_send_json", new=AsyncMock()),
+            contextlib.suppress(StopAsyncIteration),
+        ):
+            await server._message_loop(websocket, node)
 
         mock_handle_audio.assert_called_once()
         _, kwargs = mock_handle_audio.call_args
