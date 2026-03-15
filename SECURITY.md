@@ -32,10 +32,15 @@ When enabled, only commands named in `shell.allowed_commands` may run.  An
 empty `allowed_commands` list blocks all commands even when the shell is
 nominally enabled.
 
-Compound commands (using `&&`, `||`, `;`, `|`) are split and each
-sub-command is individually checked against the allowlist.  Process
-substitution (`<(...)`, `>(...)`) and command substitution (`$(...)`,
-backticks) are unconditionally blocked to prevent hidden command execution.
+Compound commands (using `&&`, `||`, `;`, `|`, `&`) are split and each
+sub-command is individually checked against the allowlist.  The following
+shell constructs are unconditionally blocked to prevent hidden command
+execution:
+
+- Process substitution: `<(...)`, `>(...)`, `<<(...)`
+- Command substitution: `$(...)`, backticks
+- Here-strings: `<<<`
+- Brace groups: `{ cmd; }`, `{;cmd;}`
 
 ### Plugin Control
 
@@ -53,15 +58,18 @@ User input is sanitized before reaching the AI provider:
 
 ### Secrets Detection & Response Censoring
 
-The `SecretsDetector` scans text for 15 credential patterns (API keys
+The `SecretsDetector` scans text for 23 credential patterns (API keys
 including `sk-proj-...`, private keys, tokens, passwords, JWTs, AWS
-credentials, GitHub/Slack/Discord tokens, etc.) and can redact them before
-text is stored or transmitted.  The CLI warns users when potential secrets
-are detected in a prompt.
+credentials, GitHub/GitLab/npm/PyPI/Slack/Discord/SendGrid tokens,
+database connection strings, etc.) and can redact them before text is
+stored or transmitted.  The CLI warns users when potential secrets are
+detected in a prompt.
 
 The agent runtime applies `censor_response()` to all final output before
 it reaches any channel, providing a last-resort defense against secret
-leakage through AI-generated responses.
+leakage through AI-generated responses.  Audit event detail messages are
+also redacted through `censor_response()` to prevent secrets from leaking
+into audit logs.
 
 ### Tool Output Injection Scanning
 
@@ -71,12 +79,42 @@ to the AI model.  When suspicious patterns are detected, a security
 warning label is prepended to the tool output so the model treats it as
 untrusted data rather than instructions.
 
-### Webhook Rate Limiting
+### Gateway Security
 
-The webhook channel enforces per-IP rate limiting (60 requests per 60-second
-sliding window), rejects payloads larger than 1 MB, and bounds the message
-queue to 1000 entries.  Excess requests receive 429 (Too Many Requests),
-413 (Payload Too Large), or 503 (Service Unavailable) responses.
+All outbound HTTP requests are routed through `PolicyHTTPClient`, which:
+
+- Restricts URL schemes to `http://` and `https://` only (blocks `file://`,
+  `ftp://`, `data://` SSRF vectors).
+- Disables redirect following (`follow_redirects=False`) to prevent
+  redirect-based SSRF.
+- Uses a kwargs allowlist — only safe parameters (`headers`, `params`,
+  `data`, `json`, `content`, `cookies`, `timeout`, `files`) pass through.
+  Dangerous kwargs like `verify=False`, `base_url`, `transport`, and `auth`
+  are silently stripped.
+- Enforces connection pool limits (20 connections, 10 keepalive, 30s expiry)
+  to prevent resource exhaustion.
+- Performs DNS rebinding protection: all resolved IPs are checked, and if
+  any address is private/reserved without explicit CIDR allowance, the
+  entire request is denied.
+
+### Webhook Security
+
+The webhook channel enforces multiple layers of protection:
+
+- **Content-Type validation**: Only `application/json` requests are accepted;
+  all others receive 415 (Unsupported Media Type), preventing CSRF via form
+  submissions.
+- **Content-Length validation**: Parsed as a non-negative integer; invalid
+  values receive 400 (Bad Request).
+- **Payload size limits**: Payloads larger than 1 MB receive 413.
+- **Per-IP rate limiting**: 60 requests per 60-second sliding window; excess
+  receives 429 (Too Many Requests) with `Retry-After` header.
+- **Queue bounds**: Maximum 1000 pending messages; excess receives 503.
+- **HMAC authentication**: Optional SHA-256 signature verification via
+  `X-Missy-Signature` header.
+- **Header filtering**: Only safe headers (Content-Type, User-Agent,
+  X-Request-Id, X-Missy-Signature) are stored in message metadata;
+  Authorization, Cookie, and forwarding headers are stripped.
 
 ### MCP Server Isolation
 
@@ -84,7 +122,9 @@ MCP server subprocesses receive a sanitized environment containing only
 safe variables (PATH, HOME, LANG, etc.), preventing API keys and other
 secrets from leaking to potentially untrusted MCP servers.  Server names
 are validated to prevent namespace collision attacks.  RPC reads have a
-30-second timeout and 1 MB size limit to prevent denial-of-service.
+30-second timeout and 1 MB size limit to prevent denial-of-service.  MCP
+configuration files are written with restrictive permissions (0o600) and
+verified for ownership and writability before loading.
 
 ### Vault Security
 
