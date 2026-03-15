@@ -71,6 +71,12 @@ class SecretsDetector:
         "newrelic_key": r"NRAK-[A-Z0-9]{27}",
         "pagerduty_key": r"(?i)pagerduty[_\s]*(?:api[_\s]*key|token)[\"'\s:=]+[A-Za-z0-9_\-]{20,}",
         "ssh_key_content": r"AAAA[BCD][A-Za-z0-9+/]{100,}",
+        # Session 24 additions
+        "netlify_token": r"(?i)netlify[_\s]*(?:token|key)[\"'\s:=]+[A-Za-z0-9_\-]{40,}",
+        "sentry_dsn": r"https://[a-f0-9]{32}@[a-z0-9]+\.ingest\.sentry\.io/\d+",
+        "algolia_key": r"(?i)algolia[_\s]*(?:api[_\s]*key|admin[_\s]*key)[\"'\s:=]+[a-f0-9]{32}",
+        "age_secret_key": r"AGE-SECRET-KEY-[A-Z0-9]{59}",
+        "doppler_token": r"dp\.st\.[a-z0-9_\-]+\.[A-Za-z0-9]{40,}",
     }
 
     def __init__(self) -> None:

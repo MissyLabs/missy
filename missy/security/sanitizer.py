@@ -229,6 +229,16 @@ class InputSanitizer:
         r"write\s+(?:a\s+)?poem\s+(?:about|using|with)\s+your\s+(?:system|initial)\s+(?:prompt|instructions?)",  # Creative extraction
         r"(?:base64|hex|rot13)\s+(?:encode|decode)\s+(?:your|the)\s+(?:system|initial)\s+(?:prompt|instructions?)",  # Encoding extraction
         r"you\s+(?:must|have\s+to|need\s+to)\s+(?:always|now)\s+(?:respond|answer|reply)\s+in",  # Forced behavior change
+        # --- Session 24: emerging attack vectors ---
+        r"<\|tool_call\|>",                              # Tool-call token injection
+        r"<\|tool_result\|>",                             # Tool-result token injection
+        r"<function_calls>",                              # XML function call injection
+        r"<\|pad\|>",                                     # Padding token injection
+        r"(?:IMPORTANT|CRITICAL|URGENT)\s*:\s*(?:ignore|disregard|override)\b",  # Urgency-prefixed override
+        r"(?:as\s+an?\s+AI|as\s+a\s+language\s+model)\s*,?\s*you\s+(?:should|must|can)\s+(?:not\s+)?(?:ignore|override|bypass)",  # Meta-AI instruction
+        r"<\|diff_marker\|>",                             # Diff marker token injection
+        r"<tool_use>",                                    # Claude-style tool_use XML injection
+        r"<antThinking>",                                 # Claude internal token injection
     ]
 
     def __init__(self) -> None:
