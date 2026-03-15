@@ -119,6 +119,32 @@ class SelfCreateTool(BaseTool):
             if not script:
                 return ToolResult(success=False, output="", error="script is required for create.")
 
+            # Scan script content for dangerous patterns
+            _DANGEROUS_PATTERNS = [
+                "curl ", "wget ", "nc ", "ncat ", "socat ",
+                "/dev/tcp/", "/dev/udp/",
+                "eval(", "exec(", "os.system(",
+                "subprocess.call(", "subprocess.Popen(",
+                "import socket", "import http",
+                "reverse_shell", "bind_shell",
+                "chmod +s", "chmod u+s", "setuid",
+            ]
+            script_lower = script.lower()
+            for pattern in _DANGEROUS_PATTERNS:
+                if pattern.lower() in script_lower:
+                    logger.warning(
+                        "self_create_tool: dangerous pattern %r found in script for %r",
+                        pattern,
+                        tool_name,
+                    )
+                    return ToolResult(
+                        success=False,
+                        output="",
+                        error=f"Script contains potentially dangerous pattern: {pattern!r}. "
+                        "Custom tool scripts must not include network access, code execution, "
+                        "or privilege escalation patterns.",
+                    )
+
             tools_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
             ext = ALLOWED_LANGUAGES[language]
             script_path = tools_dir / f"{tool_name}{ext}"

@@ -448,14 +448,14 @@ class CodeEvolveTool(BaseTool):
         try:
             result = mgr.apply(proposal_id)
             if result["success"]:
-                import contextlib
-
                 from missy.agent.code_evolution import restart_process
 
                 msg = result["message"] + "\n\nRestarting process to load evolved code..."
 
-                with contextlib.suppress(SystemExit):
+                try:
                     restart_process()
+                except SystemExit:
+                    logger.warning("code_evolve: restart_process raised SystemExit — process may not have restarted")
                 return ToolResult(success=True, output=msg)
             return ToolResult(
                 success=False,
@@ -478,13 +478,13 @@ class CodeEvolveTool(BaseTool):
 
         result = mgr.rollback(proposal_id)
         if result["success"]:
-            import contextlib
-
             from missy.agent.code_evolution import restart_process
 
             msg = result["message"] + "\n\nRestarting to load reverted code..."
-            with contextlib.suppress(SystemExit):
+            try:
                 restart_process()
+            except SystemExit:
+                logger.warning("code_evolve: restart_process raised SystemExit during rollback")
             return ToolResult(success=True, output=msg)
         return ToolResult(
             success=False,
