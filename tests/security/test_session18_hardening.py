@@ -1280,3 +1280,157 @@ class TestDeviceRegistrySavePermissions:
             st = os.stat(f"{tmpdir}/devices.json")
             mode = stat.S_IMODE(st.st_mode)
             assert mode == 0o600, f"Expected 0o600, got {oct(mode)}"
+
+
+# ---------------------------------------------------------------------------
+# 13: OAuth state CSRF verification
+# ---------------------------------------------------------------------------
+
+
+class TestOAuthStateCsrf:
+    """OAuth callback must verify state parameter."""
+
+    def test_wait_for_callback_rejects_mismatched_state(self):
+        from missy.cli import oauth
+
+        oauth._callback_event.clear()
+        oauth._callback_result.clear()
+
+        mock_server = MagicMock()
+
+        def fake_wait(timeout=None):
+            oauth._callback_result["code"] = "the-auth-code"
+            oauth._callback_result["state"] = "wrong-state"
+            oauth._callback_result["error"] = None
+            return True
+
+        with patch.object(oauth._callback_event, "wait", side_effect=fake_wait), \
+             patch.object(oauth, "console"):
+            result = oauth._wait_for_callback(
+                mock_server, timeout=5, expected_state="correct-state"
+            )
+        assert result is None
+
+    def test_wait_for_callback_accepts_matching_state(self):
+        from missy.cli import oauth
+
+        oauth._callback_event.clear()
+        oauth._callback_result.clear()
+
+        mock_server = MagicMock()
+
+        def fake_wait(timeout=None):
+            oauth._callback_result["code"] = "the-auth-code"
+            oauth._callback_result["state"] = "correct-state"
+            oauth._callback_result["error"] = None
+            return True
+
+        with patch.object(oauth._callback_event, "wait", side_effect=fake_wait):
+            result = oauth._wait_for_callback(
+                mock_server, timeout=5, expected_state="correct-state"
+            )
+        assert result == "the-auth-code"
+
+
+# ---------------------------------------------------------------------------
+# 14: MCP tool name validation at import time
+# ---------------------------------------------------------------------------
+
+
+class TestMcpToolNameValidationAtImport:
+    """McpClient._list_tools() must validate tool names from servers."""
+
+    def test_rejects_tool_with_double_underscore(self):
+        import json
+
+        from missy.mcp.client import McpClient
+
+        client = McpClient(name="test", command="dummy")
+        mock_proc = MagicMock()
+        mock_proc.stdin = MagicMock()
+        mock_proc.stdout = MagicMock()
+
+        tools_response = json.dumps({
+            "jsonrpc": "2.0",
+            "id": None,
+            "result": {
+                "tools": [
+                    {"name": "safe_tool", "description": "OK"},
+                    {"name": "bad__tool", "description": "namespace injection"},
+                ]
+            },
+        })
+        mock_proc.stdout.readline.return_value = (tools_response + "\n").encode()
+        client._proc = mock_proc
+
+        tools = client._list_tools()
+        names = [t["name"] for t in tools]
+        assert "safe_tool" in names
+        assert "bad__tool" not in names
+
+    def test_rejects_tool_with_special_characters(self):
+        import json
+
+        from missy.mcp.client import McpClient
+
+        client = McpClient(name="test", command="dummy")
+        mock_proc = MagicMock()
+        mock_proc.stdin = MagicMock()
+        mock_proc.stdout = MagicMock()
+
+        tools_response = json.dumps({
+            "jsonrpc": "2.0",
+            "id": None,
+            "result": {
+                "tools": [
+                    {"name": "valid-tool", "description": "OK"},
+                    {"name": "evil; rm -rf /", "description": "injection"},
+                    {"name": "", "description": "empty name"},
+                ]
+            },
+        })
+        mock_proc.stdout.readline.return_value = (tools_response + "\n").encode()
+        client._proc = mock_proc
+
+        tools = client._list_tools()
+        names = [t["name"] for t in tools]
+        assert "valid-tool" in names
+        assert len(names) == 1
+
+
+# ---------------------------------------------------------------------------
+# 15: File tool symlink resolution
+# ---------------------------------------------------------------------------
+
+
+class TestFileToolSymlinkResolution:
+    """File tools must resolve symlinks before I/O."""
+
+    def test_file_read_resolves_path(self):
+        import tempfile
+
+        from missy.tools.builtin.file_read import FileReadTool
+
+        tool = FileReadTool()
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+            f.write("hello world")
+            f.flush()
+            result = tool.execute(path=f.name)
+            assert result.success
+            assert "hello world" in result.output
+        import os
+        os.unlink(f.name)
+
+    def test_file_write_resolves_path(self):
+        import os
+        import tempfile
+
+        from missy.tools.builtin.file_write import FileWriteTool
+
+        tool = FileWriteTool()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "test.txt")
+            result = tool.execute(path=path, content="test content")
+            assert result.success
+            with open(path) as f:
+                assert f.read() == "test content"
