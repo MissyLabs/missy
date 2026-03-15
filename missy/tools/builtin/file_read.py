@@ -71,13 +71,18 @@ class FileReadTool(BaseTool):
             if not p.is_file():
                 return ToolResult(success=False, output=None, error=f"Not a file: {path}")
 
-            # Re-resolve immediately before open to mitigate TOCTOU symlink swap
-            real_path = p.resolve(strict=True)
-            if real_path != p:
-                p = real_path
+            # Use O_NOFOLLOW to prevent TOCTOU symlink swap between resolve and open
+            import os
 
-            size = p.stat().st_size
-            with p.open("r", encoding=encoding, errors="replace") as fh:
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            try:
+                fd = os.open(str(p), flags)
+            except OSError:
+                # O_NOFOLLOW failed — path is a symlink; re-resolve and retry
+                p = p.resolve(strict=True)
+                fd = os.open(str(p), os.O_RDONLY)
+            size = os.fstat(fd).st_size
+            with os.fdopen(fd, "r", encoding=encoding, errors="replace") as fh:
                 content = fh.read(max_bytes)
 
             truncated = size > max_bytes

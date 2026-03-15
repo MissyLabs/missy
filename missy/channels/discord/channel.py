@@ -120,7 +120,7 @@ class DiscordChannel(BaseChannel):
                 account_config.token_env_var,
             )
         else:
-            logger.info("Discord: bot token resolved (%.8s…)", token.lstrip("Bot ").strip()[:8])
+            logger.info("Discord: bot token resolved (length=%d)", len(token))
         self._rest = DiscordRestClient(
             bot_token=token,
             session_id=session_id,

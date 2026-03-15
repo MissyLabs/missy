@@ -67,10 +67,16 @@ class FileDeleteTool(BaseTool):
                     output=None,
                     error=f"Not a file (directories will not be deleted): {path}",
                 )
-            # Re-resolve immediately before unlink to mitigate TOCTOU symlink swap
-            real_path = p.resolve(strict=True)
-            if real_path != p:
-                p = real_path
+            # Open with O_NOFOLLOW to verify not a symlink, then unlink
+            import os
+
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            try:
+                fd = os.open(str(p), flags)
+                os.close(fd)
+            except OSError:
+                # O_NOFOLLOW failed — path is a symlink; re-resolve
+                p = p.resolve(strict=True)
             p.unlink()
             return ToolResult(success=True, output=f"Deleted: {path}")
         except PermissionError as exc:
