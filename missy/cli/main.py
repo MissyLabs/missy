@@ -1348,6 +1348,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                     except TimeoutError:
                         continue
                     except Exception:
+                        logging.getLogger(__name__).debug("Discord queue error", exc_info=True)
                         break
 
                     session_id = msg.metadata.get("discord_author", {}).get("id", "discord")
@@ -1577,6 +1578,7 @@ def doctor(ctx: click.Context) -> None:
             try:
                 avail = p.is_available() if p else False
             except Exception:
+                logging.getLogger(__name__).debug("Provider %s availability check failed", name, exc_info=True)
                 avail = False
             status = ok if avail else fail
             table.add_row(
