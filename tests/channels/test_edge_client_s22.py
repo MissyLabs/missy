@@ -14,8 +14,6 @@ import json
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-import pytest
-
 import missy.channels.voice.edge_client as ec
 from missy.channels.voice.edge_client import _load_config, _voice_loop
 

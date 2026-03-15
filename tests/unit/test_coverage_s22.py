@@ -6,7 +6,6 @@ Targets remaining uncovered lines across multiple modules.
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -109,9 +108,11 @@ class TestVoiceRegistryAtomicWriteFailure:
         )
         reg._nodes["test-node"] = node
 
-        with patch("tempfile.mkstemp", side_effect=PermissionError("denied")):
-            with pytest.raises(PermissionError):
-                reg.save()
+        with (
+            patch("tempfile.mkstemp", side_effect=PermissionError("denied")),
+            pytest.raises(PermissionError),
+        ):
+            reg.save()
 
 
 # ---------------------------------------------------------------------------
@@ -203,9 +204,11 @@ class TestVaultCryptoUnavailable:
     def test_vault_raises_without_crypto(self, tmp_path: Path) -> None:
         from missy.security.vault import Vault, VaultError
 
-        with patch("missy.security.vault._CRYPTO_AVAILABLE", False):
-            with pytest.raises(VaultError, match="cryptography"):
-                Vault(str(tmp_path / "secrets"))
+        with (
+            patch("missy.security.vault._CRYPTO_AVAILABLE", False),
+            pytest.raises(VaultError, match="cryptography"),
+        ):
+            Vault(str(tmp_path / "secrets"))
 
 
 # ---------------------------------------------------------------------------
