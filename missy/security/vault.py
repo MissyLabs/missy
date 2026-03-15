@@ -113,6 +113,7 @@ class Vault:
             dir=str(self._vault_path.parent), suffix=".tmp"
         )
         try:
+            os.fchmod(fd, 0o600)
             os.write(fd, encrypted)
             os.fsync(fd)
             os.close(fd)

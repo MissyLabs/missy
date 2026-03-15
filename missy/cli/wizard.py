@@ -378,6 +378,7 @@ def _write_config_atomic(config_path: Path, content: str) -> None:
     config_path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=config_path.parent, prefix=".config_tmp_")
     try:
+        os.fchmod(fd, 0o600)  # Config may contain API keys; restrict access
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(content)
         os.replace(tmp, config_path)
