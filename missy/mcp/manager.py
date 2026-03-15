@@ -76,6 +76,11 @@ class McpManager:
         self, name: str, command: str | None = None, url: str | None = None
     ) -> McpClient:
         """Connect to a new MCP server and persist the config."""
+        if not _SAFE_NAME_RE.match(name):
+            raise ValueError(
+                f"Invalid MCP server name: {name!r} "
+                "(must contain only alphanumeric, hyphens, underscores)"
+            )
         if "__" in name:
             raise ValueError(
                 f"Invalid MCP server name: {name!r} (must not contain '__')"

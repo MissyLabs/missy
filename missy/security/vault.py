@@ -71,9 +71,13 @@ class Vault:
         except FileExistsError:
             pass
 
-        # File already exists -- verify it is a regular file, not a symlink.
+        # File already exists -- verify it is a regular file, not a symlink
+        # or hard link that could point to an attacker-controlled file.
         if self._key_path.is_symlink():
             raise VaultError("Vault key file is a symlink; refusing to read.")
+        st = self._key_path.stat()
+        if st.st_nlink > 1:
+            raise VaultError("Vault key file has multiple hard links; refusing to read.")
         key = self._key_path.read_bytes()
         if len(key) != 32:
             raise VaultError("Invalid vault key length; expected 32 bytes.")

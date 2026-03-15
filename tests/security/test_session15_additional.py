@@ -13,9 +13,91 @@ import json
 import stat
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 # ---------------------------------------------------------------------------
 # MCP config file permissions (L2 fix)
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Vault hard link detection (L1 fix)
+# ---------------------------------------------------------------------------
+
+
+class TestVaultHardLinkDetection:
+    def test_hard_link_rejected(self, tmp_path):
+        """Vault key file with multiple hard links is rejected."""
+        from missy.security.vault import Vault, VaultError
+
+        # Create vault directory
+        vault_dir = tmp_path / "secrets"
+        vault_dir.mkdir()
+        key_path = vault_dir / "vault.key"
+
+        # Write a valid 32-byte key
+        import os
+        import secrets as sec
+
+        key_data = sec.token_bytes(32)
+        key_path.write_bytes(key_data)
+
+        # Create a hard link
+        hard_link = vault_dir / "vault.key.link"
+        os.link(str(key_path), str(hard_link))
+
+        # Verify hard link exists (st_nlink > 1)
+        assert key_path.stat().st_nlink > 1
+
+        with pytest.raises(VaultError, match="hard links"):
+            Vault(str(vault_dir))
+
+    def test_normal_key_file_accepted(self, tmp_path):
+        """Vault key file with single hard link (normal) is accepted."""
+        from missy.security.vault import Vault
+
+        vault_dir = tmp_path / "secrets"
+        vault_dir.mkdir()
+        key_path = vault_dir / "vault.key"
+
+        import secrets as sec
+
+        key_path.write_bytes(sec.token_bytes(32))
+
+        # Should not raise
+        vault = Vault(str(vault_dir))
+        assert vault is not None
+
+
+# ---------------------------------------------------------------------------
+# MCP server name validation (M1 fix)
+# ---------------------------------------------------------------------------
+
+
+class TestMcpServerNameValidation:
+    def test_invalid_name_with_spaces_rejected(self):
+        from missy.mcp.manager import McpManager
+
+        mgr = McpManager(config_path="/tmp/nonexistent_mcp.json")
+        with pytest.raises(ValueError, match="alphanumeric"):
+            mgr.add_server("my server", command="echo test")
+
+    def test_invalid_name_with_shell_metacharacters_rejected(self):
+        from missy.mcp.manager import McpManager
+
+        mgr = McpManager(config_path="/tmp/nonexistent_mcp.json")
+        with pytest.raises(ValueError, match="alphanumeric"):
+            mgr.add_server("server;rm -rf /", command="echo test")
+
+    def test_valid_name_with_hyphens_accepted(self):
+        """Valid names with hyphens and underscores should pass validation."""
+        from missy.mcp.manager import McpManager
+
+        mgr = McpManager(config_path="/tmp/nonexistent_mcp.json")
+        # This will fail at connect() since the command is fake,
+        # but should not fail at name validation
+        with pytest.raises(Exception, match="(?!alphanumeric)"):
+            mgr.add_server("my-valid_server123", command="nonexistent-binary")
 
 
 class TestMcpConfigPermissions:
