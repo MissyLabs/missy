@@ -1,6 +1,6 @@
 # TEST_RESULTS
 
-- Timestamp: 2026-03-15 (updated session 16)
+- Timestamp: 2026-03-15 (updated session 18)
 - Test framework: pytest 8.4.1
 - Python: 3.12.3
 
@@ -8,14 +8,14 @@
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 5432 |
-| Passed | 5432 |
+| Total tests | 5581 |
+| Passed | 5581 |
 | Failed | 0 |
 | Skipped | 7 |
 | Warnings | 1 (websockets deprecation) |
-| Duration | ~116s |
-| Source files | 123 |
-| Test files | 157 |
+| Duration | ~117s |
+| Source files | 100 |
+| Test files | 159 |
 | Statements | 11930+ |
 | Coverage | 99%+ |
 
