@@ -107,7 +107,7 @@ class WebhookChannel(BaseChannel):
                 self.send_header("X-Frame-Options", "DENY")
                 self.send_header("Cache-Control", "no-store")
 
-            def do_GET(self):
+            def do_GET(self) -> None:
                 self.send_response(405)
                 self._send_security_headers()
                 self.end_headers()
@@ -116,7 +116,7 @@ class WebhookChannel(BaseChannel):
             do_DELETE = do_GET
             do_PATCH = do_GET
 
-            def log_message(self, format, *args):
+            def log_message(self, format: str, *args: object) -> None:
                 logger.debug("Webhook: " + format, *args)
 
             def _get_client_ip(self) -> str:
@@ -127,7 +127,7 @@ class WebhookChannel(BaseChannel):
                     return forwarded.split(",")[0].strip()
                 return self.client_address[0]
 
-            def do_POST(self):
+            def do_POST(self) -> None:
                 # Rate limiting
                 client_ip = self._get_client_ip()
                 if not channel_ref._check_rate_limit(client_ip):

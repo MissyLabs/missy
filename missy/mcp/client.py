@@ -23,7 +23,7 @@ class McpClient:
         url: HTTP endpoint (for HTTP transport; not yet implemented).
     """
 
-    def __init__(self, name: str, command: str | None = None, url: str | None = None):
+    def __init__(self, name: str, command: str | None = None, url: str | None = None) -> None:
         self.name = name
         self._command = command
         self._url = url

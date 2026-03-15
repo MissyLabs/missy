@@ -21,6 +21,7 @@ import json
 import logging
 import sys
 from pathlib import Path
+from typing import Any
 
 import click
 from rich.console import Console
@@ -111,7 +112,7 @@ vault:
 # ---------------------------------------------------------------------------
 
 
-def _load_subsystems(config_path: str):
+def _load_subsystems(config_path: str) -> Any:
     """Load config, init policy engine, audit logger, and provider registry.
 
     Returns:
@@ -1222,7 +1223,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
 
     stop_event = False
 
-    def _stop(signum, frame):
+    def _stop(signum: int, frame: Any) -> None:
         nonlocal stop_event
         stop_event = True
         console.print("\n[dim]Shutting down gateway...[/]")
@@ -1420,7 +1421,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                                 session_id,
                             )
 
-            async def _run_discord():
+            async def _run_discord() -> None:
                 channels = []
                 tasks = []
                 for account in cfg.discord.accounts:

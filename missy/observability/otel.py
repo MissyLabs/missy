@@ -85,7 +85,7 @@ class OtelExporter:
         try:
             from missy.core.events import event_bus
 
-            def _handler(event):
+            def _handler(event: object) -> None:
                 self.export_event(event.__dict__ if hasattr(event, "__dict__") else {})
 
             event_bus.subscribe(_handler)

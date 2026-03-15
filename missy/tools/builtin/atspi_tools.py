@@ -230,7 +230,7 @@ def _find_element(
     lower_name = name.lower() if name else None
     lower_role = role.lower() if role else None
 
-    def _search(node, depth: int):
+    def _search(node: Any, depth: int) -> Any:
         if node is None or depth > max_depth:
             return None
         try:

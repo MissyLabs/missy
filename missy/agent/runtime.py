@@ -33,6 +33,7 @@ import contextlib
 import logging
 from collections.abc import Iterator
 from dataclasses import dataclass
+from typing import Any
 
 from missy.core.events import AuditEvent, event_bus
 from missy.core.exceptions import ProviderError
@@ -1067,7 +1068,7 @@ class AgentRuntime:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _make_circuit_breaker(provider_name: str):
+    def _make_circuit_breaker(provider_name: str) -> Any:
         """Create a :class:`~missy.agent.circuit_breaker.CircuitBreaker`.
 
         Args:
@@ -1085,7 +1086,7 @@ class AgentRuntime:
             return _NoOpCircuitBreaker()
 
     @staticmethod
-    def _make_context_manager():
+    def _make_context_manager() -> Any:
         """Create a :class:`~missy.agent.context.ContextManager`.
 
         Returns:
@@ -1100,7 +1101,7 @@ class AgentRuntime:
             return None
 
     @staticmethod
-    def _make_memory_store():
+    def _make_memory_store() -> Any:
         """Create a :class:`~missy.memory.store.MemoryStore`.
 
         Returns:
@@ -1114,7 +1115,7 @@ class AgentRuntime:
         except Exception:
             return None
 
-    def _make_cost_tracker(self):
+    def _make_cost_tracker(self) -> Any:
         """Create a :class:`~missy.agent.cost_tracker.CostTracker`.
 
         Uses ``max_spend_usd`` from the agent config when set.
@@ -1131,7 +1132,7 @@ class AgentRuntime:
             return None
 
     @staticmethod
-    def _make_rate_limiter():
+    def _make_rate_limiter() -> Any:
         """Create a :class:`~missy.providers.rate_limiter.RateLimiter`.
 
         Returns:
@@ -1146,7 +1147,7 @@ class AgentRuntime:
             return None
 
     @staticmethod
-    def _make_sanitizer():
+    def _make_sanitizer() -> Any:
         """Create an :class:`~missy.security.sanitizer.InputSanitizer`.
 
         Returns:
@@ -1275,7 +1276,7 @@ class AgentRuntime:
 
         return self._session_mgr.create_session(metadata=metadata)
 
-    def _get_provider(self):
+    def _get_provider(self) -> Any:
         """Resolve the configured provider with automatic fallback.
 
         Returns:
@@ -1364,5 +1365,5 @@ class AgentRuntime:
 class _NoOpCircuitBreaker:
     """Passthrough stub used when the circuit_breaker module is unavailable."""
 
-    def call(self, func, *args, **kwargs):
+    def call(self, func: Any, *args: Any, **kwargs: Any) -> Any:
         return func(*args, **kwargs)
