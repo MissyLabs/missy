@@ -1,6 +1,6 @@
 # AUDIT_SECURITY
 
-- Timestamp: 2026-03-15 (updated session 15)
+- Timestamp: 2026-03-15 (updated session 16)
 - Auditor: Automated build analysis + security audit agent
 
 ## Security Architecture Summary
@@ -153,7 +153,23 @@ Audit events stored as structured JSONL at ~/.missy/audit.jsonl.
 | Response censoring | 10+ |
 | Gateway SSRF | 30+ |
 | Webhook hardening | 30+ |
-| **Total security-related** | **460+** |
+| **Total security-related** | **560+** |
+
+## Session 16 Security Fixes
+
+| Finding | Severity | Fix |
+|---|---|---|
+| Shell heredoc bypass | HIGH | Added `<<` to _SUBSHELL_MARKERS to block heredoc injection |
+| Shell brace group bypass | HIGH | Brace group scanning now checks entire command, not just start |
+| FTS5 query injection | MEDIUM | Query input wrapped in double-quotes; OperationalError caught |
+| Format string injection | MEDIUM | Proactive triggers use string.Template instead of str.format() |
+| Scheduler jobs file perms | MEDIUM | Atomic write with tempfile+rename, restrictive 0o600 permissions |
+| MCP response confusion | MEDIUM | Response ID validated against request ID |
+| Self-create tool content | HIGH | Script content scanned for dangerous patterns before writing |
+| Code evolve silent exit | LOW | SystemExit now logged as warning instead of silently suppressed |
+| Webhook log secret leak | LOW | censor_response() applied to log output |
+| Device registry perms | LOW | File ownership and group/world-writable checks on load |
+| Audio log file perms | LOW | Directory created with 0o700, files with 0o600 |
 
 ## Session 15 Security Fixes
 

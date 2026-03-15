@@ -58,7 +58,7 @@ missy/                          # 123 Python source files
 
 ## Test Results
 
-- 5334 tests passing across 151 test files
+- 5432 tests passing across 157 test files
 - 99%+ code coverage, zero test warnings
 - Unit, integration, policy, Discord, security, memory, agent, tools, skills, CLI, voice, scheduler tests
 - 54+ property-based tests (hypothesis) for policy engines, security, and rate limiter
@@ -66,6 +66,24 @@ missy/                          # 123 Python source files
 - 48 rate limiter stress tests (concurrent, burst, thread safety)
 - 77 end-to-end integration tests
 - 360+ security edge-case tests (injection, secrets, vault, SSRF, path traversal, tool output injection, webhook hardening, scheme restriction, kwargs allowlist, file policy enforcement, shell brace groups, header filtering)
+
+## Session 16 Additions (2026-03-15)
+
+- **Fresh security audit**: Comprehensive code review identifying 13 findings (2 High, 6 Medium, 5 Low)
+- **Shell heredoc bypass fix**: Added `<<` to _SUBSHELL_MARKERS to block heredoc injection
+- **Shell brace group fix**: Brace group scanning now checks entire command, not just start position
+- **FTS5 query injection fix**: Query input wrapped in double-quotes and escaped; OperationalError caught gracefully
+- **Format string injection fix**: Proactive trigger templates use string.Template instead of str.format()
+- **Scheduler jobs file permissions**: Atomic write with tempfile+rename, restrictive 0o600 permissions
+- **MCP response ID validation**: Response ID checked against request ID, mismatch logged as warning
+- **Self-create tool content validation**: Script content scanned for 15+ dangerous patterns before writing (curl, wget, eval, exec, os.system, subprocess, socket, chmod +s, /dev/tcp, etc.)
+- **Code evolution logging**: SystemExit now logged as warning instead of silently suppressed
+- **Webhook log censoring**: censor_response() applied to log output to prevent secret leakage
+- **Device registry permission checks**: File ownership and group/world-writable checks on load
+- **Audio log file permissions**: Directory created with 0o700, files with 0o600
+- **Total new tests**: 98 (from 5334 to 5432) across 3 new test files
+- **All 11 audit findings addressed in code**
+- **Zero ruff lint errors**
 
 ## Session 15 Additions (2026-03-15)
 

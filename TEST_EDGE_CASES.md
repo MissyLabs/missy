@@ -1,7 +1,7 @@
 # TEST_EDGE_CASES
 
-- Updated: 2026-03-15 (session 15)
-- Total edge-case tests: 1200+
+- Updated: 2026-03-15 (session 16)
+- Total edge-case tests: 1300+
 
 ## Security Policy Edge Cases (tested)
 
@@ -27,6 +27,18 @@
 - Gateway kwargs sanitization (follow_redirects stripped)
 - Redirect following explicitly disabled on httpx clients
 - MCP config file permission checks (owner, group/world-writable)
+- Shell heredoc marker (`<<EOF`) rejection
+- Shell brace group after semicolon (`echo hi; { rm -rf /; }`) rejection
+- FTS5 query injection via AND/OR/NOT operators (wrapped in quotes)
+- FTS5 OperationalError graceful fallback (empty result)
+- Format string injection prevention in proactive trigger templates
+- Scheduler jobs file atomic write with 0o600 permissions
+- MCP response ID mismatch detection and warning
+- Device registry file ownership and permission validation on load
+- Audio log file restrictive permissions (dir 0o700, file 0o600)
+- Self-create tool script content validation (dangerous pattern rejection)
+- Code evolution SystemExit logging (not silently suppressed)
+- Webhook log output secret censoring
 
 ## Provider Edge Cases (tested)
 
