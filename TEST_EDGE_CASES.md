@@ -1,7 +1,7 @@
 # TEST_EDGE_CASES
 
-- Updated: 2026-03-15
-- Total edge-case tests: 890+
+- Updated: 2026-03-15 (session 12)
+- Total edge-case tests: 950+
 
 ## Security Policy Edge Cases (tested)
 
@@ -11,6 +11,9 @@
 - Forbidden filesystem path rejection (write outside sandbox)
 - Per-category network policy (provider hosts vs tool hosts vs discord hosts)
 - Empty allowed_commands means allow-all (shell policy regression test)
+- Process substitution blocking (<(...), >(...), <<(...))
+- Command substitution blocking ($(…), backticks)
+- Compound command chain splitting (&&, ||, ;, |)
 
 ## Provider Edge Cases (tested)
 
@@ -41,6 +44,11 @@
 - Rate limit acquisition failure handling
 - Cost recording with subsystem failures
 - Event emission with bus failures
+- Tool output injection scanning (warning label prepend)
+- Response censoring applied in runtime (censor_response on final output)
+- MCP server name validation (reject double underscores)
+- MCP RPC timeout and response size limits
+- MCP subprocess environment sanitization
 
 ## Scheduler Edge Cases (tested)
 
@@ -87,6 +95,10 @@
 - Voice server handler (registration, audio processing, TTS responses)
 - Webhook channel authentication
 - Webhook handler log_message debug output
+- Webhook per-IP rate limiting (429 on excess, window expiry, per-IP isolation)
+- Webhook payload size limits (413 on oversized, boundary testing)
+- Webhook queue overflow (503 on full queue, drain and re-accept)
+- Webhook HMAC signature validation (valid, missing, wrong, no-secret bypass)
 
 ## Memory Edge Cases (tested)
 
@@ -108,6 +120,10 @@
 - $ENV_VAR reference resolution
 - Missing vault key or env var error handling
 - Cryptography package unavailable
+- Vault atomic write with mkstemp+rename (concurrent access safety)
+- Vault TOCTOU-safe key creation with O_CREAT|O_EXCL
+- Vault symlink rejection on key file read
+- Config hotreload rejects symlinks and world-writable files
 
 ## Browser Tool Edge Cases (tested)
 
