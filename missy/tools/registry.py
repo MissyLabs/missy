@@ -245,7 +245,7 @@ class ToolRegistry:
 
                 safe_msg = censor_response(detail_msg)
             except Exception:
-                pass
+                logger.debug("Censor import failed; using raw detail message")
             event = AuditEvent.now(
                 session_id=session_id,
                 task_id=task_id,
