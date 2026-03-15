@@ -58,14 +58,30 @@ missy/                          # 123 Python source files
 
 ## Test Results
 
-- 5232 tests passing across 147 test files
+- 5317 tests passing across 150 test files
 - 99%+ code coverage, zero test warnings
 - Unit, integration, policy, Discord, security, memory, agent, tools, skills, CLI, voice, scheduler tests
 - 54+ property-based tests (hypothesis) for policy engines, security, and rate limiter
 - 116 security fuzz tests (unicode evasion, encoding bypass, vault corruption)
 - 48 rate limiter stress tests (concurrent, burst, thread safety)
 - 77 end-to-end integration tests
-- 300+ security edge-case tests (injection, secrets, vault, SSRF, path traversal, tool output injection, webhook hardening, scheme restriction, kwargs sanitization)
+- 360+ security edge-case tests (injection, secrets, vault, SSRF, path traversal, tool output injection, webhook hardening, scheme restriction, kwargs allowlist, file policy enforcement, shell brace groups, header filtering)
+
+## Session 15 Additions (2026-03-15)
+
+- **Security audit**: Full codebase security audit identifying 17 findings (3 Critical, 5 High, 6 Medium, 3 Low)
+- **H2 fix: File tool policy enforcement**: ToolRegistry._check_permissions now validates the actual `path` kwarg against filesystem policy engine (check_read/check_write), not just static allowed_paths
+- **H3 fix: Gateway kwargs allowlist**: _sanitize_kwargs replaced blocklist with explicit allowlist of safe kwargs (headers, params, data, json, content, cookies, timeout, files, extensions); strips verify, base_url, transport, auth, event_hooks
+- **H1 fix: Shell heredoc/brace rejection**: Added `<<<` (here-strings) and `{ }` / `{;` (brace groups) to shell policy rejection list
+- **H4 fix: Webhook header filtering**: Message metadata now only stores safe headers (Content-Type, User-Agent, X-Request-Id, X-Missy-Signature); Authorization, Cookie, X-Forwarded-* stripped
+- **M5 fix: Webhook Content-Type validation**: Requires Content-Type: application/json; rejects with 415 otherwise (CSRF prevention)
+- **M6 fix: Webhook Content-Length validation**: Validates as non-negative integer; rejects with 400 for non-integer/negative values
+- **L3 fix: Audit event redaction**: Tool audit event detail messages run through censor_response() to prevent secret leakage
+- **Runtime coverage**: Tests for tool output injection scanning, httpx ImportError fallback, get_tool_registry error paths
+- **Voice command coverage**: Tests for unrecognized commands, voice=None, !say errors
+- **Network policy coverage**: Tests for unparseable IP addresses from getaddrinfo
+- **Total new tests**: 41 (from 5276 to 5317) across 3 new test files
+- **Zero ruff lint errors**
 
 ## Session 14 Additions (2026-03-15)
 

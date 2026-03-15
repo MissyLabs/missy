@@ -1,36 +1,45 @@
 # AUDIT_SECURITY
 
-- Timestamp: 2026-03-15 (updated session 13)
-- Auditor: Automated build analysis
+- Timestamp: 2026-03-15 (updated session 15)
+- Auditor: Automated build analysis + security audit agent
 
 ## Security Architecture Summary
 
-Missy implements defense-in-depth with 6 security layers:
+Missy implements defense-in-depth with 12 security layers:
 
-1. **Input Sanitization** — 13+ prompt injection pattern detectors
-2. **Secrets Detection** — 20 credential patterns (API keys, JWTs, AWS, GitLab, npm, PyPI, SendGrid, DB connection strings)
-3. **Output Censoring** — `censor_response()` applied in agent runtime before output delivery
+1. **Input Sanitization** — 26+ prompt injection pattern detectors (including Llama 3, multilingual, data URI, unclosed HTML)
+2. **Secrets Detection** — 23 credential patterns (API keys, JWTs, AWS, GitLab, npm, PyPI, SendGrid, DB connection strings)
+3. **Output Censoring** — `censor_response()` applied in agent runtime and audit events
 4. **Tool Output Injection Scanning** — Tool results scanned for prompt injection, warning labels prepended
-5. **Policy Enforcement** — 3-layer default-deny (network, filesystem, shell) with process substitution blocking + bare `&` splitting
-6. **Encrypted Vault** — ChaCha20-Poly1305 key-value store with atomic writes and symlink rejection
+5. **Policy Enforcement** — 3-layer default-deny (network, filesystem, shell) with:
+   - Process substitution blocking (`<()`, `>()`, `<<()`)
+   - Bare `&` splitting for compound commands
+   - Here-string rejection (`<<<`)
+   - Brace group rejection (`{ cmd; }`)
+   - File tool path enforcement via kwargs
+6. **Encrypted Vault** — ChaCha20-Poly1305 key-value store with atomic writes, symlink rejection, hard-link check
 7. **Docker Sandbox** — Optional container isolation for shell commands
 8. **MCP Server Isolation** — Sanitized environment, name validation, response timeouts/size limits, config file permission checks
-9. **Gateway SSRF Prevention** — URL scheme restriction (http/https only), redirect following disabled, kwargs sanitization
+9. **Gateway SSRF Prevention** — URL scheme restriction (http/https only), redirect following disabled, kwargs allowlist
 10. **Shell Launcher Warnings** — Policy engine warns when command-launching programs (env, bash, sudo) are whitelisted
+11. **Webhook Hardening** — Content-Type validation, Content-Length safety, HMAC signatures, rate limiting, metadata header filtering
+12. **DNS Rebinding Protection** — All resolved IPs checked before access; mixed public/private records denied
 
 ## Threat Model Coverage
 
 | Threat | Defense | Test Coverage |
 |---|---|---|
-| Prompt injection (user input) | InputSanitizer (13 patterns) | 30+ tests |
-| Prompt injection (tool output) | Tool output scanning + warning labels | 19+ tests |
+| Prompt injection (user input) | InputSanitizer (26+ patterns) | 40+ tests |
+| Prompt injection (tool output) | Tool output scanning + warning labels | 22+ tests |
 | Plugin abuse | Plugin allowlist + disabled by default | 30+ tests |
-| Data exfiltration | Default-deny network + output censoring | 120+ policy tests |
-| SSRF | PolicyHTTPClient: scheme restriction, no redirects, kwargs sanitization | 80+ gateway tests |
-| Scheduler abuse | Active hours, max_jobs, policy enforcement | 100+ scheduler tests |
-| Secrets leakage | SecretsDetector (20 patterns) + SecretCensor on all output | 85+ security tests |
-| Tool abuse | Tool registry policy checks + approval gate | 280+ tool tests |
-| Channel impersonation | Discord access control (DM/guild/role) | 440+ channel tests |
+| Data exfiltration | Default-deny network + output censoring + audit redaction | 120+ policy tests |
+| SSRF | PolicyHTTPClient: scheme restriction, no redirects, kwargs allowlist, DNS rebinding check | 90+ gateway tests |
+| Scheduler abuse | Active hours, max_jobs, policy enforcement, input validation | 100+ scheduler tests |
+| Secrets leakage | SecretsDetector (23 patterns) + SecretCensor on output + audit redaction | 85+ security tests |
+| Tool abuse | Tool registry policy checks + file path enforcement + approval gate | 290+ tool tests |
+| Channel impersonation | Discord access control (DM/guild/role), webhook HMAC, Content-Type validation | 460+ channel tests |
+| Shell bypass | Here-strings, brace groups, process substitution, heredocs all blocked | 40+ shell tests |
+| Webhook CSRF | Content-Type: application/json required, header filtering | 30+ webhook tests |
 
 ## Policy Engine Tests
 
@@ -42,6 +51,8 @@ Missy implements defense-in-depth with 6 security layers:
 - Exact hostname matching
 - Per-category host lists (provider, tool, discord)
 - PolicyHTTPClient enforces policy before every HTTP dispatch
+- DNS rebinding protection: mixed public/private record sets denied
+- Unparseable IP addresses from getaddrinfo safely skipped
 
 ### Filesystem Policy
 
@@ -49,16 +60,36 @@ Missy implements defense-in-depth with 6 security layers:
 - Read blocked outside allowed_read_paths
 - Path traversal attacks (../) properly normalized and blocked
 - Symlink resolution before policy check
+- File tool kwargs path enforcement (H2 fix)
 
 ### Shell Policy
 
 - Disabled by default (shell.enabled: false)
 - Only whitelisted commands allowed when enabled
 - Empty allowed_commands blocks all commands
-- Compound command detection (&&, ||, ;, |)
+- Compound command detection (&&, ||, ;, |, &)
 - Process substitution blocked (<(...), >(...), <<(...))
 - Command substitution blocked ($(...), backticks)
+- Here-string injection blocked (<<<)
+- Brace group execution blocked ({ cmd; })
 - Docker sandbox optional isolation
+
+## Gateway Security
+
+- **Kwargs Allowlist**: Only safe parameters pass through (headers, params, data, json, content, cookies, timeout, files, extensions). Dangerous kwargs like `verify`, `base_url`, `transport`, `auth`, `event_hooks` are stripped.
+- **Scheme Restriction**: Only http:// and https:// allowed
+- **Redirect Prevention**: `follow_redirects=False` enforced on all clients
+- **Connection Pool Limits**: max_connections=20, max_keepalive_connections=10, keepalive_expiry=30s
+
+## Webhook Security
+
+- **Content-Type Validation**: Only `application/json` accepted (prevents CSRF via form submissions)
+- **Content-Length Safety**: Validated as non-negative integer; non-integer/negative values rejected with 400
+- **HMAC Signatures**: Optional SHA-256 HMAC verification via X-Missy-Signature
+- **Rate Limiting**: Per-IP rate limiting with configurable window
+- **Payload Size**: Enforced maximum payload size
+- **Queue Overflow**: Returns 503 when message queue is full
+- **Header Filtering**: Only safe headers stored in metadata (Content-Type, User-Agent, X-Request-Id, X-Missy-Signature); Authorization, Cookie, X-Forwarded-* stripped
 
 ## Secrets Detection Patterns
 
@@ -68,11 +99,16 @@ Missy implements defense-in-depth with 6 security layers:
 | AWS credentials | AKIA... access key IDs |
 | JWT tokens | eyJ... base64-encoded tokens |
 | GitHub tokens | ghp_*, gho_*, ghs_* patterns |
+| GitLab tokens | glpat-* patterns |
+| npm tokens | npm_* patterns |
+| PyPI tokens | pypi-* patterns |
+| SendGrid keys | SG.* patterns |
 | Private keys | BEGIN RSA/DSA/EC PRIVATE KEY |
 | Connection strings | postgresql://, mysql://, mongodb:// |
 | Bearer tokens | Bearer ... in authorization headers |
 | Slack tokens | xoxb-*, xoxp-* patterns |
 | Discord tokens | Bot token patterns |
+| OpenAI keys | sk-proj-* extended format |
 
 ## Vault Security
 
@@ -82,6 +118,8 @@ Missy implements defense-in-depth with 6 security layers:
 - vault:// references resolved at config load time
 - Invalid key length rejected
 - Corrupted data detected via authentication tag
+- Atomic file creation with O_CREAT|O_EXCL (TOCTOU-safe)
+- Symlink rejection on key and data files
 
 ## Audit Logging
 
@@ -92,6 +130,7 @@ All privileged actions are logged with:
 - Policy rule applied
 - Result (allow/deny)
 - Category (network, shell, filesystem, plugin, scheduler, provider)
+- Detail messages redacted via censor_response() to prevent secret leakage
 
 Audit events stored as structured JSONL at ~/.missy/audit.jsonl.
 
@@ -99,17 +138,31 @@ Audit events stored as structured JSONL at ~/.missy/audit.jsonl.
 
 | Category | Tests |
 |---|---|
-| Input sanitizer | 30+ |
-| Secrets detector | 20+ |
+| Input sanitizer | 40+ |
+| Secrets detector | 25+ |
 | Secret censor | 10+ |
 | Vault | 20+ |
 | Docker sandbox | 15+ |
-| Network policy | 50+ |
-| Filesystem policy | 30+ |
-| Shell policy | 30+ |
+| Network policy | 55+ |
+| Filesystem policy | 35+ |
+| Shell policy | 40+ |
 | Audit logger | 40+ |
 | Discord access control | 35+ |
-| MCP server safety | 19+ |
-| Tool output injection | 19+ |
+| MCP server safety | 54+ |
+| Tool output injection | 22+ |
 | Response censoring | 10+ |
-| **Total security-related** | **330+** |
+| Gateway SSRF | 30+ |
+| Webhook hardening | 30+ |
+| **Total security-related** | **460+** |
+
+## Session 15 Security Fixes
+
+| Finding | Severity | Fix |
+|---|---|---|
+| H2: File tools bypass filesystem policy | HIGH | Registry now checks actual path from kwargs against check_read/check_write |
+| H3: Gateway kwargs blocklist | HIGH | Replaced with explicit allowlist of safe kwargs |
+| H1: Shell heredoc/brace bypass | HIGH | Added <<<, { }, {; to rejection lists |
+| H4: Webhook header leakage | HIGH | Metadata filtered to safe allowlist (Content-Type, User-Agent, X-Request-Id) |
+| M5: Webhook Content-Type | MEDIUM | Requires application/json to prevent CSRF |
+| M6: Webhook Content-Length | MEDIUM | Validated as non-negative integer |
+| L3: Audit event secret leakage | LOW | Detail messages run through censor_response() |

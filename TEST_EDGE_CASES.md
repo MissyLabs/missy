@@ -1,7 +1,7 @@
 # TEST_EDGE_CASES
 
-- Updated: 2026-03-15 (session 14)
-- Total edge-case tests: 1160+
+- Updated: 2026-03-15 (session 15)
+- Total edge-case tests: 1200+
 
 ## Security Policy Edge Cases (tested)
 
@@ -340,6 +340,66 @@
 - Minute range validation (0-59, rejects 70)
 - Zero interval rejection
 - Timezone attachment for cron/date triggers (not intervals)
+
+## Session 15 Hardening Edge Cases (tested)
+
+### File Tool Policy Enforcement (H2)
+- File read tool path kwargs checked against filesystem policy check_read
+- File write tool path kwargs checked against filesystem policy check_write
+- Missing path kwarg skips actual path check gracefully
+
+### Gateway Kwargs Allowlist (H3)
+- verify=False stripped (prevents TLS bypass)
+- base_url stripped (prevents traffic redirect)
+- transport stripped (prevents policy bypass)
+- auth stripped (prevents credential injection)
+- event_hooks stripped (prevents response interception)
+- follow_redirects always stripped
+- Safe keys pass through (headers, params, data, json, content, cookies, timeout, files)
+- Mixed allowed and blocked: only allowed survive
+
+### Shell Heredoc and Brace Groups (H1)
+- Here-string (<<<) injection blocked
+- Brace group ({ cmd; }) execution blocked
+- Brace group with semicolon ({;cmd;}) blocked
+- Heredoc redirect (<<() already blocked in subshell markers
+- Normal whitelisted commands still pass
+
+### Webhook Content-Type Validation (M5)
+- Missing Content-Type returns 415
+- Wrong Content-Type (text/plain) returns 415
+- Correct Content-Type (application/json) accepted
+- Content-Type with charset parameter accepted
+
+### Webhook Content-Length Validation (M6)
+- Negative Content-Length returns 400
+- Non-integer Content-Length returns 400
+- Empty Content-Length returns 400
+
+### Webhook Header Filtering (H4)
+- Authorization header stripped from metadata
+- Cookie header stripped from metadata
+- X-Forwarded-For stripped from metadata
+- Safe headers preserved (Content-Type, User-Agent, X-Request-Id)
+
+### Runtime Coverage Gaps
+- Tool output injection scanning: warning prefix prepended when sanitizer detects patterns
+- Tool output: no warning when sanitizer finds nothing
+- Tool output: scanning skipped when sanitizer is None
+- _init_transient_errors without httpx: only builtin exceptions included (3 types)
+- _init_transient_errors with httpx: httpx exceptions added (5+ types)
+- _execute_tool: KeyError from get_tool_registry returns 'Tool not found'
+- _execute_tool: RuntimeError from get_tool_registry returns 'not initialised'
+
+### Voice Command Edge Cases
+- Unrecognized !command returns handled=False
+- Non-bang messages return handled=False
+- voice=None returns 'not enabled' message
+- !say with DiscordVoiceError returns error message
+
+### Network Policy Edge Cases
+- getaddrinfo returns non-IP string: ValueError caught, continue
+- Mixed valid and invalid IPs from getaddrinfo: invalid skipped
 
 ## OAuth Edge Cases (tested)
 
