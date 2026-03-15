@@ -64,17 +64,23 @@ class PolicyHTTPClient:
             synchronous and asynchronous requests.
     """
 
+    #: Default maximum response body size (50 MB).  Responses larger than
+    #: this are rejected to prevent memory exhaustion from malicious servers.
+    DEFAULT_MAX_RESPONSE_BYTES: int = 50 * 1024 * 1024
+
     def __init__(
         self,
         session_id: str = "",
         task_id: str = "",
         timeout: int = 30,
         category: str = "",
+        max_response_bytes: int = 0,
     ) -> None:
         self.session_id = session_id
         self.task_id = task_id
         self.timeout = timeout
         self.category = category
+        self.max_response_bytes = max_response_bytes or self.DEFAULT_MAX_RESPONSE_BYTES
         self._sync_client: httpx.Client | None = None
         self._async_client: httpx.AsyncClient | None = None
 
@@ -99,6 +105,7 @@ class PolicyHTTPClient:
         """
         self._check_url(url)
         response = self._get_sync_client().get(url, **self._sanitize_kwargs(kwargs))
+        self._check_response_size(response, url)
         self._emit_request_event("GET", url, response.status_code)
         return response
 
@@ -119,6 +126,7 @@ class PolicyHTTPClient:
         """
         self._check_url(url)
         response = self._get_sync_client().post(url, **self._sanitize_kwargs(kwargs))
+        self._check_response_size(response, url)
         self._emit_request_event("POST", url, response.status_code)
         return response
 
@@ -126,6 +134,7 @@ class PolicyHTTPClient:
         """Perform a synchronous HTTP PUT after a policy check."""
         self._check_url(url)
         response = self._get_sync_client().put(url, **self._sanitize_kwargs(kwargs))
+        self._check_response_size(response, url)
         self._emit_request_event("PUT", url, response.status_code)
         return response
 
@@ -133,6 +142,7 @@ class PolicyHTTPClient:
         """Perform a synchronous HTTP DELETE after a policy check."""
         self._check_url(url)
         response = self._get_sync_client().delete(url, **self._sanitize_kwargs(kwargs))
+        self._check_response_size(response, url)
         self._emit_request_event("DELETE", url, response.status_code)
         return response
 
@@ -140,6 +150,7 @@ class PolicyHTTPClient:
         """Perform a synchronous HTTP PATCH after a policy check."""
         self._check_url(url)
         response = self._get_sync_client().patch(url, **self._sanitize_kwargs(kwargs))
+        self._check_response_size(response, url)
         self._emit_request_event("PATCH", url, response.status_code)
         return response
 
@@ -147,6 +158,7 @@ class PolicyHTTPClient:
         """Perform a synchronous HTTP HEAD after a policy check."""
         self._check_url(url)
         response = self._get_sync_client().head(url, **self._sanitize_kwargs(kwargs))
+        self._check_response_size(response, url)
         self._emit_request_event("HEAD", url, response.status_code)
         return response
 
@@ -171,6 +183,7 @@ class PolicyHTTPClient:
         """
         self._check_url(url)
         response = await self._get_async_client().get(url, **self._sanitize_kwargs(kwargs))
+        self._check_response_size(response, url)
         self._emit_request_event("GET", url, response.status_code)
         return response
 
@@ -191,6 +204,7 @@ class PolicyHTTPClient:
         """
         self._check_url(url)
         response = await self._get_async_client().post(url, **self._sanitize_kwargs(kwargs))
+        self._check_response_size(response, url)
         self._emit_request_event("POST", url, response.status_code)
         return response
 
@@ -198,6 +212,7 @@ class PolicyHTTPClient:
         """Perform an asynchronous HTTP DELETE after a policy check."""
         self._check_url(url)
         response = await self._get_async_client().delete(url, **self._sanitize_kwargs(kwargs))
+        self._check_response_size(response, url)
         self._emit_request_event("DELETE", url, response.status_code)
         return response
 
@@ -205,6 +220,7 @@ class PolicyHTTPClient:
         """Perform an asynchronous HTTP PATCH after a policy check."""
         self._check_url(url)
         response = await self._get_async_client().patch(url, **self._sanitize_kwargs(kwargs))
+        self._check_response_size(response, url)
         self._emit_request_event("PATCH", url, response.status_code)
         return response
 
@@ -212,6 +228,7 @@ class PolicyHTTPClient:
         """Perform an asynchronous HTTP PUT after a policy check."""
         self._check_url(url)
         response = await self._get_async_client().put(url, **self._sanitize_kwargs(kwargs))
+        self._check_response_size(response, url)
         self._emit_request_event("PUT", url, response.status_code)
         return response
 
@@ -219,6 +236,7 @@ class PolicyHTTPClient:
         """Perform an asynchronous HTTP HEAD after a policy check."""
         self._check_url(url)
         response = await self._get_async_client().head(url, **self._sanitize_kwargs(kwargs))
+        self._check_response_size(response, url)
         self._emit_request_event("HEAD", url, response.status_code)
         return response
 
@@ -339,6 +357,29 @@ class PolicyHTTPClient:
                 limits=self._POOL_LIMITS,
             )
         return self._async_client
+
+    def _check_response_size(self, response: httpx.Response, url: str) -> None:
+        """Reject responses exceeding the configured size limit.
+
+        Checks the ``Content-Length`` header first (avoiding reading the body).
+
+        Raises:
+            ValueError: When the response body exceeds ``max_response_bytes``.
+        """
+        headers = getattr(response, "headers", None)
+        if headers is None:
+            return
+        content_length = headers.get("content-length")
+        if content_length is not None:
+            try:
+                size = int(content_length)
+            except (ValueError, TypeError):
+                size = 0
+            if size > self.max_response_bytes:
+                raise ValueError(
+                    f"Response from {url} too large: "
+                    f"{size} bytes > {self.max_response_bytes} limit"
+                )
 
     def _emit_request_event(self, method: str, url: str, status_code: int) -> None:
         """Publish a successful HTTP request audit event.
