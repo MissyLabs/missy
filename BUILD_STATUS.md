@@ -58,14 +58,31 @@ missy/                          # 123 Python source files
 
 ## Test Results
 
-- 4489 tests passing across 125 test files
-- 99.11% code coverage (11505 statements, 102 missed)
+- 4891 tests passing across 137 test files
+- 99.06% code coverage (11550 statements, 108 missed)
 - Unit, integration, policy, Discord, security, memory, agent, tools, skills, CLI, voice, scheduler tests
 - 54+ property-based tests (hypothesis) for policy engines, security, and rate limiter
 - 116 security fuzz tests (unicode evasion, encoding bypass, vault corruption)
 - 48 rate limiter stress tests (concurrent, burst, thread safety)
 - 77 end-to-end integration tests
-- 92 security edge-case tests (injection, secrets, vault)
+- 180+ security edge-case tests (injection, secrets, vault, SSRF, path traversal)
+
+## Session 11 Additions (2026-03-15)
+
+- **Input validation hardening**: Clamped voice WebSocket `sample_rate` [8000,48000] and `channels` [1,2] with safe defaults for non-numeric values; clamped code evolution `confidence` to [0.0, 1.0]
+- **Bare except fixes**: Replaced 2 remaining `except: pass` blocks with `logger.debug()` in CLI doctor and voice status
+- **Lint fixes**: Fixed raise-from in tool registry fail-closed, removed unused X11 imports in security tests
+- **MCP tests** (54 new): Dedicated test files for MCP client (28 tests: connect, RPC, notify, call_tool, disconnect) and manager (26 tests: connect_all, add/remove/restart, health_check, namespacing, shutdown, persistence)
+- **Prompt patches tests** (36 new): Full coverage of propose/approve/reject, auto-approval logic, expiration, record_outcome, build_prompt, persistence round-trips
+- **Circuit breaker tests** (67 new): State machine transitions, exponential backoff, timeout caps, thread safety (concurrent failures, deadlock detection), edge cases
+- **Tool security edge-case tests** (88 new): Path traversal, null byte injection, unicode confusion, long paths, special chars, SSRF prevention, type confusion, mode injection, encoding injection, special file protection
+- **Context manager tests** (23 new): Token approximation, budget defaults, history pruning, memory/learnings injection, truncation
+- **Sub-agent tests** (19 new): parse_subtasks (numbered, connectives, fallback), SubTask dataclass, runner (context, errors, caps)
+- **Approval gate tests** (18 new): PendingApproval lifecycle, threading, handle_response, timeout cleanup, send_fn failure
+- **Learnings tests** (25 new): TaskLearning dataclass, extract_task_type priority, extract_outcome keywords
+- **Done criteria tests** (20 new): DoneCriteria state tracking, is_compound_task patterns, prompt generators
+- **Total new tests**: 402 (from 4489 to 4891)
+- **Zero ruff lint errors**
 
 ## Session 10 Additions (2026-03-14)
 

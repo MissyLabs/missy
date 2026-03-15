@@ -1,7 +1,7 @@
 # TEST_EDGE_CASES
 
-- Updated: 2026-03-14
-- Total edge-case tests: 490+
+- Updated: 2026-03-15
+- Total edge-case tests: 890+
 
 ## Security Policy Edge Cases (tested)
 
@@ -162,6 +162,84 @@
 - File handler class with mocked watchdog (init, on_any_event, wiring)
 - Proactive callback success (AgentRuntime.run invocation)
 - Proactive callback fallback (AgentRuntime creation failure, logger-only stub)
+
+## Tool Security Edge Cases (session 11, tested)
+
+- Path traversal attacks (../../etc/passwd) in file read/write/delete/list
+- Null byte injection in file paths (rejected by Python 3.12+ Path)
+- Unicode homograph filenames (Cyrillic vs Latin)
+- Zero-width space and RTL override in paths
+- CJK/emoji filenames round-trip
+- NFC vs NFD Unicode normalization
+- Extremely long paths (>4096 chars, >255 byte components)
+- Special characters in filenames (spaces, quotes, newlines, shell metacharacters)
+- SSRF prevention (file://, dict://, gopher://, ftp://, ldap://, AWS IMDS, localhost, IPv6 loopback)
+- Empty/missing required parameters for all tools
+- Type confusion (int/None/list where string expected, str where int expected)
+- File write mode injection (raw open-mode strings, shell injection in mode)
+- Encoding injection (fake codec, semicolon in encoding name)
+- Special file protection (/dev/zero, /dev/null, directory-as-file)
+
+## Input Validation Edge Cases (session 11, tested)
+
+- Voice WebSocket sample_rate clamping [8000, 48000]
+- Voice WebSocket channels clamping [1, 2]
+- Non-numeric sample_rate/channels values (safe default fallback)
+- None, negative, and extreme int values for audio params
+- Code evolution confidence clamping [0.0, 1.0]
+- Confidence values above 1.0, below 0.0, string-numeric
+
+## Circuit Breaker Edge Cases (session 11, tested)
+
+- State machine: Closed → Open → HalfOpen → Closed full cycle
+- Exponential backoff doubling and max cap enforcement
+- Success resets backoff to base timeout
+- Alternating success/failure pattern (never opens)
+- Open state rejection doesn't bump failure count
+- Thread safety: concurrent failures, concurrent reads, deadlock detection
+- Lock reentrant safety
+- Multiple independent breaker instances
+- Custom exception subclass tracking
+
+## MCP Edge Cases (session 11, tested)
+
+- JSON-RPC request/response encoding
+- Server process lifecycle (start, health check, restart, shutdown)
+- Tool namespacing (server__tool)
+- Invalid namespaced tool name format
+- Server not connected error
+- Config parse failure (malformed JSON)
+- Connect failure propagation
+- Shutdown with disconnect errors suppressed
+
+## Prompt Patches Edge Cases (session 11, tested)
+
+- Auto-approval: low-risk types (tool hint, domain, style) with confidence >= 0.8
+- No auto-approval for high-risk types (error avoidance, workflow) or low confidence
+- MAX_PATCHES capacity enforcement (returns None)
+- Expiration: >= 5 applications AND < 40% success rate
+- Not expired: < 5 applications (even at 0% success)
+- Persistence round-trip (all statuses survive reload)
+- Malformed store file recovery (returns empty list)
+
+## Sub-Agent Edge Cases (session 11, tested)
+
+- Numbered list parsing (period and parenthesis formats)
+- Sequential connective parsing (then, and then, after that, finally)
+- Dependency chain: connective tasks have depends_on set
+- Single-task fallback for unstructured prompts
+- MAX_SUB_AGENTS cap enforcement
+- Runtime factory called per subtask (isolation)
+- Error in subtask captured in subtask.error
+
+## Approval Gate Edge Cases (session 11, tested)
+
+- Threaded approve/deny via handle_response
+- Approval timeout raises ApprovalTimeout
+- Pending cleanup after timeout
+- Case-insensitive response handling
+- send_fn failure doesn't block approval flow
+- No send_fn (None) works correctly
 
 ## Code Evolution Edge Cases (tested)
 

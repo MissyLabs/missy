@@ -1,6 +1,6 @@
 # TEST_RESULTS
 
-- Timestamp: 2026-03-14
+- Timestamp: 2026-03-15
 - Test framework: pytest 8.4.1
 - Python: 3.12.3
 
@@ -8,37 +8,38 @@
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 4489 |
-| Passed | 4489 |
+| Total tests | 4891 |
+| Passed | 4891 |
 | Failed | 0 |
 | Skipped | 7 |
 | Warnings | 7 |
-| Duration | ~102s |
+| Duration | ~134s |
 | Source files | 123 |
-| Test files | 125 |
-| Statements | 11505 |
-| Missed lines | 102 |
-| Coverage | 99.11% |
+| Test files | 137 |
+| Statements | 11550 |
+| Missed lines | 108 |
+| Coverage | 99.06% |
 
 ## Test Distribution
 
 | Test Area | Tests | Files |
 |-----------|-------|-------|
-| Agent (runtime, circuit breaker, context, done criteria, learnings, evolution, proactive) | ~555 | 20 |
-| Channels (CLI, Discord, Webhook, Voice, voice registry) | ~580 | 24 |
+| Agent (runtime, circuit breaker, context, done criteria, learnings, evolution, sub-agent, approval, prompt patches, proactive) | ~743 | 27 |
+| Channels (CLI, Discord, Webhook, Voice, voice registry, input validation) | ~606 | 25 |
 | CLI commands | ~192 | 6 |
 | Config | ~33 | 2 |
 | Core (session, events, exceptions) | ~30 | 3 |
 | Integration (policy enforcement, end-to-end) | ~107 | 2 |
+| MCP (client, manager) | ~54 | 2 |
 | Memory (SQLite, resilient, sessions, costs) | ~120 | 6 |
 | Observability (audit logger, OTEL) | ~40 | 3 |
 | Plugins (loader) | ~30 | 1 |
 | Policy (network, filesystem, shell) | ~120 | 4 |
 | Providers (anthropic, openai, ollama, codex, registry, rate limiter) | ~400 | 8 |
 | Scheduler (jobs, parser, manager) | ~100 | 7 |
-| Security (sanitizer, secrets, vault, censor, sandbox, fuzz) | ~216 | 6 |
+| Security (sanitizer, secrets, vault, censor, sandbox, fuzz, X11 injection) | ~231 | 7 |
 | Skills (registry, base, builtins) | ~80 | 3 |
-| Tools (registry, base, builtins, shell, incus, atspi, x11, browser, file ops) | ~442 | 13 |
+| Tools (registry, base, builtins, shell, incus, atspi, x11, browser, file ops, security edges) | ~530 | 14 |
 | Unit (Discord channel, config, gateway, infrastructure, coverage gaps) | ~233 | 10 |
 
 ## Session 10 Additions (86 new tests)
