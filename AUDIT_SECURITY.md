@@ -1,14 +1,14 @@
 # AUDIT_SECURITY
 
-- Timestamp: 2026-03-15 (updated session 22)
+- Timestamp: 2026-03-15 (updated session 24)
 - Auditor: Automated build analysis + security audit agent
 
 ## Security Architecture Summary
 
 Missy implements defense-in-depth with 15 security layers:
 
-1. **Input Sanitization** — 82 prompt injection pattern detectors (including Llama 2/3, GPT, Claude, FIM tokens, multilingual [9 languages incl. Korean], tool abuse, prompt leaking, data URI, unclosed HTML, base64, trigger-based, conditional override, memory poisoning, role confusion, few-shot conversation injection, code-block disguise, payload concatenation, prompt extraction via output/repeat/translate/poem/encoding, forced behavior change)
-2. **Secrets Detection** — 40 credential patterns (API keys, JWTs, AWS, GitLab, npm, PyPI, SendGrid, Azure, Twilio, Mailgun, HuggingFace, Databricks, DigitalOcean, Linear, Supabase, Vercel, Cloudflare, Shopify, Google OAuth, HashiCorp Vault, Firebase, DB connection strings, Grafana, Confluent, Datadog, New Relic, PagerDuty, SSH keys)
+1. **Input Sanitization** — 91 prompt injection pattern detectors (including Llama 2/3, GPT, Claude, FIM tokens, multilingual [9 languages incl. Korean], tool abuse, prompt leaking, data URI, unclosed HTML, base64, trigger-based, conditional override, memory poisoning, role confusion, few-shot conversation injection, code-block disguise, payload concatenation, prompt extraction via output/repeat/translate/poem/encoding, forced behavior change, tool-call/result token injection, function_calls XML, urgency-prefixed override, meta-AI instruction, antThinking injection)
+2. **Secrets Detection** — 45 credential patterns (API keys, JWTs, AWS, GitLab, npm, PyPI, SendGrid, Azure, Twilio, Mailgun, HuggingFace, Databricks, DigitalOcean, Linear, Supabase, Vercel, Cloudflare, Shopify, Google OAuth, HashiCorp Vault, Firebase, DB connection strings, Grafana, Confluent, Datadog, New Relic, PagerDuty, SSH keys, Netlify, Sentry DSN, Algolia, age secret key, Doppler)
 3. **Output Censoring** — `censor_response()` applied in agent runtime and audit events; overlapping redaction spans merged
 4. **Tool Output Injection Scanning** — Tool results scanned for prompt injection, warning labels prepended
 5. **Policy Enforcement** — 3-layer default-deny (network, filesystem, shell) with:
@@ -31,6 +31,10 @@ Missy implements defense-in-depth with 15 security layers:
 17. **WebSocket Frame Size Limit** — `max_size=1MB` enforced on voice WebSocket server to prevent memory exhaustion from oversized frames
 18. **Audit Log Memory Safety** — Tail-read strategy replaces full-file loading to prevent memory exhaustion on large audit JSONL files
 19. **Atomic Audio Log Writes** — Audio log files created with `os.open(O_CREAT|O_EXCL, 0o600)` to prevent TOCTOU permission race
+20. **TTS Env Sanitization** — TTS/audio subprocess environment filtered to safe-only variables; API keys and secrets stripped from espeak-ng, piper, gst-launch environments
+21. **Discord Snowflake Validation** — All Discord REST API methods validate snowflake IDs against `^\d{1,20}$` to prevent URL path traversal attacks
+22. **Calculator DoS Guards** — Left-shift operations capped at 10,000 bits and exponentiation capped at 1,000 to prevent memory exhaustion
+23. **X11 Shell Quoting** — xdotool commands use `shlex.quote()` instead of `json.dumps()` to prevent shell metacharacter injection via `$()`
 
 ## Threat Model Coverage
 

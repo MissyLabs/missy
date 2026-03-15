@@ -58,7 +58,7 @@ missy/                          # 123 Python source files
 
 ## Test Results
 
-- 6168 tests passing across 182 test files
+- 6294 tests passing across 187 test files
 - 99%+ code coverage, zero test warnings
 - Unit, integration, policy, Discord, security, memory, agent, tools, skills, CLI, voice, scheduler tests
 - 54+ property-based tests (hypothesis) for policy engines, security, and rate limiter
@@ -67,7 +67,21 @@ missy/                          # 123 Python source files
 - 54 concurrency safety tests (checkpoint, cost tracker, registry, memory, circuit breaker)
 - 36 resilience tests (corrupted state files, edge case data, recovery paths)
 - 77 end-to-end integration tests
-- 495+ security edge-case tests (injection, secrets, vault, SSRF, path traversal, tool output injection, webhook hardening, scheme restriction, kwargs allowlist, file policy enforcement, shell brace groups, header filtering, gateway thread safety, cost tracker edge cases, env sanitization, chunked response limits, overlapping redaction)
+- 540+ security edge-case tests (injection, secrets, vault, SSRF, path traversal, tool output injection, webhook hardening, scheme restriction, kwargs allowlist, file policy enforcement, shell brace groups, header filtering, gateway thread safety, cost tracker edge cases, env sanitization, chunked response limits, overlapping redaction, snowflake validation, LShift DoS guard, shell quoting)
+
+## Session 24 Additions (2026-03-15)
+
+- **5 security vulnerability fixes from code audit**:
+  - TTS env sanitization: `_ensure_runtime_dir()` now filters to safe-only env vars, preventing API key leakage to espeak-ng/piper/gst-launch subprocesses
+  - X11 Ollama vision: `_call_ollama_vision()` routed through PolicyHTTPClient instead of raw httpx.post(), enforcing network policy and audit logging
+  - Discord REST snowflake validation: All public methods validate channel_id/message_id against `^\d{1,20}$` to prevent URL path traversal
+  - X11 shell quoting: Replaced json.dumps() with shlex.quote() in X11ClickTool/X11TypeTool to prevent shell metacharacter injection
+  - Calculator LShift guard: Added `_MAX_SHIFT=10000` to prevent memory exhaustion DoS (e.g. `1 << 10000000000`)
+- **9 new injection detection patterns**: tool-call/result token, function_calls XML, pad token, urgency-prefixed override, meta-AI instruction, diff_marker, tool_use XML, antThinking. Total: 91 patterns
+- **5 new secret detection patterns**: Netlify token, Sentry DSN, Algolia API key, age secret key, Doppler token. Total: 45 patterns
+- **Tests (126 new)**: CLI Discord integration (33), security pattern tests (26), hardening edge cases (35), security fix verification (20), resource leak tests (12)
+- **Total new tests**: 126 (from 6168 to 6294) across 5 new test files
+- **12 commits, zero ruff lint errors**
 
 ## Session 23 Additions (2026-03-15)
 
