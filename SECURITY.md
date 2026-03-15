@@ -40,7 +40,9 @@ execution:
 - Process substitution: `<(...)`, `>(...)`, `<<(...)`
 - Command substitution: `$(...)`, backticks
 - Here-strings: `<<<`
-- Brace groups: `{ cmd; }`, `{;cmd;}`
+- Heredocs: `<<EOF`
+- Brace groups: `{ cmd; }`, `{;cmd;}` — scanned anywhere in the command,
+  not just at the start, to prevent bypass via `echo; { dangerous; }`
 
 ### Plugin Control
 
@@ -122,16 +124,43 @@ MCP server subprocesses receive a sanitized environment containing only
 safe variables (PATH, HOME, LANG, etc.), preventing API keys and other
 secrets from leaking to potentially untrusted MCP servers.  Server names
 are validated to prevent namespace collision attacks.  RPC reads have a
-30-second timeout and 1 MB size limit to prevent denial-of-service.  MCP
-configuration files are written with restrictive permissions (0o600) and
-verified for ownership and writability before loading.
+30-second timeout and 1 MB size limit to prevent denial-of-service.
+Response IDs are validated against request IDs to detect response
+confusion attacks.  MCP configuration files are written with restrictive
+permissions (0o600) and verified for ownership and writability before
+loading.
 
 ### Vault Security
 
 Secrets are stored using ChaCha20-Poly1305 authenticated encryption.
 Key file creation uses `O_CREAT|O_EXCL` for TOCTOU-safe atomic creation.
 Vault writes use a temp-file-then-rename pattern with `fsync` to prevent
-data loss on process interruption.  Symlinks in key file paths are rejected.
+data loss on process interruption.  Symlinks and hard links (st_nlink > 1)
+in key file paths are rejected.
+
+### Custom Tool Content Validation
+
+The `self_create_tool` tool allows the agent to create custom scripts in
+`~/.missy/custom-tools/`.  Before writing any script, the content is
+scanned for 15+ dangerous patterns including network access (`curl`,
+`wget`, `nc`, `/dev/tcp/`), code execution (`eval`, `exec`, `os.system`,
+`subprocess`), and privilege escalation (`chmod +s`, `setuid`).  Scripts
+matching any pattern are rejected with a descriptive error.  Tool names
+are validated to alphanumeric/underscore/hyphen characters only.
+
+### Device Registry Safety
+
+The voice device registry (`~/.missy/devices.json`) verifies file
+ownership and permissions before loading.  Files not owned by the current
+user, or that are group- or world-writable, are rejected to prevent
+a compromised file from injecting pre-paired device entries.
+
+### Scheduler Job File Safety
+
+Scheduler job state (`~/.missy/jobs.json`) is written atomically using
+`tempfile.mkstemp()` + `os.replace()` with restrictive 0o600 permissions.
+This prevents partial writes on crash and unauthorized read access to
+task descriptions that may contain sensitive prompt content.
 
 ### Config Hot-Reload Safety
 

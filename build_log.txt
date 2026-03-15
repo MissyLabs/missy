@@ -175,3 +175,36 @@ The sanitizer hardening agent completed successfully - those changes were alread
 === Session 5 ended (exit code: 0): Sun Mar 15 01:56:35 AM UTC 2026 ===
 Error: Reached max turns (100)
 === Session 6 ended (exit code: 0): Sun Mar 15 03:28:54 AM UTC 2026 ===
+**Session 15 complete — 12 commits.** Here's a summary:
+
+## Session 15 Results
+
+### Security Audit & Hardening
+- Ran comprehensive security audit (17 findings: 3 Critical, 5 High, 6 Medium, 3 Low)
+- **Addressed 11 of 17 findings**:
+  - **H2**: File tools enforce filesystem policy on actual path kwargs
+  - **H3**: Gateway kwargs allowlist (strips verify, base_url, transport, auth)
+  - **H1**: Shell heredoc (`<<<`) and brace group (`{ }`) rejection
+  - **H4**: Webhook metadata header filtering
+  - **M3**: Web fetch header sanitization (Host, Authorization, Cookie stripped)
+  - **M5**: Webhook Content-Type validation (CSRF prevention)
+  - **M6**: Webhook Content-Length safety validation
+  - **L1**: Vault hard link detection (st_nlink > 1)
+  - **L2**: MCP config atomic write with 0o600 permissions
+  - **L3**: Audit event detail messages redacted via censor_response()
+  - **M1**: MCP server name validated against _SAFE_NAME_RE on add_server
+
+### Test Growth
+- **5276 → 5334** tests (+58 new tests)
+- **4 new test files** across security and agent directories
+- **99%+ coverage**, zero lint errors, 1 warning (third-party)
+
+### Remaining findings (architectural, deferred)
+- C1: Sanitizer is advisory by design (tool output scanning provides defense)
+- C2/C3: Self-create-tool and code-evolve require architectural changes
+- H5: Incus tools need dedicated policy check
+- M2/M4: Low-risk encoding bypasses
+
+=== Session 1 ended (exit code: 0): Sun Mar 15 04:43:26 AM UTC 2026 ===
+Error: Reached max turns (100)
+=== Session 2 ended (exit code: 0): Sun Mar 15 05:23:50 AM UTC 2026 ===
