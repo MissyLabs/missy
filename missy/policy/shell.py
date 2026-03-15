@@ -132,7 +132,11 @@ class ShellPolicyEngine:
 
     # Shell metacharacters that can chain additional commands.
     _CHAIN_OPERATORS = ("&&", "||", ";", "|", "&", "\n")
-    _SUBSHELL_MARKERS = ("$(", "`", "<(", ">(", "<<(")
+    _SUBSHELL_MARKERS = ("$(", "`", "<(", ">(", "<<(", "<<<")
+
+    # Brace groups can execute compound statements; reject at the start of
+    # a (sub-)command or anywhere a bare ``{`` could introduce a group.
+    _BRACE_GROUP_MARKERS = ("{ ", "{;")
 
     # Commands that can execute arbitrary subcommands — warn when whitelisted.
     _LAUNCHER_COMMANDS = frozenset({
@@ -188,6 +192,17 @@ class ShellPolicyEngine:
                 logger.debug(
                     "ShellPolicyEngine: rejecting command with subshell marker %r: %s",
                     marker,
+                    command[:200],
+                )
+                return None
+
+        # Reject brace groups — ``{ cmd1; cmd2; }`` can execute compound
+        # statements that bypass individual command whitelisting.
+        stripped = command.lstrip()
+        for marker in cls._BRACE_GROUP_MARKERS:
+            if stripped.startswith(marker):
+                logger.debug(
+                    "ShellPolicyEngine: rejecting command with brace group: %s",
                     command[:200],
                 )
                 return None

@@ -169,8 +169,11 @@ class TestWebhookHandlerDoPost:
         wfile = io.BytesIO()
 
         mock_headers = {k.lower(): v for k, v in headers.items()}
+        # Ensure Content-Type is present by default (webhook now requires it).
+        mock_headers.setdefault("content-type", "application/json")
         mock_headers_obj = MagicMock()
         mock_headers_obj.get = lambda k, default=None: mock_headers.get(k.lower(), default)
+        mock_headers_obj.items = lambda: list(mock_headers.items())
 
         handler = HandlerClass.__new__(HandlerClass)
         handler.rfile = rfile

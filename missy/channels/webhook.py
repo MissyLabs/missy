@@ -98,7 +98,22 @@ class WebhookChannel(BaseChannel):
                     self.end_headers()
                     return
 
-                length = int(self.headers.get("Content-Length", 0))
+                # Require JSON Content-Type to prevent CSRF via form submissions.
+                content_type = (self.headers.get("Content-Type") or "").split(";")[0].strip()
+                if content_type != "application/json":
+                    self.send_response(415)
+                    self.end_headers()
+                    return
+
+                # Parse Content-Length safely (reject non-integer / negative).
+                try:
+                    length = int(self.headers.get("Content-Length", 0))
+                    if length < 0:
+                        raise ValueError("negative")
+                except (ValueError, TypeError):
+                    self.send_response(400)
+                    self.end_headers()
+                    return
 
                 # Reject oversized payloads
                 if length > _MAX_PAYLOAD_BYTES:
@@ -136,7 +151,19 @@ class WebhookChannel(BaseChannel):
                     content=prompt,
                     sender=data.get("sender", "webhook"),
                     channel="webhook",
-                    metadata={"webhook_headers": dict(self.headers)},
+                    metadata={
+                        "webhook_headers": {
+                            k: v
+                            for k, v in self.headers.items()
+                            if k.lower()
+                            in (
+                                "content-type",
+                                "user-agent",
+                                "x-request-id",
+                                "x-missy-signature",
+                            )
+                        },
+                    },
                 )
                 with channel_ref._lock:
                     if len(channel_ref._queue) >= _MAX_QUEUE_SIZE:

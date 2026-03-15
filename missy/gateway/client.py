@@ -278,11 +278,26 @@ class PolicyHTTPClient:
             category=self.category,
         )
 
-    @staticmethod
-    def _sanitize_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
-        """Remove security-sensitive kwargs that callers must not override."""
-        kwargs.pop("follow_redirects", None)
-        return kwargs
+    #: Kwargs that are safe to pass through to httpx request methods.
+    #: Everything else is stripped to prevent security bypass (e.g.
+    #: ``verify=False`` to disable TLS, ``base_url`` to redirect traffic,
+    #: ``transport`` to bypass the policy layer, ``auth`` to inject creds).
+    _ALLOWED_KWARGS = frozenset({
+        "headers",
+        "params",
+        "data",
+        "json",
+        "content",
+        "cookies",
+        "timeout",
+        "files",
+        "extensions",
+    })
+
+    @classmethod
+    def _sanitize_kwargs(cls, kwargs: dict[str, Any]) -> dict[str, Any]:
+        """Allow only safe kwargs; strip everything else."""
+        return {k: v for k, v in kwargs.items() if k in cls._ALLOWED_KWARGS}
 
     #: Explicit connection pool limits to prevent resource exhaustion.
     _POOL_LIMITS = httpx.Limits(

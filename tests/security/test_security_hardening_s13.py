@@ -145,12 +145,14 @@ class TestGatewayKwargsSanitization:
         assert result["timeout"] == 10
         assert result["headers"] == {"Authorization": "Bearer tok"}
 
-    def test_sanitize_is_in_place_mutation(self):
-        """_sanitize_kwargs mutates and returns the same dict object."""
-        kwargs = {"follow_redirects": True, "timeout": 5}
+    def test_sanitize_returns_only_allowed_keys(self):
+        """_sanitize_kwargs uses an allowlist — unknown keys are stripped."""
+        kwargs = {"follow_redirects": True, "timeout": 5, "verify": False, "base_url": "http://evil"}
         result = PolicyHTTPClient._sanitize_kwargs(kwargs)
-        # Same object is returned.
-        assert result is kwargs
+        assert "follow_redirects" not in result
+        assert "verify" not in result
+        assert "base_url" not in result
+        assert result["timeout"] == 5
 
 
 # ---------------------------------------------------------------------------

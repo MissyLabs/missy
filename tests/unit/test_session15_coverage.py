@@ -8,11 +8,9 @@ Targets:
 
 from __future__ import annotations
 
-import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # voice_commands.py line 130: unrecognized command fallthrough

@@ -11,11 +11,8 @@ from __future__ import annotations
 import sys
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from missy.agent.runtime import AgentConfig, AgentRuntime
 from missy.providers.base import CompletionResponse, ToolCall, ToolResult
-
 
 # ---------------------------------------------------------------------------
 # Helpers
