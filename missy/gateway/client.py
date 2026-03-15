@@ -98,7 +98,7 @@ class PolicyHTTPClient:
             httpx.HTTPError: On network or protocol errors.
         """
         self._check_url(url)
-        response = self._get_sync_client().get(url, **kwargs)
+        response = self._get_sync_client().get(url, **self._sanitize_kwargs(kwargs))
         self._emit_request_event("GET", url, response.status_code)
         return response
 
@@ -118,14 +118,14 @@ class PolicyHTTPClient:
             httpx.HTTPError: On network or protocol errors.
         """
         self._check_url(url)
-        response = self._get_sync_client().post(url, **kwargs)
+        response = self._get_sync_client().post(url, **self._sanitize_kwargs(kwargs))
         self._emit_request_event("POST", url, response.status_code)
         return response
 
     def put(self, url: str, **kwargs: Any) -> httpx.Response:
         """Perform a synchronous HTTP PUT after a policy check."""
         self._check_url(url)
-        response = self._get_sync_client().put(url, **kwargs)
+        response = self._get_sync_client().put(url, **self._sanitize_kwargs(kwargs))
         self._emit_request_event("PUT", url, response.status_code)
         return response
 
@@ -149,7 +149,7 @@ class PolicyHTTPClient:
             httpx.HTTPError: On network or protocol errors.
         """
         self._check_url(url)
-        response = await self._get_async_client().get(url, **kwargs)
+        response = await self._get_async_client().get(url, **self._sanitize_kwargs(kwargs))
         self._emit_request_event("GET", url, response.status_code)
         return response
 
@@ -169,7 +169,7 @@ class PolicyHTTPClient:
             httpx.HTTPError: On network or protocol errors.
         """
         self._check_url(url)
-        response = await self._get_async_client().post(url, **kwargs)
+        response = await self._get_async_client().post(url, **self._sanitize_kwargs(kwargs))
         self._emit_request_event("POST", url, response.status_code)
         return response
 
@@ -211,6 +211,8 @@ class PolicyHTTPClient:
     # Private helpers
     # ------------------------------------------------------------------
 
+    _ALLOWED_SCHEMES = {"http", "https"}
+
     def _check_url(self, url: str) -> None:
         """Extract the host from *url* and run a network policy check.
 
@@ -219,9 +221,15 @@ class PolicyHTTPClient:
 
         Raises:
             PolicyViolationError: When the host is denied by the policy engine.
-            ValueError: When the URL is malformed or contains no host component.
+            ValueError: When the URL is malformed, uses a disallowed scheme,
+                or contains no host component.
         """
         parsed = urlparse(url)
+        if parsed.scheme not in self._ALLOWED_SCHEMES:
+            raise ValueError(
+                f"Unsupported URL scheme {parsed.scheme!r}. "
+                "Only http:// and https:// are permitted."
+            )
         host = parsed.hostname  # Returns None for malformed URLs; strips brackets from IPv6.
         if not host:
             raise ValueError(
@@ -235,16 +243,26 @@ class PolicyHTTPClient:
             category=self.category,
         )
 
+    @staticmethod
+    def _sanitize_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
+        """Remove security-sensitive kwargs that callers must not override."""
+        kwargs.pop("follow_redirects", None)
+        return kwargs
+
     def _get_sync_client(self) -> httpx.Client:
         """Return the shared synchronous client, creating it on first call."""
         if self._sync_client is None:
-            self._sync_client = httpx.Client(timeout=self.timeout)
+            self._sync_client = httpx.Client(
+                timeout=self.timeout, follow_redirects=False
+            )
         return self._sync_client
 
     def _get_async_client(self) -> httpx.AsyncClient:
         """Return the shared async client, creating it on first call."""
         if self._async_client is None:
-            self._async_client = httpx.AsyncClient(timeout=self.timeout)
+            self._async_client = httpx.AsyncClient(
+                timeout=self.timeout, follow_redirects=False
+            )
         return self._async_client
 
     def _emit_request_event(self, method: str, url: str, status_code: int) -> None:

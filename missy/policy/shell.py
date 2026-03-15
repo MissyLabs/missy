@@ -111,6 +111,16 @@ class ShellPolicyEngine:
                         "any allowed_commands entry."
                     ),
                 )
+            # Warn about launcher commands that can execute arbitrary subcommands
+            import os.path
+
+            basename = os.path.basename(program)
+            if basename in self._LAUNCHER_COMMANDS:
+                logger.warning(
+                    "ShellPolicyEngine: %r is a command launcher that can execute "
+                    "arbitrary subcommands — consider removing it from allowed_commands",
+                    basename,
+                )
 
         # All programs matched — allow.
         self._emit_event(command, "allow", f"cmd:compound({len(programs)})", session_id, task_id)
@@ -121,8 +131,15 @@ class ShellPolicyEngine:
     # ------------------------------------------------------------------
 
     # Shell metacharacters that can chain additional commands.
-    _CHAIN_OPERATORS = ("&&", "||", ";", "|", "\n")
+    _CHAIN_OPERATORS = ("&&", "||", ";", "|", "&", "\n")
     _SUBSHELL_MARKERS = ("$(", "`", "<(", ">(", "<<(")
+
+    # Commands that can execute arbitrary subcommands — warn when whitelisted.
+    _LAUNCHER_COMMANDS = frozenset({
+        "env", "xargs", "find", "nice", "nohup", "strace", "ltrace",
+        "time", "watch", "sudo", "su", "doas", "bash", "sh", "zsh",
+        "dash", "python", "python3", "perl", "ruby", "node",
+    })
 
     @staticmethod
     def _extract_program(command: str) -> str | None:
@@ -180,7 +197,8 @@ class ShellPolicyEngine:
 
         # Replace chain operators with a unique delimiter, then split.
         # Order matters: && and || must be checked before single & or |.
-        pattern = r"\s*(?:&&|\|\||[;|\n])\s*"
+        # Also split on bare & (background execution) via negative lookahead.
+        pattern = r"\s*(?:&&|\|\||&(?!&)|[;|\n])\s*"
         parts = re.split(pattern, command)
 
         programs: list[str] = []

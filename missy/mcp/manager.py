@@ -5,6 +5,8 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import os
+import stat
 import threading
 from pathlib import Path
 
@@ -35,6 +37,24 @@ class McpManager:
         """Load config and connect to all configured MCP servers."""
         if not self._config_path.exists():
             logger.debug("No MCP config at %s; skipping", self._config_path)
+            return
+        # Security: verify file permissions before loading
+        try:
+            st = self._config_path.stat()
+            if st.st_uid != os.getuid():
+                logger.warning(
+                    "MCP config %s owned by uid %d, expected %d; refusing to load",
+                    self._config_path, st.st_uid, os.getuid(),
+                )
+                return
+            if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+                logger.warning(
+                    "MCP config %s is group/world-writable (mode %o); refusing to load",
+                    self._config_path, st.st_mode,
+                )
+                return
+        except OSError as exc:
+            logger.warning("MCP: cannot stat config %s: %s", self._config_path, exc)
             return
         try:
             servers = json.loads(self._config_path.read_text())

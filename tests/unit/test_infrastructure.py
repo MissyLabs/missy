@@ -684,6 +684,7 @@ class TestMcpManagerConnectAll:
     def test_connects_servers_from_config(self, tmp_path):
         cfg = tmp_path / "mcp.json"
         cfg.write_text(json.dumps([{"name": "fs", "command": "npx fs-server"}]))
+        cfg.chmod(0o600)
         mgr = McpManager(config_path=str(cfg))
 
         mock_c = _mock_client(name="fs", tools=[{"name": "read"}])
@@ -702,6 +703,7 @@ class TestMcpManagerConnectAll:
                 ]
             )
         )
+        cfg.chmod(0o600)
         mgr = McpManager(config_path=str(cfg))
 
         good_client = _mock_client(name="good", tools=[])

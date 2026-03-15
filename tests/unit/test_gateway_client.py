@@ -229,7 +229,7 @@ class TestAsyncPost:
 class TestURLParsing:
     def test_malformed_url_raises_value_error(self):
         client = PolicyHTTPClient()
-        with pytest.raises(ValueError, match="Cannot determine host"):
+        with pytest.raises(ValueError, match="Unsupported URL scheme"):
             client._check_url("not-a-url-at-all")
 
     def test_url_without_scheme_raises_value_error(self):

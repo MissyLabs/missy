@@ -361,17 +361,17 @@ class TestCategoryForwarding:
 class TestCheckUrlEdgeCases:
     def test_empty_string_raises_value_error(self) -> None:
         client = PolicyHTTPClient()
-        with pytest.raises(ValueError, match="Cannot determine host"):
+        with pytest.raises(ValueError, match="Unsupported URL scheme"):
             client._check_url("")
 
     def test_relative_path_raises_value_error(self) -> None:
         client = PolicyHTTPClient()
-        with pytest.raises(ValueError, match="Cannot determine host"):
+        with pytest.raises(ValueError, match="Unsupported URL scheme"):
             client._check_url("/relative/path/only")
 
     def test_fragment_only_raises_value_error(self) -> None:
         client = PolicyHTTPClient()
-        with pytest.raises(ValueError, match="Cannot determine host"):
+        with pytest.raises(ValueError, match="Unsupported URL scheme"):
             client._check_url("#fragment")
 
     def test_host_only_without_scheme_raises_value_error(self) -> None:

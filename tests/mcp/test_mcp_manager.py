@@ -28,14 +28,18 @@ class TestConnectAll:
         assert manager.list_servers() == []
 
     def test_malformed_config(self, tmp_config):
-        Path(tmp_config).write_text("NOT JSON")
+        p = Path(tmp_config)
+        p.write_text("NOT JSON")
+        p.chmod(0o600)
         mgr = McpManager(config_path=tmp_config)
         mgr.connect_all()
         assert mgr.list_servers() == []
 
     def test_connects_configured_servers(self, tmp_config):
         config = [{"name": "fs", "command": "npx fs-server"}]
-        Path(tmp_config).write_text(json.dumps(config))
+        p = Path(tmp_config)
+        p.write_text(json.dumps(config))
+        p.chmod(0o600)
         mgr = McpManager(config_path=tmp_config)
         mock_client = MagicMock()
         mock_client.tools = [{"name": "read"}]
@@ -45,7 +49,9 @@ class TestConnectAll:
 
     def test_handles_connect_failure(self, tmp_config):
         config = [{"name": "bad", "command": "nonexistent"}]
-        Path(tmp_config).write_text(json.dumps(config))
+        p = Path(tmp_config)
+        p.write_text(json.dumps(config))
+        p.chmod(0o600)
         mgr = McpManager(config_path=tmp_config)
         with patch.object(mgr, "add_server", side_effect=RuntimeError("fail")):
             mgr.connect_all()

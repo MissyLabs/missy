@@ -45,6 +45,11 @@ class SecretsDetector:
         "openai_key": r"sk-(?:proj-)?[A-Za-z0-9_\-]{20,}",
         "gcp_key": r"AIza[A-Za-z0-9_\-]{35}",
         "discord_token": r"[MN][A-Za-z0-9]{23,}\.[A-Za-z0-9_\-]{6}\.[A-Za-z0-9_\-]{27,}",
+        "gitlab_token": r"glpat-[A-Za-z0-9_\-]{20,}",
+        "npm_token": r"npm_[A-Za-z0-9]{36}",
+        "pypi_token": r"pypi-[A-Za-z0-9_\-]{50,}",
+        "sendgrid_key": r"SG\.[A-Za-z0-9_\-]{22}\.[A-Za-z0-9_\-]{43}",
+        "db_connection_string": r"(?i)(?:postgres|mysql|mongodb|redis)://[^:]+:[^@]+@",
     }
 
     def __init__(self) -> None:
