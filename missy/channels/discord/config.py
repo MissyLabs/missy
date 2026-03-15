@@ -126,7 +126,10 @@ class DiscordAccountConfig:
                     key = self.token[len("vault://") :]
                     return Vault().get(key)
                 except Exception:
-                    pass
+                    import logging
+                    logging.getLogger(__name__).debug(
+                        "Failed to resolve vault:// token reference", exc_info=True
+                    )
             return self.token
         return os.environ.get(self.token_env_var)
 

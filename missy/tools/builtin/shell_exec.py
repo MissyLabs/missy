@@ -1,8 +1,10 @@
 """Built-in tool: execute a shell command.
 
-Requires shell policy approval AND the command executable must be permitted
-by the policy engine's allowed_commands list.  Commands are executed via
-:mod:`subprocess` with ``shell=False`` to prevent shell injection.
+Requires shell policy approval AND every command executable in the command
+string must be permitted by the policy engine's allowed_commands list.
+Compound commands (using ``&&``, ``||``, ``;``, ``|``) have each sub-command
+validated independently.  Subshell markers (``$()`` and backticks) are
+rejected entirely.
 
 Example::
 
@@ -57,7 +59,11 @@ class ShellExecTool(BaseTool):
 
                 self._sandbox = get_sandbox(sandbox_config)
             except Exception:
-                pass
+                import logging
+                logging.getLogger(__name__).debug(
+                    "Sandbox init failed; shell commands will run unsandboxed",
+                    exc_info=True,
+                )
 
     def execute(
         self,

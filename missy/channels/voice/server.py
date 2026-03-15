@@ -366,7 +366,7 @@ class VoiceServer:
                 )
                 await websocket.close(1011, "Internal error")
             except Exception:
-                pass
+                logger.debug("Failed to send error/close to websocket", exc_info=True)
 
     # ------------------------------------------------------------------
     # Per-connection message loop

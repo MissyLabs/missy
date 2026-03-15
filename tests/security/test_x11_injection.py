@@ -12,10 +12,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from missy.tools.builtin.x11_tools import (
-    X11ClickTool,
     X11KeyTool,
     X11ScreenshotTool,
-    X11TypeTool,
     X11WindowListTool,
     _display_env,
 )

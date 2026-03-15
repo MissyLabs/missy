@@ -178,7 +178,7 @@ class ToolRegistry:
         # Policy engine must be initialised — fail closed if it is not.
         try:
             engine = get_policy_engine()
-        except RuntimeError:
+        except RuntimeError as err:
             logger.warning(
                 "PolicyEngine not initialised; DENYING tool %r (fail-closed).",
                 tool.name,
@@ -187,7 +187,7 @@ class ToolRegistry:
                 f"Tool {tool.name!r} denied: policy engine not initialised.",
                 category="security",
                 detail="Policy engine must be initialised before tool execution.",
-            )
+            ) from err
 
         if perms.network:
             for host in perms.allowed_hosts:

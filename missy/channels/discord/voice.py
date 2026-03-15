@@ -505,7 +505,7 @@ class DiscordVoiceManager:
                 if router is not None and hasattr(router, "is_alive"):
                     router_alive = router.is_alive()
             except Exception:
-                pass
+                logger.debug("Failed to check PacketRouter status", exc_info=True)
 
             if not router_alive:
                 logger.warning(
