@@ -35,7 +35,7 @@ class McpManager:
     def __init__(
         self,
         config_path: str = MCP_CONFIG_PATH,
-        block_injection: bool = False,
+        block_injection: bool = True,
     ):
         self._config_path = Path(config_path).expanduser()
         self._clients: dict[str, McpClient] = {}

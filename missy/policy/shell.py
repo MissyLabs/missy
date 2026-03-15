@@ -143,6 +143,7 @@ class ShellPolicyEngine:
         "env", "xargs", "find", "nice", "nohup", "strace", "ltrace",
         "time", "watch", "sudo", "su", "doas", "bash", "sh", "zsh",
         "dash", "python", "python3", "perl", "ruby", "node",
+        "eval", "exec",  # bash builtins that execute arbitrary commands
     })
 
     @staticmethod

@@ -84,6 +84,12 @@ _MAX_AUDIO_BYTES = 10 * 1024 * 1024
 # Maximum WebSocket frame size (1 MB) — prevents memory exhaustion.
 _MAX_WS_FRAME_BYTES = 1 * 1024 * 1024
 
+# Maximum concurrent WebSocket connections (pre-auth + authenticated).
+_MAX_CONCURRENT_CONNECTIONS = 50
+
+# Seconds to wait for the first auth frame before closing the connection.
+_AUTH_TIMEOUT_SECONDS = 10.0
+
 # Audio sample-rate bounds (Hz).
 _MIN_SAMPLE_RATE = 8000
 _MAX_SAMPLE_RATE = 48000
@@ -187,6 +193,8 @@ class VoiceServer:
         self._ws_server: Any | None = None  # websockets.WebSocketServer
         # Tracks node_ids of currently connected, authenticated connections.
         self._connected_nodes: set[str] = set()
+        # Counter for all open connections (pre-auth + authenticated).
+        self._active_connections: int = 0
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -269,6 +277,17 @@ class VoiceServer:
         remote_addr = websocket.remote_address
         logger.debug("VoiceServer: new connection from %s", remote_addr)
 
+        # --- Connection flood protection ---
+        if self._active_connections >= _MAX_CONCURRENT_CONNECTIONS:
+            logger.warning(
+                "VoiceServer: connection limit reached (%d) — rejecting %s",
+                _MAX_CONCURRENT_CONNECTIONS,
+                remote_addr,
+            )
+            await websocket.close(1013, "Server at capacity")
+            return
+
+        self._active_connections += 1
         node: EdgeNode | None = None
 
         try:
@@ -276,7 +295,17 @@ class VoiceServer:
             # First frame: must be auth or pair_request.
             # ----------------------------------------------------------
             try:
-                raw_first = await websocket.recv()
+                raw_first = await asyncio.wait_for(
+                    websocket.recv(), timeout=_AUTH_TIMEOUT_SECONDS
+                )
+            except TimeoutError:
+                logger.debug(
+                    "VoiceServer: auth timeout from %s (%.0fs)",
+                    remote_addr,
+                    _AUTH_TIMEOUT_SECONDS,
+                )
+                await websocket.close(1008, "Authentication timeout")
+                return
             except websockets.exceptions.ConnectionClosed:
                 logger.debug(
                     "VoiceServer: connection from %s closed before first frame.", remote_addr
@@ -386,6 +415,8 @@ class VoiceServer:
                 await websocket.close(1011, "Internal error")
             except Exception:
                 logger.debug("Failed to send error/close to websocket", exc_info=True)
+        finally:
+            self._active_connections = max(0, self._active_connections - 1)
 
     # ------------------------------------------------------------------
     # Per-connection message loop

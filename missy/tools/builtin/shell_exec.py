@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 _MAX_OUTPUT_BYTES = 32_768  # 32 KB
 _DEFAULT_TIMEOUT = 30
 _MAX_TIMEOUT = 300
+_MAX_COMMAND_LENGTH = 8192  # 8 KB — prevents resource exhaustion in shlex/policy
 
 #: Environment variables safe to inherit into shell subprocesses.
 #: Everything else (API keys, tokens, secrets) is stripped to prevent
@@ -117,6 +118,13 @@ class ShellExecTool(BaseTool):
 
         if not command.strip():
             return ToolResult(success=False, output=None, error="command must not be empty")
+
+        if len(command) > _MAX_COMMAND_LENGTH:
+            return ToolResult(
+                success=False,
+                output=None,
+                error=f"Command exceeds maximum length ({_MAX_COMMAND_LENGTH} bytes).",
+            )
 
         # Route through Docker sandbox when available
         if self._sandbox is not None:
