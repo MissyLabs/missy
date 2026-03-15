@@ -50,6 +50,9 @@ class SecretsDetector:
         "pypi_token": r"pypi-[A-Za-z0-9_\-]{50,}",
         "sendgrid_key": r"SG\.[A-Za-z0-9_\-]{22}\.[A-Za-z0-9_\-]{43}",
         "db_connection_string": r"(?i)(?:postgres|mysql|mongodb|redis)://[^:]+:[^@]+@",
+        "azure_key": r"(?i)(DefaultEndpointsProtocol|AccountKey)\s*=\s*[A-Za-z0-9+/=]{20,}",
+        "twilio_key": r"SK[a-f0-9]{32}",
+        "mailgun_key": r"key-[a-f0-9]{32}",
     }
 
     def __init__(self) -> None:
