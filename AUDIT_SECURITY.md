@@ -7,8 +7,8 @@
 
 Missy implements defense-in-depth with 12 security layers:
 
-1. **Input Sanitization** — 40+ prompt injection pattern detectors (including Llama 2/3, GPT, Claude, multilingual [8 languages], tool abuse, prompt leaking, data URI, unclosed HTML, base64)
-2. **Secrets Detection** — 26 credential patterns (API keys, JWTs, AWS, GitLab, npm, PyPI, SendGrid, Azure, Twilio, Mailgun, DB connection strings)
+1. **Input Sanitization** — 69 prompt injection pattern detectors (including Llama 2/3, GPT, Claude, FIM tokens, multilingual [9 languages incl. Korean], tool abuse, prompt leaking, data URI, unclosed HTML, base64, trigger-based, conditional override, memory poisoning, role confusion)
+2. **Secrets Detection** — 28 credential patterns (API keys, JWTs, AWS, GitLab, npm, PyPI, SendGrid, Azure, Twilio, Mailgun, HuggingFace, Databricks, DigitalOcean, Linear, Supabase, DB connection strings)
 3. **Output Censoring** — `censor_response()` applied in agent runtime and audit events
 4. **Tool Output Injection Scanning** — Tool results scanned for prompt injection, warning labels prepended
 5. **Policy Enforcement** — 3-layer default-deny (network, filesystem, shell) with:

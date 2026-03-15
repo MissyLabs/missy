@@ -24,7 +24,7 @@ All core phases implemented, parity gaps closed, comprehensive hardening applied
 16. CLI (60+ commands via click + rich, including recover, evolve)
 17. Discord (WebSocket gateway, REST API, threads, slash commands, pairing, access control, voice, interactive setup wizard)
 18. Code self-evolution engine (propose, test, apply, rollback)
-19. Tests (5711 tests, 99%+ coverage)
+19. Tests (5737 tests, 99%+ coverage)
 20. Documentation (SECURITY.md, OPERATIONS.md, ARCHITECTURE.md, CONFIG_REFERENCE.md, DISCORD.md, TESTING.md, TROUBLESHOOTING.md, 10+ implementation docs)
 21. Audit artifacts (AUDIT_SECURITY.md, AUDIT_CONNECTIVITY.md)
 22. Test artifacts (TEST_RESULTS.md, TEST_EDGE_CASES.md, BUILD_RESULTS.md)
@@ -58,7 +58,7 @@ missy/                          # 123 Python source files
 
 ## Test Results
 
-- 5711 tests passing across 163 test files
+- 5737 tests passing across 164 test files
 - 99%+ code coverage, zero test warnings
 - Unit, integration, policy, Discord, security, memory, agent, tools, skills, CLI, voice, scheduler tests
 - 54+ property-based tests (hypothesis) for policy engines, security, and rate limiter
@@ -76,7 +76,8 @@ missy/                          # 123 Python source files
 - **Security hardening tests (32 new)**: All 5 new secret patterns with positive/negative tests, all 10 new injection patterns, redaction verification, combined security pipeline tests, obfuscated/base64 injection detection
 - **Gateway hardening tests (16 new)**: Response size limit boundary tests (within/exceeding/exactly at limit, no Content-Length, non-numeric, zero), integration tests for GET/POST/aget/apost, pool limits, allowed schemes, allowed kwargs
 - **Edge case tests (45 new)**: Shell policy compound commands (18 tests: newline, pipe, or, background, subshell, backtick, heredoc, herestring, process substitution, brace group), webhook rate limiting (3 tests), circuit breaker state machine (5 tests), memory store FTS5 (5 tests), sanitizer obfuscation resistance (5 tests), cost tracker (5 tests), config hot-reload (1 test), provider errors (3 tests)
-- **Total new tests**: 117 (from 5594 to 5711) across 4 new test files
+- **Tool coverage tests (26 new)**: Full coverage for DiscordUploadTool (no token, success, FileNotFoundError, generic exception, empty caption, missing response ID, metadata) and SelfCreateTool (list empty/populated/corrupt, delete empty/existing/missing, create invalid name/language/script, 5 dangerous pattern categories, successful python/bash creation, unknown action, metadata)
+- **Total new tests**: 143 (from 5594 to 5737) across 5 new test files
 - **Zero ruff lint errors**
 
 ## Session 18 Additions (2026-03-15)
