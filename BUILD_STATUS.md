@@ -78,7 +78,9 @@ missy/                          # 123 Python source files
 - **Edge case tests (45 new)**: Shell policy compound commands (18 tests: newline, pipe, or, background, subshell, backtick, heredoc, herestring, process substitution, brace group), webhook rate limiting (3 tests), circuit breaker state machine (5 tests), memory store FTS5 (5 tests), sanitizer obfuscation resistance (5 tests), cost tracker (5 tests), config hot-reload (1 test), provider errors (3 tests)
 - **Tool coverage tests (26 new)**: Full coverage for DiscordUploadTool (no token, success, FileNotFoundError, generic exception, empty caption, missing response ID, metadata) and SelfCreateTool (list empty/populated/corrupt, delete empty/existing/missing, create invalid name/language/script, 5 dangerous pattern categories, successful python/bash creation, unknown action, metadata)
 - **Total new tests**: 143 (from 5594 to 5737) across 5 new test files
-- **Zero ruff lint errors**
+- **Robustness fixes**: 4 unguarded JSON parse calls in edge_client wrapped in try-except, JWT parse failure logging added to OAuth module, silent `pass` in tool registry replaced with debug log
+- **Security hygiene**: Replaced realistic API key placeholders in provider docstrings with `<REDACTED>`
+- **10 commits, zero ruff lint errors**
 
 ## Session 18 Additions (2026-03-15)
 
