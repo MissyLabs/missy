@@ -71,6 +71,7 @@ asyncio_mode = "auto"
 filterwarnings = [
     "ignore:websockets.legacy is deprecated:DeprecationWarning",
     "ignore::pytest.PytestUnraisableExceptionWarning",
+    "ignore:coroutine.*was never awaited:RuntimeWarning",
 ]
 
 [tool.black]
