@@ -1153,3 +1153,130 @@ class TestWebhookHandlerEdgeCases:
             assert resp.status == 400
         finally:
             ch.stop()
+
+
+# ---------------------------------------------------------------------------
+# 12: Security audit fixes — session 18
+# ---------------------------------------------------------------------------
+
+
+class TestPiperEnvSanitization:
+    """Piper TTS subprocess env must be sanitized."""
+
+    def test_piper_env_excludes_api_keys(self):
+        import os
+
+        from missy.channels.voice.tts.piper import _piper_subprocess_env
+
+        old_env = os.environ.copy()
+        try:
+            os.environ["ANTHROPIC_API_KEY"] = "sk-ant-secret-key"
+            os.environ["OPENAI_API_KEY"] = "sk-openai-secret"
+            os.environ["PATH"] = "/usr/bin"
+            env = _piper_subprocess_env()
+            assert "ANTHROPIC_API_KEY" not in env
+            assert "OPENAI_API_KEY" not in env
+            assert "PATH" in env
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+    def test_piper_env_includes_safe_vars(self):
+        import os
+
+        from missy.channels.voice.tts.piper import _piper_subprocess_env
+
+        old_env = os.environ.copy()
+        try:
+            os.environ["PATH"] = "/usr/bin"
+            os.environ["HOME"] = "/home/user"
+            os.environ["LANG"] = "en_US.UTF-8"
+            env = _piper_subprocess_env()
+            assert env.get("PATH") == "/usr/bin"
+            assert env.get("HOME") == "/home/user"
+            assert env.get("LANG") == "en_US.UTF-8"
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+class TestCostTrackerRecordsCap:
+    """CostTracker must cap records to prevent memory exhaustion."""
+
+    def test_records_capped_at_max(self):
+        from missy.agent.cost_tracker import CostTracker
+
+        tracker = CostTracker()
+        for _i in range(tracker._MAX_RECORDS + 100):
+            tracker.record(model="gpt-4o", prompt_tokens=10, completion_tokens=5)
+        assert tracker.call_count <= tracker._MAX_RECORDS
+
+    def test_totals_accurate_after_eviction(self):
+        from missy.agent.cost_tracker import CostTracker
+
+        tracker = CostTracker()
+        tracker._MAX_RECORDS = 100  # Override for faster test
+        n = 200
+        for _ in range(n):
+            tracker.record(model="gpt-4o", prompt_tokens=10, completion_tokens=5)
+        assert tracker.total_prompt_tokens == n * 10
+        assert tracker.total_completion_tokens == n * 5
+
+
+class TestSchedulerTaskLengthValidation:
+    """Scheduler must reject overly long task strings."""
+
+    def test_add_job_rejects_very_long_task(self):
+        from unittest.mock import MagicMock
+
+        from missy.scheduler.manager import SchedulerManager
+
+        mgr = SchedulerManager.__new__(SchedulerManager)
+        mgr._scheduler = MagicMock()
+        mgr._jobs = {}
+        mgr.jobs_file = MagicMock()
+
+        with pytest.raises(ValueError, match="too long"):
+            mgr.add_job(
+                name="test",
+                schedule="every 5 minutes",
+                task="x" * 60_000,
+            )
+
+    def test_add_job_accepts_normal_length_task(self):
+        from unittest.mock import MagicMock, patch
+
+        from missy.scheduler.manager import SchedulerManager
+
+        mgr = SchedulerManager.__new__(SchedulerManager)
+        mgr._scheduler = MagicMock()
+        mgr._jobs = {}
+        mgr.jobs_file = MagicMock()
+
+        with patch.object(mgr, "_schedule_job"), patch.object(mgr, "_save_jobs"), \
+             patch.object(mgr, "_emit_event"):
+            job = mgr.add_job(
+                name="normal",
+                schedule="every 5 minutes",
+                task="Summarize today's events",
+            )
+            assert job.task == "Summarize today's events"
+
+
+class TestDeviceRegistrySavePermissions:
+    """Device registry save() must set restrictive file permissions."""
+
+    def test_save_creates_file_with_restrictive_permissions(self):
+        """Verify that saved file has 0o600 permissions."""
+        import os
+        import stat
+        import tempfile
+
+        from missy.channels.voice.registry import DeviceRegistry
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            reg = DeviceRegistry(registry_path=f"{tmpdir}/devices.json")
+            reg.save()
+            st = os.stat(f"{tmpdir}/devices.json")
+            mode = stat.S_IMODE(st.st_mode)
+            assert mode == 0o600, f"Expected 0o600, got {oct(mode)}"
