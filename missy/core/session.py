@@ -104,6 +104,36 @@ class SessionManager:
         self._local.session = session
         return session
 
+    def create_session_with_id(
+        self, stable_id: str, metadata: dict[str, Any] | None = None
+    ) -> Session:
+        """Create (or reuse) a session keyed by a caller-supplied stable ID.
+
+        Unlike :meth:`create_session` which always generates a random UUID,
+        this method deterministically derives a UUID from *stable_id* so
+        that repeated calls with the same value return sessions that share
+        the same history key.  This is critical for channels like Discord
+        where each message may execute on a different thread-pool worker.
+
+        Args:
+            stable_id: A caller-defined string (e.g. Discord user ID or
+                thread ID).  Converted to a UUID-5 in the DNS namespace.
+            metadata: Optional mapping of arbitrary data.
+
+        Returns:
+            A :class:`Session` bound to the current thread.
+        """
+        from uuid import NAMESPACE_DNS, uuid5
+
+        deterministic_uuid = uuid5(NAMESPACE_DNS, f"missy-session-{stable_id}")
+        session = Session(
+            id=deterministic_uuid,
+            created_at=datetime.now(tz=UTC),
+            metadata=metadata or {"caller_session_id": stable_id},
+        )
+        self._local.session = session
+        return session
+
     def clear_session(self) -> None:
         """Remove the session bound to the current thread, if any."""
         self._local.session = None

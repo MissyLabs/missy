@@ -1286,11 +1286,19 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
         console.print(f"[yellow]Proactive manager failed to start: {_pe}[/]")
 
     # Build the shared agent runtime for all channels.
-    from missy.agent.runtime import AgentConfig, AgentRuntime
+    from missy.agent.runtime import DISCORD_SYSTEM_PROMPT, AgentConfig, AgentRuntime
 
     _provider_name = next(iter(cfg.providers), "anthropic") if cfg.providers else "anthropic"
     _agent_cfg = AgentConfig(provider=_provider_name)
     _agent = AgentRuntime(_agent_cfg)
+
+    # Discord-specific agent with filtered tools and appropriate system prompt.
+    _discord_agent_cfg = AgentConfig(
+        provider=_provider_name,
+        system_prompt=DISCORD_SYSTEM_PROMPT,
+        capability_mode="discord",
+    )
+    _discord_agent = AgentRuntime(_discord_agent_cfg)
 
     # Start voice channel if configured.
     voice_channel = None
@@ -1355,19 +1363,19 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                     session_id = msg.metadata.get("discord_author", {}).get("id", "discord")
                     channel_id = msg.metadata.get("discord_channel_id", "")
 
-                    # Inject Discord context so the agent knows where it is.
+                    # Inject channel context so the agent knows which Discord
+                    # channel it is responding in (for discord_upload_file etc.).
                     discord_ctx = (
-                        f"[CONTEXT] You are a Discord bot. "
-                        f"You are currently responding in Discord channel {channel_id}. "
-                        f"To post a file/image into this Discord channel, use the "
-                        f"discord_upload_file tool with channel_id='{channel_id}'."
+                        f"[Discord channel {channel_id}] "
+                        f"Use discord_upload_file with channel_id='{channel_id}' "
+                        f"to share files here."
                     )
                     enriched_prompt = f"{discord_ctx}\n\n{msg.content}"
 
                     try:
                         loop = asyncio.get_running_loop()
                         response = await loop.run_in_executor(
-                            None, _agent.run, enriched_prompt, session_id
+                            None, _discord_agent.run, enriched_prompt, session_id
                         )
                     except ProviderError as exc:
                         response = f"Sorry, I encountered a provider error: {exc}"
@@ -1412,7 +1420,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                         )
                         # Inform the agent that its response was not delivered.
                         with contextlib.suppress(Exception):
-                            _agent.run(
+                            _discord_agent.run(
                                 f"[SYSTEM] Your previous response to channel "
                                 f"{channel_id} FAILED to send after multiple "
                                 f"retries. Error: {exc}. The user did NOT see "
@@ -1426,7 +1434,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                 tasks = []
                 for account in cfg.discord.accounts:
                     ch = DiscordChannel(account_config=account)
-                    ch.set_agent_runtime(_agent)
+                    ch.set_agent_runtime(_discord_agent)
                     await ch.start()
                     channels.append(ch)
                     console.print(f"[green]Discord channel started[/] ({account.token_env_var})")

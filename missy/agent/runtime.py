@@ -104,8 +104,36 @@ class AgentConfig:
     )
     max_iterations: int = 10
     temperature: float = 0.7
-    capability_mode: str = "full"  # "full" | "safe-chat" | "no-tools"
+    capability_mode: str = "full"  # "full" | "safe-chat" | "discord" | "no-tools"
     max_spend_usd: float = 0.0  # 0 = unlimited; per-session cost cap
+
+
+#: System prompt for Discord channel — no desktop/X11/browser references.
+DISCORD_SYSTEM_PROMPT = (
+    "You are Missy, a helpful AI assistant responding via Discord. "
+    "You have access to tools and MUST use them to complete tasks. "
+    "CRITICAL: Never say 'I will now read...' or 'I am going to...' — "
+    "just call the tool immediately. Do not narrate what you plan to do. "
+    "Do not describe actions you intend to take. Take the action. "
+    "If a task requires reading a file, call file_read now. "
+    "If it requires running a command, call shell_exec now. "
+    "Available tools: file_read, file_write, file_delete, list_files, "
+    "shell_exec, web_fetch, calculator, self_create_tool, code_evolve, "
+    "discord_upload_file. "
+    "Use discord_upload_file to share files or images in the current channel. "
+    "CODE SELF-EVOLUTION: When you encounter a bug or error in your own "
+    "source code (missy/), you can fix yourself. Workflow: "
+    "1) file_read the source to understand the code "
+    "2) code_evolve(action='propose', file_path=..., original_code=..., proposed_code=...) "
+    "3) code_evolve(action='approve', proposal_id=...) "
+    "4) code_evolve(action='apply', proposal_id=...) — runs tests, commits, restarts. "
+    "Use code_evolve(action='rollback', proposal_id=...) to undo. "
+    "You are running on a Linux server and can manage files, run shell commands, "
+    "fetch web content, and manage Incus containers. "
+    "You do NOT have access to a desktop, GUI, browser, or screen — do not "
+    "reference X11, browser, or GUI tools. "
+    "Always use tools to get real information rather than guessing or describing."
+)
 
 
 class AgentRuntime:
@@ -711,6 +739,41 @@ class AgentRuntime:
         }
     )
 
+    # Tools available in Discord mode — no desktop/X11/browser/atspi tools.
+    _DISCORD_TOOLS = frozenset(
+        {
+            "calculator",
+            "file_read",
+            "file_write",
+            "file_delete",
+            "list_files",
+            "web_fetch",
+            "shell_exec",
+            "self_create_tool",
+            "code_evolve",
+            "discord_upload_file",
+            "tts_speak",
+            "audio_list_devices",
+            "audio_set_volume",
+            # Incus container tools are fine — they're server-side.
+            "incus_list",
+            "incus_info",
+            "incus_launch",
+            "incus_instance_action",
+            "incus_exec",
+            "incus_file",
+            "incus_snapshot",
+            "incus_image",
+            "incus_network",
+            "incus_storage",
+            "incus_config",
+            "incus_profile",
+            "incus_project",
+            "incus_device",
+            "incus_copy_move",
+        }
+    )
+
     def _get_tools(self) -> list:
         """Return registered tools, or an empty list when unavailable.
 
@@ -718,6 +781,7 @@ class AgentRuntime:
 
         - ``"full"``: all registered tools
         - ``"safe-chat"``: only read-only/safe tools
+        - ``"discord"``: server-side tools only (no X11/browser/atspi)
         - ``"no-tools"``: empty list (pure chat)
 
         Returns:
@@ -736,6 +800,8 @@ class AgentRuntime:
 
         if self.config.capability_mode == "safe-chat":
             tools = [t for t in tools if getattr(t, "name", "") in self._SAFE_CHAT_TOOLS]
+        elif self.config.capability_mode == "discord":
+            tools = [t for t in tools if getattr(t, "name", "") in self._DISCORD_TOOLS]
 
         return tools
 
@@ -1266,23 +1332,33 @@ class AgentRuntime:
     def _resolve_session(self, session_id: str | None) -> Session:
         """Return the current thread session, creating one if needed.
 
+        When *session_id* is supplied by the caller (e.g. a Discord user ID
+        or thread ID) it is used as the **stable session key** so that
+        conversation history can be loaded across separate calls — even when
+        those calls land on different threads (e.g. via a thread-pool
+        executor).  This is essential for channels like Discord where each
+        message is dispatched independently.
+
         Args:
-            session_id: Optional caller-supplied identifier.  When provided
-                it is stored in the new session's metadata so that audit
-                events can be correlated by the caller's own ID scheme.
+            session_id: Optional caller-supplied stable identifier.  When
+                provided it is used as the session's own ID and as the key
+                for history load/save.  When ``None`` a random UUID is
+                generated.
 
         Returns:
             The active :class:`~missy.core.session.Session` for this thread.
         """
+        # If a stable caller session ID is provided, always create a session
+        # keyed to it so that history is shared across calls.  Thread-local
+        # caching is skipped because executor threads are pooled and reused.
+        if session_id is not None:
+            return self._session_mgr.create_session_with_id(session_id)
+
         existing = self._session_mgr.get_current_session()
         if existing is not None:
             return existing
 
-        metadata: dict = {}
-        if session_id is not None:
-            metadata["caller_session_id"] = session_id
-
-        return self._session_mgr.create_session(metadata=metadata)
+        return self._session_mgr.create_session()
 
     def _get_provider(self) -> Any:
         """Resolve the configured provider with automatic fallback.
