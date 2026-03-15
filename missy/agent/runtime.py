@@ -710,10 +710,29 @@ class AgentRuntime:
 
         return tools
 
+    #: Exception types considered transient and eligible for automatic retry.
+    _TRANSIENT_ERRORS: tuple[type[Exception], ...] = ()
+
+    @staticmethod
+    def _init_transient_errors() -> tuple[type[Exception], ...]:
+        """Build the tuple of transient exception types (lazy, import-safe)."""
+        transient: list[type[Exception]] = [TimeoutError, ConnectionError, OSError]
+        try:
+            import httpx
+
+            transient.extend([httpx.TimeoutException, httpx.ConnectError])
+        except ImportError:
+            pass
+        return tuple(transient)
+
     def _execute_tool(
         self, tool_call: ToolCall, session_id: str = "", task_id: str = ""
     ) -> ToolResult:
         """Execute a single tool call via the tool registry.
+
+        Transient errors (network timeouts, connection resets) are retried up
+        to ``_MAX_TOOL_RETRIES`` times with exponential backoff before being
+        reported as failures.
 
         Args:
             tool_call: The :class:`~missy.providers.base.ToolCall` to execute.
@@ -723,31 +742,17 @@ class AgentRuntime:
         Returns:
             A :class:`~missy.providers.base.ToolResult` with the outcome.
         """
+        import time
+
+        _MAX_TOOL_RETRIES = 2
+        _RETRY_BASE_DELAY = 1.0  # seconds
+
+        # Lazily initialise transient error types once.
+        if not AgentRuntime._TRANSIENT_ERRORS:
+            AgentRuntime._TRANSIENT_ERRORS = AgentRuntime._init_transient_errors()
+
         try:
             registry = get_tool_registry()
-            logger.info(
-                "Executing tool %r with args: %s",
-                tool_call.name,
-                tool_call.arguments,
-            )
-            # Strip session_id/task_id from tool args to avoid colliding
-            # with the explicit kwargs we pass to registry.execute().
-            tool_args = {
-                k: v for k, v in tool_call.arguments.items() if k not in ("session_id", "task_id")
-            }
-            result = registry.execute(
-                tool_call.name,
-                session_id=session_id,
-                task_id=task_id,
-                **tool_args,
-            )
-            content = str(result.output) if result.output is not None else ""
-            return ToolResult(
-                tool_call_id=tool_call.id,
-                name=tool_call.name,
-                content=content if result.success else (result.error or "Tool failed"),
-                is_error=not result.success,
-            )
         except KeyError as exc:
             logger.warning("Tool %r not found in registry: %s", tool_call.name, exc)
             return ToolResult(
@@ -764,14 +769,87 @@ class AgentRuntime:
                 content="Tool registry not initialised.",
                 is_error=True,
             )
-        except Exception as exc:
-            logger.exception("Unexpected error executing tool %r", tool_call.name)
-            return ToolResult(
-                tool_call_id=tool_call.id,
-                name=tool_call.name,
-                content=f"Unexpected error: {exc}",
-                is_error=True,
-            )
+
+        logger.info(
+            "Executing tool %r with args: %s",
+            tool_call.name,
+            tool_call.arguments,
+        )
+        # Strip session_id/task_id from tool args to avoid colliding
+        # with the explicit kwargs we pass to registry.execute().
+        tool_args = {
+            k: v for k, v in tool_call.arguments.items() if k not in ("session_id", "task_id")
+        }
+
+        last_exc: Exception | None = None
+        for attempt in range(_MAX_TOOL_RETRIES + 1):
+            try:
+                result = registry.execute(
+                    tool_call.name,
+                    session_id=session_id,
+                    task_id=task_id,
+                    **tool_args,
+                )
+                content = str(result.output) if result.output is not None else ""
+                return ToolResult(
+                    tool_call_id=tool_call.id,
+                    name=tool_call.name,
+                    content=content if result.success else (result.error or "Tool failed"),
+                    is_error=not result.success,
+                )
+            except KeyError as exc:
+                logger.warning("Tool %r not found in registry: %s", tool_call.name, exc)
+                return ToolResult(
+                    tool_call_id=tool_call.id,
+                    name=tool_call.name,
+                    content=f"Tool not found: {tool_call.name}",
+                    is_error=True,
+                )
+            except RuntimeError as exc:
+                logger.warning("Tool registry not available: %s", exc)
+                return ToolResult(
+                    tool_call_id=tool_call.id,
+                    name=tool_call.name,
+                    content="Tool registry not initialised.",
+                    is_error=True,
+                )
+            except AgentRuntime._TRANSIENT_ERRORS as exc:
+                last_exc = exc
+                if attempt < _MAX_TOOL_RETRIES:
+                    delay = _RETRY_BASE_DELAY * (2**attempt)
+                    logger.warning(
+                        "Transient error executing tool %r (attempt %d/%d), "
+                        "retrying in %.1fs: %s",
+                        tool_call.name,
+                        attempt + 1,
+                        _MAX_TOOL_RETRIES + 1,
+                        delay,
+                        exc,
+                    )
+                    time.sleep(delay)
+                else:
+                    logger.warning(
+                        "Tool %r failed after %d attempts: %s",
+                        tool_call.name,
+                        _MAX_TOOL_RETRIES + 1,
+                        exc,
+                    )
+            except Exception as exc:
+                logger.exception("Unexpected error executing tool %r", tool_call.name)
+                return ToolResult(
+                    tool_call_id=tool_call.id,
+                    name=tool_call.name,
+                    content=f"Unexpected error: {exc}",
+                    is_error=True,
+                )
+
+        # All retries exhausted for transient error.
+        return ToolResult(
+            tool_call_id=tool_call.id,
+            name=tool_call.name,
+            content=f"Tool failed after {_MAX_TOOL_RETRIES + 1} attempts: {last_exc}",
+            is_error=True,
+        )
 
     # ------------------------------------------------------------------
     # Context / memory helpers

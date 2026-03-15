@@ -137,38 +137,51 @@ class NetworkPolicyEngine:
         # range is explicitly allowed via CIDR.  This prevents an attacker
         # from pointing evil.example.com at 169.254.169.254 (cloud metadata)
         # or 10.0.0.1 (internal infrastructure) and bypassing domain checks.
+        #
+        # IMPORTANT: We check ALL resolved addresses before making a decision.
+        # If ANY address is private/reserved and not in allowed CIDRs, the
+        # entire request is denied.  This prevents mixed-record attacks where
+        # a hostname resolves to both a public and a private IP.
         try:
             infos = socket.getaddrinfo(host, None)
+            # De-duplicate resolved IPs.
+            seen_ips: set[str] = set()
+            resolved: list[tuple[str, ipaddress.IPv4Address | ipaddress.IPv6Address]] = []
             for info in infos:
                 ip_str = info[4][0]
+                if ip_str in seen_ips:
+                    continue
+                seen_ips.add(ip_str)
                 try:
                     addr = ipaddress.ip_address(ip_str)
                 except ValueError:
                     continue
-                # Block private/reserved IPs obtained via DNS rebinding
+                resolved.append((ip_str, addr))
+
+            # First pass: deny if ANY resolved IP is private and not allowed.
+            for ip_str, addr in resolved:
                 if addr.is_private or addr.is_loopback or addr.is_link_local:
                     rule = self._check_cidr(ip_str)
-                    if rule:
-                        # Explicitly allowed private CIDR — permit
-                        self._emit_event(host, "allow", rule, session_id, task_id)
-                        return True
-                    # Private IP from DNS but NOT in allowed CIDRs — deny
-                    logger.warning(
-                        "NetworkPolicyEngine: DNS rebinding blocked — %r resolved to "
-                        "private address %s which is not in allowed_cidrs",
-                        host, ip_str,
-                    )
-                    self._emit_event(host, "deny", None, session_id, task_id)
-                    raise PolicyViolationError(
-                        f"Network access denied: {host!r} resolved to private "
-                        f"address {ip_str} (possible DNS rebinding attack).",
-                        category="network",
-                        detail=(
-                            f"Hostname {host!r} resolved to {ip_str} which is a "
-                            "private/reserved address not explicitly allowed by policy."
-                        ),
-                    )
-                # Public IP — check against allowed CIDRs
+                    if not rule:
+                        logger.warning(
+                            "NetworkPolicyEngine: DNS rebinding blocked — %r resolved to "
+                            "private address %s which is not in allowed_cidrs",
+                            host, ip_str,
+                        )
+                        self._emit_event(host, "deny", None, session_id, task_id)
+                        raise PolicyViolationError(
+                            f"Network access denied: {host!r} resolved to private "
+                            f"address {ip_str} (possible DNS rebinding attack).",
+                            category="network",
+                            detail=(
+                                f"Hostname {host!r} resolved to {ip_str} which is a "
+                                "private/reserved address not explicitly allowed by policy."
+                            ),
+                        )
+
+            # Second pass: all private IPs (if any) are allowed; check public
+            # IPs against CIDR allowlist.
+            for ip_str, _addr in resolved:
                 rule = self._check_cidr(ip_str)
                 if rule:
                     self._emit_event(host, "allow", rule, session_id, task_id)

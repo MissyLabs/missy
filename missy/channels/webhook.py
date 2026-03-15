@@ -21,6 +21,8 @@ _MAX_QUEUE_SIZE = 1000
 # Rate limit: max requests per IP per window.
 _RATE_LIMIT_REQUESTS = 60
 _RATE_LIMIT_WINDOW = 60  # seconds
+# Maximum tracked IPs before evicting the oldest entries.
+_MAX_TRACKED_IPS = 10_000
 
 
 class WebhookChannel(BaseChannel):
@@ -61,7 +63,24 @@ class WebhookChannel(BaseChannel):
                 return False
             timestamps.append(now)
             self._rate_tracker[client_ip] = timestamps
+
+            # Evict stale IPs to prevent unbounded memory growth.
+            if len(self._rate_tracker) > _MAX_TRACKED_IPS:
+                self._evict_stale_ips(cutoff)
             return True
+
+    def _evict_stale_ips(self, cutoff: float) -> None:
+        """Remove IPs whose timestamps have all expired.
+
+        Must be called while holding ``_rate_lock``.
+        """
+        stale = [
+            ip
+            for ip, ts_list in self._rate_tracker.items()
+            if not ts_list or all(t <= cutoff for t in ts_list)
+        ]
+        for ip in stale:
+            del self._rate_tracker[ip]
 
     def start(self) -> None:
         channel_ref = self

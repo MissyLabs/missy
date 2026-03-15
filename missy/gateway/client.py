@@ -249,11 +249,20 @@ class PolicyHTTPClient:
         kwargs.pop("follow_redirects", None)
         return kwargs
 
+    #: Explicit connection pool limits to prevent resource exhaustion.
+    _POOL_LIMITS = httpx.Limits(
+        max_connections=20,
+        max_keepalive_connections=10,
+        keepalive_expiry=30,  # seconds
+    )
+
     def _get_sync_client(self) -> httpx.Client:
         """Return the shared synchronous client, creating it on first call."""
         if self._sync_client is None:
             self._sync_client = httpx.Client(
-                timeout=self.timeout, follow_redirects=False
+                timeout=self.timeout,
+                follow_redirects=False,
+                limits=self._POOL_LIMITS,
             )
         return self._sync_client
 
@@ -261,7 +270,9 @@ class PolicyHTTPClient:
         """Return the shared async client, creating it on first call."""
         if self._async_client is None:
             self._async_client = httpx.AsyncClient(
-                timeout=self.timeout, follow_redirects=False
+                timeout=self.timeout,
+                follow_redirects=False,
+                limits=self._POOL_LIMITS,
             )
         return self._async_client
 

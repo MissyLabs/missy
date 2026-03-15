@@ -161,6 +161,26 @@ class InputSanitizer:
         r"ignorer\s+(toutes?\s+)?(les?\s+)?instructions?\s+(pr[e\u00e9]c[e\u00e9]dentes?|ant[e\u00e9]rieures?)",  # French
         r"ignoriere\s+(alle\s+)?(vorherigen?\s+)?anweisungen",  # German
         r"(new|nuove?)\s+istruzioni\s*:",         # Italian "new instructions:"
+        # --- Unclosed tag / comment injection ---
+        r"<!--\s*(system|ignore|override|inject|instruction)",  # Unclosed HTML comment with keywords
+        # --- Data URI / protocol injection ---
+        r"data:\s*text/(html|javascript|plain)\s*[;,]",  # data: URI with text content
+        # --- Invisible instruction hiding ---
+        r"<\s*div\s+style\s*=\s*[\"'].*?display\s*:\s*none",  # Hidden div instructions
+        r"\[comment\]:",                           # Markdown-style hidden comment
+        # --- Additional model-specific delimiters ---
+        r"<\|begin_of_text\|>",                    # Llama 3 begin token
+        r"<\|start_header_id\|>",                  # Llama 3 header token
+        r"<\|end_header_id\|>",                    # Llama 3 header end token
+        r"<\|reserved_special_token",              # Any reserved special token
+        # --- Chained instruction patterns ---
+        r"new\s+instructions?\s*:",                # "new instructions:"
+        r"updated?\s+instructions?\s*:",           # "updated instructions:"
+        r"revised?\s+instructions?\s*:",           # "revised instructions:"
+        r"real\s+instructions?\s*:",               # "real instructions:"
+        # --- Portuguese / Russian injection keywords ---
+        r"ignore\s+as\s+instru[çc][õo]es\s+anteriores",  # Portuguese
+        r"игнорируй\s+(все\s+)?предыдущие\s+инструкции",  # Russian
     ]
 
     def __init__(self) -> None:
