@@ -24,7 +24,7 @@ All core phases implemented, parity gaps closed, comprehensive hardening applied
 16. CLI (60+ commands via click + rich, including recover, evolve)
 17. Discord (WebSocket gateway, REST API, threads, slash commands, pairing, access control, voice, interactive setup wizard)
 18. Code self-evolution engine (propose, test, apply, rollback)
-19. Tests (5981 tests, 99%+ coverage)
+19. Tests (5988 tests, 99%+ coverage)
 20. Documentation (SECURITY.md, OPERATIONS.md, ARCHITECTURE.md, CONFIG_REFERENCE.md, DISCORD.md, TESTING.md, TROUBLESHOOTING.md, 10+ implementation docs)
 21. Audit artifacts (AUDIT_SECURITY.md, AUDIT_CONNECTIVITY.md)
 22. Test artifacts (TEST_RESULTS.md, TEST_EDGE_CASES.md, BUILD_RESULTS.md)
@@ -58,7 +58,7 @@ missy/                          # 123 Python source files
 
 ## Test Results
 
-- 5981 tests passing across 172 test files
+- 5988 tests passing across 173 test files
 - 99%+ code coverage, zero test warnings
 - Unit, integration, policy, Discord, security, memory, agent, tools, skills, CLI, voice, scheduler tests
 - 54+ property-based tests (hypothesis) for policy engines, security, and rate limiter
@@ -79,8 +79,10 @@ missy/                          # 123 Python source files
 - **Debug logging**: Added logging to silent exception handlers in anthropic_auth
 - **AUDIT_CONNECTIVITY.md**: Comprehensive update with all security layers, shell/filesystem controls, secret protection
 - **Agent subsystem tests (32 new)**: Runtime init edge cases (6), context manager (4), done criteria (4), learnings extraction (5), prompt patches lifecycle (4), sub-agent parsing (3), skills registry (2), event bus (4)
-- **Total new tests**: 152 (from 5829 to 5981) across 4 new test files
-- **9 commits, zero ruff lint errors**
+- **Permission hardening**: Vault _save_store and wizard _write_config_atomic now explicitly fchmod(0o600) before writing sensitive data
+- **Permission tests (7 new)**: Vault data/key file permissions, config atomic write permissions, scheduler jobs permissions
+- **Total new tests**: 159 (from 5829 to 5988) across 5 new test files
+- **10 commits, zero ruff lint errors**
 
 ## Session 20 Additions (2026-03-15)
 
