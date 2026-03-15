@@ -192,9 +192,15 @@ class WebhookChannel(BaseChannel):
                     self.end_headers()
                     return
 
+                # Validate sender: cap length, strip control characters
+                raw_sender = str(data.get("sender", "webhook"))[:64]
+                safe_sender = "".join(
+                    c for c in raw_sender if c.isalnum() or c in "-_. @"
+                ) or "webhook"
+
                 msg = ChannelMessage(
                     content=prompt,
-                    sender=data.get("sender", "webhook"),
+                    sender=safe_sender,
                     channel="webhook",
                     metadata={
                         "webhook_headers": {

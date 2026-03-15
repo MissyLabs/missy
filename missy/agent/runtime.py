@@ -184,6 +184,11 @@ class AgentRuntime:
             ProviderError: When no provider is available or the provider
                 call fails.
         """
+        # Sanitize user input: truncate oversized payloads and detect
+        # prompt injection patterns *before* the input reaches the LLM.
+        if self._sanitizer is not None:
+            user_input = self._sanitizer.sanitize(user_input)
+
         session = self._resolve_session(session_id)
         sid = str(session.id)
         task_id = str(self._session_mgr.generate_task_id())
@@ -296,6 +301,10 @@ class AgentRuntime:
         Yields:
             String chunks of the model's response.
         """
+        # Sanitize user input before processing (same as run())
+        if self._sanitizer is not None:
+            user_input = self._sanitizer.sanitize(user_input)
+
         session = self._resolve_session(session_id)
         sid = str(session.id)
 
