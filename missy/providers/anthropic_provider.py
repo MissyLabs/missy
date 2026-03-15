@@ -10,7 +10,7 @@ Example::
     from missy.providers.anthropic_provider import AnthropicProvider
 
     config = ProviderConfig(name="anthropic", model="claude-3-5-sonnet-20241022",
-                            api_key="sk-ant-...")
+                            api_key="<REDACTED>")
     provider = AnthropicProvider(config)
     response = provider.complete([Message(role="user", content="Hello")])
 """

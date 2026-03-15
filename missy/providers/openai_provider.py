@@ -12,7 +12,7 @@ Example::
     from missy.config.settings import ProviderConfig
     from missy.providers.openai_provider import OpenAIProvider
 
-    config = ProviderConfig(name="openai", model="gpt-4o", api_key="sk-...")
+    config = ProviderConfig(name="openai", model="gpt-4o", api_key="<REDACTED>")
     provider = OpenAIProvider(config)
     response = provider.complete([Message(role="user", content="Hello")])
 """
