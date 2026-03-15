@@ -131,6 +131,16 @@ class SelfCreateTool(BaseTool):
                 # Indirect execution patterns
                 "__import__(", "getattr(", "importlib.",
                 "compile(", "code.interact(",
+                # Builtins access for sandbox escape
+                "__builtins__",
+                # File I/O for arbitrary reads/writes
+                "open(",
+                # Process execution functions
+                "os.exec", "os.fork", "os.spawn",
+                "os.popen(", "os.startfile(",
+                # Destructive file operations
+                "shutil.rmtree", "shutil.move",
+                "os.remove(", "os.unlink(", "os.rmdir(",
                 # Node.js patterns
                 "child_process", "require('fs')", 'require("fs")',
                 # Shell expansion patterns

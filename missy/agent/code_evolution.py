@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
 import threading
 import uuid
@@ -487,11 +488,35 @@ class CodeEvolutionManager:
             # Apply diffs
             for diff in prop.diffs:
                 abs_path = (self._repo_root / diff.file_path).resolve()
+                # Prevent path traversal: ensure resolved path is under repo root
+                if not abs_path.is_relative_to(self._repo_root.resolve()):
+                    self._revert_diffs(prop.diffs)
+                    with self._lock:
+                        prop.status = EvolutionStatus.FAILED
+                        self._save()
+                    self._emit_event(
+                        "code_evolution.apply",
+                        "deny",
+                        {"proposal_id": proposal_id, "error": f"Path traversal: {diff.file_path}"},
+                    )
+                    return {
+                        "status": "failed",
+                        "error": f"Path traversal blocked: {diff.file_path} resolves outside repo",
+                        "commit_sha": "",
+                        "test_output": "",
+                    }
                 content = abs_path.read_text()
                 content = content.replace(diff.original_code, diff.proposed_code, 1)
                 abs_path.write_text(content)
 
-            # Run tests
+            # Run tests — sanitize environment to prevent API key leakage
+            _SAFE_ENV_VARS = frozenset({
+                "PATH", "HOME", "USER", "LOGNAME", "SHELL",
+                "LANG", "LC_ALL", "LC_CTYPE", "LANGUAGE",
+                "TERM", "COLORTERM", "COLUMNS", "LINES",
+                "XDG_RUNTIME_DIR", "TMPDIR", "PWD", "DISPLAY",
+            })
+            safe_env = {k: os.environ[k] for k in _SAFE_ENV_VARS if k in os.environ}
             test_result = subprocess.run(
                 self._test_command,
                 shell=True,
@@ -500,6 +525,7 @@ class CodeEvolutionManager:
                 text=True,
                 timeout=300,
                 executable="/bin/bash",
+                env=safe_env,
             )
             test_output = test_result.stdout + test_result.stderr
 

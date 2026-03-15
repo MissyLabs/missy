@@ -225,6 +225,8 @@ class X11ClickTool(BaseTool):
         window_name: str = "",
         **_: Any,
     ) -> ToolResult:
+        # Enforce integer types to prevent shell injection via string params
+        x, y = int(x), int(y)
 
         if window_name:
             focus_cmd = f"xdotool search --name {shlex.quote(window_name)} windowfocus"
@@ -292,6 +294,9 @@ class X11TypeTool(BaseTool):
         delay_ms: int = 12,
         **_: Any,
     ) -> ToolResult:
+        # Enforce integer type to prevent shell injection via string params
+        delay_ms = int(delay_ms)
+
         if window_name:
             focus_cmd = f"xdotool search --name {shlex.quote(window_name)} windowfocus"
             r = _run(focus_cmd)
