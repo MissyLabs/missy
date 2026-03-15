@@ -32,6 +32,11 @@ When enabled, only commands named in `shell.allowed_commands` may run.  An
 empty `allowed_commands` list blocks all commands even when the shell is
 nominally enabled.
 
+Compound commands (using `&&`, `||`, `;`, `|`) are split and each
+sub-command is individually checked against the allowlist.  Process
+substitution (`<(...)`, `>(...)`) and command substitution (`$(...)`,
+backticks) are unconditionally blocked to prevent hidden command execution.
+
 ### Plugin Control
 
 The plugin system is **disabled by default** (`plugins.enabled: false`).
@@ -46,12 +51,54 @@ User input is sanitized before reaching the AI provider:
 - Scanned for 13+ prompt-injection patterns; violations are logged as
   warnings.
 
-### Secrets Detection
+### Secrets Detection & Response Censoring
 
-The `SecretsDetector` scans text for 9 credential patterns (API keys,
-private keys, tokens, passwords, JWTs, etc.) and can redact them before
+The `SecretsDetector` scans text for 15 credential patterns (API keys
+including `sk-proj-...`, private keys, tokens, passwords, JWTs, AWS
+credentials, GitHub/Slack/Discord tokens, etc.) and can redact them before
 text is stored or transmitted.  The CLI warns users when potential secrets
 are detected in a prompt.
+
+The agent runtime applies `censor_response()` to all final output before
+it reaches any channel, providing a last-resort defense against secret
+leakage through AI-generated responses.
+
+### Tool Output Injection Scanning
+
+Tool results (shell output, file contents, MCP server responses, web
+fetches) are scanned for prompt injection patterns before being fed back
+to the AI model.  When suspicious patterns are detected, a security
+warning label is prepended to the tool output so the model treats it as
+untrusted data rather than instructions.
+
+### Webhook Rate Limiting
+
+The webhook channel enforces per-IP rate limiting (60 requests per 60-second
+sliding window), rejects payloads larger than 1 MB, and bounds the message
+queue to 1000 entries.  Excess requests receive 429 (Too Many Requests),
+413 (Payload Too Large), or 503 (Service Unavailable) responses.
+
+### MCP Server Isolation
+
+MCP server subprocesses receive a sanitized environment containing only
+safe variables (PATH, HOME, LANG, etc.), preventing API keys and other
+secrets from leaking to potentially untrusted MCP servers.  Server names
+are validated to prevent namespace collision attacks.  RPC reads have a
+30-second timeout and 1 MB size limit to prevent denial-of-service.
+
+### Vault Security
+
+Secrets are stored using ChaCha20-Poly1305 authenticated encryption.
+Key file creation uses `O_CREAT|O_EXCL` for TOCTOU-safe atomic creation.
+Vault writes use a temp-file-then-rename pattern with `fsync` to prevent
+data loss on process interruption.  Symlinks in key file paths are rejected.
+
+### Config Hot-Reload Safety
+
+Before reloading configuration, the watcher verifies the config file is
+not a symlink, is owned by the current user, and is not group- or
+world-writable.  This prevents an attacker from injecting a malicious
+config via a symlink or permission escalation.
 
 ### Audit Logging
 
@@ -145,14 +192,16 @@ plugins:
 
 ---
 
-## Environment Variables for Secrets
+## Secrets Management
 
-Never put API keys in the config file.  Set them as environment variables:
+API keys can be stored in three ways (from most to least secure):
 
-```bash
-export ANTHROPIC_API_KEY="sk-ant-..."
-export OPENAI_API_KEY="sk-..."
-```
+1. **Encrypted vault** — `missy vault set ANTHROPIC_API_KEY sk-ant-...`
+   Reference in config as `vault://ANTHROPIC_API_KEY`.
+2. **Environment variables** — `export ANTHROPIC_API_KEY="sk-ant-..."`
+   Reference in config as `$ANTHROPIC_API_KEY`.
+3. **Never in plaintext config** — API keys should never appear directly
+   in `config.yaml`.
 
 Missy reads `<PROVIDER_NAME>_API_KEY` automatically (e.g. `ANTHROPIC_API_KEY`
 for a provider named `anthropic`).
@@ -204,3 +253,4 @@ Out of scope:
 | Version | Change |
 |---|---|
 | 0.1.0 | Initial release with secure-by-default policy engine, input sanitization, secrets detection, and JSONL audit logging. |
+| 0.2.0 | Added tool output injection scanning, response censoring, webhook rate limiting, MCP server isolation, process substitution blocking, vault atomic writes, config hotreload safety, encrypted vault with ChaCha20-Poly1305. |
