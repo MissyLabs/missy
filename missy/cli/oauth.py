@@ -23,6 +23,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 import os
 import secrets
 import threading
@@ -35,6 +36,7 @@ from pathlib import Path
 import click
 from rich.console import Console
 
+logger = logging.getLogger(__name__)
 console = Console()
 
 # ---------------------------------------------------------------------------
@@ -226,7 +228,8 @@ def _parse_jwt_payload(token: str) -> dict:
         padded = parts[1] + "=" * padding
         payload_bytes = base64.urlsafe_b64decode(padded)
         return json.loads(payload_bytes)
-    except Exception:
+    except Exception as exc:
+        logger.debug("JWT payload parsing failed: %s", exc)
         return {}
 
 

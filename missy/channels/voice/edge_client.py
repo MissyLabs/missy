@@ -222,7 +222,11 @@ async def _pair_device(
         )
 
         raw = await ws.recv()
-        msg = json.loads(raw)
+        try:
+            msg = json.loads(raw)
+        except (json.JSONDecodeError, TypeError) as exc:
+            print(f"Malformed pairing response: {exc}", file=sys.stderr)
+            return None
 
         if msg.get("type") == "pair_pending":
             node_id = msg["node_id"]
@@ -262,7 +266,11 @@ async def _voice_loop(
         )
 
         raw = await ws.recv()
-        msg = json.loads(raw)
+        try:
+            msg = json.loads(raw)
+        except (json.JSONDecodeError, TypeError) as exc:
+            print(f"Malformed auth response: {exc}", file=sys.stderr)
+            return
 
         if msg.get("type") != "auth_ok":
             reason = msg.get("reason", msg.get("type", "unknown"))
@@ -334,7 +342,10 @@ async def _voice_loop(
                             audio_chunks.append(raw_resp)
                         continue
 
-                    resp = json.loads(raw_resp)
+                    try:
+                        resp = json.loads(raw_resp)
+                    except (json.JSONDecodeError, TypeError):
+                        continue
                     resp_type = resp.get("type", "")
 
                     if resp_type == "transcript":
@@ -382,7 +393,10 @@ async def _voice_loop(
 def _load_config(path: Path) -> dict[str, Any]:
     """Load edge client config from JSON file."""
     if path.is_file():
-        return json.loads(path.read_text())
+        try:
+            return json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError):
+            return {}
     return {}
 
 
