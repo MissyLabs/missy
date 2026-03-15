@@ -93,14 +93,18 @@ def _record_audio(
         ]
 
         proc = subprocess.Popen(cmd, env=env, stderr=subprocess.PIPE)
-        time.sleep(duration)
-        proc.send_signal(signal.SIGINT)
-
         try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
+            time.sleep(duration)
+            proc.send_signal(signal.SIGINT)
+
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+        finally:
+            if proc.stderr:
+                proc.stderr.close()
 
         if not Path(wav_path).exists() or Path(wav_path).stat().st_size == 0:
             return b""
@@ -148,14 +152,18 @@ def _record_audio_gst(
         ]
 
         proc = subprocess.Popen(cmd, env=env, stderr=subprocess.PIPE)
-        time.sleep(duration)
-        proc.send_signal(signal.SIGINT)
-
         try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
+            time.sleep(duration)
+            proc.send_signal(signal.SIGINT)
+
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+        finally:
+            if proc.stderr:
+                proc.stderr.close()
 
         if Path(raw_path).exists():
             return Path(raw_path).read_bytes()
