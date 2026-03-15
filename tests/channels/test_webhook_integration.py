@@ -147,12 +147,14 @@ class TestOversizedPayload:
         port = _free_port()
         with _running_channel(port=port):
             # Build a payload whose JSON-encoded length equals _MAX_PAYLOAD_BYTES.
-            # Use a prompt padded to fit precisely inside the limit.
+            # Keep prompt short (under _MAX_PROMPT_LENGTH) and pad with a
+            # separate JSON field so the overall body hits the byte limit.
             limit = webhook_module._MAX_PAYLOAD_BYTES
-            prefix = b'{"prompt":"'
+            prompt = "hello"
+            prefix = b'{"prompt":"hello","pad":"'
             suffix = b'"}'
             padding_len = limit - len(prefix) - len(suffix)
-            body = prefix + b"a" * padding_len + suffix
+            body = prefix + b"x" * padding_len + suffix
             assert len(body) == limit
             resp = _post(port, body)
             # The body is valid JSON and the prompt is non-empty, so 202.
