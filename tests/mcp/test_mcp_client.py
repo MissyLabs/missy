@@ -51,6 +51,29 @@ class TestMcpClientConnect:
         assert len(c.tools) == 1
         assert c.tools[0]["name"] == "read_file"
 
+    def test_connect_sanitizes_environment(self):
+        """MCP subprocess must not inherit API keys or other secrets."""
+        c = McpClient(name="test", command="echo hello")
+        init_resp = {"jsonrpc": "2.0", "id": "1", "result": {"capabilities": {}}}
+        tools_resp = {"jsonrpc": "2.0", "id": "2", "result": {"tools": []}}
+        mock_proc = MagicMock()
+        mock_proc.stdin = MagicMock()
+        mock_proc.stdout = MagicMock()
+        mock_proc.stdout.readline.side_effect = [
+            json.dumps(init_resp).encode() + b"\n",
+            json.dumps(tools_resp).encode() + b"\n",
+        ]
+        import os
+
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-secret", "PATH": "/usr/bin"}), \
+             patch("subprocess.Popen", return_value=mock_proc) as mock_popen:
+            c.connect()
+        # Check that env was passed and doesn't contain the API key
+        call_kwargs = mock_popen.call_args[1]
+        assert "env" in call_kwargs
+        assert "ANTHROPIC_API_KEY" not in call_kwargs["env"]
+        assert "PATH" in call_kwargs["env"]
+
     def test_connect_without_command_raises(self):
         c = McpClient(name="test", url="http://localhost:3000")
         with pytest.raises(NotImplementedError, match="HTTP MCP transport"):

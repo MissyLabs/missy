@@ -34,13 +34,23 @@ class McpClient:
     def connect(self) -> None:
         """Start the MCP server process and perform the initialize handshake."""
         if self._command:
+            import os
             import shlex
+
+            # Pass only safe environment variables to prevent secret leakage
+            _SAFE_VARS = (
+                "PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM",
+                "XDG_RUNTIME_DIR", "TMPDIR", "TMP", "TEMP",
+                "NODE_PATH", "NPM_CONFIG_PREFIX",
+            )
+            env = {k: os.environ[k] for k in _SAFE_VARS if k in os.environ}
 
             self._proc = subprocess.Popen(
                 shlex.split(self._command),
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                env=env,
             )
             self._initialize()
         else:
