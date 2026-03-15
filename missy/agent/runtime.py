@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 from missy.core.events import AuditEvent, event_bus
@@ -278,7 +279,7 @@ class AgentRuntime:
 
         return censor_response(final_response)
 
-    def run_stream(self, user_input: str, session_id: str | None = None):
+    def run_stream(self, user_input: str, session_id: str | None = None) -> Iterator[str]:
         """Stream the response token-by-token for real-time CLI output.
 
         For tool-calling loops, this falls back to ``run()`` and yields the
