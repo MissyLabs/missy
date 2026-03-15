@@ -432,8 +432,14 @@ class VoiceServer:
             if msg_type == "audio_start":
                 in_audio_session = True
                 audio_buffer = b""
-                audio_sample_rate = int(msg.get("sample_rate", 16000))
-                audio_channels = int(msg.get("channels", 1))
+                try:
+                    audio_sample_rate = max(8000, min(48000, int(msg.get("sample_rate", 16000))))
+                except (ValueError, TypeError):
+                    audio_sample_rate = 16000
+                try:
+                    audio_channels = max(1, min(2, int(msg.get("channels", 1))))
+                except (ValueError, TypeError):
+                    audio_channels = 1
                 logger.debug(
                     "VoiceServer: audio_start from %s — rate=%d ch=%d",
                     node.node_id,

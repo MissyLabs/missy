@@ -217,7 +217,7 @@ class CodeEvolveTool(BaseTool):
                 proposed_code=kwargs["proposed_code"],
                 trigger=kwargs.get("trigger", "user_request"),
                 trigger_detail=kwargs.get("trigger_detail", ""),
-                confidence=float(kwargs.get("confidence", 0.5)),
+                confidence=max(0.0, min(1.0, float(kwargs.get("confidence", 0.5)))),
                 error_pattern=kwargs.get("error_pattern", ""),
             )
             return ToolResult(
@@ -267,7 +267,7 @@ class CodeEvolveTool(BaseTool):
                 diffs=diffs,
                 trigger=kwargs.get("trigger", "user_request"),
                 trigger_detail=kwargs.get("trigger_detail", ""),
-                confidence=float(kwargs.get("confidence", 0.5)),
+                confidence=max(0.0, min(1.0, float(kwargs.get("confidence", 0.5)))),
                 error_pattern=kwargs.get("error_pattern", ""),
             )
             files = [d.file_path for d in prop.diffs]
