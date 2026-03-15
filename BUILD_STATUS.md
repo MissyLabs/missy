@@ -58,7 +58,7 @@ missy/                          # 123 Python source files
 
 ## Test Results
 
-- 6091 tests passing across 180 test files
+- 6168 tests passing across 182 test files
 - 99%+ code coverage, zero test warnings
 - Unit, integration, policy, Discord, security, memory, agent, tools, skills, CLI, voice, scheduler tests
 - 54+ property-based tests (hypothesis) for policy engines, security, and rate limiter
@@ -68,6 +68,15 @@ missy/                          # 123 Python source files
 - 36 resilience tests (corrupted state files, edge case data, recovery paths)
 - 77 end-to-end integration tests
 - 495+ security edge-case tests (injection, secrets, vault, SSRF, path traversal, tool output injection, webhook hardening, scheme restriction, kwargs allowlist, file policy enforcement, shell brace groups, header filtering, gateway thread safety, cost tracker edge cases, env sanitization, chunked response limits, overlapping redaction)
+
+## Session 23 Additions (2026-03-15)
+
+- **Discord REST security fix**: upload_file, add_reaction, delete_message now use policy-enforced `self._http` instead of raw httpx — previously bypassed network policy enforcement and audit logging
+- **Piper TTS timeout**: Added `asyncio.wait_for(timeout=60)` to subprocess communicate() call to prevent indefinite hangs; process killed on timeout
+- **Hardening tests (40 new)**: Piper TTS (3), agent runtime tool loop edge cases (6), Discord gateway opcodes (11), Discord REST retry logic (3), network policy (6), MCP lifecycle (6), scheduler parser (5)
+- **Security tests (37 new)**: Code evolution path traversal prevention (5), code evolution lifecycle (5), vault operations (6), input sanitizer (6), secrets detector (5), censor pipeline (3), circuit breaker state machine (4), provider config (4)
+- **Total new tests**: 77 (from 6091 to 6168) across 2 new test files
+- **3 commits, zero ruff lint errors**
 
 ## Session 22 Additions (2026-03-15)
 
