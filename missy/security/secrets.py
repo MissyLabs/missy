@@ -64,6 +64,13 @@ class SecretsDetector:
         "google_oauth_secret": r'(?i)client[_\s]?secret["\s:=]+[A-Za-z0-9_\-]{24,}',
         "hashicorp_vault_token": r"(?:hvs|hvb|hvr)\.[A-Za-z0-9_\-]{24,}",
         "firebase_key": r"(?i)firebase[_\s]*(?:api[_\s]*key|secret)[\"'\s:=]+[A-Za-z0-9_\-]{20,}",
+        # Session 21 additions
+        "grafana_token": r"glc_[A-Za-z0-9_\-]{32,}",
+        "confluent_key": r"(?i)confluent[_\s]*(?:api[_\s]*(?:key|secret))[\"'\s:=]+[A-Za-z0-9_\-]{16,}",
+        "datadog_key": r"(?i)(?:dd|datadog)[_\s]*(?:api[_\s]*key|app[_\s]*key)[\"'\s:=]+[a-f0-9]{32,}",
+        "newrelic_key": r"NRAK-[A-Z0-9]{27}",
+        "pagerduty_key": r"(?i)pagerduty[_\s]*(?:api[_\s]*key|token)[\"'\s:=]+[A-Za-z0-9_\-]{20,}",
+        "ssh_key_content": r"AAAA[BCD][A-Za-z0-9+/]{100,}",
     }
 
     def __init__(self) -> None:

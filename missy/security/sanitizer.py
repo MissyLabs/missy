@@ -222,6 +222,13 @@ class InputSanitizer:
         # --- Payload concatenation attack ---
         r"continue\s+from\s+where\s+(?:you|I)\s+left\s+off",  # Multi-turn chain attack
         r"the\s+previous\s+(?:message|response)\s+was\s+(?:wrong|incorrect|a\s+test)",  # Context override
+        # --- Session 21: additional attack vectors ---
+        r"output\s+your\s+(?:system|initial|original)\s+(?:prompt|instructions?)",  # Prompt extraction
+        r"repeat\s+(?:back|everything|all)\s+(?:above|before|from\s+the\s+start)",  # Prompt leaking via repetition
+        r"translate\s+(?:your|the)\s+(?:system|initial)\s+(?:prompt|instructions?)",  # Translate-based extraction
+        r"write\s+(?:a\s+)?poem\s+(?:about|using|with)\s+your\s+(?:system|initial)\s+(?:prompt|instructions?)",  # Creative extraction
+        r"(?:base64|hex|rot13)\s+(?:encode|decode)\s+(?:your|the)\s+(?:system|initial)\s+(?:prompt|instructions?)",  # Encoding extraction
+        r"you\s+(?:must|have\s+to|need\s+to)\s+(?:always|now)\s+(?:respond|answer|reply)\s+in",  # Forced behavior change
     ]
 
     def __init__(self) -> None:
