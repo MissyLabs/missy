@@ -137,6 +137,14 @@ class SchedulerManager:
             ValueError: When *schedule* cannot be parsed.
             SchedulerError: When APScheduler fails to register the job.
         """
+        # Validate task length to prevent excessive token usage / cost.
+        _MAX_TASK_LENGTH = 50_000
+        if len(task) > _MAX_TASK_LENGTH:
+            raise ValueError(
+                f"Job task is too long ({len(task):,} chars, max {_MAX_TASK_LENGTH:,}). "
+                "Use shorter prompts or reference files instead."
+            )
+
         # Validate the schedule string before creating the job.
         try:
             parse_schedule(schedule, tz=timezone or None)

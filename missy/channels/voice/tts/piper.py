@@ -54,8 +54,17 @@ _TASK_ID = "tts"
 
 
 def _piper_subprocess_env() -> dict[str, str]:
-    """Return env dict with LD_LIBRARY_PATH set for Piper shared libs."""
-    env = {**os.environ}
+    """Return a sanitized env dict with LD_LIBRARY_PATH set for Piper shared libs.
+
+    Only safe environment variables are forwarded to prevent API keys and
+    other secrets from leaking to the Piper subprocess.
+    """
+    _SAFE_VARS = (
+        "PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM",
+        "XDG_RUNTIME_DIR", "TMPDIR", "TMP", "TEMP",
+        "LD_LIBRARY_PATH", "PULSE_SERVER", "ALSA_CARD",
+    )
+    env = {k: os.environ[k] for k in _SAFE_VARS if k in os.environ}
     piper_lib = str(_LOCAL_PIPER_BIN.parent)
     existing = env.get("LD_LIBRARY_PATH", "")
     if piper_lib not in existing:

@@ -205,6 +205,7 @@ class DeviceRegistry:
                 dir=self._path.parent, prefix=".devices_", suffix=".json.tmp"
             )
             try:
+                os.fchmod(tmp_fd, 0o600)
                 with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
                     fh.write(payload)
                 os.replace(tmp_path, self._path)

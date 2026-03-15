@@ -124,6 +124,10 @@ class CostTracker:
             ``None``, no budget enforcement is performed.
     """
 
+    #: Maximum individual records to retain in memory.  Totals
+    #: remain accurate after eviction; only per-call detail is lost.
+    _MAX_RECORDS: int = 10_000
+
     def __init__(self, max_spend_usd: float = 0.0) -> None:
         self.max_spend_usd = max_spend_usd or 0.0
         self._records: list[UsageRecord] = []
@@ -167,6 +171,10 @@ class CostTracker:
             self._total_prompt += prompt_tokens
             self._total_completion += completion_tokens
             self._total_cost += cost
+            # Evict oldest records to prevent unbounded memory growth
+            # in long-running sessions.  Totals remain accurate.
+            if len(self._records) > self._MAX_RECORDS:
+                self._records = self._records[-self._MAX_RECORDS:]
 
         return rec
 
