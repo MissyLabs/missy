@@ -105,12 +105,12 @@ class TestInjectionPatternCount:
 class TestMCPBlockInjection:
     """Verify MCP manager block_injection mode."""
 
-    def test_block_injection_default_false(self):
-        """Default block_injection should be False."""
+    def test_block_injection_default_true(self):
+        """Default block_injection should be True (secure default)."""
         from missy.mcp.manager import McpManager
 
         mgr = McpManager()
-        assert mgr._block_injection is False
+        assert mgr._block_injection is True
 
     def test_block_injection_enabled(self):
         """block_injection=True should store the flag."""

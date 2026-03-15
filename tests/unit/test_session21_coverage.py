@@ -580,14 +580,13 @@ class TestSchedulerEdgeCases:
     """Additional edge cases for the scheduler."""
 
     def test_add_job_with_empty_name_raises(self, tmp_path):
-        """Empty job name raises SchedulerError from APScheduler."""
-        from missy.core.exceptions import SchedulerError
+        """Empty job name raises ValueError from input validation."""
         from missy.scheduler.manager import SchedulerManager
 
         mgr = SchedulerManager(jobs_file=str(tmp_path / "jobs.json"))
         mgr.start()
         try:
-            with pytest.raises(SchedulerError):
+            with pytest.raises(ValueError, match="name must not be empty"):
                 mgr.add_job(name="", schedule="every 5 minutes", task="test task")
         finally:
             mgr.stop()

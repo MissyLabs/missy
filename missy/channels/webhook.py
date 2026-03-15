@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 
 # Maximum request body size (1 MB).
 _MAX_PAYLOAD_BYTES = 1024 * 1024
+# Maximum prompt length (characters) to prevent excessive token usage.
+_MAX_PROMPT_LENGTH = 32_000
 # Maximum queued messages before rejecting new ones.
 _MAX_QUEUE_SIZE = 1000
 # Rate limit: max requests per IP per window.
@@ -93,6 +95,12 @@ class WebhookChannel(BaseChannel):
             del self._rate_tracker[ip]
 
     def start(self) -> None:
+        if self._trust_proxy and self._host != "127.0.0.1":
+            logger.warning(
+                "WebhookChannel: trust_proxy=True on non-loopback bind (%s) — "
+                "X-Forwarded-For can be spoofed if not behind a trusted proxy.",
+                self._host,
+            )
         channel_ref = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -188,6 +196,12 @@ class WebhookChannel(BaseChannel):
                 prompt = (data.get("prompt") or "").strip()
                 if not prompt:
                     self.send_response(400)
+                    self._send_security_headers()
+                    self.end_headers()
+                    return
+
+                if len(prompt) > _MAX_PROMPT_LENGTH:
+                    self.send_response(413)
                     self._send_security_headers()
                     self.end_headers()
                     return
