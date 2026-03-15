@@ -8,9 +8,9 @@
 | Metric | Value |
 |--------|-------|
 | Source files | 123 Python modules |
-| Test files | 150 test files |
-| Total tests | 5317 |
-| Tests passing | 5317 |
+| Test files | 151 test files |
+| Total tests | 5329 |
+| Tests passing | 5329 |
 | Tests failing | 0 |
 | Tests skipped | 7 |
 | Warnings | 1 (websockets deprecation) |

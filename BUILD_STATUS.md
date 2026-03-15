@@ -58,7 +58,7 @@ missy/                          # 123 Python source files
 
 ## Test Results
 
-- 5318 tests passing across 150 test files
+- 5329 tests passing across 151 test files
 - 99%+ code coverage, zero test warnings
 - Unit, integration, policy, Discord, security, memory, agent, tools, skills, CLI, voice, scheduler tests
 - 54+ property-based tests (hypothesis) for policy engines, security, and rate limiter
@@ -80,7 +80,7 @@ missy/                          # 123 Python source files
 - **Runtime coverage**: Tests for tool output injection scanning, httpx ImportError fallback, get_tool_registry error paths
 - **Voice command coverage**: Tests for unrecognized commands, voice=None, !say errors
 - **Network policy coverage**: Tests for unparseable IP addresses from getaddrinfo
-- **Total new tests**: 42 (from 5276 to 5318) across 3 new test files
+- **Total new tests**: 53 (from 5276 to 5329) across 4 new test files
 - **Zero ruff lint errors**
 
 ## Session 14 Additions (2026-03-15)

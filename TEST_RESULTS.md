@@ -8,14 +8,14 @@
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 5317 |
-| Passed | 5317 |
+| Total tests | 5329 |
+| Passed | 5329 |
 | Failed | 0 |
 | Skipped | 7 |
 | Warnings | 1 (websockets deprecation) |
 | Duration | ~113s |
 | Source files | 123 |
-| Test files | 150 |
+| Test files | 151 |
 | Statements | 11550+ |
 | Coverage | 99%+ |
 

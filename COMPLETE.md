@@ -18,7 +18,7 @@ Missy has reached strong feature parity with OpenClaw-style capabilities across 
 | Policy/security enforcement works | ✅ 3-layer default-deny (network, filesystem, shell) |
 | Audit logging works | ✅ Structured JSONL + OpenTelemetry |
 | Implementation docs exist | ✅ 10+ docs covering all subsystems |
-| Tests have been run | ✅ 5317 tests passing, 99%+ coverage |
+| Tests have been run | ✅ 5329 tests passing, 99%+ coverage |
 | Security artifacts exist | ✅ SECURITY.md, AUDIT_SECURITY.md, threat model, vault |
 | Discord integration exists and documented | ✅ WebSocket gateway, slash commands, voice, threads, DISCORD.md |
 | OPENCLAW_GAP_ANALYSIS.md shows parity | ✅ All major capabilities implemented |
@@ -26,7 +26,7 @@ Missy has reached strong feature parity with OpenClaw-style capabilities across 
 ## Architecture
 
 - **123 Python source files** across 15+ packages
-- **5317 tests** across 150 test files
+- **5329 tests** across 151 test files
 - **99%+ code coverage**
 - **60+ CLI commands** covering all operator workflows
 - **4 AI providers** (Anthropic, OpenAI, Ollama, Codex) with fallback chain
