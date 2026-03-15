@@ -176,6 +176,7 @@ class TestWebhookHandlerDoPost:
         handler.rfile = rfile
         handler.wfile = wfile
         handler.headers = mock_headers_obj
+        handler.client_address = ("127.0.0.1", 12345)
 
         _responses = []
 
