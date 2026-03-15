@@ -55,14 +55,19 @@ may be loaded.
 User input is sanitized before reaching the AI provider:
 
 - Truncated to 10 000 characters to prevent oversized-payload attacks.
-- Scanned for 13+ prompt-injection patterns; violations are logged as
-  warnings.
+- Scanned for 40+ prompt-injection patterns covering system/role delimiters,
+  jailbreak attempts, multi-language injection (English, Spanish, French,
+  German, Italian, Portuguese, Russian, Japanese), tool/function abuse,
+  prompt leaking/exfiltration, model-specific tokens (Llama 2/3, GPT,
+  Claude), base64-encoded payloads, and hidden instruction vectors;
+  violations are logged as warnings.
 
 ### Secrets Detection & Response Censoring
 
-The `SecretsDetector` scans text for 23 credential patterns (API keys
+The `SecretsDetector` scans text for 26 credential patterns (API keys
 including `sk-proj-...`, private keys, tokens, passwords, JWTs, AWS
 credentials, GitHub/GitLab/npm/PyPI/Slack/Discord/SendGrid tokens,
+Azure AccountKey, Twilio SK, Mailgun key,
 database connection strings, etc.) and can redact them before text is
 stored or transmitted.  The CLI warns users when potential secrets are
 detected in a prompt.
@@ -323,3 +328,4 @@ Out of scope:
 |---|---|
 | 0.1.0 | Initial release with secure-by-default policy engine, input sanitization, secrets detection, and JSONL audit logging. |
 | 0.2.0 | Added tool output injection scanning, response censoring, webhook rate limiting, MCP server isolation, process substitution blocking, vault atomic writes, config hotreload safety, encrypted vault with ChaCha20-Poly1305. |
+| 0.3.0 | Extended sanitizer to 40+ patterns (tool abuse, prompt leaking, Japanese, Anthropic delimiters); added Azure/Twilio/Mailgun secret detection; gateway async aput/ahead methods; web_fetch header sanitization as class constant. |
