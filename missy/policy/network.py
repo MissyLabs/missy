@@ -132,15 +132,49 @@ class NetworkPolicyEngine:
             return True
 
         # Step 5 – DNS resolution + CIDR re-check.
+        # Defense against DNS rebinding: when a *hostname* (not a direct IP)
+        # resolves to a private/reserved address, deny unless that private
+        # range is explicitly allowed via CIDR.  This prevents an attacker
+        # from pointing evil.example.com at 169.254.169.254 (cloud metadata)
+        # or 10.0.0.1 (internal infrastructure) and bypassing domain checks.
         try:
             infos = socket.getaddrinfo(host, None)
             for info in infos:
-                # info[4] is the address tuple; index 0 is the IP string.
                 ip_str = info[4][0]
+                try:
+                    addr = ipaddress.ip_address(ip_str)
+                except ValueError:
+                    continue
+                # Block private/reserved IPs obtained via DNS rebinding
+                if addr.is_private or addr.is_loopback or addr.is_link_local:
+                    rule = self._check_cidr(ip_str)
+                    if rule:
+                        # Explicitly allowed private CIDR — permit
+                        self._emit_event(host, "allow", rule, session_id, task_id)
+                        return True
+                    # Private IP from DNS but NOT in allowed CIDRs — deny
+                    logger.warning(
+                        "NetworkPolicyEngine: DNS rebinding blocked — %r resolved to "
+                        "private address %s which is not in allowed_cidrs",
+                        host, ip_str,
+                    )
+                    self._emit_event(host, "deny", None, session_id, task_id)
+                    raise PolicyViolationError(
+                        f"Network access denied: {host!r} resolved to private "
+                        f"address {ip_str} (possible DNS rebinding attack).",
+                        category="network",
+                        detail=(
+                            f"Hostname {host!r} resolved to {ip_str} which is a "
+                            "private/reserved address not explicitly allowed by policy."
+                        ),
+                    )
+                # Public IP — check against allowed CIDRs
                 rule = self._check_cidr(ip_str)
                 if rule:
                     self._emit_event(host, "allow", rule, session_id, task_id)
                     return True
+        except PolicyViolationError:
+            raise
         except OSError:
             # DNS failure – treat as unresolvable and fall through to deny.
             logger.debug("NetworkPolicyEngine: DNS resolution failed for %r", host)
