@@ -1,6 +1,6 @@
 # AUDIT_SECURITY
 
-- Timestamp: 2026-03-15 (updated session 24)
+- Timestamp: 2026-03-15 (updated session 25)
 - Auditor: Automated build analysis + security audit agent
 
 ## Security Architecture Summary
@@ -35,6 +35,12 @@ Missy implements defense-in-depth with 15 security layers:
 21. **Discord Snowflake Validation** — All Discord REST API methods validate snowflake IDs against `^\d{1,20}$` to prevent URL path traversal attacks
 22. **Calculator DoS Guards** — Left-shift operations capped at 10,000 bits and exponentiation capped at 1,000 to prevent memory exhaustion
 23. **X11 Shell Quoting** — xdotool commands use `shlex.quote()` instead of `json.dumps()` to prevent shell metacharacter injection via `$()`
+24. **X11 Integer Coercion** — Explicit `int()` coercion on x, y, delay_ms parameters to prevent shell injection via string values in xdotool commands
+25. **Self-Create Tool Blocklist** — 25+ dangerous patterns blocked including `__builtins__`, `open(`, `os.exec/fork/spawn/popen`, `shutil.rmtree/move`, `os.remove/unlink/rmdir`
+26. **FallbackSandbox Env Sanitization** — Non-Docker sandbox path also filters subprocess environment to safe-only vars (matching ShellExecTool behavior)
+27. **Code Evolution Path Traversal** — `is_relative_to()` check blocks diff file paths resolving outside repo root (e.g. `../../etc/cron.d/backdoor`)
+28. **Gateway URL Length Limit** — URLs exceeding 8192 chars rejected to prevent URL-bomb memory exhaustion
+29. **Runtime Input Validation** — Empty/whitespace-only user_input rejected at API boundary before reaching LLM
 
 ## Threat Model Coverage
 

@@ -58,7 +58,7 @@ missy/                          # 123 Python source files
 
 ## Test Results
 
-- 6316 tests passing across 188 test files
+- 6412 tests passing across 191 test files
 - 99%+ code coverage, zero test warnings
 - Unit, integration, policy, Discord, security, memory, agent, tools, skills, CLI, voice, scheduler tests
 - 54+ property-based tests (hypothesis) for policy engines, security, and rate limiter
@@ -68,6 +68,24 @@ missy/                          # 123 Python source files
 - 36 resilience tests (corrupted state files, edge case data, recovery paths)
 - 77 end-to-end integration tests
 - 540+ security edge-case tests (injection, secrets, vault, SSRF, path traversal, tool output injection, webhook hardening, scheme restriction, kwargs allowlist, file policy enforcement, shell brace groups, header filtering, gateway thread safety, cost tracker edge cases, env sanitization, chunked response limits, overlapping redaction, snowflake validation, LShift DoS guard, shell quoting)
+
+## Session 25 Additions (2026-03-15)
+
+- **5 security vulnerability fixes from code audit**:
+  - Self-create tool: expanded blocklist with 10 new patterns (__builtins__, open(, os.exec/fork/spawn/popen, shutil.rmtree/move, os.remove/unlink/rmdir)
+  - X11 click/type tools: explicit int() coercion on x, y, delay_ms parameters to prevent shell injection via string params
+  - FallbackSandbox: environment sanitized to safe-only vars, preventing API key leakage to arbitrary commands
+  - Code evolution: is_relative_to() check blocks path traversal (../../etc/cron.d/backdoor)
+  - Code evolution: test subprocess environment sanitized to safe-only vars
+- **6 silent exception handler fixes**: Added debug logging with exc_info to runtime (streaming fallback, checkpoint init), code_evolution (_load, _revert_diffs), sanitizer (URL/HTML decode)
+- **Magic number extraction**: Checkpoint age thresholds extracted to _RESUME_THRESHOLD_SECS (3600) and _RESTART_THRESHOLD_SECS (86400)
+- **Input validation hardening**:
+  - Gateway: timeout positivity validation, URL length limit (8192 chars)
+  - Runtime: empty user_input validation on run() and run_stream()
+  - Browser: session_id length limit (128 chars)
+- **Tests (96 new)**: Validation tests (22), coverage gap tests (52), security fix tests (22)
+- **Total new tests**: 96 (from 6316 to 6412) across 3 new test files
+- **6 commits, zero ruff lint errors**
 
 ## Session 24 Additions (2026-03-15)
 
