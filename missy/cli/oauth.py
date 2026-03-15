@@ -255,8 +255,13 @@ def _save_token(data: dict) -> None:
     """Write token data to TOKEN_FILE atomically (mode 0o600)."""
     TOKEN_FILE.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
     tmp = TOKEN_FILE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    tmp.chmod(0o600)
+    fd = os.open(str(tmp), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f, indent=2)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     tmp.replace(TOKEN_FILE)
 
 

@@ -112,8 +112,13 @@ def store_token(token: str, token_type: str, issued_at: int | None = None) -> No
         "issued_at": issued_at or int(time.time()),
     }
     tmp = TOKEN_FILE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    tmp.chmod(0o600)
+    fd = os.open(str(tmp), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f, indent=2)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     tmp.replace(TOKEN_FILE)
 
 

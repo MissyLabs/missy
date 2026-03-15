@@ -124,7 +124,7 @@ def _walk_tree(node, max_depth: int, current_depth: int = 0) -> list[dict[str, A
             text_iface = node.queryText()
             text_content = text_iface.getText(0, -1)
         except Exception:  # noqa: BLE001
-            pass
+            logger.debug("AT-SPI text query failed", exc_info=True)
 
         # Collect state flags of interest
         try:
@@ -146,7 +146,7 @@ def _walk_tree(node, max_depth: int, current_depth: int = 0) -> list[dict[str, A
                     if state_set.contains(state_val):
                         states.append(state_name)
                 except Exception:  # noqa: BLE001
-                    pass
+                    logger.debug("AT-SPI state query failed for %s", state_name, exc_info=True)
         except Exception:  # noqa: BLE001
             states = []
 
@@ -251,9 +251,10 @@ def _find_element(
                     if found is not None:
                         return found
                 except Exception:  # noqa: BLE001
+                    logger.debug("AT-SPI child access failed at index %d", i, exc_info=True)
                     continue
         except Exception:  # noqa: BLE001
-            pass
+            logger.debug("AT-SPI element search failed", exc_info=True)
         return None
 
     return _search(app, 0)
@@ -650,7 +651,7 @@ class AtSpiSetValueTool(BaseTool):
                 component = element.queryComponent()
                 component.grabFocus()
             except Exception:  # noqa: BLE001
-                pass
+                logger.debug("AT-SPI grabFocus failed for %s", name, exc_info=True)
 
             # Try AT-SPI editable text interface
             set_via: str
@@ -662,7 +663,7 @@ class AtSpiSetValueTool(BaseTool):
                     text_iface = element.queryText()
                     current_len = text_iface.getCharacterCount()
                 except Exception:  # noqa: BLE001
-                    pass
+                    logger.debug("AT-SPI character count query failed", exc_info=True)
                 if current_len > 0:
                     editable.deleteText(0, current_len)
                 editable.insertText(0, value, len(value))

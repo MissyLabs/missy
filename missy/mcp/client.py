@@ -53,6 +53,12 @@ class McpClient:
                 stderr=subprocess.PIPE,
                 env=env,
             )
+            # Verify the process is alive before attempting handshake
+            if self._proc.poll() is not None:
+                stderr = self._proc.stderr.read().decode(errors="replace") if self._proc.stderr else ""
+                raise RuntimeError(
+                    f"MCP server process exited immediately with code {self._proc.returncode}: {stderr[:500]}"
+                )
             self._initialize()
         else:
             raise NotImplementedError("HTTP MCP transport not yet implemented")
