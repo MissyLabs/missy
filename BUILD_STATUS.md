@@ -58,7 +58,7 @@ missy/                          # 123 Python source files
 
 ## Test Results
 
-- 6076 tests passing across 178 test files
+- 6091 tests passing across 180 test files
 - 99%+ code coverage, zero test warnings
 - Unit, integration, policy, Discord, security, memory, agent, tools, skills, CLI, voice, scheduler tests
 - 54+ property-based tests (hypothesis) for policy engines, security, and rate limiter
@@ -83,8 +83,10 @@ missy/                          # 123 Python source files
 - **Coverage gap tests (19 new)**: Edge client malformed JSON, voice channel start failure, registry save error, network policy IP parse, Discord voice commands, vault crypto unavailable
 - **Security hardening tests (13 new)**: ReDoS resistance, WebSocket max_size verification, audit tail-read round-trips, atomic audio log write verification
 - **Edge case tests (36 new)**: Config hot-reload callback, memory store 100KB content, rate limiter refill boundary, tool registry double-register, circuit breaker half-open recovery, provider registry all-unavailable, scheduler parse errors, context manager zero budget, MCP shutdown idempotency, cost tracker negative tokens
-- **Total new tests**: 68 (from 6008 to 6076) across 4 new test files
-- **7 commits, zero ruff lint errors**
+- **Property-based tests (9 new)**: Hypothesis invariants for sanitizer (never raises, output ≤ input, returns list), secrets detector (never raises, redact idempotent), censor (never raises), scheduler parser (never crashes)
+- **Tool result truncation**: Agent runtime now truncates tool results exceeding 200K chars to prevent memory exhaustion (6 new tests)
+- **Total new tests**: 83 (from 6008 to 6091) across 7 new test files
+- **10 commits, zero ruff lint errors**
 
 ## Session 21 Additions (2026-03-15)
 
