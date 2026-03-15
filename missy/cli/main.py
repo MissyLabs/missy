@@ -1691,7 +1691,7 @@ def doctor(ctx: click.Context) -> None:
         else:
             table.add_row("checkpoints", Text("none", style="dim"), "no checkpoint database")
     except Exception:
-        pass
+        logger.debug("doctor: failed to check checkpoints", exc_info=True)
 
     console.print(table)
 
@@ -2572,7 +2572,7 @@ def voice_status(ctx: click.Context) -> None:
                     raw = yaml.safe_load(fh) or {}
                 voice_cfg = raw.get("voice", {})
         except Exception:
-            pass
+            logger.debug("voice status: failed to load voice config", exc_info=True)
 
     host = voice_cfg.get("host", "0.0.0.0")
     port = voice_cfg.get("port", 8765)
