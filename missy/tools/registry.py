@@ -168,6 +168,13 @@ class ToolRegistry:
         Raises:
             PolicyViolationError: When any required permission is denied.
         """
+        perms = tool.permissions
+
+        # If the tool declares no permissions, no policy checks are needed.
+        needs_policy = perms.network or perms.shell or perms.filesystem_read or perms.filesystem_write
+        if not needs_policy:
+            return
+
         # Policy engine must be initialised — fail closed if it is not.
         try:
             engine = get_policy_engine()
@@ -181,8 +188,6 @@ class ToolRegistry:
                 category="security",
                 detail="Policy engine must be initialised before tool execution.",
             )
-
-        perms = tool.permissions
 
         if perms.network:
             for host in perms.allowed_hosts:

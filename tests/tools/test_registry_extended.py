@@ -139,6 +139,59 @@ class TestToolRegistryPolicyChecks:
         engine.check_write.assert_called_once_with("/tmp/test", session_id="", task_id="")
 
 
+    def test_fail_closed_all_tool_types(self):
+        """All tool types with permissions are denied when policy engine is absent."""
+        import missy.policy.engine as pe
+
+        old = pe._engine
+        pe._engine = None
+        try:
+            reg = ToolRegistry()
+            for tool_cls in [NetworkTool, ShellTool, FSTool]:
+                reg.register(tool_cls())
+                result = reg.execute(tool_cls.name)
+                assert not result.success, f"{tool_cls.name} should be denied"
+                assert "policy engine not initialised" in result.error
+        finally:
+            pe._engine = old
+
+    def test_no_permissions_tool_allowed_without_engine(self):
+        """A tool with no permissions should execute even without policy engine."""
+        import missy.policy.engine as pe
+
+        old = pe._engine
+        pe._engine = None
+        try:
+            reg = ToolRegistry()
+            reg.register(EchoTool())
+            result = reg.execute("echo", text="hi")
+            assert result.success
+            assert result.output == "hi"
+        finally:
+            pe._engine = old
+
+    @patch("missy.tools.registry.get_policy_engine")
+    def test_network_host_check_called_per_host(self, mock_get_engine):
+        """Each allowed_host should be checked against network policy."""
+        engine = MagicMock()
+        mock_get_engine.return_value = engine
+
+        class MultiHostTool(BaseTool):
+            name = "multi_host"
+            description = "Multiple hosts"
+            permissions = ToolPermissions(
+                network=True, allowed_hosts=["api.a.com", "api.b.com"]
+            )
+
+            def execute(self, **kwargs):
+                return ToolResult(success=True, output="ok")
+
+        reg = ToolRegistry()
+        reg.register(MultiHostTool())
+        reg.execute("multi_host")
+        assert engine.check_network.call_count == 2
+
+
 class TestToolRegistryQueries:
     def test_list_tools_sorted(self):
         reg = ToolRegistry()
