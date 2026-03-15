@@ -41,6 +41,7 @@ and call :func:`store_token` with the new value.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import time
@@ -50,6 +51,7 @@ import click
 from rich.console import Console
 from rich.panel import Panel
 
+logger = logging.getLogger(__name__)
 console = Console()
 
 # ---------------------------------------------------------------------------
@@ -122,6 +124,7 @@ def load_token() -> dict | None:
     try:
         return json.loads(TOKEN_FILE.read_text(encoding="utf-8"))
     except Exception:
+        logger.debug("Failed to read Anthropic token file %s", TOKEN_FILE)
         return None
 
 
@@ -316,4 +319,5 @@ def get_current_token(vault_dir: str = "~/.missy/secrets") -> str | None:
         v = Vault(vault_dir)
         return v.get("anthropic_api_key")
     except Exception:
+        logger.debug("Failed to load Anthropic key from vault")
         return None
