@@ -55,12 +55,14 @@ may be loaded.
 User input is sanitized before reaching the AI provider:
 
 - Truncated to 10 000 characters to prevent oversized-payload attacks.
-- Scanned for 40+ prompt-injection patterns covering system/role delimiters,
+- Scanned for 69 prompt-injection patterns covering system/role delimiters,
   jailbreak attempts, multi-language injection (English, Spanish, French,
-  German, Italian, Portuguese, Russian, Japanese), tool/function abuse,
+  German, Italian, Portuguese, Russian, Japanese, Korean), tool/function abuse,
   prompt leaking/exfiltration, model-specific tokens (Llama 2/3, GPT,
-  Claude), base64-encoded payloads, and hidden instruction vectors;
-  violations are logged as warnings.
+  Claude, FIM), base64-encoded payloads, hidden instruction vectors,
+  trigger-based injection, conditional overrides, memory poisoning, future
+  response control, and role confusion attacks; violations are logged as
+  warnings.
 
 ### Secrets Detection & Response Censoring
 

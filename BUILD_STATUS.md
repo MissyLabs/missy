@@ -24,7 +24,7 @@ All core phases implemented, parity gaps closed, comprehensive hardening applied
 16. CLI (60+ commands via click + rich, including recover, evolve)
 17. Discord (WebSocket gateway, REST API, threads, slash commands, pairing, access control, voice, interactive setup wizard)
 18. Code self-evolution engine (propose, test, apply, rollback)
-19. Tests (5232 tests, 99%+ coverage)
+19. Tests (5711 tests, 99%+ coverage)
 20. Documentation (SECURITY.md, OPERATIONS.md, ARCHITECTURE.md, CONFIG_REFERENCE.md, DISCORD.md, TESTING.md, TROUBLESHOOTING.md, 10+ implementation docs)
 21. Audit artifacts (AUDIT_SECURITY.md, AUDIT_CONNECTIVITY.md)
 22. Test artifacts (TEST_RESULTS.md, TEST_EDGE_CASES.md, BUILD_RESULTS.md)
@@ -58,7 +58,7 @@ missy/                          # 123 Python source files
 
 ## Test Results
 
-- 5594 tests passing across 159 test files
+- 5711 tests passing across 163 test files
 - 99%+ code coverage, zero test warnings
 - Unit, integration, policy, Discord, security, memory, agent, tools, skills, CLI, voice, scheduler tests
 - 54+ property-based tests (hypothesis) for policy engines, security, and rate limiter
@@ -66,6 +66,18 @@ missy/                          # 123 Python source files
 - 48 rate limiter stress tests (concurrent, burst, thread safety)
 - 77 end-to-end integration tests
 - 410+ security edge-case tests (injection, secrets, vault, SSRF, path traversal, tool output injection, webhook hardening, scheme restriction, kwargs allowlist, file policy enforcement, shell brace groups, header filtering, gateway thread safety, cost tracker edge cases)
+
+## Session 19 Additions (2026-03-15)
+
+- **New secret detection patterns (5)**: HuggingFace (hf_), Databricks (dapi), DigitalOcean (dop_v1_), Linear (lin_api_), Supabase (sbp_). Total: 28 patterns
+- **New injection detection patterns (10)**: Korean language, trigger-based injection, conditional override, memory poisoning, future response control, FIM tokens (prefix/middle/suffix), endofprompt token, role confusion attacks. Total: 69 patterns
+- **Gateway response size limits**: All HTTP methods (sync + async) now check Content-Length against configurable max_response_bytes (default 50MB). Prevents memory exhaustion from malicious/oversized responses
+- **Coverage gap tests (24 new)**: Scheduler _load_jobs error paths (invalid JSON, non-list, non-dict records, malformed records, OSError on stat), voice registry corrupt JSON, voice channel loop error, discord voice resample break branch, voice commands fallthrough, network policy IP parsing, discord channel agent runtime
+- **Security hardening tests (32 new)**: All 5 new secret patterns with positive/negative tests, all 10 new injection patterns, redaction verification, combined security pipeline tests, obfuscated/base64 injection detection
+- **Gateway hardening tests (16 new)**: Response size limit boundary tests (within/exceeding/exactly at limit, no Content-Length, non-numeric, zero), integration tests for GET/POST/aget/apost, pool limits, allowed schemes, allowed kwargs
+- **Edge case tests (45 new)**: Shell policy compound commands (18 tests: newline, pipe, or, background, subshell, backtick, heredoc, herestring, process substitution, brace group), webhook rate limiting (3 tests), circuit breaker state machine (5 tests), memory store FTS5 (5 tests), sanitizer obfuscation resistance (5 tests), cost tracker (5 tests), config hot-reload (1 test), provider errors (3 tests)
+- **Total new tests**: 117 (from 5594 to 5711) across 4 new test files
+- **Zero ruff lint errors**
 
 ## Session 18 Additions (2026-03-15)
 
