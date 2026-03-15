@@ -285,7 +285,16 @@ class PiperTTS(TTSEngine):
 
         # Write text followed by a newline; Piper processes one utterance per line.
         stdin_data = (text + "\n").encode("utf-8")
-        pcm_bytes, stderr_bytes = await proc.communicate(input=stdin_data)
+        try:
+            pcm_bytes, stderr_bytes = await asyncio.wait_for(
+                proc.communicate(input=stdin_data), timeout=60.0
+            )
+        except TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise RuntimeError(
+                "Piper TTS process timed out after 60 seconds"
+            ) from None
 
         t_end = time.perf_counter()
         processing_ms = int((t_end - t_start) * 1000)
