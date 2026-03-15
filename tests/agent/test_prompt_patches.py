@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -13,7 +12,6 @@ from missy.agent.prompt_patches import (
     PromptPatch,
     PromptPatchManager,
 )
-
 
 # ---- PromptPatch dataclass ----
 
@@ -217,7 +215,7 @@ class TestManagerListMethods:
 
 class TestManagerRecordOutcome:
     def test_record_success(self, mgr):
-        p = mgr.propose(PatchType.TOOL_USAGE_HINT, "test", confidence=0.9)
+        mgr.propose(PatchType.TOOL_USAGE_HINT, "test", confidence=0.9)
         mgr.record_outcome(success=True)
         patches = mgr.list_all()
         assert patches[0].applications == 1
@@ -266,10 +264,10 @@ class TestManagerPersistence:
     def test_round_trip_all_statuses(self, tmp_path):
         path = str(tmp_path / "patches.json")
         mgr = PromptPatchManager(store_path=path)
-        p1 = mgr.propose(PatchType.TOOL_USAGE_HINT, "approved", confidence=0.9)
-        p2 = mgr.propose(PatchType.ERROR_AVOIDANCE, "proposed", confidence=0.5)
-        p3 = mgr.propose(PatchType.WORKFLOW_PATTERN, "rejected", confidence=0.5)
-        mgr.reject(p3.id)
+        mgr.propose(PatchType.TOOL_USAGE_HINT, "approved", confidence=0.9)
+        mgr.propose(PatchType.ERROR_AVOIDANCE, "proposed", confidence=0.5)
+        rejected = mgr.propose(PatchType.WORKFLOW_PATTERN, "rejected", confidence=0.5)
+        mgr.reject(rejected.id)
 
         mgr2 = PromptPatchManager(store_path=path)
         patches = mgr2.list_all()

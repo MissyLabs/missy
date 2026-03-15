@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from missy.agent.done_criteria import (
     DoneCriteria,
     is_compound_task,

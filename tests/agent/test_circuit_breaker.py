@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
+import contextlib
 import threading
 import time
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from missy.agent.circuit_breaker import CircuitBreaker, CircuitState
 from missy.core.exceptions import MissyError
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -26,7 +26,7 @@ def _trip(breaker: CircuitBreaker, n: int | None = None) -> None:
     """Drive *n* (default: threshold) consecutive failures through the breaker."""
     count = n if n is not None else breaker._threshold
     for _ in range(count):
-        with pytest.raises(Exception):
+        with pytest.raises(RuntimeError):
             breaker.call(_raise)
 
 
@@ -543,17 +543,13 @@ class TestThreadSafety:
 
         def succeed():
             while not stop.is_set():
-                try:
+                with contextlib.suppress(Exception):
                     breaker.call(lambda: None)
-                except Exception:
-                    pass
 
         def fail():
             while not stop.is_set():
-                try:
+                with contextlib.suppress(Exception):
                     breaker.call(_raise)
-                except Exception:
-                    pass
 
         workers = [threading.Thread(target=succeed) for _ in range(3)]
         workers += [threading.Thread(target=fail) for _ in range(3)]
@@ -608,7 +604,7 @@ class TestCircuitStateEnum:
         assert CircuitState.HALF_OPEN == "half_open"
 
     def test_all_three_members_exist(self):
-        members = {s for s in CircuitState}
+        members = set(CircuitState)
         assert members == {CircuitState.CLOSED, CircuitState.OPEN, CircuitState.HALF_OPEN}
 
     def test_str_representation(self):

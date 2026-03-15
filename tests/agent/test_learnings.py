@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from missy.agent.learnings import (
     TaskLearning,
     extract_learnings,

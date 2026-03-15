@@ -83,7 +83,7 @@ class TestMcpClientRpc:
         c = self._make_connected_client()
         resp = {"jsonrpc": "2.0", "id": "1", "result": {}}
         c._proc.stdout.readline.return_value = json.dumps(resp).encode() + b"\n"
-        result = c._rpc("test/method")
+        c._rpc("test/method")
         sent = json.loads(c._proc.stdin.write.call_args[0][0].decode())
         assert "params" not in sent
 

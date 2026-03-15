@@ -37,7 +37,6 @@ from missy.tools.builtin.file_write import FileWriteTool
 from missy.tools.builtin.list_files import ListFilesTool
 from missy.tools.builtin.web_fetch import WebFetchTool
 
-
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------

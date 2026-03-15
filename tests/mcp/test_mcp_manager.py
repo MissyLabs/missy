@@ -70,9 +70,11 @@ class TestAddServer:
     def test_add_server_propagates_connect_error(self, manager):
         mock_client = MagicMock()
         mock_client.connect.side_effect = RuntimeError("connection failed")
-        with patch("missy.mcp.manager.McpClient", return_value=mock_client):
-            with pytest.raises(RuntimeError, match="connection failed"):
-                manager.add_server("bad", command="fail")
+        with (
+            patch("missy.mcp.manager.McpClient", return_value=mock_client),
+            pytest.raises(RuntimeError, match="connection failed"),
+        ):
+            manager.add_server("bad", command="fail")
 
 
 class TestRemoveServer:
