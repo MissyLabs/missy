@@ -89,6 +89,7 @@ class X11LaunchTool(BaseTool):
                 capture_output=True,
                 text=True,
                 env=env,
+                timeout=10,
             )
             ids = result.stdout.strip().splitlines()
             if ids:
@@ -100,6 +101,7 @@ class X11LaunchTool(BaseTool):
                     capture_output=True,
                     text=True,
                     env=env,
+                    timeout=10,
                 )
                 window_name = name_result.stdout.strip()
                 break

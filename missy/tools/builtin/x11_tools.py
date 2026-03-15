@@ -52,7 +52,7 @@ def _display_env() -> dict[str, str]:
     return env
 
 
-def _run(cmd: str) -> subprocess.CompletedProcess:
+def _run(cmd: str, *, timeout: int = 30) -> subprocess.CompletedProcess:
     """Run *cmd* via the shell and return the completed process."""
     return subprocess.run(
         cmd,
@@ -60,6 +60,7 @@ def _run(cmd: str) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         env=_display_env(),
+        timeout=timeout,
     )
 
 

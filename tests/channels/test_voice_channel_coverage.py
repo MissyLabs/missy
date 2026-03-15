@@ -132,11 +132,8 @@ class TestVoiceChannelStop:
         ch._thread = mock_thread
 
         # run_coroutine_threadsafe schedules the coro in the given loop.
-        # We run that loop briefly in a background thread to let the coro complete.
-        def run_loop_briefly():
-            loop.run_until_complete(asyncio.sleep(0.5))
-
-        t = threading.Thread(target=run_loop_briefly, daemon=True)
+        # We run the loop with run_forever so it stays alive until stop() completes.
+        t = threading.Thread(target=loop.run_forever, daemon=True)
         t.start()
 
         try:
