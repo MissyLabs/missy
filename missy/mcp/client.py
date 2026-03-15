@@ -70,7 +70,10 @@ class McpClient:
         self._notify("notifications/initialized")
         self._tools = self._list_tools()
 
-    def _rpc(self, method: str, params: Any = None) -> dict:
+    # Maximum size for a single MCP response line (1 MB).
+    _MAX_RESPONSE_BYTES = 1024 * 1024
+
+    def _rpc(self, method: str, params: Any = None, *, timeout: float = 30.0) -> dict:
         request = {"jsonrpc": "2.0", "id": str(uuid.uuid4()), "method": method}
         if params is not None:
             request["params"] = params
@@ -80,7 +83,19 @@ class McpClient:
                 raise RuntimeError("MCP server not connected")
             self._proc.stdin.write(line.encode())
             self._proc.stdin.flush()
-            response_line = self._proc.stdout.readline()
+            # Use select() for timeout when a real file descriptor is available;
+            # fall back to direct read for mock/pipe objects without fileno().
+            try:
+                import select
+
+                ready, _, _ = select.select([self._proc.stdout], [], [], timeout)
+                if not ready:
+                    raise TimeoutError(
+                        f"MCP server {self.name!r} did not respond within {timeout}s"
+                    )
+            except (TypeError, ValueError, AttributeError):
+                pass  # fileno not available (e.g. mock) — skip timeout guard
+            response_line = self._proc.stdout.readline(self._MAX_RESPONSE_BYTES)
         if not response_line:
             raise RuntimeError("MCP server closed connection")
         return json.loads(response_line)

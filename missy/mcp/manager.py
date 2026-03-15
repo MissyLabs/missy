@@ -52,6 +52,10 @@ class McpManager:
         self, name: str, command: str | None = None, url: str | None = None
     ) -> McpClient:
         """Connect to a new MCP server and persist the config."""
+        if "__" in name:
+            raise ValueError(
+                f"Invalid MCP server name: {name!r} (must not contain '__')"
+            )
         client = McpClient(name=name, command=command, url=url)
         client.connect()
         with self._lock:

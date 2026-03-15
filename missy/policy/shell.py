@@ -122,7 +122,7 @@ class ShellPolicyEngine:
 
     # Shell metacharacters that can chain additional commands.
     _CHAIN_OPERATORS = ("&&", "||", ";", "|", "\n")
-    _SUBSHELL_MARKERS = ("$(", "`")
+    _SUBSHELL_MARKERS = ("$(", "`", "<(", ">(", "<<(")
 
     @staticmethod
     def _extract_program(command: str) -> str | None:
