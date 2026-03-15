@@ -167,7 +167,7 @@ class WebhookChannel(BaseChannel):
                     self.end_headers()
                     return
 
-                prompt = data.get("prompt", "").strip()
+                prompt = (data.get("prompt") or "").strip()
                 if not prompt:
                     self.send_response(400)
                     self._send_security_headers()
