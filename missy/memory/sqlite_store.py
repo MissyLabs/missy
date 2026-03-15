@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -288,22 +291,30 @@ class SQLiteMemoryStore:
             Matching :class:`ConversationTurn` objects ordered by relevance.
         """
         conn = self._conn()
-        if session_id:
-            rows = conn.execute(
-                """SELECT t.* FROM turns t
-                   JOIN turns_fts f ON t.rowid = f.rowid
-                   WHERE turns_fts MATCH ? AND t.session_id = ?
-                   ORDER BY rank LIMIT ?""",
-                (query, session_id, limit),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                """SELECT t.* FROM turns t
-                   JOIN turns_fts f ON t.rowid = f.rowid
-                   WHERE turns_fts MATCH ?
-                   ORDER BY rank LIMIT ?""",
-                (query, limit),
-            ).fetchall()
+        # Sanitize FTS5 query to prevent syntax injection.  Wrap in double
+        # quotes to treat input as a phrase search and escape embedded quotes.
+
+        safe_query = '"' + query.replace('"', '""') + '"'
+        try:
+            if session_id:
+                rows = conn.execute(
+                    """SELECT t.* FROM turns t
+                       JOIN turns_fts f ON t.rowid = f.rowid
+                       WHERE turns_fts MATCH ? AND t.session_id = ?
+                       ORDER BY rank LIMIT ?""",
+                    (safe_query, session_id, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """SELECT t.* FROM turns t
+                       JOIN turns_fts f ON t.rowid = f.rowid
+                       WHERE turns_fts MATCH ?
+                       ORDER BY rank LIMIT ?""",
+                    (safe_query, limit),
+                ).fetchall()
+        except sqlite3.OperationalError:
+            logger.warning("FTS5 query failed for %r — returning empty", query[:100])
+            return []
         return [self._row_to_turn(r) for r in rows]
 
     # ------------------------------------------------------------------

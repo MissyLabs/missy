@@ -157,6 +157,26 @@ class DeviceRegistry:
                 self._nodes = {}
                 return
             try:
+                import os
+                import stat
+
+                # Validate file ownership and permissions before loading
+                st = self._path.stat()
+                if st.st_uid != os.getuid():
+                    logger.error(
+                        "Registry file %s not owned by current user — refusing to load.",
+                        self._path,
+                    )
+                    self._nodes = {}
+                    return
+                if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+                    logger.error(
+                        "Registry file %s is group/world-writable — refusing to load.",
+                        self._path,
+                    )
+                    self._nodes = {}
+                    return
+
                 raw = self._path.read_text(encoding="utf-8")
                 data: list[dict[str, Any]] = json.loads(raw)
                 self._nodes = {entry["node_id"]: _node_from_dict(entry) for entry in data}

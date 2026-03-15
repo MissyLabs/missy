@@ -495,12 +495,30 @@ class SchedulerManager:
         logged but not re-raised to avoid interrupting the scheduler thread.
         """
         try:
+            import os
+            import tempfile
+
             self.jobs_file.parent.mkdir(parents=True, exist_ok=True)
             payload = [job.to_dict() for job in self._jobs.values()]
-            self.jobs_file.write_text(
-                json.dumps(payload, indent=2, default=str),
-                encoding="utf-8",
+            data = json.dumps(payload, indent=2, default=str).encode("utf-8")
+            # Atomic write with restrictive permissions (0o600)
+            fd, tmp_path = tempfile.mkstemp(
+                dir=str(self.jobs_file.parent), suffix=".tmp"
             )
+            try:
+                os.fchmod(fd, 0o600)
+                os.write(fd, data)
+                os.close(fd)
+                fd = -1  # mark as closed
+                os.replace(tmp_path, str(self.jobs_file))
+            except BaseException:
+                if fd >= 0:
+                    os.close(fd)
+                import contextlib
+
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp_path)
+                raise
         except Exception as exc:
             logger.error("Failed to save jobs to %s: %s", self.jobs_file, exc)
 

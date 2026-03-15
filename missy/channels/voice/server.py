@@ -815,8 +815,9 @@ class VoiceServer:
         try:
 
             def _write() -> None:
-                log_dir.mkdir(parents=True, exist_ok=True)
+                log_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
                 filename.write_bytes(audio_buffer)
+                filename.chmod(0o600)
 
             await loop.run_in_executor(None, _write)
             _emit(

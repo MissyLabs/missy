@@ -74,7 +74,8 @@ class McpClient:
     _MAX_RESPONSE_BYTES = 1024 * 1024
 
     def _rpc(self, method: str, params: Any = None, *, timeout: float = 30.0) -> dict:
-        request = {"jsonrpc": "2.0", "id": str(uuid.uuid4()), "method": method}
+        req_id = str(uuid.uuid4())
+        request = {"jsonrpc": "2.0", "id": req_id, "method": method}
         if params is not None:
             request["params"] = params
         line = json.dumps(request) + "\n"
@@ -98,7 +99,14 @@ class McpClient:
             response_line = self._proc.stdout.readline(self._MAX_RESPONSE_BYTES)
         if not response_line:
             raise RuntimeError("MCP server closed connection")
-        return json.loads(response_line)
+        resp = json.loads(response_line)
+        # Validate response ID matches request to prevent response confusion
+        resp_id = resp.get("id")
+        if resp_id is not None and resp_id != req_id:
+            logger.warning(
+                "MCP response ID mismatch: expected %s, got %s", req_id, resp_id
+            )
+        return resp
 
     def _notify(self, method: str, params: Any = None) -> None:
         note = {"jsonrpc": "2.0", "method": method}

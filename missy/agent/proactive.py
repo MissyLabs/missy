@@ -348,12 +348,20 @@ class ProactiveManager:
             # 2. Record last_fired inside the lock to prevent double-fire races.
             self._last_fired[trigger.name] = now
 
-        # 3. Build prompt
+        # 3. Build prompt — use string.Template for safety (no attribute access)
+        from string import Template
+
         ts = datetime.fromtimestamp(now, tz=UTC).isoformat()
-        template = trigger.prompt_template or (
-            "Proactive trigger '{trigger_name}' of type '{trigger_type}' fired at {timestamp}."
+        raw_template = trigger.prompt_template or (
+            "Proactive trigger '${trigger_name}' of type '${trigger_type}' fired at ${timestamp}."
         )
-        prompt = template.format(
+        # Support both ${var} (Template) and {var} (format) style templates
+        # by converting {var} to ${var} if the template uses the old style.
+        if "{trigger_name}" in raw_template and "${trigger_name}" not in raw_template:
+            raw_template = raw_template.replace("{trigger_name}", "${trigger_name}")
+            raw_template = raw_template.replace("{trigger_type}", "${trigger_type}")
+            raw_template = raw_template.replace("{timestamp}", "${timestamp}")
+        prompt = Template(raw_template).safe_substitute(
             trigger_name=trigger.name,
             trigger_type=trigger.trigger_type,
             timestamp=ts,

@@ -193,4 +193,6 @@ class WebhookChannel(BaseChannel):
             return self._queue.pop(0) if self._queue else None
 
     def send(self, message: str) -> None:
-        logger.info("Webhook response: %s", message[:200])
+        from missy.security.censor import censor_response
+
+        logger.info("Webhook response: %s", censor_response(message[:200]))
