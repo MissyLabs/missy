@@ -500,8 +500,8 @@ class CodeEvolutionManager:
                         {"proposal_id": proposal_id, "error": f"Path traversal: {diff.file_path}"},
                     )
                     return {
-                        "status": "failed",
-                        "error": f"Path traversal blocked: {diff.file_path} resolves outside repo",
+                        "success": False,
+                        "message": f"Path traversal blocked: {diff.file_path} resolves outside repo",
                         "commit_sha": "",
                         "test_output": "",
                     }

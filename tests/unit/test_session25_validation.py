@@ -7,7 +7,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Gateway: timeout validation
 # ---------------------------------------------------------------------------
@@ -168,7 +167,7 @@ class TestCheckpointConstants:
     """Checkpoint module uses named constants instead of magic numbers."""
 
     def test_constants_defined(self):
-        from missy.agent.checkpoint import _RESUME_THRESHOLD_SECS, _RESTART_THRESHOLD_SECS
+        from missy.agent.checkpoint import _RESTART_THRESHOLD_SECS, _RESUME_THRESHOLD_SECS
 
         assert _RESUME_THRESHOLD_SECS == 3600
         assert _RESTART_THRESHOLD_SECS == 86400
@@ -176,7 +175,7 @@ class TestCheckpointConstants:
     def test_classify_uses_resume_threshold(self):
         import time
 
-        from missy.agent.checkpoint import CheckpointManager, _RESUME_THRESHOLD_SECS
+        from missy.agent.checkpoint import _RESUME_THRESHOLD_SECS, CheckpointManager
 
         cm = CheckpointManager.__new__(CheckpointManager)
         # Fresh checkpoint: just under the threshold
@@ -186,7 +185,7 @@ class TestCheckpointConstants:
     def test_classify_uses_restart_threshold(self):
         import time
 
-        from missy.agent.checkpoint import CheckpointManager, _RESTART_THRESHOLD_SECS
+        from missy.agent.checkpoint import _RESTART_THRESHOLD_SECS, CheckpointManager
 
         cm = CheckpointManager.__new__(CheckpointManager)
         # Between 1hr and 24hr: restart
@@ -196,7 +195,7 @@ class TestCheckpointConstants:
     def test_classify_abandon_after_restart_threshold(self):
         import time
 
-        from missy.agent.checkpoint import CheckpointManager, _RESTART_THRESHOLD_SECS
+        from missy.agent.checkpoint import _RESTART_THRESHOLD_SECS, CheckpointManager
 
         cm = CheckpointManager.__new__(CheckpointManager)
         # Beyond 24hr: abandon

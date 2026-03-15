@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import json
-import time
 import inspect
 import logging
-from pathlib import Path
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Incus tools: invalid action paths
@@ -241,34 +238,34 @@ class TestCheckpointConstants:
     """Checkpoint module uses named constants instead of magic numbers."""
 
     def test_constants_defined(self):
-        from missy.agent.checkpoint import _RESUME_THRESHOLD_SECS, _RESTART_THRESHOLD_SECS
+        from missy.agent.checkpoint import _RESTART_THRESHOLD_SECS, _RESUME_THRESHOLD_SECS
 
         assert _RESUME_THRESHOLD_SECS == 3600
         assert _RESTART_THRESHOLD_SECS == 86400
 
     def test_classify_uses_resume_threshold(self):
-        from missy.agent.checkpoint import CheckpointManager, _RESUME_THRESHOLD_SECS
+        from missy.agent.checkpoint import _RESUME_THRESHOLD_SECS, CheckpointManager
 
         cm = CheckpointManager.__new__(CheckpointManager)
         checkpoint = {"created_at": time.time() - _RESUME_THRESHOLD_SECS + 10}
         assert cm.classify(checkpoint) == "resume"
 
     def test_classify_uses_restart_threshold(self):
-        from missy.agent.checkpoint import CheckpointManager, _RESTART_THRESHOLD_SECS
+        from missy.agent.checkpoint import _RESTART_THRESHOLD_SECS, CheckpointManager
 
         cm = CheckpointManager.__new__(CheckpointManager)
         checkpoint = {"created_at": time.time() - _RESTART_THRESHOLD_SECS + 10}
         assert cm.classify(checkpoint) == "restart"
 
     def test_classify_abandon_after_restart_threshold(self):
-        from missy.agent.checkpoint import CheckpointManager, _RESTART_THRESHOLD_SECS
+        from missy.agent.checkpoint import _RESTART_THRESHOLD_SECS, CheckpointManager
 
         cm = CheckpointManager.__new__(CheckpointManager)
         checkpoint = {"created_at": time.time() - _RESTART_THRESHOLD_SECS - 100}
         assert cm.classify(checkpoint) == "abandon"
 
     def test_abandon_old_default_matches_constant(self):
-        from missy.agent.checkpoint import CheckpointManager, _RESTART_THRESHOLD_SECS
+        from missy.agent.checkpoint import _RESTART_THRESHOLD_SECS, CheckpointManager
 
         sig = inspect.signature(CheckpointManager.abandon_old)
         default = sig.parameters["max_age_seconds"].default
@@ -340,7 +337,7 @@ class TestCostTrackerEdgeCases:
         tracker.check_budget()
 
     def test_budget_exceeded_raises(self):
-        from missy.agent.cost_tracker import CostTracker, BudgetExceededError
+        from missy.agent.cost_tracker import BudgetExceededError, CostTracker
 
         tracker = CostTracker(max_spend_usd=0.0001)
         tracker.record("claude-sonnet-4-6", 1000000, 1000000)
@@ -516,8 +513,8 @@ class TestAuditLoggerEventHandling:
     """Audit logger write and read events."""
 
     def test_write_and_read_events(self, tmp_path):
-        from missy.observability.audit_logger import AuditLogger
         from missy.core.events import AuditEvent, EventBus
+        from missy.observability.audit_logger import AuditLogger
 
         log_path = str(tmp_path / "audit.jsonl")
         bus = EventBus()
@@ -537,8 +534,8 @@ class TestAuditLoggerEventHandling:
         assert len(events) >= 1
 
     def test_unicode_in_events(self, tmp_path):
-        from missy.observability.audit_logger import AuditLogger
         from missy.core.events import AuditEvent, EventBus
+        from missy.observability.audit_logger import AuditLogger
 
         log_path = str(tmp_path / "audit.jsonl")
         bus = EventBus()
@@ -558,8 +555,8 @@ class TestAuditLoggerEventHandling:
         assert len(events) == 1
 
     def test_empty_audit_log(self, tmp_path):
-        from missy.observability.audit_logger import AuditLogger
         from missy.core.events import EventBus
+        from missy.observability.audit_logger import AuditLogger
 
         log_path = str(tmp_path / "audit.jsonl")
         bus = EventBus()
@@ -597,25 +594,28 @@ class TestPolicyEngineSmokeTests:
         )
 
     def test_default_deny_blocks_unknown_host(self):
+        from missy.core.exceptions import PolicyViolationError
         from missy.policy.engine import PolicyEngine
 
         config = self._make_config()
         engine = PolicyEngine(config)
-        with pytest.raises(Exception):
+        with pytest.raises(PolicyViolationError):
             engine.check_network("evil.example.com", "sid", "tid")
 
     def test_shell_policy_blocks_by_default(self):
+        from missy.core.exceptions import PolicyViolationError
         from missy.policy.engine import PolicyEngine
 
         config = self._make_config()
         engine = PolicyEngine(config)
-        with pytest.raises(Exception):
+        with pytest.raises(PolicyViolationError):
             engine.check_shell("rm -rf /", "sid", "tid")
 
     def test_filesystem_write_denied_by_default(self):
+        from missy.core.exceptions import PolicyViolationError
         from missy.policy.engine import PolicyEngine
 
         config = self._make_config()
         engine = PolicyEngine(config)
-        with pytest.raises(Exception):
+        with pytest.raises(PolicyViolationError):
             engine.check_write("/etc/passwd", "sid", "tid")
