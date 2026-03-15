@@ -58,7 +58,7 @@ missy/                          # 123 Python source files
 
 ## Test Results
 
-- 6008 tests passing across 174 test files
+- 6076 tests passing across 178 test files
 - 99%+ code coverage, zero test warnings
 - Unit, integration, policy, Discord, security, memory, agent, tools, skills, CLI, voice, scheduler tests
 - 54+ property-based tests (hypothesis) for policy engines, security, and rate limiter
@@ -68,6 +68,23 @@ missy/                          # 123 Python source files
 - 36 resilience tests (corrupted state files, edge case data, recovery paths)
 - 77 end-to-end integration tests
 - 495+ security edge-case tests (injection, secrets, vault, SSRF, path traversal, tool output injection, webhook hardening, scheme restriction, kwargs allowlist, file policy enforcement, shell brace groups, header filtering, gateway thread safety, cost tracker edge cases, env sanitization, chunked response limits, overlapping redaction)
+
+## Session 22 Additions (2026-03-15)
+
+- **PEP 561 py.typed marker**: Added `py.typed` marker file and `pyproject.toml` package-data entry for type checker support
+- **`__all__` exports**: Added `__all__` to 4 empty `__init__.py` files (tools/, channels/, security/, providers/)
+- **Silent exception handler fixes**: Added debug logging to 2 silent exception handlers in CLI (Discord queue error, provider availability check)
+- **Type hint improvements**: Added return type annotations to atspi helpers (_get_desktop, _find_application, _get_focused_application) and browser tools (get_page, _page)
+- **ReDoS fix (MEDIUM)**: HTML comment pattern changed from `[\s\S]*?` to `(?:(?!-->)[\s\S])*` to prevent catastrophic backtracking
+- **ReDoS fix (LOW)**: Prompt extraction pattern bounded `(\w+\s+)*` to `(?:\w+\s+){0,10}` to prevent exponential backtracking
+- **WebSocket max_size (HIGH)**: Added `max_size=1MB` to `websockets.serve()` to prevent memory exhaustion from oversized frames
+- **Audit log tail-read**: Replaced full-file `read_text()` with seek-from-end `_read_tail_lines()` to prevent memory exhaustion on large audit logs
+- **Audio log TOCTOU fix**: Audio log files now created with `os.open(O_CREAT|O_EXCL, 0o600)` instead of write+chmod for atomic permission setting
+- **Coverage gap tests (19 new)**: Edge client malformed JSON, voice channel start failure, registry save error, network policy IP parse, Discord voice commands, vault crypto unavailable
+- **Security hardening tests (13 new)**: ReDoS resistance, WebSocket max_size verification, audit tail-read round-trips, atomic audio log write verification
+- **Edge case tests (36 new)**: Config hot-reload callback, memory store 100KB content, rate limiter refill boundary, tool registry double-register, circuit breaker half-open recovery, provider registry all-unavailable, scheduler parse errors, context manager zero budget, MCP shutdown idempotency, cost tracker negative tokens
+- **Total new tests**: 68 (from 6008 to 6076) across 4 new test files
+- **7 commits, zero ruff lint errors**
 
 ## Session 21 Additions (2026-03-15)
 

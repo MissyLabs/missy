@@ -1,7 +1,40 @@
 # TEST_EDGE_CASES
 
-- Updated: 2026-03-15 (session 21)
-- Total edge-case tests: 1420+
+- Updated: 2026-03-15 (session 22)
+- Total edge-case tests: 1488+
+
+## Session 22 Additions (68 new tests)
+
+### Security Hardening (13 tests)
+- ReDoS resistance: HTML comment pattern with 5000 dashes completes in <2s
+- ReDoS resistance: prompt extraction with 500 word-space pairs completes in <2s
+- ReDoS-safe patterns still detect valid HTML comments (single and multiline)
+- ReDoS-safe prompt extraction still detects with up to 10 intervening words
+- WebSocket max_size configured in voice server source
+- Audit logger tail-read returns correct last N lines from large files
+- Audit logger tail-read handles empty files and fewer-than-limit lines
+- Atomic audio log write uses os.O_CREAT | os.O_EXCL with 0o600
+
+### Coverage Gap Tests (19 tests)
+- Edge client: malformed auth JSON, None auth response, malformed inner-loop JSON
+- Edge client: corrupt config JSON, OSError on config read, malformed pair response
+- Voice channel: start failure RuntimeError propagation
+- Voice registry: save() PermissionError on mkstemp
+- Network policy: unparseable IP from getaddrinfo skipped gracefully
+- Discord: non-bang command not handled, unrecognized bang command not handled
+- Vault: crypto unavailable raises VaultError
+
+### Subsystem Edge Cases (36 tests)
+- Config hot-reload: callback invoked on mtime change, reload skipped for symlink
+- Memory store: 100KB content round-trip fidelity, FTS5 search on large content
+- Rate limiter: refill restores full capacity after window, acquire succeeds after advance, on_rate_limit_response drains bucket
+- Tool registry: double-register replaces first, execute dispatches to latest
+- Circuit breaker: half-open success closes, half-open failure reopens with doubled timeout, open state rejects calls
+- Provider registry: empty registry, all unavailable, exception treated as unavailable, mixed available/unavailable
+- Scheduler parsing: every 0 minutes/seconds, daily at 25:00, daily at 09:60, weekly on invalid day, empty string
+- Context manager: zero budget returns only new message, no history with zero budget, negative budget
+- MCP manager: shutdown idempotent, double shutdown, list/tools empty, connect_all no config
+- Cost tracker: negative prompt/completion tokens, budget check with negatives, zero tokens, unknown model
 
 ## Security Policy Edge Cases (tested)
 

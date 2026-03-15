@@ -1,6 +1,6 @@
 # AUDIT_SECURITY
 
-- Timestamp: 2026-03-15 (updated session 21)
+- Timestamp: 2026-03-15 (updated session 22)
 - Auditor: Automated build analysis + security audit agent
 
 ## Security Architecture Summary
@@ -27,6 +27,10 @@ Missy implements defense-in-depth with 15 security layers:
 13. **Shell Env Sanitization** — Subprocess environment filtered to safe-only variables; API keys, tokens, secrets stripped
 14. **Encoded Injection Detection** — URL-encoded (%XX) and HTML-entity encoded inputs decoded before injection pattern scanning
 15. **Overlapping Redaction Safety** — Secret spans merged before replacement to prevent partial leakage from offset corruption
+16. **ReDoS Prevention** — Injection regex patterns reviewed for catastrophic backtracking; HTML comment and prompt extraction patterns made safe via negative lookahead and bounded repetition
+17. **WebSocket Frame Size Limit** — `max_size=1MB` enforced on voice WebSocket server to prevent memory exhaustion from oversized frames
+18. **Audit Log Memory Safety** — Tail-read strategy replaces full-file loading to prevent memory exhaustion on large audit JSONL files
+19. **Atomic Audio Log Writes** — Audio log files created with `os.open(O_CREAT|O_EXCL, 0o600)` to prevent TOCTOU permission race
 
 ## Threat Model Coverage
 
