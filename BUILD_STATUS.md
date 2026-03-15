@@ -58,14 +58,14 @@ missy/                          # 123 Python source files
 
 ## Test Results
 
-- 4911 tests passing across 138 test files
+- 4951 tests passing across 140 test files
 - 99%+ code coverage
 - Unit, integration, policy, Discord, security, memory, agent, tools, skills, CLI, voice, scheduler tests
 - 54+ property-based tests (hypothesis) for policy engines, security, and rate limiter
 - 116 security fuzz tests (unicode evasion, encoding bypass, vault corruption)
 - 48 rate limiter stress tests (concurrent, burst, thread safety)
 - 77 end-to-end integration tests
-- 200+ security edge-case tests (injection, secrets, vault, SSRF, path traversal, tool output injection)
+- 230+ security edge-case tests (injection, secrets, vault, SSRF, path traversal, tool output injection, webhook hardening)
 
 ## Session 12 Additions (2026-03-15)
 
@@ -81,8 +81,13 @@ missy/                          # 123 Python source files
 - **Flaky test fix**: Fixed voice channel test race condition (run_forever vs run_until_complete)
 - **Test connection leak fix**: Replaced 23 manual sqlite3 conn.open/close patterns with context managers in checkpoint tests
 - **New tests**: 19 security hardening tests (shell process substitution, MCP name validation, tool output injection, response censoring)
-- **Total new tests**: 19 (from 4892 to 4911)
-- **Warnings reduced**: From 7 to 6 (fixed flaky voice channel warning)
+- **Vault security**: Atomic write with mkstemp+rename, TOCTOU-safe key creation with O_CREAT|O_EXCL, symlink rejection
+- **Config hotreload safety**: Rejects symlinks, non-owner files, and group/world-writable config before reload
+- **Settings vault:// resolution**: Provider API keys now resolve vault:// and $ENV references
+- **Webhook integration tests** (26 new): End-to-end HTTP tests for rate limiting (429), oversized payloads (413), queue overflow (503), HMAC signatures, server lifecycle
+- **Hotreload safety tests** (2 new): World-writable rejection, symlink rejection
+- **Total new tests**: 59 (from 4892 to 4951)
+- **Warnings reduced**: From 7 to 4 (2 remaining are from websockets library deprecation)
 
 ## Session 11 Additions (2026-03-15)
 
