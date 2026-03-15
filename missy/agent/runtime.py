@@ -44,6 +44,9 @@ from missy.tools.registry import get_tool_registry
 
 logger = logging.getLogger(__name__)
 
+# Maximum size (chars) for a single tool result to prevent memory exhaustion.
+_MAX_TOOL_RESULT_CHARS = 200_000
+
 
 @dataclass
 class AgentConfig:
@@ -536,6 +539,13 @@ class AgentRuntime:
                     # Append tool result messages (with injection scanning)
                     for tr in tool_results:
                         content = tr.content
+                        # Truncate oversized tool results to prevent memory exhaustion
+                        if content and len(content) > _MAX_TOOL_RESULT_CHARS:
+                            content = (
+                                content[:_MAX_TOOL_RESULT_CHARS]
+                                + f"\n[TRUNCATED: output was {len(tr.content)} chars, "
+                                f"limit is {_MAX_TOOL_RESULT_CHARS}]"
+                            )
                         # Scan tool output for prompt injection attempts
                         if content and self._sanitizer is not None:
                             injection_matches = self._sanitizer.check_for_injection(content)
