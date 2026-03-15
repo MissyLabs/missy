@@ -82,14 +82,14 @@ class ShellPolicyEngine:
                 detail="ShellPolicy.enabled is False; no shell commands are permitted.",
             )
 
-        # Step 2 – extract program token.
-        program = self._extract_program(command)
-        if program is None:
+        # Step 2 – extract ALL program tokens (handles compound commands).
+        programs = self._extract_all_programs(command)
+        if programs is None:
             self._emit_event(command, "deny", None, session_id, task_id)
             raise PolicyViolationError(
-                "Shell command denied: empty or unparseable command.",
+                "Shell command denied: empty, unparseable, or contains subshell.",
                 category="shell",
-                detail=f"Could not determine the program name from command {command!r}.",
+                detail=f"Could not determine the program name(s) from command {command!r}.",
             )
 
         # Step 3 – allow-list check.
@@ -98,24 +98,31 @@ class ShellPolicyEngine:
             self._emit_event(command, "allow", "*", session_id, task_id)
             return True
 
-        rule = self._match_allowed(program)
-        if rule:
-            self._emit_event(command, "allow", rule, session_id, task_id)
-            return True
+        # Every program in a compound command must be allowed.
+        for program in programs:
+            rule = self._match_allowed(program)
+            if not rule:
+                self._emit_event(command, "deny", None, session_id, task_id)
+                raise PolicyViolationError(
+                    f"Shell command denied: {program!r} is not in the allowed commands list.",
+                    category="shell",
+                    detail=(
+                        f"Program {program!r} (from command {command!r}) did not match "
+                        "any allowed_commands entry."
+                    ),
+                )
 
-        self._emit_event(command, "deny", None, session_id, task_id)
-        raise PolicyViolationError(
-            f"Shell command denied: {program!r} is not in the allowed commands list.",
-            category="shell",
-            detail=(
-                f"Program {program!r} (from command {command!r}) did not match "
-                "any allowed_commands entry."
-            ),
-        )
+        # All programs matched — allow.
+        self._emit_event(command, "allow", f"cmd:compound({len(programs)})", session_id, task_id)
+        return True
 
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    # Shell metacharacters that can chain additional commands.
+    _CHAIN_OPERATORS = ("&&", "||", ";", "|", "\n")
+    _SUBSHELL_MARKERS = ("$(", "`")
 
     @staticmethod
     def _extract_program(command: str) -> str | None:
@@ -140,6 +147,53 @@ class ShellPolicyEngine:
             logger.debug("ShellPolicyEngine: could not parse command %r", command)
             return None
         return tokens[0] if tokens else None
+
+    @classmethod
+    def _extract_all_programs(cls, command: str) -> list[str] | None:
+        """Extract ALL program names from a potentially compound command.
+
+        Splits on shell chain operators (&&, ||, ;, |, newline) and returns
+        the first token of each sub-command.  Returns ``None`` if the command
+        is empty, contains subshell markers ($(...) or backticks), or any
+        sub-command cannot be parsed.
+
+        Subshell markers are rejected outright because the inner commands
+        cannot be reliably extracted via simple tokenisation.
+        """
+        if not command or not command.strip():
+            return None
+
+        # Reject subshell / command substitution — these can hide arbitrary
+        # commands inside $(...) or backticks that simple splitting cannot
+        # reliably extract.
+        for marker in cls._SUBSHELL_MARKERS:
+            if marker in command:
+                logger.debug(
+                    "ShellPolicyEngine: rejecting command with subshell marker %r: %s",
+                    marker,
+                    command[:200],
+                )
+                return None
+
+        # Split on chain operators to get individual sub-commands.
+        import re
+
+        # Replace chain operators with a unique delimiter, then split.
+        # Order matters: && and || must be checked before single & or |.
+        pattern = r"\s*(?:&&|\|\||[;|\n])\s*"
+        parts = re.split(pattern, command)
+
+        programs: list[str] = []
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
+            prog = cls._extract_program(part)
+            if prog is None:
+                return None
+            programs.append(prog)
+
+        return programs if programs else None
 
     def _match_allowed(self, program: str) -> str | None:
         """Return the first ``allowed_commands`` entry matched by *program*.

@@ -612,7 +612,7 @@ class TestShellPolicyEnforcement:
 
         events = event_bus.get_events(event_type="shell_check", result="allow")
         assert len(events) == 1
-        assert events[0].policy_rule == "cmd:git"
+        assert events[0].policy_rule == "cmd:compound(1)"
 
     def test_denied_command_emits_deny_event(self):
         """A denied command must emit a shell_check deny event."""

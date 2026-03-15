@@ -168,16 +168,19 @@ class ToolRegistry:
         Raises:
             PolicyViolationError: When any required permission is denied.
         """
-        # Policy engine may not be initialised in all test contexts; skip
-        # gracefully if it is not available.
+        # Policy engine must be initialised — fail closed if it is not.
         try:
             engine = get_policy_engine()
         except RuntimeError:
-            logger.debug(
-                "PolicyEngine not initialised; skipping permission checks for tool %r.",
+            logger.warning(
+                "PolicyEngine not initialised; DENYING tool %r (fail-closed).",
                 tool.name,
             )
-            return
+            raise PolicyViolationError(
+                f"Tool {tool.name!r} denied: policy engine not initialised.",
+                category="security",
+                detail="Policy engine must be initialised before tool execution.",
+            )
 
         perms = tool.permissions
 

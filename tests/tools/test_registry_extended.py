@@ -86,8 +86,8 @@ class TestToolRegistryExecute:
 
 
 class TestToolRegistryPolicyChecks:
-    def test_policy_not_initialized_skips_gracefully(self):
-        """When PolicyEngine is not initialized, execution proceeds."""
+    def test_policy_not_initialized_denies_gracefully(self):
+        """When PolicyEngine is not initialized, execution is denied (fail-closed)."""
         import missy.policy.engine as pe
 
         old = pe._engine
@@ -96,7 +96,8 @@ class TestToolRegistryPolicyChecks:
             reg = ToolRegistry()
             reg.register(NetworkTool())
             result = reg.execute("net_tool")
-            assert result.success
+            assert not result.success
+            assert "policy engine not initialised" in result.error
         finally:
             pe._engine = old
 
