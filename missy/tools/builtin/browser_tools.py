@@ -14,6 +14,7 @@ import os
 import threading
 import time
 from pathlib import Path
+from typing import Any
 
 from missy.tools.base import BaseTool, ToolPermissions, ToolResult
 
@@ -78,7 +79,7 @@ class BrowserSession:
             env={**os.environ},
         )
 
-    def get_page(self):
+    def get_page(self) -> Any:
         """Return the most recent open page in the context.
 
         Always checks the context for the latest page rather than
@@ -155,7 +156,7 @@ class _SessionRegistry:
 _registry = _SessionRegistry()
 
 
-def _page(session_id: str = "default", headless: bool = False):
+def _page(session_id: str = "default", headless: bool = False) -> Any:
     return _registry.get_or_create(session_id, headless=headless).get_page()
 
 

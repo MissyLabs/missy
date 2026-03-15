@@ -30,7 +30,7 @@ _PYATSPI_MISSING = "pyatspi is not installed. Install it with: pip install pyats
 # ---------------------------------------------------------------------------
 
 
-def _get_desktop():
+def _get_desktop() -> Any:
     """Return the AT-SPI desktop object.
 
     Returns:
@@ -44,7 +44,7 @@ def _get_desktop():
     return pyatspi.Registry.getDesktop(0)
 
 
-def _find_application(desktop, app_name: str):
+def _find_application(desktop: Any, app_name: str) -> Any:
     """Locate an application on the AT-SPI desktop by name.
 
     Args:
@@ -65,7 +65,7 @@ def _find_application(desktop, app_name: str):
     return None
 
 
-def _get_focused_application(desktop):
+def _get_focused_application(desktop: Any) -> Any:
     """Return the currently focused application on the desktop.
 
     Iterates over desktop children and returns the first one whose state
