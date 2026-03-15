@@ -277,7 +277,7 @@ class TestDiscordVoiceAgentCallbackClosure:
         # The closure in the source is:
         #
         #   async def _voice_agent_cb(prompt: str, session_id: str) -> str:
-        #       loop = asyncio.get_event_loop()
+        #       loop = asyncio.get_running_loop()
         #       return await loop.run_in_executor(None, _rt.run, prompt, session_id)
         #
         # We replicate that closure verbatim and verify that run_in_executor is
@@ -287,7 +287,7 @@ class TestDiscordVoiceAgentCallbackClosure:
         _rt = fake_runtime
 
         async def _voice_agent_cb(prompt: str, session_id: str) -> str:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             return await loop.run_in_executor(None, _rt.run, prompt, session_id)
 
         result = await _voice_agent_cb("hello from voice", "session-abc")
@@ -303,7 +303,7 @@ class TestDiscordVoiceAgentCallbackClosure:
         _rt = fake_runtime
 
         async def _voice_agent_cb(prompt: str, session_id: str) -> str:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             return await loop.run_in_executor(None, _rt.run, prompt, session_id)
 
         with pytest.raises(RuntimeError, match="agent crashed"):

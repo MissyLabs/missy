@@ -91,7 +91,7 @@ async def _handle_ask(interaction: dict[str, Any], channel: DiscordChannel) -> s
 
         agent_cfg = AgentConfig(provider="anthropic")
         agent = AgentRuntime(agent_cfg)
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, agent.run, prompt, "discord")
     except Exception as exc:
         logger.exception("Slash /ask handler failed: %s", exc)

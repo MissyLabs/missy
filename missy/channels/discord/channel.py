@@ -223,7 +223,7 @@ class DiscordChannel(BaseChannel):
             logger.warning("DiscordChannel.send(): no current channel context — message dropped")
             return
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             loop.create_task(self.send_with_retry(self._current_channel_id, message))
         except RuntimeError:
             logger.warning("DiscordChannel.send(): no running event loop — message dropped")
@@ -636,7 +636,7 @@ class DiscordChannel(BaseChannel):
                     _rt = self._agent_runtime
 
                     async def _voice_agent_cb(prompt: str, session_id: str) -> str:
-                        loop = asyncio.get_event_loop()
+                        loop = asyncio.get_running_loop()
                         return await loop.run_in_executor(
                             None,
                             _rt.run,

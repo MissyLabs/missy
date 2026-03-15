@@ -270,7 +270,7 @@ class TestSend:
         ch._current_channel_id = "chan-1"
 
         with (
-            patch("asyncio.get_event_loop", side_effect=RuntimeError("no loop")),
+            patch("asyncio.get_running_loop", side_effect=RuntimeError("no loop")),
             caplog.at_level(logging.WARNING, logger="missy.channels.discord.channel"),
         ):
             ch.send("test message")

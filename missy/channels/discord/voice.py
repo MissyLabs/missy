@@ -163,7 +163,7 @@ class DiscordVoiceManager:
             ) from e
 
         self._discord = discord
-        self._loop = asyncio.get_event_loop()
+        self._loop = asyncio.get_running_loop()
 
         # Load STT engine.
         try:

@@ -92,7 +92,7 @@ class TestSendHappyPath:
         mock_loop = MagicMock()
         mock_loop.create_task = MagicMock()
 
-        with patch("asyncio.get_event_loop", return_value=mock_loop):
+        with patch("asyncio.get_running_loop", return_value=mock_loop):
             ch.send("hello discord")
 
         mock_loop.create_task.assert_called_once()

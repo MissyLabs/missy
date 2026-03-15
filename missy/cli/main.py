@@ -1364,7 +1364,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                     enriched_prompt = f"{discord_ctx}\n\n{msg.content}"
 
                     try:
-                        loop = asyncio.get_event_loop()
+                        loop = asyncio.get_running_loop()
                         response = await loop.run_in_executor(
                             None, _agent.run, enriched_prompt, session_id
                         )

@@ -813,7 +813,7 @@ class VoiceServer:
         timestamp_ns = time.time_ns()
         filename = log_dir / f"{timestamp_ns}.pcm"
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
 
             def _write() -> None:

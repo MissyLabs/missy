@@ -290,7 +290,7 @@ async def _voice_loop(
                     await asyncio.sleep(0.5)
 
                 print("  Listening...")
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
                 pcm_data = await loop.run_in_executor(
                     None,
                     _record_audio,

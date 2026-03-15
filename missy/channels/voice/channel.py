@@ -70,7 +70,7 @@ def _build_agent_callback(agent_runtime: Any) -> Callable[..., Any]:
 
     # Fall back: wrap synchronous run() in an executor.
     async def _sync_cb(prompt: str, session_id: str, metadata: dict) -> str:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, agent_runtime.run, prompt, session_id)
 
     return _sync_cb
