@@ -137,6 +137,14 @@ class SchedulerManager:
             ValueError: When *schedule* cannot be parsed.
             SchedulerError: When APScheduler fails to register the job.
         """
+        # --- Input validation ---
+        if not name or not name.strip():
+            raise ValueError("Job name must not be empty.")
+        if not task or not task.strip():
+            raise ValueError("Job task must not be empty.")
+        if max_attempts < 1:
+            raise ValueError(f"max_attempts must be >= 1, got {max_attempts}.")
+
         # Validate task length to prevent excessive token usage / cost.
         _MAX_TASK_LENGTH = 50_000
         if len(task) > _MAX_TASK_LENGTH:
