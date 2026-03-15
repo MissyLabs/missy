@@ -1,14 +1,14 @@
 # AUDIT_SECURITY
 
-- Timestamp: 2026-03-15 (updated session 16)
+- Timestamp: 2026-03-15 (updated session 18)
 - Auditor: Automated build analysis + security audit agent
 
 ## Security Architecture Summary
 
 Missy implements defense-in-depth with 12 security layers:
 
-1. **Input Sanitization** — 26+ prompt injection pattern detectors (including Llama 3, multilingual, data URI, unclosed HTML)
-2. **Secrets Detection** — 23 credential patterns (API keys, JWTs, AWS, GitLab, npm, PyPI, SendGrid, DB connection strings)
+1. **Input Sanitization** — 40+ prompt injection pattern detectors (including Llama 2/3, GPT, Claude, multilingual [8 languages], tool abuse, prompt leaking, data URI, unclosed HTML, base64)
+2. **Secrets Detection** — 26 credential patterns (API keys, JWTs, AWS, GitLab, npm, PyPI, SendGrid, Azure, Twilio, Mailgun, DB connection strings)
 3. **Output Censoring** — `censor_response()` applied in agent runtime and audit events
 4. **Tool Output Injection Scanning** — Tool results scanned for prompt injection, warning labels prepended
 5. **Policy Enforcement** — 3-layer default-deny (network, filesystem, shell) with:
@@ -29,13 +29,13 @@ Missy implements defense-in-depth with 12 security layers:
 
 | Threat | Defense | Test Coverage |
 |---|---|---|
-| Prompt injection (user input) | InputSanitizer (26+ patterns) | 40+ tests |
+| Prompt injection (user input) | InputSanitizer (40+ patterns, 8 languages, base64 decoding) | 55+ tests |
 | Prompt injection (tool output) | Tool output scanning + warning labels | 22+ tests |
 | Plugin abuse | Plugin allowlist + disabled by default | 30+ tests |
 | Data exfiltration | Default-deny network + output censoring + audit redaction | 120+ policy tests |
 | SSRF | PolicyHTTPClient: scheme restriction, no redirects, kwargs allowlist, DNS rebinding check | 90+ gateway tests |
 | Scheduler abuse | Active hours, max_jobs, policy enforcement, input validation | 100+ scheduler tests |
-| Secrets leakage | SecretsDetector (23 patterns) + SecretCensor on output + audit redaction | 85+ security tests |
+| Secrets leakage | SecretsDetector (26 patterns) + SecretCensor on output + audit redaction | 95+ security tests |
 | Tool abuse | Tool registry policy checks + file path enforcement + approval gate | 290+ tool tests |
 | Channel impersonation | Discord access control (DM/guild/role), webhook HMAC, Content-Type validation | 460+ channel tests |
 | Shell bypass | Here-strings, brace groups, process substitution, heredocs all blocked | 40+ shell tests |
