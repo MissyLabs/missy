@@ -11,13 +11,11 @@ Tests for:
 from __future__ import annotations
 
 import os
-import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from missy.security.secrets import SecretsDetector, secrets_detector
-
 
 # ──────────────────────────────────────────────────────────────────────
 # Shell exec environment sanitization
@@ -67,8 +65,8 @@ class TestShellExecEnvSanitization:
         from missy.tools.builtin.shell_exec import ShellExecTool
 
         tool = ShellExecTool()
-        with patch.dict(os.environ, {"PATH": "/usr/bin", "ANTHROPIC_API_KEY": "sk-ant-test123"}):
-            with patch("missy.tools.builtin.shell_exec.subprocess.run") as mock_run:
+        with patch.dict(os.environ, {"PATH": "/usr/bin", "ANTHROPIC_API_KEY": "sk-ant-test123"}), \
+             patch("missy.tools.builtin.shell_exec.subprocess.run") as mock_run:
                 mock_run.return_value = MagicMock(
                     stdout=b"", stderr=b"", returncode=0
                 )
@@ -80,13 +78,13 @@ class TestShellExecEnvSanitization:
 
     def test_missing_safe_var_skipped(self):
         """If a safe var isn't in os.environ, it shouldn't appear in the env."""
-        from missy.tools.builtin.shell_exec import ShellExecTool, _SAFE_ENV_VARS
+        from missy.tools.builtin.shell_exec import ShellExecTool
 
         tool = ShellExecTool()
         # Use a controlled environment
         test_env = {"PATH": "/bin", "HOME": "/home/test"}
-        with patch.dict(os.environ, test_env, clear=True):
-            with patch("missy.tools.builtin.shell_exec.subprocess.run") as mock_run:
+        with patch.dict(os.environ, test_env, clear=True), \
+             patch("missy.tools.builtin.shell_exec.subprocess.run") as mock_run:
                 mock_run.return_value = MagicMock(
                     stdout=b"", stderr=b"", returncode=0
                 )
@@ -227,8 +225,6 @@ class TestOverlappingRedaction:
         result = secrets_detector.redact(text)
         # Should not have corrupted output or multiple adjacent [REDACTED]
         assert "[REDACTED]" in result
-        # Count redaction markers - overlapping matches should be merged
-        count = result.count("[REDACTED]")
         # The exact count depends on pattern matching; the key invariant is
         # no partial secrets remain visible
         assert "sk-ant-" not in result

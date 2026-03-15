@@ -121,7 +121,8 @@ class TestMCPBlockInjection:
 
     def test_call_tool_blocks_injection_result(self):
         """When block_injection=True, injection in tool output returns block message."""
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
+
         from missy.mcp.manager import McpManager
 
         mgr = McpManager(block_injection=True)
@@ -136,6 +137,7 @@ class TestMCPBlockInjection:
     def test_call_tool_warns_but_passes_when_not_blocking(self):
         """When block_injection=False, injection in tool output warns but passes through."""
         from unittest.mock import MagicMock
+
         from missy.mcp.manager import McpManager
 
         mgr = McpManager(block_injection=False)
@@ -150,6 +152,7 @@ class TestMCPBlockInjection:
     def test_call_tool_clean_result_passes(self):
         """Clean tool output should pass through unchanged."""
         from unittest.mock import MagicMock
+
         from missy.mcp.manager import McpManager
 
         mgr = McpManager(block_injection=True)

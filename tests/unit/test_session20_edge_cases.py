@@ -12,15 +12,9 @@ from __future__ import annotations
 
 import json
 import os
-import sqlite3
-import stat
-import tempfile
 import time
 from pathlib import Path
-from unittest.mock import MagicMock, patch, PropertyMock
-
-import pytest
-
+from unittest.mock import MagicMock, patch
 
 # ──────────────────────────────────────────────────────────────────────
 # Checkpoint: _row_to_dict JSON fallback
@@ -186,14 +180,12 @@ class TestSchedulerLoadJobsSecurity:
 
     def test_wrong_ownership_rejected(self, tmp_path):
         """Jobs file owned by different UID is rejected."""
-        from missy.scheduler.manager import SchedulerManager
 
         jobs_file = tmp_path / "jobs.json"
         jobs_file.write_text("[]")
         mgr = self._make_manager(jobs_file)
 
         # Mock stat to return wrong UID
-        fake_stat = os.stat(str(jobs_file))
         with patch.object(Path, "stat") as mock_stat:
             mock_result = MagicMock()
             mock_result.st_uid = os.getuid() + 1  # Wrong user
@@ -239,7 +231,6 @@ class TestSchedulerLoadJobsSecurity:
         jobs_file.write_text("[]")
         mgr = self._make_manager(jobs_file)
 
-        original_exists = jobs_file.exists
         with patch.object(
             type(jobs_file), "stat", side_effect=OSError("permission denied")
         ), patch.object(
@@ -323,7 +314,7 @@ class TestCodeEvolutionTracebackParsing:
 
         mgr = CodeEvolutionManager(store_path=str(tmp_path / "evo.json"))
         # Line contains missy/ and File " but the path extraction will fail
-        result = mgr.analyze_error_for_evolution(
+        mgr.analyze_error_for_evolution(
             tool_name="test",
             error_message="some error",
             traceback_text='  File "missy/broken',  # Truncated/malformed

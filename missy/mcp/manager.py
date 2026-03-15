@@ -165,7 +165,7 @@ class McpManager:
                     namespaced_name,
                     warnings,
                 )
-                if self._block_injection:
+                if getattr(self, "_block_injection", False):
                     return (
                         f"[MCP BLOCKED] Tool {namespaced_name!r} output contained "
                         f"injection patterns and was blocked: {warnings}"
