@@ -6,6 +6,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import stat
 import threading
 from pathlib import Path
@@ -15,6 +16,9 @@ from missy.mcp.client import McpClient
 logger = logging.getLogger(__name__)
 
 MCP_CONFIG_PATH = "~/.missy/mcp.json"
+
+#: Tool names may only contain alphanumeric characters, hyphens, and underscores.
+_SAFE_NAME_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
 
 
 class McpManager:
@@ -132,6 +136,9 @@ class McpManager:
         if "__" not in namespaced_name:
             return f"[MCP error] invalid tool name: {namespaced_name}"
         server_name, tool_name = namespaced_name.split("__", 1)
+        # Validate tool name characters to prevent injection via crafted names.
+        if not _SAFE_NAME_RE.match(tool_name):
+            return f"[MCP error] unsafe tool name: {tool_name!r}"
         with self._lock:
             client = self._clients.get(server_name)
         if not client:

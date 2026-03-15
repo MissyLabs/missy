@@ -143,6 +143,13 @@ class PolicyHTTPClient:
         self._emit_request_event("PATCH", url, response.status_code)
         return response
 
+    def head(self, url: str, **kwargs: Any) -> httpx.Response:
+        """Perform a synchronous HTTP HEAD after a policy check."""
+        self._check_url(url)
+        response = self._get_sync_client().head(url, **self._sanitize_kwargs(kwargs))
+        self._emit_request_event("HEAD", url, response.status_code)
+        return response
+
     # ------------------------------------------------------------------
     # Asynchronous interface
     # ------------------------------------------------------------------
