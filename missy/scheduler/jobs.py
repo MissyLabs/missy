@@ -194,7 +194,7 @@ class ScheduledJob:
             run_count=int(data.get("run_count", 0)),
             last_result=data.get("last_result"),
             # Retry fields — safe defaults for legacy records
-            max_attempts=int(data.get("max_attempts", 3)),
+            max_attempts=min(int(data.get("max_attempts", 3)), 10),
             backoff_seconds=list(data.get("backoff_seconds", [30, 60, 300])),
             retry_on=list(data.get("retry_on", ["network", "provider_error"])),
             consecutive_failures=int(data.get("consecutive_failures", 0)),

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -529,6 +530,27 @@ class SchedulerManager:
         exist the method returns without error.
         """
         if not self.jobs_file.exists():
+            return
+
+        # Verify file ownership and permissions before trusting content.
+        try:
+            st = self.jobs_file.stat()
+            if st.st_uid != os.getuid():
+                logger.error(
+                    "Jobs file %s is not owned by current user (uid=%d) — refusing to load",
+                    self.jobs_file,
+                    os.getuid(),
+                )
+                return
+            if st.st_mode & 0o022:  # group-writable or world-writable
+                logger.error(
+                    "Jobs file %s has unsafe permissions (mode=%o) — refusing to load",
+                    self.jobs_file,
+                    st.st_mode & 0o777,
+                )
+                return
+        except OSError as exc:
+            logger.error("Cannot stat jobs file %s: %s", self.jobs_file, exc)
             return
 
         try:

@@ -770,10 +770,11 @@ class AgentRuntime:
                 is_error=True,
             )
 
+        # Log tool name and argument keys only — values may contain secrets.
         logger.info(
-            "Executing tool %r with args: %s",
+            "Executing tool %r with arg keys: %s",
             tool_call.name,
-            tool_call.arguments,
+            list(tool_call.arguments.keys()),
         )
         # Strip session_id/task_id from tool args to avoid colliding
         # with the explicit kwargs we pass to registry.execute().
@@ -834,12 +835,12 @@ class AgentRuntime:
                         _MAX_TOOL_RETRIES + 1,
                         exc,
                     )
-            except Exception as exc:
+            except Exception:
                 logger.exception("Unexpected error executing tool %r", tool_call.name)
                 return ToolResult(
                     tool_call_id=tool_call.id,
                     name=tool_call.name,
-                    content=f"Unexpected error: {exc}",
+                    content="Tool execution failed due to an internal error.",
                     is_error=True,
                 )
 

@@ -103,8 +103,8 @@ class McpClient:
         # Validate response ID matches request to prevent response confusion
         resp_id = resp.get("id")
         if resp_id is not None and resp_id != req_id:
-            logger.warning(
-                "MCP response ID mismatch: expected %s, got %s", req_id, resp_id
+            raise RuntimeError(
+                f"MCP response ID mismatch: expected {req_id}, got {resp_id}"
             )
         return resp
 

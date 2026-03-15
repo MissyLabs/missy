@@ -86,6 +86,26 @@ class WebhookChannel(BaseChannel):
         channel_ref = self
 
         class Handler(BaseHTTPRequestHandler):
+            server_version = "missy"
+            sys_version = ""
+
+            def version_string(self) -> str:
+                return "missy"
+
+            def _send_security_headers(self) -> None:
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("X-Frame-Options", "DENY")
+                self.send_header("Cache-Control", "no-store")
+
+            def do_GET(self):
+                self.send_response(405)
+                self._send_security_headers()
+                self.end_headers()
+
+            do_PUT = do_GET
+            do_DELETE = do_GET
+            do_PATCH = do_GET
+
             def log_message(self, format, *args):
                 logger.debug("Webhook: " + format, *args)
 
@@ -95,6 +115,7 @@ class WebhookChannel(BaseChannel):
                 if not channel_ref._check_rate_limit(client_ip):
                     self.send_response(429)
                     self.send_header("Retry-After", str(_RATE_LIMIT_WINDOW))
+                    self._send_security_headers()
                     self.end_headers()
                     return
 
@@ -102,6 +123,7 @@ class WebhookChannel(BaseChannel):
                 content_type = (self.headers.get("Content-Type") or "").split(";")[0].strip()
                 if content_type != "application/json":
                     self.send_response(415)
+                    self._send_security_headers()
                     self.end_headers()
                     return
 
@@ -112,12 +134,14 @@ class WebhookChannel(BaseChannel):
                         raise ValueError("negative")
                 except (ValueError, TypeError):
                     self.send_response(400)
+                    self._send_security_headers()
                     self.end_headers()
                     return
 
                 # Reject oversized payloads
                 if length > _MAX_PAYLOAD_BYTES:
                     self.send_response(413)
+                    self._send_security_headers()
                     self.end_headers()
                     return
 
@@ -131,6 +155,7 @@ class WebhookChannel(BaseChannel):
                     )
                     if not hmac.compare_digest(sig, expected):
                         self.send_response(401)
+                        self._send_security_headers()
                         self.end_headers()
                         return
 
@@ -138,12 +163,14 @@ class WebhookChannel(BaseChannel):
                     data = json.loads(body)
                 except json.JSONDecodeError:
                     self.send_response(400)
+                    self._send_security_headers()
                     self.end_headers()
                     return
 
                 prompt = data.get("prompt", "").strip()
                 if not prompt:
                     self.send_response(400)
+                    self._send_security_headers()
                     self.end_headers()
                     return
 
@@ -168,12 +195,14 @@ class WebhookChannel(BaseChannel):
                 with channel_ref._lock:
                     if len(channel_ref._queue) >= _MAX_QUEUE_SIZE:
                         self.send_response(503)
+                        self._send_security_headers()
                         self.end_headers()
                         return
                     channel_ref._queue.append(msg)
 
                 self.send_response(202)
                 self.send_header("Content-Type", "application/json")
+                self._send_security_headers()
                 self.end_headers()
                 self.wfile.write(b'{"status": "queued"}')
 

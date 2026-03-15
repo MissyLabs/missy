@@ -124,10 +124,17 @@ class SelfCreateTool(BaseTool):
                 "curl ", "wget ", "nc ", "ncat ", "socat ",
                 "/dev/tcp/", "/dev/udp/",
                 "eval(", "exec(", "os.system(",
-                "subprocess.call(", "subprocess.Popen(",
+                "subprocess.call(", "subprocess.Popen(", "subprocess.run(",
                 "import socket", "import http",
                 "reverse_shell", "bind_shell",
                 "chmod +s", "chmod u+s", "setuid",
+                # Indirect execution patterns
+                "__import__(", "getattr(", "importlib.",
+                "compile(", "code.interact(",
+                # Node.js patterns
+                "child_process", "require('fs')", 'require("fs")',
+                # Shell expansion patterns
+                "$(", "`",
             ]
             script_lower = script.lower()
             for pattern in _DANGEROUS_PATTERNS:
