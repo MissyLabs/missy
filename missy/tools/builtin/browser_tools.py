@@ -36,6 +36,14 @@ _FIREFOX_PREFS = {
 
 class BrowserSession:
     def __init__(self, session_id: str, headless: bool = False) -> None:
+        import re
+
+        # Validate session_id to prevent directory traversal.
+        if not re.match(r"^[a-zA-Z0-9_\-]+$", session_id):
+            raise ValueError(
+                f"Invalid session_id {session_id!r}: must be alphanumeric, "
+                "hyphens, or underscores only."
+            )
         self.session_id = session_id
         self.headless = headless
         self._lock = threading.Lock()
