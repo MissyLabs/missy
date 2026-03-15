@@ -10,7 +10,6 @@ Targets uncovered paths in:
 """
 from __future__ import annotations
 
-import asyncio
 import importlib
 import json
 import os
@@ -65,17 +64,11 @@ class TestMcpManagerSaveConfigWriteError:
             _, path = real_mkstemp(dir=dir, suffix=suffix)
             return fake_fd, path
 
-        real_os_write = os.write
-
         def fake_write(fd, data):
             raise OSError("disk full")
 
-        real_os_close = os.close
-
         def fake_close(fd):
             closed_fds.append(fd)
-
-        real_os_unlink = os.unlink
 
         def fake_unlink(path):
             unlinked_paths.append(path)
@@ -87,9 +80,9 @@ class TestMcpManagerSaveConfigWriteError:
             patch("os.unlink", side_effect=fake_unlink),
             patch("os.fchmod"),
             patch("os.replace"),
+            pytest.raises(OSError, match="disk full"),
         ):
-            with pytest.raises(OSError, match="disk full"):
-                mgr._save_config()
+            mgr._save_config()
 
         # fd must have been closed exactly once (closed=False path)
         assert fake_fd in closed_fds
@@ -126,9 +119,9 @@ class TestMcpManagerSaveConfigWriteError:
             patch("os.close", side_effect=fake_close),
             patch("os.replace", side_effect=OSError("replace failed")),
             patch("os.unlink", side_effect=fake_unlink),
+            pytest.raises(OSError, match="replace failed"),
         ):
-            with pytest.raises(OSError, match="replace failed"):
-                mgr._save_config()
+            mgr._save_config()
 
         # closed=True when os.replace failed, so fd must NOT be re-closed in except.
         assert closed_fds.count(fake_fd) == 1  # only the successful explicit close
@@ -153,9 +146,9 @@ class TestMcpManagerSaveConfigWriteError:
             patch("os.fchmod"),
             patch("os.replace"),
             patch("os.unlink"),
+            pytest.raises(PermissionError, match="no write perm"),
         ):
-            with pytest.raises(PermissionError, match="no write perm"):
-                mgr._save_config()
+            mgr._save_config()
 
     def test_unlink_oserror_is_suppressed(self, tmp_path: Path) -> None:
         """When os.unlink raises OSError the exception does not propagate; only
@@ -176,10 +169,10 @@ class TestMcpManagerSaveConfigWriteError:
             patch("os.fchmod"),
             patch("os.replace"),
             patch("os.unlink", side_effect=OSError("unlink also failed")),
-        ):
             # Only the original write error propagates; unlink OSError is suppressed.
-            with pytest.raises(OSError, match="write failed"):
-                mgr._save_config()
+            pytest.raises(OSError, match="write failed"),
+        ):
+            mgr._save_config()
 
 
 # ===========================================================================
@@ -373,7 +366,7 @@ class TestNetworkPolicyInvalidIPSkipped:
     def test_invalid_ip_string_from_getaddrinfo_is_skipped(self) -> None:
         """An unparseable address in getaddrinfo results is skipped; the request
         proceeds and is allowed by the domain allowlist."""
-        from missy.policy.network import NetworkPolicyEngine, NetworkPolicy
+        from missy.policy.network import NetworkPolicy, NetworkPolicyEngine
 
         policy = NetworkPolicy(
             default_deny=True,
@@ -396,7 +389,7 @@ class TestNetworkPolicyInvalidIPSkipped:
     def test_all_invalid_ips_from_getaddrinfo_allows_via_domain(self) -> None:
         """When every getaddrinfo entry has an unparseable IP the resolved list is
         empty; the private-check loop is skipped and the domain-level allow stands."""
-        from missy.policy.network import NetworkPolicyEngine, NetworkPolicy
+        from missy.policy.network import NetworkPolicy, NetworkPolicyEngine
 
         policy = NetworkPolicy(
             default_deny=True,
@@ -447,6 +440,7 @@ class TestVoiceServerConnectionClosedBeforeAuth:
         """ConnectionClosed raised from websocket.recv() before auth: node is None
         so the line-360 branch logs the remote_addr."""
         import logging
+
         import websockets.exceptions
 
         server = _make_voice_server()

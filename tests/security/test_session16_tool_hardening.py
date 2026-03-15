@@ -15,7 +15,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # 1: self_create_tool dangerous-pattern validation
 # ---------------------------------------------------------------------------
@@ -367,7 +366,7 @@ class TestCodeEvolveSystemExitLogging:
             ),
             patch("missy.tools.builtin.code_evolve.logger") as mock_logger,
         ):
-            result = tool.execute(action="apply", proposal_id="prop-001")
+            tool.execute(action="apply", proposal_id="prop-001")
 
         mock_logger.warning.assert_called()
         warning_text = str(mock_logger.warning.call_args_list)
@@ -413,7 +412,7 @@ class TestCodeEvolveSystemExitLogging:
         ):
             # Must not raise
             try:
-                result = tool.execute(action="apply", proposal_id="prop-001")
+                tool.execute(action="apply", proposal_id="prop-001")
             except SystemExit:
                 pytest.fail("SystemExit propagated out of CodeEvolveTool.execute — it must be caught")
 
@@ -460,7 +459,7 @@ class TestCodeEvolveSystemExitLogging:
             ),
             patch("missy.tools.builtin.code_evolve.logger") as mock_logger,
         ):
-            result = tool.execute(action="rollback", proposal_id="prop-001")
+            tool.execute(action="rollback", proposal_id="prop-001")
 
         mock_logger.warning.assert_called()
         warning_text = str(mock_logger.warning.call_args_list)
@@ -504,7 +503,7 @@ class TestCodeEvolveSystemExitLogging:
             patch("missy.tools.builtin.code_evolve.logger"),
         ):
             try:
-                result = tool.execute(action="rollback", proposal_id="prop-001")
+                tool.execute(action="rollback", proposal_id="prop-001")
             except SystemExit:
                 pytest.fail("SystemExit propagated out of CodeEvolveTool.execute during rollback")
 

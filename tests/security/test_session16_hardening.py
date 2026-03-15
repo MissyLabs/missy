@@ -16,16 +16,13 @@ Tests for fixes applied this session:
 
 from __future__ import annotations
 
-import os
 import sqlite3
 import stat
-import tempfile
 from pathlib import Path
 from string import Template
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # 1 & 2: Shell heredoc and brace group (anywhere) rejection
@@ -239,7 +236,6 @@ class TestFTS5QuerySanitization:
 
     def test_fts_operational_error_logs_warning(self, store):
         """A warning is logged at WARNING level when FTS5 query fails."""
-        import logging
 
         with patch.object(store, "_conn") as mock_conn_method:
             mock_conn = MagicMock()
@@ -404,8 +400,8 @@ class TestSchedulerAtomicWrite:
         """_save_jobs calls tempfile.mkstemp and then os.replace.
         Both tempfile and os are local imports inside _save_jobs, so we patch
         them at the canonical module level."""
-        import tempfile as tempfile_module
         import os as os_module
+        import tempfile as tempfile_module
 
         mgr, jobs_file = self._make_manager(tmp_path)
 
@@ -418,10 +414,10 @@ class TestSchedulerAtomicWrite:
 
         with (
             patch("tempfile.mkstemp", return_value=(fd_value, tmp_file)) as mock_mkstemp,
-            patch("os.fchmod") as mock_fchmod,
-            patch("os.write") as mock_write,
-            patch("os.close") as mock_close,
-            patch("os.replace") as mock_replace,
+            patch("os.fchmod"),
+            patch("os.write"),
+            patch("os.close"),
+            patch("os.replace"),
         ):
             mgr._save_jobs()
 
