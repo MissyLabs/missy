@@ -1,6 +1,6 @@
 # AUDIT_CONNECTIVITY
 
-- Timestamp: 2026-03-14
+- Timestamp: 2026-03-15 (updated session 12)
 - Auditor: Automated build analysis
 
 ## Network Architecture
@@ -58,6 +58,22 @@ network:
     - "cdn.discordapp.com"
 ```
 
+## Inbound Traffic Controls
+
+| Channel | Control | Details |
+|---|---|---|
+| Webhook | Rate limiting | 60 req/min per IP, 1 MB max payload, 1000 max queue |
+| Webhook | HMAC authentication | Optional SHA-256 signature validation |
+| Voice | Device pairing | PBKDF2-hashed tokens, per-device policy modes |
+| Discord | Access control | DM allowlist, guild/role policies |
+
+## MCP Server Isolation
+
+MCP server subprocesses receive a sanitized environment with only safe
+variables (PATH, HOME, LANG, etc.).  Server names must not contain `__`
+to prevent namespace collision.  RPC reads have a 30s timeout and 1 MB
+size limit.
+
 ## Policy Enforcement Points
 
 1. **PolicyHTTPClient.request()** — Every outbound HTTP request checked
@@ -65,6 +81,8 @@ network:
 3. **ShellExecTool.execute()** — Commands checked against shell policy
 4. **FileReadTool/FileWriteTool** — Paths checked against filesystem policy
 5. **SchedulerManager._run_job()** — Jobs run through policy enforcement
+6. **WebhookChannel._check_rate_limit()** — Per-IP rate limiting on inbound
+7. **McpClient._rpc()** — Timeout and size limits on MCP server responses
 
 ## Network Policy Test Coverage
 
