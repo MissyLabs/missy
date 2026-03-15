@@ -36,6 +36,25 @@ def clear_event_bus():
     event_bus.clear()
 
 
+def _query_one(tmp_db: str, sql: str, params: tuple = ()) -> tuple:
+    """Execute a query and return one row, using a context manager."""
+    with sqlite3.connect(tmp_db) as conn:
+        return conn.execute(sql, params).fetchone()
+
+
+def _query_all(tmp_db: str, sql: str, params: tuple = ()) -> list:
+    """Execute a query and return all rows, using a context manager."""
+    with sqlite3.connect(tmp_db) as conn:
+        return conn.execute(sql, params).fetchall()
+
+
+def _execute(tmp_db: str, sql: str, params: tuple = ()) -> None:
+    """Execute a statement with commit, using a context manager."""
+    with sqlite3.connect(tmp_db) as conn:
+        conn.execute(sql, params)
+        conn.commit()
+
+
 # ---------------------------------------------------------------------------
 # CheckpointManager: construction and schema
 # ---------------------------------------------------------------------------
@@ -53,18 +72,15 @@ class TestCheckpointManagerInit:
 
     def test_schema_has_checkpoints_table(self, tmp_db):
         CheckpointManager(db_path=tmp_db)
-        conn = sqlite3.connect(tmp_db)
-        rows = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='checkpoints'"
-        ).fetchall()
-        conn.close()
+        rows = _query_all(
+            tmp_db,
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='checkpoints'",
+        )
         assert rows, "checkpoints table should exist"
 
     def test_wal_mode_enabled(self, tmp_db):
         CheckpointManager(db_path=tmp_db)
-        conn = sqlite3.connect(tmp_db)
-        mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
-        conn.close()
+        mode = _query_one(tmp_db, "PRAGMA journal_mode")[0]
         assert mode == "wal"
 
     def test_tilde_expansion(self, monkeypatch, tmp_path):
@@ -88,29 +104,27 @@ class TestCreate:
 
     def test_inserted_with_running_state(self, cm, tmp_db):
         cid = cm.create("sess-1", "task-1", "prompt")
-        conn = sqlite3.connect(tmp_db)
-        row = conn.execute("SELECT state FROM checkpoints WHERE id=?", (cid,)).fetchone()
-        conn.close()
+        row = _query_one(tmp_db, "SELECT state FROM checkpoints WHERE id=?", (cid,))
         assert row[0] == "RUNNING"
 
     def test_stores_session_task_and_prompt(self, cm, tmp_db):
         cid = cm.create("my-session", "my-task", "do the thing")
-        conn = sqlite3.connect(tmp_db)
-        row = conn.execute(
-            "SELECT session_id, task_id, prompt FROM checkpoints WHERE id=?", (cid,)
-        ).fetchone()
-        conn.close()
+        row = _query_one(
+            tmp_db,
+            "SELECT session_id, task_id, prompt FROM checkpoints WHERE id=?",
+            (cid,),
+        )
         assert row == ("my-session", "my-task", "do the thing")
 
     def test_timestamps_are_set(self, cm, tmp_db):
         before = time.time()
         cid = cm.create("s", "t", "p")
         after = time.time()
-        conn = sqlite3.connect(tmp_db)
-        row = conn.execute(
-            "SELECT created_at, updated_at FROM checkpoints WHERE id=?", (cid,)
-        ).fetchone()
-        conn.close()
+        row = _query_one(
+            tmp_db,
+            "SELECT created_at, updated_at FROM checkpoints WHERE id=?",
+            (cid,),
+        )
         assert before <= row[0] <= after
         assert before <= row[1] <= after
 
@@ -129,51 +143,45 @@ class TestUpdate:
         cid = cm.create("s", "t", "p")
         messages = [{"role": "user", "content": "hello"}]
         cm.update(cid, messages, ["tool_a"], iteration=1)
-        conn = sqlite3.connect(tmp_db)
-        raw = conn.execute("SELECT loop_messages FROM checkpoints WHERE id=?", (cid,)).fetchone()[0]
-        conn.close()
+        raw = _query_one(
+            tmp_db, "SELECT loop_messages FROM checkpoints WHERE id=?", (cid,)
+        )[0]
         assert json.loads(raw) == messages
 
     def test_update_persists_tool_names(self, cm, tmp_db):
         cid = cm.create("s", "t", "p")
         cm.update(cid, [], ["tool_x", "tool_y"], iteration=0)
-        conn = sqlite3.connect(tmp_db)
-        raw = conn.execute("SELECT tool_names_used FROM checkpoints WHERE id=?", (cid,)).fetchone()[
-            0
-        ]
-        conn.close()
+        raw = _query_one(
+            tmp_db, "SELECT tool_names_used FROM checkpoints WHERE id=?", (cid,)
+        )[0]
         assert json.loads(raw) == ["tool_x", "tool_y"]
 
     def test_update_persists_iteration(self, cm, tmp_db):
         cid = cm.create("s", "t", "p")
         cm.update(cid, [], [], iteration=7)
-        conn = sqlite3.connect(tmp_db)
-        row = conn.execute("SELECT iteration FROM checkpoints WHERE id=?", (cid,)).fetchone()
-        conn.close()
+        row = _query_one(
+            tmp_db, "SELECT iteration FROM checkpoints WHERE id=?", (cid,)
+        )
         assert row[0] == 7
 
     def test_update_advances_updated_at(self, cm, tmp_db):
         cid = cm.create("s", "t", "p")
-        conn = sqlite3.connect(tmp_db)
-        before_update = conn.execute(
-            "SELECT updated_at FROM checkpoints WHERE id=?", (cid,)
-        ).fetchone()[0]
-        conn.close()
+        before_update = _query_one(
+            tmp_db, "SELECT updated_at FROM checkpoints WHERE id=?", (cid,)
+        )[0]
         time.sleep(0.01)
         cm.update(cid, [], [], iteration=0)
-        conn = sqlite3.connect(tmp_db)
-        after_update = conn.execute(
-            "SELECT updated_at FROM checkpoints WHERE id=?", (cid,)
-        ).fetchone()[0]
-        conn.close()
+        after_update = _query_one(
+            tmp_db, "SELECT updated_at FROM checkpoints WHERE id=?", (cid,)
+        )[0]
         assert after_update >= before_update
 
     def test_update_does_not_change_state(self, cm, tmp_db):
         cid = cm.create("s", "t", "p")
         cm.update(cid, [], [], iteration=2)
-        conn = sqlite3.connect(tmp_db)
-        state = conn.execute("SELECT state FROM checkpoints WHERE id=?", (cid,)).fetchone()[0]
-        conn.close()
+        state = _query_one(
+            tmp_db, "SELECT state FROM checkpoints WHERE id=?", (cid,)
+        )[0]
         assert state == "RUNNING"
 
 
@@ -186,9 +194,9 @@ class TestComplete:
     def test_sets_state_to_complete(self, cm, tmp_db):
         cid = cm.create("s", "t", "p")
         cm.complete(cid)
-        conn = sqlite3.connect(tmp_db)
-        state = conn.execute("SELECT state FROM checkpoints WHERE id=?", (cid,)).fetchone()[0]
-        conn.close()
+        state = _query_one(
+            tmp_db, "SELECT state FROM checkpoints WHERE id=?", (cid,)
+        )[0]
         assert state == "COMPLETE"
 
     def test_complete_not_in_get_incomplete(self, cm):
@@ -202,25 +210,25 @@ class TestFail:
     def test_sets_state_to_failed(self, cm, tmp_db):
         cid = cm.create("s", "t", "p")
         cm.fail(cid)
-        conn = sqlite3.connect(tmp_db)
-        state = conn.execute("SELECT state FROM checkpoints WHERE id=?", (cid,)).fetchone()[0]
-        conn.close()
+        state = _query_one(
+            tmp_db, "SELECT state FROM checkpoints WHERE id=?", (cid,)
+        )[0]
         assert state == "FAILED"
 
     def test_fail_with_error_appends_to_prompt(self, cm, tmp_db):
         cid = cm.create("s", "t", "original prompt")
         cm.fail(cid, error="something went wrong")
-        conn = sqlite3.connect(tmp_db)
-        prompt = conn.execute("SELECT prompt FROM checkpoints WHERE id=?", (cid,)).fetchone()[0]
-        conn.close()
+        prompt = _query_one(
+            tmp_db, "SELECT prompt FROM checkpoints WHERE id=?", (cid,)
+        )[0]
         assert "something went wrong" in prompt
 
     def test_fail_without_error_does_not_change_prompt(self, cm, tmp_db):
         cid = cm.create("s", "t", "original prompt")
         cm.fail(cid)
-        conn = sqlite3.connect(tmp_db)
-        prompt = conn.execute("SELECT prompt FROM checkpoints WHERE id=?", (cid,)).fetchone()[0]
-        conn.close()
+        prompt = _query_one(
+            tmp_db, "SELECT prompt FROM checkpoints WHERE id=?", (cid,)
+        )[0]
         assert prompt == "original prompt"
 
 
@@ -307,19 +315,16 @@ class TestClassify:
 class TestAbandonOld:
     def test_old_running_becomes_abandoned(self, cm, tmp_db):
         cid = cm.create("s", "t", "p")
-        # Manually backdate the created_at timestamp
-        conn = sqlite3.connect(tmp_db)
-        conn.execute(
+        _execute(
+            tmp_db,
             "UPDATE checkpoints SET created_at=? WHERE id=?",
             (time.time() - 90000, cid),
         )
-        conn.commit()
-        conn.close()
         count = cm.abandon_old(max_age_seconds=86400)
         assert count == 1
-        conn = sqlite3.connect(tmp_db)
-        state = conn.execute("SELECT state FROM checkpoints WHERE id=?", (cid,)).fetchone()[0]
-        conn.close()
+        state = _query_one(
+            tmp_db, "SELECT state FROM checkpoints WHERE id=?", (cid,)
+        )[0]
         assert state == "ABANDONED"
 
     def test_recent_running_not_abandoned(self, cm):
@@ -331,14 +336,13 @@ class TestAbandonOld:
 
     def test_returns_count_of_abandoned(self, cm, tmp_db):
         ids = [cm.create("s", "t", "p") for _ in range(3)]
-        conn = sqlite3.connect(tmp_db)
-        for cid in ids:
-            conn.execute(
-                "UPDATE checkpoints SET created_at=? WHERE id=?",
-                (time.time() - 90000, cid),
-            )
-        conn.commit()
-        conn.close()
+        with sqlite3.connect(tmp_db) as conn:
+            for cid in ids:
+                conn.execute(
+                    "UPDATE checkpoints SET created_at=? WHERE id=?",
+                    (time.time() - 90000, cid),
+                )
+            conn.commit()
         count = cm.abandon_old()
         assert count == 3
 
@@ -352,9 +356,9 @@ class TestDelete:
     def test_delete_removes_record(self, cm, tmp_db):
         cid = cm.create("s", "t", "p")
         cm.delete(cid)
-        conn = sqlite3.connect(tmp_db)
-        row = conn.execute("SELECT id FROM checkpoints WHERE id=?", (cid,)).fetchone()
-        conn.close()
+        row = _query_one(
+            tmp_db, "SELECT id FROM checkpoints WHERE id=?", (cid,)
+        )
         assert row is None
 
     def test_delete_nonexistent_is_noop(self, cm):
@@ -368,13 +372,11 @@ class TestDelete:
 
 class TestCleanup:
     def _backdate(self, tmp_db: str, cid: str, days: int) -> None:
-        conn = sqlite3.connect(tmp_db)
-        conn.execute(
+        _execute(
+            tmp_db,
             "UPDATE checkpoints SET updated_at=? WHERE id=?",
             (time.time() - days * 86400, cid),
         )
-        conn.commit()
-        conn.close()
 
     def test_cleanup_removes_old_terminal_records(self, cm, tmp_db):
         cid = cm.create("s", "t", "p")
@@ -382,9 +384,9 @@ class TestCleanup:
         self._backdate(tmp_db, cid, days=10)
         count = cm.cleanup(older_than_days=7)
         assert count == 1
-        conn = sqlite3.connect(tmp_db)
-        row = conn.execute("SELECT id FROM checkpoints WHERE id=?", (cid,)).fetchone()
-        conn.close()
+        row = _query_one(
+            tmp_db, "SELECT id FROM checkpoints WHERE id=?", (cid,)
+        )
         assert row is None
 
     def test_cleanup_preserves_recent_terminal_records(self, cm, tmp_db):
@@ -410,13 +412,11 @@ class TestCleanup:
 
     def test_cleanup_handles_abandoned_state(self, cm, tmp_db):
         cid = cm.create("s", "t", "p")
-        conn = sqlite3.connect(tmp_db)
-        conn.execute(
+        _execute(
+            tmp_db,
             "UPDATE checkpoints SET state='ABANDONED', updated_at=? WHERE id=?",
             (time.time() - 10 * 86400, cid),
         )
-        conn.commit()
-        conn.close()
         count = cm.cleanup(older_than_days=7)
         assert count == 1
 
@@ -460,14 +460,11 @@ class TestScanForRecovery:
     def test_old_checkpoint_is_abandoned_before_scan(self, tmp_db):
         cm = CheckpointManager(db_path=tmp_db)
         cid = cm.create("s", "t", "p")
-        # Backdate to 2 days ago
-        conn = sqlite3.connect(tmp_db)
-        conn.execute(
+        _execute(
+            tmp_db,
             "UPDATE checkpoints SET created_at=? WHERE id=?",
             (time.time() - 2 * 86400, cid),
         )
-        conn.commit()
-        conn.close()
         results = scan_for_recovery(db_path=tmp_db)
         # abandon_old should have transitioned it before get_incomplete is called
         assert len(results) == 0
