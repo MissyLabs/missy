@@ -17,6 +17,7 @@ Example::
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import uuid
 from dataclasses import asdict, dataclass
@@ -136,6 +137,9 @@ class PromptPatchManager:
                 patches.append(PromptPatch(**d))
             return patches
         except Exception:
+            logging.getLogger(__name__).warning(
+                "Failed to load prompt patches from %s", self._path, exc_info=True
+            )
             return []
 
     def _save(self) -> None:

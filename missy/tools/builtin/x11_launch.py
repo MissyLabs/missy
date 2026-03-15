@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 import time
 
@@ -10,7 +11,14 @@ from missy.tools.base import BaseTool, ToolPermissions, ToolResult
 
 
 def _display_env() -> dict:
-    return {**os.environ, "DISPLAY": os.environ.get("DISPLAY", ":0")}
+    """Return a minimal environment dict with DISPLAY set."""
+    _SAFE_VARS = (
+        "PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM",
+        "XDG_RUNTIME_DIR", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS",
+    )
+    env = {k: os.environ[k] for k in _SAFE_VARS if k in os.environ}
+    env["DISPLAY"] = os.environ.get("DISPLAY", ":0")
+    return env
 
 
 class X11LaunchTool(BaseTool):
@@ -76,7 +84,7 @@ class X11LaunchTool(BaseTool):
         while time.time() < deadline:
             time.sleep(0.5)
             result = subprocess.run(
-                f"xdotool search --onlyvisible --name {hint!r}",
+                f"xdotool search --onlyvisible --name {shlex.quote(hint)}",
                 shell=True,
                 capture_output=True,
                 text=True,
@@ -87,7 +95,7 @@ class X11LaunchTool(BaseTool):
                 window_id = ids[0].strip()
                 # Get the window name.
                 name_result = subprocess.run(
-                    f"xdotool getwindowname {window_id}",
+                    f"xdotool getwindowname {shlex.quote(window_id)}",
                     shell=True,
                     capture_output=True,
                     text=True,

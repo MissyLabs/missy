@@ -773,4 +773,4 @@ class CodeEvolutionManager:
                 )
             )
         except Exception:
-            pass
+            logger.debug("Failed to emit code evolution audit event", exc_info=True)

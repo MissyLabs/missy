@@ -423,7 +423,7 @@ class TestX11KeyTool:
 
         assert result.success is True
         assert result.output["key"] == "Return"
-        mock_run.assert_called_once_with("xdotool key Return")
+        mock_run.assert_called_once_with("xdotool key -- Return")
 
     def test_xdotool_not_installed(self):
         """Line 339: command not found path."""

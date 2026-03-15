@@ -316,7 +316,7 @@ class TestX11KeyTool:
         assert result.success is True
         assert result.output["key"] == "Return"
         called_cmd = mock_run.call_args[0][0]
-        assert called_cmd == "xdotool key Return"
+        assert called_cmd == "xdotool key -- Return"
 
     def test_send_ctrl_c_shortcut(self):
         with patch("missy.tools.builtin.x11_tools.subprocess.run") as mock_run:

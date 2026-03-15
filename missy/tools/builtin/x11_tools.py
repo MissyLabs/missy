@@ -15,6 +15,7 @@ import base64
 import json
 import logging
 import os
+import shlex
 import subprocess
 from typing import Any
 
@@ -37,8 +38,18 @@ _OLLAMA_DEFAULT_URL = "http://localhost:11434"
 
 
 def _display_env() -> dict[str, str]:
-    """Return an environment dict with DISPLAY set."""
-    return {**os.environ, "DISPLAY": os.environ.get("DISPLAY", ":0")}
+    """Return a minimal environment dict with DISPLAY set.
+
+    Only passes through essential variables to avoid leaking secrets
+    (API keys, tokens, etc.) to subprocess environments.
+    """
+    _SAFE_VARS = (
+        "PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM",
+        "XDG_RUNTIME_DIR", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS",
+    )
+    env = {k: os.environ[k] for k in _SAFE_VARS if k in os.environ}
+    env["DISPLAY"] = os.environ.get("DISPLAY", ":0")
+    return env
 
 
 def _run(cmd: str) -> subprocess.CompletedProcess:
@@ -143,7 +154,7 @@ class X11ScreenshotTool(BaseTool):
     def execute(
         self, *, path: str = "/tmp/screenshot.png", region: str = "", **_: Any
     ) -> ToolResult:
-        cmd = f"scrot -a {region} {path}" if region else f"scrot {path}"
+        cmd = f"scrot -a {shlex.quote(region)} {shlex.quote(path)}" if region else f"scrot {shlex.quote(path)}"
 
         result = _run(cmd)
 
@@ -341,7 +352,7 @@ class X11KeyTool(BaseTool):
             if r.returncode != 0:
                 logger.debug("xdotool windowfocus stderr: %s", r.stderr.strip())
 
-        cmd = f"xdotool key {key}"
+        cmd = f"xdotool key -- {shlex.quote(key)}"
         result = _run(cmd)
         if result.returncode != 0:
             err = result.stderr.strip() or result.stdout.strip()
@@ -410,7 +421,7 @@ class X11WindowListTool(BaseTool):
             wid = wid.strip()
             if not wid:
                 continue
-            name_result = _run(f"xdotool getwindowname {wid}")
+            name_result = _run(f"xdotool getwindowname {shlex.quote(wid)}")
             name = name_result.stdout.strip() if name_result.returncode == 0 else ""
             windows.append({"id": wid, "name": name})
 
@@ -468,9 +479,9 @@ class X11ReadScreenTool(BaseTool):
                 if browser_registry.screenshot_active(path):
                     return None
             except Exception:
-                pass
+                logger.debug("Browser screenshot fallback failed", exc_info=True)
 
-        cmd = f"scrot -a {region} {path}" if region else f"scrot {path}"
+        cmd = f"scrot -a {shlex.quote(region)} {shlex.quote(path)}" if region else f"scrot {shlex.quote(path)}"
         result = _run(cmd)
         if result.returncode != 0:
             err = result.stderr.strip() or result.stdout.strip()
