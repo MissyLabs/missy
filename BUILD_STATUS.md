@@ -24,7 +24,7 @@ All core phases implemented, parity gaps closed, comprehensive hardening applied
 16. CLI (60+ commands via click + rich, including recover, evolve)
 17. Discord (WebSocket gateway, REST API, threads, slash commands, pairing, access control, voice, interactive setup wizard)
 18. Code self-evolution engine (propose, test, apply, rollback)
-19. Tests (4489 tests, 99.11% coverage)
+19. Tests (5145 tests, 99%+ coverage)
 20. Documentation (SECURITY.md, OPERATIONS.md, ARCHITECTURE.md, CONFIG_REFERENCE.md, DISCORD.md, TESTING.md, TROUBLESHOOTING.md, 10+ implementation docs)
 21. Audit artifacts (AUDIT_SECURITY.md, AUDIT_CONNECTIVITY.md)
 22. Test artifacts (TEST_RESULTS.md, TEST_EDGE_CASES.md, BUILD_RESULTS.md)
@@ -58,14 +58,30 @@ missy/                          # 123 Python source files
 
 ## Test Results
 
-- 5029 tests passing across 141 test files
-- 99%+ code coverage
+- 5145 tests passing across 144 test files
+- 99%+ code coverage, zero test warnings
 - Unit, integration, policy, Discord, security, memory, agent, tools, skills, CLI, voice, scheduler tests
 - 54+ property-based tests (hypothesis) for policy engines, security, and rate limiter
 - 116 security fuzz tests (unicode evasion, encoding bypass, vault corruption)
 - 48 rate limiter stress tests (concurrent, burst, thread safety)
 - 77 end-to-end integration tests
-- 230+ security edge-case tests (injection, secrets, vault, SSRF, path traversal, tool output injection, webhook hardening)
+- 300+ security edge-case tests (injection, secrets, vault, SSRF, path traversal, tool output injection, webhook hardening, scheme restriction, kwargs sanitization)
+
+## Session 13 Additions (2026-03-15)
+
+- **SSRF prevention**: Gateway now rejects non-http/https URL schemes (blocks file://, ftp://, data:// attacks)
+- **Redirect bypass prevention**: Gateway strips `follow_redirects` from kwargs, explicitly sets `follow_redirects=False` on httpx clients
+- **Shell policy bare `&` fix**: Background execution operator now properly splits compound commands (prevents `allowed_cmd & forbidden_cmd` bypass)
+- **Shell launcher command warnings**: Policy engine warns when command-launching programs (env, bash, sudo, find, xargs) are whitelisted
+- **MCP config permission checks**: Manager verifies file ownership and permissions (rejects non-owner, group/world-writable) before loading mcp.json
+- **New secret patterns**: Added GitLab (glpat-), npm (npm_), PyPI (pypi-), SendGrid (SG.), database connection string detection
+- **Websockets deprecation fix**: Updated import to use new `websockets.asyncio.server.ServerConnection` API with fallback
+- **Test warning elimination**: Fixed all 4 test warnings (websockets deprecation, unawaited coroutines) — now zero warnings
+- **Coverage gap tests** (46 new): vault atomic write, symlink detection, config hotreload owner/stat, settings vault resolution, runtime cost recording, tool output injection, shell empty parts, code evolution malformed paths, voice server pre-auth close, audio param fallback, MCP timeout, discord voice init failure, resampling break branch, vault crypto unavailable
+- **Security hardening tests** (70 new): URL scheme restriction, kwargs sanitization, follow_redirects enforcement, bare & split, launcher warnings, MCP config permissions, all 5 new secret patterns
+- **Total new tests**: 116 (from 5029 to 5145)
+- **Zero test warnings** (was 4)
+- **Zero ruff lint errors**
 
 ## Session 12 Additions (2026-03-15)
 

@@ -8,11 +8,12 @@
 | Metric | Value |
 |--------|-------|
 | Source files | 123 Python modules |
-| Test files | 141 test files |
-| Total tests | 5029 |
-| Tests passing | 5029 |
+| Test files | 144 test files |
+| Total tests | 5145 |
+| Tests passing | 5145 |
 | Tests failing | 0 |
 | Tests skipped | 7 |
+| Warnings | 0 |
 | Coverage | 99%+ |
 | Lint errors | 0 |
 

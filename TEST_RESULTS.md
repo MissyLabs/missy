@@ -8,14 +8,14 @@
 
 | Metric | Value |
 |--------|-------|
-| Total tests | 5029 |
-| Passed | 5029 |
+| Total tests | 5145 |
+| Passed | 5145 |
 | Failed | 0 |
 | Skipped | 7 |
-| Warnings | 4 |
+| Warnings | 0 |
 | Duration | ~109s |
 | Source files | 123 |
-| Test files | 141 |
+| Test files | 144 |
 | Statements | 11550+ |
 | Coverage | 99%+ |
 

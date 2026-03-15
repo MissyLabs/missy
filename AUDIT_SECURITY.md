@@ -1,6 +1,6 @@
 # AUDIT_SECURITY
 
-- Timestamp: 2026-03-15 (updated session 12)
+- Timestamp: 2026-03-15 (updated session 13)
 - Auditor: Automated build analysis
 
 ## Security Architecture Summary
@@ -8,13 +8,15 @@
 Missy implements defense-in-depth with 6 security layers:
 
 1. **Input Sanitization** — 13+ prompt injection pattern detectors
-2. **Secrets Detection** — 15 credential patterns (API keys, JWTs, AWS, sk-proj-, etc.)
+2. **Secrets Detection** — 20 credential patterns (API keys, JWTs, AWS, GitLab, npm, PyPI, SendGrid, DB connection strings)
 3. **Output Censoring** — `censor_response()` applied in agent runtime before output delivery
 4. **Tool Output Injection Scanning** — Tool results scanned for prompt injection, warning labels prepended
-5. **Policy Enforcement** — 3-layer default-deny (network, filesystem, shell) with process substitution blocking
-6. **Encrypted Vault** — ChaCha20-Poly1305 key-value store
+5. **Policy Enforcement** — 3-layer default-deny (network, filesystem, shell) with process substitution blocking + bare `&` splitting
+6. **Encrypted Vault** — ChaCha20-Poly1305 key-value store with atomic writes and symlink rejection
 7. **Docker Sandbox** — Optional container isolation for shell commands
-8. **MCP Server Isolation** — Sanitized environment variables, name validation, response timeouts/size limits
+8. **MCP Server Isolation** — Sanitized environment, name validation, response timeouts/size limits, config file permission checks
+9. **Gateway SSRF Prevention** — URL scheme restriction (http/https only), redirect following disabled, kwargs sanitization
+10. **Shell Launcher Warnings** — Policy engine warns when command-launching programs (env, bash, sudo) are whitelisted
 
 ## Threat Model Coverage
 
@@ -24,9 +26,9 @@ Missy implements defense-in-depth with 6 security layers:
 | Prompt injection (tool output) | Tool output scanning + warning labels | 19+ tests |
 | Plugin abuse | Plugin allowlist + disabled by default | 30+ tests |
 | Data exfiltration | Default-deny network + output censoring | 120+ policy tests |
-| SSRF | PolicyHTTPClient blocks unauthorized outbound | 50+ gateway tests |
+| SSRF | PolicyHTTPClient: scheme restriction, no redirects, kwargs sanitization | 80+ gateway tests |
 | Scheduler abuse | Active hours, max_jobs, policy enforcement | 100+ scheduler tests |
-| Secrets leakage | SecretsDetector + SecretCensor on all output | 55+ security tests |
+| Secrets leakage | SecretsDetector (20 patterns) + SecretCensor on all output | 85+ security tests |
 | Tool abuse | Tool registry policy checks + approval gate | 280+ tool tests |
 | Channel impersonation | Discord access control (DM/guild/role) | 440+ channel tests |
 
