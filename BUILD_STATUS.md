@@ -58,7 +58,7 @@ missy/                          # 123 Python source files
 
 ## Test Results
 
-- 5581 tests passing across 159 test files
+- 5588 tests passing across 159 test files
 - 99%+ code coverage, zero test warnings
 - Unit, integration, policy, Discord, security, memory, agent, tools, skills, CLI, voice, scheduler tests
 - 54+ property-based tests (hypothesis) for policy engines, security, and rate limiter
@@ -75,7 +75,7 @@ missy/                          # 123 Python source files
 - **SecretsDetector expansion**: 3 new patterns — Azure AccountKey, Twilio SK, Mailgun key. Total: 23 patterns
 - **WebFetchTool refactor**: Moved _BLOCKED_HEADERS to class-level frozenset constant
 - **AgentRuntime type hint**: Added Iterator[str] return type to run_stream()
-- **Edge case tests (88 new)**: Gateway async aput/ahead (6), injection pattern tests (17), secret pattern tests (7), WebFetchTool header tests (3), gateway thread safety (8), cost tracker edge cases (11), shell policy edge cases (12), MCP client edge cases (8), webhook handler edge cases (10), regression tests (6)
+- **Edge case tests (95 new)**: Gateway async aput/ahead (6), injection pattern tests (17), secret pattern tests (7), WebFetchTool header tests (3), gateway thread safety (8), cost tracker edge cases (13), shell policy edge cases (12), MCP client edge cases (8), webhook handler edge cases (10), regression tests (6), Piper env sanitization (2), scheduler task validation (2), device registry perms (1)
 - **Updated reports**: SECURITY.md (v0.3.0), AUDIT_SECURITY.md, all counts updated
 - **Zero ruff lint errors**
 
