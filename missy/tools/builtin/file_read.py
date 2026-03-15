@@ -71,6 +71,11 @@ class FileReadTool(BaseTool):
             if not p.is_file():
                 return ToolResult(success=False, output=None, error=f"Not a file: {path}")
 
+            # Re-resolve immediately before open to mitigate TOCTOU symlink swap
+            real_path = p.resolve(strict=True)
+            if real_path != p:
+                p = real_path
+
             size = p.stat().st_size
             with p.open("r", encoding=encoding, errors="replace") as fh:
                 content = fh.read(max_bytes)
