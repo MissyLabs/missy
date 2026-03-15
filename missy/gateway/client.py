@@ -208,6 +208,20 @@ class PolicyHTTPClient:
         self._emit_request_event("PATCH", url, response.status_code)
         return response
 
+    async def aput(self, url: str, **kwargs: Any) -> httpx.Response:
+        """Perform an asynchronous HTTP PUT after a policy check."""
+        self._check_url(url)
+        response = await self._get_async_client().put(url, **self._sanitize_kwargs(kwargs))
+        self._emit_request_event("PUT", url, response.status_code)
+        return response
+
+    async def ahead(self, url: str, **kwargs: Any) -> httpx.Response:
+        """Perform an asynchronous HTTP HEAD after a policy check."""
+        self._check_url(url)
+        response = await self._get_async_client().head(url, **self._sanitize_kwargs(kwargs))
+        self._emit_request_event("HEAD", url, response.status_code)
+        return response
+
     # ------------------------------------------------------------------
     # Context manager support
     # ------------------------------------------------------------------

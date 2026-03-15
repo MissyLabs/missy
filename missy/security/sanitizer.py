@@ -181,6 +181,19 @@ class InputSanitizer:
         # --- Portuguese / Russian injection keywords ---
         r"ignore\s+as\s+instru[çc][õo]es\s+anteriores",  # Portuguese
         r"игнорируй\s+(все\s+)?предыдущие\s+инструкции",  # Russian
+        # --- Tool/function abuse patterns ---
+        r"call\s+the\s+function\s+with\s+these\s+(exact\s+)?parameters?",
+        r"execute\s+this\s+(tool|function|command)\s+exactly\s+as\s+(written|shown|given)",
+        # --- Anthropic-specific delimiters ---
+        r"<\|?claude\|?>",
+        r"\[/?SYSTEM\]",
+        r"Human:\s*$",       # Attempting to inject a new Human: turn
+        r"Assistant:\s*$",   # Attempting to inject an Assistant: turn
+        # --- Prompt leaking / exfiltration ---
+        r"(show|reveal|print|output|display)\s+(your\s+)?(system\s+)?(prompt|instructions?)",
+        r"what\s+(are|is)\s+your\s+(system\s+)?(prompt|instructions?)",
+        # --- Japanese injection keywords ---
+        r"以前の指示を(無視|忘れ)",  # Japanese: ignore/forget previous instructions
     ]
 
     def __init__(self) -> None:
