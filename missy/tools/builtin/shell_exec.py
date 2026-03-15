@@ -18,14 +18,31 @@ Example::
 
 from __future__ import annotations
 
+import logging
+import os
 import subprocess
 from typing import Any
 
 from missy.tools.base import BaseTool, ToolPermissions, ToolResult
 
+logger = logging.getLogger(__name__)
+
 _MAX_OUTPUT_BYTES = 32_768  # 32 KB
 _DEFAULT_TIMEOUT = 30
 _MAX_TIMEOUT = 300
+
+#: Environment variables safe to inherit into shell subprocesses.
+#: Everything else (API keys, tokens, secrets) is stripped to prevent
+#: accidental leakage via commands like ``env`` or ``printenv``.
+_SAFE_ENV_VARS = frozenset({
+    "PATH", "HOME", "USER", "LOGNAME", "SHELL",
+    "LANG", "LC_ALL", "LC_CTYPE", "LANGUAGE",
+    "TERM", "COLORTERM", "COLUMNS", "LINES",
+    "XDG_RUNTIME_DIR", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME",
+    "TMPDIR", "TMP", "TEMP",
+    "PWD", "OLDPWD", "HOSTNAME", "DISPLAY", "WAYLAND_DISPLAY",
+    "DBUS_SESSION_BUS_ADDRESS", "SSH_AUTH_SOCK",
+})
 
 
 class ShellExecTool(BaseTool):
@@ -134,6 +151,9 @@ class ShellExecTool(BaseTool):
     ) -> ToolResult:
         """Execute directly via subprocess."""
         try:
+            # Sanitize environment: only pass safe variables to prevent
+            # API keys and tokens from leaking to arbitrary shell commands.
+            safe_env = {k: os.environ[k] for k in _SAFE_ENV_VARS if k in os.environ}
             proc = subprocess.run(
                 command,
                 shell=True,
@@ -141,6 +161,7 @@ class ShellExecTool(BaseTool):
                 cwd=cwd or None,
                 timeout=timeout,
                 executable="/bin/bash",
+                env=safe_env,
             )
             combined: bytes = proc.stdout + proc.stderr
             if len(combined) > _MAX_OUTPUT_BYTES:

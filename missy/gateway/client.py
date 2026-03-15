@@ -361,7 +361,10 @@ class PolicyHTTPClient:
     def _check_response_size(self, response: httpx.Response, url: str) -> None:
         """Reject responses exceeding the configured size limit.
 
-        Checks the ``Content-Length`` header first (avoiding reading the body).
+        Checks the ``Content-Length`` header first (fast path).  When no
+        ``Content-Length`` is present (e.g. chunked transfer-encoding), falls
+        back to checking the actual body length after it has been buffered by
+        httpx.
 
         Raises:
             ValueError: When the response body exceeds ``max_response_bytes``.
@@ -369,6 +372,7 @@ class PolicyHTTPClient:
         headers = getattr(response, "headers", None)
         if headers is None:
             return
+
         content_length = headers.get("content-length")
         if content_length is not None:
             try:
@@ -379,6 +383,18 @@ class PolicyHTTPClient:
                 raise ValueError(
                     f"Response from {url} too large: "
                     f"{size} bytes > {self.max_response_bytes} limit"
+                )
+        else:
+            # No Content-Length header (chunked encoding, HTTP/1.0, etc.) —
+            # check the actual buffered body length as a fallback.
+            try:
+                body_len = len(response.content)
+            except Exception:
+                return
+            if body_len > self.max_response_bytes:
+                raise ValueError(
+                    f"Response from {url} too large: "
+                    f"{body_len} bytes > {self.max_response_bytes} limit"
                 )
 
     def _emit_request_event(self, method: str, url: str, status_code: int) -> None:

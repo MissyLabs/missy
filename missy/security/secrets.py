@@ -58,6 +58,12 @@ class SecretsDetector:
         "digitalocean_token": r"dop_v1_[a-f0-9]{64}",
         "linear_key": r"lin_api_[A-Za-z0-9]{40,}",
         "supabase_key": r"sbp_[a-f0-9]{40}",
+        "vercel_token": r"(?i)vercel[_\s]*(?:token|key)[\"'\s:=]+[A-Za-z0-9_\-]{24,}",
+        "cloudflare_token": r"(?i)(?:cf|cloudflare)[_\s]*(?:api[_\s]*(?:token|key))[\"'\s:=]+[A-Za-z0-9_\-]{37,}",
+        "shopify_token": r"shp(?:at|ca|pa|ss)_[a-fA-F0-9]{32,}",
+        "google_oauth_secret": r'(?i)client[_\s]?secret["\s:=]+[A-Za-z0-9_\-]{24,}',
+        "hashicorp_vault_token": r"(?:hvs|hvb|hvr)\.[A-Za-z0-9_\-]{24,}",
+        "firebase_key": r"(?i)firebase[_\s]*(?:api[_\s]*key|secret)[\"'\s:=]+[A-Za-z0-9_\-]{20,}",
     }
 
     def __init__(self) -> None:
@@ -111,14 +117,25 @@ class SecretsDetector:
         if not findings:
             return text
 
-        # Deduplicate overlapping spans and sort by position descending so
-        # that right-to-left replacement keeps earlier offsets valid.
-        findings_sorted = sorted(findings, key=lambda f: f["match_start"], reverse=True)
+        # Merge overlapping spans so that partial redaction cannot leak
+        # fragments of a secret.  Sort by start position, then merge any
+        # spans whose ranges overlap or abut.
+        spans = sorted(
+            ((f["match_start"], f["match_end"]) for f in findings),
+            key=lambda s: s[0],
+        )
+        merged: list[tuple[int, int]] = [spans[0]]
+        for start, end in spans[1:]:
+            prev_start, prev_end = merged[-1]
+            if start <= prev_end:
+                # Overlapping or abutting — extend the previous span.
+                merged[-1] = (prev_start, max(prev_end, end))
+            else:
+                merged.append((start, end))
 
+        # Replace from right to left so earlier offsets stay valid.
         result = text
-        for finding in findings_sorted:
-            start = finding["match_start"]
-            end = finding["match_end"]
+        for start, end in reversed(merged):
             result = result[:start] + "[REDACTED]" + result[end:]
 
         return result

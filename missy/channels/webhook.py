@@ -35,14 +35,24 @@ class WebhookChannel(BaseChannel):
         host: Bind address (default 127.0.0.1).
         port: Bind port (default 9090).
         secret: Optional HMAC-SHA256 shared secret for request validation.
+        trust_proxy: When ``True``, use ``X-Forwarded-For`` header for
+            rate-limiting IP resolution.  Only enable behind a trusted
+            reverse proxy.
     """
 
     name = "webhook"
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 9090, secret: str = ""):
+    def __init__(
+        self,
+        host: str = "127.0.0.1",
+        port: int = 9090,
+        secret: str = "",
+        trust_proxy: bool = False,
+    ):
         self._host = host
         self._port = port
         self._secret = secret.encode() if secret else b""
+        self._trust_proxy = trust_proxy
         self._queue: list[ChannelMessage] = []
         self._lock = threading.Lock()
         self._server: HTTPServer | None = None
@@ -109,9 +119,17 @@ class WebhookChannel(BaseChannel):
             def log_message(self, format, *args):
                 logger.debug("Webhook: " + format, *args)
 
+            def _get_client_ip(self) -> str:
+                """Return the client IP, respecting X-Forwarded-For when behind a trusted proxy."""
+                forwarded = self.headers.get("X-Forwarded-For")
+                if forwarded and channel_ref._trust_proxy:
+                    # Take the leftmost (client-closest) IP.
+                    return forwarded.split(",")[0].strip()
+                return self.client_address[0]
+
             def do_POST(self):
                 # Rate limiting
-                client_ip = self.client_address[0]
+                client_ip = self._get_client_ip()
                 if not channel_ref._check_rate_limit(client_ip):
                     self.send_response(429)
                     self.send_header("Retry-After", str(_RATE_LIMIT_WINDOW))
