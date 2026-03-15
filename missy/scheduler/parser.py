@@ -83,12 +83,22 @@ def _parse_interval(match: re.Match) -> dict[str, Any]:
         A dict suitable for unpacking into APScheduler's ``add_job`` call.
     """
     value = int(match.group("value"))
+    if value <= 0:
+        raise ValueError(f"Interval value must be positive, got {value}")
     raw_unit = match.group("unit").lower().rstrip("s")  # lower first, then strip trailing 's'
     unit_map = {"second": "seconds", "minute": "minutes", "hour": "hours"}
     unit = unit_map.get(raw_unit)
     if unit is None:
         raise ValueError(f"Unrecognised time unit: {match.group('unit')!r}")
     return {"trigger": "interval", unit: value}
+
+
+def _validate_time(hour: int, minute: int) -> None:
+    """Raise ValueError if *hour* or *minute* is out of range."""
+    if not (0 <= hour <= 23):
+        raise ValueError(f"Hour must be 0-23, got {hour}")
+    if not (0 <= minute <= 59):
+        raise ValueError(f"Minute must be 0-59, got {minute}")
 
 
 def _parse_daily(match: re.Match) -> dict[str, Any]:
@@ -100,10 +110,13 @@ def _parse_daily(match: re.Match) -> dict[str, Any]:
     Returns:
         A dict suitable for unpacking into APScheduler's ``add_job`` call.
     """
+    hour = int(match.group("hour"))
+    minute = int(match.group("minute"))
+    _validate_time(hour, minute)
     return {
         "trigger": "cron",
-        "hour": int(match.group("hour")),
-        "minute": int(match.group("minute")),
+        "hour": hour,
+        "minute": minute,
     }
 
 
@@ -126,11 +139,14 @@ def _parse_weekly(match: re.Match) -> dict[str, Any]:
             f"Unrecognised day of week: {match.group('day')!r}. "
             f"Expected one of: {', '.join(_DAY_MAP)}."
         )
+    hour = int(match.group("hour"))
+    minute = int(match.group("minute"))
+    _validate_time(hour, minute)
     return {
         "trigger": "cron",
         "day_of_week": day_of_week,
-        "hour": int(match.group("hour")),
-        "minute": int(match.group("minute")),
+        "hour": hour,
+        "minute": minute,
     }
 
 
