@@ -1136,6 +1136,7 @@ class TestPlayTtsExtraEdgeCases:
 
         return AudioBuffer(data=data, sample_rate=22050, channels=1, format="wav")
 
+    @pytest.mark.filterwarnings("ignore::RuntimeWarning")
     def test_play_tts_logs_after_error(self, manager) -> None:
         """The _after callback with an error logs but does not raise."""
         tts = MagicMock()

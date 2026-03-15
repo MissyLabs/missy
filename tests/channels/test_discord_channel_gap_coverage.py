@@ -176,6 +176,7 @@ class TestHandleMessageVoiceCommandEarlyReturn:
 
 class TestHandleMessageDeleteRaisesWarning:
     @pytest.mark.asyncio
+    @pytest.mark.filterwarnings("ignore::RuntimeWarning")
     async def test_delete_message_exception_logged_as_warning(self, caplog):
         """Lines 489-490: delete_message raises → warning is logged, processing continues."""
         import logging
