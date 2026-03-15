@@ -24,7 +24,7 @@ All core phases implemented, parity gaps closed, comprehensive hardening applied
 16. CLI (60+ commands via click + rich, including recover, evolve)
 17. Discord (WebSocket gateway, REST API, threads, slash commands, pairing, access control, voice, interactive setup wizard)
 18. Code self-evolution engine (propose, test, apply, rollback)
-19. Tests (4465 tests, 98.92% coverage)
+19. Tests (4489 tests, 99.11% coverage)
 20. Documentation (SECURITY.md, OPERATIONS.md, ARCHITECTURE.md, CONFIG_REFERENCE.md, DISCORD.md, TESTING.md, TROUBLESHOOTING.md, 10+ implementation docs)
 21. Audit artifacts (AUDIT_SECURITY.md, AUDIT_CONNECTIVITY.md)
 22. Test artifacts (TEST_RESULTS.md, TEST_EDGE_CASES.md, BUILD_RESULTS.md)
@@ -58,8 +58,8 @@ missy/                          # 123 Python source files
 
 ## Test Results
 
-- 4465 tests passing across 124 test files
-- 98.92% code coverage (11505 statements, 124 missed)
+- 4489 tests passing across 125 test files
+- 99.11% code coverage (11505 statements, 102 missed)
 - Unit, integration, policy, Discord, security, memory, agent, tools, skills, CLI, voice, scheduler tests
 - 54+ property-based tests (hypothesis) for policy engines, security, and rate limiter
 - 116 security fuzz tests (unicode evasion, encoding bypass, vault corruption)
@@ -76,8 +76,9 @@ missy/                          # 123 Python source files
 - **Proactive manager coverage tests** (17 new): watchdog import success path, threshold loop inner break, audit publish/exception, file handler with mocked watchdog
 - **Remaining gap coverage tests** (21 new): heartbeat loop fire, overnight active hours, webhook log_message, config watcher OSError, Discord voice callback closure, DM policy fallthrough, mention fallback, gateway heartbeat loop
 - **Test ordering fix**: Fixed proactive stub test collision with reimport tests
-- **Total new tests**: 86 (from 4379 to 4465)
-- **Coverage**: 98.3% → 98.92% (196 missed → 124 missed)
+- **Additional coverage tests** (24 new): edge client import/main, wizard prompt/verify/guild/OAuth paths, anthropic auth, config error wrapping, memory malformed record, plugin event failure, network policy CIDR type mismatch, ollama/openai provider paths, scheduler parser/retry, vault crypto unavailable, registry key rotation
+- **Total new tests**: 110 (from 4379 to 4489)
+- **Coverage**: 98.3% → 99.11% (196 missed → 102 missed)
 
 ## Session 9 Additions (2026-03-14)
 
@@ -116,9 +117,9 @@ missy/                          # 123 Python source files
 - Discord multi-account support (P3, low demand)
 - Web UI / dashboard (P4, intentionally deferred)
 
-## Remaining Coverage Gaps (124 lines)
+## Remaining Coverage Gaps (102 lines)
 
-Most remaining gaps are in complex async integration code (Discord run loop: 64 lines), platform-dependent tools (atspi: 7, incus: 9), and edge-client/wizard live interaction paths.
+Most remaining gaps are in complex async integration code (Discord run loop: 64 lines), platform-dependent tools (atspi: 7, incus: 9), and defensive dead code paths.
 
 ## Next Actions
 
