@@ -58,7 +58,7 @@ missy/                          # 123 Python source files
 
 ## Test Results
 
-- 6556 tests passing across 195 test files
+- 6606 tests passing across 196 test files
 - 99%+ code coverage, zero test warnings
 - Unit, integration, policy, Discord, security, memory, agent, tools, skills, CLI, voice, scheduler tests
 - 54+ property-based tests (hypothesis) for policy engines, security, and rate limiter
@@ -80,9 +80,9 @@ missy/                          # 123 Python source files
   - MCP client: Startup check detects immediate process exit before handshake
 - **7 new injection detection patterns**: Multimodal token injection (<|image|>, <|audio|>, <|video|>), structural injection (<|separator|>, <|context|>), uppercase override mode, authority claim injection. Total: 98 patterns
 - **5 new secret detection patterns**: PlanetScale, Neon, Postmark, Render, Fly.io tokens. Total: 50 patterns
-- **Tests (144 new)**: Security fix tests (22), edge case tests (37), security pattern tests (27), integration pipeline tests (58)
-- **Total new tests**: 144 (from 6412 to 6556) across 4 new test files
-- **7 commits, zero ruff lint errors**
+- **Tests (194 new)**: Security fix tests (22), edge case tests (37), security pattern tests (27), integration pipeline tests (58), property-based fuzz tests (50)
+- **Total new tests**: 194 (from 6412 to 6606) across 5 new test files
+- **9 commits, zero ruff lint errors**
 
 ## Session 25 Additions (2026-03-15)
 
