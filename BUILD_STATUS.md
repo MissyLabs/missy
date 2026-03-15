@@ -24,7 +24,7 @@ All core phases implemented, parity gaps closed, comprehensive hardening applied
 16. CLI (60+ commands via click + rich, including recover, evolve)
 17. Discord (WebSocket gateway, REST API, threads, slash commands, pairing, access control, voice, interactive setup wizard)
 18. Code self-evolution engine (propose, test, apply, rollback)
-19. Tests (5145 tests, 99%+ coverage)
+19. Tests (5232 tests, 99%+ coverage)
 20. Documentation (SECURITY.md, OPERATIONS.md, ARCHITECTURE.md, CONFIG_REFERENCE.md, DISCORD.md, TESTING.md, TROUBLESHOOTING.md, 10+ implementation docs)
 21. Audit artifacts (AUDIT_SECURITY.md, AUDIT_CONNECTIVITY.md)
 22. Test artifacts (TEST_RESULTS.md, TEST_EDGE_CASES.md, BUILD_RESULTS.md)
@@ -58,7 +58,7 @@ missy/                          # 123 Python source files
 
 ## Test Results
 
-- 5145 tests passing across 144 test files
+- 5232 tests passing across 147 test files
 - 99%+ code coverage, zero test warnings
 - Unit, integration, policy, Discord, security, memory, agent, tools, skills, CLI, voice, scheduler tests
 - 54+ property-based tests (hypothesis) for policy engines, security, and rate limiter
@@ -66,6 +66,18 @@ missy/                          # 123 Python source files
 - 48 rate limiter stress tests (concurrent, burst, thread safety)
 - 77 end-to-end integration tests
 - 300+ security edge-case tests (injection, secrets, vault, SSRF, path traversal, tool output injection, webhook hardening, scheme restriction, kwargs sanitization)
+
+## Session 14 Additions (2026-03-15)
+
+- **Tool execution retry**: Transient errors (TimeoutError, ConnectionError, OSError, httpx.TimeoutException) automatically retried up to 2 times with exponential backoff (1s, 2s). Non-transient errors (KeyError, ValueError) fail immediately
+- **DNS rebinding fix**: Check ALL resolved IPs before allowing access. If ANY resolved address is private/reserved and not in allowed_cidrs, deny the entire request. Prevents mixed-record attacks where a hostname resolves to both public and private IPs
+- **Gateway connection pool limits**: Explicit httpx.Limits(max_connections=20, max_keepalive_connections=10, keepalive_expiry=30) to prevent resource exhaustion
+- **Gateway DELETE/PATCH methods**: Added sync (delete/patch) and async (adelete/apatch) HTTP methods with full policy enforcement, kwargs sanitization, and audit events
+- **Webhook rate tracker cleanup**: Added _evict_stale_ips() to prevent unbounded memory growth; triggers when tracked IPs exceed 10K, removing IPs with all-expired timestamps
+- **Prompt injection sanitizer**: 13 new patterns — unclosed HTML comments with keywords, data: URIs, hidden div detection, Llama 3 tokens (<|begin_of_text|>, <|start_header_id|>, <|end_header_id|>, <|reserved_special_token), chained instruction patterns (new/updated/revised/real instructions:), Portuguese and Russian injection keywords
+- **Scheduler input validation**: Hour (0-23) and minute (0-59) range validation for daily/weekly schedules; zero-interval rejection
+- **Total new tests**: 66 (from 5166 to 5232) across 3 new test files
+- **Zero ruff lint errors**
 
 ## Session 13 Additions (2026-03-15)
 

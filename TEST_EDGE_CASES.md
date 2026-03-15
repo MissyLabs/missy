@@ -1,7 +1,7 @@
 # TEST_EDGE_CASES
 
-- Updated: 2026-03-15 (session 13)
-- Total edge-case tests: 1100+
+- Updated: 2026-03-15 (session 14)
+- Total edge-case tests: 1160+
 
 ## Security Policy Edge Cases (tested)
 
@@ -18,6 +18,9 @@
 - Launcher command warnings (env, bash, sudo, find, xargs)
 - DNS rebinding detection (hostname → private IP without explicit CIDR)
 - DNS rebinding allowed when private CIDR explicitly configured
+- DNS rebinding mixed-record attack (public + private IPs → deny)
+- DNS rebinding deduplication (duplicate A records handled correctly)
+- DNS rebinding partial CIDR allow (10.x allowed but 192.168.x not → deny)
 - IPv6 rebinding protection (::1, fe80::, fd00::)
 - Cloud metadata IP blocking (169.254.169.254)
 - URL scheme restriction (file://, ftp://, data:// blocked)
@@ -291,6 +294,52 @@
 - Error analysis ValueError from relative_to silently skipped
 - Revert diffs with git checkout exceptions swallowed
 - Event emission with import/publish failures swallowed
+
+## Session 14 Hardening Edge Cases (tested)
+
+### Tool Execution Retry
+- Transient errors (TimeoutError, ConnectionError, OSError) trigger retry with backoff
+- httpx.TimeoutException triggers retry when httpx is available
+- Retry exhaustion (3 attempts) returns error result
+- Non-transient errors (KeyError, ValueError) fail immediately without retry
+- Exponential backoff delays verified (1.0s, 2.0s)
+
+### Webhook Rate Tracker Memory
+- Stale IP eviction removes entries with all-expired timestamps
+- Empty timestamp lists are cleaned up
+- Overflow triggers automatic eviction when >10K IPs tracked
+- Active IPs preserved during eviction
+
+### Gateway Connection Pool
+- Explicit pool limits verified (max_connections=20, keepalive_expiry=30s)
+- DELETE/PATCH methods enforce policy, sanitize kwargs, emit audit events
+- Async adelete/apatch methods enforce policy on denied hosts
+
+### Prompt Injection Patterns (session 14)
+- Unclosed HTML comments with keywords (system, ignore, inject, override)
+- Data URI injection (data:text/html, data:text/javascript)
+- Hidden div detection (display:none with embedded instructions)
+- Markdown comment pattern ([comment]:)
+- Llama 3 model tokens (begin_of_text, start_header_id, end_header_id)
+- Reserved special tokens (<|reserved_special_token)
+- Chained instruction patterns (new/updated/revised/real instructions:)
+- Portuguese injection keywords
+- Russian injection keywords
+- Benign text false-negative verification
+
+### DNS Rebinding Mixed Records
+- Public + private IP → deny (prevents mixed-record TOCTTOU attack)
+- Public + loopback → deny
+- All-public in CIDR → allow
+- Duplicate IPs deduplicated
+- Partial CIDR allow + disallowed private → deny
+- All-private in allowed CIDRs → allow
+
+### Scheduler Input Validation
+- Hour range validation (0-23, rejects 25)
+- Minute range validation (0-59, rejects 70)
+- Zero interval rejection
+- Timezone attachment for cron/date triggers (not intervals)
 
 ## OAuth Edge Cases (tested)
 
