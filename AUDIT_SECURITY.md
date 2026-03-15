@@ -1,15 +1,15 @@
 # AUDIT_SECURITY
 
-- Timestamp: 2026-03-15 (updated session 18)
+- Timestamp: 2026-03-15 (updated session 21)
 - Auditor: Automated build analysis + security audit agent
 
 ## Security Architecture Summary
 
-Missy implements defense-in-depth with 12 security layers:
+Missy implements defense-in-depth with 15 security layers:
 
-1. **Input Sanitization** — 69 prompt injection pattern detectors (including Llama 2/3, GPT, Claude, FIM tokens, multilingual [9 languages incl. Korean], tool abuse, prompt leaking, data URI, unclosed HTML, base64, trigger-based, conditional override, memory poisoning, role confusion)
-2. **Secrets Detection** — 28 credential patterns (API keys, JWTs, AWS, GitLab, npm, PyPI, SendGrid, Azure, Twilio, Mailgun, HuggingFace, Databricks, DigitalOcean, Linear, Supabase, DB connection strings)
-3. **Output Censoring** — `censor_response()` applied in agent runtime and audit events
+1. **Input Sanitization** — 82 prompt injection pattern detectors (including Llama 2/3, GPT, Claude, FIM tokens, multilingual [9 languages incl. Korean], tool abuse, prompt leaking, data URI, unclosed HTML, base64, trigger-based, conditional override, memory poisoning, role confusion, few-shot conversation injection, code-block disguise, payload concatenation, prompt extraction via output/repeat/translate/poem/encoding, forced behavior change)
+2. **Secrets Detection** — 40 credential patterns (API keys, JWTs, AWS, GitLab, npm, PyPI, SendGrid, Azure, Twilio, Mailgun, HuggingFace, Databricks, DigitalOcean, Linear, Supabase, Vercel, Cloudflare, Shopify, Google OAuth, HashiCorp Vault, Firebase, DB connection strings, Grafana, Confluent, Datadog, New Relic, PagerDuty, SSH keys)
+3. **Output Censoring** — `censor_response()` applied in agent runtime and audit events; overlapping redaction spans merged
 4. **Tool Output Injection Scanning** — Tool results scanned for prompt injection, warning labels prepended
 5. **Policy Enforcement** — 3-layer default-deny (network, filesystem, shell) with:
    - Process substitution blocking (`<()`, `>()`, `<<()`)
@@ -19,11 +19,14 @@ Missy implements defense-in-depth with 12 security layers:
    - File tool path enforcement via kwargs
 6. **Encrypted Vault** — ChaCha20-Poly1305 key-value store with atomic writes, symlink rejection, hard-link check
 7. **Docker Sandbox** — Optional container isolation for shell commands
-8. **MCP Server Isolation** — Sanitized environment, name validation, response timeouts/size limits, config file permission checks
-9. **Gateway SSRF Prevention** — URL scheme restriction (http/https only), redirect following disabled, kwargs allowlist
+8. **MCP Server Isolation** — Sanitized environment, name validation, response timeouts/size limits, config file permission checks, optional injection blocking mode
+9. **Gateway SSRF Prevention** — URL scheme restriction (http/https only), redirect following disabled, kwargs allowlist, chunked response body size enforcement
 10. **Shell Launcher Warnings** — Policy engine warns when command-launching programs (env, bash, sudo) are whitelisted
-11. **Webhook Hardening** — Content-Type validation, Content-Length safety, HMAC signatures, rate limiting, metadata header filtering
+11. **Webhook Hardening** — Content-Type validation, Content-Length safety, HMAC signatures, rate limiting, metadata header filtering, X-Forwarded-For support for reverse proxies
 12. **DNS Rebinding Protection** — All resolved IPs checked before access; mixed public/private records denied
+13. **Shell Env Sanitization** — Subprocess environment filtered to safe-only variables; API keys, tokens, secrets stripped
+14. **Encoded Injection Detection** — URL-encoded (%XX) and HTML-entity encoded inputs decoded before injection pattern scanning
+15. **Overlapping Redaction Safety** — Secret spans merged before replacement to prevent partial leakage from offset corruption
 
 ## Threat Model Coverage
 

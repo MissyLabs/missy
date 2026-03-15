@@ -24,7 +24,7 @@ All core phases implemented, parity gaps closed, comprehensive hardening applied
 16. CLI (60+ commands via click + rich, including recover, evolve)
 17. Discord (WebSocket gateway, REST API, threads, slash commands, pairing, access control, voice, interactive setup wizard)
 18. Code self-evolution engine (propose, test, apply, rollback)
-19. Tests (5744 tests, 99%+ coverage)
+19. Tests (5949 tests, 99%+ coverage)
 20. Documentation (SECURITY.md, OPERATIONS.md, ARCHITECTURE.md, CONFIG_REFERENCE.md, DISCORD.md, TESTING.md, TROUBLESHOOTING.md, 10+ implementation docs)
 21. Audit artifacts (AUDIT_SECURITY.md, AUDIT_CONNECTIVITY.md)
 22. Test artifacts (TEST_RESULTS.md, TEST_EDGE_CASES.md, BUILD_RESULTS.md)
@@ -58,14 +58,44 @@ missy/                          # 123 Python source files
 
 ## Test Results
 
-- 5744 tests passing across 165 test files
+- 5949 tests passing across 171 test files
 - 99%+ code coverage, zero test warnings
 - Unit, integration, policy, Discord, security, memory, agent, tools, skills, CLI, voice, scheduler tests
 - 54+ property-based tests (hypothesis) for policy engines, security, and rate limiter
 - 116 security fuzz tests (unicode evasion, encoding bypass, vault corruption)
 - 48 rate limiter stress tests (concurrent, burst, thread safety)
+- 54 concurrency safety tests (checkpoint, cost tracker, registry, memory, circuit breaker)
+- 36 resilience tests (corrupted state files, edge case data, recovery paths)
 - 77 end-to-end integration tests
-- 410+ security edge-case tests (injection, secrets, vault, SSRF, path traversal, tool output injection, webhook hardening, scheme restriction, kwargs allowlist, file policy enforcement, shell brace groups, header filtering, gateway thread safety, cost tracker edge cases)
+- 495+ security edge-case tests (injection, secrets, vault, SSRF, path traversal, tool output injection, webhook hardening, scheme restriction, kwargs allowlist, file policy enforcement, shell brace groups, header filtering, gateway thread safety, cost tracker edge cases, env sanitization, chunked response limits, overlapping redaction)
+
+## Session 21 Additions (2026-03-15)
+
+- **New secret detection patterns (6)**: Grafana (glc_), Confluent API, Datadog API/app, New Relic (NRAK-), PagerDuty API, SSH public key content. Total: 40 patterns
+- **New injection detection patterns (6)**: Prompt extraction via output/repeat/translate, creative extraction via poem, encoding extraction (base64/hex/rot13), forced behavior change. Total: 82 patterns
+- **Concurrency safety tests (54 new)**: Checkpoint concurrent create/update/abandon (2), cost tracker concurrent record/budget/summary (3), provider registry concurrent register/rotate (2), memory store concurrent add/search/cleanup (2), tool registry concurrent register/list (1), circuit breaker concurrent transitions (1), plus scheduler/gateway/vault/rate limiter/sanitizer/policy/secrets/censor/resilient store edge cases (43)
+- **Resilience tests (36 new)**: Scheduler corrupted/empty/invalid JSON files (6), checkpoint DB lifecycle (5), memory store unicode/empty/large content/FTS5 special chars (7), config loading edge cases (3), MCP manager corrupted config (3), vault concurrent ops and edge cases (3), cost tracker unknown model/zero/large tokens (4), circuit breaker recovery transitions (3), audit logger unicode/empty events (2)
+- **Security hardening tests (30 new)**: New secret patterns positive/negative (10), new injection pattern tests (15), redaction tests (3), combined pipeline tests (2)
+- **Debug logging**: Added logging to silent exception handlers in anthropic_auth
+- **AUDIT_CONNECTIVITY.md**: Comprehensive update with all security layers, shell/filesystem controls, secret protection
+- **Total new tests**: 120 (from 5829 to 5949) across 3 new test files
+- **6 commits, zero ruff lint errors**
+
+## Session 20 Additions (2026-03-15)
+
+- **Shell exec env sanitization**: Subprocess environment filtered to safe-only variables (PATH, HOME, LANG, TERM, etc.) — prevents API key leakage to arbitrary shell commands
+- **Gateway chunked response enforcement**: Body size now checked when Content-Length header is absent (chunked transfer encoding), closing bypass of 50MB response size limit
+- **New secret detection patterns (6)**: Vercel, Cloudflare, Shopify (4 prefixes), Google OAuth client_secret, HashiCorp Vault (hvs/hvb/hvr), Firebase. Total: 34 patterns
+- **Overlapping redaction span merging**: SecretsDetector.redact() now merges overlapping match spans before replacement, preventing partial secret leakage from offset corruption
+- **Webhook reverse proxy support**: New `trust_proxy` parameter and X-Forwarded-For parsing for correct rate limiting behind reverse proxies
+- **Sanitizer URL/HTML decoding**: check_for_injection() now decodes URL-encoded (%XX) and HTML-entity (&lt; etc.) text before scanning, catching encoded evasion attempts
+- **7 new injection patterns**: Few-shot conversation injection, separator + role injection, URL-encoded delimiter detection, code-block disguise (```system), payload concatenation, context override. Total: 76 patterns
+- **MCP block_injection mode**: McpManager supports optional `block_injection=True` to reject (not just warn) tool outputs containing injection patterns
+- **Edge case tests (20 new)**: Checkpoint _row_to_dict JSON fallback (5), scan_for_recovery DB/event failures (4), scheduler _load_jobs security checks (5), code evolution load/traceback parsing (5), provider registry constructor failure (1)
+- **Security hardening tests (43 new)**: Shell env sanitization (5), gateway chunked response (6), new secret patterns (20), overlapping redaction (5), webhook XFF (7)
+- **Sanitizer tests (22 new)**: New injection patterns (10), URL-decoding preprocessing (3), HTML-entity decoding (3), pattern count (1), MCP block mode (5)
+- **Total new tests**: 85 (from 5744 to 5829) across 3 new test files
+- **8 commits, zero ruff lint errors**
 
 ## Session 19 Additions (2026-03-15)
 
