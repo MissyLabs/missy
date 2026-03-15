@@ -240,3 +240,29 @@ Session 19 is complete with **13 commits** and **150 new tests** (5594 → 5744)
 - Comprehensive edge cases for shell policy, circuit breaker, memory store, webhook rate limiting
 
 === Session 5 ended (exit code: 0): Sun Mar 15 07:29:39 AM UTC 2026 ===
+Error: Reached max turns (100)
+=== Session 6 ended (exit code: 0): Sun Mar 15 07:52:44 AM UTC 2026 ===
+## Updated Session 21 Final Summary
+
+**13 commits**, **179 new tests** (5829 → 6008), zero lint errors, zero failures.
+
+### Critical Security Fixes
+- **User input sanitization**: `AgentRuntime.run()` and `run_stream()` now pass user_input through `InputSanitizer` before it reaches the LLM — previously the sanitizer only scanned tool output, leaving the primary attack surface (user input) completely unprotected
+- **Webhook sender validation**: Length capped at 64 chars, control characters stripped, log injection prevented
+- **File permissions**: Vault data and config files explicitly `fchmod(0o600)` before writing
+
+### Security Hardening
+- 6 new secret patterns (Grafana, Confluent, Datadog, New Relic, PagerDuty, SSH keys) — total: 40
+- 6 new injection patterns (prompt extraction, forced behavior change) — total: 82
+
+### Tests Added (179 new)
+- 54 concurrency safety, 36 resilience, 30 security patterns, 32 agent subsystem, 20 audit fixes, 7 permissions
+
+=== Session 7 ended (exit code: 0): Sun Mar 15 08:47:05 AM UTC 2026 ===
+All clean. **6091 tests passing, zero lint errors, 11 commits this session.**
+
+=== Session 8 ended (exit code: 0): Sun Mar 15 09:44:17 AM UTC 2026 ===
+Error: Reached max turns (100)
+=== Session 9 ended (exit code: 0): Sun Mar 15 10:03:56 AM UTC 2026 ===
+Error: Reached max turns (100)
+=== Session 10 ended (exit code: 0): Sun Mar 15 10:25:46 AM UTC 2026 ===

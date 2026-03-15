@@ -26,7 +26,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # CLI Discord _process_channel logic
 # ---------------------------------------------------------------------------
@@ -280,9 +279,9 @@ class TestVoiceChannelLoopError:
             # The real start() creates a thread — we test the _run_loop logic directly
             # by verifying the channel can handle start/stop without crashing
             # even when VoiceServer setup fails
-            with patch.object(VoiceChannel, "start", side_effect=RuntimeError("test")):
-                with pytest.raises(RuntimeError):
-                    vc.start(MagicMock())
+            with patch.object(VoiceChannel, "start", side_effect=RuntimeError("test")), \
+                 pytest.raises(RuntimeError):
+                vc.start(MagicMock())
 
 
 # ---------------------------------------------------------------------------
@@ -346,7 +345,6 @@ class TestVaultCryptoImport:
 
     def test_crypto_unavailable_flag(self) -> None:
         """When cryptography not installed, _CRYPTO_AVAILABLE is False."""
-        import importlib
         import missy.security.vault as vault_mod
 
         # The flag is already set at module load time
@@ -355,7 +353,7 @@ class TestVaultCryptoImport:
 
     def test_vault_requires_crypto(self) -> None:
         """Vault operations should fail gracefully without crypto."""
-        from missy.security.vault import Vault, VaultError, _CRYPTO_AVAILABLE
+        from missy.security.vault import _CRYPTO_AVAILABLE, Vault, VaultError
 
         with tempfile.TemporaryDirectory() as td:
             vault = Vault(vault_dir=td)
@@ -393,7 +391,6 @@ class TestVoiceServerHandlerError:
 
     def test_unexpected_error_logged(self) -> None:
         """Unexpected exceptions in handler should be logged, not crash."""
-        import logging
         from missy.channels.voice.server import VoiceServer
 
         server = VoiceServer.__new__(VoiceServer)
@@ -422,7 +419,6 @@ class TestCodeEvolutionTraceback:
         output = 'File "not/a/real/path", line 42\nFile "", line 1\nno file here'
         # The private method should handle these without crashing
         # We test the parsing logic directly
-        import re
         lines = output.splitlines()
         missy_files = []
         for line in lines:

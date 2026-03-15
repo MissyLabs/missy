@@ -12,7 +12,6 @@ import pytest
 from missy.security.sanitizer import InputSanitizer
 from missy.security.secrets import SecretsDetector
 
-
 # ---------------------------------------------------------------------------
 # New injection patterns
 # ---------------------------------------------------------------------------
