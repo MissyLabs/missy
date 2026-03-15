@@ -233,13 +233,21 @@ class ToolRegistry:
             detail_msg: Human-readable description.
         """
         try:
+            # Redact potential secrets from audit event detail messages.
+            safe_msg = detail_msg
+            try:
+                from missy.security.censor import censor_response
+
+                safe_msg = censor_response(detail_msg)
+            except Exception:
+                pass
             event = AuditEvent.now(
                 session_id=session_id,
                 task_id=task_id,
                 event_type="tool_execute",
                 category="plugin",
                 result=result,  # type: ignore[arg-type]
-                detail={"tool": tool_name, "message": detail_msg},
+                detail={"tool": tool_name, "message": safe_msg},
             )
             event_bus.publish(event)
         except Exception:
