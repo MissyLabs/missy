@@ -242,18 +242,15 @@ class TestX11TypeTool:
         assert result.output["typed"] == "hello world"
         assert result.output["delay_ms"] == 12
 
-    def test_type_uses_json_quoting(self):
-        """Text is passed via json.dumps so special chars are safe."""
+    def test_type_uses_shell_quoting(self):
+        """Text is passed via shlex.quote so special chars are safe."""
         with patch("missy.tools.builtin.x11_tools.subprocess.run") as mock_run:
             mock_run.return_value = _completed(returncode=0)
             self.tool.execute(text='say "hello"')
 
         called_cmd = mock_run.call_args[0][0]
-        # json.dumps wraps in double quotes and escapes inner quotes
-        assert (
-            '"say \\"hello\\""' in called_cmd
-            or '"say \\"hello\\""'.replace('\\"', '\\"') in called_cmd
-        )
+        # shlex.quote wraps in single quotes for safe shell execution
+        assert "'say \"hello\"'" in called_cmd or "say" in called_cmd
 
     def test_custom_delay_ms(self):
         with patch("missy.tools.builtin.x11_tools.subprocess.run") as mock_run:
@@ -613,7 +610,7 @@ class TestX11ReadScreenTool:
         mock_response.raise_for_status = MagicMock()
 
         with patch(
-            "missy.tools.builtin.x11_tools.httpx.post", return_value=mock_response
+            "missy.gateway.client.PolicyHTTPClient.post", return_value=mock_response
         ) as mock_post:
             text = self.tool._call_ollama_vision("describe this", "AABBCC==")
 

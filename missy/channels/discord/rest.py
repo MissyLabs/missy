@@ -33,6 +33,23 @@ BASE = "https://discord.com/api/v10"
 
 _MENTION_ID_RE = re.compile(r"<@!?(?:\\d+)>|<@&(?:\\d+)>|<#(?:\\d+)>")
 
+#: Discord snowflake IDs are 64-bit integers (up to 20 digits).
+_SNOWFLAKE_RE = re.compile(r"^\d{1,20}$")
+
+
+def _validate_snowflake(value: str, name: str = "id") -> str:
+    """Validate that *value* is a valid Discord snowflake ID.
+
+    Raises:
+        ValueError: When the value is not a valid snowflake ID.
+    """
+    if not _SNOWFLAKE_RE.match(value):
+        raise ValueError(
+            f"Invalid Discord {name}: {value!r}. "
+            "Expected a numeric snowflake ID (1-20 digits)."
+        )
+    return value
+
 
 def _mask_mentions(s: str) -> str:
     """Redact snowflake IDs inside common mention tokens for safer logging."""
@@ -146,6 +163,9 @@ class DiscordRestClient:
             httpx.HTTPStatusError: On non-2xx responses (after retries).
             RuntimeError: If Discord returns a payload without a message id.
         """
+        _validate_snowflake(channel_id, "channel_id")
+        if reply_to_message_id is not None:
+            _validate_snowflake(reply_to_message_id, "reply_to_message_id")
         url = f"{BASE}/channels/{channel_id}/messages"
         body: dict[str, Any] = {
             "content": content,
@@ -269,6 +289,7 @@ class DiscordRestClient:
         import mimetypes
         from pathlib import Path
 
+        _validate_snowflake(channel_id, "channel_id")
         path = Path(file_path).expanduser()
         if not path.exists():
             raise FileNotFoundError(f"File not found: {file_path}")
@@ -304,6 +325,8 @@ class DiscordRestClient:
         """
         from urllib.parse import quote
 
+        _validate_snowflake(channel_id, "channel_id")
+        _validate_snowflake(message_id, "message_id")
         encoded = quote(emoji, safe="")
         url = f"{BASE}/channels/{channel_id}/messages/{message_id}/reactions/{encoded}/@me"
         # Discord expects a PUT with empty body; returns 204 No Content.
@@ -323,6 +346,7 @@ class DiscordRestClient:
         Args:
             channel_id: The channel snowflake ID.
         """
+        _validate_snowflake(channel_id, "channel_id")
         try:
             self._http.post(
                 f"{BASE}/channels/{channel_id}/typing",
@@ -348,6 +372,8 @@ class DiscordRestClient:
         Raises:
             PolicyViolationError: If discord.com is not in the network policy.
         """
+        _validate_snowflake(channel_id, "channel_id")
+        _validate_snowflake(message_id, "message_id")
         url = f"{BASE}/channels/{channel_id}/messages/{message_id}"
         try:
             response = self._http.delete(
@@ -393,7 +419,9 @@ class DiscordRestClient:
         Returns:
             The created channel (thread) object as a dict.
         """
+        _validate_snowflake(channel_id, "channel_id")
         if message_id:
+            _validate_snowflake(message_id, "message_id")
             url = f"{BASE}/channels/{channel_id}/messages/{message_id}/threads"
             body: dict[str, Any] = {
                 "name": name[:100],
@@ -419,6 +447,7 @@ class DiscordRestClient:
         Returns:
             The Discord Channel object as a dict.
         """
+        _validate_snowflake(channel_id, "channel_id")
         url = f"{BASE}/channels/{channel_id}"
         response = self._http.get(url, headers=self._headers())
         response.raise_for_status()

@@ -70,7 +70,7 @@ class TestDeleteMessage:
         mock_response.status_code = 204
         rest._http.delete.return_value = mock_response
 
-        result = rest.delete_message("chan123", "msg456")
+        result = rest.delete_message("100000000000000001", "200000000000000001")
         assert result is True
 
     def test_returns_false_on_403(self) -> None:
@@ -79,7 +79,7 @@ class TestDeleteMessage:
         mock_response.status_code = 403
         rest._http.delete.return_value = mock_response
 
-        result = rest.delete_message("chan123", "msg456")
+        result = rest.delete_message("100000000000000001", "200000000000000001")
         assert result is False
 
     def test_returns_false_on_404(self) -> None:
@@ -88,14 +88,14 @@ class TestDeleteMessage:
         mock_response.status_code = 404
         rest._http.delete.return_value = mock_response
 
-        result = rest.delete_message("chan123", "msg456")
+        result = rest.delete_message("100000000000000001", "200000000000000001")
         assert result is False
 
     def test_returns_false_on_exception(self) -> None:
         rest = self._make_rest()
         rest._http.delete.side_effect = OSError("network error")
 
-        result = rest.delete_message("chan123", "msg456")
+        result = rest.delete_message("100000000000000001", "200000000000000001")
         assert result is False
 
     def test_raises_for_status_on_unexpected_code(self) -> None:
@@ -106,7 +106,7 @@ class TestDeleteMessage:
         mock_response.raise_for_status.side_effect = Exception("server error")
         rest._http.delete.return_value = mock_response
 
-        result = rest.delete_message("chan123", "msg456")
+        result = rest.delete_message("100000000000000001", "200000000000000001")
         assert result is False
 
 
@@ -152,13 +152,13 @@ class TestHandleMessageCredentialDetection:
                 ch._handle_message(
                     _message_payload(
                         "token: ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ1234567890",
-                        channel_id="CH1",
-                        message_id="MSG1",
+                        channel_id="100000000000000011",
+                        message_id="200000000000000011",
                     )
                 )
             )
 
-        mock_del.assert_called_once_with("CH1", "MSG1")
+        mock_del.assert_called_once_with("100000000000000011", "200000000000000011")
 
     def test_secret_message_sends_warning_reply(self) -> None:
         """A warning message is sent back to the channel after detection."""
@@ -170,7 +170,7 @@ class TestHandleMessageCredentialDetection:
             patch.object(ch, "_emit_audit"),
         ):
             self._run(
-                ch._handle_message(_message_payload("AKIA1234567890ABCDEF", channel_id="CH2"))
+                ch._handle_message(_message_payload("AKIA1234567890ABCDEF", channel_id="100000000000000012"))
             )
 
         # send_message should have been called with a warning.

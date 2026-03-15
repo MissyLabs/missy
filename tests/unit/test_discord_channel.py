@@ -194,11 +194,11 @@ class TestDiscordRestClient:
     def test_send_message_no_reply(
         self, rest_client: DiscordRestClient, mock_http_client: MagicMock
     ) -> None:
-        mock_http_client.post.return_value.json.return_value = {"id": "msg-1"}
-        rest_client.send_message(channel_id="chan-1", content="Hello!")
+        mock_http_client.post.return_value.json.return_value = {"id": "200000000000000001"}
+        rest_client.send_message(channel_id="100000000000000001", content="Hello!")
         mock_http_client.post.assert_called_once()
         call_url = mock_http_client.post.call_args[0][0]
-        assert "chan-1/messages" in call_url
+        assert "100000000000000001/messages" in call_url
         call_kwargs = mock_http_client.post.call_args[1]
         assert call_kwargs["json"]["content"] == "Hello!"
         assert "message_reference" not in call_kwargs["json"]
@@ -206,22 +206,22 @@ class TestDiscordRestClient:
     def test_send_message_with_reply(
         self, rest_client: DiscordRestClient, mock_http_client: MagicMock
     ) -> None:
-        mock_http_client.post.return_value.json.return_value = {"id": "msg-2"}
+        mock_http_client.post.return_value.json.return_value = {"id": "200000000000000002"}
         rest_client.send_message(
-            channel_id="chan-1",
+            channel_id="100000000000000001",
             content="Reply!",
-            reply_to_message_id="original-msg",
+            reply_to_message_id="200000000000000010",
         )
         call_kwargs = mock_http_client.post.call_args[1]
-        assert call_kwargs["json"]["message_reference"]["message_id"] == "original-msg"
+        assert call_kwargs["json"]["message_reference"]["message_id"] == "200000000000000010"
 
     def test_trigger_typing_calls_correct_url(
         self, rest_client: DiscordRestClient, mock_http_client: MagicMock
     ) -> None:
         mock_http_client.post.return_value.status_code = 204
-        rest_client.trigger_typing("chan-1")
+        rest_client.trigger_typing("100000000000000001")
         call_url = mock_http_client.post.call_args[0][0]
-        assert "chan-1/typing" in call_url
+        assert "100000000000000001/typing" in call_url
 
     def test_register_slash_commands_global(
         self, rest_client: DiscordRestClient, mock_http_client: MagicMock
@@ -877,11 +877,11 @@ class TestDiscordRestThreads:
     def test_create_thread_without_message(
         self, rest_client: DiscordRestClient, mock_http_client: MagicMock
     ) -> None:
-        mock_http_client.post.return_value.json.return_value = {"id": "thread-1"}
-        result = rest_client.create_thread("chan-1", "My Thread")
-        assert result["id"] == "thread-1"
+        mock_http_client.post.return_value.json.return_value = {"id": "500000000000000001"}
+        result = rest_client.create_thread("100000000000000001", "My Thread")
+        assert result["id"] == "500000000000000001"
         call_args = mock_http_client.post.call_args
-        assert "/channels/chan-1/threads" in call_args[0][0]
+        assert "/channels/100000000000000001/threads" in call_args[0][0]
         body = call_args[1]["json"]
         assert body["name"] == "My Thread"
         assert body["type"] == 11  # PUBLIC_THREAD
@@ -889,24 +889,24 @@ class TestDiscordRestThreads:
     def test_create_thread_with_message(
         self, rest_client: DiscordRestClient, mock_http_client: MagicMock
     ) -> None:
-        mock_http_client.post.return_value.json.return_value = {"id": "thread-2"}
-        result = rest_client.create_thread("chan-1", "Thread", message_id="msg-99")
-        assert result["id"] == "thread-2"
+        mock_http_client.post.return_value.json.return_value = {"id": "500000000000000002"}
+        result = rest_client.create_thread("100000000000000001", "Thread", message_id="200000000000000099")
+        assert result["id"] == "500000000000000002"
         call_args = mock_http_client.post.call_args
-        assert "/messages/msg-99/threads" in call_args[0][0]
+        assert "/messages/200000000000000099/threads" in call_args[0][0]
 
     def test_create_thread_name_truncation(
         self, rest_client: DiscordRestClient, mock_http_client: MagicMock
     ) -> None:
-        mock_http_client.post.return_value.json.return_value = {"id": "thread-3"}
+        mock_http_client.post.return_value.json.return_value = {"id": "500000000000000003"}
         long_name = "x" * 200
-        rest_client.create_thread("chan-1", long_name)
+        rest_client.create_thread("100000000000000001", long_name)
         call_args = mock_http_client.post.call_args
         assert len(call_args[1]["json"]["name"]) == 100
 
     def test_get_channel(self, rest_client: DiscordRestClient, mock_http_client: MagicMock) -> None:
-        mock_http_client.get.return_value.json.return_value = {"id": "chan-1", "type": 0}
-        result = rest_client.get_channel("chan-1")
-        assert result["id"] == "chan-1"
+        mock_http_client.get.return_value.json.return_value = {"id": "100000000000000001", "type": 0}
+        result = rest_client.get_channel("100000000000000001")
+        assert result["id"] == "100000000000000001"
         call_args = mock_http_client.get.call_args
-        assert "/channels/chan-1" in call_args[0][0]
+        assert "/channels/100000000000000001" in call_args[0][0]

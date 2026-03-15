@@ -868,7 +868,7 @@ class TestRestSendMessageRetry:
         mock_http.post.side_effect = [rate_limit_resp, success_resp]
 
         with patch("time.sleep"):
-            result = client.send_message("chan-1", "hello")
+            result = client.send_message("100000000000000001", "hello")
 
         assert result["id"] == "msg-after-retry"
         assert mock_http.post.call_count == 2
@@ -889,7 +889,7 @@ class TestRestSendMessageRetry:
         mock_http.post.side_effect = [rate_limit_resp, success_resp]
 
         with patch("time.sleep") as mock_sleep:
-            result = client.send_message("chan-1", "hello")
+            result = client.send_message("100000000000000001", "hello")
 
         assert result["id"] == "msg-ok"
         mock_sleep.assert_called_once()
@@ -912,7 +912,7 @@ class TestRestSendMessageRetry:
         mock_http.post.side_effect = [bad_resp, good_resp]
 
         with patch("time.sleep"):
-            result = client.send_message("chan-1", "hello")
+            result = client.send_message("100000000000000001", "hello")
 
         assert result["id"] == "msg-ok"
 
@@ -932,7 +932,7 @@ class TestRestSendMessageRetry:
         mock_http.post.side_effect = [bad_resp, good_resp]
 
         with patch("time.sleep"):
-            result = client.send_message("chan-1", "hello")
+            result = client.send_message("100000000000000001", "hello")
 
         assert result["id"] == "msg-ok"
 
@@ -952,7 +952,7 @@ class TestRestSendMessageRetry:
         mock_http.post.side_effect = [bad_resp, good_resp]
 
         with patch("time.sleep"):
-            result = client.send_message("chan-1", "hello")
+            result = client.send_message("100000000000000001", "hello")
 
         assert result["id"] == "msg-ok"
 
@@ -968,7 +968,7 @@ class TestRestSendMessageRetry:
         mock_http.post.return_value = rate_limit_resp
 
         with patch("time.sleep"), pytest.raises(Exception, match="429"):
-            client.send_message("chan-1", "hello")
+            client.send_message("100000000000000001", "hello")
 
     def test_exception_in_send_retries_then_reraises(self):
         client, mock_http = _make_rest()
@@ -976,7 +976,7 @@ class TestRestSendMessageRetry:
         mock_http.post.side_effect = OSError("connection refused")
 
         with patch("time.sleep"), pytest.raises(OSError, match="connection refused"):
-            client.send_message("chan-1", "hello")
+            client.send_message("100000000000000001", "hello")
 
         # Should have retried: attempt_count = len(backoffs)+1 = 4 total, but
         # exceptions exhaust backoffs array first (3 items) then re-raise
@@ -992,7 +992,7 @@ class TestRestSendMessageRetry:
         mock_http.post.return_value = resp
 
         with pytest.raises(RuntimeError, match="missing id"):
-            client.send_message("chan-1", "hello")
+            client.send_message("100000000000000001", "hello")
 
     def test_send_message_with_mention_user_ids(self):
         client, mock_http = _make_rest()
@@ -1003,7 +1003,7 @@ class TestRestSendMessageRetry:
         resp.raise_for_status.return_value = None
         mock_http.post.return_value = resp
 
-        result = client.send_message("chan-1", "hello <@user-42>", mention_user_ids=["user-42"])
+        result = client.send_message("100000000000000001", "hello <@user-42>", mention_user_ids=["user-42"])
 
         call_kwargs = mock_http.post.call_args[1]
         assert "user-42" in call_kwargs["json"]["allowed_mentions"]["users"]
@@ -1018,7 +1018,7 @@ class TestRestSendMessageRetry:
         resp.raise_for_status.return_value = None
         mock_http.post.return_value = resp
 
-        client.send_message("chan-1", "hello @everyone")
+        client.send_message("100000000000000001", "hello @everyone")
 
         call_kwargs = mock_http.post.call_args[1]
         # parse list should be empty to suppress mention parsing
@@ -1031,7 +1031,7 @@ class TestRestUploadFile:
         client, _ = _make_rest()
 
         with pytest.raises(FileNotFoundError):
-            client.upload_file("chan-1", "/nonexistent/path/file.txt")
+            client.upload_file("100000000000000001", "/nonexistent/path/file.txt")
 
     def test_upload_file_success(self):
         client, mock_http = _make_rest()
@@ -1048,7 +1048,7 @@ class TestRestUploadFile:
             tmp_path = tmp.name
 
         try:
-            result = client.upload_file("chan-1", tmp_path, caption="My file")
+            result = client.upload_file("100000000000000001", tmp_path, caption="My file")
 
             assert result["id"] == "upload-msg-1"
             mock_http.post.assert_called()
@@ -1072,7 +1072,7 @@ class TestRestUploadFile:
             tmp_path = tmp.name
 
         try:
-            client.upload_file("chan-1", tmp_path)
+            client.upload_file("100000000000000001", tmp_path)
 
             call_kwargs = mock_http.post.call_args[1]
             # No caption means no data dict (or empty)
@@ -1095,7 +1095,7 @@ class TestRestUploadFile:
             tmp_path = tmp.name
 
         try:
-            client.upload_file("chan-1", tmp_path)
+            client.upload_file("100000000000000001", tmp_path)
 
             headers = mock_http.post.call_args[1]["headers"]
             assert "Content-Type" not in headers
@@ -1111,7 +1111,7 @@ class TestRestAddReaction:
         mock_response.raise_for_status.return_value = None
         mock_http.put.return_value = mock_response
 
-        client.add_reaction("chan-1", "msg-1", "\u2705")
+        client.add_reaction("100000000000000001", "200000000000000001", "\u2705")
         mock_http.put.assert_called_once()
 
     def test_add_reaction_url_encodes_emoji(self):
@@ -1121,7 +1121,7 @@ class TestRestAddReaction:
         mock_response.raise_for_status.return_value = None
         mock_http.put.return_value = mock_response
 
-        client.add_reaction("chan-1", "msg-1", "\u2705")
+        client.add_reaction("100000000000000001", "200000000000000001", "\u2705")
 
         call_args = mock_http.put.call_args
         call_url = call_args[0][0]
@@ -1135,11 +1135,11 @@ class TestRestAddReaction:
         mock_response.raise_for_status.return_value = None
         mock_http.put.return_value = mock_response
 
-        client.add_reaction("chan-99", "msg-77", "\U0001f44d")
+        client.add_reaction("100000000000000099", "200000000000000077", "\U0001f44d")
 
         call_url = mock_http.put.call_args[0][0]
-        assert "chan-99" in call_url
-        assert "msg-77" in call_url
+        assert "100000000000000099" in call_url
+        assert "200000000000000077" in call_url
         assert "reactions" in call_url
         assert "@me" in call_url
 
@@ -1150,7 +1150,7 @@ class TestRestAddReaction:
         mock_response.raise_for_status.return_value = None
         mock_http.put.return_value = mock_response
 
-        client.add_reaction("chan-1", "msg-1", "\u274c")
+        client.add_reaction("100000000000000001", "200000000000000001", "\u274c")
 
         headers = mock_http.put.call_args[1]["headers"]
         assert "Content-Type" not in headers
@@ -1164,7 +1164,7 @@ class TestRestAddReaction:
         mock_http.put.return_value = mock_response
 
         with pytest.raises(Exception, match="Forbidden"):
-            client.add_reaction("chan-1", "msg-1", "\u2705")
+            client.add_reaction("100000000000000001", "200000000000000001", "\u2705")
 
 
 class TestRestTriggerTyping:
@@ -1174,17 +1174,17 @@ class TestRestTriggerTyping:
         resp.status_code = 204
         mock_http.post.return_value = resp
 
-        client.trigger_typing("chan-42")
+        client.trigger_typing("100000000000000042")
 
         call_url = mock_http.post.call_args[0][0]
-        assert "chan-42/typing" in call_url
+        assert "100000000000000042/typing" in call_url
 
     def test_trigger_typing_swallows_exceptions(self):
         client, mock_http = _make_rest()
         mock_http.post.side_effect = OSError("connection refused")
 
         # Should not raise
-        client.trigger_typing("chan-1")
+        client.trigger_typing("100000000000000001")
 
 
 class TestRestGetCurrentUser:
@@ -1282,25 +1282,25 @@ class TestRestCreateThread:
         client, mock_http = _make_rest()
         mock_http.post.return_value.json.return_value = {"id": "thread-1"}
 
-        client.create_thread("chan-1", "My Thread")
+        client.create_thread("100000000000000001", "My Thread")
 
         call_url = mock_http.post.call_args[0][0]
-        assert "/channels/chan-1/threads" in call_url
+        assert "/channels/100000000000000001/threads" in call_url
 
     def test_message_thread_url(self):
         client, mock_http = _make_rest()
         mock_http.post.return_value.json.return_value = {"id": "thread-2"}
 
-        client.create_thread("chan-1", "My Thread", message_id="msg-99")
+        client.create_thread("100000000000000001", "My Thread", message_id="200000000000000099")
 
         call_url = mock_http.post.call_args[0][0]
-        assert "/messages/msg-99/threads" in call_url
+        assert "/messages/200000000000000099/threads" in call_url
 
     def test_auto_archive_duration_forwarded(self):
         client, mock_http = _make_rest()
         mock_http.post.return_value.json.return_value = {"id": "t"}
 
-        client.create_thread("chan-1", "T", auto_archive_duration=60)
+        client.create_thread("100000000000000001", "T", auto_archive_duration=60)
 
         body = mock_http.post.call_args[1]["json"]
         assert body["auto_archive_duration"] == 60
@@ -1309,7 +1309,7 @@ class TestRestCreateThread:
         client, mock_http = _make_rest()
         mock_http.post.return_value.json.return_value = {"id": "t"}
 
-        client.create_thread("chan-1", "T")
+        client.create_thread("100000000000000001", "T")
 
         body = mock_http.post.call_args[1]["json"]
         assert body["type"] == 11  # PUBLIC_THREAD
@@ -1318,7 +1318,7 @@ class TestRestCreateThread:
         client, mock_http = _make_rest()
         mock_http.post.return_value.json.return_value = {"id": "t"}
 
-        client.create_thread("chan-1", "T", message_id="msg-1")
+        client.create_thread("100000000000000001", "T", message_id="200000000000000001")
 
         body = mock_http.post.call_args[1]["json"]
         assert "type" not in body

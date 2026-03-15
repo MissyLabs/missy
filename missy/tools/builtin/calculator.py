@@ -87,6 +87,9 @@ _UNARY_OPS: dict[type, Any] = {
 # Guard against exponentiation DoS (e.g. 9**9**9**9)
 _MAX_EXPONENT = 1_000
 
+# Guard against left-shift memory exhaustion (e.g. 1 << 10000000000)
+_MAX_SHIFT = 10_000
+
 
 def _safe_eval(node: ast.AST) -> int | float | complex:
     """Recursively evaluate an AST node from a numeric expression.
@@ -127,6 +130,11 @@ def _safe_eval(node: ast.AST) -> int | float | complex:
         if isinstance(node.op, ast.Pow) and isinstance(right, (int, float)) and abs(right) > _MAX_EXPONENT:
                 raise ValueError(
                     f"Exponent {right} exceeds the maximum allowed value of {_MAX_EXPONENT}."
+                )
+        # Prevent left-shift memory exhaustion
+        if isinstance(node.op, ast.LShift) and isinstance(right, int) and right > _MAX_SHIFT:
+                raise ValueError(
+                    f"Left shift by {right} exceeds the maximum allowed value of {_MAX_SHIFT}."
                 )
         return op_fn(left, right)
 

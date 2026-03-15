@@ -59,7 +59,7 @@ class TestDiscordRestSendMessageTextAccessError:
         # With 4 attempts (1 + 3 backoffs), the last attempt raises after calling
         # _log_final_failure which accesses response.text.
         with patch("time.sleep"), pytest.raises(Exception, match="HTTP 500"):
-            client.send_message("ch1", "hello")
+            client.send_message("100000000000000001", "hello")
 
     def test_response_text_none_response_skipped(self) -> None:
         """When response is None (exception before HTTP call), the text branch
@@ -70,7 +70,7 @@ class TestDiscordRestSendMessageTextAccessError:
         client = _make_rest_client(http)
 
         with patch("time.sleep"), pytest.raises(RuntimeError, match="network failure"):
-            client.send_message("ch1", "hello")
+            client.send_message("100000000000000001", "hello")
 
 
 # ---------------------------------------------------------------------------
@@ -104,7 +104,7 @@ class TestDiscordRestSendMessageRetryAfterParsing:
         client = _make_rest_client(http)
 
         with patch("time.sleep") as mock_sleep:
-            result = client.send_message("ch1", "hello")
+            result = client.send_message("100000000000000001", "hello")
 
         assert result == {"id": "123"}
         # sleep was called with a positive float (the backoff + jitter)
@@ -129,7 +129,7 @@ class TestDiscordRestSendMessageRetryAfterParsing:
         client = _make_rest_client(http)
 
         with patch("time.sleep"):
-            result = client.send_message("ch1", "hello")
+            result = client.send_message("100000000000000001", "hello")
 
         assert result == {"id": "456"}
 
@@ -165,7 +165,7 @@ class TestDiscordRestSendMessageExhaustedWithoutException:
         client = _make_rest_client(http)
 
         with patch("time.sleep"), pytest.raises(RuntimeError, match="failed without exception"):
-            client.send_message("ch1", "hello")
+            client.send_message("100000000000000001", "hello")
 
 
 # ---------------------------------------------------------------------------
@@ -185,7 +185,7 @@ class TestDiscordRestDeleteMessage:
         mock_http = MagicMock()
         mock_http.delete.return_value = resp
         client = _make_rest_client(mock_http)
-        assert client.delete_message("ch1", "msg1") is True
+        assert client.delete_message("100000000000000001", "200000000000000001") is True
 
     def test_delete_200_raise_for_status_ok_returns_true(self) -> None:
         """Non-204/403/404 status that doesn't raise on raise_for_status → True
@@ -197,7 +197,7 @@ class TestDiscordRestDeleteMessage:
         mock_http = MagicMock()
         mock_http.delete.return_value = resp
         client = _make_rest_client(mock_http)
-        assert client.delete_message("ch1", "msg1") is True
+        assert client.delete_message("100000000000000001", "200000000000000001") is True
 
     def test_delete_403_returns_false(self) -> None:
         """HTTP 403 Forbidden → False."""
@@ -207,7 +207,7 @@ class TestDiscordRestDeleteMessage:
         mock_http = MagicMock()
         mock_http.delete.return_value = resp
         client = _make_rest_client(mock_http)
-        assert client.delete_message("ch1", "msg1") is False
+        assert client.delete_message("100000000000000001", "200000000000000001") is False
 
     def test_delete_404_returns_false(self) -> None:
         """HTTP 404 Not Found → False."""
@@ -217,14 +217,14 @@ class TestDiscordRestDeleteMessage:
         mock_http = MagicMock()
         mock_http.delete.return_value = resp
         client = _make_rest_client(mock_http)
-        assert client.delete_message("ch1", "msg1") is False
+        assert client.delete_message("100000000000000001", "200000000000000001") is False
 
     def test_delete_exception_returns_false(self) -> None:
         """Any unexpected exception → False (the outer except block)."""
         mock_http = MagicMock()
         mock_http.delete.side_effect = RuntimeError("connection refused")
         client = _make_rest_client(mock_http)
-        assert client.delete_message("ch1", "msg1") is False
+        assert client.delete_message("100000000000000001", "200000000000000001") is False
 
 
 # ===========================================================================

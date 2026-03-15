@@ -42,9 +42,25 @@ _PIPER_VOICES_DIR = Path.home() / ".local" / "share" / "piper-voices"
 _PIPER_DEFAULT_VOICE = "en_US-lessac-medium"
 
 
+#: Environment variables safe to pass to TTS/audio subprocesses.
+#: Prevents API key leakage to espeak-ng, piper, gst-launch, etc.
+_SAFE_TTS_ENV_VARS = frozenset({
+    "PATH", "HOME", "USER", "LOGNAME", "SHELL",
+    "LANG", "LC_ALL", "LC_CTYPE", "LANGUAGE",
+    "TERM", "XDG_RUNTIME_DIR", "XDG_DATA_HOME", "XDG_CONFIG_HOME",
+    "TMPDIR", "TMP", "TEMP", "DISPLAY", "WAYLAND_DISPLAY",
+    "DBUS_SESSION_BUS_ADDRESS", "LD_LIBRARY_PATH",
+    "PULSE_SERVER", "PIPEWIRE_REMOTE",
+})
+
+
 def _ensure_runtime_dir() -> dict[str, str]:
-    """Return an environment dict with XDG_RUNTIME_DIR set for PipeWire access."""
-    env = {**os.environ}
+    """Return a sanitized environment dict with XDG_RUNTIME_DIR set for PipeWire access.
+
+    Only safe variables are passed to prevent API key leakage to
+    TTS/audio subprocesses.
+    """
+    env = {k: v for k, v in os.environ.items() if k in _SAFE_TTS_ENV_VARS}
     if "XDG_RUNTIME_DIR" not in env:
         uid = os.getuid()
         env["XDG_RUNTIME_DIR"] = f"/run/user/{uid}"

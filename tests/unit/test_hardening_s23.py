@@ -483,12 +483,12 @@ class TestDiscordRESTRetryLogic:
         rest = self._make_rest()
         mock_resp = MagicMock()
         mock_resp.status_code = 200
-        mock_resp.json.return_value = {"id": "msg-1"}
+        mock_resp.json.return_value = {"id": "200000000000000001"}
         mock_resp.raise_for_status.return_value = None
         rest._http.post.return_value = mock_resp
 
-        result = rest.send_message("chan-1", "hello")
-        assert result["id"] == "msg-1"
+        result = rest.send_message("100000000000000001", "hello")
+        assert result["id"] == "200000000000000001"
 
     def test_send_message_rate_limited(self) -> None:
         """429 responses should trigger retry with Retry-After header."""
@@ -506,7 +506,7 @@ class TestDiscordRESTRetryLogic:
         rest._http.post.side_effect = [rate_resp, ok_resp]
 
         with patch("time.sleep"):  # skip delays
-            result = rest.send_message("chan-1", "hello")
+            result = rest.send_message("100000000000000001", "hello")
 
         assert result["id"] == "msg-after-retry"
         assert rest._http.post.call_count == 2
@@ -520,7 +520,7 @@ class TestDiscordRESTRetryLogic:
         rest._http.put.return_value = mock_resp
 
         # add_reaction returns None on success; just verify no exception
-        rest.add_reaction("chan-1", "msg-1", "\U0001f44d")
+        rest.add_reaction("100000000000000001", "200000000000000001", "\U0001f44d")
         rest._http.put.assert_called_once()
 
 

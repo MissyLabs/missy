@@ -46,11 +46,18 @@ class TestEnsureRuntimeDir:
         env = _ensure_runtime_dir()
         assert env["XDG_RUNTIME_DIR"] == f"/run/user/{uid}"
 
-    def test_returned_env_contains_other_vars(self, monkeypatch):
+    def test_returned_env_contains_safe_vars_only(self, monkeypatch):
+        """Environment is sanitized to safe vars only (prevents API key leakage)."""
         monkeypatch.setenv("MY_CUSTOM_VAR", "custom_value")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-secret")
+        monkeypatch.setenv("HOME", "/home/test")
         monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
         env = _ensure_runtime_dir()
-        assert env.get("MY_CUSTOM_VAR") == "custom_value"
+        # Safe vars should be present
+        assert env.get("HOME") == "/home/test"
+        # Secrets and custom vars should be filtered out
+        assert "MY_CUSTOM_VAR" not in env
+        assert "ANTHROPIC_API_KEY" not in env
 
 
 # ---------------------------------------------------------------------------

@@ -227,7 +227,7 @@ class X11ClickTool(BaseTool):
     ) -> ToolResult:
 
         if window_name:
-            focus_cmd = f"xdotool search --name {json.dumps(window_name)} windowfocus"
+            focus_cmd = f"xdotool search --name {shlex.quote(window_name)} windowfocus"
             r = _run(focus_cmd)
             if r.returncode != 0:
                 logger.debug("xdotool windowfocus stderr: %s", r.stderr.strip())
@@ -293,15 +293,15 @@ class X11TypeTool(BaseTool):
         **_: Any,
     ) -> ToolResult:
         if window_name:
-            focus_cmd = f"xdotool search --name {json.dumps(window_name)} windowfocus"
+            focus_cmd = f"xdotool search --name {shlex.quote(window_name)} windowfocus"
             r = _run(focus_cmd)
             if r.returncode != 0:
                 logger.debug("xdotool windowfocus stderr: %s", r.stderr.strip())
 
         # Use -- to prevent text that starts with - from being interpreted as flags.
-        # We pass text via shell quoting using json.dumps (which produces a valid
-        # double-quoted string) to handle spaces and special characters safely.
-        quoted_text = json.dumps(text)
+        # Use shlex.quote for safe shell quoting (not json.dumps, which does not
+        # escape shell metacharacters like $(...)).
+        quoted_text = shlex.quote(text)
         cmd = f"xdotool type --delay {delay_ms} -- {quoted_text}"
 
         result = _run(cmd)
@@ -348,7 +348,7 @@ class X11KeyTool(BaseTool):
 
     def execute(self, *, key: str, window_name: str = "", **_: Any) -> ToolResult:
         if window_name:
-            focus_cmd = f"xdotool search --name {json.dumps(window_name)} windowfocus"
+            focus_cmd = f"xdotool search --name {shlex.quote(window_name)} windowfocus"
             r = _run(focus_cmd)
             if r.returncode != 0:
                 logger.debug("xdotool windowfocus stderr: %s", r.stderr.strip())
@@ -500,7 +500,12 @@ class X11ReadScreenTool(BaseTool):
 
         Uses the ``/api/chat`` endpoint with the ``images`` field, which
         accepts a list of base64-encoded images alongside the text prompt.
+
+        Routes through :class:`~missy.gateway.client.PolicyHTTPClient` to
+        enforce network policy and audit logging.
         """
+        from missy.gateway.client import PolicyHTTPClient
+
         base_url = _get_ollama_base_url()
         body: dict[str, Any] = {
             "model": _OLLAMA_VISION_MODEL,
@@ -514,10 +519,10 @@ class X11ReadScreenTool(BaseTool):
             "stream": False,
         }
 
-        resp = httpx.post(
+        client = PolicyHTTPClient(category="provider", timeout=120)
+        resp = client.post(
             f"{base_url}/api/chat",
             json=body,
-            timeout=120,
         )
         resp.raise_for_status()
         data = resp.json()
