@@ -1437,6 +1437,9 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                 finally:
                     for t in tasks:
                         t.cancel()
+                    for t in tasks:
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await t
                     for ch in channels:
                         await ch.stop()
 

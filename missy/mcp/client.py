@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import subprocess
@@ -170,4 +171,10 @@ class McpClient:
                 self._proc.wait(timeout=5)
             except Exception:
                 self._proc.kill()
+            finally:
+                # Explicitly close subprocess pipes to prevent fd leaks.
+                for pipe in (self._proc.stdin, self._proc.stdout, self._proc.stderr):
+                    if pipe:
+                        with contextlib.suppress(OSError):
+                            pipe.close()
             self._proc = None
