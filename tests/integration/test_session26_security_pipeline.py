@@ -13,8 +13,6 @@ Tests cover end-to-end flows that cross subsystem boundaries:
 from __future__ import annotations
 
 import os
-import tempfile
-import threading
 import time
 import uuid
 from collections.abc import Generator
@@ -31,7 +29,7 @@ from missy.config.settings import (
     PluginPolicy,
     ShellPolicy,
 )
-from missy.core.events import AuditEvent, EventBus, event_bus
+from missy.core.events import AuditEvent, event_bus
 from missy.core.exceptions import PolicyViolationError
 from missy.memory.sqlite_store import ConversationTurn, SQLiteMemoryStore
 from missy.policy.engine import PolicyEngine, init_policy_engine
@@ -41,7 +39,6 @@ from missy.policy.shell import ShellPolicyEngine
 from missy.security.censor import censor_response
 from missy.security.sanitizer import InputSanitizer
 from missy.security.secrets import SecretsDetector
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -851,9 +848,11 @@ class TestConfigHotReload:
         mock_stat.st_uid = os.getuid() + 9999  # different from current user
         mock_stat.st_mode = stat_module.S_IRUSR | stat_module.S_IWUSR  # safe perms
 
-        with patch.object(Path, "stat", return_value=mock_stat):
-            with patch.object(Path, "is_symlink", return_value=False):
-                result = watcher._check_file_safety()
+        with (
+            patch.object(Path, "stat", return_value=mock_stat),
+            patch.object(Path, "is_symlink", return_value=False),
+        ):
+            result = watcher._check_file_safety()
 
         assert result is False
 
@@ -883,7 +882,7 @@ class TestConfigHotReload:
 
     def test_init_policy_engine_replaces_singleton(self) -> None:
         """init_policy_engine() installs a new PolicyEngine instance atomically."""
-        from missy.policy.engine import get_policy_engine, init_policy_engine
+        from missy.policy.engine import get_policy_engine
 
         config_a = _make_config(allowed_domains=["a.example.com"])
         config_b = _make_config(allowed_domains=["b.example.com"])
@@ -897,7 +896,7 @@ class TestConfigHotReload:
 
     def test_hotreload_updates_policy_engine_via_init(self) -> None:
         """Simulates what _apply_config does: new config re-inits the PolicyEngine."""
-        from missy.policy.engine import get_policy_engine, init_policy_engine
+        from missy.policy.engine import get_policy_engine
 
         # Start with a restrictive policy
         config_restrictive = _make_config(allowed_domains=[])

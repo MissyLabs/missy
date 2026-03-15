@@ -266,3 +266,35 @@ Error: Reached max turns (100)
 === Session 9 ended (exit code: 0): Sun Mar 15 10:03:56 AM UTC 2026 ===
 Error: Reached max turns (100)
 === Session 10 ended (exit code: 0): Sun Mar 15 10:25:46 AM UTC 2026 ===
+Session 24 accomplished:
+
+**10 Security Fixes:**
+1. TTS env sanitization (API key leak prevention)
+2. Browser env sanitization (API key leak to Firefox)
+3. X11 Ollama vision routed through PolicyHTTPClient
+4. Discord REST snowflake ID validation (path traversal prevention)
+5. X11 shell quoting (shlex.quote replaces json.dumps)
+6. Calculator LShift DoS guard
+7. Audit log directory permissions (0o700)
+8. MCP silent exception → debug logging
+9. Discord gateway WebSocket max_size (4MB)
+10. Discord REST mention regex fix
+
+**Security Pattern Additions:**
+- 9 new injection patterns (total: 91)
+- 5 new secret detection patterns (total: 45)
+
+**148 New Tests** (6168 → 6316) across 6 new test files:
+- CLI Discord integration (33)
+- Security pattern tests (26)
+- Hardening edge cases (35)
+- Security fix verification (20)
+- Resource leak tests (12)
+- Edge case tests (22)
+
+**16 commits, zero ruff lint errors, zero test failures.**
+
+=== Session 11 ended (exit code: 0): Sun Mar 15 11:33:23 AM UTC 2026 ===
+All 7 findings from the security audit have now been addressed (5 in the main batch + TOCTOU fix + audit log atomicity is informational-only). Session 25 is complete with 8 commits, 6412 passing tests, zero lint errors, and 6 security vulnerabilities fixed.
+
+=== Session 12 ended (exit code: 0): Sun Mar 15 12:17:36 PM UTC 2026 ===

@@ -10,7 +10,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Token file TOCTOU fix: anthropic_auth
 # ---------------------------------------------------------------------------
@@ -52,8 +51,10 @@ class TestAnthropicAuthTokenTOCTOU:
                 created_modes.append(mode)
             return fd
 
-        with patch("missy.cli.anthropic_auth.TOKEN_FILE", token_file):
-            with patch("os.open", side_effect=tracking_open):
+        with (
+            patch("missy.cli.anthropic_auth.TOKEN_FILE", token_file),
+            patch("os.open", side_effect=tracking_open),
+        ):
                 from missy.cli.anthropic_auth import store_token
 
                 store_token("x", token_type="t")
@@ -99,11 +100,10 @@ class TestOAuthTokenTOCTOU:
         class NotSerializable:
             pass
 
-        with patch("missy.cli.oauth.TOKEN_FILE", token_file):
-            with pytest.raises(TypeError):
-                from missy.cli.oauth import _save_token
+        with patch("missy.cli.oauth.TOKEN_FILE", token_file), pytest.raises(TypeError):
+            from missy.cli.oauth import _save_token
 
-                _save_token({"bad": NotSerializable()})
+            _save_token({"bad": NotSerializable()})
         # Temp file should be cleaned up
         assert not token_file.with_suffix(".tmp").exists()
 
@@ -331,8 +331,8 @@ class TestNetworkPolicyUnparseableIP:
     """Test that unparseable IP addresses from getaddrinfo are skipped."""
 
     def test_unparseable_ip_skipped(self) -> None:
-        from missy.core.exceptions import PolicyViolationError
         from missy.config.settings import NetworkPolicy
+        from missy.core.exceptions import PolicyViolationError
         from missy.policy.network import NetworkPolicyEngine
 
         policy = NetworkPolicy(default_deny=True)
@@ -347,8 +347,8 @@ class TestNetworkPolicyUnparseableIP:
                 engine.check_host("example.com")
 
     def test_all_ips_unparseable_denies(self) -> None:
-        from missy.core.exceptions import PolicyViolationError
         from missy.config.settings import NetworkPolicy
+        from missy.core.exceptions import PolicyViolationError
         from missy.policy.network import NetworkPolicyEngine
 
         policy = NetworkPolicy(default_deny=True)

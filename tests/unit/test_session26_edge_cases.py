@@ -7,7 +7,6 @@ import json
 import tempfile
 import threading
 import time
-from io import BytesIO
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -23,7 +22,6 @@ from missy.config.settings import (
 from missy.core.events import AuditEvent, EventBus, event_bus
 from missy.policy import engine as engine_module
 from missy.policy.engine import init_policy_engine
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -285,7 +283,7 @@ class TestCheckpointEdgeCases:
     def test_create_with_very_long_session_id(self, cm):
         """A very long session ID (e.g. 10 000 chars) is stored without truncation."""
         long_id = "x" * 10_000
-        cid = cm.create(session_id=long_id, task_id="t1", prompt="test")
+        cm.create(session_id=long_id, task_id="t1", prompt="test")
         incomplete = cm.get_incomplete()
         assert len(incomplete) == 1
         assert incomplete[0]["session_id"] == long_id
@@ -335,7 +333,7 @@ class TestCheckpointEdgeCases:
 
     def test_classify_fresh_checkpoint_returns_resume(self, cm):
         """A checkpoint created seconds ago is classified as 'resume'."""
-        cid = cm.create(session_id="s1", task_id="t1", prompt="fresh")
+        cm.create(session_id="s1", task_id="t1", prompt="fresh")
         rows = cm.get_incomplete()
         action = cm.classify(rows[0])
         assert action == "resume"
@@ -389,21 +387,16 @@ class TestWebhookHandlerEdgeCases:
         """A POST with an empty body (no 'prompt' key) results in a 400 response."""
         import http.client
         import socket
-        import threading
+
         from missy.channels.webhook import WebhookChannel
 
         channel = WebhookChannel(host="127.0.0.1", port=0)
         # Use a real (but ephemeral) port
-        from http.server import HTTPServer
 
         # We spin up the server on an available port briefly
-        with tempfile.TemporaryDirectory():
-            import socketserver
-
-            # Find a free port
-            with socket.socket() as s:
-                s.bind(("127.0.0.1", 0))
-                free_port = s.getsockname()[1]
+        with tempfile.TemporaryDirectory(), socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            free_port = s.getsockname()[1]
 
         channel._port = free_port
         channel.start()
@@ -563,14 +556,14 @@ class TestAuditLoggerEdgeCases:
         return logger, bus
 
     def _make_event(self, **kwargs) -> AuditEvent:
-        defaults = dict(
-            session_id="s1",
-            task_id="t1",
-            event_type="test.event",
-            category="network",
-            result="allow",
-            detail={},
-        )
+        defaults = {
+            "session_id": "s1",
+            "task_id": "t1",
+            "event_type": "test.event",
+            "category": "network",
+            "result": "allow",
+            "detail": {},
+        }
         defaults.update(kwargs)
         return AuditEvent.now(**defaults)
 
