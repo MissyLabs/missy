@@ -58,7 +58,7 @@ missy/                          # 123 Python source files
 
 ## Test Results
 
-- 5329 tests passing across 151 test files
+- 5334 tests passing across 151 test files
 - 99%+ code coverage, zero test warnings
 - Unit, integration, policy, Discord, security, memory, agent, tools, skills, CLI, voice, scheduler tests
 - 54+ property-based tests (hypothesis) for policy engines, security, and rate limiter
@@ -80,7 +80,10 @@ missy/                          # 123 Python source files
 - **Runtime coverage**: Tests for tool output injection scanning, httpx ImportError fallback, get_tool_registry error paths
 - **Voice command coverage**: Tests for unrecognized commands, voice=None, !say errors
 - **Network policy coverage**: Tests for unparseable IP addresses from getaddrinfo
-- **Total new tests**: 53 (from 5276 to 5329) across 4 new test files
+- **L1 fix: Vault hard link detection**: Vault rejects key files with st_nlink > 1 to prevent hard link attacks
+- **M1 fix: MCP server name validation**: add_server validates against _SAFE_NAME_RE (alphanumeric, hyphens, underscores only)
+- **Total new tests**: 58 (from 5276 to 5334) across 4 new test files
+- **Security findings addressed**: 11 of 17 findings from comprehensive security audit
 - **Zero ruff lint errors**
 
 ## Session 14 Additions (2026-03-15)
