@@ -58,7 +58,7 @@ missy/                          # 123 Python source files
 
 ## Test Results
 
-- 4951 tests passing across 140 test files
+- 5029 tests passing across 141 test files
 - 99%+ code coverage
 - Unit, integration, policy, Discord, security, memory, agent, tools, skills, CLI, voice, scheduler tests
 - 54+ property-based tests (hypothesis) for policy engines, security, and rate limiter
@@ -86,7 +86,10 @@ missy/                          # 123 Python source files
 - **Settings vault:// resolution**: Provider API keys now resolve vault:// and $ENV references
 - **Webhook integration tests** (26 new): End-to-end HTTP tests for rate limiting (429), oversized payloads (413), queue overflow (503), HMAC signatures, server lifecycle
 - **Hotreload safety tests** (2 new): World-writable rejection, symlink rejection
-- **Total new tests**: 59 (from 4892 to 4951)
+- **InputSanitizer hardening**: Added patterns for base64-encoded injections, data URIs, unicode homoglyph obfuscation, markdown/HTML hidden instructions, multi-language injection
+- **Rate limiter edge case tests** (78 new): Zero-limit unlimited mode, negative max_wait, concurrent acquire, refill calculation, RPM/TPM interaction
+- **Sanitizer tests** (300+ lines new): Comprehensive testing of all new injection patterns
+- **Total new tests**: 137 (from 4892 to 5029)
 - **Warnings reduced**: From 7 to 4 (2 remaining are from websockets library deprecation)
 
 ## Session 11 Additions (2026-03-15)
