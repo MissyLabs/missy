@@ -129,6 +129,20 @@ class PolicyHTTPClient:
         self._emit_request_event("PUT", url, response.status_code)
         return response
 
+    def delete(self, url: str, **kwargs: Any) -> httpx.Response:
+        """Perform a synchronous HTTP DELETE after a policy check."""
+        self._check_url(url)
+        response = self._get_sync_client().delete(url, **self._sanitize_kwargs(kwargs))
+        self._emit_request_event("DELETE", url, response.status_code)
+        return response
+
+    def patch(self, url: str, **kwargs: Any) -> httpx.Response:
+        """Perform a synchronous HTTP PATCH after a policy check."""
+        self._check_url(url)
+        response = self._get_sync_client().patch(url, **self._sanitize_kwargs(kwargs))
+        self._emit_request_event("PATCH", url, response.status_code)
+        return response
+
     # ------------------------------------------------------------------
     # Asynchronous interface
     # ------------------------------------------------------------------
@@ -171,6 +185,20 @@ class PolicyHTTPClient:
         self._check_url(url)
         response = await self._get_async_client().post(url, **self._sanitize_kwargs(kwargs))
         self._emit_request_event("POST", url, response.status_code)
+        return response
+
+    async def adelete(self, url: str, **kwargs: Any) -> httpx.Response:
+        """Perform an asynchronous HTTP DELETE after a policy check."""
+        self._check_url(url)
+        response = await self._get_async_client().delete(url, **self._sanitize_kwargs(kwargs))
+        self._emit_request_event("DELETE", url, response.status_code)
+        return response
+
+    async def apatch(self, url: str, **kwargs: Any) -> httpx.Response:
+        """Perform an asynchronous HTTP PATCH after a policy check."""
+        self._check_url(url)
+        response = await self._get_async_client().patch(url, **self._sanitize_kwargs(kwargs))
+        self._emit_request_event("PATCH", url, response.status_code)
         return response
 
     # ------------------------------------------------------------------
