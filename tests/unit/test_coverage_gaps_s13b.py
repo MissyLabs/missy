@@ -275,13 +275,13 @@ class TestMcpClientTimeout:
         # Make fileno() raise AttributeError to trigger the except (TypeError, ValueError, AttributeError) branch.
         mock_proc.stdout = MagicMock()
         mock_proc.stdout.fileno.side_effect = AttributeError("no fileno")
-        mock_proc.stdout.readline.return_value = b'{"jsonrpc":"2.0","id":"1","result":{}}'
+        mock_proc.stdout.readline.return_value = b'{"jsonrpc":"2.0","result":{}}'
 
         client._proc = mock_proc
 
         # Should NOT raise; should return the parsed response.
         result = client._rpc("ping", timeout=1.0)
-        assert result == {"jsonrpc": "2.0", "id": "1", "result": {}}
+        assert result == {"jsonrpc": "2.0", "result": {}}
 
 
 # ===========================================================================

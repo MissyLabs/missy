@@ -426,8 +426,10 @@ class TestApplyConfig:
 # ---------------------------------------------------------------------------
 
 
-def _make_rpc_response(result=None, error=None, id="test-id"):
-    resp = {"jsonrpc": "2.0", "id": id}
+def _make_rpc_response(result=None, error=None, id=None):
+    resp = {"jsonrpc": "2.0"}
+    if id is not None:
+        resp["id"] = id
     if error is not None:
         resp["error"] = error
     else:

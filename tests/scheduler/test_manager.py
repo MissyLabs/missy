@@ -41,6 +41,7 @@ class TestSchedulerManagerLifecycle:
         jobs_path = Path(tmp_jobs_file)
         jobs_path.parent.mkdir(parents=True, exist_ok=True)
         jobs_path.write_text(json.dumps([job.to_dict()]), encoding="utf-8")
+        jobs_path.chmod(0o600)
 
         mgr = SchedulerManager(jobs_file=tmp_jobs_file)
         mgr.start()

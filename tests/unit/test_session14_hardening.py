@@ -121,7 +121,7 @@ class TestToolExecutionRetry:
             result = runtime._execute_tool(tc)
 
         assert result.is_error is True
-        assert "Unexpected error" in result.content
+        assert "internal error" in result.content
         assert tool_reg.execute.call_count == 1
 
     def test_retry_with_exponential_backoff_delays(self):

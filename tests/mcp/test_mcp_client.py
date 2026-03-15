@@ -31,12 +31,10 @@ class TestMcpClientConnect:
         c = McpClient(name="test", command="echo hello")
         init_resp = {
             "jsonrpc": "2.0",
-            "id": "1",
             "result": {"capabilities": {}},
         }
         tools_resp = {
             "jsonrpc": "2.0",
-            "id": "2",
             "result": {"tools": [{"name": "read_file", "description": "Read a file"}]},
         }
         mock_proc = MagicMock()
@@ -54,8 +52,8 @@ class TestMcpClientConnect:
     def test_connect_sanitizes_environment(self):
         """MCP subprocess must not inherit API keys or other secrets."""
         c = McpClient(name="test", command="echo hello")
-        init_resp = {"jsonrpc": "2.0", "id": "1", "result": {"capabilities": {}}}
-        tools_resp = {"jsonrpc": "2.0", "id": "2", "result": {"tools": []}}
+        init_resp = {"jsonrpc": "2.0", "result": {"capabilities": {}}}
+        tools_resp = {"jsonrpc": "2.0", "result": {"tools": []}}
         mock_proc = MagicMock()
         mock_proc.stdin = MagicMock()
         mock_proc.stdout = MagicMock()
@@ -92,7 +90,7 @@ class TestMcpClientRpc:
 
     def test_rpc_sends_and_receives(self):
         c = self._make_connected_client()
-        expected = {"jsonrpc": "2.0", "id": "123", "result": {"ok": True}}
+        expected = {"jsonrpc": "2.0", "result": {"ok": True}}
         c._proc.stdout.readline.return_value = json.dumps(expected).encode() + b"\n"
         result = c._rpc("test/method", {"key": "value"})
         assert result == expected
@@ -104,7 +102,7 @@ class TestMcpClientRpc:
 
     def test_rpc_without_params(self):
         c = self._make_connected_client()
-        resp = {"jsonrpc": "2.0", "id": "1", "result": {}}
+        resp = {"jsonrpc": "2.0", "result": {}}
         c._proc.stdout.readline.return_value = json.dumps(resp).encode() + b"\n"
         c._rpc("test/method")
         sent = json.loads(c._proc.stdin.write.call_args[0][0].decode())
@@ -150,7 +148,6 @@ class TestMcpClientCallTool:
         c = self._make_connected_client()
         resp = {
             "jsonrpc": "2.0",
-            "id": "1",
             "result": {
                 "content": [
                     {"type": "text", "text": "line1"},
@@ -164,7 +161,7 @@ class TestMcpClientCallTool:
 
     def test_call_tool_error(self):
         c = self._make_connected_client()
-        resp = {"jsonrpc": "2.0", "id": "1", "error": {"code": -1, "message": "fail"}}
+        resp = {"jsonrpc": "2.0", "error": {"code": -1, "message": "fail"}}
         c._proc.stdout.readline.return_value = json.dumps(resp).encode() + b"\n"
         result = c.call_tool("bad", {})
         assert "[MCP error]" in result
@@ -173,7 +170,6 @@ class TestMcpClientCallTool:
         c = self._make_connected_client()
         resp = {
             "jsonrpc": "2.0",
-            "id": "1",
             "result": {"content": [{"type": "image", "data": "base64..."}]},
         }
         c._proc.stdout.readline.return_value = json.dumps(resp).encode() + b"\n"
@@ -183,7 +179,7 @@ class TestMcpClientCallTool:
 
     def test_call_tool_empty_content(self):
         c = self._make_connected_client()
-        resp = {"jsonrpc": "2.0", "id": "1", "result": {"content": []}}
+        resp = {"jsonrpc": "2.0", "result": {"content": []}}
         c._proc.stdout.readline.return_value = json.dumps(resp).encode() + b"\n"
         result = c.call_tool("empty", {})
         assert result  # str(result dict)

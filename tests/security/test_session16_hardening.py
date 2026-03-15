@@ -612,8 +612,8 @@ class TestMcpResponseIdValidation:
 
         mock_logger.warning.assert_not_called()
 
-    def test_mismatched_response_id_logs_warning(self):
-        """When response ID differs from request ID, a warning is logged."""
+    def test_mismatched_response_id_raises_runtime_error(self):
+        """When response ID differs from request ID, a RuntimeError is raised."""
         import json
 
         from missy.mcp.client import McpClient
@@ -633,13 +633,9 @@ class TestMcpResponseIdValidation:
 
         with (
             patch("missy.mcp.client.uuid.uuid4", return_value=MagicMock(__str__=lambda s: fixed_req_id)),
-            patch("missy.mcp.client.logger") as mock_logger,
+            pytest.raises(RuntimeError, match="MCP response ID mismatch"),
         ):
             client._rpc("tools/list")
-
-        mock_logger.warning.assert_called_once()
-        warning_msg = str(mock_logger.warning.call_args)
-        assert "mismatch" in warning_msg.lower() or "ID" in warning_msg or "id" in warning_msg.lower()
 
     def test_null_response_id_does_not_log_warning(self):
         """When response ID is null/None, the check is skipped (notification-style

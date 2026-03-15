@@ -735,7 +735,7 @@ class TestRuntimeExecuteTool:
             result = runtime._execute_tool(tc)
 
         assert result.is_error is True
-        assert "boom" in result.content
+        assert "internal error" in result.content
 
     def test_execute_tool_success_returns_output(self):
         from missy.agent.runtime import AgentConfig, AgentRuntime
