@@ -93,21 +93,25 @@ class TestGatewayMethodIntegration:
         client = self._make_client_with_mocked_transport()
         mock_response = httpx.Response(200, headers={"content-length": "200"})
 
-        with patch.object(client, "_check_url"):
-            with patch.object(client, "_get_sync_client") as mock_sync:
-                mock_sync.return_value.get.return_value = mock_response
-                with pytest.raises(ValueError, match="too large"):
-                    client.get("http://example.com")
+        with (
+            patch.object(client, "_check_url"),
+            patch.object(client, "_get_sync_client") as mock_sync,
+        ):
+            mock_sync.return_value.get.return_value = mock_response
+            with pytest.raises(ValueError, match="too large"):
+                client.get("http://example.com")
 
     def test_post_checks_response_size(self):
         client = self._make_client_with_mocked_transport()
         mock_response = httpx.Response(200, headers={"content-length": "200"})
 
-        with patch.object(client, "_check_url"):
-            with patch.object(client, "_get_sync_client") as mock_sync:
-                mock_sync.return_value.post.return_value = mock_response
-                with pytest.raises(ValueError, match="too large"):
-                    client.post("http://example.com")
+        with (
+            patch.object(client, "_check_url"),
+            patch.object(client, "_get_sync_client") as mock_sync,
+        ):
+            mock_sync.return_value.post.return_value = mock_response
+            with pytest.raises(ValueError, match="too large"):
+                client.post("http://example.com")
 
     @pytest.mark.asyncio
     async def test_aget_checks_response_size(self):
@@ -117,9 +121,11 @@ class TestGatewayMethodIntegration:
         with patch.object(client, "_check_url"):
             mock_async_client = MagicMock()
             mock_async_client.get = AsyncMock(return_value=mock_response)
-            with patch.object(client, "_get_async_client", return_value=mock_async_client):
-                with pytest.raises(ValueError, match="too large"):
-                    await client.aget("http://example.com")
+            with (
+                patch.object(client, "_get_async_client", return_value=mock_async_client),
+                pytest.raises(ValueError, match="too large"),
+            ):
+                await client.aget("http://example.com")
 
     @pytest.mark.asyncio
     async def test_apost_checks_response_size(self):
@@ -129,9 +135,11 @@ class TestGatewayMethodIntegration:
         with patch.object(client, "_check_url"):
             mock_async_client = MagicMock()
             mock_async_client.post = AsyncMock(return_value=mock_response)
-            with patch.object(client, "_get_async_client", return_value=mock_async_client):
-                with pytest.raises(ValueError, match="too large"):
-                    await client.apost("http://example.com")
+            with (
+                patch.object(client, "_get_async_client", return_value=mock_async_client),
+                pytest.raises(ValueError, match="too large"),
+            ):
+                await client.apost("http://example.com")
 
 
 class TestGatewayPoolLimits:
@@ -142,7 +150,7 @@ class TestGatewayPoolLimits:
         assert PolicyHTTPClient._POOL_LIMITS.max_keepalive_connections == 10
 
     def test_allowed_schemes(self):
-        assert PolicyHTTPClient._ALLOWED_SCHEMES == {"http", "https"}
+        assert {"http", "https"} == PolicyHTTPClient._ALLOWED_SCHEMES
 
     def test_allowed_kwargs(self):
         allowed = PolicyHTTPClient._ALLOWED_KWARGS

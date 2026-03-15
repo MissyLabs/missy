@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from missy.core.exceptions import PolicyViolationError
-
 
 # ---------------------------------------------------------------------------
 # Shell policy: advanced compound command edge cases
@@ -135,7 +134,7 @@ class TestWebhookRateLimitEdges:
         from missy.channels.webhook import WebhookChannel
 
         ch = WebhookChannel()
-        for i in range(60):
+        for _i in range(60):
             assert ch._check_rate_limit("192.168.1.1") is True
         assert ch._check_rate_limit("192.168.1.1") is False
 
@@ -143,7 +142,7 @@ class TestWebhookRateLimitEdges:
         from missy.channels.webhook import WebhookChannel
 
         ch = WebhookChannel()
-        for i in range(60):
+        for _i in range(60):
             ch._check_rate_limit("10.0.0.1")
         assert ch._check_rate_limit("10.0.0.2") is True
 
@@ -151,7 +150,7 @@ class TestWebhookRateLimitEdges:
         from missy.channels.webhook import WebhookChannel
 
         ch = WebhookChannel()
-        for i in range(60):
+        for _i in range(60):
             ch._check_rate_limit("10.0.0.3")
         assert ch._check_rate_limit("10.0.0.3") is False
 
@@ -204,7 +203,7 @@ class TestCircuitBreakerEdges:
         from missy.agent.circuit_breaker import CircuitBreaker
 
         cb = CircuitBreaker("test", threshold=5)
-        for i in range(4):
+        for _i in range(4):
             with pytest.raises(RuntimeError):
                 cb.call(self._failing_fn)
             assert cb.state == "closed"

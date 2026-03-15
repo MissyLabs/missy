@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import pytest
-
 from missy.security.sanitizer import InputSanitizer
 from missy.security.secrets import SecretsDetector
-
 
 # ---------------------------------------------------------------------------
 # New secret patterns (session 19)

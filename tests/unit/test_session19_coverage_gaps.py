@@ -11,7 +11,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Scheduler manager: _load_jobs error paths
 # ---------------------------------------------------------------------------
@@ -98,9 +97,11 @@ class TestSchedulerLoadJobsErrors:
         jobs_file.write_text("[]", encoding="utf-8")
 
         mgr = self._make_manager(jobs_file)
-        with patch.object(Path, "exists", return_value=True):
-            with patch.object(Path, "stat", side_effect=OSError("stat failed")):
-                mgr._load_jobs()
+        with (
+            patch.object(Path, "exists", return_value=True),
+            patch.object(Path, "stat", side_effect=OSError("stat failed")),
+        ):
+            mgr._load_jobs()
         assert mgr._jobs == {}
 
 
