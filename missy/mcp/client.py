@@ -116,9 +116,31 @@ class McpClient:
             self._proc.stdin.write((json.dumps(note) + "\n").encode())
             self._proc.stdin.flush()
 
+    #: Tool names from MCP servers must match this pattern.
+    _SAFE_TOOL_NAME_RE = __import__("re").compile(r"^[a-zA-Z0-9_\-]+$")
+
     def _list_tools(self) -> list[dict]:
         resp = self._rpc("tools/list")
-        return resp.get("result", {}).get("tools", [])
+        raw_tools = resp.get("result", {}).get("tools", [])
+        # Validate tool names at import time to prevent namespace injection
+        # and reject tools with potentially dangerous names.
+        validated: list[dict] = []
+        for tool in raw_tools:
+            name = tool.get("name", "")
+            if not name or not self._SAFE_TOOL_NAME_RE.match(name):
+                logger.warning(
+                    "MCP server %r: rejecting tool with invalid name %r",
+                    self.name, name,
+                )
+                continue
+            if "__" in name:
+                logger.warning(
+                    "MCP server %r: rejecting tool name %r (contains '__')",
+                    self.name, name,
+                )
+                continue
+            validated.append(tool)
+        return validated
 
     def call_tool(self, name: str, arguments: dict) -> str:
         """Call a tool on this MCP server and return the result as a string."""

@@ -65,7 +65,7 @@ class ListFilesTool(BaseTool):
             * ``success=False`` and ``error`` describing the problem.
         """
         try:
-            p = Path(path).expanduser()
+            p = Path(path).expanduser().resolve(strict=False)
         except Exception as exc:
             return ToolResult(success=False, output=None, error=f"Invalid path: {exc}")
 

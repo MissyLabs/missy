@@ -305,12 +305,16 @@ class TestAutomaticCallbackWins:
             def fake_wait(timeout=None):
                 oauth._callback_result["code"] = "the-auth-code"
                 oauth._callback_result["error"] = None
+                # Set the state to match what run_openai_oauth generates.
+                # We patch secrets.token_urlsafe below to control it.
+                oauth._callback_result["state"] = "fixed-state-value"
                 oauth._callback_event.set()
                 return True
 
             with (
                 patch.object(oauth._callback_event, "wait", side_effect=fake_wait),
                 patch("missy.cli.oauth.threading.Thread") as MockThread,
+                patch("missy.cli.oauth.secrets.token_urlsafe", return_value="fixed-state-value"),
             ):
                 # Make paste_done.is_set() return True to break the loop
                 paste_done_mock = MagicMock()

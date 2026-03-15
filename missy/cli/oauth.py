@@ -138,10 +138,15 @@ def _start_callback_server() -> HTTPServer | None:
         return None
 
 
-def _wait_for_callback(server: HTTPServer, timeout: int = 120) -> str | None:
+def _wait_for_callback(
+    server: HTTPServer, timeout: int = 120, expected_state: str = "",
+) -> str | None:
     """Block until the callback arrives or timeout expires.
 
-    Returns the authorization code, or None on timeout/error.
+    When *expected_state* is provided, the callback's ``state`` parameter
+    is compared against it to prevent CSRF attacks.
+
+    Returns the authorization code, or None on timeout/error/state mismatch.
     """
     got_code = _callback_event.wait(timeout=timeout)
     server.shutdown()
@@ -149,6 +154,10 @@ def _wait_for_callback(server: HTTPServer, timeout: int = 120) -> str | None:
         return None
     if _callback_result.get("error"):
         console.print(f"  [red]OAuth error:[/] {_callback_result['error']}")
+        return None
+    # CSRF check: verify that the state parameter matches what we sent.
+    if expected_state and _callback_result.get("state") != expected_state:
+        console.print("  [red]OAuth state mismatch — possible CSRF attack. Aborting.[/]")
         return None
     return _callback_result.get("code")
 
@@ -394,10 +403,14 @@ def run_openai_oauth(client_id: str | None = None) -> str | None:
             if _callback_event.wait(timeout=0.5):
                 break
         if _callback_event.is_set() and not _callback_result.get("error"):
-            code = _callback_result.get("code")
-            if code:
-                console.print("  [green]Automatic callback received.[/]")
-                server.shutdown()
+            # Verify state to prevent CSRF
+            if _callback_result.get("state") != state:
+                console.print("  [red]OAuth state mismatch — possible CSRF attack.[/]")
+            else:
+                code = _callback_result.get("code")
+                if code:
+                    console.print("  [green]Automatic callback received.[/]")
+            server.shutdown()
 
     # If automatic capture didn't get a code, use whatever was pasted.
     if not code:
