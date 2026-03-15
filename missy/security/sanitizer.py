@@ -190,7 +190,7 @@ class InputSanitizer:
         r"Human:\s*$",       # Attempting to inject a new Human: turn
         r"Assistant:\s*$",   # Attempting to inject an Assistant: turn
         # --- Prompt leaking / exfiltration ---
-        r"(show|reveal|print|output|display)\s+(your\s+)?(system\s+)?(prompt|instructions?)",
+        r"(show|reveal|print|output|display)\s+(\w+\s+)*(system\s+)?(prompt|instructions?)",
         r"what\s+(are|is)\s+your\s+(system\s+)?(prompt|instructions?)",
         # --- Japanese injection keywords ---
         r"以前の指示を(無視|忘れ)",  # Japanese: ignore/forget previous instructions
