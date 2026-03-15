@@ -58,7 +58,7 @@ missy/                          # 123 Python source files
 
 ## Test Results
 
-- 6294 tests passing across 187 test files
+- 6316 tests passing across 188 test files
 - 99%+ code coverage, zero test warnings
 - Unit, integration, policy, Discord, security, memory, agent, tools, skills, CLI, voice, scheduler tests
 - 54+ property-based tests (hypothesis) for policy engines, security, and rate limiter
@@ -79,9 +79,10 @@ missy/                          # 123 Python source files
   - Calculator LShift guard: Added `_MAX_SHIFT=10000` to prevent memory exhaustion DoS (e.g. `1 << 10000000000`)
 - **9 new injection detection patterns**: tool-call/result token, function_calls XML, pad token, urgency-prefixed override, meta-AI instruction, diff_marker, tool_use XML, antThinking. Total: 91 patterns
 - **5 new secret detection patterns**: Netlify token, Sentry DSN, Algolia API key, age secret key, Doppler token. Total: 45 patterns
-- **Tests (126 new)**: CLI Discord integration (33), security pattern tests (26), hardening edge cases (35), security fix verification (20), resource leak tests (12)
-- **Total new tests**: 126 (from 6168 to 6294) across 5 new test files
-- **12 commits, zero ruff lint errors**
+- **5 additional security fixes**: Browser env sanitization, audit log directory permissions (0o700), MCP silent exception logging, Discord gateway max_size (4MB), Discord REST mention regex fix
+- **Tests (148 new)**: CLI Discord integration (33), security pattern tests (26), hardening edge cases (35), security fix verification (20), resource leak tests (12), edge case tests (22)
+- **Total new tests**: 148 (from 6168 to 6316) across 6 new test files
+- **16 commits, zero ruff lint errors**
 
 ## Session 23 Additions (2026-03-15)
 
