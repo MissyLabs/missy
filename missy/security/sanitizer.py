@@ -194,6 +194,21 @@ class InputSanitizer:
         r"what\s+(are|is)\s+your\s+(system\s+)?(prompt|instructions?)",
         # --- Japanese injection keywords ---
         r"以前の指示を(無視|忘れ)",  # Japanese: ignore/forget previous instructions
+        # --- Korean injection keywords ---
+        r"이전\s+지시를?\s+(무시|잊어)",  # Korean: ignore/forget previous instructions
+        # --- Indirect prompt injection vectors ---
+        r"when\s+you\s+(see|read|encounter)\s+this",  # Trigger-based injection
+        r"(if|when)\s+the\s+user\s+asks?\s+about",  # Conditional instruction override
+        # --- Payload splitting / multi-turn injection ---
+        r"remember\s+this\s+for\s+(later|next|future)\s+",  # Memory poisoning
+        r"in\s+your\s+next\s+response\s*,?\s*(you\s+)?(must|should|will)",  # Future response control
+        # --- Gemini/Claude/GPT-specific delimiters ---
+        r"<\|fim_prefix\|>",  # Fill-in-the-middle prefix token
+        r"<\|fim_middle\|>",  # Fill-in-the-middle middle token
+        r"<\|fim_suffix\|>",  # Fill-in-the-middle suffix token
+        r"<\|endofprompt\|>",  # End-of-prompt token variant
+        # --- Role confusion attacks ---
+        r"you\s+are\s+(the\s+)?(system|root|admin|developer)\s*(prompt|user)?",
     ]
 
     def __init__(self) -> None:

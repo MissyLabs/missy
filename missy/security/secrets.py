@@ -53,6 +53,11 @@ class SecretsDetector:
         "azure_key": r"(?i)(DefaultEndpointsProtocol|AccountKey)\s*=\s*[A-Za-z0-9+/=]{20,}",
         "twilio_key": r"SK[a-f0-9]{32}",
         "mailgun_key": r"key-[a-f0-9]{32}",
+        "huggingface_token": r"hf_[A-Za-z0-9]{34,}",
+        "databricks_token": r"dapi[a-f0-9]{32}",
+        "digitalocean_token": r"dop_v1_[a-f0-9]{64}",
+        "linear_key": r"lin_api_[A-Za-z0-9]{40,}",
+        "supabase_key": r"sbp_[a-f0-9]{40}",
     }
 
     def __init__(self) -> None:
