@@ -10,15 +10,12 @@ Tests for:
 from __future__ import annotations
 
 import json
-import re
 import time
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 from missy.core.events import EventBus
 from missy.observability.audit_logger import AuditLogger
 from missy.security.sanitizer import InputSanitizer
-
 
 # ---------------------------------------------------------------------------
 # ReDoS resistance tests
@@ -86,10 +83,10 @@ class TestWebSocketMaxSize:
 
     def test_voice_server_sets_max_size(self) -> None:
         """VoiceServer passes max_size=1MB to websockets.serve."""
-        from missy.channels.voice.server import VoiceServer
-
         # Read the source to verify max_size is set
         import inspect
+
+        from missy.channels.voice.server import VoiceServer
 
         source = inspect.getsource(VoiceServer.start)
         assert "max_size" in source
