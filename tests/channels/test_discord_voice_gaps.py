@@ -320,8 +320,10 @@ class TestStartListeningBody:
             assert state.watchdog_task is not None
             vc.listen.assert_called_once()
 
-            # Clean up the watchdog task.
+            # Clean up the watchdog task properly to avoid unawaited coroutine.
             state.watchdog_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                loop.run_until_complete(state.watchdog_task)
         finally:
             loop.close()
 
@@ -366,6 +368,11 @@ class TestStartListeningBody:
             # Old watchdog was cancelled.
             old_watchdog.cancel.assert_called_once()
             assert state.watchdog_task is not old_watchdog
+
+            # Clean up the new watchdog task to avoid unawaited coroutine.
+            state.watchdog_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                loop.run_until_complete(state.watchdog_task)
         finally:
             loop.close()
 

@@ -7,11 +7,20 @@ import hmac
 import json
 import logging
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from missy.channels.base import BaseChannel, ChannelMessage
 
 logger = logging.getLogger(__name__)
+
+# Maximum request body size (1 MB).
+_MAX_PAYLOAD_BYTES = 1024 * 1024
+# Maximum queued messages before rejecting new ones.
+_MAX_QUEUE_SIZE = 1000
+# Rate limit: max requests per IP per window.
+_RATE_LIMIT_REQUESTS = 60
+_RATE_LIMIT_WINDOW = 60  # seconds
 
 
 class WebhookChannel(BaseChannel):
@@ -36,6 +45,23 @@ class WebhookChannel(BaseChannel):
         self._lock = threading.Lock()
         self._server: HTTPServer | None = None
         self._thread: threading.Thread | None = None
+        # Per-IP rate tracking: {ip: [timestamps]}
+        self._rate_tracker: dict[str, list[float]] = {}
+        self._rate_lock = threading.Lock()
+
+    def _check_rate_limit(self, client_ip: str) -> bool:
+        """Return True if the request is within rate limits."""
+        now = time.monotonic()
+        cutoff = now - _RATE_LIMIT_WINDOW
+        with self._rate_lock:
+            timestamps = self._rate_tracker.get(client_ip, [])
+            timestamps = [t for t in timestamps if t > cutoff]
+            if len(timestamps) >= _RATE_LIMIT_REQUESTS:
+                self._rate_tracker[client_ip] = timestamps
+                return False
+            timestamps.append(now)
+            self._rate_tracker[client_ip] = timestamps
+            return True
 
     def start(self) -> None:
         channel_ref = self
@@ -45,7 +71,22 @@ class WebhookChannel(BaseChannel):
                 logger.debug("Webhook: " + format, *args)
 
             def do_POST(self):
+                # Rate limiting
+                client_ip = self.client_address[0]
+                if not channel_ref._check_rate_limit(client_ip):
+                    self.send_response(429)
+                    self.send_header("Retry-After", str(_RATE_LIMIT_WINDOW))
+                    self.end_headers()
+                    return
+
                 length = int(self.headers.get("Content-Length", 0))
+
+                # Reject oversized payloads
+                if length > _MAX_PAYLOAD_BYTES:
+                    self.send_response(413)
+                    self.end_headers()
+                    return
+
                 body = self.rfile.read(length)
 
                 # Validate HMAC if secret configured
@@ -79,6 +120,10 @@ class WebhookChannel(BaseChannel):
                     metadata={"webhook_headers": dict(self.headers)},
                 )
                 with channel_ref._lock:
+                    if len(channel_ref._queue) >= _MAX_QUEUE_SIZE:
+                        self.send_response(503)
+                        self.end_headers()
+                        return
                     channel_ref._queue.append(msg)
 
                 self.send_response(202)
