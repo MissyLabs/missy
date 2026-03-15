@@ -1,7 +1,7 @@
 # TEST_EDGE_CASES
 
-- Updated: 2026-03-15 (session 12)
-- Total edge-case tests: 950+
+- Updated: 2026-03-15 (session 13)
+- Total edge-case tests: 1100+
 
 ## Security Policy Edge Cases (tested)
 
@@ -13,7 +13,17 @@
 - Empty allowed_commands means allow-all (shell policy regression test)
 - Process substitution blocking (<(...), >(...), <<(...))
 - Command substitution blocking ($(…), backticks)
-- Compound command chain splitting (&&, ||, ;, |)
+- Compound command chain splitting (&&, ||, ;, |, bare &)
+- Background execution operator (&) properly split to prevent bypass
+- Launcher command warnings (env, bash, sudo, find, xargs)
+- DNS rebinding detection (hostname → private IP without explicit CIDR)
+- DNS rebinding allowed when private CIDR explicitly configured
+- IPv6 rebinding protection (::1, fe80::, fd00::)
+- Cloud metadata IP blocking (169.254.169.254)
+- URL scheme restriction (file://, ftp://, data:// blocked)
+- Gateway kwargs sanitization (follow_redirects stripped)
+- Redirect following explicitly disabled on httpx clients
+- MCP config file permission checks (owner, group/world-writable)
 
 ## Provider Edge Cases (tested)
 
@@ -48,7 +58,20 @@
 - Response censoring applied in runtime (censor_response on final output)
 - MCP server name validation (reject double underscores)
 - MCP RPC timeout and response size limits
+- MCP config permission verification before loading
 - MCP subprocess environment sanitization
+
+## Secrets Detection Edge Cases (tested)
+
+- 20 credential patterns: API keys, AWS, GitHub, Stripe, Slack, JWT, Anthropic, OpenAI, GCP, Discord, GitLab, npm, PyPI, SendGrid, DB connection strings
+- Database connection string detection (postgres://, mysql://, mongodb://, redis://)
+- Case-insensitive DB scheme matching
+- URL without credentials not flagged as secret
+- Truncated tokens not flagged (partial matches rejected)
+- Vault atomic write failure cleanup (temp file unlinked)
+- Vault key symlink rejection (VaultError raised)
+- Vault crypto unavailable (VaultError with install hint)
+- Config vault:// resolution fallback (exception → original value returned)
 
 ## Scheduler Edge Cases (tested)
 
