@@ -60,12 +60,13 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-import websockets
 import websockets.exceptions
 
 try:
     from websockets.asyncio.server import ServerConnection as WebSocketServerProtocol
+    from websockets.asyncio.server import serve as _ws_serve
 except ImportError:  # websockets < 13
+    from websockets import serve as _ws_serve  # type: ignore[assignment]
     from websockets.server import WebSocketServerProtocol  # type: ignore[assignment]
 
 from missy.channels.voice.pairing import PairingManager
@@ -79,6 +80,18 @@ logger = logging.getLogger(__name__)
 
 # Maximum audio payload held in memory per connection (10 MB).
 _MAX_AUDIO_BYTES = 10 * 1024 * 1024
+
+# Maximum WebSocket frame size (1 MB) — prevents memory exhaustion.
+_MAX_WS_FRAME_BYTES = 1 * 1024 * 1024
+
+# Audio sample-rate bounds (Hz).
+_MIN_SAMPLE_RATE = 8000
+_MAX_SAMPLE_RATE = 48000
+_DEFAULT_SAMPLE_RATE = 16000
+
+# Audio channel bounds.
+_MIN_CHANNELS = 1
+_MAX_CHANNELS = 2
 
 # Audit task-id used for all server-level events.
 _TASK_ID = "voice-server"
@@ -209,11 +222,11 @@ class VoiceServer:
         logger.info("VoiceServer: loading TTS engine (%s)…", self._tts.name)
         self._tts.load()
 
-        self._ws_server = await websockets.serve(
+        self._ws_server = await _ws_serve(
             self._handle_connection,
             self._host,
             self._port,
-            max_size=1 * 1024 * 1024,  # 1 MB per frame — prevents memory exhaustion
+            max_size=_MAX_WS_FRAME_BYTES,
         )
         self._running = True
         logger.info("VoiceServer: listening on ws://%s:%d", self._host, self._port)
@@ -439,13 +452,18 @@ class VoiceServer:
                 in_audio_session = True
                 audio_buffer = b""
                 try:
-                    audio_sample_rate = max(8000, min(48000, int(msg.get("sample_rate", 16000))))
+                    audio_sample_rate = max(
+                        _MIN_SAMPLE_RATE,
+                        min(_MAX_SAMPLE_RATE, int(msg.get("sample_rate", _DEFAULT_SAMPLE_RATE))),
+                    )
                 except (ValueError, TypeError):
-                    audio_sample_rate = 16000
+                    audio_sample_rate = _DEFAULT_SAMPLE_RATE
                 try:
-                    audio_channels = max(1, min(2, int(msg.get("channels", 1))))
+                    audio_channels = max(
+                        _MIN_CHANNELS, min(_MAX_CHANNELS, int(msg.get("channels", _MIN_CHANNELS)))
+                    )
                 except (ValueError, TypeError):
-                    audio_channels = 1
+                    audio_channels = _MIN_CHANNELS
                 logger.debug(
                     "VoiceServer: audio_start from %s — rate=%d ch=%d",
                     node.node_id,

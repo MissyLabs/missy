@@ -59,6 +59,9 @@ _GATEWAY_URL = "wss://gateway.discord.gg/?v=10&encoding=json"
 #         | DIRECT_MESSAGES | DIRECT_MESSAGE_REACTIONS | MESSAGE_CONTENT
 _INTENTS = 1 | 512 | 1024 | 4096 | 8192 | 32768
 
+# Maximum WebSocket frame size for the Gateway connection (4 MB).
+_MAX_WS_SIZE = 4 * 1024 * 1024
+
 AsyncMessageCallback = Callable[[dict[str, Any]], Coroutine[Any, Any, None]]
 
 
@@ -127,7 +130,7 @@ class DiscordGatewayClient:
 
         url = self._resume_gateway_url or self._gateway_url
         logger.debug("Discord Gateway: connecting to %s", url)
-        self._ws = await websockets.connect(url, max_size=4 * 1024 * 1024)
+        self._ws = await websockets.connect(url, max_size=_MAX_WS_SIZE)
         self._emit_audit("discord.gateway.connect", "allow", {"url": url})
 
     async def disconnect(self) -> None:

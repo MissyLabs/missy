@@ -166,7 +166,7 @@ class TestVoiceServerLifecycle:
         async def fake_serve(*args, **kwargs):
             return mock_ws_server
 
-        with patch("missy.channels.voice.server.websockets.serve", side_effect=fake_serve):
+        with patch("missy.channels.voice.server._ws_serve", side_effect=fake_serve):
             await server.start()
 
         server._stt.load.assert_called_once()
@@ -178,7 +178,7 @@ class TestVoiceServerLifecycle:
         server = _make_server()
         server._running = True
 
-        with patch("missy.channels.voice.server.websockets.serve") as mock_serve:
+        with patch("missy.channels.voice.server._ws_serve") as mock_serve:
             await server.start()
 
         mock_serve.assert_not_called()
@@ -195,7 +195,7 @@ class TestVoiceServerLifecycle:
             return mock_ws_server
 
         with (
-            patch("missy.channels.voice.server.websockets.serve", side_effect=fake_serve),
+            patch("missy.channels.voice.server._ws_serve", side_effect=fake_serve),
             patch("missy.channels.voice.server._emit") as mock_emit,
         ):
             await server.start()
