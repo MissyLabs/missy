@@ -1,7 +1,7 @@
 # TEST_EDGE_CASES
 
-- Updated: 2026-03-15 (session 16)
-- Total edge-case tests: 1300+
+- Updated: 2026-03-15 (session 21)
+- Total edge-case tests: 1420+
 
 ## Security Policy Edge Cases (tested)
 
@@ -39,6 +39,37 @@
 - Self-create tool script content validation (dangerous pattern rejection)
 - Code evolution SystemExit logging (not silently suppressed)
 - Webhook log output secret censoring
+- Prompt extraction via output/repeat/translate/poem/encoding (6 new patterns)
+- Forced behavior change detection ("you must always respond in...")
+- Grafana, Confluent, Datadog, New Relic, PagerDuty, SSH key detection
+- Sanitizer exception path coverage (unquote/html.unescape failure fallbacks)
+
+## Concurrency Safety Edge Cases (tested, session 21)
+
+- Checkpoint concurrent create/update/abandon across 8 threads
+- Cost tracker concurrent record (8 threads x 50 ops) with token verification
+- Cost tracker concurrent budget check during recording (no deadlock)
+- Provider registry concurrent register (4 threads) + read
+- Provider registry concurrent key rotation (4 threads x 50 rotations)
+- Memory store concurrent add_turn (4 threads) + search
+- Memory store concurrent cleanup during writes
+- Tool registry concurrent register + list
+- Circuit breaker rapid concurrent fail/success/state-check (5 threads)
+
+## Resilience Edge Cases (tested, session 21)
+
+- Scheduler start with empty/invalid/non-list/malformed JSON jobs file
+- Checkpoint update/complete with nonexistent ID
+- Checkpoint scan_for_recovery on empty DB
+- Memory store unicode content storage/retrieval
+- Memory store empty content, very large content (100K chars)
+- Memory store FTS5 search with special characters (*, ", OR, AND)
+- Config loading with empty YAML, extra/unknown fields
+- MCP manager with missing/empty/invalid JSON config
+- Vault with new nested directories, concurrent ops (4 writer + 4 reader threads)
+- Cost tracker with unknown models (zero pricing), zero tokens, very large tokens
+- Circuit breaker recovery timeout transitions, half-open → closed/open
+- Audit logger unicode events, empty detail dicts
 
 ## Provider Edge Cases (tested)
 
