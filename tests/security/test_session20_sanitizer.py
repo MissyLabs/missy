@@ -98,8 +98,8 @@ class TestInjectionPatternCount:
     """Verify total injection pattern count."""
 
     def test_total_pattern_count(self):
-        """Should have 91 injection patterns after session 24 additions."""
-        assert len(InputSanitizer.INJECTION_PATTERNS) == 91
+        """Should have 98 injection patterns after session 26 additions."""
+        assert len(InputSanitizer.INJECTION_PATTERNS) == 98
 
 
 class TestMCPBlockInjection:

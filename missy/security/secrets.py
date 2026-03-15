@@ -77,6 +77,12 @@ class SecretsDetector:
         "algolia_key": r"(?i)algolia[_\s]*(?:api[_\s]*key|admin[_\s]*key)[\"'\s:=]+[a-f0-9]{32}",
         "age_secret_key": r"AGE-SECRET-KEY-[A-Z0-9]{59}",
         "doppler_token": r"dp\.st\.[a-z0-9_\-]+\.[A-Za-z0-9]{40,}",
+        # Session 26 additions
+        "planetscale_token": r"pscale_tkn_[A-Za-z0-9_\-]{32,}",
+        "neon_token": r"neon[_\s]*(?:api[_\s]*key|token)[\"'\s:=]+[A-Za-z0-9_\-]{50,}",
+        "postmark_token": r"(?i)postmark[_\s]*(?:server[_\s]*)?token[\"'\s:=]+[a-f0-9\-]{36}",
+        "render_key": r"rnd_[A-Za-z0-9]{32,}",
+        "fly_token": r"FlyV1\s+[A-Za-z0-9_\-]{40,}",
     }
 
     def __init__(self) -> None:

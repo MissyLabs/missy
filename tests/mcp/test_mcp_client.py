@@ -38,6 +38,7 @@ class TestMcpClientConnect:
             "result": {"tools": [{"name": "read_file", "description": "Read a file"}]},
         }
         mock_proc = MagicMock()
+        mock_proc.poll.return_value = None  # Process still running
         mock_proc.stdin = MagicMock()
         mock_proc.stdout = MagicMock()
         mock_proc.stdout.readline.side_effect = [
@@ -55,6 +56,7 @@ class TestMcpClientConnect:
         init_resp = {"jsonrpc": "2.0", "result": {"capabilities": {}}}
         tools_resp = {"jsonrpc": "2.0", "result": {"tools": []}}
         mock_proc = MagicMock()
+        mock_proc.poll.return_value = None  # Process still running
         mock_proc.stdin = MagicMock()
         mock_proc.stdout = MagicMock()
         mock_proc.stdout.readline.side_effect = [

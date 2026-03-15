@@ -88,8 +88,8 @@ class TestSession24InjectionPatterns:
         assert len(new_pattern_matches) == 0
 
     def test_pattern_count_includes_new(self, sanitizer: InputSanitizer) -> None:
-        """Total pattern count should include new session 24 patterns."""
-        assert len(sanitizer.INJECTION_PATTERNS) >= 91  # 82 previous + 9 new
+        """Total pattern count should include session 26 patterns."""
+        assert len(sanitizer.INJECTION_PATTERNS) >= 98  # 91 previous + 7 new
 
 
 # ---------------------------------------------------------------------------

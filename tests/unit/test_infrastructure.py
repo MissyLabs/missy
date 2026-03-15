@@ -482,6 +482,7 @@ class TestMcpClientConnect:
         init_resp = _make_rpc_response(result={"capabilities": {}})
         tools_resp = _make_rpc_response(result={"tools": [{"name": "mytool"}]})
         mock_proc = MagicMock()
+        mock_proc.poll.return_value = None  # Process still running
         mock_proc.stdout.readline.side_effect = [init_resp, tools_resp]
         mock_proc.stdin = MagicMock()
 
@@ -496,6 +497,7 @@ class TestMcpClientConnect:
         client = McpClient(name="test", command="echo hello")
         error_resp = _make_rpc_response(error="init failed")
         mock_proc = MagicMock()
+        mock_proc.poll.return_value = None  # Process still running
         mock_proc.stdout.readline.return_value = error_resp
         mock_proc.stdin = MagicMock()
 

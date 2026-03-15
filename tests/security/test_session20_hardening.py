@@ -354,5 +354,5 @@ class TestSecretPatternCount:
     """Verify total secret pattern count after additions."""
 
     def test_total_pattern_count(self):
-        """Should have 45 secret patterns after session 24 additions."""
-        assert len(SecretsDetector.SECRET_PATTERNS) == 45
+        """Should have 50 secret patterns after session 26 additions."""
+        assert len(SecretsDetector.SECRET_PATTERNS) == 50

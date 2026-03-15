@@ -239,6 +239,14 @@ class InputSanitizer:
         r"<\|diff_marker\|>",                             # Diff marker token injection
         r"<tool_use>",                                    # Claude-style tool_use XML injection
         r"<antThinking>",                                 # Claude internal token injection
+        # --- Session 26: multimodal and structural injection ---
+        r"<\|image\|>",                                      # Vision model image token injection
+        r"<\|audio\|>",                                      # Audio model token injection
+        r"<\|video\|>",                                      # Video model token injection
+        r"(?:SYSTEM|USER|ASSISTANT)\s+OVERRIDE\s+MODE",      # Uppercase override pattern
+        r"<\|separator\|>",                                  # Separator token injection
+        r"<\|context\|>",                                    # Context boundary token injection
+        r"(?:real|actual|true)\s+(?:system|user)\s+(?:message|prompt|instruction)",  # Authority claim
     ]
 
     def __init__(self) -> None:
