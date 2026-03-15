@@ -188,6 +188,9 @@ class AgentRuntime:
             ProviderError: When no provider is available or the provider
                 call fails.
         """
+        if not user_input or not user_input.strip():
+            raise ValueError("user_input must be a non-empty string")
+
         # Sanitize user input: truncate oversized payloads and detect
         # prompt injection patterns *before* the input reaches the LLM.
         if self._sanitizer is not None:
@@ -305,6 +308,9 @@ class AgentRuntime:
         Yields:
             String chunks of the model's response.
         """
+        if not user_input or not user_input.strip():
+            raise ValueError("user_input must be a non-empty string")
+
         # Sanitize user input before processing (same as run())
         if self._sanitizer is not None:
             user_input = self._sanitizer.sanitize(user_input)
@@ -337,6 +343,7 @@ class AgentRuntime:
                 full_text += chunk
                 yield chunk
         except Exception:
+            logger.debug("Streaming failed; falling back to non-streaming", exc_info=True)
             # Fall back to non-streaming
             response = self._single_turn(
                 provider=provider,
@@ -463,6 +470,7 @@ class AgentRuntime:
             _cm = _CheckpointManager()
             _checkpoint_id = _cm.create(session_id, task_id, user_input)
         except Exception:
+            logger.debug("CheckpointManager init failed; proceeding without checkpoints", exc_info=True)
             _cm = None
             _checkpoint_id = None
 

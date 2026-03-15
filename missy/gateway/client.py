@@ -78,6 +78,8 @@ class PolicyHTTPClient:
     ) -> None:
         self.session_id = session_id
         self.task_id = task_id
+        if timeout is not None and timeout <= 0:
+            raise ValueError(f"timeout must be positive, got {timeout}")
         self.timeout = timeout
         self.category = category
         self.max_response_bytes = max_response_bytes or self.DEFAULT_MAX_RESPONSE_BYTES
@@ -291,6 +293,11 @@ class PolicyHTTPClient:
             ValueError: When the URL is malformed, uses a disallowed scheme,
                 or contains no host component.
         """
+        _MAX_URL_LENGTH = 8192  # Prevent URL-bomb memory exhaustion
+        if len(url) > _MAX_URL_LENGTH:
+            raise ValueError(
+                f"URL exceeds maximum length of {_MAX_URL_LENGTH} characters."
+            )
         parsed = urlparse(url)
         if parsed.scheme not in self._ALLOWED_SCHEMES:
             raise ValueError(

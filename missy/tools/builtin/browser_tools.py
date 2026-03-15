@@ -51,6 +51,11 @@ class BrowserSession:
         import re
 
         # Validate session_id to prevent directory traversal.
+        _MAX_SESSION_ID_LEN = 128
+        if len(session_id) > _MAX_SESSION_ID_LEN:
+            raise ValueError(
+                f"session_id exceeds maximum length of {_MAX_SESSION_ID_LEN} characters."
+            )
         if not re.match(r"^[a-zA-Z0-9_\-]+$", session_id):
             raise ValueError(
                 f"Invalid session_id {session_id!r}: must be alphanumeric, "

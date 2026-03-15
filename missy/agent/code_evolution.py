@@ -202,7 +202,7 @@ class CodeEvolutionManager:
             data = json.loads(self._path.read_text())
             return [_deserialize_proposal(d) for d in data]
         except Exception:
-            logger.warning("Failed to load evolutions from %s", self._path)
+            logger.warning("Failed to load evolutions from %s", self._path, exc_info=True)
             return []
 
     def _save(self) -> None:
@@ -750,7 +750,7 @@ class CodeEvolutionManager:
             try:
                 self._git("checkout", "--", diff.file_path, check=False)
             except Exception:
-                logger.warning("Failed to revert %s", diff.file_path)
+                logger.warning("Failed to revert %s", diff.file_path, exc_info=True)
 
     def _emit_event(
         self,

@@ -42,6 +42,10 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_DB_PATH = "~/.missy/checkpoints.db"
 
+#: Age thresholds (in seconds) for checkpoint recovery classification.
+_RESUME_THRESHOLD_SECS = 3600  # 1 hour — checkpoint is "fresh"
+_RESTART_THRESHOLD_SECS = 86400  # 24 hours — checkpoint is "stale"
+
 # ---------------------------------------------------------------------------
 # Schema
 # ---------------------------------------------------------------------------
@@ -265,9 +269,9 @@ class CheckpointManager:
             ``"abandon"`` if it is older than 24 hours.
         """
         age = time.time() - checkpoint["created_at"]
-        if age < 3600:
+        if age < _RESUME_THRESHOLD_SECS:
             return "resume"
-        if age < 86400:
+        if age < _RESTART_THRESHOLD_SECS:
             return "restart"
         return "abandon"
 
@@ -275,7 +279,7 @@ class CheckpointManager:
     # Bulk / maintenance operations
     # ------------------------------------------------------------------
 
-    def abandon_old(self, max_age_seconds: int = 86400) -> int:
+    def abandon_old(self, max_age_seconds: int = _RESTART_THRESHOLD_SECS) -> int:
         """Set state=ABANDONED for RUNNING checkpoints older than *max_age_seconds*.
 
         Args:
@@ -322,7 +326,7 @@ class CheckpointManager:
         Returns:
             The number of rows deleted.
         """
-        cutoff = time.time() - older_than_days * 86400
+        cutoff = time.time() - older_than_days * _RESTART_THRESHOLD_SECS
         conn = self._connect()
         cursor = conn.execute(
             """

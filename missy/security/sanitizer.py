@@ -304,10 +304,12 @@ class InputSanitizer:
         try:
             url_decoded = unquote(text)
         except Exception:
+            logger.debug("URL-decode failed during injection check", exc_info=True)
             url_decoded = text
         try:
             html_decoded = html.unescape(text)
         except Exception:
+            logger.debug("HTML-unescape failed during injection check", exc_info=True)
             html_decoded = text
         for decoded_variant in (url_decoded, html_decoded):
             if decoded_variant != text:
