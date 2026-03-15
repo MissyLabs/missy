@@ -182,9 +182,10 @@ class TestDiscordRestDeleteMessage:
         resp = MagicMock()
         resp.status_code = 204
 
-        with patch("httpx.delete", return_value=resp):
-            client = _make_rest_client()
-            assert client.delete_message("ch1", "msg1") is True
+        mock_http = MagicMock()
+        mock_http.delete.return_value = resp
+        client = _make_rest_client(mock_http)
+        assert client.delete_message("ch1", "msg1") is True
 
     def test_delete_200_raise_for_status_ok_returns_true(self) -> None:
         """Non-204/403/404 status that doesn't raise on raise_for_status → True
@@ -193,33 +194,37 @@ class TestDiscordRestDeleteMessage:
         resp.status_code = 200
         resp.raise_for_status.return_value = None  # does not raise
 
-        with patch("httpx.delete", return_value=resp):
-            client = _make_rest_client()
-            assert client.delete_message("ch1", "msg1") is True
+        mock_http = MagicMock()
+        mock_http.delete.return_value = resp
+        client = _make_rest_client(mock_http)
+        assert client.delete_message("ch1", "msg1") is True
 
     def test_delete_403_returns_false(self) -> None:
         """HTTP 403 Forbidden → False."""
         resp = MagicMock()
         resp.status_code = 403
 
-        with patch("httpx.delete", return_value=resp):
-            client = _make_rest_client()
-            assert client.delete_message("ch1", "msg1") is False
+        mock_http = MagicMock()
+        mock_http.delete.return_value = resp
+        client = _make_rest_client(mock_http)
+        assert client.delete_message("ch1", "msg1") is False
 
     def test_delete_404_returns_false(self) -> None:
         """HTTP 404 Not Found → False."""
         resp = MagicMock()
         resp.status_code = 404
 
-        with patch("httpx.delete", return_value=resp):
-            client = _make_rest_client()
-            assert client.delete_message("ch1", "msg1") is False
+        mock_http = MagicMock()
+        mock_http.delete.return_value = resp
+        client = _make_rest_client(mock_http)
+        assert client.delete_message("ch1", "msg1") is False
 
     def test_delete_exception_returns_false(self) -> None:
         """Any unexpected exception → False (the outer except block)."""
-        with patch("httpx.delete", side_effect=RuntimeError("connection refused")):
-            client = _make_rest_client()
-            assert client.delete_message("ch1", "msg1") is False
+        mock_http = MagicMock()
+        mock_http.delete.side_effect = RuntimeError("connection refused")
+        client = _make_rest_client(mock_http)
+        assert client.delete_message("ch1", "msg1") is False
 
 
 # ===========================================================================

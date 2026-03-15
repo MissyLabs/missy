@@ -68,38 +68,34 @@ class TestDeleteMessage:
         rest = self._make_rest()
         mock_response = MagicMock()
         mock_response.status_code = 204
+        rest._http.delete.return_value = mock_response
 
-        with patch("httpx.delete", return_value=mock_response):
-            result = rest.delete_message("chan123", "msg456")
-
+        result = rest.delete_message("chan123", "msg456")
         assert result is True
 
     def test_returns_false_on_403(self) -> None:
         rest = self._make_rest()
         mock_response = MagicMock()
         mock_response.status_code = 403
+        rest._http.delete.return_value = mock_response
 
-        with patch("httpx.delete", return_value=mock_response):
-            result = rest.delete_message("chan123", "msg456")
-
+        result = rest.delete_message("chan123", "msg456")
         assert result is False
 
     def test_returns_false_on_404(self) -> None:
         rest = self._make_rest()
         mock_response = MagicMock()
         mock_response.status_code = 404
+        rest._http.delete.return_value = mock_response
 
-        with patch("httpx.delete", return_value=mock_response):
-            result = rest.delete_message("chan123", "msg456")
-
+        result = rest.delete_message("chan123", "msg456")
         assert result is False
 
     def test_returns_false_on_exception(self) -> None:
         rest = self._make_rest()
+        rest._http.delete.side_effect = OSError("network error")
 
-        with patch("httpx.delete", side_effect=OSError("network error")):
-            result = rest.delete_message("chan123", "msg456")
-
+        result = rest.delete_message("chan123", "msg456")
         assert result is False
 
     def test_raises_for_status_on_unexpected_code(self) -> None:
@@ -108,10 +104,9 @@ class TestDeleteMessage:
         mock_response = MagicMock()
         mock_response.status_code = 500
         mock_response.raise_for_status.side_effect = Exception("server error")
+        rest._http.delete.return_value = mock_response
 
-        with patch("httpx.delete", return_value=mock_response):
-            result = rest.delete_message("chan123", "msg456")
-
+        result = rest.delete_message("chan123", "msg456")
         assert result is False
 
 

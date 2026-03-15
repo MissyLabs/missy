@@ -269,8 +269,6 @@ class DiscordRestClient:
         import mimetypes
         from pathlib import Path
 
-        import httpx
-
         path = Path(file_path).expanduser()
         if not path.exists():
             raise FileNotFoundError(f"File not found: {file_path}")
@@ -282,7 +280,7 @@ class DiscordRestClient:
         with path.open("rb") as fh:
             files = {"file": (path.name, fh, mime)}
             data = {"content": caption} if caption else {}
-            response = httpx.post(url, headers=headers, files=files, data=data, timeout=60)
+            response = self._http.post(url, headers=headers, files=files, data=data, timeout=60)
         response.raise_for_status()
         return response.json()
 
@@ -306,12 +304,10 @@ class DiscordRestClient:
         """
         from urllib.parse import quote
 
-        import httpx
-
         encoded = quote(emoji, safe="")
         url = f"{BASE}/channels/{channel_id}/messages/{message_id}/reactions/{encoded}/@me"
         # Discord expects a PUT with empty body; returns 204 No Content.
-        response = httpx.put(
+        response = self._http.put(
             url,
             headers={k: v for k, v in self._headers().items() if k != "Content-Type"},
             timeout=10,
@@ -354,9 +350,7 @@ class DiscordRestClient:
         """
         url = f"{BASE}/channels/{channel_id}/messages/{message_id}"
         try:
-            import httpx
-
-            response = httpx.delete(
+            response = self._http.delete(
                 url,
                 headers={k: v for k, v in self._headers().items() if k != "Content-Type"},
                 timeout=10,

@@ -1034,46 +1034,47 @@ class TestRestUploadFile:
             client.upload_file("chan-1", "/nonexistent/path/file.txt")
 
     def test_upload_file_success(self):
-        client, _ = _make_rest()
+        client, mock_http = _make_rest()
 
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {"id": "upload-msg-1"}
         mock_response.raise_for_status.return_value = None
 
+        mock_http.post.return_value = mock_response
+
         with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as tmp:
             tmp.write(b"hello file content")
             tmp_path = tmp.name
 
         try:
-            with patch("httpx.post", return_value=mock_response) as mock_post:
-                result = client.upload_file("chan-1", tmp_path, caption="My file")
+            result = client.upload_file("chan-1", tmp_path, caption="My file")
 
             assert result["id"] == "upload-msg-1"
-            mock_post.assert_called_once()
-            call_kwargs = mock_post.call_args[1]
+            mock_http.post.assert_called()
+            call_kwargs = mock_http.post.call_args[1]
             assert "file" in call_kwargs.get("files", {})
             assert call_kwargs.get("data", {}).get("content") == "My file"
         finally:
             os.unlink(tmp_path)
 
     def test_upload_file_without_caption(self):
-        client, _ = _make_rest()
+        client, mock_http = _make_rest()
 
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {"id": "upload-msg-2"}
         mock_response.raise_for_status.return_value = None
+        mock_http.post.return_value = mock_response
 
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
             tmp.write(b"\x89PNG")
             tmp_path = tmp.name
 
         try:
-            with patch("httpx.post", return_value=mock_response) as mock_post:
-                client.upload_file("chan-1", tmp_path)
+            client.upload_file("chan-1", tmp_path)
 
-            call_kwargs = mock_post.call_args[1]
+            call_kwargs = mock_http.post.call_args[1]
             # No caption means no data dict (or empty)
             assert call_kwargs.get("data") == {}
         finally:
@@ -1081,22 +1082,22 @@ class TestRestUploadFile:
 
     def test_upload_file_excludes_content_type_header(self):
         """Content-Type must be omitted so httpx sets multipart boundary correctly."""
-        client, _ = _make_rest()
+        client, mock_http = _make_rest()
 
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {"id": "m"}
         mock_response.raise_for_status.return_value = None
+        mock_http.post.return_value = mock_response
 
         with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as tmp:
             tmp.write(b"data")
             tmp_path = tmp.name
 
         try:
-            with patch("httpx.post", return_value=mock_response) as mock_post:
-                client.upload_file("chan-1", tmp_path)
+            client.upload_file("chan-1", tmp_path)
 
-            headers = mock_post.call_args[1]["headers"]
+            headers = mock_http.post.call_args[1]["headers"]
             assert "Content-Type" not in headers
         finally:
             os.unlink(tmp_path)
@@ -1104,64 +1105,65 @@ class TestRestUploadFile:
 
 class TestRestAddReaction:
     def test_add_reaction_uses_put(self):
-        client, _ = _make_rest()
+        client, mock_http = _make_rest()
         mock_response = MagicMock()
         mock_response.status_code = 204
         mock_response.raise_for_status.return_value = None
+        mock_http.put.return_value = mock_response
 
-        with patch("httpx.put", return_value=mock_response) as mock_put:
-            client.add_reaction("chan-1", "msg-1", "\u2705")
-
-        mock_put.assert_called_once()
+        client.add_reaction("chan-1", "msg-1", "\u2705")
+        mock_http.put.assert_called_once()
 
     def test_add_reaction_url_encodes_emoji(self):
-        client, _ = _make_rest()
+        client, mock_http = _make_rest()
         mock_response = MagicMock()
         mock_response.status_code = 204
         mock_response.raise_for_status.return_value = None
+        mock_http.put.return_value = mock_response
 
-        with patch("httpx.put", return_value=mock_response) as mock_put:
-            client.add_reaction("chan-1", "msg-1", "\u2705")
+        client.add_reaction("chan-1", "msg-1", "\u2705")
 
-        call_url = mock_put.call_args[0][0]
+        call_args = mock_http.put.call_args
+        call_url = call_args[0][0]
         # The checkmark emoji must be percent-encoded in the URL
-        assert "%E2%9C%85" in call_url or "✅" not in call_url
+        assert "%E2%9C%85" in call_url or "\u2705" not in call_url
 
     def test_add_reaction_correct_url_structure(self):
-        client, _ = _make_rest()
+        client, mock_http = _make_rest()
         mock_response = MagicMock()
         mock_response.status_code = 204
         mock_response.raise_for_status.return_value = None
+        mock_http.put.return_value = mock_response
 
-        with patch("httpx.put", return_value=mock_response) as mock_put:
-            client.add_reaction("chan-99", "msg-77", "👍")
+        client.add_reaction("chan-99", "msg-77", "\U0001f44d")
 
-        call_url = mock_put.call_args[0][0]
+        call_url = mock_http.put.call_args[0][0]
         assert "chan-99" in call_url
         assert "msg-77" in call_url
         assert "reactions" in call_url
         assert "@me" in call_url
 
     def test_add_reaction_excludes_content_type_header(self):
-        client, _ = _make_rest()
+        client, mock_http = _make_rest()
         mock_response = MagicMock()
         mock_response.status_code = 204
         mock_response.raise_for_status.return_value = None
+        mock_http.put.return_value = mock_response
 
-        with patch("httpx.put", return_value=mock_response) as mock_put:
-            client.add_reaction("chan-1", "msg-1", "\u274c")
+        client.add_reaction("chan-1", "msg-1", "\u274c")
 
-        headers = mock_put.call_args[1]["headers"]
+        headers = mock_http.put.call_args[1]["headers"]
         assert "Content-Type" not in headers
         assert "Authorization" in headers
 
     def test_add_reaction_raises_on_http_error(self):
-        client, _ = _make_rest()
+        client, mock_http = _make_rest()
         mock_response = MagicMock()
         mock_response.status_code = 403
         mock_response.raise_for_status.side_effect = Exception("Forbidden")
+        mock_http.put.return_value = mock_response
 
-        with patch("httpx.put", return_value=mock_response), pytest.raises(Exception, match="Forbidden"):
+        with pytest.raises(Exception, match="Forbidden"):
             client.add_reaction("chan-1", "msg-1", "\u2705")
 
 
