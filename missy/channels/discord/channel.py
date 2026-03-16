@@ -462,12 +462,21 @@ class DiscordChannel(BaseChannel):
             logger.debug("Discord: ignoring own message (bot_id=%s)", self._bot_user_id)
             return
 
-        # 0. Voice MVP commands (MESSAGE_CREATE) — handled before policy gates.
+        # 0. Voice and image commands (MESSAGE_CREATE) — handled before policy gates.
         if guild_id and content:
             handled = await self._maybe_handle_voice_command(
                 guild_id=str(guild_id),
                 channel_id=channel_id,
                 author_id=author_id,
+                content=content,
+            )
+            if handled:
+                return
+
+        # 0b. Image commands (!analyze, !screenshot).
+        if content:
+            handled = await self._maybe_handle_image_command(
+                channel_id=channel_id,
                 content=content,
             )
             if handled:
@@ -532,24 +541,46 @@ class DiscordChannel(BaseChannel):
         # 3. Attachment policy gate.
         attachments: list[dict] = data.get("attachments") or []
         if attachments:
-            # Attachments are policy-gated: deny unless explicitly configured.
-            # For now: log and drop messages with attachments (safe default).
-            self._emit_audit(
-                "discord.channel.attachment_denied",
-                "deny",
-                {
-                    "author_id": author_id,
-                    "channel_id": channel_id,
-                    "attachment_count": len(attachments),
-                    "reason": "attachments_not_permitted",
-                },
-            )
-            logger.info(
-                "Discord: message with %d attachment(s) from %s denied by policy",
-                len(attachments),
-                author_id,
-            )
-            return
+            from missy.channels.discord.image_analyze import is_image_attachment
+
+            image_attachments = [a for a in attachments if is_image_attachment(a)]
+            non_image_attachments = [a for a in attachments if not is_image_attachment(a)]
+
+            # Allow image attachments through (for vision analysis).
+            # Non-image attachments are still denied.
+            if non_image_attachments:
+                self._emit_audit(
+                    "discord.channel.attachment_denied",
+                    "deny",
+                    {
+                        "author_id": author_id,
+                        "channel_id": channel_id,
+                        "attachment_count": len(non_image_attachments),
+                        "reason": "non_image_attachments_not_permitted",
+                    },
+                )
+                logger.info(
+                    "Discord: message with %d non-image attachment(s) from %s denied by policy",
+                    len(non_image_attachments),
+                    author_id,
+                )
+                return
+
+            if image_attachments:
+                self._emit_audit(
+                    "discord.channel.image_attachment_allowed",
+                    "allow",
+                    {
+                        "author_id": author_id,
+                        "channel_id": channel_id,
+                        "image_count": len(image_attachments),
+                    },
+                )
+                logger.info(
+                    "Discord: allowing %d image attachment(s) from %s for analysis",
+                    len(image_attachments),
+                    author_id,
+                )
 
         # 4. Route to DM or guild access control.
         if guild_id is None:
@@ -579,6 +610,24 @@ class DiscordChannel(BaseChannel):
 
         # 6. Enqueue.
         self._current_channel_id = channel_id
+
+        # Include image attachment info in metadata for vision analysis.
+        image_attachment_data: list[dict] = []
+        if attachments:
+            from missy.channels.discord.image_analyze import is_image_attachment
+
+            image_attachment_data = [
+                {
+                    "url": a.get("url", ""),
+                    "proxy_url": a.get("proxy_url", ""),
+                    "filename": a.get("filename", ""),
+                    "content_type": a.get("content_type", ""),
+                    "size": a.get("size", 0),
+                }
+                for a in attachments
+                if is_image_attachment(a)
+            ]
+
         msg = ChannelMessage(
             content=content,
             sender=author_id,
@@ -591,6 +640,7 @@ class DiscordChannel(BaseChannel):
                 "discord_thread_session_id": thread_session_id,
                 "discord_author": author,
                 "discord_author_is_bot": bool(author.get("bot", False)),
+                "discord_image_attachments": image_attachment_data,
             },
         )
         self._emit_audit(
@@ -665,6 +715,46 @@ class DiscordChannel(BaseChannel):
         )
         if result.handled and result.reply:
             self._rest.send_message(channel_id, result.reply)
+        return result.handled
+
+    async def _maybe_handle_image_command(
+        self,
+        channel_id: str,
+        content: str,
+    ) -> bool:
+        """Check for !analyze / !screenshot commands and handle them."""
+        import re
+
+        text = content.strip()
+        # Strip leading bot mentions so "@Missy !analyze" works.
+        text = re.sub(r"^(<@!?\d+>\s*)+", "", text).strip()
+        if not text.startswith("!"):
+            return False
+
+        cmd = text.split()[0].lower()
+        if cmd not in ("!analyze", "!screenshot"):
+            return False
+
+        from missy.channels.discord.image_commands import maybe_handle_image_command
+
+        # Show typing indicator while processing.
+        if self._rest is not None:
+            self._rest.trigger_typing(channel_id)
+
+        result = await maybe_handle_image_command(
+            content=text,
+            channel_id=channel_id,
+            rest_client=self._rest,
+        )
+        if result.handled and result.reply:
+            # Analysis responses can be long — use message splitting.
+            reply = result.reply
+            if len(reply) <= 2000:
+                self._rest.send_message(channel_id, reply)
+            else:
+                # Split into 1990-char chunks.
+                for i in range(0, len(reply), 1990):
+                    self._rest.send_message(channel_id, reply[i : i + 1990])
         return result.handled
 
     async def _handle_interaction(self, data: dict[str, Any]) -> None:

@@ -502,6 +502,63 @@ class DiscordRestClient:
         response.raise_for_status()
         return response.json()
 
+    def get_channel_messages(
+        self,
+        channel_id: str,
+        limit: int = 10,
+        before: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Fetch recent messages from a Discord channel.
+
+        Args:
+            channel_id: The channel snowflake ID.
+            limit: Number of messages to fetch (1-100, default 10).
+            before: Optional message ID to fetch messages before.
+
+        Returns:
+            List of Discord Message objects (newest first).
+        """
+        _validate_snowflake(channel_id, "channel_id")
+        if before:
+            _validate_snowflake(before, "before")
+        limit = max(1, min(100, limit))
+        url = f"{BASE}/channels/{channel_id}/messages"
+        params: dict[str, Any] = {"limit": limit}
+        if before:
+            params["before"] = before
+        response = self._http.get(url, headers=self._headers(), params=params)
+        response.raise_for_status()
+        return response.json()
+
+    def download_attachment(self, url: str, timeout: int = 30) -> bytes:
+        """Download a file from a Discord CDN URL.
+
+        Args:
+            url: The attachment URL (cdn.discordapp.com or media.discordapp.net).
+            timeout: Request timeout in seconds.
+
+        Returns:
+            Raw file bytes.
+
+        Raises:
+            ValueError: If the URL is not a Discord CDN URL.
+            httpx.HTTPStatusError: On non-2xx responses.
+        """
+        from urllib.parse import urlparse
+
+        parsed = urlparse(url)
+        if parsed.hostname not in (
+            "cdn.discordapp.com",
+            "media.discordapp.net",
+        ):
+            raise ValueError(
+                f"Not a Discord CDN URL: {url!r}. "
+                "Only cdn.discordapp.com and media.discordapp.net are allowed."
+            )
+        response = self._http.get(url, timeout=timeout)
+        response.raise_for_status()
+        return response.content
+
     def register_slash_commands(
         self,
         application_id: str,
