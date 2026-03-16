@@ -85,7 +85,7 @@ class ToolRegistry:
 
     def execute(
         self,
-        name: str,
+        tool_name: str,
         session_id: str = "",
         task_id: str = "",
         **kwargs,
@@ -119,19 +119,19 @@ class ToolRegistry:
             when a policy check or unexpected exception occurs.
 
         Raises:
-            KeyError: When *name* is not registered.
+            KeyError: When *tool_name* is not registered.
         """
-        tool = self._tools.get(name)
+        tool = self._tools.get(tool_name)
         if tool is None:
-            raise KeyError(f"No tool registered under the name {name!r}.")
+            raise KeyError(f"No tool registered under the name {tool_name!r}.")
 
         # Policy checks - failures surface as ToolResult(success=False)
         # rather than raised exceptions so the agent can handle them gracefully.
         try:
             self._check_permissions(tool, session_id, task_id, kwargs)
         except PolicyViolationError as exc:
-            logger.warning("Policy denied execution of tool %r: %s", name, exc)
-            self._emit_event(name, session_id, task_id, "deny", str(exc))
+            logger.warning("Policy denied execution of tool %r: %s", tool_name, exc)
+            self._emit_event(tool_name, session_id, task_id, "deny", str(exc))
             return ToolResult(success=False, output=None, error=str(exc))
 
         # Strip registry-internal keys that tools don't accept.
@@ -139,12 +139,12 @@ class ToolRegistry:
         try:
             result = tool.execute(**tool_kwargs)
         except Exception as exc:
-            logger.exception("Tool %r raised an unhandled exception.", name)
-            self._emit_event(name, session_id, task_id, "error", str(exc))
+            logger.exception("Tool %r raised an unhandled exception.", tool_name)
+            self._emit_event(tool_name, session_id, task_id, "error", str(exc))
             return ToolResult(success=False, output=None, error=str(exc))
 
         event_result = "allow" if result.success else "error"
-        self._emit_event(name, session_id, task_id, event_result, result.error or "")
+        self._emit_event(tool_name, session_id, task_id, event_result, result.error or "")
         return result
 
     # ------------------------------------------------------------------
@@ -218,6 +218,9 @@ class ToolRegistry:
         if perms.shell:
             # Pass the actual command so the policy engine can check it.
             command = (kwargs or {}).get("command", "shell")
+            # Incus tools may pass command as a list; convert to string for policy check.
+            if isinstance(command, list):
+                command = " ".join(str(c) for c in command)
             engine.check_shell(command, session_id=session_id, task_id=task_id)
 
     def _emit_event(

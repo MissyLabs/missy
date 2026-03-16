@@ -467,20 +467,14 @@ class TestHandleInteraction:
         import sys
 
         ch = _make_channel()
-
-        mock_http = MagicMock()
-        mock_http.post = MagicMock()
+        ch._rest.send_interaction_response = MagicMock()
+        ch._rest.edit_interaction_response = MagicMock()
+        ch.account_config.application_id = "123456789"
 
         mock_commands_module = MagicMock()
         mock_commands_module.handle_slash_command = AsyncMock(return_value="ok reply")
 
-        mock_gateway_module = MagicMock()
-        mock_gateway_module.create_client = MagicMock(return_value=mock_http)
-
-        with (
-            patch.dict(sys.modules, {"missy.channels.discord.commands": mock_commands_module}),
-            patch.dict(sys.modules, {"missy.gateway.client": mock_gateway_module}),
-        ):
+        with patch.dict(sys.modules, {"missy.channels.discord.commands": mock_commands_module}):
             data = {
                 "id": "int-1",
                 "token": "tok-abc",
@@ -490,29 +484,21 @@ class TestHandleInteraction:
             await ch._handle_interaction(data)
 
         assert ch._current_channel_id == "chan-1"
+        ch._rest.send_interaction_response.assert_called_once_with("int-1", "tok-abc", response_type=5)
+        ch._rest.edit_interaction_response.assert_called_once_with("123456789", "tok-abc", "ok reply")
 
     @pytest.mark.asyncio
-    async def test_handle_interaction_logs_on_http_error(self, caplog):
+    async def test_handle_interaction_logs_on_deferred_response_error(self, caplog):
         import logging
-        import sys
 
         ch = _make_channel()
+        ch._rest.send_interaction_response = MagicMock(side_effect=RuntimeError("network error"))
 
-        mock_commands_module = MagicMock()
-        mock_commands_module.handle_slash_command = AsyncMock(return_value="resp")
-
-        mock_gateway_module = MagicMock()
-        mock_gateway_module.create_client = MagicMock(side_effect=RuntimeError("network error"))
-
-        with (
-            patch.dict(sys.modules, {"missy.channels.discord.commands": mock_commands_module}),
-            patch.dict(sys.modules, {"missy.gateway.client": mock_gateway_module}),
-            caplog.at_level(logging.ERROR, logger="missy.channels.discord.channel"),
-        ):
+        with caplog.at_level(logging.ERROR, logger="missy.channels.discord.channel"):
             data = {"id": "int-1", "token": "tok", "channel_id": "chan-1", "data": {"name": "help"}}
             await ch._handle_interaction(data)
 
-        assert any("interaction response failed" in r.message for r in caplog.records)
+        assert any("deferred interaction response failed" in r.message for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------

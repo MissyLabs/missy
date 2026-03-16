@@ -668,7 +668,12 @@ class DiscordChannel(BaseChannel):
         return result.handled
 
     async def _handle_interaction(self, data: dict[str, Any]) -> None:
-        """Handle a slash command interaction."""
+        """Handle a slash command interaction.
+
+        Sends a deferred response (type 5) immediately, then runs the
+        command handler and edits the original response with the result.
+        This avoids the 3-second interaction timeout for slow providers.
+        """
         from missy.channels.discord.commands import handle_slash_command
 
         interaction_id: str = str(data.get("id", ""))
@@ -676,30 +681,31 @@ class DiscordChannel(BaseChannel):
         channel_id: str = str(data.get("channel_id", ""))
         self._current_channel_id = channel_id
 
-        response_text = await handle_slash_command(data, self)
-
-        # Respond to the interaction via the REST API.
+        # Send deferred response immediately (type 5 = DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE)
         try:
-            url = (
-                f"https://discord.com/api/v10/interactions/"
-                f"{interaction_id}/{interaction_token}/callback"
-            )
-            from missy.gateway.client import create_client
-
-            http = create_client(session_id=self._session_id, task_id="interaction")
-            http.post(
-                url,
-                headers={
-                    "Authorization": self._rest._token,
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "type": 4,  # CHANNEL_MESSAGE_WITH_SOURCE
-                    "data": {"content": response_text[:2000]},
-                },
+            self._rest.send_interaction_response(
+                interaction_id, interaction_token, response_type=5
             )
         except Exception as exc:
-            logger.error("Discord: interaction response failed: %s", exc)
+            logger.error("Discord: deferred interaction response failed: %s", exc)
+            return
+
+        # Run the command handler (may take a while for /ask with slow providers)
+        try:
+            response_text = await handle_slash_command(data, self)
+        except Exception as exc:
+            logger.exception("Discord: slash command handler failed: %s", exc)
+            response_text = f"Sorry, I encountered an error: {exc}"
+
+        # Edit the deferred response with the actual result
+        try:
+            app_id = self.account_config.application_id
+            if not app_id:
+                logger.error("Discord: no application_id configured, cannot edit interaction response")
+                return
+            self._rest.edit_interaction_response(app_id, interaction_token, response_text)
+        except Exception as exc:
+            logger.error("Discord: editing interaction response failed: %s", exc)
 
     # ------------------------------------------------------------------
     # Access control

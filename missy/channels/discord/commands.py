@@ -86,15 +86,11 @@ async def _handle_ask(interaction: dict[str, Any], channel: DiscordChannel) -> s
     if not prompt:
         return "Please provide a prompt with `/ask <your question>`."
 
-    try:
-        from missy.agent.runtime import DISCORD_SYSTEM_PROMPT, AgentConfig, AgentRuntime
+    agent = channel._agent_runtime
+    if agent is None:
+        return "Agent runtime is not available. Please try again later."
 
-        agent_cfg = AgentConfig(
-            provider="anthropic",
-            system_prompt=DISCORD_SYSTEM_PROMPT,
-            capability_mode="discord",
-        )
-        agent = AgentRuntime(agent_cfg)
+    try:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, agent.run, prompt, "discord")
     except Exception as exc:

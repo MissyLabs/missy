@@ -587,10 +587,19 @@ class IncusSnapshotTool(BaseTool):
                 error=f"Invalid action '{action}'. Must be one of: {', '.join(sorted(valid))}",
             )
         if action == "list":
-            args = ["info", instance, "--format", "json"]
+            # Use the REST query endpoint which reliably returns JSON,
+            # falling back to text `incus info` if that fails.
+            args = ["query", f"/1.0/instances/{instance}/snapshots"]
             if project:
                 args.extend(["--project", project])
-            return _run_incus(args, timeout=timeout)
+            result = _run_incus(args, timeout=timeout)
+            if not result.success:
+                # Fallback: plain text info output (always works)
+                args = ["info", instance]
+                if project:
+                    args.extend(["--project", project])
+                return _run_incus(args, timeout=timeout)
+            return result
         if action in {"create", "delete"} and not snapshot_name:
             return ToolResult(
                 success=False,

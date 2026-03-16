@@ -866,6 +866,7 @@ class AgentRuntime:
         )
         # Strip session_id/task_id from tool args to avoid colliding
         # with the explicit kwargs we pass to registry.execute().
+        # Also extract 'name' separately since it collides with registry.execute(name=...).
         tool_args = {
             k: v for k, v in tool_call.arguments.items() if k not in ("session_id", "task_id")
         }

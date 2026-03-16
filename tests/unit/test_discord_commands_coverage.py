@@ -104,39 +104,40 @@ class TestHandleAsk:
 
     @pytest.mark.asyncio
     async def test_ask_success_via_agent_runtime(self):
-        """Lines 89-95: successful agent run returns reply string."""
+        """Successful agent run returns reply string."""
         interaction = _make_interaction("ask", options=[{"name": "prompt", "value": "What time?"}])
         channel = _make_mock_channel()
 
         mock_agent = MagicMock()
         mock_agent.run.return_value = "It is 3pm."
+        channel._agent_runtime = mock_agent
 
-        import sys
+        result = await _handle_ask(interaction, channel)
 
-        mock_module = MagicMock()
-        mock_module.AgentConfig = MagicMock(return_value=MagicMock())
-        mock_module.AgentRuntime = MagicMock(return_value=mock_agent)
+        assert result == "It is 3pm."
 
-        with patch.dict(sys.modules, {"missy.agent.runtime": mock_module}):
-            result = await _handle_ask(interaction, channel)
+    @pytest.mark.asyncio
+    async def test_ask_no_runtime_returns_unavailable(self):
+        """When agent runtime is None, returns unavailable message."""
+        interaction = _make_interaction("ask", options=[{"name": "prompt", "value": "hi"}])
+        channel = _make_mock_channel()
+        channel._agent_runtime = None
 
-        # Should return the agent's response or an error string
-        assert isinstance(result, str)
+        result = await _handle_ask(interaction, channel)
+
+        assert "not available" in result.lower()
 
     @pytest.mark.asyncio
     async def test_ask_exception_returns_error_message(self):
-        """Lines 96-98: exception in agent run returns user-friendly error."""
+        """Exception in agent run returns user-friendly error."""
         interaction = _make_interaction("ask", options=[{"name": "prompt", "value": "boom"}])
         channel = _make_mock_channel()
 
-        import sys
+        mock_agent = MagicMock()
+        mock_agent.run.side_effect = RuntimeError("agent exploded")
+        channel._agent_runtime = mock_agent
 
-        mock_module = MagicMock()
-        mock_module.AgentConfig = MagicMock(side_effect=RuntimeError("agent exploded"))
-        mock_module.AgentRuntime = MagicMock()
-
-        with patch.dict(sys.modules, {"missy.agent.runtime": mock_module}):
-            result = await _handle_ask(interaction, channel)
+        result = await _handle_ask(interaction, channel)
 
         assert "error" in result.lower() or "agent exploded" in result
 

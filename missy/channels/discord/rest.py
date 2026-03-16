@@ -453,6 +453,55 @@ class DiscordRestClient:
         response.raise_for_status()
         return response.json()
 
+    def send_interaction_response(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        response_type: int,
+        data: dict[str, Any] | None = None,
+    ) -> None:
+        """Send an initial response to a Discord interaction.
+
+        Args:
+            interaction_id: The interaction snowflake ID.
+            interaction_token: The interaction token.
+            response_type: The interaction callback type (e.g. 4 or 5).
+            data: Optional response data payload.
+        """
+        _validate_snowflake(interaction_id, "interaction_id")
+        url = f"{BASE}/interactions/{interaction_id}/{interaction_token}/callback"
+        body: dict[str, Any] = {"type": response_type}
+        if data is not None:
+            body["data"] = data
+        response = self._http.post(url, headers=self._headers(), json=body)
+        response.raise_for_status()
+
+    def edit_interaction_response(
+        self,
+        application_id: str,
+        interaction_token: str,
+        content: str,
+    ) -> dict[str, Any]:
+        """Edit the original interaction response (for deferred replies).
+
+        Args:
+            application_id: The Discord application ID.
+            interaction_token: The interaction token.
+            content: The message content to set.
+
+        Returns:
+            The updated message object as a dict.
+        """
+        _validate_snowflake(application_id, "application_id")
+        url = f"{BASE}/webhooks/{application_id}/{interaction_token}/messages/@original"
+        response = self._http.patch(
+            url,
+            headers=self._headers(),
+            json={"content": content[:2000]},
+        )
+        response.raise_for_status()
+        return response.json()
+
     def register_slash_commands(
         self,
         application_id: str,
