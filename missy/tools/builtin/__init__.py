@@ -54,6 +54,11 @@ from missy.tools.builtin.incus_tools import (
     IncusStorageTool,
 )
 from missy.tools.builtin.list_files import ListFilesTool
+from missy.tools.builtin.memory_tools import (
+    MemoryDescribeTool,
+    MemoryExpandTool,
+    MemorySearchTool,
+)
 from missy.tools.builtin.self_create_tool import SelfCreateTool
 from missy.tools.builtin.shell_exec import ShellExecTool
 from missy.tools.builtin.tts_speak import AudioListDevicesTool, AudioSetVolumeTool, TTSSpeakTool
@@ -104,6 +109,9 @@ __all__ = [
     "FileReadTool",
     "FileWriteTool",
     "ListFilesTool",
+    "MemoryDescribeTool",
+    "MemoryExpandTool",
+    "MemorySearchTool",
     "SelfCreateTool",
     "ShellExecTool",
     "WebFetchTool",
@@ -156,6 +164,9 @@ _ALL_TOOL_CLASSES = [
     IncusStorageTool,
     FileWriteTool,
     ListFilesTool,
+    MemoryDescribeTool,
+    MemoryExpandTool,
+    MemorySearchTool,
     SelfCreateTool,
     ShellExecTool,
     TTSSpeakTool,

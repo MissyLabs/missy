@@ -48,6 +48,10 @@ logger = logging.getLogger(__name__)
 # Maximum size (chars) for a single tool result to prevent memory exhaustion.
 _MAX_TOOL_RESULT_CHARS = 200_000
 
+# Threshold (chars) above which tool results are stored separately and replaced
+# with a compact reference.  Must be <= _MAX_TOOL_RESULT_CHARS.
+_LARGE_CONTENT_THRESHOLD = 50_000
+
 
 @dataclass
 class AgentConfig:
@@ -245,7 +249,7 @@ class AgentRuntime:
         history = self._load_history(sid)
 
         # Build context-managed messages
-        system_prompt, messages = self._build_context_messages(user_input, history)
+        system_prompt, messages = self._build_context_messages(user_input, history, session_id=sid)
 
         # Attempt agentic tool loop; fall back to single-turn on any issue
         all_tool_names_used: list[str] = []
@@ -292,6 +296,9 @@ class AgentRuntime:
         # Extract learnings from tool-augmented runs
         if all_tool_names_used:
             self._record_learnings(all_tool_names_used, final_response, user_input)
+
+        # Trigger compaction if context is getting large.
+        self._maybe_compact(sid, provider)
 
         cost_detail = {}
         if self._cost_tracker is not None:
@@ -353,7 +360,7 @@ class AgentRuntime:
 
         # Single-turn streaming
         history = self._load_history(sid)
-        system_prompt, messages = self._build_context_messages(user_input, history)
+        system_prompt, messages = self._build_context_messages(user_input, history, session_id=sid)
         msg_objects = self._dicts_to_messages(system_prompt, messages)
 
         self._acquire_rate_limit()
@@ -569,7 +576,12 @@ class AgentRuntime:
                     # Append tool result messages (with injection scanning)
                     for tr in tool_results:
                         content = tr.content
-                        # Truncate oversized tool results to prevent memory exhaustion
+                        # Store large tool results separately and replace with reference.
+                        if content and len(content) > _LARGE_CONTENT_THRESHOLD:
+                            content = self._intercept_large_content(
+                                session_id, tr.name, content,
+                            )
+                        # Hard truncation safety net for anything still oversized.
                         if content and len(content) > _MAX_TOOL_RESULT_CHARS:
                             content = (
                                 content[:_MAX_TOOL_RESULT_CHARS]
@@ -946,7 +958,7 @@ class AgentRuntime:
     # ------------------------------------------------------------------
 
     def _build_context_messages(
-        self, user_input: str, history: list[dict]
+        self, user_input: str, history: list[dict], session_id: str = ""
     ) -> tuple[str, list[dict]]:
         """Assemble the system prompt and message list via ContextManager.
 
@@ -956,16 +968,43 @@ class AgentRuntime:
         Args:
             user_input: The new user input text.
             history: Loaded history dicts from the memory store.
+            session_id: Current session ID (used to load summaries).
 
         Returns:
             A 2-tuple of ``(system_prompt_str, messages_list)``.
         """
         if self._context_manager is not None:
             try:
+                # Retrieve recent learnings for context injection.
+                recent_learnings: list[str] | None = None
+                if self._memory_store is not None:
+                    try:
+                        recent_learnings = self._memory_store.get_learnings(limit=5) or None
+                    except Exception:
+                        logger.debug("Failed to load learnings", exc_info=True)
+
+                # Load top-level summaries for this session.
+                session_summaries = None
+                if session_id and self._memory_store is not None:
+                    try:
+                        from missy.memory.sqlite_store import SummaryRecord  # noqa: F811
+
+                        all_summaries = self._memory_store.get_summaries(
+                            session_id, limit=100
+                        )
+                        # Only include top-level (no parent) summaries.
+                        session_summaries = [
+                            s for s in all_summaries if s.parent_id is None
+                        ] or None
+                    except Exception:
+                        logger.debug("Failed to load summaries", exc_info=True)
+
                 return self._context_manager.build_messages(
                     system=self.config.system_prompt,
                     new_message=user_input,
                     history=history,
+                    learnings=recent_learnings,
+                    summaries=session_summaries,
                 )
             except Exception as exc:
                 logger.debug("ContextManager.build_messages failed: %s", exc)
@@ -1012,6 +1051,74 @@ class AgentRuntime:
             )
         except Exception as exc:
             logger.debug("Failed to save turn to memory store: %s", exc)
+
+    def _intercept_large_content(
+        self, session_id: str, tool_name: str, content: str
+    ) -> str:
+        """Store large content and return a compact reference.
+
+        Falls back to returning original content (with truncation marker) if
+        storage fails.
+        """
+        if self._memory_store is None:
+            # No store available — fall back to simple preview.
+            return (
+                content[:400]
+                + f"\n...\n[Large output: {len(content)} chars, ~{len(content)//4} tokens. "
+                f"No memory store available to save full content.]"
+            )
+        try:
+            from missy.memory.sqlite_store import LargeContentRecord
+
+            preview_head = content[:200]
+            preview_tail = content[-200:] if len(content) > 400 else ""
+            line_count = content.count("\n") + 1
+            summary = f"Tool '{tool_name}' output: {line_count} lines, {len(content)} chars"
+
+            record = LargeContentRecord.new(
+                session_id=session_id,
+                tool_name=tool_name,
+                content=content,
+                summary=summary,
+            )
+            content_id = self._memory_store.store_large_content(record)
+
+            replacement = (
+                f"[Large output stored as {content_id}]\n"
+                f"Size: {len(content)} chars (~{len(content)//4} tokens), {line_count} lines\n"
+                f"Tool: {tool_name}\n"
+                f"Preview: {preview_head}..."
+            )
+            if preview_tail:
+                replacement += f"\n...{preview_tail}"
+            replacement += (
+                "\nUse memory_search or memory_expand to retrieve full content."
+            )
+            return replacement
+        except Exception:
+            logger.debug("Failed to store large content", exc_info=True)
+            return (
+                content[:400]
+                + f"\n...\n[Large output: {len(content)} chars — storage failed, showing preview only]"
+            )
+
+    def _maybe_compact(self, session_id: str, provider: Any) -> None:
+        """Run compaction if the session exceeds the context threshold.
+
+        Runs synchronously but is a no-op for short sessions. Failures are
+        silently swallowed to avoid breaking the main agent loop.
+        """
+        if self._memory_store is None or self._context_manager is None:
+            return
+        try:
+            from missy.agent.compaction import compact_if_needed
+            from missy.agent.summarizer import Summarizer
+
+            budget = self._context_manager._budget
+            summarizer = Summarizer(provider)
+            compact_if_needed(session_id, self._memory_store, summarizer, budget)
+        except Exception:
+            logger.debug("Compaction failed for session %s", session_id, exc_info=True)
 
     def _record_learnings(
         self,

@@ -52,6 +52,7 @@ class TokenBudget:
     tool_definitions_reserve: int = 2_000
     memory_fraction: float = 0.15
     learnings_fraction: float = 0.05
+    fresh_tail_count: int = 16
 
 
 class ContextManager:
@@ -73,12 +74,14 @@ class ContextManager:
         memory_results: list[str] | None = None,
         learnings: list[str] | None = None,
         tool_definitions: list | None = None,
+        summaries: list | None = None,
     ) -> tuple[str, list[dict]]:
         """Return ``(enriched_system, messages_list)`` within token budget.
 
-        The system prompt is enriched with retrieved memory snippets and past
-        learnings.  Conversation history is pruned from the oldest end when
-        the combined content would exceed the available token budget.
+        The system prompt is enriched with retrieved memory snippets, past
+        learnings, and conversation summaries.  Conversation history is
+        pruned from the oldest end when the combined content would exceed
+        the available token budget.
 
         Args:
             system: Base system prompt text.
@@ -91,6 +94,8 @@ class ContextManager:
                 append to the system prompt.
             tool_definitions: Ignored (reserved for future use; accounted for
                 via ``TokenBudget.tool_definitions_reserve``).
+            summaries: Optional list of :class:`SummaryRecord` objects to
+                include as compressed history before raw messages.
 
         Returns:
             A 2-tuple of ``(enriched_system_prompt, messages_list)`` where
@@ -108,7 +113,6 @@ class ContextManager:
         if memory_results:
             memory_text = "\n".join(memory_results)
             if _approx_tokens(memory_text) > memory_budget:
-                # Truncate to character limit equivalent of memory_budget tokens
                 memory_text = memory_text[: memory_budget * 4]
             enriched_system += f"\n\n## Relevant Memory\n{memory_text}"
 
@@ -117,17 +121,58 @@ class ContextManager:
             if _approx_tokens(learnings_text) <= learnings_budget:
                 enriched_system += f"\n\n## Past Learnings\n{learnings_text}"
 
-        # Prune history: keep newest messages that fit within remaining budget
+        # Split history into protected fresh tail and evictable prefix.
         history_budget = available - memory_budget - learnings_budget
-        kept: list[dict] = []
+        tail_n = budget.fresh_tail_count
+        if tail_n <= 0:
+            evictable = list(history)
+            fresh_tail: list[dict] = []
+        elif len(history) > tail_n:
+            evictable = history[:-tail_n]
+            fresh_tail = history[-tail_n:]
+        else:
+            evictable = []
+            fresh_tail = list(history)
+
+        # Fresh tail is always included regardless of budget.
         used = _approx_tokens(new_message)
+        for turn in fresh_tail:
+            used += _approx_tokens(str(turn.get("content", "")))
 
-        for turn in reversed(history):
+        # Include summaries (compressed history) before evictable messages.
+        summary_messages: list[dict] = []
+        if summaries:
+            for s in summaries:
+                s_text = _format_summary(s)
+                s_tokens = _approx_tokens(s_text)
+                if used + s_tokens > history_budget:
+                    break
+                summary_messages.append({"role": "user", "content": s_text})
+                used += s_tokens
+
+        # Fill remaining budget from evictable prefix, newest first.
+        kept_evictable: list[dict] = []
+        remaining = max(0, history_budget - used)
+        for turn in reversed(evictable):
             turn_tokens = _approx_tokens(str(turn.get("content", "")))
-            if used + turn_tokens > history_budget:
+            if turn_tokens > remaining:
                 break
-            kept.insert(0, turn)
-            used += turn_tokens
+            kept_evictable.insert(0, turn)
+            remaining -= turn_tokens
 
-        kept.append({"role": "user", "content": new_message})
-        return enriched_system, kept
+        result = summary_messages + kept_evictable + fresh_tail
+        result.append({"role": "user", "content": new_message})
+        return enriched_system, result
+
+
+def _format_summary(summary) -> str:
+    """Format a SummaryRecord into a labeled context block."""
+    time_info = ""
+    if getattr(summary, "time_range_start", None) and getattr(summary, "time_range_end", None):
+        time_info = f", covers {summary.time_range_start} to {summary.time_range_end}"
+    descendants = getattr(summary, "descendant_count", 0)
+    return (
+        f"[Conversation Summary — depth {summary.depth}"
+        f", {descendants} messages{time_info}]\n"
+        f"{summary.content}"
+    )

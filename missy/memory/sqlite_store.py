@@ -80,6 +80,170 @@ class ConversationTurn:
         )
 
 
+@dataclass
+class SummaryRecord:
+    """A DAG node summarising a chunk of conversation history.
+
+    Leaf summaries (depth 0) compress raw turns.  Condensed summaries
+    (depth 1+) compress groups of same-depth summaries.
+    """
+
+    id: str
+    session_id: str
+    depth: int
+    content: str
+    token_estimate: int = 0
+    source_turn_ids: list[str] = field(default_factory=list)
+    source_summary_ids: list[str] = field(default_factory=list)
+    parent_id: str | None = None
+    time_range_start: str | None = None
+    time_range_end: str | None = None
+    descendant_count: int = 0
+    file_refs: list[str] = field(default_factory=list)
+    created_at: str = ""
+
+    @classmethod
+    def new(
+        cls,
+        session_id: str,
+        depth: int,
+        content: str,
+        *,
+        token_estimate: int = 0,
+        source_turn_ids: list[str] | None = None,
+        source_summary_ids: list[str] | None = None,
+        time_range_start: str | None = None,
+        time_range_end: str | None = None,
+        descendant_count: int = 0,
+    ) -> SummaryRecord:
+        return cls(
+            id=f"sum_{uuid.uuid4().hex[:16]}",
+            session_id=session_id,
+            depth=depth,
+            content=content,
+            token_estimate=token_estimate or max(1, len(content) // 4),
+            source_turn_ids=source_turn_ids or [],
+            source_summary_ids=source_summary_ids or [],
+            time_range_start=time_range_start,
+            time_range_end=time_range_end,
+            descendant_count=descendant_count,
+            created_at=datetime.now(UTC).isoformat(),
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "session_id": self.session_id,
+            "depth": self.depth,
+            "content": self.content,
+            "token_estimate": self.token_estimate,
+            "source_turn_ids": self.source_turn_ids,
+            "source_summary_ids": self.source_summary_ids,
+            "parent_id": self.parent_id,
+            "time_range_start": self.time_range_start,
+            "time_range_end": self.time_range_end,
+            "descendant_count": self.descendant_count,
+            "file_refs": self.file_refs,
+            "created_at": self.created_at,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> SummaryRecord:
+        return cls(
+            id=data.get("id", f"sum_{uuid.uuid4().hex[:16]}"),
+            session_id=data.get("session_id", ""),
+            depth=data.get("depth", 0),
+            content=data.get("content", ""),
+            token_estimate=data.get("token_estimate", 0),
+            source_turn_ids=data.get("source_turn_ids", []),
+            source_summary_ids=data.get("source_summary_ids", []),
+            parent_id=data.get("parent_id"),
+            time_range_start=data.get("time_range_start"),
+            time_range_end=data.get("time_range_end"),
+            descendant_count=data.get("descendant_count", 0),
+            file_refs=data.get("file_refs", []),
+            created_at=data.get("created_at", ""),
+        )
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> SummaryRecord:
+        return cls(
+            id=row["id"],
+            session_id=row["session_id"],
+            depth=row["depth"],
+            content=row["content"],
+            token_estimate=row["token_estimate"],
+            source_turn_ids=json.loads(row["source_turn_ids"] or "[]"),
+            source_summary_ids=json.loads(row["source_summary_ids"] or "[]"),
+            parent_id=row["parent_id"],
+            time_range_start=row["time_range_start"],
+            time_range_end=row["time_range_end"],
+            descendant_count=row["descendant_count"],
+            file_refs=json.loads(row["file_refs"] or "[]"),
+            created_at=row["created_at"],
+        )
+
+
+@dataclass
+class LargeContentRecord:
+    """A stored large tool result that was too big for inline context."""
+
+    id: str
+    session_id: str
+    turn_id: str | None
+    tool_name: str
+    original_chars: int
+    content: str
+    summary: str = ""
+    created_at: str = ""
+
+    @classmethod
+    def new(
+        cls,
+        session_id: str,
+        tool_name: str,
+        content: str,
+        *,
+        turn_id: str | None = None,
+        summary: str = "",
+    ) -> LargeContentRecord:
+        return cls(
+            id=f"ref_{uuid.uuid4().hex[:16]}",
+            session_id=session_id,
+            turn_id=turn_id,
+            tool_name=tool_name,
+            original_chars=len(content),
+            content=content,
+            summary=summary,
+            created_at=datetime.now(UTC).isoformat(),
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "session_id": self.session_id,
+            "turn_id": self.turn_id,
+            "tool_name": self.tool_name,
+            "original_chars": self.original_chars,
+            "content": self.content,
+            "summary": self.summary,
+            "created_at": self.created_at,
+        }
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> LargeContentRecord:
+        return cls(
+            id=row["id"],
+            session_id=row["session_id"],
+            turn_id=row["turn_id"],
+            tool_name=row["tool_name"],
+            original_chars=row["original_chars"],
+            content=row["content"],
+            summary=row["summary"] or "",
+            created_at=row["created_at"],
+        )
+
+
 class SQLiteMemoryStore:
     """SQLite-backed conversation memory with FTS search.
 
@@ -188,6 +352,56 @@ class SQLiteMemoryStore:
                 ON costs(session_id);
             CREATE INDEX IF NOT EXISTS idx_costs_timestamp
                 ON costs(timestamp);
+
+            CREATE TABLE IF NOT EXISTS summaries (
+                id                 TEXT PRIMARY KEY,
+                session_id         TEXT NOT NULL,
+                depth              INTEGER NOT NULL DEFAULT 0,
+                content            TEXT NOT NULL,
+                token_estimate     INTEGER NOT NULL DEFAULT 0,
+                source_turn_ids    TEXT NOT NULL DEFAULT '[]',
+                source_summary_ids TEXT NOT NULL DEFAULT '[]',
+                parent_id          TEXT,
+                time_range_start   TEXT,
+                time_range_end     TEXT,
+                descendant_count   INTEGER NOT NULL DEFAULT 0,
+                file_refs          TEXT NOT NULL DEFAULT '[]',
+                created_at         TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_summaries_session
+                ON summaries(session_id);
+            CREATE INDEX IF NOT EXISTS idx_summaries_depth
+                ON summaries(session_id, depth);
+
+            CREATE VIRTUAL TABLE IF NOT EXISTS summaries_fts USING fts5(
+                id         UNINDEXED,
+                session_id UNINDEXED,
+                content,
+                content='summaries',
+                content_rowid='rowid'
+            );
+
+            CREATE TRIGGER IF NOT EXISTS summaries_ai AFTER INSERT ON summaries BEGIN
+                INSERT INTO summaries_fts(rowid, id, session_id, content)
+                VALUES (new.rowid, new.id, new.session_id, new.content);
+            END;
+            CREATE TRIGGER IF NOT EXISTS summaries_ad AFTER DELETE ON summaries BEGIN
+                INSERT INTO summaries_fts(summaries_fts, rowid, id, session_id, content)
+                VALUES ('delete', old.rowid, old.id, old.session_id, old.content);
+            END;
+
+            CREATE TABLE IF NOT EXISTS large_content (
+                id              TEXT PRIMARY KEY,
+                session_id      TEXT NOT NULL,
+                turn_id         TEXT,
+                tool_name       TEXT NOT NULL DEFAULT '',
+                original_chars  INTEGER NOT NULL,
+                content         TEXT NOT NULL,
+                summary         TEXT NOT NULL DEFAULT '',
+                created_at      TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_large_content_session
+                ON large_content(session_id);
         """)
         conn.commit()
 
@@ -581,6 +795,214 @@ class SQLiteMemoryStore:
             }
             for r in rows
         ]
+
+    # ------------------------------------------------------------------
+    # Summary DAG operations
+    # ------------------------------------------------------------------
+
+    def add_summary(self, summary: SummaryRecord) -> None:
+        """Persist a summary record."""
+        conn = self._conn()
+        conn.execute(
+            """INSERT OR REPLACE INTO summaries
+               (id, session_id, depth, content, token_estimate,
+                source_turn_ids, source_summary_ids, parent_id,
+                time_range_start, time_range_end, descendant_count,
+                file_refs, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                summary.id,
+                summary.session_id,
+                summary.depth,
+                summary.content,
+                summary.token_estimate,
+                json.dumps(summary.source_turn_ids),
+                json.dumps(summary.source_summary_ids),
+                summary.parent_id,
+                summary.time_range_start,
+                summary.time_range_end,
+                summary.descendant_count,
+                json.dumps(summary.file_refs),
+                summary.created_at,
+            ),
+        )
+        conn.commit()
+
+    def get_summaries(
+        self,
+        session_id: str,
+        depth: int | None = None,
+        limit: int = 50,
+    ) -> list[SummaryRecord]:
+        """Return summaries for a session, optionally filtered by depth."""
+        conn = self._conn()
+        if depth is not None:
+            rows = conn.execute(
+                """SELECT * FROM summaries
+                   WHERE session_id = ? AND depth = ?
+                   ORDER BY created_at
+                   LIMIT ?""",
+                (session_id, depth, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """SELECT * FROM summaries
+                   WHERE session_id = ?
+                   ORDER BY depth, created_at
+                   LIMIT ?""",
+                (session_id, limit),
+            ).fetchall()
+        return [SummaryRecord.from_row(r) for r in rows]
+
+    def get_summary_by_id(self, summary_id: str) -> SummaryRecord | None:
+        """Return a single summary by ID, or None."""
+        conn = self._conn()
+        row = conn.execute(
+            "SELECT * FROM summaries WHERE id = ?", (summary_id,)
+        ).fetchone()
+        return SummaryRecord.from_row(row) if row else None
+
+    def get_uncompacted_summaries(
+        self, session_id: str, depth: int
+    ) -> list[SummaryRecord]:
+        """Return summaries at *depth* with no parent (eligible for condensation)."""
+        conn = self._conn()
+        rows = conn.execute(
+            """SELECT * FROM summaries
+               WHERE session_id = ? AND depth = ? AND parent_id IS NULL
+               ORDER BY created_at""",
+            (session_id, depth),
+        ).fetchall()
+        return [SummaryRecord.from_row(r) for r in rows]
+
+    def mark_summary_compacted(
+        self, summary_ids: list[str], parent_id: str
+    ) -> None:
+        """Set parent_id on consumed summaries after condensation."""
+        if not summary_ids:
+            return
+        conn = self._conn()
+        placeholders = ",".join("?" for _ in summary_ids)
+        conn.execute(
+            f"UPDATE summaries SET parent_id = ? WHERE id IN ({placeholders})",
+            [parent_id] + summary_ids,
+        )
+        conn.commit()
+
+    def get_source_turns(self, summary_id: str) -> list[ConversationTurn]:
+        """Resolve source_turn_ids for a summary into full turn objects."""
+        summary = self.get_summary_by_id(summary_id)
+        if not summary or not summary.source_turn_ids:
+            return []
+        conn = self._conn()
+        placeholders = ",".join("?" for _ in summary.source_turn_ids)
+        rows = conn.execute(
+            f"SELECT * FROM turns WHERE id IN ({placeholders}) ORDER BY timestamp",
+            summary.source_turn_ids,
+        ).fetchall()
+        return [self._row_to_turn(r) for r in rows]
+
+    def get_child_summaries(self, parent_id: str) -> list[SummaryRecord]:
+        """Return summaries whose parent_id matches."""
+        conn = self._conn()
+        rows = conn.execute(
+            "SELECT * FROM summaries WHERE parent_id = ? ORDER BY created_at",
+            (parent_id,),
+        ).fetchall()
+        return [SummaryRecord.from_row(r) for r in rows]
+
+    def search_summaries(
+        self,
+        query: str,
+        session_id: str | None = None,
+        limit: int = 10,
+    ) -> list[SummaryRecord]:
+        """Full-text search across summaries."""
+        conn = self._conn()
+        safe_query = '"' + query.replace('"', '""') + '"'
+        try:
+            if session_id:
+                rows = conn.execute(
+                    """SELECT s.* FROM summaries s
+                       JOIN summaries_fts f ON s.rowid = f.rowid
+                       WHERE summaries_fts MATCH ? AND s.session_id = ?
+                       ORDER BY rank LIMIT ?""",
+                    (safe_query, session_id, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """SELECT s.* FROM summaries s
+                       JOIN summaries_fts f ON s.rowid = f.rowid
+                       WHERE summaries_fts MATCH ?
+                       ORDER BY rank LIMIT ?""",
+                    (safe_query, limit),
+                ).fetchall()
+        except sqlite3.OperationalError:
+            logger.warning("Summary FTS5 query failed for %r", query[:100])
+            return []
+        return [SummaryRecord.from_row(r) for r in rows]
+
+    def get_session_token_count(self, session_id: str) -> int:
+        """Estimate total tokens for a session (turns + top-level summaries)."""
+        conn = self._conn()
+        turn_chars = conn.execute(
+            "SELECT COALESCE(SUM(LENGTH(content)), 0) FROM turns WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()[0]
+        summary_chars = conn.execute(
+            """SELECT COALESCE(SUM(LENGTH(content)), 0) FROM summaries
+               WHERE session_id = ? AND parent_id IS NULL""",
+            (session_id,),
+        ).fetchone()[0]
+        return max(1, (turn_chars + summary_chars) // 4)
+
+    # ------------------------------------------------------------------
+    # Large content operations
+    # ------------------------------------------------------------------
+
+    def store_large_content(self, record: LargeContentRecord) -> str:
+        """Persist a large content record. Returns the record ID."""
+        conn = self._conn()
+        conn.execute(
+            """INSERT OR REPLACE INTO large_content
+               (id, session_id, turn_id, tool_name, original_chars,
+                content, summary, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                record.id,
+                record.session_id,
+                record.turn_id,
+                record.tool_name,
+                record.original_chars,
+                record.content,
+                record.summary,
+                record.created_at,
+            ),
+        )
+        conn.commit()
+        return record.id
+
+    def get_large_content(self, content_id: str) -> LargeContentRecord | None:
+        """Return a large content record by ID, or None."""
+        conn = self._conn()
+        row = conn.execute(
+            "SELECT * FROM large_content WHERE id = ?", (content_id,)
+        ).fetchone()
+        return LargeContentRecord.from_row(row) if row else None
+
+    def search_large_content(
+        self, query: str, session_id: str, limit: int = 5
+    ) -> list[LargeContentRecord]:
+        """Simple LIKE search across large content summaries and content."""
+        conn = self._conn()
+        pattern = f"%{query}%"
+        rows = conn.execute(
+            """SELECT * FROM large_content
+               WHERE session_id = ? AND (summary LIKE ? OR content LIKE ?)
+               ORDER BY created_at DESC LIMIT ?""",
+            (session_id, pattern, pattern, limit),
+        ).fetchall()
+        return [LargeContentRecord.from_row(r) for r in rows]
 
     # ------------------------------------------------------------------
     # Maintenance

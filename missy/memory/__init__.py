@@ -10,13 +10,15 @@ Public API
 
 from missy.memory.resilient import ResilientMemoryStore
 from missy.memory.sqlite_store import ConversationTurn as SQLiteConversationTurn
-from missy.memory.sqlite_store import SQLiteMemoryStore
+from missy.memory.sqlite_store import LargeContentRecord, SQLiteMemoryStore, SummaryRecord
 from missy.memory.store import ConversationTurn, MemoryStore
 
 __all__ = [
     "ConversationTurn",
+    "LargeContentRecord",
     "MemoryStore",
     "ResilientMemoryStore",
     "SQLiteConversationTurn",
     "SQLiteMemoryStore",
+    "SummaryRecord",
 ]

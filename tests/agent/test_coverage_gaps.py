@@ -310,13 +310,15 @@ class TestContextManagerHistoryPruning:
     def test_old_history_dropped_when_over_budget(self):
         from missy.agent.context import ContextManager, TokenBudget
 
-        # Tight budget: only 50 tokens for history
+        # Tight budget: only 50 tokens for history.
+        # fresh_tail_count=0 disables fresh-tail protection so pruning is exercised.
         budget = TokenBudget(
             total=100,
             system_reserve=0,
             tool_definitions_reserve=0,
             memory_fraction=0.0,
             learnings_fraction=0.0,
+            fresh_tail_count=0,
         )
         mgr = ContextManager(budget=budget)
 
