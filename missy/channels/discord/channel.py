@@ -109,6 +109,9 @@ class DiscordChannel(BaseChannel):
         # Optional voice manager (lazy import so text-only deployments don't need voice deps)
         self._voice = None
 
+        # Optional screencast channel reference — set via set_screencast() from main.py
+        self._screencast: Any = None
+
         # Agent runtime reference — set via set_agent_runtime() from main.py
         # so voice can call the agent for conversational responses.
         self._agent_runtime: Any = None
@@ -147,6 +150,10 @@ class DiscordChannel(BaseChannel):
     def set_agent_runtime(self, agent_runtime: Any) -> None:
         """Provide the agent runtime for voice conversation support."""
         self._agent_runtime = agent_runtime
+
+    def set_screencast(self, screencast: Any) -> None:
+        """Provide the screencast channel for !screen command support."""
+        self._screencast = screencast
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -482,6 +489,16 @@ class DiscordChannel(BaseChannel):
             if handled:
                 return
 
+        # 0c. Screencast commands (!screen share/list/stop/analyze/status).
+        if content:
+            handled = await self._maybe_handle_screen_command(
+                channel_id=channel_id,
+                author_id=author_id,
+                content=content,
+            )
+            if handled:
+                return
+
         # 1b. Credential / secrets detection — delete message and warn if secrets found.
         if content:
             try:
@@ -753,6 +770,38 @@ class DiscordChannel(BaseChannel):
                 self._rest.send_message(channel_id, reply)
             else:
                 # Split into 1990-char chunks.
+                for i in range(0, len(reply), 1990):
+                    self._rest.send_message(channel_id, reply[i : i + 1990])
+        return result.handled
+
+    async def _maybe_handle_screen_command(
+        self,
+        channel_id: str,
+        author_id: str,
+        content: str,
+    ) -> bool:
+        """Check for !screen commands and handle them."""
+        import re
+
+        text = content.strip()
+        # Strip leading bot mentions so "@Missy !screen share" works.
+        text = re.sub(r"^(<@!?\d+>\s*)+", "", text).strip()
+        if not text.startswith("!screen"):
+            return False
+
+        from missy.channels.discord.screen_commands import maybe_handle_screen_command
+
+        result = await maybe_handle_screen_command(
+            content=text,
+            channel_id=channel_id,
+            author_id=author_id,
+            screencast=self._screencast,
+        )
+        if result.handled and result.reply:
+            reply = result.reply
+            if len(reply) <= 2000:
+                self._rest.send_message(channel_id, reply)
+            else:
                 for i in range(0, len(reply), 1990):
                     self._rest.send_message(channel_id, reply[i : i + 1990])
         return result.handled

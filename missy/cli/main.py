@@ -1341,6 +1341,42 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
         console.print(f"[yellow]Voice channel failed to start: {_ve}[/]")
         logger.warning("Voice channel startup error: %s", _ve, exc_info=True)
 
+    # Start screencast channel if configured.
+    screencast_channel = None
+    try:
+        import yaml as _sc_yaml
+
+        _cfg_file_sc = Path(ctx.obj["config_path"]).expanduser()
+        _raw_cfg_sc = {}
+        if _cfg_file_sc.exists():
+            with _cfg_file_sc.open() as _fh_sc:
+                _raw_cfg_sc = _sc_yaml.safe_load(_fh_sc) or {}
+        _sc_cfg = _raw_cfg_sc.get("screencast", {})
+
+        if _sc_cfg.get("enabled", False):
+            from missy.channels.screencast.channel import ScreencastChannel
+
+            screencast_channel = ScreencastChannel(
+                host=_sc_cfg.get("host", "127.0.0.1"),
+                port=_sc_cfg.get("port", 8780),
+                max_sessions=_sc_cfg.get("max_sessions", 20),
+                frame_save_dir=_sc_cfg.get("frame_save_dir", ""),
+                vision_model=_sc_cfg.get("vision_model", ""),
+                analysis_prompt=_sc_cfg.get("analysis_prompt", ""),
+                capture_url_base=_sc_cfg.get("capture_url_base", ""),
+            )
+            screencast_channel.start()
+            _sc_host = _sc_cfg.get("host", "127.0.0.1")
+            _sc_port = _sc_cfg.get("port", 8780)
+            _sc_tls = getattr(screencast_channel._server, "_tls_enabled", False)  # noqa: SLF001
+            _sc_scheme = "https" if _sc_tls else "http"
+            console.print(
+                f"[green]Screencast channel started[/] on {_sc_scheme}://{_sc_host}:{_sc_port}"
+            )
+    except Exception as _sc_exc:
+        console.print(f"[yellow]Screencast channel failed to start: {_sc_exc}[/]")
+        logger.warning("Screencast channel startup error: %s", _sc_exc, exc_info=True)
+
     # Start Discord channel if configured.
     try:
         if cfg.discord and cfg.discord.enabled and cfg.discord.accounts:
@@ -1435,6 +1471,9 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                 for account in cfg.discord.accounts:
                     ch = DiscordChannel(account_config=account)
                     ch.set_agent_runtime(_discord_agent)
+                    if screencast_channel is not None:
+                        ch.set_screencast(screencast_channel)
+                        screencast_channel.set_discord_rest(ch._rest)  # noqa: SLF001
                     await ch.start()
                     channels.append(ch)
                     console.print(f"[green]Discord channel started[/] ({account.token_env_var})")
@@ -1465,6 +1504,12 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                 console.print("[dim]Voice channel stopped.[/]")
             except Exception as _vs_exc:
                 logger.debug("voice: stop error: %s", _vs_exc)
+        if screencast_channel is not None:
+            try:
+                screencast_channel.stop()
+                console.print("[dim]Screencast channel stopped.[/]")
+            except Exception as _sc_stop_exc:
+                logger.debug("screencast: stop error: %s", _sc_stop_exc)
         if proactive_manager is not None:
             try:
                 proactive_manager.stop()

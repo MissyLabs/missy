@@ -1062,6 +1062,72 @@ def test_cleanup(suite: TestSuite) -> None:
     )
 
 
+def test_screencast(suite: TestSuite) -> None:
+    """Screencast channel command tests (!screen share/list/stop/analyze/status)."""
+    print("\n>>> SCREENCAST TESTS")
+
+    # !screen status — should report server status (enabled or not enabled)
+    run_test(
+        suite,
+        "Screen status",
+        "screencast",
+        "!screen status",
+        check_fn=lambda text, _: (
+            "screencast" in text.lower() or "screen" in text.lower() or "not enabled" in text.lower() or "running" in text.lower(),
+            f"Got: {text[:120]}",
+        ),
+    )
+
+    # !screen share — create a session and get a share URL
+    run_test(
+        suite,
+        "Screen share create",
+        "screencast",
+        "!screen share live-test",
+        check_fn=lambda text, _: (
+            ("session" in text.lower() and ("share" in text.lower() or "http" in text.lower() or "url" in text.lower() or "link" in text.lower()))
+            or "not enabled" in text.lower(),
+            f"Got: {text[:120]}",
+        ),
+    )
+
+    # !screen list — should show active sessions (or empty list)
+    run_test(
+        suite,
+        "Screen list sessions",
+        "screencast",
+        "!screen list",
+        check_fn=lambda text, _: (
+            "session" in text.lower() or "no active" in text.lower() or "not enabled" in text.lower(),
+            f"Got: {text[:120]}",
+        ),
+    )
+
+    # !screen analyze — should report no results or show analysis
+    run_test(
+        suite,
+        "Screen analyze",
+        "screencast",
+        "!screen analyze",
+        check_fn=lambda text, _: (
+            "analysis" in text.lower() or "no " in text.lower() or "session" in text.lower() or "not enabled" in text.lower(),
+            f"Got: {text[:120]}",
+        ),
+    )
+
+    # !screen stop — should stop a session or report nothing to stop
+    run_test(
+        suite,
+        "Screen stop",
+        "screencast",
+        "!screen stop",
+        check_fn=lambda text, _: (
+            "stop" in text.lower() or "no active" in text.lower() or "not found" in text.lower() or "not enabled" in text.lower(),
+            f"Got: {text[:120]}",
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -1081,6 +1147,7 @@ ALL_TEST_GROUPS = {
     "incus": test_incus_containers,
     "incus_lifecycle": test_incus_lifecycle,
     "message_splitting": test_message_splitting,
+    "screencast": test_screencast,
     "cleanup": test_cleanup,
 }
 
