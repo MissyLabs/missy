@@ -50,6 +50,7 @@ from missy.core.exceptions import ConfigurationError
 
 if TYPE_CHECKING:
     from missy.channels.discord.config import DiscordConfig
+    from missy.security.container import ContainerConfig
     from missy.security.sandbox import SandboxConfig
 
 
@@ -82,6 +83,8 @@ class NetworkPolicy:
     discord_allowed_hosts: list[str] = field(default_factory=list)
     # Named presets that expand to hosts/domains/CIDRs (e.g. "anthropic", "github")
     presets: list[str] = field(default_factory=list)
+    # L7 REST policy rules (method + path level controls per host)
+    rest_policies: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -297,6 +300,7 @@ class MissyConfig:
     vault: VaultConfig = field(default_factory=VaultConfig)
     proactive: ProactiveConfig = field(default_factory=ProactiveConfig)
     sandbox: SandboxConfig | None = None
+    container: ContainerConfig | None = None
     max_spend_usd: float = 0.0  # 0 = unlimited; per-session budget cap
     config_version: int = 0  # schema version stamp (0 = pre-migration)
 
@@ -348,6 +352,7 @@ def _parse_network(data: dict[str, Any]) -> NetworkPolicy:
         tool_allowed_hosts=list(data.get("tool_allowed_hosts", [])),
         discord_allowed_hosts=list(data.get("discord_allowed_hosts", [])),
         presets=presets,
+        rest_policies=list(data.get("rest_policies", [])),
     )
 
 
@@ -508,6 +513,13 @@ def _parse_sandbox(data: dict[str, Any]) -> SandboxConfig:
     return parse_sandbox_config(data)
 
 
+def _parse_container(data: dict[str, Any]) -> ContainerConfig:
+    """Parse the ``container`` section of a Missy config dict."""
+    from missy.security.container import parse_container_config
+
+    return parse_container_config(data)
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -570,6 +582,7 @@ def load_config(path: str) -> MissyConfig:
             vault=_parse_vault(data.get("vault") or {}),
             proactive=_parse_proactive(data.get("proactive") or {}),
             sandbox=_parse_sandbox(data.get("sandbox") or {}),
+            container=_parse_container(data.get("container") or {}),
             max_spend_usd=float(data.get("max_spend_usd", 0.0)),
             config_version=int(data.get("config_version", 0)),
         )

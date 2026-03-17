@@ -984,9 +984,17 @@ def providers_switch(ctx: click.Context, name: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-@cli.command("skills")
+@cli.group("skills", invoke_without_command=True)
 @click.pass_context
-def skills_list(ctx: click.Context) -> None:
+def skills_group(ctx: click.Context) -> None:
+    """Manage skills (list, scan)."""
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(skills_list_cmd)
+
+
+@skills_group.command("list")
+@click.pass_context
+def skills_list_cmd(ctx: click.Context) -> None:
     """List all registered skills."""
     from missy.skills.registry import SkillRegistry
 
@@ -1007,6 +1015,44 @@ def skills_list(ctx: click.Context) -> None:
 
     for name in skill_names:
         table.add_row(name)
+
+    console.print(table)
+
+
+@skills_group.command("scan")
+@click.option(
+    "--path",
+    default="~/.missy/skills",
+    help="Directory to scan for SKILL.md files.",
+    show_default=True,
+)
+@click.pass_context
+def skills_scan_cmd(ctx: click.Context, path: str) -> None:
+    """Scan a directory for SKILL.md files and list discovered skills."""
+    from missy.skills.discovery import SkillDiscovery
+
+    discovery = SkillDiscovery()
+    manifests = discovery.scan_directory(path)
+
+    if not manifests:
+        console.print(f"[dim]No SKILL.md files found in {path}[/]")
+        return
+
+    table = Table(title=f"Discovered Skills ({path})")
+    table.add_column("Name", style="bold")
+    table.add_column("Version")
+    table.add_column("Author")
+    table.add_column("Description")
+    table.add_column("Tools")
+
+    for m in manifests:
+        table.add_row(
+            m.name,
+            m.version or "[dim]-[/]",
+            m.author or "[dim]-[/]",
+            m.description[:60] + ("..." if len(m.description) > 60 else ""),
+            ", ".join(m.tools) if m.tools else "[dim]-[/]",
+        )
 
     console.print(table)
 
@@ -2972,6 +3018,50 @@ def config_plan(ctx: click.Context) -> None:
     else:
         console.print("[bold]Changes since last backup:[/]\n")
         console.print(diff_text)
+
+
+# ---------------------------------------------------------------------------
+# Sandbox
+# ---------------------------------------------------------------------------
+
+
+@cli.group("sandbox")
+def sandbox_group() -> None:
+    """Container-per-session sandbox management."""
+
+
+@sandbox_group.command("status")
+@click.pass_context
+def sandbox_status(ctx: click.Context) -> None:
+    """Check Docker availability and show container sandbox configuration."""
+    from missy.security.container import ContainerConfig, ContainerSandbox
+
+    cfg = _load_subsystems(ctx.obj["config_path"])
+
+    container_cfg: ContainerConfig | None = getattr(cfg, "container", None)
+
+    table = Table(title="Container Sandbox Status", show_lines=True)
+    table.add_column("Setting", style="bold")
+    table.add_column("Value")
+
+    # Docker availability
+    docker_ok = ContainerSandbox.is_available()
+    docker_status = (
+        Text("available", style="green") if docker_ok else Text("not found", style="red")
+    )
+    table.add_row("Docker", docker_status)
+
+    if container_cfg is not None:
+        enabled_style = "green" if container_cfg.enabled else "dim"
+        table.add_row("enabled", Text(str(container_cfg.enabled), style=enabled_style))
+        table.add_row("image", container_cfg.image)
+        table.add_row("memory_limit", container_cfg.memory_limit)
+        table.add_row("cpu_quota", str(container_cfg.cpu_quota))
+        table.add_row("network_mode", container_cfg.network_mode)
+    else:
+        table.add_row("enabled", Text("false (not configured)", style="dim"))
+
+    console.print(table)
 
 
 # ---------------------------------------------------------------------------

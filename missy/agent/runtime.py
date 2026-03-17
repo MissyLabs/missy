@@ -41,6 +41,7 @@ from missy.core.session import Session, SessionManager
 from missy.providers.base import CompletionResponse, Message, ToolCall, ToolResult
 from missy.providers.registry import get_registry
 from missy.security.censor import censor_response
+from missy.security.trust import TrustScorer
 from missy.tools.registry import get_tool_registry
 
 logger = logging.getLogger(__name__)
@@ -181,6 +182,14 @@ class AgentRuntime:
 
             progress_reporter = NullReporter()
         self._progress = progress_reporter
+        # Interactive approval for policy-denied operations
+        self._interactive_approval = self._make_interactive_approval()
+        # Prompt drift detector (security)
+        self._drift_detector = self._make_drift_detector()
+        # Cryptographic agent identity (lazy load/generate)
+        self._identity = self._make_identity()
+        # Trust scorer for providers, tools, and MCP servers
+        self._trust_scorer = TrustScorer()
 
     def switch_provider(self, name: str) -> None:
         """Switch the active provider at runtime.
@@ -274,6 +283,10 @@ class AgentRuntime:
 
         # Build context-managed messages
         system_prompt, messages = self._build_context_messages(user_input, history, session_id=sid)
+
+        # Register system prompt hash for drift detection
+        if self._drift_detector is not None:
+            self._drift_detector.register("system_prompt", system_prompt)
 
         # Attempt agentic tool loop; fall back to single-turn on any issue
         all_tool_names_used: list[str] = []
@@ -547,6 +560,19 @@ class AgentRuntime:
                 # Rate limit before calling provider
                 self._acquire_rate_limit()
 
+                # Verify system prompt integrity before each provider call
+                if self._drift_detector is not None and not self._drift_detector.verify(
+                    "system_prompt", system_prompt
+                ):
+                    logger.warning("Prompt drift detected: system prompt has been modified")
+                    self._emit_event(
+                        session_id=session_id,
+                        task_id=task_id,
+                        event_type="security.prompt_drift",
+                        result="alert",
+                        detail={"prompt_id": "system_prompt"},
+                    )
+
                 try:
                     response: CompletionResponse = self._circuit_breaker.call(
                         provider.complete_with_tools,
@@ -592,6 +618,20 @@ class AgentRuntime:
                                 should_inject = False
                         else:
                             should_inject = False
+
+                        # Trust scoring: adjust score based on tool outcome
+                        _trust = getattr(self, "_trust_scorer", None)
+                        if _trust is not None:
+                            if tr.is_error:
+                                _trust.record_failure(tc.name)
+                                if not _trust.is_trusted(tc.name):
+                                    logger.warning(
+                                        "Trust score for tool %r dropped below threshold: %d",
+                                        tc.name,
+                                        _trust.score(tc.name),
+                                    )
+                            else:
+                                _trust.record_success(tc.name)
 
                     # Append assistant message with tool_calls to loop history
                     loop_messages.append(
@@ -1025,8 +1065,6 @@ class AgentRuntime:
                 session_summaries = None
                 if session_id and self._memory_store is not None:
                     try:
-                        from missy.memory.sqlite_store import SummaryRecord  # noqa: F811
-
                         all_summaries = self._memory_store.get_summaries(session_id, limit=100)
                         # Only include top-level (no parent) summaries.
                         session_summaries = [
@@ -1369,6 +1407,66 @@ class AgentRuntime:
             return None
 
     @staticmethod
+    def _make_interactive_approval() -> Any:
+        """Create an :class:`~missy.agent.interactive_approval.InteractiveApproval`.
+
+        Installs the instance into the gateway module so that
+        :class:`~missy.gateway.client.PolicyHTTPClient` can prompt the
+        operator when a network request is denied by policy.
+
+        Returns:
+            An :class:`InteractiveApproval` instance, or ``None`` when
+            the module is unavailable.
+        """
+        try:
+            from missy.agent.interactive_approval import InteractiveApproval
+            from missy.gateway.client import set_interactive_approval
+
+            approval = InteractiveApproval()
+            set_interactive_approval(approval)
+            return approval
+        except Exception:
+            return None
+
+    @staticmethod
+    def _make_drift_detector() -> Any:
+        """Create a :class:`~missy.security.drift.PromptDriftDetector`.
+
+        Returns:
+            A :class:`~missy.security.drift.PromptDriftDetector` instance,
+            or ``None`` when the module is unavailable.
+        """
+        try:
+            from missy.security.drift import PromptDriftDetector
+
+            return PromptDriftDetector()
+        except Exception:
+            return None
+
+    @staticmethod
+    def _make_identity() -> Any:
+        """Load or generate an Ed25519 agent identity.
+
+        Attempts to load from the default key path; generates and saves
+        a new identity if no key file exists.  Returns ``None`` if the
+        identity module is unavailable.
+        """
+        try:
+            import os
+
+            from missy.security.identity import DEFAULT_KEY_PATH, AgentIdentity
+
+            if os.path.exists(DEFAULT_KEY_PATH):
+                return AgentIdentity.from_key_file(DEFAULT_KEY_PATH)
+            identity = AgentIdentity.generate()
+            identity.save(DEFAULT_KEY_PATH)
+            logger.info("Generated new agent identity: %s", identity.public_key_fingerprint())
+            return identity
+        except Exception:
+            logger.debug("Agent identity unavailable; proceeding without it", exc_info=True)
+            return None
+
+    @staticmethod
     def _scan_checkpoints() -> list:
         """Scan for incomplete checkpoints from previous runs.
 
@@ -1561,6 +1659,18 @@ class AgentRuntime:
             detail: Structured event data.
         """
         try:
+            # Sign audit event with agent identity if available
+            identity = getattr(self, "_identity", None)
+            if identity is not None:
+                import json
+
+                event_payload = json.dumps(
+                    {"session_id": session_id, "task_id": task_id, "event_type": event_type},
+                    sort_keys=True,
+                ).encode()
+                sig = identity.sign(event_payload)
+                detail = {**detail, "identity_signature": sig.hex()}
+
             event = AuditEvent.now(
                 session_id=session_id,
                 task_id=task_id,

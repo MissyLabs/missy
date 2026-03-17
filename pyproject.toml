@@ -50,6 +50,9 @@ discord_voice = [
     "discord.py[voice]>=2.3.0",
     "discord-ext-voice-recv @ git+https://github.com/rdphillips7/discord-ext-voice-recv.git@main",
 ]
+vector = [
+    "faiss-cpu>=1.7",
+]
 # Browser automation (Firefox via Playwright) and GTK/X11 accessibility tools.
 # After installing playwright, run: playwright install firefox
 desktop = [

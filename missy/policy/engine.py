@@ -26,11 +26,12 @@ from missy.config.settings import MissyConfig
 
 from .filesystem import FilesystemPolicyEngine
 from .network import NetworkPolicyEngine
+from .rest_policy import RestPolicy
 from .shell import ShellPolicyEngine
 
 
 class PolicyEngine:
-    """Facade that composes network, filesystem, and shell policy engines.
+    """Facade that composes network, filesystem, shell, and REST policy engines.
 
     Args:
         config: The fully-populated runtime configuration.
@@ -40,6 +41,9 @@ class PolicyEngine:
         self.network: NetworkPolicyEngine = NetworkPolicyEngine(config.network)
         self.filesystem: FilesystemPolicyEngine = FilesystemPolicyEngine(config.filesystem)
         self.shell: ShellPolicyEngine = ShellPolicyEngine(config.shell)
+        self.rest_policy: RestPolicy = RestPolicy.from_config(
+            getattr(config.network, "rest_policies", []) or []
+        )
 
     # ------------------------------------------------------------------
     # Delegate methods

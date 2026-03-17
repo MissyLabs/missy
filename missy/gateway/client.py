@@ -38,9 +38,26 @@ from urllib.parse import urlparse
 import httpx
 
 from missy.core.events import AuditEvent, event_bus
+from missy.core.exceptions import PolicyViolationError
 from missy.policy.engine import get_policy_engine
 
 logger = logging.getLogger(__name__)
+
+# Module-level reference to an InteractiveApproval instance.  Set by the
+# agent runtime at startup so the gateway can prompt the operator when a
+# network request is denied by policy.
+_interactive_approval: object | None = None
+
+
+def set_interactive_approval(approval: object | None) -> None:
+    """Install (or clear) the module-level interactive approval instance.
+
+    Args:
+        approval: An :class:`~missy.agent.interactive_approval.InteractiveApproval`
+            instance, or ``None`` to disable interactive approval.
+    """
+    global _interactive_approval
+    _interactive_approval = approval
 
 
 class PolicyHTTPClient:
@@ -105,7 +122,7 @@ class PolicyHTTPClient:
             PolicyViolationError: When the destination host is denied.
             httpx.HTTPError: On network or protocol errors.
         """
-        self._check_url(url)
+        self._check_url(url, "GET")
         response = self._get_sync_client().get(url, **self._sanitize_kwargs(kwargs))
         self._check_response_size(response, url)
         self._emit_request_event("GET", url, response.status_code)
@@ -126,7 +143,7 @@ class PolicyHTTPClient:
             PolicyViolationError: When the destination host is denied.
             httpx.HTTPError: On network or protocol errors.
         """
-        self._check_url(url)
+        self._check_url(url, "POST")
         response = self._get_sync_client().post(url, **self._sanitize_kwargs(kwargs))
         self._check_response_size(response, url)
         self._emit_request_event("POST", url, response.status_code)
@@ -134,7 +151,7 @@ class PolicyHTTPClient:
 
     def put(self, url: str, **kwargs: Any) -> httpx.Response:
         """Perform a synchronous HTTP PUT after a policy check."""
-        self._check_url(url)
+        self._check_url(url, "PUT")
         response = self._get_sync_client().put(url, **self._sanitize_kwargs(kwargs))
         self._check_response_size(response, url)
         self._emit_request_event("PUT", url, response.status_code)
@@ -142,7 +159,7 @@ class PolicyHTTPClient:
 
     def delete(self, url: str, **kwargs: Any) -> httpx.Response:
         """Perform a synchronous HTTP DELETE after a policy check."""
-        self._check_url(url)
+        self._check_url(url, "DELETE")
         response = self._get_sync_client().delete(url, **self._sanitize_kwargs(kwargs))
         self._check_response_size(response, url)
         self._emit_request_event("DELETE", url, response.status_code)
@@ -150,7 +167,7 @@ class PolicyHTTPClient:
 
     def patch(self, url: str, **kwargs: Any) -> httpx.Response:
         """Perform a synchronous HTTP PATCH after a policy check."""
-        self._check_url(url)
+        self._check_url(url, "PATCH")
         response = self._get_sync_client().patch(url, **self._sanitize_kwargs(kwargs))
         self._check_response_size(response, url)
         self._emit_request_event("PATCH", url, response.status_code)
@@ -158,7 +175,7 @@ class PolicyHTTPClient:
 
     def head(self, url: str, **kwargs: Any) -> httpx.Response:
         """Perform a synchronous HTTP HEAD after a policy check."""
-        self._check_url(url)
+        self._check_url(url, "HEAD")
         response = self._get_sync_client().head(url, **self._sanitize_kwargs(kwargs))
         self._check_response_size(response, url)
         self._emit_request_event("HEAD", url, response.status_code)
@@ -183,7 +200,7 @@ class PolicyHTTPClient:
             PolicyViolationError: When the destination host is denied.
             httpx.HTTPError: On network or protocol errors.
         """
-        self._check_url(url)
+        self._check_url(url, "GET")
         response = await self._get_async_client().get(url, **self._sanitize_kwargs(kwargs))
         self._check_response_size(response, url)
         self._emit_request_event("GET", url, response.status_code)
@@ -204,7 +221,7 @@ class PolicyHTTPClient:
             PolicyViolationError: When the destination host is denied.
             httpx.HTTPError: On network or protocol errors.
         """
-        self._check_url(url)
+        self._check_url(url, "POST")
         response = await self._get_async_client().post(url, **self._sanitize_kwargs(kwargs))
         self._check_response_size(response, url)
         self._emit_request_event("POST", url, response.status_code)
@@ -212,7 +229,7 @@ class PolicyHTTPClient:
 
     async def adelete(self, url: str, **kwargs: Any) -> httpx.Response:
         """Perform an asynchronous HTTP DELETE after a policy check."""
-        self._check_url(url)
+        self._check_url(url, "DELETE")
         response = await self._get_async_client().delete(url, **self._sanitize_kwargs(kwargs))
         self._check_response_size(response, url)
         self._emit_request_event("DELETE", url, response.status_code)
@@ -220,7 +237,7 @@ class PolicyHTTPClient:
 
     async def apatch(self, url: str, **kwargs: Any) -> httpx.Response:
         """Perform an asynchronous HTTP PATCH after a policy check."""
-        self._check_url(url)
+        self._check_url(url, "PATCH")
         response = await self._get_async_client().patch(url, **self._sanitize_kwargs(kwargs))
         self._check_response_size(response, url)
         self._emit_request_event("PATCH", url, response.status_code)
@@ -228,7 +245,7 @@ class PolicyHTTPClient:
 
     async def aput(self, url: str, **kwargs: Any) -> httpx.Response:
         """Perform an asynchronous HTTP PUT after a policy check."""
-        self._check_url(url)
+        self._check_url(url, "PUT")
         response = await self._get_async_client().put(url, **self._sanitize_kwargs(kwargs))
         self._check_response_size(response, url)
         self._emit_request_event("PUT", url, response.status_code)
@@ -236,7 +253,7 @@ class PolicyHTTPClient:
 
     async def ahead(self, url: str, **kwargs: Any) -> httpx.Response:
         """Perform an asynchronous HTTP HEAD after a policy check."""
-        self._check_url(url)
+        self._check_url(url, "HEAD")
         response = await self._get_async_client().head(url, **self._sanitize_kwargs(kwargs))
         self._check_response_size(response, url)
         self._emit_request_event("HEAD", url, response.status_code)
@@ -282,22 +299,23 @@ class PolicyHTTPClient:
 
     _ALLOWED_SCHEMES = {"http", "https"}
 
-    def _check_url(self, url: str) -> None:
-        """Extract the host from *url* and run a network policy check.
+    def _check_url(self, url: str, method: str = "") -> None:
+        """Extract the host from *url* and run network + REST policy checks.
 
         Args:
             url: A fully-qualified URL string.
+            method: HTTP method (e.g. ``"GET"``).  When provided the REST
+                policy is evaluated after the network policy passes.
 
         Raises:
-            PolicyViolationError: When the host is denied by the policy engine.
+            PolicyViolationError: When the host is denied by the policy engine
+                or a REST policy rule denies the request.
             ValueError: When the URL is malformed, uses a disallowed scheme,
                 or contains no host component.
         """
         _MAX_URL_LENGTH = 8192  # Prevent URL-bomb memory exhaustion
         if len(url) > _MAX_URL_LENGTH:
-            raise ValueError(
-                f"URL exceeds maximum length of {_MAX_URL_LENGTH} characters."
-            )
+            raise ValueError(f"URL exceeds maximum length of {_MAX_URL_LENGTH} characters.")
         parsed = urlparse(url)
         if parsed.scheme not in self._ALLOWED_SCHEMES:
             raise ValueError(
@@ -310,28 +328,74 @@ class PolicyHTTPClient:
                 f"Cannot determine host from URL {url!r}. "
                 "Ensure the URL includes a scheme (e.g. https://)."
             )
-        get_policy_engine().check_network(
-            host,
-            self.session_id,
-            self.task_id,
-            category=self.category,
-        )
+        try:
+            get_policy_engine().check_network(
+                host,
+                self.session_id,
+                self.task_id,
+                category=self.category,
+            )
+        except PolicyViolationError:
+            # If an interactive approval instance is available, prompt the
+            # operator before raising.  An "allow always" decision is
+            # remembered for the remainder of the session.
+            if _interactive_approval is not None:
+                from missy.agent.interactive_approval import InteractiveApproval
+
+                if isinstance(
+                    _interactive_approval, InteractiveApproval
+                ) and _interactive_approval.prompt_user("network_request", url):
+                    logger.info(
+                        "Operator approved denied network request to %s",
+                        host,
+                    )
+                    return  # skip the rest — operator override
+            raise
+
+        # L7 REST policy check (method + path level)
+        if method:
+            self._check_rest_policy(host, method, parsed.path or "/")
+
+    def _check_rest_policy(self, host: str, method: str, path: str) -> None:
+        """Evaluate L7 REST policy rules for *host*, *method*, and *path*.
+
+        Raises:
+            PolicyViolationError: When a REST rule explicitly denies the request.
+        """
+        try:
+            engine = get_policy_engine()
+            rest_policy = getattr(engine, "rest_policy", None)
+            if rest_policy is None:
+                return
+            result = rest_policy.check(host, method, path)
+            if result == "deny":
+                raise PolicyViolationError(
+                    f"REST policy denied {method} {host}{path}",
+                    category="network",
+                    detail=f"REST rule denied {method} {path} on {host}",
+                )
+        except PolicyViolationError:
+            raise
+        except Exception:
+            logger.debug("REST policy check failed; allowing request", exc_info=True)
 
     #: Kwargs that are safe to pass through to httpx request methods.
     #: Everything else is stripped to prevent security bypass (e.g.
     #: ``verify=False`` to disable TLS, ``base_url`` to redirect traffic,
     #: ``transport`` to bypass the policy layer, ``auth`` to inject creds).
-    _ALLOWED_KWARGS = frozenset({
-        "headers",
-        "params",
-        "data",
-        "json",
-        "content",
-        "cookies",
-        "timeout",
-        "files",
-        "extensions",
-    })
+    _ALLOWED_KWARGS = frozenset(
+        {
+            "headers",
+            "params",
+            "data",
+            "json",
+            "content",
+            "cookies",
+            "timeout",
+            "files",
+            "extensions",
+        }
+    )
 
     @classmethod
     def _sanitize_kwargs(cls, kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -388,8 +452,7 @@ class PolicyHTTPClient:
                 size = 0
             if size > self.max_response_bytes:
                 raise ValueError(
-                    f"Response from {url} too large: "
-                    f"{size} bytes > {self.max_response_bytes} limit"
+                    f"Response from {url} too large: {size} bytes > {self.max_response_bytes} limit"
                 )
         else:
             # No Content-Length header (chunked encoding, HTTP/1.0, etc.) —
