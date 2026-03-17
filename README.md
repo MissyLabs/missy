@@ -71,17 +71,14 @@ This clones to `~/.local/share/missy`, creates a venv, installs, and symlinks `m
 ## Quick Start
 
 ```bash
-# Set your API key
-export ANTHROPIC_API_KEY="sk-ant-..."
-
-# Run the setup wizard
 missy setup
+```
 
-# Ask a question
+The setup wizard walks you through configuring API keys, providers, network policy, and workspace paths. Once complete:
+
+```bash
 missy ask "What services are listening on this machine?"
-
-# Start an interactive session
-missy run
+missy run    # interactive session
 ```
 
 <details>
