@@ -59,7 +59,7 @@ Uses the official `anthropic` Python SDK to call the Messages API.  The SDK is
 imported lazily -- if the package is not installed, `is_available()` returns
 `False` without raising.
 
-**Default model**: `claude-3-5-sonnet-20241022`
+**Default model**: `claude-sonnet-4-6`
 
 **Required environment variable**: `ANTHROPIC_API_KEY`
 
@@ -80,7 +80,7 @@ it correctly.
 providers:
   anthropic:
     name: anthropic
-    model: "claude-3-5-sonnet-20241022"
+    model: "claude-sonnet-4-6"
     timeout: 30
 ```
 

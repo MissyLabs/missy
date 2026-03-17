@@ -98,7 +98,7 @@ payload for debugging or accessing provider-specific fields.
 ```python
 provider = AnthropicProvider(ProviderConfig(
     name="anthropic",
-    model="claude-3-5-sonnet-20241022",
+    model="claude-sonnet-4-6",
     api_key="sk-ant-...",
     timeout=30,
 ))
@@ -141,7 +141,7 @@ Returns `True` when both conditions are met:
   "result": "allow" | "error",
   "detail": {
     "provider": "anthropic",
-    "model": "claude-3-5-sonnet-20241022",
+    "model": "claude-sonnet-4-6",
     "message": "completion successful"
   }
 }
@@ -251,7 +251,7 @@ network:
 @dataclass
 class ProviderConfig:
     name: str                    # e.g. "anthropic"
-    model: str                   # e.g. "claude-3-5-sonnet-20241022"
+    model: str                   # e.g. "claude-sonnet-4-6"
     api_key: Optional[str]       # Falls back to {NAME}_API_KEY env var
     base_url: Optional[str]      # Override for self-hosted endpoints
     timeout: int = 30            # Request timeout in seconds

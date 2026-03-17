@@ -115,7 +115,7 @@ pytest tests/ --cov=missy --cov-report=term-missing
 
 ### Current coverage target
 
-The project targets **85% code coverage** (currently at 86% with 740 tests).
+The project targets **85% code coverage** (currently at 85%+ with 1097 tests across 52 test files).
 
 ---
 
@@ -259,7 +259,7 @@ from missy.providers.anthropic_provider import AnthropicProvider
 from missy.config.settings import ProviderConfig
 
 def test_anthropic_complete():
-    config = ProviderConfig(name="anthropic", model="claude-3-5-sonnet-20241022",
+    config = ProviderConfig(name="anthropic", model="claude-sonnet-4-6",
                             api_key="test-key")
     provider = AnthropicProvider(config)
 

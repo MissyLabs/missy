@@ -28,7 +28,7 @@ monitoring, and maintenance of a Missy deployment.
 ### Install from source
 
 ```bash
-git clone https://github.com/your-org/missy.git
+git clone https://github.com/MissyLabs/missy.git
 cd missy
 pip install -e ".[dev]"   # editable install with dev extras
 ```
@@ -127,7 +127,7 @@ plugins:
 providers:
   anthropic:
     name: anthropic
-    model: "claude-3-5-sonnet-20241022"
+    model: "claude-sonnet-4-6"
     timeout: 30
   openai:
     name: openai
@@ -211,7 +211,7 @@ The audit log is a newline-delimited JSON (JSONL) file, by default at
   "event_type": "agent.run.complete",
   "category": "provider",
   "result": "allow",
-  "detail": {"provider": "anthropic", "model": "claude-3-5-sonnet-20241022"},
+  "detail": {"provider": "anthropic", "model": "claude-sonnet-4-6"},
   "policy_rule": null
 }
 ```
@@ -337,7 +337,7 @@ process first.
 providers:
   anthropic:
     name: anthropic
-    model: "claude-3-5-sonnet-20241022"
+    model: "claude-sonnet-4-6"
     timeout: 30
 ```
 

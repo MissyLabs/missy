@@ -191,7 +191,7 @@ Each line in the file is a self-contained JSON object:
   "result": "allow",
   "detail": {
     "provider": "anthropic",
-    "model": "claude-3-5-sonnet-20241022",
+    "model": "claude-sonnet-4-6",
     "usage": {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150}
   },
   "policy_rule": null

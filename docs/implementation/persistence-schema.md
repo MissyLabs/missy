@@ -94,7 +94,7 @@ plugins:
 providers:
   anthropic:
     name: anthropic
-    model: claude-3-5-sonnet-20241022
+    model: claude-sonnet-4-6
     # api_key: null  -- falls back to ANTHROPIC_API_KEY env var
     timeout: 30
     enabled: true
