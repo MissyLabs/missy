@@ -80,6 +80,8 @@ class NetworkPolicy:
     provider_allowed_hosts: list[str] = field(default_factory=list)
     tool_allowed_hosts: list[str] = field(default_factory=list)
     discord_allowed_hosts: list[str] = field(default_factory=list)
+    # Named presets that expand to hosts/domains/CIDRs (e.g. "anthropic", "github")
+    presets: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -304,14 +306,47 @@ class MissyConfig:
 
 
 def _parse_network(data: dict[str, Any]) -> NetworkPolicy:
+    presets = list(data.get("presets", []))
+    allowed_hosts = list(data.get("allowed_hosts", []))
+    allowed_domains = list(data.get("allowed_domains", []))
+    allowed_cidrs = list(data.get("allowed_cidrs", []))
+
+    if presets:
+        import logging
+
+        from missy.policy.presets import resolve_presets
+
+        p_hosts, p_domains, p_cidrs, unknown = resolve_presets(presets)
+        if unknown:
+            logging.getLogger(__name__).warning(
+                "Unknown network presets (ignored): %s", ", ".join(unknown)
+            )
+        # Merge preset entries with explicit entries, deduplicating
+        existing_hosts = set(allowed_hosts)
+        for h in p_hosts:
+            if h not in existing_hosts:
+                allowed_hosts.append(h)
+                existing_hosts.add(h)
+        existing_domains = set(allowed_domains)
+        for d in p_domains:
+            if d not in existing_domains:
+                allowed_domains.append(d)
+                existing_domains.add(d)
+        existing_cidrs = set(allowed_cidrs)
+        for c in p_cidrs:
+            if c not in existing_cidrs:
+                allowed_cidrs.append(c)
+                existing_cidrs.add(c)
+
     return NetworkPolicy(
         default_deny=bool(data.get("default_deny", True)),
-        allowed_cidrs=list(data.get("allowed_cidrs", [])),
-        allowed_domains=list(data.get("allowed_domains", [])),
-        allowed_hosts=list(data.get("allowed_hosts", [])),
+        allowed_cidrs=allowed_cidrs,
+        allowed_domains=allowed_domains,
+        allowed_hosts=allowed_hosts,
         provider_allowed_hosts=list(data.get("provider_allowed_hosts", [])),
         tool_allowed_hosts=list(data.get("tool_allowed_hosts", [])),
         discord_allowed_hosts=list(data.get("discord_allowed_hosts", [])),
+        presets=presets,
     )
 
 

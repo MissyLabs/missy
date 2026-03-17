@@ -54,6 +54,7 @@ class ProviderRegistry:
         self._providers: dict[str, BaseProvider] = {}
         self._key_indices: dict[str, int] = {}
         self._provider_configs: dict[str, ProviderConfig] = {}
+        self._default_name: str | None = None
 
     # ------------------------------------------------------------------
     # Mutation
@@ -108,6 +109,33 @@ class ProviderRegistry:
         elif hasattr(provider, "_api_key"):
             provider._api_key = next_key  # type: ignore[attr-defined]
         logger.info("rotate_key: provider %r rotated to key index %d.", provider_name, next_idx)
+
+    def set_default(self, name: str) -> None:
+        """Set the default provider by name.
+
+        Args:
+            name: Registry key of the provider to make default.
+
+        Raises:
+            ValueError: If the name is not registered or the provider is
+                not available.
+        """
+        provider = self._providers.get(name)
+        if provider is None:
+            raise ValueError(f"Provider {name!r} is not registered.")
+        try:
+            if not provider.is_available():
+                raise ValueError(f"Provider {name!r} is not available.")
+        except Exception as exc:
+            if isinstance(exc, ValueError):
+                raise
+            raise ValueError(f"Provider {name!r} availability check failed: {exc}") from exc
+        self._default_name = name
+        logger.info("Default provider set to %r.", name)
+
+    def get_default_name(self) -> str | None:
+        """Return the name of the current default provider, or ``None``."""
+        return self._default_name
 
     # ------------------------------------------------------------------
     # Queries

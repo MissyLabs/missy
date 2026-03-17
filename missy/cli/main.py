@@ -281,8 +281,24 @@ def init(ctx: click.Context) -> None:
 
 
 @cli.command()
+@click.option(
+    "--provider", "setup_provider", default=None, help="Provider name for non-interactive mode."
+)
+@click.option("--api-key", "setup_api_key", default=None, help="API key (direct value).")
+@click.option("--api-key-env", default=None, help="Environment variable containing the API key.")
+@click.option("--model", "setup_model", default=None, help="Model identifier.")
+@click.option("--workspace", "setup_workspace", default=None, help="Workspace directory path.")
+@click.option("--no-prompt", is_flag=True, default=False, help="Non-interactive mode (no prompts).")
 @click.pass_context
-def setup(ctx: click.Context) -> None:
+def setup(
+    ctx: click.Context,
+    setup_provider: str | None,
+    setup_api_key: str | None,
+    setup_api_key_env: str | None,
+    setup_model: str | None,
+    setup_workspace: str | None,
+    no_prompt: bool,
+) -> None:
     """Interactive onboarding wizard — configure providers and write config.yaml.
 
     Walks through workspace setup, AI provider selection (Anthropic / OpenAI /
@@ -290,12 +306,35 @@ def setup(ctx: click.Context) -> None:
     model tier selection, and atomic config write.
 
     Safe to re-run: prompts before overwriting an existing config.
-    """
-    from missy.cli.wizard import run_wizard
 
+    Use --no-prompt for non-interactive mode (requires --provider).
+    """
     config_path = (
         ctx.obj.get("config_path", "~/.missy/config.yaml") if ctx.obj else "~/.missy/config.yaml"
     )
+
+    if no_prompt:
+        from missy.cli.wizard import run_wizard_noninteractive
+
+        if not setup_provider:
+            _print_error("--provider is required in --no-prompt mode.")
+            sys.exit(1)
+        try:
+            run_wizard_noninteractive(
+                config_path=config_path,
+                provider=setup_provider,
+                api_key=setup_api_key,
+                api_key_env=setup_api_key_env,
+                model=setup_model,
+                workspace=setup_workspace,
+            )
+        except click.ClickException as exc:
+            _print_error(str(exc.message))
+            sys.exit(1)
+        return
+
+    from missy.cli.wizard import run_wizard
+
     try:
         run_wizard(config_path)
     except (KeyboardInterrupt, click.Abort):
@@ -849,9 +888,18 @@ def audit_recent(ctx: click.Context, limit: int, category: str | None) -> None:
 # ---------------------------------------------------------------------------
 
 
-@cli.command("providers")
+@cli.group("providers", invoke_without_command=True)
 @click.pass_context
-def providers_list(ctx: click.Context) -> None:
+def providers_group(ctx: click.Context) -> None:
+    """Manage AI providers (list, switch)."""
+    if ctx.invoked_subcommand is None:
+        # Bare `missy providers` → list (backward compatible)
+        ctx.invoke(providers_list_cmd)
+
+
+@providers_group.command("list")
+@click.pass_context
+def providers_list_cmd(ctx: click.Context) -> None:
     """List configured AI providers and their availability."""
     from missy.providers.registry import get_registry
 
@@ -890,6 +938,25 @@ def providers_list(ctx: click.Context) -> None:
         )
 
     console.print(table)
+
+
+@providers_group.command("switch")
+@click.argument("name")
+@click.pass_context
+def providers_switch(ctx: click.Context, name: str) -> None:
+    """Switch the active provider to NAME at runtime."""
+    from missy.providers.registry import get_registry
+
+    _load_subsystems(ctx.obj["config_path"])
+    registry = get_registry()
+
+    try:
+        registry.set_default(name)
+    except ValueError as exc:
+        _print_error(str(exc))
+        sys.exit(1)
+
+    _print_success(f"Active provider switched to [bold]{name}[/].")
 
 
 # ---------------------------------------------------------------------------
@@ -1635,7 +1702,9 @@ def doctor(ctx: click.Context) -> None:
             try:
                 avail = p.is_available() if p else False
             except Exception:
-                logging.getLogger(__name__).debug("Provider %s availability check failed", name, exc_info=True)
+                logging.getLogger(__name__).debug(
+                    "Provider %s availability check failed", name, exc_info=True
+                )
                 avail = False
             status = ok if avail else fail
             table.add_row(
@@ -2391,7 +2460,7 @@ def mcp_add(ctx: click.Context, name: str, command: str | None, url: str | None)
 @mcp.command("remove")
 @click.argument("name")
 @click.pass_context
-def mcp_remove(ctx: click.Context, name: str) -> None:
+def mcp_remove_cmd(ctx: click.Context, name: str) -> None:
     """Disconnect and remove an MCP server."""
     from missy.mcp.manager import McpManager
 
@@ -2399,6 +2468,35 @@ def mcp_remove(ctx: click.Context, name: str) -> None:
     mgr = McpManager()
     mgr.remove_server(name)
     _print_success(f"MCP server [bold]{name}[/] removed.")
+
+
+@mcp.command("pin")
+@click.argument("name")
+@click.pass_context
+def mcp_pin_cmd(ctx: click.Context, name: str) -> None:
+    """Pin the tool manifest digest for an MCP server.
+
+    Connects to the server, computes the SHA-256 digest of its tool
+    manifest, and writes it back to mcp.json.  Future connections will
+    refuse to load if the digest changes.
+    """
+    from missy.mcp.manager import McpManager
+
+    _load_subsystems(ctx.obj["config_path"])
+    mgr = McpManager()
+    mgr.connect_all()
+
+    try:
+        digest = mgr.pin_server_digest(name)
+    except KeyError:
+        _print_error(f"MCP server {name!r} is not connected.")
+        sys.exit(1)
+    except Exception as exc:
+        _print_error(f"Failed to pin digest: {exc}")
+        sys.exit(1)
+
+    _print_success(f"Pinned digest for [bold]{name}[/]:\n  {digest}")
+    mgr.shutdown()
 
 
 # ---------------------------------------------------------------------------
@@ -2716,6 +2814,144 @@ def voice_test(ctx: click.Context, node_id: str, text: str) -> None:
     except Exception as exc:
         _print_error(f"TTS synthesis failed: {exc}")
         sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# missy presets
+# ---------------------------------------------------------------------------
+
+
+@cli.group("presets")
+def presets_group() -> None:
+    """Manage network policy presets."""
+
+
+@presets_group.command("list")
+def presets_list() -> None:
+    """List all built-in network policy presets and their contents."""
+    from missy.policy.presets import PRESETS
+
+    table = Table(title="Network Policy Presets", show_lines=True)
+    table.add_column("Name", style="bold")
+    table.add_column("Hosts")
+    table.add_column("Domains")
+    table.add_column("CIDRs")
+
+    for name in sorted(PRESETS):
+        preset = PRESETS[name]
+        table.add_row(
+            name,
+            ", ".join(preset.get("hosts", [])) or "[dim]—[/]",
+            ", ".join(preset.get("domains", [])) or "[dim]—[/]",
+            ", ".join(preset.get("cidrs", [])) or "[dim]—[/]",
+        )
+
+    console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# missy mcp pin
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# missy config
+# ---------------------------------------------------------------------------
+
+
+@cli.group("config")
+def config_group() -> None:
+    """Config backup, diff, and rollback commands."""
+
+
+@config_group.command("backups")
+@click.pass_context
+def config_backups(ctx: click.Context) -> None:
+    """List all config backups."""
+    from missy.config.plan import list_backups
+
+    backups = list_backups()
+    if not backups:
+        console.print("[dim]No config backups found.[/]")
+        return
+
+    table = Table(title="Config Backups", show_lines=True)
+    table.add_column("File", style="bold")
+    table.add_column("Size", justify="right")
+
+    for b in backups:
+        table.add_row(b.name, f"{b.stat().st_size:,} bytes")
+
+    console.print(table)
+
+
+@config_group.command("diff")
+@click.pass_context
+def config_diff(ctx: click.Context) -> None:
+    """Show unified diff between current config and latest backup."""
+    from missy.config.plan import diff_configs, list_backups
+
+    config_path = ctx.obj.get("config_path", DEFAULT_CONFIG)
+    config_file = Path(config_path).expanduser()
+
+    if not config_file.exists():
+        _print_error(f"Config file not found: {config_file}")
+        sys.exit(1)
+
+    backups = list_backups()
+    if not backups:
+        console.print("[dim]No backups to compare against.[/]")
+        return
+
+    latest = backups[-1]
+    diff_text = diff_configs(latest, config_file)
+    if not diff_text:
+        console.print("[dim]No differences between current config and latest backup.[/]")
+    else:
+        console.print(diff_text)
+
+
+@config_group.command("rollback")
+@click.pass_context
+def config_rollback(ctx: click.Context) -> None:
+    """Restore config from the latest backup (current config is backed up first)."""
+    from missy.config.plan import rollback
+
+    config_path = ctx.obj.get("config_path", DEFAULT_CONFIG)
+    config_file = Path(config_path).expanduser()
+
+    restored = rollback(config_file)
+    if restored is None:
+        console.print("[dim]No backups available to restore from.[/]")
+    else:
+        _print_success(f"Config restored from [bold]{restored.name}[/].")
+
+
+@config_group.command("plan")
+@click.pass_context
+def config_plan(ctx: click.Context) -> None:
+    """Show what would change if a new config were applied (diff vs latest backup)."""
+    from missy.config.plan import diff_configs, list_backups
+
+    config_path = ctx.obj.get("config_path", DEFAULT_CONFIG)
+    config_file = Path(config_path).expanduser()
+
+    if not config_file.exists():
+        console.print("[dim]No config file exists yet. Run 'missy setup' to create one.[/]")
+        return
+
+    backups = list_backups()
+    if not backups:
+        console.print("[dim]No previous backups. Current config is the baseline.[/]")
+        return
+
+    latest = backups[-1]
+    diff_text = diff_configs(latest, config_file)
+    if not diff_text:
+        console.print("[green]Config matches the latest backup — no changes pending.[/]")
+    else:
+        console.print("[bold]Changes since last backup:[/]\n")
+        console.print(diff_text)
 
 
 # ---------------------------------------------------------------------------

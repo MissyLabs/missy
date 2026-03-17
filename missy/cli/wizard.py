@@ -562,16 +562,19 @@ def run_wizard(config_path: str) -> None:
                     api_key = run_anthropic_vault_flow(api_key, vault_dir)
 
             # Live verification (skip for vault refs and setup-tokens).
-            if api_key and not api_key.startswith("vault://") and auth_choice != "3" and click.confirm("    Verify API key with a test call?", default=True):
-                    console.print("    [dim]Connecting…[/]")
-                    ok = _verify_anthropic(api_key)
-                    verify_results.append(("anthropic", ok))
-                    if ok:
-                        console.print("    [green]Connection successful.[/]")
-                    else:
-                        console.print(
-                            "    [yellow]Verification failed — key will still be saved.[/]"
-                        )
+            if (
+                api_key
+                and not api_key.startswith("vault://")
+                and auth_choice != "3"
+                and click.confirm("    Verify API key with a test call?", default=True)
+            ):
+                console.print("    [dim]Connecting…[/]")
+                ok = _verify_anthropic(api_key)
+                verify_results.append(("anthropic", ok))
+                if ok:
+                    console.print("    [green]Connection successful.[/]")
+                else:
+                    console.print("    [yellow]Verification failed — key will still be saved.[/]")
 
         # Use updated pkey's info for model choices (e.g. openai-codex after OAuth).
         primary, fast, premium = _prompt_model(_PROVIDERS.get(pkey, info))
@@ -734,6 +737,15 @@ def run_wizard(config_path: str) -> None:
     )
 
     try:
+        # Back up existing config before overwriting
+        if config_file.exists():
+            try:
+                from missy.config.plan import backup_config
+
+                backup_path = backup_config(config_file)
+                console.print(f"  [dim]Backed up existing config to {backup_path}[/]")
+            except Exception as _bkp_exc:
+                console.print(f"  [yellow]Could not back up config: {_bkp_exc}[/]")
         _write_config_atomic(config_file, yaml_content)
     except OSError as exc:
         err_console.print(f"[red]Failed to write config: {exc}[/]")
@@ -763,3 +775,102 @@ def run_wizard(config_path: str) -> None:
             border_style="green",
         )
     )
+
+
+# ---------------------------------------------------------------------------
+# Non-interactive setup (Feature 2)
+# ---------------------------------------------------------------------------
+
+
+def run_wizard_noninteractive(
+    config_path: str,
+    provider: str,
+    api_key: str | None = None,
+    api_key_env: str | None = None,
+    model: str | None = None,
+    workspace: str | None = None,
+) -> None:
+    """Write a config file without any interactive prompts.
+
+    Args:
+        config_path: Destination path for config.yaml.
+        provider: Provider name (must be a key in ``_PROVIDERS``).
+        api_key: Direct API key value.
+        api_key_env: Environment variable name to read the API key from.
+        model: Model identifier (defaults to provider's primary model).
+        workspace: Workspace directory (defaults to ``~/workspace``).
+
+    Raises:
+        click.ClickException: On validation errors.
+    """
+    config_file = Path(config_path).expanduser()
+
+    if provider not in _PROVIDERS:
+        valid = ", ".join(sorted(_PROVIDERS))
+        raise click.ClickException(f"Unknown provider {provider!r}. Valid: {valid}")
+
+    info = _PROVIDERS[provider]
+
+    # Resolve API key
+    resolved_key: str | None = api_key
+    if not resolved_key and api_key_env:
+        resolved_key = os.environ.get(api_key_env)
+        if not resolved_key:
+            raise click.ClickException(f"Environment variable {api_key_env!r} is not set or empty.")
+
+    # Resolve model
+    resolved_model = model or info["models"].get("primary", "")
+    if not resolved_model:
+        raise click.ClickException(f"No default model for provider {provider!r}; specify --model.")
+
+    # Workspace
+    workspace_path = Path(workspace or "~/workspace").expanduser()
+    workspace_path.mkdir(parents=True, exist_ok=True)
+
+    # Build allowed hosts
+    allowed_hosts: list[str] = []
+    host = info.get("host")
+    if host:
+        allowed_hosts.append(host)
+
+    # Build provider config
+    providers_cfg = [
+        {
+            "name": provider,
+            "model": resolved_model,
+            "fast_model": info["models"].get("fast", ""),
+            "premium_model": info["models"].get("premium", ""),
+            "api_key": resolved_key,
+            "base_url": None,
+        }
+    ]
+
+    yaml_content = _build_config_yaml(
+        workspace=str(workspace_path),
+        providers_cfg=providers_cfg,
+        allowed_hosts=allowed_hosts,
+    )
+
+    # Back up if overwriting
+    if config_file.exists():
+        try:
+            from missy.config.plan import backup_config
+
+            backup_config(config_file)
+        except Exception:
+            pass
+
+    _write_config_atomic(config_file, yaml_content)
+
+    # Ensure standard directories exist
+    missy_dir = config_file.parent
+    for subdir, mode in [("secrets", 0o700), ("logs", 0o755)]:
+        d = missy_dir / subdir
+        if not d.exists():
+            d.mkdir(mode=mode)
+
+    jobs_file = missy_dir / "jobs.json"
+    if not jobs_file.exists():
+        jobs_file.write_text("[]", encoding="utf-8")
+
+    err_console.print(f"[green]Config written to {config_file}[/]")

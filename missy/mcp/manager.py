@@ -53,13 +53,16 @@ class McpManager:
             if st.st_uid != os.getuid():
                 logger.warning(
                     "MCP config %s owned by uid %d, expected %d; refusing to load",
-                    self._config_path, st.st_uid, os.getuid(),
+                    self._config_path,
+                    st.st_uid,
+                    os.getuid(),
                 )
                 return
             if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
                 logger.warning(
                     "MCP config %s is group/world-writable (mode %o); refusing to load",
-                    self._config_path, st.st_mode,
+                    self._config_path,
+                    st.st_mode,
                 )
                 return
         except OSError as exc:
@@ -80,23 +83,118 @@ class McpManager:
     def add_server(
         self, name: str, command: str | None = None, url: str | None = None
     ) -> McpClient:
-        """Connect to a new MCP server and persist the config."""
+        """Connect to a new MCP server and persist the config.
+
+        If the config entry for this server has a ``"digest"`` key, the
+        tool manifest digest is verified after connection.  A mismatch
+        causes the server to be disconnected and an error to be raised.
+        """
         if not _SAFE_NAME_RE.match(name):
             raise ValueError(
                 f"Invalid MCP server name: {name!r} "
                 "(must contain only alphanumeric, hyphens, underscores)"
             )
         if "__" in name:
-            raise ValueError(
-                f"Invalid MCP server name: {name!r} (must not contain '__')"
-            )
+            raise ValueError(f"Invalid MCP server name: {name!r} (must not contain '__')")
         client = McpClient(name=name, command=command, url=url)
         client.connect()
+
+        # Digest verification (Feature 3)
+        expected_digest = self._get_server_digest(name)
+        if expected_digest is not None:
+            from missy.mcp.digest import compute_tool_manifest_digest, verify_digest
+
+            actual_digest = compute_tool_manifest_digest(client.tools)
+            if not verify_digest(expected_digest, actual_digest):
+                client.disconnect()
+                logger.warning(
+                    "MCP: digest mismatch for %r: expected=%s actual=%s",
+                    name,
+                    expected_digest,
+                    actual_digest,
+                )
+                try:
+                    from missy.core.events import AuditEvent, event_bus
+
+                    event_bus.emit(
+                        AuditEvent(
+                            event_type="mcp.digest_mismatch",
+                            category="security",
+                            result="deny",
+                            detail={
+                                "server": name,
+                                "expected": expected_digest,
+                                "actual": actual_digest,
+                            },
+                        )
+                    )
+                except Exception:
+                    pass
+                raise ValueError(
+                    f"MCP server {name!r} tool manifest digest mismatch: "
+                    f"expected {expected_digest}, got {actual_digest}"
+                )
+            logger.info("MCP: digest verified for %r", name)
+        else:
+            logger.debug(
+                "MCP: no digest pinned for %r — consider running 'missy mcp pin %s'",
+                name,
+                name,
+            )
+
         with self._lock:
             self._clients[name] = client
         self._save_config()
         logger.info("MCP: connected to %r (%d tools)", name, len(client.tools))
         return client
+
+    def _get_server_digest(self, name: str) -> str | None:
+        """Return the pinned digest for server *name* from the config file, or None."""
+        if not self._config_path.exists():
+            return None
+        try:
+            servers = json.loads(self._config_path.read_text())
+            for entry in servers:
+                if entry.get("name") == name:
+                    return entry.get("digest")
+        except Exception:
+            pass
+        return None
+
+    def pin_server_digest(self, name: str) -> str:
+        """Compute and persist the digest for a connected server.
+
+        Args:
+            name: Name of the MCP server (must be connected).
+
+        Returns:
+            The computed digest string.
+
+        Raises:
+            KeyError: If the server is not connected.
+        """
+        with self._lock:
+            client = self._clients.get(name)
+        if client is None:
+            raise KeyError(f"MCP server {name!r} is not connected.")
+
+        from missy.mcp.digest import compute_tool_manifest_digest
+
+        digest = compute_tool_manifest_digest(client.tools)
+
+        # Update digest in config file
+        if self._config_path.exists():
+            try:
+                servers = json.loads(self._config_path.read_text())
+                for entry in servers:
+                    if entry.get("name") == name:
+                        entry["digest"] = digest
+                        break
+                self._config_path.write_text(json.dumps(servers, indent=2))
+            except Exception as exc:
+                logger.warning("MCP: failed to persist digest for %r: %s", name, exc)
+
+        return digest
 
     def remove_server(self, name: str) -> None:
         with self._lock:
