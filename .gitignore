@@ -21,3 +21,12 @@ htmlcov/
 *.log
 *.jsonl
 .hypothesis/
+
+# Local config (may contain secrets or personal settings)
+config.yaml
+discord-configs.yaml
+*.pem
+*.key
+*.crt
+*.cert
+secrets.yaml
