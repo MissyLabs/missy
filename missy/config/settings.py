@@ -298,6 +298,7 @@ class MissyConfig:
     proactive: ProactiveConfig = field(default_factory=ProactiveConfig)
     sandbox: SandboxConfig | None = None
     max_spend_usd: float = 0.0  # 0 = unlimited; per-session budget cap
+    config_version: int = 0  # schema version stamp (0 = pre-migration)
 
 
 # ---------------------------------------------------------------------------
@@ -570,6 +571,7 @@ def load_config(path: str) -> MissyConfig:
             proactive=_parse_proactive(data.get("proactive") or {}),
             sandbox=_parse_sandbox(data.get("sandbox") or {}),
             max_spend_usd=float(data.get("max_spend_usd", 0.0)),
+            config_version=int(data.get("config_version", 0)),
         )
     except ConfigurationError:
         raise

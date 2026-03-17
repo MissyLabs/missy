@@ -54,13 +54,16 @@ _DEFAULT_CONFIG_YAML = """\
 # Missy configuration — edit to enable capabilities.
 # All capabilities are disabled by default (secure-by-default posture).
 
+config_version: 2
+
 network:
   default_deny: true
+  presets:
+    - anthropic
+    - openai
   allowed_cidrs: []
   allowed_domains: []
-  allowed_hosts:
-    - "api.anthropic.com"
-    - "api.openai.com"
+  allowed_hosts: []
 
 filesystem:
   allowed_write_paths:
@@ -128,6 +131,23 @@ def _load_subsystems(config_path: str) -> Any:
     from missy.providers.registry import init_registry
 
     expanded = str(Path(config_path).expanduser())
+
+    # Run config migration before loading (backs up + rewrites if needed)
+    try:
+        from missy.config.migrate import migrate_config
+
+        migration = migrate_config(expanded)
+        if migration["migrated"]:
+            presets = migration["presets_detected"]
+            backup = migration["backup_path"]
+            console.print(
+                f"[green]Config migrated to v{migration['version']}[/]"
+                + (f" — detected presets: {', '.join(presets)}" if presets else "")
+                + (f"\n  [dim]Backup: {backup}[/]" if backup else "")
+            )
+    except Exception as _mig_exc:
+        logger.warning("Config migration skipped: %s", _mig_exc)
+
     try:
         cfg = load_config(expanded)
     except ConfigurationError as exc:
