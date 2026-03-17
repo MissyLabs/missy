@@ -60,19 +60,22 @@ This isn't paranoia — it's the only sane default for an AI agent that can exec
 
 ---
 
+## Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/MissyLabs/missy/master/install.sh | bash
+```
+
+This clones to `~/.local/share/missy`, creates a venv, installs, and symlinks `missy` into `~/.local/bin`. Requires Python 3.11+ and git.
+
 ## Quick Start
 
 ```bash
-# Install
-git clone https://github.com/MissyLabs/missy.git
-cd missy
-pip install -e .
-
-# Initialize config and workspace
-missy setup
-
 # Set your API key
 export ANTHROPIC_API_KEY="sk-ant-..."
+
+# Run the setup wizard
+missy setup
 
 # Ask a question
 missy ask "What services are listening on this machine?"
@@ -80,6 +83,17 @@ missy ask "What services are listening on this machine?"
 # Start an interactive session
 missy run
 ```
+
+<details>
+<summary>Manual install</summary>
+
+```bash
+git clone https://github.com/MissyLabs/missy.git
+cd missy
+pip install -e .
+missy setup
+```
+</details>
 
 ### Optional extras
 
