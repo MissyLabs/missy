@@ -44,6 +44,21 @@ from missy.security.censor import censor_response
 from missy.security.trust import TrustScorer
 from missy.tools.registry import get_tool_registry
 
+# Message bus integration (graceful degradation — never break the runtime).
+try:
+    from missy.core.bus_topics import (
+        AGENT_RUN_COMPLETE,
+        AGENT_RUN_ERROR,
+        AGENT_RUN_START,
+        TOOL_REQUEST,
+    )
+    from missy.core.bus_topics import TOOL_RESULT as _BUS_TOOL_RESULT
+    from missy.core.message_bus import BusMessage, get_message_bus
+
+    _HAS_MESSAGE_BUS = True
+except ImportError:  # pragma: no cover
+    _HAS_MESSAGE_BUS = False
+
 logger = logging.getLogger(__name__)
 
 # Maximum size (chars) for a single tool result to prevent memory exhaustion.
@@ -190,6 +205,35 @@ class AgentRuntime:
         self._identity = self._make_identity()
         # Trust scorer for providers, tools, and MCP servers
         self._trust_scorer = TrustScorer()
+        # Attention system (Feature B: brain-inspired attention subsystems)
+        self._attention = self._make_attention_system()
+        # Message bus (graceful degradation)
+        self._message_bus = self._make_message_bus()
+
+    # ------------------------------------------------------------------
+    # Message bus helper
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _make_message_bus():
+        """Try to acquire the message bus singleton; return None on failure."""
+        if not _HAS_MESSAGE_BUS:
+            return None
+        try:
+            return get_message_bus()
+        except Exception:
+            logger.debug("Message bus not available; events will not be published.")
+            return None
+
+    def _bus_publish(self, topic: str, payload: dict, source: str = "agent") -> None:
+        """Publish a message to the bus.  Never raises."""
+        bus = self._message_bus
+        if bus is None:
+            return
+        try:
+            bus.publish(BusMessage(topic=topic, payload=payload, source=source))
+        except Exception:
+            logger.debug("Failed to publish bus message for topic %r", topic, exc_info=True)
 
     def switch_provider(self, name: str) -> None:
         """Switch the active provider at runtime.
@@ -265,6 +309,15 @@ class AgentRuntime:
             result="allow",
             detail={"user_input_length": len(user_input)},
         )
+        if _HAS_MESSAGE_BUS:
+            self._bus_publish(
+                AGENT_RUN_START,
+                {
+                    "session_id": sid,
+                    "task_id": task_id,
+                    "user_input_length": len(user_input),
+                },
+            )
 
         try:
             provider = self._get_provider()
@@ -281,8 +334,40 @@ class AgentRuntime:
         # Load history from memory store
         history = self._load_history(sid)
 
+        # Attention system: process input to get urgency, topics, priorities
+        attention_query = user_input
+        if self._attention is not None:
+            try:
+                attn_state = self._attention.process(user_input, history)
+                attention_query = " ".join(attn_state.topics) if attn_state.topics else user_input
+                logger.debug(
+                    "Attention state: urgency=%.2f topics=%s focus=%d priority=%s",
+                    attn_state.urgency,
+                    attn_state.topics,
+                    attn_state.focus_duration,
+                    attn_state.priority_tools,
+                )
+                if attn_state.urgency > 0.7:
+                    self._emit_event(
+                        session_id=sid,
+                        task_id=task_id,
+                        event_type="agent.attention.urgent",
+                        result="info",
+                        detail={
+                            "urgency": attn_state.urgency,
+                            "topics": attn_state.topics,
+                        },
+                    )
+            except Exception:
+                logger.debug("Attention system failed", exc_info=True)
+
         # Build context-managed messages
-        system_prompt, messages = self._build_context_messages(user_input, history, session_id=sid)
+        system_prompt, messages = self._build_context_messages(
+            user_input,
+            history,
+            session_id=sid,
+            attention_query=attention_query,
+        )
 
         # Register system prompt hash for drift detection
         if self._drift_detector is not None:
@@ -311,6 +396,11 @@ class AgentRuntime:
                     "provider": provider.name,
                 },
             )
+            if _HAS_MESSAGE_BUS:
+                self._bus_publish(
+                    AGENT_RUN_ERROR,
+                    {"session_id": sid, "task_id": task_id, "error": str(exc)},
+                )
             raise
         except Exception as exc:
             self._emit_event(
@@ -324,6 +414,11 @@ class AgentRuntime:
                     "provider": provider.name,
                 },
             )
+            if _HAS_MESSAGE_BUS:
+                self._bus_publish(
+                    AGENT_RUN_ERROR,
+                    {"session_id": sid, "task_id": task_id, "error": str(exc)},
+                )
             raise ProviderError(f"Unexpected error during completion: {exc}") from exc
 
         # Persist turn
@@ -353,6 +448,16 @@ class AgentRuntime:
                 **cost_detail,
             },
         )
+        if _HAS_MESSAGE_BUS:
+            self._bus_publish(
+                AGENT_RUN_COMPLETE,
+                {
+                    "session_id": sid,
+                    "task_id": task_id,
+                    "provider": provider.name,
+                    "tools_used": all_tool_names_used,
+                },
+            )
 
         return censor_response(final_response)
 
@@ -605,7 +710,28 @@ class AgentRuntime:
                     for tc in response.tool_calls:
                         tool_names_used.append(tc.name)
                         _progress.on_tool_start(tc.name)
+                        if _HAS_MESSAGE_BUS:
+                            self._bus_publish(
+                                TOOL_REQUEST,
+                                {
+                                    "tool": tc.name,
+                                    "session_id": session_id,
+                                    "task_id": task_id,
+                                },
+                                source=f"tool:{tc.name}",
+                            )
                         tr = self._execute_tool(tc, session_id=session_id, task_id=task_id)
+                        if _HAS_MESSAGE_BUS:
+                            self._bus_publish(
+                                _BUS_TOOL_RESULT,
+                                {
+                                    "tool": tc.name,
+                                    "is_error": tr.is_error,
+                                    "session_id": session_id,
+                                    "task_id": task_id,
+                                },
+                                source=f"tool:{tc.name}",
+                            )
                         _progress.on_tool_done(tc.name, "error" if tr.is_error else "ok")
                         tool_results.append(tr)
 
@@ -1036,21 +1162,33 @@ class AgentRuntime:
     # ------------------------------------------------------------------
 
     def _build_context_messages(
-        self, user_input: str, history: list[dict], session_id: str = ""
+        self,
+        user_input: str,
+        history: list[dict],
+        session_id: str = "",
+        attention_query: str = "",
     ) -> tuple[str, list[dict]]:
         """Assemble the system prompt and message list via ContextManager.
 
         Falls back to a minimal system + user message when the context
         manager is unavailable.
 
+        When the :class:`~missy.memory.synthesizer.MemorySynthesizer` is
+        available, memory and learnings are merged into a single
+        relevance-ranked block instead of being injected separately.
+
         Args:
             user_input: The new user input text.
             history: Loaded history dicts from the memory store.
             session_id: Current session ID (used to load summaries).
+            attention_query: Query derived from the attention system for
+                relevance scoring.  Falls back to *user_input* when empty.
 
         Returns:
             A 2-tuple of ``(system_prompt_str, messages_list)``.
         """
+        synth_query = attention_query or user_input
+
         if self._context_manager is not None:
             try:
                 # Retrieve recent learnings for context injection.
@@ -1063,6 +1201,7 @@ class AgentRuntime:
 
                 # Load top-level summaries for this session.
                 session_summaries = None
+                summary_texts: list[str] = []
                 if session_id and self._memory_store is not None:
                     try:
                         all_summaries = self._memory_store.get_summaries(session_id, limit=100)
@@ -1070,11 +1209,47 @@ class AgentRuntime:
                         session_summaries = [
                             s for s in all_summaries if s.parent_id is None
                         ] or None
+                        if session_summaries:
+                            summary_texts = [
+                                getattr(s, "content", str(s)) for s in session_summaries
+                            ]
                     except Exception:
                         logger.debug("Failed to load summaries", exc_info=True)
 
+                # Inject proven playbook patterns into system prompt.
+                playbook_system = self.config.system_prompt
+                playbook_texts: list[str] = []
+                try:
+                    playbook_patterns = self._get_playbook_patterns(user_input)
+                    if playbook_patterns:
+                        playbook_system += playbook_patterns
+                        playbook_texts = [playbook_patterns]
+                except Exception:
+                    logger.debug("Playbook pattern injection failed", exc_info=True)
+
+                # Attempt unified synthesis (Feature A: MemorySynthesizer).
+                synthesized_block = self._synthesize_memory(
+                    learnings=recent_learnings,
+                    summary_texts=summary_texts,
+                    playbook_texts=playbook_texts,
+                    query=synth_query,
+                )
+
+                if synthesized_block:
+                    # Use synthesized block -- pass no separate learnings.
+                    system, msgs = self._context_manager.build_messages(
+                        system=playbook_system,
+                        new_message=user_input,
+                        history=history,
+                        learnings=None,
+                        summaries=session_summaries,
+                    )
+                    system += f"\n\n## Synthesized Memory\n{synthesized_block}"
+                    return system, msgs
+
+                # Fallback: separate injection (original behaviour).
                 return self._context_manager.build_messages(
-                    system=self.config.system_prompt,
+                    system=playbook_system,
                     new_message=user_input,
                     history=history,
                     learnings=recent_learnings,
@@ -1085,6 +1260,44 @@ class AgentRuntime:
 
         # Minimal fallback
         return self.config.system_prompt, [{"role": "user", "content": user_input}]
+
+    def _synthesize_memory(
+        self,
+        learnings: list[str] | None,
+        summary_texts: list[str] | None,
+        playbook_texts: list[str] | None = None,
+        query: str = "",
+    ) -> str:
+        """Build a unified memory block via :class:`MemorySynthesizer`.
+
+        Returns an empty string when the synthesizer is unavailable or
+        there are no fragments to merge.
+        """
+        try:
+            from missy.memory.synthesizer import MemorySynthesizer
+
+            synth = MemorySynthesizer()
+            has_content = False
+
+            if learnings:
+                synth.add_fragments("learnings", learnings, base_relevance=0.7)
+                has_content = True
+
+            if summary_texts:
+                synth.add_fragments("summaries", summary_texts, base_relevance=0.4)
+                has_content = True
+
+            if playbook_texts:
+                synth.add_fragments("playbook", playbook_texts, base_relevance=0.6)
+                has_content = True
+
+            if not has_content:
+                return ""
+
+            return synth.synthesize(query)
+        except Exception:
+            logger.debug("MemorySynthesizer failed", exc_info=True)
+            return ""
 
     def _load_history(self, session_id: str) -> list[dict]:
         """Load conversation history from the memory store.
@@ -1464,6 +1677,22 @@ class AgentRuntime:
             return identity
         except Exception:
             logger.debug("Agent identity unavailable; proceeding without it", exc_info=True)
+            return None
+
+    @staticmethod
+    def _make_attention_system():
+        """Create an :class:`~missy.agent.attention.AttentionSystem`.
+
+        Returns:
+            An :class:`AttentionSystem` instance, or ``None`` when
+            unavailable.
+        """
+        try:
+            from missy.agent.attention import AttentionSystem
+
+            return AttentionSystem()
+        except Exception:
+            logger.debug("AttentionSystem unavailable; proceeding without it", exc_info=True)
             return None
 
     @staticmethod
