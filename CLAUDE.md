@@ -270,7 +270,7 @@ Tests under `tests/` with subdirectories: `agent/`, `channels/`, `cli/`, `config
 
 ## Companion Project: missy-edge
 
-**Repository:** `/home/missy/missy-edge/` ([GitHub](https://github.com/TargetedEntropy/missy-edge))
+**Repository:** `/home/missy/missy-edge/` ([GitHub](https://github.com/MissyLabs/missy-edge))
 
 `missy-edge` is the standalone Raspberry Pi voice edge node client. It connects to Missy's VoiceChannel server (`missy/channels/voice/server.py`) over WebSocket and provides always-on wake word detection, audio streaming, and TTS playback.
 
