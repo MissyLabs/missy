@@ -164,7 +164,8 @@ def analyze_discord_attachment(
     saved_to = None
     if save_path:
         os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True, mode=0o700)
-        with open(save_path, "wb") as f:
+        fd = os.open(save_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as f:
             f.write(image_data)
         saved_to = save_path
         logger.info("Saved Discord attachment to %s (%d bytes)", save_path, len(image_data))
@@ -210,7 +211,8 @@ def save_discord_attachment(
     dest = os.path.join(save_dir, f"{ts}_{filename}")
 
     image_data = rest_client.download_attachment(url)
-    with open(dest, "wb") as f:
+    fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as f:
         f.write(image_data)
 
     logger.info("Saved attachment to %s (%d bytes)", dest, len(image_data))
