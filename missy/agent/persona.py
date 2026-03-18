@@ -349,7 +349,8 @@ class PersonaManager:
         }
         try:
             audit_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            with audit_path.open("a", encoding="utf-8") as fh:
+            fd = os.open(str(audit_path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            with os.fdopen(fd, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(entry) + "\n")
         except OSError:
             logger.debug("Could not write to persona audit log at %s", audit_path)

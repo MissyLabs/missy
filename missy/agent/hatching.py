@@ -175,7 +175,8 @@ class HatchingLog:
         }
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            with self._path.open("a", encoding="utf-8") as fh:
+            fd = os.open(str(self._path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            with os.fdopen(fd, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(entry) + "\n")
         except OSError:
             logger.warning("Could not write to hatching log at %s", self._path)
@@ -433,7 +434,8 @@ class HatchingManager:
         try:
             self._state_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             tmp_path = self._state_path.with_suffix(".yaml.tmp")
-            with tmp_path.open("w", encoding="utf-8") as fh:
+            fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 yaml.safe_dump(state.to_dict(), fh, default_flow_style=False, allow_unicode=True)
             tmp_path.replace(self._state_path)
         except OSError as exc:
