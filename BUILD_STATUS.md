@@ -9,11 +9,11 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 
 ## Test Results
 
-- **Total tests: 9110**
-- **Passed: 9110**
+- **Total tests: 10233**
+- **Passed: 10233**
 - **Failed: 0**
 - **Skipped: 17**
-- **Duration: ~173s**
+- **Duration: ~204s**
 
 ## Completed Components
 
@@ -80,8 +80,8 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 ## Architecture
 
 - 157 Python source files
-- 290+ test files
-- 9110 tests total
+- 310+ test files
+- 10233 tests total
 
 ## Session History
 
@@ -162,6 +162,28 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 12. Added 141 CLI integration + persona enforcement integration tests
 13. Total: 9110 tests passing, 0 failures
 
+### Session 7 (2026-03-18) — Deep Integration Testing + Bug Fixes
+1. Fixed MemoryStore thread-safety bug: added threading.Lock to add_turn/clear_session/compact_session
+2. Fixed MCP manager digest-mismatch audit: publish() not emit(), AuditEvent.now() for correct fields
+3. Added 10 SessionManager.create_session_with_id tests (deterministic UUID, thread isolation)
+4. Added 12 SummaryRecord/LargeContentRecord.from_row + get_source_turns tests
+5. Added 107 end-to-end CLI integration tests (init, ask, providers, skills, plugins, presets, audit, doctor, hatch, persona, cost, recover, sandbox, config backups, help flags)
+6. Added 16 persona runtime enforcement integration tests (traits, empty fields, reset, full pipeline)
+7. Added 98 Discord channel integration tests (construction, setters, access control, pairing, lifecycle)
+8. Added 62 resilient memory store deep tests (fallback, sync, search, learning, cleanup)
+9. Added 19 MemoryStore thread-safety tests (concurrent add/clear/compact, lock verification)
+10. Added 94 gateway+policy integration tests (network, REST L7, presets, CIDR, domain, approval)
+11. Added 75 MCP+skills integration tests (lifecycle, health, namespacing, digest, discovery, audit)
+12. Added 102 scheduler deep tests (parser edge cases, persistence, active hours, timezone, concurrent)
+13. Added 103 agent runtime deep tests (initialization, tool loop, circuit breaker, context, persona)
+14. Added 85 config+observability integration tests (validation, defaults, backup/rollback, audit JSONL)
+15. Added 88 channel deep tests (device registry, PBKDF2 tokens, voice protocol, webhook, CLI)
+16. Added 85 security defense validation tests (injection, homoglyphs, Unicode bypass, credential detection)
+17. Added 89 message bus deep tests (wildcards, priority, correlation, filtering, thread safety, high-volume)
+18. Added 96 hatching+persona stress tests (100 rapid restarts, concurrent, YAML injection, audit integrity)
+19. Updated BUILD_RESULTS.md, TEST_RESULTS.md with current counts
+20. Total: 10233 tests passing, 0 failures
+
 ## Remaining Work (Future Hardening)
 - [x] Persona change audit trail (JSONL log of all edits) — done in session 2
 - [x] Fuzz testing for YAML parsing edge cases — done in session 3
@@ -188,6 +210,11 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 - [x] Vault/synthesizer/identity/drift edge cases — done in session 6
 - [x] Learnings/provider/rate-limiter edge cases — done in session 6
 - [x] Sanitizer/censor edge cases (homoglyphs, RTL, base64, nested injection) — done in session 6
-- [ ] Discord voice manager integration tests (requires discord.py + voice_recv mocking)
-- [ ] End-to-end CLI integration tests (missy ask/run with mock provider)
-- [ ] Persona runtime enforcement integration tests
+- [x] Discord channel integration tests (construction, access control, lifecycle) — done in session 7
+- [x] End-to-end CLI integration tests (missy ask/run with mock provider) — done in session 7
+- [x] Persona runtime enforcement integration tests — done in session 7
+- [x] Deep integration tests (gateway+policy, MCP+skills, scheduler, runtime, config+observability) — done in session 7
+- [x] Security defense validation tests (attack scenarios, credential detection) — done in session 7
+- [x] Stress tests (hatching rapid restarts, concurrent persona, high-volume events) — done in session 7
+- [x] MemoryStore thread-safety fix + tests — done in session 7
+- [x] MCP digest audit bug fix — done in session 7
