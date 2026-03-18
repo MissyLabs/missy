@@ -39,7 +39,6 @@ from collections.abc import Iterator
 from typing import Any
 
 from missy.config.settings import ProviderConfig
-from missy.core.events import AuditEvent, event_bus
 from missy.core.exceptions import ProviderError
 
 from .base import BaseProvider, CompletionResponse, Message
@@ -338,8 +337,10 @@ class AcpxProvider(BaseProvider):
         result: str,
         detail_msg: str,
     ) -> None:
-        """Publish a provider audit event to the global event bus."""
+        """Publish a provider audit event including the agent name."""
         try:
+            from missy.core.events import AuditEvent, event_bus
+
             event = AuditEvent.now(
                 session_id=session_id,
                 task_id=task_id,

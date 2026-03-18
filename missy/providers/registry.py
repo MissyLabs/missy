@@ -31,6 +31,7 @@ from .base import BaseProvider
 from .codex_provider import CodexProvider
 from .ollama_provider import OllamaProvider
 from .openai_provider import OpenAIProvider
+from .rate_limiter import RateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -231,6 +232,8 @@ class ProviderRegistry:
                 continue
             try:
                 instance = provider_cls(provider_config)
+                # Attach a rate limiter so providers enforce RPM/TPM limits.
+                instance.rate_limiter = RateLimiter()
                 registry.register(key, instance, config=provider_config)
                 logger.debug("Registered provider %r (%s).", key, provider_cls.__name__)
             except Exception:

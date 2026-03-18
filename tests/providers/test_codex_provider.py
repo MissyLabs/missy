@@ -65,15 +65,14 @@ def _make_jwt_token(payload: dict) -> str:
 
 @contextmanager
 def _mock_sse_stream(lines: list[str]):
-    """Patch httpx.stream to return an iterator over *lines*."""
+    """Patch PolicyHTTPClient.post to return a mock response with *lines*."""
     mock_resp = MagicMock()
     mock_resp.raise_for_status = MagicMock()
     mock_resp.iter_lines = MagicMock(return_value=iter(lines))
-    mock_ctx = MagicMock()
-    mock_ctx.__enter__ = MagicMock(return_value=mock_resp)
-    mock_ctx.__exit__ = MagicMock(return_value=False)
-    with patch("httpx.stream", return_value=mock_ctx):
-        yield mock_ctx
+    mock_resp.close = MagicMock()
+    with patch("missy.providers.codex_provider.PolicyHTTPClient") as mock_cls:
+        mock_cls.return_value.post.return_value = mock_resp
+        yield mock_cls
 
 
 def _sse(*events: dict, done: bool = True) -> list[str]:
@@ -686,11 +685,8 @@ class TestCodexProviderStream:
         mock_resp.text = "Unauthorized"
         http_error = httpx.HTTPStatusError("401", request=MagicMock(), response=mock_resp)
 
-        mock_ctx = MagicMock()
-        mock_ctx.__enter__ = MagicMock(side_effect=http_error)
-        mock_ctx.__exit__ = MagicMock(return_value=False)
-
-        with patch("httpx.stream", return_value=mock_ctx):
+        with patch("missy.providers.codex_provider.PolicyHTTPClient") as mock_cls:
+            mock_cls.return_value.post.side_effect = http_error
             with pytest.raises(ProviderError, match="401"):
                 list(self.provider.stream(self._messages()))
 
@@ -956,11 +952,8 @@ class TestCodexProviderCompleteWithTools:
         mock_resp.text = "Forbidden"
         http_error = httpx.HTTPStatusError("403", request=MagicMock(), response=mock_resp)
 
-        mock_ctx = MagicMock()
-        mock_ctx.__enter__ = MagicMock(side_effect=http_error)
-        mock_ctx.__exit__ = MagicMock(return_value=False)
-
-        with patch("httpx.stream", return_value=mock_ctx):
+        with patch("missy.providers.codex_provider.PolicyHTTPClient") as mock_cls:
+            mock_cls.return_value.post.side_effect = http_error
             with pytest.raises(ProviderError, match="403"):
                 self.provider.complete_with_tools(self._messages(), tools=[])
 

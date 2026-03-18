@@ -26,7 +26,6 @@ from collections.abc import Iterator
 from typing import Any
 
 from missy.config.settings import ProviderConfig
-from missy.core.events import AuditEvent, event_bus
 from missy.core.exceptions import ProviderError
 from missy.gateway.client import PolicyHTTPClient
 
@@ -116,6 +115,8 @@ class OllamaProvider(BaseProvider):
         # Forward any remaining kwargs directly into the payload
         payload.update(kwargs)
 
+        self._acquire_rate_limit()
+
         try:
             client = PolicyHTTPClient(
                 session_id=session_id,
@@ -156,13 +157,15 @@ class OllamaProvider(BaseProvider):
 
         self._emit_event(session_id, task_id, "allow", "completion successful")
 
-        return CompletionResponse(
+        result = CompletionResponse(
             content=content_text,
             model=data.get("model", model),
             provider=self.name,
             usage=usage,
             raw=data,
         )
+        self._record_rate_limit_usage(result)
+        return result
 
     def get_tool_schema(self, tools: list) -> list:
         """Convert BaseTool instances to Ollama's native tool schema format.
@@ -238,6 +241,8 @@ class OllamaProvider(BaseProvider):
             "stream": False,
         }
 
+        self._acquire_rate_limit()
+
         try:
             client = PolicyHTTPClient(
                 timeout=self._timeout,
@@ -289,7 +294,7 @@ class OllamaProvider(BaseProvider):
 
         if parsed_tool_calls:
             self._emit_event("", "", "allow", "tool_calls")
-            return CompletionResponse(
+            result = CompletionResponse(
                 content=content_text,
                 model=data.get("model", self._model),
                 provider=self.name,
@@ -298,9 +303,11 @@ class OllamaProvider(BaseProvider):
                 tool_calls=parsed_tool_calls,
                 finish_reason="tool_calls",
             )
+            self._record_rate_limit_usage(result)
+            return result
 
         self._emit_event("", "", "allow", "completion successful")
-        return CompletionResponse(
+        result = CompletionResponse(
             content=content_text,
             model=data.get("model", self._model),
             provider=self.name,
@@ -309,6 +316,8 @@ class OllamaProvider(BaseProvider):
             tool_calls=[],
             finish_reason="stop",
         )
+        self._record_rate_limit_usage(result)
+        return result
 
     def stream(self, messages: list[Message], system: str = "") -> Iterator[str]:
         """Stream partial response tokens from the Ollama API.
@@ -379,15 +388,10 @@ class OllamaProvider(BaseProvider):
         result: str,
         detail_msg: str,
     ) -> None:
-        """Publish a provider audit event to the global event bus.
-
-        Args:
-            session_id: Calling session identifier.
-            task_id: Calling task identifier.
-            result: One of ``"allow"`` or ``"error"``.
-            detail_msg: Human-readable description to include in the event.
-        """
+        """Publish a provider audit event including model and base_url."""
         try:
+            from missy.core.events import AuditEvent, event_bus
+
             event = AuditEvent.now(
                 session_id=session_id,
                 task_id=task_id,

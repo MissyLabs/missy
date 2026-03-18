@@ -22,14 +22,13 @@ from collections.abc import Iterator
 from typing import Any
 
 from missy.config.settings import ProviderConfig
-from missy.core.events import AuditEvent, event_bus
 from missy.core.exceptions import ProviderError
 
 from .base import BaseProvider, CompletionResponse, Message, ToolCall
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_MODEL = "claude-3-5-sonnet-20241022"
+_DEFAULT_MODEL = "claude-sonnet-4-6"
 
 try:
     import anthropic as _anthropic_sdk
@@ -64,6 +63,7 @@ class AnthropicProvider(BaseProvider):
         self._api_key: str | None = key
         self._model: str = config.model or _DEFAULT_MODEL
         self._timeout: int = config.timeout
+        self._client: Any | None = None
 
     # ------------------------------------------------------------------
     # BaseProvider interface
@@ -79,11 +79,13 @@ class AnthropicProvider(BaseProvider):
         return _ANTHROPIC_AVAILABLE and bool(self._api_key)
 
     def _make_client(self) -> Any:
-        """Construct an Anthropic client."""
-        return _anthropic_sdk.Anthropic(
-            api_key=self._api_key,
-            timeout=float(self._timeout),
-        )
+        """Return a cached Anthropic client, creating one on first call."""
+        if self._client is None:
+            self._client = _anthropic_sdk.Anthropic(
+                api_key=self._api_key,
+                timeout=float(self._timeout),
+            )
+        return self._client
 
     def complete(self, messages: list[Message], **kwargs: Any) -> CompletionResponse:
         """Send *messages* to the Anthropic Messages API.
@@ -137,6 +139,8 @@ class AnthropicProvider(BaseProvider):
         # Forward any remaining provider-specific kwargs
         call_kwargs.update(kwargs)
 
+        self._acquire_rate_limit()
+
         try:
             client = self._make_client()
             raw_response = client.messages.create(**call_kwargs)
@@ -167,13 +171,15 @@ class AnthropicProvider(BaseProvider):
 
         self._emit_event(session_id, task_id, "allow", "completion successful")
 
-        return CompletionResponse(
+        response = CompletionResponse(
             content=content_text,
             model=raw_response.model,
             provider=self.name,
             usage=usage,
             raw=raw_response.model_dump() if hasattr(raw_response, "model_dump") else {},
         )
+        self._record_rate_limit_usage(response)
+        return response
 
     def get_tool_schema(self, tools: list) -> list:
         """Convert BaseTool instances to Anthropic tool schema format.
@@ -250,6 +256,8 @@ class AnthropicProvider(BaseProvider):
         if system_content:
             call_kwargs["system"] = system_content
 
+        self._acquire_rate_limit()
+
         try:
             client = self._make_client()
             raw_response = client.messages.create(**call_kwargs)
@@ -290,7 +298,7 @@ class AnthropicProvider(BaseProvider):
             ),
         }
 
-        return CompletionResponse(
+        response = CompletionResponse(
             content=content_text,
             model=raw_response.model,
             provider=self.name,
@@ -299,6 +307,8 @@ class AnthropicProvider(BaseProvider):
             tool_calls=tool_calls,
             finish_reason=finish_reason,
         )
+        self._record_rate_limit_usage(response)
+        return response
 
     def stream(self, messages: list[Message], system: str = "") -> Iterator[str]:
         """Stream partial response tokens from the Anthropic API.
@@ -360,15 +370,10 @@ class AnthropicProvider(BaseProvider):
         result: str,
         detail_msg: str,
     ) -> None:
-        """Publish a provider audit event to the global event bus.
-
-        Args:
-            session_id: Calling session identifier.
-            task_id: Calling task identifier.
-            result: One of ``"allow"`` or ``"error"``.
-            detail_msg: Human-readable description to include in the event.
-        """
+        """Publish a provider audit event including the model name."""
         try:
+            from missy.core.events import AuditEvent, event_bus
+
             event = AuditEvent.now(
                 session_id=session_id,
                 task_id=task_id,

@@ -21,9 +21,16 @@ Example::
 
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from missy.providers.rate_limiter import RateLimiter
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -112,6 +119,7 @@ class BaseProvider(ABC):
     """
 
     name: str
+    rate_limiter: RateLimiter | None = None
 
     @abstractmethod
     def complete(self, messages: list[Message], **kwargs) -> CompletionResponse:
@@ -215,6 +223,51 @@ class BaseProvider(ABC):
         """
         response = self.complete(messages, system=system)
         yield response.content
+
+    def _acquire_rate_limit(self, estimated_tokens: int = 0) -> None:
+        """Block until the rate limiter permits a request, if one is set."""
+        if self.rate_limiter is not None:
+            self.rate_limiter.acquire(tokens=estimated_tokens)
+
+    def _record_rate_limit_usage(self, response: CompletionResponse) -> None:
+        """Deduct actual token usage from the rate limiter budget."""
+        if self.rate_limiter is not None:
+            self.rate_limiter.record_usage(
+                prompt_tokens=response.usage.get("prompt_tokens", 0),
+                completion_tokens=response.usage.get("completion_tokens", 0),
+            )
+
+    def _emit_event(
+        self,
+        session_id: str,
+        task_id: str,
+        result: str,
+        detail_msg: str,
+    ) -> None:
+        """Publish a provider audit event to the global event bus.
+
+        Subclasses may override to include provider-specific detail fields.
+
+        Args:
+            session_id: Calling session identifier.
+            task_id: Calling task identifier.
+            result: One of ``"allow"`` or ``"error"``.
+            detail_msg: Human-readable description to include in the event.
+        """
+        try:
+            from missy.core.events import AuditEvent, event_bus
+
+            event = AuditEvent.now(
+                session_id=session_id,
+                task_id=task_id,
+                event_type="provider_invoke",
+                category="provider",
+                result=result,  # type: ignore[arg-type]
+                detail={"provider": self.name, "message": detail_msg},
+            )
+            event_bus.publish(event)
+        except Exception:
+            logger.exception("Failed to emit audit event for provider %r", self.name)
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}(name={self.name!r})"

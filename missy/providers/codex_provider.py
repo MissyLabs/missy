@@ -16,6 +16,10 @@ The OAuth token is loaded automatically from
 refreshed if it is near expiry.  It can also be supplied directly via
 the ``api_key`` field in ``ProviderConfig``.
 
+All outbound HTTP is routed through
+:class:`~missy.gateway.client.PolicyHTTPClient` so that network policy
+is enforced automatically.
+
 Configure in ``config.yaml``::
 
     providers:
@@ -33,10 +37,9 @@ import logging
 from collections.abc import Iterator
 from typing import Any
 
-import httpx
-
 from missy.config.settings import ProviderConfig
 from missy.core.exceptions import ProviderError
+from missy.gateway.client import PolicyHTTPClient
 
 from .base import BaseProvider, CompletionResponse, Message, ToolCall
 
@@ -100,6 +103,10 @@ def _extract_system(messages: list[Message]) -> str:
 class CodexProvider(BaseProvider):
     """Provider that calls ChatGPT's backend API with an OAuth token.
 
+    All HTTP traffic is routed through
+    :class:`~missy.gateway.client.PolicyHTTPClient` so network policy is
+    enforced automatically.
+
     Args:
         config: Provider config.  ``api_key`` should be the OAuth access
             token.  If omitted, the token is loaded from
@@ -154,9 +161,80 @@ class CodexProvider(BaseProvider):
             body["tool_choice"] = "auto"
         return body
 
+    def _make_client(
+        self,
+        session_id: str = "",
+        task_id: str = "",
+    ) -> PolicyHTTPClient:
+        """Construct a PolicyHTTPClient for outbound requests."""
+        return PolicyHTTPClient(
+            session_id=session_id,
+            task_id=task_id,
+            timeout=self._timeout,
+            category="provider",
+        )
+
+    def _stream_sse(
+        self,
+        client: PolicyHTTPClient,
+        body: dict[str, Any],
+        token: str,
+        account_id: str,
+    ) -> Iterator[dict]:
+        """POST to the Codex endpoint and yield parsed SSE event dicts.
+
+        Uses ``PolicyHTTPClient.post(stream=True)`` so that network
+        policy is enforced.
+
+        Yields:
+            Parsed JSON event dicts from ``data:`` lines.
+
+        Raises:
+            ProviderError: On HTTP errors or stream error events.
+        """
+        try:
+            response = client.post(
+                _CODEX_ENDPOINT,
+                json=body,
+                headers=self._headers(token, account_id),
+                stream=True,
+            )
+            response.raise_for_status()
+        except ProviderError:
+            raise
+        except Exception as exc:
+            raise ProviderError(f"openai-codex request failed: {exc}") from exc
+
+        try:
+            for line in response.iter_lines():
+                if not line.startswith("data: "):
+                    continue
+                raw = line[6:].strip()
+                if raw in ("", "[DONE]"):
+                    continue
+                try:
+                    event = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                etype = event.get("type", "")
+                if etype in ("response.failed", "error"):
+                    msg = event.get("message") or event.get("error", {}).get(
+                        "message", "unknown"
+                    )
+                    raise ProviderError(f"openai-codex stream error: {msg}")
+                yield event
+        finally:
+            response.close()
+
     def complete(self, messages: list[Message], **kwargs: Any) -> CompletionResponse:
         """Single-turn completion — collects the SSE stream and returns full text."""
+        session_id = kwargs.pop("session_id", "")
+        task_id = kwargs.pop("task_id", "")
+
         text = "".join(self.stream(messages, **kwargs))
+
+        self._emit_event(session_id, task_id, "allow", "completion successful")
+
         return CompletionResponse(
             content=text,
             model=self._model,
@@ -177,54 +255,63 @@ class CodexProvider(BaseProvider):
         # Fallback: older shape
         return data.get("text", "") or data.get("content", "") or ""
 
-    def stream(self, messages: list[Message], **kwargs: Any) -> Iterator[str]:
-        """Stream tokens from the Codex backend via SSE."""
+    def stream(self, messages: list[Message], system: str = "", **kwargs: Any) -> Iterator[str]:
+        """Stream tokens from the Codex backend via SSE.
+
+        All HTTP is routed through :class:`PolicyHTTPClient`.
+
+        Args:
+            messages: Ordered conversation turns.
+            system: Optional system prompt (prepended if non-empty).
+
+        Yields:
+            Text delta chunks as they arrive.
+
+        Raises:
+            ProviderError: On transport failure or stream errors.
+        """
+        if system:
+            messages = [Message(role="system", content=system), *messages]
+
         token = self._get_token()
         account_id = _extract_account_id(token)
         body = self._build_body(messages, stream=True)
+        client = self._make_client()
 
-        try:
-            with httpx.stream(
-                "POST",
-                _CODEX_ENDPOINT,
-                headers=self._headers(token, account_id),
-                json=body,
-                timeout=self._timeout,
-            ) as resp:
-                resp.raise_for_status()
-                for line in resp.iter_lines():
-                    if not line.startswith("data: "):
-                        continue
-                    raw = line[6:].strip()
-                    if raw in ("", "[DONE]"):
-                        continue
-                    try:
-                        event = json.loads(raw)
-                    except json.JSONDecodeError:
-                        continue
-                    etype = event.get("type", "")
-                    if etype == "response.output_text.delta":
-                        delta = event.get("delta", "")
-                        if delta:
-                            yield delta
-                    elif etype in ("response.failed", "error"):
-                        msg = event.get("message") or event.get("error", {}).get(
-                            "message", "unknown"
-                        )
-                        raise ProviderError(f"openai-codex stream error: {msg}")
-        except httpx.HTTPStatusError as exc:
-            raise ProviderError(
-                f"openai-codex HTTP {exc.response.status_code}: {exc.response.text[:200]}"
-            ) from exc
+        for event in self._stream_sse(client, body, token, account_id):
+            etype = event.get("type", "")
+            if etype == "response.output_text.delta":
+                delta = event.get("delta", "")
+                if delta:
+                    yield delta
 
     def complete_with_tools(
         self,
         messages: list[Message],
-        tools: list[dict],
-        system_prompt: str = "",
-        **kwargs: Any,
+        tools: list,
+        system: str = "",
     ) -> CompletionResponse:
-        """Tool-calling completion — collects SSE stream and parses tool calls."""
+        """Tool-calling completion — collects SSE stream and parses tool calls.
+
+        All HTTP is routed through :class:`PolicyHTTPClient`.
+
+        Args:
+            messages: Ordered conversation turns.
+            tools: List of :class:`~missy.tools.base.BaseTool` instances
+                or pre-built schema dicts.
+            system: Optional system prompt string.
+
+        Returns:
+            A :class:`CompletionResponse`.  When ``finish_reason`` is
+            ``"tool_calls"``, ``tool_calls`` contains the parsed
+            :class:`~missy.providers.base.ToolCall` instances.
+
+        Raises:
+            ProviderError: On transport failure or stream errors.
+        """
+        if system:
+            messages = [Message(role="system", content=system), *messages]
+
         token = self._get_token()
         account_id = _extract_account_id(token)
         # Convert BaseTool instances → schema dicts if needed.
@@ -232,72 +319,46 @@ class CodexProvider(BaseProvider):
             self.get_tool_schema(tools) if tools and not isinstance(tools[0], dict) else tools
         )
         body = self._build_body(messages, tools=tool_schemas)
+        client = self._make_client()
 
         tool_calls: list[ToolCall] = []
         text_parts: list[str] = []
         current_fn: dict = {}
 
-        try:
-            with httpx.stream(
-                "POST",
-                _CODEX_ENDPOINT,
-                headers=self._headers(token, account_id),
-                json=body,
-                timeout=self._timeout,
-            ) as resp:
-                resp.raise_for_status()
-                for line in resp.iter_lines():
-                    if not line.startswith("data: "):
-                        continue
-                    raw = line[6:].strip()
-                    if raw in ("", "[DONE]"):
-                        continue
-                    try:
-                        event = json.loads(raw)
-                    except json.JSONDecodeError:
-                        continue
-                    etype = event.get("type", "")
-                    if etype == "response.output_text.delta":
-                        text_parts.append(event.get("delta", ""))
-                    elif etype == "response.output_item.added":
-                        item = event.get("item", {})
-                        if item.get("type") == "function_call":
-                            # Arguments may be inline in this event OR arrive
-                            # via subsequent function_call_arguments.delta events.
-                            current_fn = {
-                                "id": item.get("call_id", item.get("id", "")),
-                                "name": item.get("name", ""),
-                                "arguments": item.get("arguments", ""),
-                            }
-                    elif etype == "response.function_call_arguments.delta":
-                        current_fn["arguments"] = current_fn.get("arguments", "") + event.get(
-                            "delta", ""
-                        )
-                    elif etype == "response.function_call_arguments.done":
-                        if current_fn.get("name"):
-                            try:
-                                args = json.loads(current_fn.get("arguments", "{}"))
-                            except json.JSONDecodeError:
-                                args = {}
-                            tool_calls.append(
-                                ToolCall(
-                                    id=current_fn["id"],
-                                    name=current_fn["name"],
-                                    arguments=args,
-                                )
-                            )
-                            current_fn = {}
-                    elif etype in ("response.failed", "error"):
-                        msg = event.get("message") or event.get("error", {}).get(
-                            "message", "unknown"
-                        )
-                        raise ProviderError(f"openai-codex stream error: {msg}")
-        except httpx.HTTPStatusError as exc:
-            raise ProviderError(
-                f"openai-codex HTTP {exc.response.status_code}: {exc.response.text[:200]}"
-            ) from exc
+        for event in self._stream_sse(client, body, token, account_id):
+            etype = event.get("type", "")
+            if etype == "response.output_text.delta":
+                text_parts.append(event.get("delta", ""))
+            elif etype == "response.output_item.added":
+                item = event.get("item", {})
+                if item.get("type") == "function_call":
+                    current_fn = {
+                        "id": item.get("call_id", item.get("id", "")),
+                        "name": item.get("name", ""),
+                        "arguments": item.get("arguments", ""),
+                    }
+            elif etype == "response.function_call_arguments.delta":
+                current_fn["arguments"] = current_fn.get("arguments", "") + event.get(
+                    "delta", ""
+                )
+            elif etype == "response.function_call_arguments.done" and current_fn.get("name"):
+                try:
+                    args = json.loads(current_fn.get("arguments", "{}"))
+                except json.JSONDecodeError:
+                    args = {}
+                tool_calls.append(
+                    ToolCall(
+                        id=current_fn["id"],
+                        name=current_fn["name"],
+                        arguments=args,
+                    )
+                )
+                current_fn = {}
 
         finish_reason = "tool_calls" if tool_calls else "stop"
+
+        self._emit_event("", "", "allow", f"completion: {finish_reason}")
+
         return CompletionResponse(
             content="".join(text_parts),
             model=self._model,
@@ -339,3 +400,26 @@ class CodexProvider(BaseProvider):
             return bool(self._api_key or _load_oauth_token())
         except Exception:
             return False
+
+    def _emit_event(
+        self,
+        session_id: str,
+        task_id: str,
+        result: str,
+        detail_msg: str,
+    ) -> None:
+        """Publish a provider audit event including the model name."""
+        try:
+            from missy.core.events import AuditEvent, event_bus
+
+            event = AuditEvent.now(
+                session_id=session_id,
+                task_id=task_id,
+                event_type="provider_invoke",
+                category="provider",
+                result=result,  # type: ignore[arg-type]
+                detail={"provider": self.name, "model": self._model, "message": detail_msg},
+            )
+            event_bus.publish(event)
+        except Exception:
+            logger.exception("Failed to emit audit event for provider %r", self.name)
