@@ -20,6 +20,7 @@ import contextlib
 import json
 import logging
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -401,6 +402,17 @@ def ask(
     from missy.security.sanitizer import sanitizer
     from missy.security.secrets import secrets_detector
 
+    # Check hatching status (non-blocking hint)
+    try:
+        from missy.agent.hatching import HatchingManager
+
+        if HatchingManager().needs_hatching():
+            console.print(
+                "[dim]Tip: Run [bold]missy hatch[/bold] to complete initial setup.[/dim]\n"
+            )
+    except Exception:
+        pass
+
     cfg = _load_subsystems(ctx.obj["config_path"])
 
     # Security: detect secrets in the prompt before sending.
@@ -496,6 +508,17 @@ def run(ctx: click.Context, provider: str | None, session: str, capability_mode:
     from missy.security.secrets import secrets_detector
 
     cfg = _load_subsystems(ctx.obj["config_path"])
+
+    # Check hatching status (non-blocking hint)
+    try:
+        from missy.agent.hatching import HatchingManager
+
+        if HatchingManager().needs_hatching():
+            console.print(
+                "[dim]Tip: Run [bold]missy hatch[/bold] to complete initial setup.[/dim]\n"
+            )
+    except Exception:
+        pass
 
     provider_name = provider or (
         next(iter(cfg.providers), "anthropic") if cfg.providers else "anthropic"
@@ -3197,6 +3220,57 @@ def persona_reset() -> None:
     mgr = PersonaManager()
     mgr.reset()
     console.print(f"[green]Persona reset to defaults (v{mgr.version}).[/]")
+
+
+@persona.command("backups")
+def persona_backups() -> None:
+    """List available persona backups."""
+    from missy.agent.persona import PersonaManager
+
+    mgr = PersonaManager()
+    backups = mgr.list_backups()
+    if not backups:
+        console.print("[yellow]No persona backups found.[/]")
+        return
+
+    table = Table(title="Persona Backups")
+    table.add_column("#", style="dim")
+    table.add_column("File")
+    table.add_column("Size")
+    table.add_column("Modified")
+
+    for idx, bk in enumerate(backups, 1):
+        stat = bk.stat()
+        mod_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime))
+        table.add_row(str(idx), bk.name, f"{stat.st_size} B", mod_time)
+
+    console.print(table)
+
+
+@persona.command("diff")
+def persona_diff() -> None:
+    """Show diff between current persona and latest backup."""
+    from missy.agent.persona import PersonaManager
+
+    mgr = PersonaManager()
+    diff_text = mgr.diff()
+    if not diff_text:
+        console.print("[dim]No differences (or no backups to compare against).[/]")
+        return
+    console.print(diff_text)
+
+
+@persona.command("rollback")
+def persona_rollback() -> None:
+    """Restore persona from the latest backup."""
+    from missy.agent.persona import PersonaManager
+
+    mgr = PersonaManager()
+    restored = mgr.rollback()
+    if restored is None:
+        console.print("[yellow]No backups available to rollback to.[/]")
+        return
+    console.print(f"[green]Persona restored from {restored.name} (v{mgr.version}).[/]")
 
 
 # ---------------------------------------------------------------------------

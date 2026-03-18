@@ -379,3 +379,98 @@ class TestPersonaResetCommand:
 
         assert result.exit_code == 0
         assert "v7" in result.output
+
+
+# ---------------------------------------------------------------------------
+# missy persona backups
+# ---------------------------------------------------------------------------
+
+
+class TestPersonaBackupsCommand:
+    def test_persona_backups_no_backups(self, runner: CliRunner) -> None:
+        """persona backups prints message when no backups exist."""
+        mock_mgr = _make_persona_manager()
+        mock_mgr.list_backups = MagicMock(return_value=[])
+
+        with patch("missy.agent.persona.PersonaManager", return_value=mock_mgr):
+            result = runner.invoke(cli, ["persona", "backups"])
+
+        assert result.exit_code == 0
+        assert "No persona backups" in result.output
+
+    def test_persona_backups_with_backups(self, tmp_path, runner: CliRunner) -> None:
+        """persona backups shows table when backups exist."""
+        # Create a real backup file so stat() works
+        backup_file = tmp_path / "persona.yaml.20260318_120000"
+        backup_file.write_text("name: Old\n")
+
+        mock_mgr = _make_persona_manager()
+        mock_mgr.list_backups = MagicMock(return_value=[backup_file])
+
+        with patch("missy.agent.persona.PersonaManager", return_value=mock_mgr):
+            result = runner.invoke(cli, ["persona", "backups"])
+
+        assert result.exit_code == 0
+        assert "persona.yaml.20260318_120000" in result.output
+
+
+# ---------------------------------------------------------------------------
+# missy persona diff
+# ---------------------------------------------------------------------------
+
+
+class TestPersonaDiffCommand:
+    def test_persona_diff_no_changes(self, runner: CliRunner) -> None:
+        """persona diff prints message when no diff available."""
+        mock_mgr = _make_persona_manager()
+        mock_mgr.diff = MagicMock(return_value="")
+
+        with patch("missy.agent.persona.PersonaManager", return_value=mock_mgr):
+            result = runner.invoke(cli, ["persona", "diff"])
+
+        assert result.exit_code == 0
+        assert "No differences" in result.output
+
+    def test_persona_diff_with_changes(self, runner: CliRunner) -> None:
+        """persona diff prints the diff text when changes exist."""
+        mock_mgr = _make_persona_manager()
+        mock_mgr.diff = MagicMock(return_value="--- backup\n+++ current\n@@ -1 +1 @@\n-name: Old\n+name: New\n")
+
+        with patch("missy.agent.persona.PersonaManager", return_value=mock_mgr):
+            result = runner.invoke(cli, ["persona", "diff"])
+
+        assert result.exit_code == 0
+        assert "name: New" in result.output
+
+
+# ---------------------------------------------------------------------------
+# missy persona rollback
+# ---------------------------------------------------------------------------
+
+
+class TestPersonaRollbackCommand:
+    def test_persona_rollback_no_backups(self, runner: CliRunner) -> None:
+        """persona rollback prints message when no backups available."""
+        mock_mgr = _make_persona_manager()
+        mock_mgr.rollback = MagicMock(return_value=None)
+
+        with patch("missy.agent.persona.PersonaManager", return_value=mock_mgr):
+            result = runner.invoke(cli, ["persona", "rollback"])
+
+        assert result.exit_code == 0
+        assert "No backups available" in result.output
+
+    def test_persona_rollback_success(self, tmp_path, runner: CliRunner) -> None:
+        """persona rollback prints success message with filename."""
+        backup_file = tmp_path / "persona.yaml.20260318_100000"
+        backup_file.write_text("name: Restored\n")
+
+        mock_mgr = _make_persona_manager(version=3)
+        mock_mgr.rollback = MagicMock(return_value=backup_file)
+
+        with patch("missy.agent.persona.PersonaManager", return_value=mock_mgr):
+            result = runner.invoke(cli, ["persona", "rollback"])
+
+        assert result.exit_code == 0
+        assert "restored" in result.output.lower() or "Persona restored" in result.output
+        assert "persona.yaml.20260318_100000" in result.output

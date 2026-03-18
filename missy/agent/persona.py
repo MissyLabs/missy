@@ -20,9 +20,12 @@ Example::
 from __future__ import annotations
 
 import contextlib
+import difflib
 import logging
 import os
+import shutil
 import tempfile
+import time
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
@@ -227,14 +230,19 @@ class PersonaManager:
     def save(self) -> None:
         """Persist the current persona to disk, incrementing the version.
 
-        The write is atomic: data is written to a temp file in the same
-        directory and then renamed into place, so a crash mid-write cannot
-        corrupt the existing file.
+        Creates a timestamped backup of the previous persona file before
+        overwriting.  The write itself is atomic: data is written to a temp
+        file in the same directory and then renamed into place, so a crash
+        mid-write cannot corrupt the existing file.
 
         Raises:
             OSError: If the directory cannot be created or the file cannot
                 be written.
         """
+        # Back up existing file before overwriting
+        if self._path.exists():
+            self._create_backup()
+
         self._persona.version += 1
         self._path.parent.mkdir(parents=True, exist_ok=True)
         data = _persona_to_dict(self._persona)
@@ -312,6 +320,102 @@ class PersonaManager:
     def path(self) -> Path:
         """Resolved path to the persona YAML file."""
         return self._path
+
+    # ------------------------------------------------------------------
+    # Backup / rollback / diff
+    # ------------------------------------------------------------------
+
+    _MAX_BACKUPS = 5
+
+    @property
+    def backup_dir(self) -> Path:
+        """Directory where persona backups are stored."""
+        return self._path.parent / "persona.d"
+
+    def _create_backup(self) -> Path:
+        """Create a timestamped backup of the current persona file.
+
+        Returns:
+            Path to the newly created backup file.
+        """
+        bdir = self.backup_dir
+        bdir.mkdir(parents=True, exist_ok=True)
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        backup_path = bdir / f"persona.yaml.{timestamp}"
+        shutil.copy2(str(self._path), str(backup_path))
+        self._prune_backups()
+        logger.debug("Persona backup created: %s", backup_path)
+        return backup_path
+
+    def _prune_backups(self) -> None:
+        """Remove oldest backups so at most ``_MAX_BACKUPS`` remain."""
+        backups = self.list_backups()
+        while len(backups) > self._MAX_BACKUPS:
+            oldest = backups.pop(0)
+            oldest.unlink()
+
+    def list_backups(self) -> list[Path]:
+        """Return all persona backup files sorted oldest-first.
+
+        Returns:
+            List of backup :class:`Path` objects.
+        """
+        bdir = self.backup_dir
+        if not bdir.exists():
+            return []
+        return sorted(
+            [p for p in bdir.iterdir() if p.name.startswith("persona.yaml.")],
+            key=lambda p: p.stat().st_mtime,
+        )
+
+    def rollback(self) -> Path | None:
+        """Restore the latest backup, backing up the current persona first.
+
+        Returns:
+            Path to the restored backup, or ``None`` if no backups exist.
+        """
+        backups = self.list_backups()
+        if not backups:
+            return None
+
+        latest = backups[-1]
+        restore_content = latest.read_text(encoding="utf-8")
+
+        # Back up current before overwriting (without incrementing version)
+        if self._path.exists():
+            self._create_backup()
+
+        self._path.write_text(restore_content, encoding="utf-8")
+        self._persona = self._load()
+        logger.info(
+            "Persona rolled back to backup %s (version %d)",
+            latest.name,
+            self._persona.version,
+        )
+        return latest
+
+    def diff(self) -> str:
+        """Return a unified diff between the current persona and the latest backup.
+
+        Returns:
+            A unified diff string, or an empty string if no backups exist or
+            files are identical.
+        """
+        backups = self.list_backups()
+        if not backups or not self._path.exists():
+            return ""
+
+        latest = backups[-1]
+        a_lines = latest.read_text(encoding="utf-8").splitlines(keepends=True)
+        b_lines = self._path.read_text(encoding="utf-8").splitlines(keepends=True)
+        return "".join(
+            difflib.unified_diff(
+                a_lines,
+                b_lines,
+                fromfile=f"backup ({latest.name})",
+                tofile="current (persona.yaml)",
+            )
+        )
 
     # ------------------------------------------------------------------
     # Internal helpers
