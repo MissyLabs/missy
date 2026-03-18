@@ -197,19 +197,21 @@ class TestHatchingConcurrentExecution:
         errors: list[Exception] = []
 
         def _run() -> None:
-            with _mock_hatching_deps():
-                mgr = HatchingManager(state_path=state_path, log_path=log_path)
-                try:
-                    state = mgr.run_hatching(interactive=False)
-                    results.append(state)
-                except Exception as exc:  # noqa: BLE001
-                    errors.append(exc)
+            mgr = HatchingManager(state_path=state_path, log_path=log_path)
+            try:
+                state = mgr.run_hatching(interactive=False)
+                results.append(state)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
 
-        threads = [threading.Thread(target=_run) for _ in range(2)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=10)
+        # Share a single patch context across all threads to avoid
+        # concurrent patch/restore races corrupting module attributes.
+        with _mock_hatching_deps():
+            threads = [threading.Thread(target=_run) for _ in range(2)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=10)
 
         assert not errors, f"Threads raised errors: {errors}"
 
