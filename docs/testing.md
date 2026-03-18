@@ -9,53 +9,24 @@ abstraction, configuration parsing, scheduling, plugins, and more.
 
 ```
 tests/
-  agent/              AgentRuntime tests
-    test_runtime.py
-  channels/           Channel abstraction tests
-    test_cli_channel.py
-  cli/                CLI command tests
-    test_main.py
-  config/             Configuration loading and validation tests
-    test_settings.py
-  core/               Session management tests
-    test_session.py
-  integration/        End-to-end policy enforcement tests
-    test_policy_enforcement.py
-  memory/             Memory store tests
-    test_store.py
-  observability/      Audit logger tests
-    test_audit_logger.py
-  plugins/            Plugin system tests
-    test_base.py
-    test_loader.py
-  policy/             Policy engine tests
-    test_engine.py
-    test_filesystem.py
-    test_network.py
-    test_shell.py
-  providers/          Provider abstraction tests
-    test_anthropic.py
-    test_base.py
-    test_ollama.py
-    test_openai.py
-    test_registry.py
-  scheduler/          Scheduler tests
-    test_jobs.py
-    test_manager.py
-    test_parser.py
-  security/           Input sanitization and secrets detection tests
-    test_sanitizer.py
-    test_secrets.py
-  skills/             Skill system tests
-    test_base.py
-    test_registry.py
-  tools/              Tool system tests
-    test_calculator.py
-    test_registry.py
-  unit/               Unit tests (Discord, gateway)
-    test_discord_channel.py
-    test_discord_config.py
-    test_gateway_client.py
+  agent/              Runtime, behavior, persona, hatching, attention, playbook, etc.
+  channels/           CLI, Discord (Gateway + REST + voice/image), webhook, voice
+  cli/                CLI commands, wizard, OAuth, auth flows
+  config/             Config loading, validation, migration, hot-reload
+  core/               Session management, events, message bus, exceptions
+  gateway/            PolicyHTTPClient error paths, REST policy
+  integration/        Cross-module integration tests, policy enforcement
+  mcp/                MCP manager, digest pinning, health checks
+  memory/             SQLite store, resilient wrapper, vector store, concurrent access
+  observability/      Audit logger, OpenTelemetry
+  plugins/            Plugin loading, registry, permissions
+  policy/             Network, filesystem, shell, REST L7 policies, presets
+  providers/          Anthropic, OpenAI, Ollama providers, registry
+  scheduler/          Job scheduling, parser, persistence, timezone
+  security/           Sanitizer, secrets, censor, vault, identity, trust, drift
+  skills/             Skill discovery, SKILL.md parsing, search
+  tools/              Built-in tools (file, shell, web, calculator, etc.)
+  unit/               Focused unit tests, hardening, edge cases
 ```
 
 ---
@@ -115,7 +86,7 @@ pytest tests/ --cov=missy --cov-report=term-missing
 
 ### Current coverage target
 
-The project targets **85% code coverage** (currently at 85%+ with 1097 tests across 52 test files).
+The project targets **85% code coverage** (currently at 85%+ with 11,900+ tests across 340+ test files).
 
 ---
 

@@ -307,7 +307,7 @@ ruff check missy/ tests/                              # Lint
 ruff format missy/ tests/                             # Format
 ```
 
-1300+ tests across 70+ test files. 85% coverage threshold.
+11,900+ tests across 340+ test files. 85% coverage threshold.
 
 ---
 
