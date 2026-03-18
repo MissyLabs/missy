@@ -9,11 +9,11 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 
 ## Test Results
 
-- **Total tests: 8817**
-- **Passed: 8817**
+- **Total tests: 9110**
+- **Passed: 9110**
 - **Failed: 0**
 - **Skipped: 17**
-- **Duration: ~174s**
+- **Duration: ~173s**
 
 ## Completed Components
 
@@ -80,8 +80,8 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 ## Architecture
 
 - 157 Python source files
-- 280+ test files
-- 8817 tests total
+- 290+ test files
+- 9110 tests total
 
 ## Session History
 
@@ -158,7 +158,9 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 8. Added 198 policy/gateway/preset and config migration/plan tests
 9. Added 117 vault/synthesizer/identity/drift tests (found identity key permission bug)
 10. Added 149 learnings/provider/rate-limiter/sanitizer/censor tests
-11. Total: 8817 tests passing, 0 failures
+11. Added 152 proactive/checkpoint/cost + container/progress edge case tests
+12. Added 141 CLI integration + persona enforcement integration tests
+13. Total: 9110 tests passing, 0 failures
 
 ## Remaining Work (Future Hardening)
 - [x] Persona change audit trail (JSONL log of all edits) — done in session 2
