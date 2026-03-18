@@ -218,3 +218,52 @@
 | SQLite learnings concurrent | Save+read no errors | Covered |
 | High volume (100 writes) | ThreadPool stress test | Covered |
 | Persistence verification | Data survives reload after concurrent writes | Covered |
+
+## Screencast Security Edge Cases (Session 10)
+
+| Test | Description | Status |
+|---|---|---|
+| Non-numeric width | `"width": "abc"` sends error, not crash | Covered |
+| Non-numeric height | `"height": "not_a_number"` sends error | Covered |
+| Non-numeric seq | `"seq": "xyz"` sends error | Covered |
+| Dimension bypass w=0 h=1080 | Rejected (not bypassed) | Covered |
+| Both dimensions zero | Accepted (no dims provided) | Covered |
+| Referrer-Policy header | `no-referrer` present in security headers | Covered |
+| Auth timeout | No message within 10s → connection closed | Covered |
+| Binary first frame | Binary data before JSON auth → rejected | Covered |
+| Malformed JSON auth | Broken JSON in auth → rejected | Covered |
+| Missing session_id | Empty session_id in auth → rejected | Covered |
+| Connection flood | 20+ connections → rejected with 1013 | Covered |
+| Session capacity | Max sessions reached → auth_fail | Covered |
+| Frame too large | >5MB binary → rejected with error | Covered |
+| Rate limiting | Two frames within 2s → second dropped | Covered |
+| Backpressure | Full queue → backpressure message sent | Covered |
+
+## Interactive Approval Edge Cases (Session 10)
+
+| Test | Description | Status |
+|---|---|---|
+| ImportError in _do_prompt | rich not installed → returns False | Covered |
+| EOFError in prompt | Pipe input closes → returns False | Covered |
+| KeyboardInterrupt | Ctrl-C during prompt → returns False | Covered |
+| "y" response | Allow once, not remembered | Covered |
+| "n" response | Deny, not remembered | Covered |
+| "a" response | Allow always, stored in remembered | Covered |
+| Empty input | Treated as deny | Covered |
+| _is_tty exception | stdin.isatty() raises → returns False | Covered |
+
+## Hatching Coverage Edge Cases (Session 10)
+
+| Test | Description | Status |
+|---|---|---|
+| HatchingLog write OSError | Swallowed, not re-raised | Covered |
+| HatchingLog read OSError | Returns empty list | Covered |
+| Step skip (already done) | Interactive prints [skip] | Covered |
+| Step success (interactive) | Interactive prints [ok] | Covered |
+| Step warning (interactive) | Interactive prints [warn] | Covered |
+| Step failure (interactive) | Interactive prints [FAIL], status=FAILED | Covered |
+| Reset OSError | State file unlink fails → logged | Covered |
+| Low disk space | statvfs → _HatchingStepWarning | Covered |
+| Dir not writable | os.access fails → RuntimeError | Covered |
+| Persona ImportError | _generate_persona → _HatchingStepWarning | Covered |
+| Memory ImportError | _seed_memory → _HatchingStepWarning | Covered |

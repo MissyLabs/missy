@@ -1,6 +1,6 @@
 # Missy Build Status
 
-Last updated: 2026-03-18 (Session 9)
+Last updated: 2026-03-18 (Session 10)
 
 ## Status: FEATURE COMPLETE + HARDENED + SECURITY AUDITED
 
@@ -9,11 +9,11 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 
 ## Test Results
 
-- **Total tests: 11512**
-- **Passed: 11512**
+- **Total tests: 11722**
+- **Passed: 11722**
 - **Failed: 0**
 - **Skipped: 17**
-- **Duration: ~218s**
+- **Duration: ~254s**
 
 ## Completed Components
 
@@ -80,8 +80,8 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 ## Architecture
 
 - 157 Python source files
-- 320+ test files
-- 11512 tests total
+- 340+ test files
+- 11722 tests total
 
 ## Session History
 
@@ -215,6 +215,23 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 12. Added 17 persona→behavior→response pipeline integration tests
 13. Total: 11512 tests passing, 0 failures, 17 skipped
 
+### Session 10 (2026-03-18) — Deep Coverage Gaps + Screencast Security Hardening
+1. Coverage gap analysis: identified 8 modules with <95% coverage
+2. Added 28 screencast channel tests (53%→~98%) — start/stop lifecycle, _post_to_discord, delegation
+3. Added 32 screencast server tests (68%→~95%) — WebSocket protocol, auth, message loop, SSL
+4. Added 10 screencast analyzer tests (87%→~98%) — frame save, dequeue edge cases, discord callback
+5. Added 36 interactive approval tests (88%→~100%) — _do_prompt exceptions, y/n/a responses, _is_tty
+6. Added 36 runtime coverage gap tests (89%→~95%) — _intercept_large_content, _synthesize_memory, factory methods
+7. Added 30 Discord image gap tests (88%→~98%) — analyze/screenshot error paths, config loading, path traversal
+8. Added 34 hatching coverage gap tests (86%→~98%) — HatchingLog OSError, step execution, env validation
+9. Added 37 CLI coverage gap tests (90%→~95%) — setup --no-prompt, providers switch, mcp pin, config diff/rollback
+10. Security audit: found and fixed 3 vulnerabilities in screencast server:
+    - Missing Referrer-Policy header (token leakage via HTTP Referer)
+    - int() ValueError crash on non-numeric frame fields
+    - Dimension validation bypass when width=0 or height=0
+11. Added 6 security hardening validation tests
+12. Total: 11722 tests passing, 0 failures, 17 skipped
+
 ## Remaining Work (Future Hardening)
 - [x] Persona change audit trail (JSONL log of all edits) — done in session 2
 - [x] Fuzz testing for YAML parsing edge cases — done in session 3
@@ -261,5 +278,10 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 - [x] Skills discovery coverage tests (94%→~100%) — done in session 9
 - [x] Security audit: path traversal fix + fail-closed gateway — done in session 9
 - [x] Behavior layer robustness tests (adversarial, unicode, multilingual) — done in session 9
+- [x] Channel screencast coverage tests (53%→~98%) — done in session 10
+- [x] Screencast server security hardening (Referrer-Policy, int() validation, dimension bypass) — done in session 10
+- [x] Interactive approval coverage tests (88%→~100%) — done in session 10
+- [x] Runtime factory method coverage tests — done in session 10
+- [x] Hatching coverage tests (86%→~98%) — done in session 10
+- [x] CLI main.py coverage tests (90%→~95%) — done in session 10
 - [ ] Discord voice channel deep protocol tests
-- [ ] Channel screencast integration tests

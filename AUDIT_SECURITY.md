@@ -114,6 +114,32 @@ using `os.open()` with restrictive flags (`O_CREAT | O_TRUNC` or `O_CREAT | O_AP
 | `tools/builtin/tts_speak.py` | — | 0o600 (os.open) |
 | `tools/builtin/file_write.py` | — | 0o600 (os.open + O_NOFOLLOW) |
 
+## Session 10 Security Audit
+
+### Vulnerabilities Found and Fixed
+
+| # | Finding | Severity | Fix |
+|---|---------|----------|-----|
+| 1 | Missing `Referrer-Policy` header in screencast server | **Medium** | Added `Referrer-Policy: no-referrer` to `_SECURITY_HEADERS` |
+| 2 | `int()` ValueError crash on non-numeric frame fields | **Medium** | Added try/except ValueError/TypeError with error response |
+| 3 | Dimension validation bypass (width=0 or height=0) | **Low** | Changed guard from `width and height` to `width or height` |
+
+### Details
+
+**Referrer-Policy (server.py):** The screencast share URL embeds the plaintext auth token as a query parameter. Without `Referrer-Policy: no-referrer`, this token could leak via the HTTP `Referer` header when the capture page loads external resources. Fixed by adding the header to the security headers dict.
+
+**int() ValueError (server.py):** Client-supplied `width`, `height`, and `seq` fields were cast with `int()` without catching `ValueError`/`TypeError`. A malicious client sending `"width": "abc"` would crash the connection handler. Fixed by wrapping in try/except and sending a protocol error.
+
+**Dimension bypass (server.py):** The validation `if width and height and not (...)` was short-circuit when either was 0, allowing `width=0, height=1080` to bypass dimension bounds checking. Fixed by changing to `if (width or height) and not (...)`.
+
+### Additional Audit Findings (No Fix Required)
+
+- CSP uses `script-src 'unsafe-inline'` — required for the capture page's inline JS; no user-controlled data is reflected into the page
+- Token in URL query params — by design for browser-based sharing; mitigated by Referrer-Policy and no-store Cache-Control
+- No auth brute-force rate limiting — mitigated by 256-bit token entropy (secrets.token_urlsafe(32))
+- SessionManager has no explicit thread safety — safe under asyncio single-threaded model (GIL provides incidental protection)
+- Self-signed TLS cert has 10-year validity — acceptable for local-only dev tool
+
 ## Session 9 Security Audit
 
 ### Vulnerabilities Found and Fixed
