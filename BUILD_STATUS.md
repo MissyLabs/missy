@@ -2,17 +2,18 @@
 
 Last updated: 2026-03-18
 
-## Status: FEATURE COMPLETE
+## Status: FEATURE COMPLETE + HARDENED
 
 All required subsystems implemented including hatching, persona, and behavior layer.
+Hardening pass completed with bug fixes, security improvements, and expanded tests.
 
 ## Test Results
 
-- **Total tests: 7265**
-- **Passed: 7265**
+- **Total tests: 7335**
+- **Passed: 7335**
 - **Failed: 0**
 - **Skipped: 14**
-- **Duration: ~148s**
+- **Duration: ~143s**
 
 ## Completed Components
 
@@ -25,13 +26,16 @@ All required subsystems implemented including hatching, persona, and behavior la
 - [x] Observability (audit logger, OpenTelemetry)
 - [x] Config (hot-reload, migration, plan/rollback)
 
-### Hatching + Persona (NEW)
+### Hatching + Persona
 - [x] Hatching system (`missy/agent/hatching.py`) — 7-step first-run bootstrap
 - [x] Persona system (`missy/agent/persona.py`) — YAML-backed identity/tone/style
+- [x] Persona backup/rollback/diff (`~/.missy/persona.d/`, max 5 backups)
 - [x] Behavior layer (`missy/agent/behavior.py`) — tone analysis, intent classification, response shaping
-- [x] CLI: `missy hatch`, `missy persona show/edit/reset`
+- [x] CLI: `missy hatch`, `missy persona show/edit/reset/backups/diff/rollback`
 - [x] Runtime integration (system prompt shaping + response post-processing)
-- [x] 196 dedicated tests (43 persona + 112 behavior + 41 hatching)
+- [x] Hatching check in both `missy ask` and `missy run`
+- [x] Persona file permissions (0o600 on save)
+- [x] 243 dedicated tests (60 persona + 129 behavior + 51 hatching + CLI tests)
 
 ### Channels
 - [x] CLI channel (interactive REPL)
@@ -76,12 +80,12 @@ All required subsystems implemented including hatching, persona, and behavior la
 ## Architecture
 
 - 157 Python source files
-- 254 test files
-- 7265 tests total
+- 254+ test files
+- 7335 tests total
 
-## Current Session (2026-03-18) — Hatching Branch
+## Session History
 
-### What Was Done
+### Session 1 (2026-03-18) — Feature Implementation
 1. Implemented persona system (`PersonaConfig`, `PersonaManager`)
 2. Implemented behavior layer (`BehaviorLayer`, `IntentInterpreter`, `ResponseShaper`)
 3. Implemented hatching system (`HatchingManager`, `HatchingLog`, `HatchingState`)
@@ -90,11 +94,21 @@ All required subsystems implemented including hatching, persona, and behavior la
 6. Wrote 196 tests for new systems
 7. Fixed 8 test failures (7 pre-existing + 1 from integration)
 8. Created HATCHING.md, HATCHING_LOG.md, PERSONA.md documentation
-9. All 7265 tests passing
 
-## Remaining Work (Hardening)
-- [ ] CLI tests for hatch/persona commands
-- [ ] Hatching check in `missy run`/`missy ask` (prompt if not hatched)
-- [ ] Persona versioning history file
-- [ ] Behavior layer fine-tuning
-- [ ] Edge case testing for persona YAML corruption
+### Session 2 (2026-03-18) — Hardening Pass
+1. Added hatching status check to `missy run` (was only in `missy ask`)
+2. Added persona backup/rollback/diff system with 5-backup history
+3. Added CLI commands: `missy persona backups/diff/rollback`
+4. Fixed 2 bugs in hatching: None steps_completed crash, non-dict YAML crash
+5. Added persona file permission hardening (0o600)
+6. Added 10 hatching edge case tests (unicode, empty YAML, extra keys, etc.)
+7. Added 17 behavior layer edge case tests (mixed signals, code blocks, etc.)
+8. Added 19 persona backup/rollback/diff tests
+9. Added 8 CLI tests for new persona commands
+10. Total: 7335 tests passing, 0 failures
+
+## Remaining Work (Future Hardening)
+- [ ] Persona change audit trail (JSONL log of all edits)
+- [ ] Behavior layer: context carryover between sessions
+- [ ] Fuzz testing for YAML parsing edge cases
+- [ ] Integration tests for hatching → persona → behavior pipeline

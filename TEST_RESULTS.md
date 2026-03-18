@@ -6,11 +6,11 @@
 
 | Metric | Value |
 |---|---|
-| Total tests | 7265 |
-| Passed | 7265 |
+| Total tests | 7335 |
+| Passed | 7335 |
 | Failed | 0 |
 | Skipped | 14 |
-| Duration | ~148s |
+| Duration | ~143s |
 
 ## Test Distribution
 
@@ -37,10 +37,11 @@
 
 | File | Tests | Coverage |
 |---|---|---|
-| tests/agent/test_persona.py | 43 | PersonaConfig, PersonaManager, YAML round-trip |
-| tests/agent/test_behavior.py | 112 | BehaviorLayer, IntentInterpreter, ResponseShaper |
-| tests/agent/test_hatching.py | 41 | HatchingManager, HatchingLog, state machine |
-| **Total new** | **196** | |
+| tests/agent/test_persona.py | 60 | PersonaConfig, PersonaManager, YAML round-trip, backup/rollback/diff |
+| tests/agent/test_behavior.py | 129 | BehaviorLayer, IntentInterpreter, ResponseShaper, edge cases |
+| tests/agent/test_hatching.py | 51 | HatchingManager, HatchingLog, state machine, edge cases |
+| tests/cli/test_cli_hatch_persona.py | 33 | CLI: hatch, persona show/edit/reset/backups/diff/rollback |
+| **Total new** | **273** | |
 
 ## Tests Fixed (This Session)
 
