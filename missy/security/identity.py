@@ -64,12 +64,16 @@ class AgentIdentity:
         )
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        # Write with restrictive permissions: create file 0o600
+        # Write with restrictive permissions: create file 0o600.
+        # os.open's mode argument only applies when O_CREAT creates a new file;
+        # for pre-existing paths the inode permissions are unchanged.  Explicitly
+        # chmod after writing so overwrite also enforces 0o600.
         fd = os.open(str(p), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         try:
             os.write(fd, pem_bytes)
         finally:
             os.close(fd)
+        os.chmod(str(p), 0o600)
 
     # ------------------------------------------------------------------
     # Cryptographic operations
