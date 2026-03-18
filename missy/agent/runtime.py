@@ -1604,6 +1604,27 @@ class AgentRuntime:
         except Exception:
             return None
 
+    def _get_playbook_patterns(self, user_input: str) -> str | None:
+        """Return formatted playbook patterns relevant to *user_input*.
+
+        Returns:
+            A string block to append to the system prompt, or ``None``.
+        """
+        try:
+            from missy.agent.playbook import Playbook
+
+            playbook = Playbook()
+            entries = playbook.get_relevant(task_type=user_input, top_k=3)
+            if not entries:
+                return None
+            lines = ["\n\n[Playbook — proven patterns]"]
+            for entry in entries:
+                tools = " → ".join(entry.tool_sequence) if entry.tool_sequence else "—"
+                lines.append(f"- {entry.description or entry.task_type}: {tools}")
+            return "\n".join(lines)
+        except Exception:
+            return None
+
     @staticmethod
     def _make_memory_store() -> Any:
         """Create a :class:`~missy.memory.store.MemoryStore`.
