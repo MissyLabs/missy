@@ -101,6 +101,13 @@ class WebhookChannel(BaseChannel):
                 "X-Forwarded-For can be spoofed if not behind a trusted proxy.",
                 self._host,
             )
+        if not self._secret and self._host != "127.0.0.1":
+            logger.warning(
+                "WebhookChannel: no HMAC secret configured on non-loopback bind (%s) — "
+                "webhook accepts unauthenticated requests from any client that can reach this port. "
+                "Set 'secret' to enable request signing.",
+                self._host,
+            )
         channel_ref = self
 
         class Handler(BaseHTTPRequestHandler):

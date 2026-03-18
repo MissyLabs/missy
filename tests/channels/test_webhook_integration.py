@@ -408,3 +408,27 @@ class TestServerLifecycle:
     def test_send_does_not_raise(self):
         ch = WebhookChannel(port=_free_port())
         ch.send("any output")  # logs only, must not raise
+
+    def test_no_secret_on_non_loopback_logs_warning(self, caplog):
+        """Starting without a secret on non-loopback should log a warning."""
+        import logging
+
+        port = _free_port()
+        ch = WebhookChannel(host="0.0.0.0", port=port, secret="")
+        with caplog.at_level(logging.WARNING):
+            ch.start()
+            time.sleep(0.05)
+            ch.stop()
+        assert any("no HMAC secret" in msg for msg in caplog.messages)
+
+    def test_with_secret_no_warning(self, caplog):
+        """Starting with a secret should not log the unauthenticated warning."""
+        import logging
+
+        port = _free_port()
+        ch = WebhookChannel(host="0.0.0.0", port=port, secret="s3cr3t")
+        with caplog.at_level(logging.WARNING):
+            ch.start()
+            time.sleep(0.05)
+            ch.stop()
+        assert not any("no HMAC secret" in msg for msg in caplog.messages)
