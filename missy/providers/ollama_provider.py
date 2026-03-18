@@ -54,10 +54,26 @@ class OllamaProvider(BaseProvider):
         self._base_url: str = (config.base_url or _DEFAULT_BASE_URL).rstrip("/")
         self._model: str = config.model or _DEFAULT_MODEL
         self._timeout: int = config.timeout
+        self._client: PolicyHTTPClient | None = None
 
     # ------------------------------------------------------------------
     # BaseProvider interface
     # ------------------------------------------------------------------
+
+    def _make_client(
+        self,
+        session_id: str = "",
+        task_id: str = "",
+    ) -> PolicyHTTPClient:
+        """Return a cached PolicyHTTPClient, creating one on first call."""
+        if self._client is None:
+            self._client = PolicyHTTPClient(
+                session_id=session_id,
+                task_id=task_id,
+                timeout=self._timeout,
+                category="provider",
+            )
+        return self._client
 
     def is_available(self) -> bool:
         """Return ``True`` when the Ollama server responds to ``GET /api/tags``.
@@ -118,12 +134,7 @@ class OllamaProvider(BaseProvider):
         self._acquire_rate_limit()
 
         try:
-            client = PolicyHTTPClient(
-                session_id=session_id,
-                task_id=task_id,
-                timeout=self._timeout,
-                category="provider",
-            )
+            client = self._make_client(session_id=session_id, task_id=task_id)
             response = client.post(
                 f"{self._base_url}/api/chat",
                 json=payload,
@@ -244,10 +255,7 @@ class OllamaProvider(BaseProvider):
         self._acquire_rate_limit()
 
         try:
-            client = PolicyHTTPClient(
-                timeout=self._timeout,
-                category="provider",
-            )
+            client = self._make_client()
             response = client.post(
                 f"{self._base_url}/api/chat",
                 json=payload,
@@ -351,7 +359,7 @@ class OllamaProvider(BaseProvider):
         }
 
         try:
-            client = PolicyHTTPClient(timeout=self._timeout, category="provider")
+            client = self._make_client()
             response = client.post(
                 f"{self._base_url}/api/chat",
                 json=payload,

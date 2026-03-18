@@ -231,7 +231,9 @@ class CodexProvider(BaseProvider):
         session_id = kwargs.pop("session_id", "")
         task_id = kwargs.pop("task_id", "")
 
-        text = "".join(self.stream(messages, **kwargs))
+        self._acquire_rate_limit()
+
+        text = "".join(self.stream(messages))
 
         self._emit_event(session_id, task_id, "allow", "completion successful")
 
@@ -309,6 +311,8 @@ class CodexProvider(BaseProvider):
         Raises:
             ProviderError: On transport failure or stream errors.
         """
+        self._acquire_rate_limit()
+
         if system:
             messages = [Message(role="system", content=system), *messages]
 

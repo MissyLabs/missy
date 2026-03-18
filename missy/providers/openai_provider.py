@@ -137,6 +137,13 @@ class OpenAIProvider(BaseProvider):
             raise ProviderError(f"OpenAI authentication failed: {exc}") from exc
         except _openai_sdk.APIError as exc:
             self._emit_event(session_id, task_id, "error", str(exc))
+            if getattr(exc, "status_code", 0) == 429:
+                retry_after = float(
+                    getattr(getattr(exc, "response", None), "headers", {}).get("retry-after", 5)
+                )
+                if self.rate_limiter is not None:
+                    self.rate_limiter.on_rate_limit_response(retry_after)
+                raise ProviderError(f"OpenAI rate limited: {exc}") from exc
             raise ProviderError(f"OpenAI API error: {exc}") from exc
         except Exception as exc:
             self._emit_event(session_id, task_id, "error", str(exc))
@@ -246,6 +253,13 @@ class OpenAIProvider(BaseProvider):
         except _openai_sdk.AuthenticationError as exc:
             raise ProviderError(f"OpenAI authentication failed: {exc}") from exc
         except _openai_sdk.APIError as exc:
+            if getattr(exc, "status_code", 0) == 429:
+                retry_after = float(
+                    getattr(getattr(exc, "response", None), "headers", {}).get("retry-after", 5)
+                )
+                if self.rate_limiter is not None:
+                    self.rate_limiter.on_rate_limit_response(retry_after)
+                raise ProviderError(f"OpenAI rate limited: {exc}") from exc
             raise ProviderError(f"OpenAI API error: {exc}") from exc
         except Exception as exc:
             raise ProviderError(f"Unexpected error calling OpenAI: {exc}") from exc

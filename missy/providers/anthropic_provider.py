@@ -9,7 +9,7 @@ Example::
     from missy.config.settings import ProviderConfig
     from missy.providers.anthropic_provider import AnthropicProvider
 
-    config = ProviderConfig(name="anthropic", model="claude-3-5-sonnet-20241022",
+    config = ProviderConfig(name="anthropic", model="claude-sonnet-4-6",
                             api_key="<REDACTED>")
     provider = AnthropicProvider(config)
     response = provider.complete([Message(role="user", content="Hello")])
@@ -154,6 +154,13 @@ class AnthropicProvider(BaseProvider):
             raise ProviderError(f"Anthropic authentication failed: {exc}") from exc
         except _anthropic_sdk.APIError as exc:
             self._emit_event(session_id, task_id, "error", str(exc))
+            if getattr(exc, "status_code", 0) == 429:
+                retry_after = float(
+                    getattr(getattr(exc, "response", None), "headers", {}).get("retry-after", 5)
+                )
+                if self.rate_limiter is not None:
+                    self.rate_limiter.on_rate_limit_response(retry_after)
+                raise ProviderError(f"Anthropic rate limited: {exc}") from exc
             raise ProviderError(f"Anthropic API error: {exc}") from exc
         except Exception as exc:
             self._emit_event(session_id, task_id, "error", str(exc))
@@ -268,6 +275,13 @@ class AnthropicProvider(BaseProvider):
         except _anthropic_sdk.AuthenticationError as exc:
             raise ProviderError(f"Anthropic authentication failed: {exc}") from exc
         except _anthropic_sdk.APIError as exc:
+            if getattr(exc, "status_code", 0) == 429:
+                retry_after = float(
+                    getattr(getattr(exc, "response", None), "headers", {}).get("retry-after", 5)
+                )
+                if self.rate_limiter is not None:
+                    self.rate_limiter.on_rate_limit_response(retry_after)
+                raise ProviderError(f"Anthropic rate limited: {exc}") from exc
             raise ProviderError(f"Anthropic API error: {exc}") from exc
         except Exception as exc:
             raise ProviderError(f"Unexpected error calling Anthropic: {exc}") from exc
