@@ -9,11 +9,11 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 
 ## Test Results
 
-- **Total tests: 7856**
-- **Passed: 7856**
+- **Total tests: 8817**
+- **Passed: 8817**
 - **Failed: 0**
 - **Skipped: 17**
-- **Duration: ~163s**
+- **Duration: ~174s**
 
 ## Completed Components
 
@@ -80,8 +80,8 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 ## Architecture
 
 - 157 Python source files
-- 262+ test files
-- 7856 tests total
+- 280+ test files
+- 8817 tests total
 
 ## Session History
 
@@ -147,6 +147,19 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 11. Added 26 ToolRegistry hardening tests (execution paths, permission checks, audit events)
 12. Total: 7856 tests passing, 0 failures
 
+### Session 6 (2026-03-18) — Deep Security Audit + Comprehensive Edge Case Testing
+1. Security audit: found and fixed 4 vulnerabilities (path traversal, shell injection, symlink TOCTOU, identity permission leak)
+2. Added 25 ConfigWatcher edge case tests (debounce, deletion, permissions, races)
+3. Added 38 MessageBus tests (wildcards, queue full, thread safety, ordering)
+4. Added 51 VoiceServer protocol tests (auth, flood protection, audio state machine)
+5. Added 69 security fix validation + context manager tests
+6. Added 174 agent subsystem tests (attention, consolidation, playbook, done criteria, approval, sub-agent)
+7. Added 140 scheduler/MCP/trust/circuit breaker edge case tests
+8. Added 198 policy/gateway/preset and config migration/plan tests
+9. Added 117 vault/synthesizer/identity/drift tests (found identity key permission bug)
+10. Added 149 learnings/provider/rate-limiter/sanitizer/censor tests
+11. Total: 8817 tests passing, 0 failures
+
 ## Remaining Work (Future Hardening)
 - [x] Persona change audit trail (JSONL log of all edits) — done in session 2
 - [x] Fuzz testing for YAML parsing edge cases — done in session 3
@@ -161,7 +174,18 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 - [x] Load testing for memory store under concurrent access — done in session 5
 - [x] Voice STT/TTS subprocess management tests (whisper.py, piper.py) — done in session 5
 - [x] Discord voice_commands and image_commands tests — done in session 5
+- [x] End-to-end WebSocket protocol tests for VoiceServer — done in session 6
+- [x] Config hotreload edge case tests — done in session 6
+- [x] Message bus topic wildcard tests — done in session 6
+- [x] Security audit + vulnerability fixes — done in session 6
+- [x] Context manager edge cases — done in session 6
+- [x] Agent subsystem edge cases (attention, consolidation, playbook, approval, sub-agent) — done in session 6
+- [x] Scheduler/MCP/trust/circuit breaker edge cases — done in session 6
+- [x] Policy/gateway/preset edge cases — done in session 6
+- [x] Config migration/plan edge cases — done in session 6
+- [x] Vault/synthesizer/identity/drift edge cases — done in session 6
+- [x] Learnings/provider/rate-limiter edge cases — done in session 6
+- [x] Sanitizer/censor edge cases (homoglyphs, RTL, base64, nested injection) — done in session 6
 - [ ] Discord voice manager integration tests (requires discord.py + voice_recv mocking)
-- [ ] End-to-end WebSocket protocol tests for VoiceServer
-- [ ] Config hotreload edge case tests
-- [ ] Message bus topic wildcard tests
+- [ ] End-to-end CLI integration tests (missy ask/run with mock provider)
+- [ ] Persona runtime enforcement integration tests

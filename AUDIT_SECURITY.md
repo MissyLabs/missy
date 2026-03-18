@@ -112,3 +112,23 @@ using `os.open()` with restrictive flags (`O_CREAT | O_TRUNC` or `O_CREAT | O_AP
 | `channels/discord/image_analyze.py` | 0o700 | 0o600 (os.open, 2 locations) |
 | `memory/vector_store.py` | 0o700 | 0o600 (os.open) |
 | `tools/builtin/tts_speak.py` | — | 0o600 (os.open) |
+| `tools/builtin/file_write.py` | — | 0o600 (os.open + O_NOFOLLOW) |
+
+## Session 6 Security Audit
+
+### Vulnerabilities Found and Fixed
+
+| # | Finding | Severity | Fix |
+|---|---------|----------|-----|
+| 1 | Discord attachment filename path traversal | **Medium** | `os.path.basename()` + null-byte strip + `realpath` guard |
+| 2 | `code_evolution` shell injection via `test_command` | **Medium** | Replaced `shell=True` with `shlex.split()` + `shell=False` |
+| 3 | `file_write` symlink TOCTOU (missing O_NOFOLLOW) | **Low** | Added `O_NOFOLLOW` to `os.open()` flags |
+| 4 | `AgentIdentity.save()` permission leak on overwrite | **Low** | Added `os.chmod()` after write (O_TRUNC preserves old mode) |
+
+### Audit Methodology
+
+- Automated search for unsafe patterns: `yaml.load`, `shell=True`, `pickle`, `eval`, `exec`
+- Path traversal review: all user-input-to-path constructions
+- SQL injection review: all raw SQL in SQLite stores
+- Secret logging review: all `logger.info/debug` calls near credential variables
+- File permission review: all `os.open` / `Path.open` calls
