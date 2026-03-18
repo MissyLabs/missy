@@ -474,3 +474,34 @@ class TestPersonaRollbackCommand:
         assert result.exit_code == 0
         assert "restored" in result.output.lower() or "Persona restored" in result.output
         assert "persona.yaml.20260318_100000" in result.output
+
+
+# ---------------------------------------------------------------------------
+# missy persona log
+# ---------------------------------------------------------------------------
+
+
+class TestPersonaLogCommand:
+    def test_persona_log_no_entries(self, runner: CliRunner) -> None:
+        """persona log prints message when no entries exist."""
+        mock_mgr = _make_persona_manager()
+        mock_mgr.get_audit_log = MagicMock(return_value=[])
+
+        with patch("missy.agent.persona.PersonaManager", return_value=mock_mgr):
+            result = runner.invoke(cli, ["persona", "log"])
+
+        assert result.exit_code == 0
+        assert "No persona audit log" in result.output
+
+    def test_persona_log_with_entries(self, runner: CliRunner) -> None:
+        """persona log shows table when entries exist."""
+        mock_mgr = _make_persona_manager()
+        mock_mgr.get_audit_log = MagicMock(return_value=[
+            {"timestamp": "2026-03-18T12:00:00+00:00", "action": "save", "version": 2, "name": "Missy", "details": {}},
+        ])
+
+        with patch("missy.agent.persona.PersonaManager", return_value=mock_mgr):
+            result = runner.invoke(cli, ["persona", "log"])
+
+        assert result.exit_code == 0
+        assert "save" in result.output

@@ -21,12 +21,14 @@ from __future__ import annotations
 
 import contextlib
 import difflib
+import json
 import logging
 import os
 import shutil
 import tempfile
 import time
 from dataclasses import asdict, dataclass, field, fields
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -261,6 +263,7 @@ class PersonaManager:
             # Restrict file permissions — persona may contain sensitive identity info
             with contextlib.suppress(OSError):
                 self._path.chmod(0o600)
+            self._audit("save")
             logger.debug(
                 "Persona saved to %s (version %d)",
                 self._path,
@@ -281,6 +284,7 @@ class PersonaManager:
         current_version = self._persona.version
         self._persona = PersonaConfig(version=current_version)
         self.save()
+        self._audit("reset")
         logger.info("Persona reset to defaults (version %d)", self._persona.version)
 
     def update(self, **kwargs: Any) -> None:
@@ -323,6 +327,57 @@ class PersonaManager:
     def path(self) -> Path:
         """Resolved path to the persona YAML file."""
         return self._path
+
+    # ------------------------------------------------------------------
+    # Audit trail
+    # ------------------------------------------------------------------
+
+    def _audit(self, action: str, details: dict[str, Any] | None = None) -> None:
+        """Append a structured entry to the persona audit log.
+
+        Args:
+            action: Short label such as ``"save"``, ``"reset"``, ``"rollback"``.
+            details: Optional extra structured data.
+        """
+        audit_path = self._path.parent / "persona_audit.jsonl"
+        entry = {
+            "timestamp": datetime.now(UTC).isoformat(),
+            "action": action,
+            "version": self._persona.version,
+            "name": self._persona.name,
+            "details": details or {},
+        }
+        try:
+            audit_path.parent.mkdir(parents=True, exist_ok=True)
+            with audit_path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(entry) + "\n")
+        except OSError:
+            logger.debug("Could not write to persona audit log at %s", audit_path)
+
+    def get_audit_log(self) -> list[dict[str, Any]]:
+        """Return all persona audit log entries in chronological order.
+
+        Returns:
+            A list of entry dictionaries. Returns an empty list when the
+            audit log does not exist.
+        """
+        audit_path = self._path.parent / "persona_audit.jsonl"
+        if not audit_path.exists():
+            return []
+        entries: list[dict[str, Any]] = []
+        try:
+            with audit_path.open(encoding="utf-8") as fh:
+                for raw_line in fh:
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entries.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        pass
+        except OSError:
+            pass
+        return entries
 
     # ------------------------------------------------------------------
     # Backup / rollback / diff
@@ -390,6 +445,7 @@ class PersonaManager:
 
         self._path.write_text(restore_content, encoding="utf-8")
         self._persona = self._load()
+        self._audit("rollback", {"from_backup": latest.name})
         logger.info(
             "Persona rolled back to backup %s (version %d)",
             latest.name,

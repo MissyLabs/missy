@@ -475,3 +475,75 @@ class TestPersonaDiff:
         diff_text = pm.diff()
         # Version numbers differ so diff won't be empty, but it should exist
         assert isinstance(diff_text, str)
+
+
+# ---------------------------------------------------------------------------
+# PersonaManager — audit trail
+# ---------------------------------------------------------------------------
+
+
+class TestPersonaAuditTrail:
+    def test_save_creates_audit_entry(self, tmp_path):
+        path = tmp_path / "persona.yaml"
+        pm = PersonaManager(persona_path=path)
+        pm.save()
+        entries = pm.get_audit_log()
+        assert len(entries) >= 1
+        assert entries[-1]["action"] == "save"
+
+    def test_reset_creates_audit_entry(self, tmp_path):
+        path = tmp_path / "persona.yaml"
+        pm = PersonaManager(persona_path=path)
+        pm.save()
+        pm.reset()
+        entries = pm.get_audit_log()
+        actions = [e["action"] for e in entries]
+        # save from initial + save inside reset + reset audit
+        assert "reset" in actions
+
+    def test_rollback_creates_audit_entry(self, tmp_path, monkeypatch):
+        call_count = 0
+
+        def _mock_strftime(fmt, *args):
+            nonlocal call_count
+            call_count += 1
+            return f"20260318_13000{call_count}"
+
+        monkeypatch.setattr(time, "strftime", _mock_strftime)
+
+        path = tmp_path / "persona.yaml"
+        pm = PersonaManager(persona_path=path)
+        pm.save()
+        pm.update(name="Changed")
+        pm.save()
+        pm.rollback()
+        entries = pm.get_audit_log()
+        actions = [e["action"] for e in entries]
+        assert "rollback" in actions
+
+    def test_audit_log_empty_initially(self, tmp_path):
+        path = tmp_path / "persona.yaml"
+        pm = PersonaManager(persona_path=path)
+        assert pm.get_audit_log() == []
+
+    def test_audit_entry_has_timestamp(self, tmp_path):
+        path = tmp_path / "persona.yaml"
+        pm = PersonaManager(persona_path=path)
+        pm.save()
+        entries = pm.get_audit_log()
+        assert "timestamp" in entries[0]
+        assert "T" in entries[0]["timestamp"]  # ISO format
+
+    def test_audit_entry_has_version(self, tmp_path):
+        path = tmp_path / "persona.yaml"
+        pm = PersonaManager(persona_path=path)
+        pm.save()
+        entries = pm.get_audit_log()
+        assert entries[0]["version"] == 2  # First save increments from 1 to 2
+
+    def test_audit_entry_has_name(self, tmp_path):
+        path = tmp_path / "persona.yaml"
+        pm = PersonaManager(persona_path=path)
+        pm.save()
+        entries = pm.get_audit_log()
+        assert entries[0]["name"] == "Missy"

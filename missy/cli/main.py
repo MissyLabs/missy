@@ -3273,6 +3273,37 @@ def persona_rollback() -> None:
     console.print(f"[green]Persona restored from {restored.name} (v{mgr.version}).[/]")
 
 
+@persona.command("log")
+@click.option("--limit", "-n", default=20, help="Number of recent entries to show.")
+def persona_log(limit: int) -> None:
+    """Show persona change audit log."""
+    from missy.agent.persona import PersonaManager
+
+    mgr = PersonaManager()
+    entries = mgr.get_audit_log()
+    if not entries:
+        console.print("[dim]No persona audit log entries.[/]")
+        return
+
+    recent = entries[-limit:]
+    table = Table(title="Persona Audit Log")
+    table.add_column("Time", style="dim")
+    table.add_column("Action")
+    table.add_column("Version")
+    table.add_column("Name")
+
+    for entry in recent:
+        ts = entry.get("timestamp", "?")[:19]
+        table.add_row(
+            ts,
+            entry.get("action", "?"),
+            str(entry.get("version", "?")),
+            entry.get("name", "?"),
+        )
+
+    console.print(table)
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
