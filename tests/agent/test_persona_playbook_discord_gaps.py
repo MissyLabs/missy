@@ -24,23 +24,20 @@ discord/channel.py:
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch, mock_open
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-import yaml
 
-from missy.agent.persona import PersonaConfig, PersonaManager
+from missy.agent.persona import PersonaManager
 from missy.agent.playbook import Playbook
 from missy.channels.discord.channel import DiscordChannel
 from missy.channels.discord.config import (
     DiscordAccountConfig,
     DiscordDMPolicy,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -85,13 +82,12 @@ class TestPersonaSaveExceptionCleanup:
         pm = PersonaManager(persona_path=persona_file)
 
         # Capture the temp file path that mkstemp creates so we can assert it is removed.
-        created_tmp: list[str] = []
 
         real_mkstemp = os.fdopen
 
         def fake_fdopen(fd, *args, **kwargs):
             # Let the fd open, then raise to simulate a mid-write failure.
-            fh = real_mkstemp(fd, *args, **kwargs)
+            real_mkstemp(fd, *args, **kwargs)
             raise OSError("simulated disk full")
 
         with patch("missy.agent.persona.os.fdopen", side_effect=fake_fdopen):
@@ -212,7 +208,7 @@ class TestPlaybookSaveExceptionCleanup:
         pb = Playbook(store_path=str(tmp_path / "playbook.json"))
         pb.record("shell", "deploy", ["shell_exec"], "use rsync")
 
-        with patch("missy.agent.playbook.json.dump", side_effect=IOError("disk full")):
+        with patch("missy.agent.playbook.json.dump", side_effect=OSError("disk full")):
             # save() swallows the exception (logs at DEBUG) — must not propagate.
             pb.save()
 
@@ -222,7 +218,7 @@ class TestPlaybookSaveExceptionCleanup:
         pb.record("file", "read config", ["file_read"], "open yaml")
 
         with (
-            patch("missy.agent.playbook.json.dump", side_effect=IOError("write failed")),
+            patch("missy.agent.playbook.json.dump", side_effect=OSError("write failed")),
             patch("missy.agent.playbook.os.unlink", side_effect=OSError("busy")),
         ):
             pb.save()  # Must not raise.
@@ -231,7 +227,7 @@ class TestPlaybookSaveExceptionCleanup:
         """Even if disk write fails, the in-memory entry is updated."""
         pb = Playbook(store_path=str(tmp_path / "playbook.json"))
 
-        with patch("missy.agent.playbook.json.dump", side_effect=IOError("disk full")):
+        with patch("missy.agent.playbook.json.dump", side_effect=OSError("disk full")):
             entry = pb.record("net", "fetch url", ["http_get"], "use requests")
 
         assert entry.task_type == "net"

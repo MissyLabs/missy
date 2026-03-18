@@ -18,7 +18,6 @@ from missy.agent.attention import (
 )
 from missy.agent.consolidation import MemoryConsolidator
 
-
 # ---------------------------------------------------------------------------
 # AttentionSystem — subsystem composition
 # ---------------------------------------------------------------------------
@@ -62,7 +61,7 @@ class TestAttentionSystemSubsystems:
         """context_filter must be the lowercased version of extracted topics."""
         attn = AttentionSystem()
         state = attn.process("Configure Docker networking")
-        for topic, cf in zip(state.topics, state.context_filter):
+        for topic, cf in zip(state.topics, state.context_filter, strict=False):
             assert cf == topic.lower()
 
     def test_process_consecutive_different_topics_keeps_duration_at_one(self):

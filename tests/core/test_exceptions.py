@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from missy.core import bus_topics
 from missy.core.exceptions import (
     ApprovalRequiredError,
     ConfigurationError,
@@ -12,8 +13,6 @@ from missy.core.exceptions import (
     ProviderError,
     SchedulerError,
 )
-from missy.core import bus_topics
-
 
 # ---------------------------------------------------------------------------
 # Exception hierarchy tests

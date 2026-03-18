@@ -8,10 +8,7 @@ from __future__ import annotations
 
 import struct
 
-import pytest
-
 from missy.channels.discord.voice import _clean_for_speech, _resample_pcm
-
 
 # ---------------------------------------------------------------------------
 # _clean_for_speech tests

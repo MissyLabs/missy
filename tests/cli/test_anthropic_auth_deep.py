@@ -5,26 +5,21 @@ expiry detection, vault integration, and runtime resolution.
 from __future__ import annotations
 
 import json
-import os
-import stat
 import time
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from missy.cli.anthropic_auth import (
-    TOKEN_FILE,
-    SETUP_TOKEN_TTL_SECONDS,
     REFRESH_WARN_MARGIN,
-    classify_token,
-    store_token,
-    load_token,
-    is_token_expiring,
-    get_current_token,
+    SETUP_TOKEN_TTL_SECONDS,
     _try_store_in_vault,
+    classify_token,
+    get_current_token,
+    is_token_expiring,
+    load_token,
+    store_token,
 )
-
 
 # =========================================================================
 # classify_token
@@ -217,12 +212,11 @@ class TestGetCurrentToken:
             assert result == "vault-key"
 
     def test_vault_failure_returns_none(self):
-        with patch("missy.cli.anthropic_auth.load_token", return_value=None):
-            with patch(
-                "missy.security.vault.Vault", side_effect=Exception("vault error")
-            ):
-                result = get_current_token()
-                assert result is None
+        with patch("missy.cli.anthropic_auth.load_token", return_value=None), patch(
+            "missy.security.vault.Vault", side_effect=Exception("vault error")
+        ):
+            result = get_current_token()
+            assert result is None
 
 
 # =========================================================================

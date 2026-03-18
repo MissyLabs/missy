@@ -17,7 +17,6 @@ import pytest
 from missy.memory.synthesizer import MemoryFragment, MemorySynthesizer
 from missy.security.vault import Vault, VaultError
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

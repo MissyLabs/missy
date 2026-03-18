@@ -23,7 +23,6 @@ from missy.security.censor import censor_response
 from missy.security.sanitizer import InputSanitizer, _strip_zero_width
 from missy.security.secrets import SecretsDetector
 
-
 # ---------------------------------------------------------------------------
 # Shared fixtures
 # ---------------------------------------------------------------------------

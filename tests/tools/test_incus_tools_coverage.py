@@ -6,12 +6,9 @@ patching action validation, and snapshot fallback with project.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import patch
 
 from missy.tools.base import ToolResult
-
 
 # ---------------------------------------------------------------------------
 # Snapshot tool — fallback on list failure (lines 598-601)
@@ -78,7 +75,7 @@ class TestIncusConfigUnreachable:
         tool = IncusConfigTool()
 
         # Normal invalid action gets caught by validation
-        with patch("missy.tools.builtin.incus_tools._run_incus") as mock:
+        with patch("missy.tools.builtin.incus_tools._run_incus"):
             result = tool.execute(instance="vm1", action="invalid")
         assert not result.success
         assert "Invalid action" in result.error

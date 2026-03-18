@@ -21,7 +21,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -146,7 +145,8 @@ class TestDiscordSaveAttachmentSanitization:
         """The downloaded bytes must actually be written to the returned path."""
         dest = self._call_save("photo.jpg", tmp_path)
         assert os.path.exists(dest)
-        assert open(dest, "rb").read() == b"fake-image-data"
+        with open(dest, "rb") as f:
+            assert f.read() == b"fake-image-data"
 
     def test_save_dir_created_with_restricted_permissions(self, tmp_path):
         """The save directory is created with mode 0o700 (no world access)."""
@@ -180,7 +180,6 @@ class TestCodeEvolutionShellFalse:
         argument and the leading program is expected to fail or error out,
         rather than silently running the second half of the pipe.
         """
-        from missy.agent.code_evolution import CodeEvolutionManager
 
         # "true | rm -rf /" — with shell=True this would attempt to delete
         # everything. With shell=False, "true" is run with args

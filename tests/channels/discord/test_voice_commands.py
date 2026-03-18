@@ -6,16 +6,13 @@ Tests the command parsing and routing in
 
 from __future__ import annotations
 
-import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from missy.channels.discord.voice_commands import (
-    VoiceCommandResult,
     maybe_handle_voice_command,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

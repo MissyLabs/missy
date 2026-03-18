@@ -8,13 +8,12 @@ module-level singleton.
 from __future__ import annotations
 
 import threading
-from datetime import UTC, datetime, timezone, timedelta
-from unittest.mock import MagicMock, call, patch
+from datetime import UTC, datetime, timedelta, timezone
+from unittest.mock import MagicMock
 
 import pytest
 
 from missy.core.events import AuditEvent, EventBus, event_bus
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -620,7 +619,7 @@ class TestEventBusThreadSafety:
 
         def subscribe_loop() -> None:
             try:
-                for i in range(100):
+                for _i in range(100):
                     cb = MagicMock()
                     bus.subscribe("race.event", cb)
             except Exception as exc:

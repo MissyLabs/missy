@@ -12,39 +12,31 @@ Covers:
 from __future__ import annotations
 
 import asyncio
-import concurrent.futures
 import json
 import os
 import tempfile
 import threading
 import time
-from collections import deque
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from missy.channels.screencast.analyzer import _DEFAULT_PROMPT, FrameAnalyzer
 from missy.channels.screencast.auth import ScreencastSession, ScreencastTokenRegistry
-from missy.channels.screencast.analyzer import FrameAnalyzer, _DEFAULT_PROMPT
 from missy.channels.screencast.channel import ScreencastChannel, _get_lan_ip
 from missy.channels.screencast.server import (
-    ScreencastServer,
     _JPEG_MAGIC,
-    _MAX_CONCURRENT_CONNECTIONS,
-    _MAX_FRAME_BYTES,
-    _MIN_DIMENSION,
-    _MAX_DIMENSION,
-    _MIN_FRAME_INTERVAL,
     _PNG_MAGIC,
+    ScreencastServer,
 )
 from missy.channels.screencast.session_manager import (
+    _MAX_RESULTS_PER_SESSION,
     AnalysisResult,
     FrameMetadata,
     SessionManager,
     SessionState,
-    _MAX_RESULTS_PER_SESSION,
 )
-
 
 # ---------------------------------------------------------------------------
 # Shared fixtures

@@ -24,7 +24,6 @@ from missy.agent.persona import PersonaConfig, PersonaManager
 from missy.agent.runtime import AgentConfig, AgentRuntime
 from missy.providers.base import CompletionResponse
 
-
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
@@ -693,7 +692,6 @@ class TestToneAdaptation:
         session = runtime._resolve_session(None)
         sid = str(session.id)
         # Inject casual messages directly into the in-memory session store
-        from missy.core.session import Session
         if hasattr(runtime._session_mgr, "_sessions"):
             runtime._session_mgr._sessions[sid] = session
 
@@ -1069,7 +1067,7 @@ class TestPersonaResetRestoresDefaults:
     ) -> None:
         """After reset, get_system_prompt_prefix() matches what a brand-new PersonaManager produces."""
         pm_fresh = PersonaManager(persona_path=tmp_path / "fresh.yaml")
-        fresh_prefix = pm_fresh.get_system_prompt_prefix()
+        pm_fresh.get_system_prompt_prefix()
 
         pm_edited = PersonaManager(persona_path=tmp_path / "edited.yaml")
         pm_edited.update(name="Temp", tone=["weird"])

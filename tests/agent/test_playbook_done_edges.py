@@ -7,20 +7,17 @@ existing test_playbook.py and test_done_criteria.py suites.
 from __future__ import annotations
 
 import json
-import os
 import threading
 
 import pytest
 
 from missy.agent.done_criteria import (
     DoneCriteria,
-    _COMPOUND_PATTERNS,
     is_compound_task,
     make_done_prompt,
     make_verification_prompt,
 )
-from missy.agent.playbook import Playbook, PlaybookEntry, _compute_pattern_id
-
+from missy.agent.playbook import Playbook, _compute_pattern_id
 
 # ---------------------------------------------------------------------------
 # Playbook edge cases

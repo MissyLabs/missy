@@ -25,11 +25,10 @@ from missy.core.events import event_bus
 from missy.core.exceptions import PolicyViolationError
 from missy.gateway.client import PolicyHTTPClient, create_client
 from missy.policy import engine as engine_module
-from missy.policy.engine import PolicyEngine, init_policy_engine
+from missy.policy.engine import init_policy_engine
 from missy.policy.network import NetworkPolicyEngine
 from missy.policy.presets import PRESETS, resolve_presets
-from missy.policy.rest_policy import RestPolicy, RestRule
-
+from missy.policy.rest_policy import RestPolicy
 
 # ---------------------------------------------------------------------------
 # Shared helpers

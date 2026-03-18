@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from click.testing import CliRunner
 
-from missy.agent.persona import PersonaConfig, PersonaManager
+from missy.agent.persona import PersonaManager
 from missy.cli.main import cli
 
 

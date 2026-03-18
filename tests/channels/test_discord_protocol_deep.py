@@ -279,7 +279,7 @@ class TestGetGatewayBot:
         client, mock_http = _make_rest(
             get_response=_make_response(json_data=expected)
         )
-        result = client.get_gateway_bot()
+        client.get_gateway_bot()
         url_called = mock_http.get.call_args[0][0]
         assert url_called == f"{BASE}/gateway/bot"
 
@@ -1148,7 +1148,6 @@ class TestHandleDispatchResumed:
     async def test_resumed_emits_audit(self):
         gw = _make_gateway()
         emitted: list[str] = []
-        original_emit = gw._emit_audit
 
         def _capture(event_type, result, detail):
             emitted.append(event_type)

@@ -33,7 +33,6 @@ from missy.config.settings import (
     ShellPolicy,
 )
 from missy.core.events import event_bus
-from missy.core.exceptions import PolicyViolationError
 from missy.mcp.digest import compute_tool_manifest_digest
 from missy.mcp.manager import McpManager
 from missy.policy.engine import init_policy_engine

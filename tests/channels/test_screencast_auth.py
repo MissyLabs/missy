@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-import time
-
-import pytest
-
-from missy.channels.screencast.auth import ScreencastSession, ScreencastTokenRegistry
+from missy.channels.screencast.auth import ScreencastTokenRegistry
 
 
 class TestScreencastTokenRegistry:

@@ -9,17 +9,13 @@ Covers:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
 from unittest.mock import MagicMock
-
-import pytest
 
 from missy.tools.builtin.memory_tools import (
     MemoryDescribeTool,
     MemoryExpandTool,
     MemorySearchTool,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers / mock objects
@@ -343,16 +339,16 @@ class TestMemoryExpandTool:
         store.get_child_summaries.return_value = []  # empty — trigger fallback
         call_count = 0
 
+        _lookup = {
+            "sum_parent": summary,
+            "sum_c1": child1,
+            "sum_c2": child2,
+        }
+
         def get_by_id(sid):
             nonlocal call_count
             call_count += 1
-            if sid == "sum_parent":
-                return summary
-            elif sid == "sum_c1":
-                return child1
-            elif sid == "sum_c2":
-                return child2
-            return None
+            return _lookup.get(sid)
 
         store.get_summary_by_id.side_effect = get_by_id
         store.get_source_turns.return_value = []

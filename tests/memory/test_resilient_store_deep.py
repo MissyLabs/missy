@@ -13,13 +13,12 @@ Focuses on areas not covered by test_resilient_extended.py:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, UTC
-from unittest.mock import MagicMock, call, patch
+from datetime import UTC, datetime
+from unittest.mock import MagicMock
 
 import pytest
 
 from missy.memory.resilient import ResilientMemoryStore
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -204,7 +203,7 @@ class TestSyncAfterRecovery:
 
         # Fix primary but make it fail on the first sync call only
         call_count = {"n": 0}
-        originals = list(turns)
+        list(turns)
 
         def flaky_add(t):
             call_count["n"] += 1

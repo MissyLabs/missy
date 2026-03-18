@@ -17,6 +17,7 @@ Covers:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import textwrap
 import time
@@ -32,7 +33,6 @@ from missy.config.plan import backup_config, diff_configs, list_backups, rollbac
 from missy.config.settings import (
     MissyConfig,
     ObservabilityConfig,
-    ProviderConfig,
     get_default_config,
     load_config,
 )
@@ -40,7 +40,6 @@ from missy.core.events import AuditEvent, EventBus
 from missy.core.exceptions import ConfigurationError
 from missy.observability.audit_logger import AuditLogger
 from missy.observability.otel import OtelExporter, init_otel
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -950,7 +949,10 @@ class TestOtelExporterDisabledByDefault:
         exporter = init_otel(cfg)
         # The disabled stub has no _tracer / _enabled; export_event must guard against that.
         # We call it and verify it does not raise.
-        try:
+        with contextlib.suppress(AttributeError):
+            # The disabled stub may have no _enabled attribute — AttributeError is
+            # acceptable for a bare __new__ stub.  The key contract is that
+            # init_otel returns an OtelExporter instance.
             exporter.export_event(
                 {
                     "event_type": "network.request",
@@ -959,11 +961,6 @@ class TestOtelExporterDisabledByDefault:
                     "detail": {},
                 }
             )
-        except AttributeError:
-            # If the stub has no _enabled attribute, export_event may raise AttributeError.
-            # This is acceptable for a bare __new__ stub — the key contract is that
-            # init_otel returns an OtelExporter instance.
-            pass
 
     def test_otel_exporter_direct_init_without_packages(self) -> None:
         """OtelExporter gracefully degrades when opentelemetry is unavailable."""
@@ -1292,7 +1289,7 @@ class TestConfigAuditEndToEnd:
         cfg = load_config(str(cfg_path))
 
         bus = EventBus()
-        al = AuditLogger(log_path=cfg.audit_log_path, bus=bus)
+        AuditLogger(log_path=cfg.audit_log_path, bus=bus)
         _make_event(bus, "test.event", "network", "allow")
 
         assert audit_file.exists()

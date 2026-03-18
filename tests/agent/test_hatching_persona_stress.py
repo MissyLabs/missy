@@ -22,8 +22,8 @@ test_behavior.py:
 
 from __future__ import annotations
 
+import contextlib
 import json
-import os
 import sys
 import threading
 import time
@@ -45,10 +45,7 @@ from missy.agent.hatching import (
 from missy.agent.persona import (
     PersonaConfig,
     PersonaManager,
-    _persona_from_dict,
-    _persona_to_dict,
 )
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -73,9 +70,6 @@ def _patch_module_paths(monkeypatch: Any, tmp_path: Path) -> None:
     monkeypatch.setattr(hatching_mod, "_SECRETS_DIR", tmp_path / "secrets")
     monkeypatch.setattr(hatching_mod, "_PERSONA_PATH", tmp_path / "persona.yaml")
     monkeypatch.setattr(hatching_mod, "_MEMORY_DB_PATH", tmp_path / "memory.db")
-
-
-import contextlib
 
 
 @contextlib.contextmanager
@@ -507,7 +501,7 @@ class TestPersonaRapidEditCycle:
             versions.append(pm.version)
 
         # Versions must be strictly increasing.
-        for a, b in zip(versions, versions[1:]):
+        for a, b in zip(versions, versions[1:], strict=False):
             assert b > a, f"Version went backwards: {a} → {b}"
 
     def test_100_edits_final_name_is_correct(self, tmp_path: Path) -> None:
@@ -977,7 +971,7 @@ class TestPersonaAuditLogIntegrity:
 
         entries = pm.get_audit_log()
         versions = [e["version"] for e in entries]
-        for a, b in zip(versions, versions[1:]):
+        for a, b in zip(versions, versions[1:], strict=False):
             assert b > a, f"Audit version went backwards: {a} → {b}"
 
     def test_audit_log_reset_and_rollback_entries_present(self, tmp_path: Path, monkeypatch: Any) -> None:

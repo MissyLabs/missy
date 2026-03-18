@@ -25,7 +25,6 @@ import pytest
 
 from missy.scheduler.parser import parse_schedule
 
-
 # ===========================================================================
 # Scheduler parser — edge cases not covered by existing tests
 # ===========================================================================

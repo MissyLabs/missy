@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import MagicMock
 
 from missy.agent.summarizer import Summarizer, _approx_tokens
 from missy.memory.sqlite_store import ConversationTurn, SummaryRecord
@@ -28,7 +26,7 @@ class TestSummarizeTurns:
 
     def _make_turns(self, n=3):
         return [
-            ConversationTurn.new(f"sess", role="user", content=f"Turn {i}")
+            ConversationTurn.new("sess", role="user", content=f"Turn {i}")
             for i in range(n)
         ]
 

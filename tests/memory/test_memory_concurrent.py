@@ -6,17 +6,11 @@ without corruption, data loss, or crashes.
 
 from __future__ import annotations
 
-import asyncio
 import concurrent.futures
-import os
 import threading
 import time
-from pathlib import Path
 
-import pytest
-
-from missy.memory.store import ConversationTurn, MemoryStore
-
+from missy.memory.store import MemoryStore
 
 # ---------------------------------------------------------------------------
 # MemoryStore (JSON) concurrent tests
@@ -217,8 +211,8 @@ class TestSQLiteMemoryStoreConcurrent:
     """Test SQLiteMemoryStore under concurrent access."""
 
     def test_concurrent_add_turns(self, tmp_path):
-        from missy.memory.sqlite_store import SQLiteMemoryStore
         from missy.memory.sqlite_store import ConversationTurn as SQLiteTurn
+        from missy.memory.sqlite_store import SQLiteMemoryStore
         db_path = str(tmp_path / "memory.db")
         store = SQLiteMemoryStore(db_path=db_path)
         errors = []
@@ -253,8 +247,8 @@ class TestSQLiteMemoryStoreConcurrent:
         assert total == 50
 
     def test_concurrent_search_and_write(self, tmp_path):
-        from missy.memory.sqlite_store import SQLiteMemoryStore
         from missy.memory.sqlite_store import ConversationTurn as SQLiteTurn
+        from missy.memory.sqlite_store import SQLiteMemoryStore
         db_path = str(tmp_path / "memory.db")
         store = SQLiteMemoryStore(db_path=db_path)
 

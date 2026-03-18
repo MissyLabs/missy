@@ -39,11 +39,11 @@ ProgressReporter:
 
 from __future__ import annotations
 
+import contextlib
 import subprocess
 import sys
-from io import StringIO
 from typing import Any
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -54,7 +54,6 @@ from missy.agent.progress import (
     ProgressReporter,
 )
 from missy.security.container import ContainerSandbox
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -411,10 +410,9 @@ class TestContextManagerEdgeCases:
         stop_result = MagicMock(returncode=0, stdout=b"", stderr=b"")
         mock_run.side_effect = [start_result, stop_result]
 
-        with pytest.raises(RuntimeError):
-            with ContainerSandbox(workspace="/tmp/ws") as sb:
-                assert sb.container_id == "exctest"
-                raise RuntimeError("deliberate failure")
+        with pytest.raises(RuntimeError), ContainerSandbox(workspace="/tmp/ws") as sb:
+            assert sb.container_id == "exctest"
+            raise RuntimeError("deliberate failure")
 
         # stop() ran, container_id cleared
         assert sb.container_id is None
@@ -572,7 +570,6 @@ class TestAuditReporterEdgeCases:
         calls: list[tuple[str, dict]] = []
 
         reporter = AuditReporter(session_id="sid", task_id="tid")
-        original_emit = reporter._emit
 
         def _spy_emit(event_type: str, detail: dict) -> None:
             calls.append((event_type, detail))
@@ -640,10 +637,8 @@ class TestAuditReporterEdgeCases:
         with patch("missy.agent.progress.AuditReporter._emit") as mock_emit:
             # Replicate what the real _emit does: call publish inside a try/except
             def _emit_with_swallow(event_type: str, detail: dict) -> None:
-                try:
+                with contextlib.suppress(Exception):
                     mock_bus.publish(event_type, detail)
-                except Exception:
-                    pass
 
             mock_emit.side_effect = _emit_with_swallow
             r.on_complete("check")  # must not raise

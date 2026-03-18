@@ -24,10 +24,9 @@ Coverage targets
 from __future__ import annotations
 
 import hashlib
-import time
 from collections.abc import Generator
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -50,7 +49,6 @@ from missy.policy.network import NetworkPolicyEngine
 from missy.policy.presets import PRESETS, resolve_presets
 from missy.policy.rest_policy import RestPolicy, RestRule
 from missy.providers.rate_limiter import RateLimiter, RateLimitExceeded
-
 
 # ---------------------------------------------------------------------------
 # Test-wide fixtures and helpers
@@ -198,9 +196,8 @@ class TestNetworkPolicyEnforcement:
         """create_client() must produce a client that honours the installed engine."""
         init_policy_engine(_build_config(default_deny=True))
         client = create_client(session_id="s", task_id="t")
-        with patch.object(httpx.Client, "get"):
-            with pytest.raises(PolicyViolationError):
-                client.get("https://blocked.example.com/")
+        with patch.object(httpx.Client, "get"), pytest.raises(PolicyViolationError):
+            client.get("https://blocked.example.com/")
 
 
 # ===========================================================================
@@ -943,9 +940,8 @@ class TestGatewayErrorHandling:
             httpx.Client,
             "get",
             side_effect=httpx.TimeoutException("timed out"),
-        ):
-            with pytest.raises(httpx.TimeoutException):
-                client.get("https://api.example.com/slow")
+        ), pytest.raises(httpx.TimeoutException):
+            client.get("https://api.example.com/slow")
 
     def test_connect_error_propagates(self) -> None:
         """httpx.ConnectError must propagate after the policy check passes."""
@@ -955,9 +951,8 @@ class TestGatewayErrorHandling:
             httpx.Client,
             "get",
             side_effect=httpx.ConnectError("refused"),
-        ):
-            with pytest.raises(httpx.ConnectError):
-                client.get("https://api.example.com/unreachable")
+        ), pytest.raises(httpx.ConnectError):
+            client.get("https://api.example.com/unreachable")
 
     def test_http_4xx_returned_as_response(self) -> None:
         """A 404 HTTP response must be returned rather than raised."""
@@ -1009,9 +1004,8 @@ class TestGatewayErrorHandling:
             "get",
             new_callable=AsyncMock,
             side_effect=httpx.TimeoutException("async timeout"),
-        ):
-            with pytest.raises(httpx.TimeoutException):
-                await client.aget("https://api.example.com/slow")
+        ), pytest.raises(httpx.TimeoutException):
+            await client.aget("https://api.example.com/slow")
 
     def test_policy_check_before_httpx_on_denied_host(self) -> None:
         """The policy guard must fire before httpx is touched — confirmed by
@@ -1117,9 +1111,8 @@ class TestPolicyAuditEvents:
             )
         )
         client = PolicyHTTPClient()
-        with patch.object(httpx.Client, "delete"):
-            with pytest.raises(PolicyViolationError):
-                client.delete("https://api.github.com/repos/foo")
+        with patch.object(httpx.Client, "delete"), pytest.raises(PolicyViolationError):
+            client.delete("https://api.github.com/repos/foo")
         req_events = event_bus.get_events(event_type="network_request")
         assert len(req_events) == 0
 

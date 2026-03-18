@@ -8,15 +8,12 @@ tmp_path so no real filesystem state is modified.
 from __future__ import annotations
 
 import threading
-import time
 from pathlib import Path
 
-import pytest
 import yaml
 
 from missy.agent.hatching import HatchingManager, HatchingState, HatchingStatus
-from missy.agent.persona import PersonaConfig, PersonaManager, _persona_from_dict
-
+from missy.agent.persona import PersonaConfig, PersonaManager
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -71,7 +68,7 @@ def test_hatching_state_deeply_nested(tmp_path: Path) -> None:
     # Build a 100-deep nested structure starting with a valid outer key
     nested: dict = {}
     current = nested
-    for i in range(99):
+    for _i in range(99):
         current["level"] = {}
         current = current["level"]
     current["leaf"] = "value"

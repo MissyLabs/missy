@@ -150,7 +150,6 @@ class TestOversizedPayload:
             # Keep prompt short (under _MAX_PROMPT_LENGTH) and pad with a
             # separate JSON field so the overall body hits the byte limit.
             limit = webhook_module._MAX_PAYLOAD_BYTES
-            prompt = "hello"
             prefix = b'{"prompt":"hello","pad":"'
             suffix = b'"}'
             padding_len = limit - len(prefix) - len(suffix)

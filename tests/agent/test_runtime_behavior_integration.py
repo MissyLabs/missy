@@ -13,10 +13,8 @@ from __future__ import annotations
 from contextlib import ExitStack
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from missy.agent.runtime import AgentConfig, AgentRuntime
-from missy.providers.base import CompletionResponse, Message
+from missy.providers.base import CompletionResponse
 
 
 def _make_config(**overrides):
@@ -66,7 +64,7 @@ class TestBehaviorLayerCreation:
     """Test that behavior subsystems are lazily created."""
 
     def test_behavior_layer_created(self):
-        rt = AgentRuntime(_make_config())
+        AgentRuntime(_make_config())
         assert True  # If we get here, no crash
 
     def test_response_shaper_created(self):

@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import contextlib
-import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
 import yaml
 
 from missy.agent.hatching import (
@@ -17,7 +15,6 @@ from missy.agent.hatching import (
     HatchingStatus,
     _HatchingStepWarning,
 )
-
 
 # ---------------------------------------------------------------------------
 # HatchingStatus enum
@@ -395,14 +392,12 @@ class TestHatchingManagerRunHatching:
         """A step raising a plain Exception (not _HatchingStepWarning) marks state FAILED."""
         _patch_module_paths(monkeypatch, tmp_path)
 
-        import missy.agent.hatching as hatching_mod
 
         def _bad_step(state, *, interactive):
             raise RuntimeError("disk exploded")
 
         mgr = _make_manager(tmp_path)
         # Inject a broken step directly
-        original_finalize = mgr._finalize
         mgr._finalize = _bad_step  # type: ignore[method-assign]
 
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")

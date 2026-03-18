@@ -11,19 +11,16 @@ Covers:
 from __future__ import annotations
 
 import json
-import os
 import sys
 import types
 from pathlib import Path
-from unittest.mock import MagicMock, mock_open, patch
+from unittest.mock import MagicMock
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # SimpleVectorizer tests (always available, no FAISS needed)
 # ---------------------------------------------------------------------------
-
 from missy.memory.vector_store import SimpleVectorizer, _tokenize
 
 
@@ -149,7 +146,7 @@ def mock_faiss():
             query = arr[0]
             dists = []
             for i, v in enumerate(self._vectors):
-                d = sum((a - b) ** 2 for a, b in zip(query, v))
+                d = sum((a - b) ** 2 for a, b in zip(query, v, strict=False))
                 dists.append((d, i))
             dists.sort()
             k = min(k, len(dists))

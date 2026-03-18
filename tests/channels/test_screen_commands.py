@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 import time
-from types import SimpleNamespace
 from unittest.mock import MagicMock
-
-import pytest
 
 from missy.channels.discord.screen_commands import (
     ScreenCommandResult,
@@ -14,7 +11,6 @@ from missy.channels.discord.screen_commands import (
     maybe_handle_screen_command,
 )
 from missy.channels.screencast.session_manager import AnalysisResult
-
 
 # ---------------------------------------------------------------------------
 # Helpers

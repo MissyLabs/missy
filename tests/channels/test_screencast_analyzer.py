@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from missy.channels.screencast.analyzer import FrameAnalyzer
 from missy.channels.screencast.auth import ScreencastTokenRegistry
 from missy.channels.screencast.session_manager import (
-    AnalysisResult,
     FrameMetadata,
     SessionManager,
 )
@@ -394,7 +393,6 @@ class TestSaveFrameSyncFailure:
         self, session_manager: SessionManager, registry: ScreencastTokenRegistry, tmp_path
     ) -> None:
         """If os.open fails, the exception propagates (no tmp file created)."""
-        import os
 
         session_id, _ = registry.create_session()
         analyzer = FrameAnalyzer(

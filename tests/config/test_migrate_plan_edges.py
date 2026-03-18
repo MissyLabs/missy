@@ -6,14 +6,12 @@ are not covered by the primary test suites in test_migrate.py and test_plan.py.
 
 from __future__ import annotations
 
-import os
 import stat
 import textwrap
 import time
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
 import yaml
 
 from missy.config.migrate import (
@@ -29,7 +27,6 @@ from missy.config.plan import (
     list_backups,
     rollback,
 )
-
 
 # ---------------------------------------------------------------------------
 # Migration edge cases

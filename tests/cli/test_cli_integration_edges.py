@@ -13,7 +13,6 @@ Test structure follows Arrange-Act-Assert throughout.
 
 from __future__ import annotations
 
-import json
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -113,7 +112,7 @@ class TestInit:
     def test_init_creates_config_in_tmpdir(self, runner: CliRunner, tmp_path: Path) -> None:
         """init writes a config.yaml into a fresh missy directory."""
         missy_dir = tmp_path / ".missy"
-        config_file = missy_dir / "config.yaml"
+        missy_dir / "config.yaml"
 
         with patch("missy.cli.main.Path") as mock_path_cls:
             # Only intercept the two paths the command constructs at the top level.

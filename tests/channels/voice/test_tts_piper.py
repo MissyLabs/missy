@@ -6,9 +6,7 @@ and environment sanitization.
 
 from __future__ import annotations
 
-import asyncio
 import struct
-import tempfile
 import wave
 from io import BytesIO
 from pathlib import Path
@@ -22,7 +20,6 @@ from missy.channels.voice.tts.piper import (
     _pcm_to_wav,
     _piper_subprocess_env,
 )
-
 
 # ---------------------------------------------------------------------------
 # _pcm_to_wav helper

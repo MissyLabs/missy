@@ -18,7 +18,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-import os
 import stat
 import time
 import urllib.parse
@@ -31,7 +30,6 @@ import pytest
 import missy.cli.oauth as oauth_module
 from missy.cli.oauth import (
     AUTHORIZE_URL,
-    DEFAULT_CLIENT_ID,
     REDIRECT_URI,
     REFRESH_MARGIN_SECONDS,
     SCOPES,
@@ -44,7 +42,6 @@ from missy.cli.oauth import (
     load_token,
     refresh_token_if_needed,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

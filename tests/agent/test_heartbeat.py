@@ -2,12 +2,8 @@
 
 from __future__ import annotations
 
-import threading
 from datetime import datetime
-from pathlib import Path
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from missy.agent.heartbeat import HeartbeatRunner
 
@@ -120,7 +116,6 @@ class TestActiveHours:
         runner = HeartbeatRunner(agent_run_fn=lambda p: "ok", active_hours=active_hours)
         frozen = datetime(2026, 3, 18, hour, minute, 0)
         # Monkey-patch the method to use frozen time
-        original = runner._in_active_hours
 
         def patched():
             import re as _re

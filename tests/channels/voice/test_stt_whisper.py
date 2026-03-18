@@ -13,7 +13,6 @@ import pytest
 
 from missy.channels.voice.stt.base import STTEngine, TranscriptionResult
 
-
 # ---------------------------------------------------------------------------
 # Mock segment for Whisper output
 # ---------------------------------------------------------------------------

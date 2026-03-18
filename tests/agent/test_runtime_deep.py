@@ -15,9 +15,9 @@ Exercises multi-subsystem interactions end-to-end with a mocked provider:
 
 from __future__ import annotations
 
+import contextlib
 import time
-from typing import Any
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -36,8 +36,7 @@ from missy.agent.runtime import AgentConfig, AgentRuntime
 from missy.core.events import event_bus
 from missy.core.exceptions import MissyError, ProviderError
 from missy.providers import registry as registry_module
-from missy.providers.base import CompletionResponse, ToolCall, ToolResult
-
+from missy.providers.base import CompletionResponse, ToolCall
 
 # ---------------------------------------------------------------------------
 # Shared test helpers
@@ -483,10 +482,8 @@ class TestRuntimeCircuitBreakerIntegration:
         breaker = CircuitBreaker("test", threshold=3, base_timeout=60.0)
 
         # Simulate one failure (not enough to open)
-        try:
+        with contextlib.suppress(RuntimeError):
             breaker.call(lambda: (_ for _ in ()).throw(RuntimeError("fail")))
-        except RuntimeError:
-            pass
 
         assert breaker._failure_count == 1
         assert breaker.state == CircuitState.CLOSED
@@ -1191,37 +1188,29 @@ class TestCircuitBreakerStateMachine:
     def test_failures_below_threshold_stay_closed(self):
         cb = CircuitBreaker("test", threshold=3)
         for _ in range(2):
-            try:
+            with contextlib.suppress(RuntimeError):
                 cb.call(lambda: (_ for _ in ()).throw(RuntimeError("fail")))
-            except RuntimeError:
-                pass
         assert cb.state == CircuitState.CLOSED
 
     def test_threshold_failures_open_circuit(self):
         cb = CircuitBreaker("test", threshold=3)
         for _ in range(3):
-            try:
+            with contextlib.suppress(RuntimeError):
                 cb.call(lambda: (_ for _ in ()).throw(RuntimeError("fail")))
-            except RuntimeError:
-                pass
         assert cb.state == CircuitState.OPEN
 
     def test_open_circuit_rejects_calls(self):
         cb = CircuitBreaker("test", threshold=1, base_timeout=3600.0)
-        try:
+        with contextlib.suppress(RuntimeError):
             cb.call(lambda: (_ for _ in ()).throw(RuntimeError("fail")))
-        except RuntimeError:
-            pass
 
         with pytest.raises(MissyError, match="OPEN"):
             cb.call(lambda: "should not be called")
 
     def test_open_transitions_to_half_open_after_timeout(self):
         cb = CircuitBreaker("test", threshold=1, base_timeout=0.05)
-        try:
+        with contextlib.suppress(RuntimeError):
             cb.call(lambda: (_ for _ in ()).throw(RuntimeError("fail")))
-        except RuntimeError:
-            pass
 
         assert cb.state == CircuitState.OPEN
         time.sleep(0.1)
@@ -1229,10 +1218,8 @@ class TestCircuitBreakerStateMachine:
 
     def test_half_open_success_closes_circuit(self):
         cb = CircuitBreaker("test", threshold=1, base_timeout=0.05)
-        try:
+        with contextlib.suppress(RuntimeError):
             cb.call(lambda: (_ for _ in ()).throw(RuntimeError("fail")))
-        except RuntimeError:
-            pass
 
         time.sleep(0.1)
         assert cb.state == CircuitState.HALF_OPEN
@@ -1243,19 +1230,15 @@ class TestCircuitBreakerStateMachine:
 
     def test_half_open_failure_reopens_circuit_with_doubled_timeout(self):
         cb = CircuitBreaker("test", threshold=1, base_timeout=0.05, max_timeout=300.0)
-        try:
+        with contextlib.suppress(RuntimeError):
             cb.call(lambda: (_ for _ in ()).throw(RuntimeError("fail")))
-        except RuntimeError:
-            pass
 
         time.sleep(0.1)
         assert cb.state == CircuitState.HALF_OPEN
 
         original_timeout = cb._recovery_timeout
-        try:
+        with contextlib.suppress(RuntimeError):
             cb.call(lambda: (_ for _ in ()).throw(RuntimeError("probe fail")))
-        except RuntimeError:
-            pass
 
         assert cb.state == CircuitState.OPEN
         assert cb._recovery_timeout == min(original_timeout * 2, 300.0)
@@ -1263,10 +1246,8 @@ class TestCircuitBreakerStateMachine:
     def test_success_resets_failure_count(self):
         cb = CircuitBreaker("test", threshold=5)
         for _ in range(4):
-            try:
+            with contextlib.suppress(RuntimeError):
                 cb.call(lambda: (_ for _ in ()).throw(RuntimeError("fail")))
-            except RuntimeError:
-                pass
 
         assert cb._failure_count == 4
         cb.call(lambda: "ok")
@@ -1301,10 +1282,8 @@ class TestCircuitBreakerStateMachine:
         cb._state = CircuitState.HALF_OPEN
         cb._recovery_timeout = 200.0
 
-        try:
+        with contextlib.suppress(RuntimeError):
             cb.call(lambda: (_ for _ in ()).throw(RuntimeError("fail")))
-        except RuntimeError:
-            pass
 
         assert cb._recovery_timeout <= 300.0
 

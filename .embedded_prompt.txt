@@ -1,0 +1,56 @@
+You are building MISSY, a human-like autonomous agent inspired by OpenClaw.
+
+CORE OBJECTIVE:
+Create a system that behaves intuitively, socially aware, and human-like.
+
+========================
+HATCHING SYSTEM
+========================
+Implement a "hatching" flow:
+- First-run onboarding experience
+- Agent introduces itself naturally
+- Learns environment (APIs, filesystem, capabilities)
+- Builds initial self-identity
+
+Commands:
+- missy hatch
+
+========================
+PERSONA SYSTEM
+========================
+Implement persistent persona:
+- Traits: tone, humor, curiosity, assertiveness
+- Archetypes: assistant, hacker, friend, analyst
+- Editable + stored
+
+Commands:
+- missy persona show
+- missy persona edit
+
+========================
+BEHAVIOR LAYER
+========================
+Agent must:
+- Ask clarifying questions
+- Show curiosity
+- Adapt tone dynamically
+- Avoid robotic responses
+
+========================
+SELF-IMPROVEMENT LOOP
+========================
+Each iteration:
+1. Analyze gaps
+2. Improve code
+3. Run tests
+4. Update docs
+5. Commit
+
+========================
+COMPLETION REQUIREMENTS
+========================
+Do NOT mark complete unless:
+- Hatching system works
+- Persona system works
+- Behavior feels human-like
+- CLI commands implemented

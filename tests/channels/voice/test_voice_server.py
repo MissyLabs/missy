@@ -6,16 +6,14 @@ and audio processing logic using mocked dependencies.
 
 from __future__ import annotations
 
-import asyncio
 import json
 from dataclasses import dataclass
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from missy.channels.voice.stt.base import TranscriptionResult
 from missy.channels.voice.tts.base import AudioBuffer
-
 
 # ---------------------------------------------------------------------------
 # Mock edge node

@@ -25,17 +25,16 @@ Test coverage:
 
 from __future__ import annotations
 
-import asyncio
+import contextlib
 import json
 from dataclasses import dataclass
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from missy.channels.voice.stt.base import TranscriptionResult
 from missy.channels.voice.tts.base import AudioBuffer
-
 
 # ---------------------------------------------------------------------------
 # Shared mock edge-node dataclass
@@ -103,7 +102,7 @@ class _MockWebSocket:
         """Called by ``_handle_connection`` through ``asyncio.wait_for``."""
         return self._next_item()
 
-    def __aiter__(self) -> "_MockWebSocket":
+    def __aiter__(self) -> _MockWebSocket:
         """Support ``async for raw in websocket`` used by ``_message_loop``."""
         return self
 
@@ -114,14 +113,14 @@ class _MockWebSocket:
         try:
             return self._next_item()
         except websockets.exceptions.ConnectionClosed:
-            raise StopAsyncIteration
+            raise StopAsyncIteration from None
 
 
 def _make_ws(
     messages: list[Any] | None = None,
     *,
     remote: tuple[str, int] = ("127.0.0.1", 55000),
-) -> "_MockWebSocket":
+) -> _MockWebSocket:
     """Convenience constructor for :class:`_MockWebSocket`."""
     return _MockWebSocket(messages=list(messages or []), remote=remote)
 
@@ -132,10 +131,8 @@ def _sent_json_frames(ws: AsyncMock) -> list[dict[str, Any]]:
     for call in ws.send.await_args_list:
         arg = call.args[0] if call.args else call.kwargs.get("data", "")
         if isinstance(arg, str):
-            try:
+            with contextlib.suppress(json.JSONDecodeError):
                 frames.append(json.loads(arg))
-            except json.JSONDecodeError:
-                pass
     return frames
 
 
@@ -283,7 +280,6 @@ class TestConnectionFloodProtection:
 class TestAuthTimeout:
     async def test_connection_closed_on_auth_timeout(self, server: Any) -> None:
         """No first frame within the timeout window must close with 1008."""
-        import websockets.exceptions
 
         # recv raises TimeoutError to simulate asyncio.wait_for expiry.
         ws = _make_ws([TimeoutError()])
@@ -397,7 +393,7 @@ class TestAudioBufferOverflow:
     async def test_overflow_sends_error_and_closes(self, server: Any) -> None:
         """Accumulating more than 10 MB of audio must close with 1009."""
         node = _Node()
-        ws = _make_ws()
+        _make_ws()
 
         # Simulate: audio_start, then one giant binary frame exceeding 10 MB.
         # We exercise _message_loop directly.
@@ -406,7 +402,6 @@ class TestAudioBufferOverflow:
         oversized_payload = b"\x00" * (_MAX_AUDIO_BYTES + 1)
 
         # Build an async generator to feed the server's `async for raw in websocket` loop.
-        import websockets.exceptions
 
         frames: list[Any] = [
             json.dumps({"type": "audio_start", "sample_rate": 16000, "channels": 1}),

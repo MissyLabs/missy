@@ -14,7 +14,6 @@ import pytest
 from missy.channels.screencast.channel import ScreencastChannel, _get_lan_ip
 from missy.channels.screencast.session_manager import AnalysisResult
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -122,7 +121,6 @@ class TestGetLanIp:
 
     def test_get_lan_ip_fallback_on_error(self) -> None:
         """When the socket call fails, the function must return 127.0.0.1."""
-        import socket
         with patch("missy.channels.screencast.channel.socket.socket") as mock_sock_cls:
             mock_sock = MagicMock()
             mock_sock.__enter__ = MagicMock(return_value=mock_sock)
@@ -518,7 +516,6 @@ class TestStopLifecycle:
         ch._thread = bg_thread
 
         # Patch Future.result to raise TimeoutError simulating a slow shutdown.
-        real_future_result = concurrent.futures.Future.result
 
         def _slow_result(self, timeout=None):
             raise concurrent.futures.TimeoutError("simulated timeout")

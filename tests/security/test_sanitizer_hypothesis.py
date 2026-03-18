@@ -11,11 +11,16 @@ import base64
 import string
 
 import pytest
-from hypothesis import given, settings, assume, HealthCheck
+from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
 
-from missy.security.sanitizer import InputSanitizer, MAX_INPUT_LENGTH, _strip_zero_width, _normalize_unicode, _decode_base64_segments
-
+from missy.security.sanitizer import (
+    MAX_INPUT_LENGTH,
+    InputSanitizer,
+    _decode_base64_segments,
+    _normalize_unicode,
+    _strip_zero_width,
+)
 
 # ---------------------------------------------------------------------------
 # Shared fixtures

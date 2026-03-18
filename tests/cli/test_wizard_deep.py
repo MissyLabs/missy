@@ -4,14 +4,11 @@ from __future__ import annotations
 
 import os
 import stat
-import tempfile
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import click
 import pytest
 import yaml
-
 
 # ---------------------------------------------------------------------------
 # _mask_key
@@ -495,7 +492,6 @@ class TestWriteConfigAtomic:
         target = tmp_path / "config.yaml"
 
         # Patch os.replace to simulate a failure after the temp file is written
-        original_replace = os.replace
 
         def failing_replace(src, dst):
             raise OSError("simulated replace failure")

@@ -23,7 +23,6 @@ from missy.agent.hatching import (
     _HatchingStepWarning,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -86,7 +85,6 @@ class TestHatchingLogGetEntriesOSError:
         log_path.write_text('{"step":"s","status":"ok","message":"m","details":{},"timestamp":"t"}\n')
 
         with patch("missy.agent.hatching.Path.open", side_effect=OSError("permission denied")):
-            result = log_path  # confirm path exists before patching
             log = HatchingLog(log_path=log_path)
             entries = log.get_entries()
 
@@ -128,7 +126,7 @@ class TestRunHatchingInteractivePrintPaths:
         state_path.write_text(yaml.safe_dump(partial_state.to_dict()), encoding="utf-8")
 
         mgr = HatchingManager(state_path=state_path, log_path=tmp_path / "log.jsonl")
-        state = mgr.run_hatching(interactive=True)
+        mgr.run_hatching(interactive=True)
 
         captured = capsys.readouterr()
         assert "[skip]" in captured.out
@@ -179,7 +177,6 @@ class TestRunHatchingInteractivePrintPaths:
             pass
 
         # Patch the steps list via run_hatching by monkey-patching one step method.
-        original_validate = mgr._validate_environment
         mgr._validate_environment = _warn_step  # type: ignore[method-assign]
 
         # Remaining steps need the env to be valid; skip them.
@@ -199,7 +196,7 @@ class TestRunHatchingInteractivePrintPaths:
             yaml.safe_dump(partial_state.to_dict()), encoding="utf-8"
         )
 
-        state = mgr.run_hatching(interactive=True)
+        mgr.run_hatching(interactive=True)
 
         captured = capsys.readouterr()
         assert "[warn]" in captured.out
@@ -292,7 +289,6 @@ class TestValidateEnvironment:
         """Python < 3.11 must raise RuntimeError (line 458)."""
         _patch_module_paths(monkeypatch, tmp_path)
 
-        old_version = sys.version_info
         fake_version = SimpleNamespace(major=3, minor=10, micro=5)
 
         with patch("missy.agent.hatching.sys") as mock_sys:
@@ -554,7 +550,7 @@ class TestInitializeSecurity:
         _patch_module_paths(monkeypatch, tmp_path)
 
         # Ensure secrets dir can be created (use real tmp_path).
-        secrets_dir = tmp_path / "secrets"
+        tmp_path / "secrets"
         # Do NOT create identity.pem so the absent-key branch is taken.
 
         mgr = _make_manager(tmp_path)
@@ -618,7 +614,7 @@ class TestGeneratePersona:
             # removing the module from sys.modules so the import re-executes.
             original_module = sys.modules.pop("missy.agent.persona", None)
             sys.modules["missy.agent.persona"] = MagicMock(
-                **{"PersonaManager": MagicMock(side_effect=ImportError("injected"))}
+                PersonaManager=MagicMock(side_effect=ImportError("injected"))
             )
             # Actually the import uses `from missy.agent.persona import PersonaManager`
             # inside the function body; patching sys.modules is the reliable way.
@@ -682,12 +678,9 @@ class TestSeedMemory:
         # Remove the memory module from sys.modules temporarily so the import fails.
         original_module = sys.modules.pop("missy.memory.sqlite_store", None)
         sys.modules["missy.memory.sqlite_store"] = MagicMock(
-            **{
-                "SQLiteMemoryStore": MagicMock(
+            SQLiteMemoryStore=MagicMock(
                     side_effect=ImportError("no sqlite_store")
-                ),
-                "ConversationTurn": MagicMock(),
-            }
+                ), ConversationTurn=MagicMock()
         )
         try:
             with pytest.raises(_HatchingStepWarning, match="Could not import SQLiteMemoryStore"):

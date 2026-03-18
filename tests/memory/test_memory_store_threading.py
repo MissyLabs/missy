@@ -19,12 +19,10 @@ import threading
 import time
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, patch, call
 
 import pytest
 
-from missy.memory.store import ConversationTurn, MemoryStore
-
+from missy.memory.store import MemoryStore
 
 # ---------------------------------------------------------------------------
 # Fixtures

@@ -7,15 +7,11 @@ so tests run without a display server or audio stack.
 from __future__ import annotations
 
 import json
-import os
 import subprocess
-import threading
 from pathlib import Path
-from typing import Any
-from unittest.mock import MagicMock, Mock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 import pytest
-
 
 # =========================================================================
 # X11 tools helpers
@@ -89,6 +85,7 @@ class TestX11ExtractAccountId:
 
     def test_valid_jwt_with_account_id(self):
         import base64
+
         from missy.tools.builtin.x11_tools import _extract_account_id
 
         payload = {
@@ -101,6 +98,7 @@ class TestX11ExtractAccountId:
 
     def test_fallback_to_sub(self):
         import base64
+
         from missy.tools.builtin.x11_tools import _extract_account_id
 
         payload = {"sub": "user_789"}
@@ -274,7 +272,7 @@ class TestPiperEnv:
     def test_adds_ld_library_path(self, monkeypatch):
         monkeypatch.setenv("PATH", "/usr/bin")
         monkeypatch.delenv("LD_LIBRARY_PATH", raising=False)
-        from missy.tools.builtin.tts_speak import _piper_env, _PIPER_BIN
+        from missy.tools.builtin.tts_speak import _PIPER_BIN, _piper_env
 
         env = _piper_env()
         assert str(_PIPER_BIN.parent) in env.get("LD_LIBRARY_PATH", "")

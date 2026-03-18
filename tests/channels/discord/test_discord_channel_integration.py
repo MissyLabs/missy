@@ -35,7 +35,6 @@ from missy.channels.discord.config import (
     DiscordGuildPolicy,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers / shared fixtures
 # ---------------------------------------------------------------------------
@@ -675,7 +674,7 @@ class TestBaseChannelInterface:
         channel.send_with_retry = _noop  # type: ignore[method-assign]
 
         # call send() inside a running event loop to verify it creates a task.
-        loop = asyncio.get_event_loop()
+        asyncio.get_event_loop()
         channel.send("hello there")
         # Give the newly scheduled task a chance to start.
         await asyncio.sleep(0)

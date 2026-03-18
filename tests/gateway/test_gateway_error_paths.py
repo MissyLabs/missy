@@ -6,8 +6,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from missy.gateway.client import PolicyHTTPClient
 from missy.core.exceptions import PolicyViolationError
+from missy.gateway.client import PolicyHTTPClient
 
 
 class TestURLValidation:

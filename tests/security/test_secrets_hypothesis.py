@@ -9,7 +9,7 @@ from __future__ import annotations
 import string
 
 import pytest
-from hypothesis import given, settings, HealthCheck
+from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from missy.security.secrets import SecretsDetector

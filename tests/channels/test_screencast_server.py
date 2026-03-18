@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import ssl
 import sys
@@ -12,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from missy.channels.screencast.auth import ScreencastTokenRegistry
-from missy.channels.screencast.server import ScreencastServer, _JPEG_MAGIC, _PNG_MAGIC
+from missy.channels.screencast.server import _JPEG_MAGIC, _PNG_MAGIC, ScreencastServer
 from missy.channels.screencast.session_manager import FrameMetadata, SessionManager, SessionState
 
 
@@ -308,10 +309,8 @@ class TestImportFallback:
             sys.modules,
             {"websockets.asyncio.server": None},
         ):
-            try:
+            with contextlib.suppress(Exception):
                 import missy.channels.screencast.server as srv_mod  # noqa: F401
-            except Exception:
-                pass
         if cached is not None:
             sys.modules["missy.channels.screencast.server"] = cached
 

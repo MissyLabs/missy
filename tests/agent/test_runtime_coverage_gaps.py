@@ -31,14 +31,14 @@ Targets uncovered lines:
 from __future__ import annotations
 
 import sys
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 import missy.agent.runtime as runtime_module
 from missy.agent.runtime import AgentConfig, AgentRuntime
 from missy.providers import registry as registry_module
-from missy.providers.base import CompletionResponse, ToolCall, ToolResult
+from missy.providers.base import CompletionResponse, ToolCall
 
 # ---------------------------------------------------------------------------
 # Shared helpers

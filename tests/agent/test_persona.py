@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import time
+from dataclasses import fields
 
 import pytest
 import yaml
-from pathlib import Path
-from dataclasses import fields
 
 from missy.agent.persona import (
     PersonaConfig,
@@ -15,7 +14,6 @@ from missy.agent.persona import (
     _persona_from_dict,
     _persona_to_dict,
 )
-
 
 # ---------------------------------------------------------------------------
 # PersonaConfig dataclass

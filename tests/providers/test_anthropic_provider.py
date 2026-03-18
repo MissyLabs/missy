@@ -70,7 +70,7 @@ class TestAnthropicComplete:
             content=[content_block],
             model=model,
             usage=usage,
-            model_dump=lambda: {},
+            model_dump=dict,
         )
 
     @patch("missy.providers.anthropic_provider._anthropic_sdk")
@@ -170,7 +170,7 @@ class TestAnthropicComplete:
             content=[],
             model="claude-3-5-sonnet-20241022",
             usage=SimpleNamespace(input_tokens=5, output_tokens=0),
-            model_dump=lambda: {},
+            model_dump=dict,
         )
         mock_client = MagicMock()
         mock_client.messages.create.return_value = resp
@@ -236,7 +236,7 @@ class TestAnthropicCompleteWithTools:
             model="claude-3-5-sonnet-20241022",
             stop_reason="tool_use",
             usage=SimpleNamespace(input_tokens=10, output_tokens=20),
-            model_dump=lambda: {},
+            model_dump=dict,
         )
         mock_client = MagicMock()
         mock_client.messages.create.return_value = resp

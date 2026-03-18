@@ -240,10 +240,7 @@ def run_test(
         except Exception as exc:
             result = TestResult(name, category, "FAIL", f"Check error: {exc}", bot_text, elapsed)
     elif check is not None:
-        if isinstance(check, str):
-            checks = [check]
-        else:
-            checks = list(check)
+        checks = [check] if isinstance(check, str) else list(check)
         missing = [c for c in checks if c.lower() not in bot_text.lower()]
         if not missing:
             result = TestResult(name, category, "PASS", bot_text[:80], bot_text, elapsed)

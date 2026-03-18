@@ -23,7 +23,7 @@ from __future__ import annotations
 import signal
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
@@ -967,8 +967,6 @@ class TestMainEntryPoint:
         running the module directly. We test this by verifying the guard
         compiles and the cli object is callable.
         """
-        import importlib
-        import types
 
         # Verify the main module's __file__ exists and contains the guard
         from missy.cli import main as main_module

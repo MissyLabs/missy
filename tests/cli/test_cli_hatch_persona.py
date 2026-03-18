@@ -10,7 +10,6 @@ from missy.agent.hatching import HatchingState, HatchingStatus
 from missy.agent.persona import PersonaConfig
 from missy.cli.main import cli
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

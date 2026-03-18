@@ -22,7 +22,6 @@ import hmac as _hmac
 import http.client
 import json
 import socket
-import sys
 import time
 from io import StringIO
 from pathlib import Path
@@ -39,7 +38,6 @@ from missy.channels.voice.server import VoiceServer
 from missy.channels.voice.stt.base import STTEngine, TranscriptionResult
 from missy.channels.voice.tts.base import AudioBuffer, TTSEngine
 from missy.channels.webhook import WebhookChannel
-
 
 # ---------------------------------------------------------------------------
 # WebSocket mock helper
@@ -328,7 +326,7 @@ class TestDeviceRegistryTokenHashing:
         expected = hashlib.pbkdf2_hmac(
             "sha256",
             token.encode(),
-            "verify-me".encode(),
+            b"verify-me",
             iterations=100_000,
         ).hex()
         actual = reg._hash_token("verify-me", token)

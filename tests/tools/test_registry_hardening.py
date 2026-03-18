@@ -12,8 +12,7 @@ import pytest
 
 from missy.core.exceptions import PolicyViolationError
 from missy.tools.base import BaseTool, ToolPermissions, ToolResult
-from missy.tools.registry import ToolRegistry, init_tool_registry, get_tool_registry
-
+from missy.tools.registry import ToolRegistry, get_tool_registry, init_tool_registry
 
 # ---------------------------------------------------------------------------
 # Test tools

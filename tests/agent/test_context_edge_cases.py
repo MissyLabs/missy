@@ -17,10 +17,7 @@ test_context_with_summaries.py:
 
 from __future__ import annotations
 
-import pytest
-
 from missy.agent.context import ContextManager, TokenBudget, _approx_tokens
-
 
 # ---------------------------------------------------------------------------
 # Helpers

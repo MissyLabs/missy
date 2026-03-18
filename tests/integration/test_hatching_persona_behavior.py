@@ -17,7 +17,6 @@ from missy.agent.behavior import BehaviorLayer
 from missy.agent.hatching import HatchingManager, HatchingState, HatchingStatus
 from missy.agent.persona import PersonaConfig, PersonaManager
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

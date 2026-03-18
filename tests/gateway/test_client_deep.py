@@ -8,9 +8,8 @@ lifecycle, the interactive approval flow, and the create_client factory.
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Generator
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -28,7 +27,6 @@ from missy.gateway import client as gateway_module
 from missy.gateway.client import PolicyHTTPClient, create_client, set_interactive_approval
 from missy.policy import engine as engine_module
 from missy.policy.engine import init_policy_engine
-
 
 # ---------------------------------------------------------------------------
 # Config helpers
@@ -788,9 +786,8 @@ class TestAuditEventEmission:
         engine_module._engine = None
         init_policy_engine(_restrictive_config())
         client = PolicyHTTPClient()
-        with patch.object(httpx.Client, "get"):
-            with pytest.raises(PolicyViolationError):
-                client.get("https://denied.example.com/")
+        with patch.object(httpx.Client, "get"), pytest.raises(PolicyViolationError):
+            client.get("https://denied.example.com/")
         events = event_bus.get_events(event_type="network_request")
         assert events == []
 
@@ -856,9 +853,8 @@ class TestConnectionErrorHandling:
             httpx.AsyncClient, "get",
             new_callable=AsyncMock,
             side_effect=httpx.ConnectError("async refused"),
-        ):
-            with pytest.raises(httpx.ConnectError):
-                await client.aget("https://api.example.com/")
+        ), pytest.raises(httpx.ConnectError):
+            await client.aget("https://api.example.com/")
 
 
 # ---------------------------------------------------------------------------
@@ -979,9 +975,8 @@ class TestInteractiveApprovalFlow:
         set_interactive_approval(approval)
 
         client = PolicyHTTPClient()
-        with patch.object(httpx.Client, "get") as mock_get:
-            with pytest.raises(PolicyViolationError):
-                client.get("https://denied.example.com/")
+        with patch.object(httpx.Client, "get"), pytest.raises(PolicyViolationError):
+            client.get("https://denied.example.com/")
         approval.prompt_user.assert_called_once()
 
     def test_no_interactive_approval_instance_raises_immediately(self) -> None:

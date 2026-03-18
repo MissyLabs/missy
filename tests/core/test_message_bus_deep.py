@@ -26,13 +26,11 @@ import threading
 import time
 import uuid
 from collections import defaultdict
-from datetime import UTC, datetime
 
 import pytest
 
 from missy.core.bus_topics import (
     AGENT_RUN_COMPLETE,
-    AGENT_RUN_ERROR,
     AGENT_RUN_START,
     CHANNEL_INBOUND,
     CHANNEL_OUTBOUND,
@@ -911,9 +909,9 @@ class TestHighVolumeEvents:
     def test_eventbus_1000_events_stored_and_filterable(self) -> None:
         """EventBus stores 1 000 events and can filter them correctly."""
         bus = EventBus()
-        for i in range(500):
+        for _i in range(500):
             bus.publish(_audit(category="network", result="allow"))
-        for i in range(500):
+        for _i in range(500):
             bus.publish(_audit(category="filesystem", result="deny"))
 
         all_events = bus.get_events()

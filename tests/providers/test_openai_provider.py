@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -57,7 +56,7 @@ class TestOpenAIComplete:
             choices=[choice],
             model=model,
             usage=usage,
-            model_dump=lambda: {},
+            model_dump=dict,
         )
 
     @patch("missy.providers.openai_provider._openai_sdk")
@@ -120,7 +119,7 @@ class TestOpenAIComplete:
             choices=[],
             model="gpt-4o",
             usage=SimpleNamespace(prompt_tokens=5, completion_tokens=0, total_tokens=5),
-            model_dump=lambda: {},
+            model_dump=dict,
         )
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = resp
@@ -176,7 +175,7 @@ class TestOpenAICompleteWithTools:
             choices=[choice],
             model="gpt-4o",
             usage=SimpleNamespace(prompt_tokens=10, completion_tokens=20, total_tokens=30),
-            model_dump=lambda: {},
+            model_dump=dict,
         )
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = resp
@@ -208,7 +207,7 @@ class TestOpenAICompleteWithTools:
             choices=[choice],
             model="gpt-4o",
             usage=SimpleNamespace(prompt_tokens=5, completion_tokens=5, total_tokens=10),
-            model_dump=lambda: {},
+            model_dump=dict,
         )
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = resp
@@ -233,7 +232,7 @@ class TestOpenAICompleteWithTools:
             )],
             model="gpt-4o",
             usage=SimpleNamespace(prompt_tokens=5, completion_tokens=5, total_tokens=10),
-            model_dump=lambda: {},
+            model_dump=dict,
         )
         mock_client.chat.completions.create.return_value = resp
         mock_sdk.OpenAI.return_value = mock_client

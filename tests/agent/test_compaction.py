@@ -76,7 +76,7 @@ class TestCompactSession:
 
     def test_does_not_resummarize_existing(self, memory_store, summarizer):
         _add_turns(memory_store, "sess1", 30, content_size=200)
-        stats1 = compact_session("sess1", memory_store, summarizer, fresh_tail_count=16)
+        compact_session("sess1", memory_store, summarizer, fresh_tail_count=16)
         stats2 = compact_session("sess1", memory_store, summarizer, fresh_tail_count=16)
         # Second pass should find nothing new to summarize
         assert stats2["leaf_summaries_created"] == 0

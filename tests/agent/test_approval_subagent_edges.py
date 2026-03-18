@@ -6,10 +6,11 @@ test_approval_gate.py and test_sub_agent.py.
 
 from __future__ import annotations
 
+import contextlib
 import threading
 import time
 from collections.abc import Callable
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -26,7 +27,6 @@ from missy.agent.sub_agent import (
     SubTask,
     parse_subtasks,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -430,10 +430,8 @@ class TestSubAgentRunnerEdges:
                     if active[0] > peak[0]:
                         peak[0] = active[0]
                 # Synchronise so all MAX_CONCURRENT slots fill up simultaneously
-                try:
+                with contextlib.suppress(threading.BrokenBarrierError):
                     barrier.wait(timeout=2.0)
-                except threading.BrokenBarrierError:
-                    pass
                 with lock:
                     active[0] -= 1
                 return "ok"

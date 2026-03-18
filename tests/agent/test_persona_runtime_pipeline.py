@@ -10,13 +10,10 @@ Validates that:
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
-
 import pytest
 
 from missy.agent.behavior import BehaviorLayer, IntentInterpreter, ResponseShaper
 from missy.agent.persona import PersonaConfig, PersonaManager
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

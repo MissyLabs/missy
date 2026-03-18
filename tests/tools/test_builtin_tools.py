@@ -26,7 +26,7 @@ import os
 import stat
 import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -38,19 +38,15 @@ from missy.tools.builtin.file_delete import FileDeleteTool
 from missy.tools.builtin.file_read import _DEFAULT_ENCODING, _DEFAULT_MAX_BYTES, FileReadTool
 from missy.tools.builtin.file_write import FileWriteTool
 from missy.tools.builtin.list_files import _DEFAULT_MAX_ENTRIES, ListFilesTool
-from missy.tools.builtin.self_create_tool import ALLOWED_LANGUAGES, SelfCreateTool
+from missy.tools.builtin.self_create_tool import SelfCreateTool
 from missy.tools.builtin.tts_speak import (
     AudioListDevicesTool,
     AudioSetVolumeTool,
     TTSSpeakTool,
     _ensure_runtime_dir,
-    _find_piper_model,
     _piper_env,
-    _synth_piper,
 )
 from missy.tools.builtin.web_fetch import _DEFAULT_TIMEOUT, _MAX_RESPONSE_BYTES, WebFetchTool
-from missy.tools.base import ToolPermissions, ToolResult
-
 
 # ===========================================================================
 # FileReadTool
@@ -322,7 +318,7 @@ class TestFileWriteTool:
         )
 
         assert result.success is True
-        assert target.read_bytes() == "caf\u00e9".encode("utf-8")
+        assert target.read_bytes() == "caf\u00e9".encode()
 
     def test_write_uses_tilde_expansion(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

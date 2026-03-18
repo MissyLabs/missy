@@ -7,14 +7,11 @@ from __future__ import annotations
 
 import json
 import stat
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from missy.tools.builtin.self_create_tool import (
-    ALLOWED_LANGUAGES,
-    CUSTOM_TOOLS_DIR,
     SelfCreateTool,
 )
 

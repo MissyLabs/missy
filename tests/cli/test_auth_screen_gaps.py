@@ -6,21 +6,10 @@
 
 from __future__ import annotations
 
-import json
-import os
 import time
-from pathlib import Path
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import pytest
-
-# ---------------------------------------------------------------------------
-# anthropic_auth — lines 119-121, 237
-# ---------------------------------------------------------------------------
-from missy.cli.anthropic_auth import (
-    store_token,
-    load_token,
-)
 
 # ---------------------------------------------------------------------------
 # screen_commands — lines 95, 138-139, 170, 183
@@ -31,6 +20,13 @@ from missy.channels.discord.screen_commands import (
 )
 from missy.channels.screencast.session_manager import AnalysisResult
 
+# ---------------------------------------------------------------------------
+# anthropic_auth — lines 119-121, 237
+# ---------------------------------------------------------------------------
+from missy.cli.anthropic_auth import (
+    load_token,
+    store_token,
+)
 
 # ===========================================================================
 # Module 1: anthropic_auth
@@ -79,9 +75,8 @@ class TestStoreTokenWriteFailure:
 
     def test_successful_write_after_prior_failure_still_works(self):
         """A subsequent store_token call succeeds even after a prior failure."""
-        with patch("json.dump", side_effect=OSError("transient")):
-            with pytest.raises(OSError):
-                store_token("failing-token", "api_key")
+        with patch("json.dump", side_effect=OSError("transient")), pytest.raises(OSError):
+            store_token("failing-token", "api_key")
 
         # Now a normal call should work.
         store_token("good-token", "api_key")

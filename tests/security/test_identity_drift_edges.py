@@ -18,13 +18,10 @@ from pathlib import Path
 
 import pytest
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.asymmetric.rsa import generate_private_key
-from cryptography.hazmat.primitives.asymmetric import padding
 
 from missy.security.drift import PromptDriftDetector
 from missy.security.identity import AgentIdentity
-
 
 # ---------------------------------------------------------------------------
 # AgentIdentity — keypair generation
@@ -275,7 +272,7 @@ class TestAgentIdentityPersistence:
     def test_load_corrupted_pem_raises(self, tmp_path):
         key_file = tmp_path / "bad.pem"
         key_file.write_bytes(b"-----BEGIN PRIVATE KEY-----\nnotbase64!!!\n-----END PRIVATE KEY-----\n")
-        with pytest.raises(Exception):
+        with pytest.raises((ValueError, OSError)):
             AgentIdentity.from_key_file(str(key_file))
 
 
@@ -322,7 +319,7 @@ class TestPromptDriftDetectorRegistration:
         detector.register("sys", "v2")
         report = detector.get_drift_report()
         assert len(report) == 1  # only one record, overwritten
-        expected = hashlib.sha256("v2".encode()).hexdigest()
+        expected = hashlib.sha256(b"v2").hexdigest()
         assert report[0]["expected_hash"] == expected
 
 

@@ -35,8 +35,7 @@ import pytest
 
 from missy.config.settings import ProviderConfig
 from missy.core.exceptions import ProviderError
-from missy.providers.base import Message, ToolCall
-
+from missy.providers.base import Message
 
 # ---------------------------------------------------------------------------
 # Shared factories
@@ -295,7 +294,7 @@ class TestCodexProviderInit:
         assert p._model == "gpt-4o"
 
     def test_uses_default_model_when_config_model_empty(self):
-        from missy.providers.codex_provider import CodexProvider, _DEFAULT_MODEL
+        from missy.providers.codex_provider import _DEFAULT_MODEL, CodexProvider
 
         p = CodexProvider(_make_config(model=""))
         assert p._model == _DEFAULT_MODEL
@@ -676,9 +675,8 @@ class TestCodexProviderStream:
 
     def test_raises_provider_error_on_error_event(self):
         lines = _sse({"type": "error", "error": {"message": "internal error"}})
-        with _mock_sse_stream(lines):
-            with pytest.raises(ProviderError, match="internal error"):
-                list(self.provider.stream(self._messages()))
+        with _mock_sse_stream(lines), pytest.raises(ProviderError, match="internal error"):
+            list(self.provider.stream(self._messages()))
 
     def test_raises_provider_error_on_http_status_error(self):
         import httpx
@@ -942,15 +940,13 @@ class TestCodexProviderCompleteWithTools:
 
     def test_response_failed_event_raises_provider_error(self):
         lines = _sse({"type": "response.failed", "message": "quota exceeded"})
-        with _mock_sse_stream(lines):
-            with pytest.raises(ProviderError, match="quota exceeded"):
-                self.provider.complete_with_tools(self._messages(), tools=[])
+        with _mock_sse_stream(lines), pytest.raises(ProviderError, match="quota exceeded"):
+            self.provider.complete_with_tools(self._messages(), tools=[])
 
     def test_error_event_raises_provider_error(self):
         lines = _sse({"type": "error", "error": {"message": "server crash"}})
-        with _mock_sse_stream(lines):
-            with pytest.raises(ProviderError, match="server crash"):
-                self.provider.complete_with_tools(self._messages(), tools=[])
+        with _mock_sse_stream(lines), pytest.raises(ProviderError, match="server crash"):
+            self.provider.complete_with_tools(self._messages(), tools=[])
 
     def test_http_status_error_raises_provider_error(self):
         import httpx

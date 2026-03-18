@@ -18,7 +18,6 @@ Covers areas not addressed by the existing test suite:
 from __future__ import annotations
 
 import json
-import os
 import stat
 import threading
 from datetime import datetime
@@ -30,7 +29,6 @@ import pytest
 from missy.scheduler.jobs import ScheduledJob
 from missy.scheduler.manager import SchedulerManager
 from missy.scheduler.parser import parse_schedule
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -687,7 +685,7 @@ class TestJobMetadata:
         assert job.description == "Do the thing"
 
     def test_provider_field_stored_and_listed(self, mgr: SchedulerManager) -> None:
-        job = mgr.add_job("p", "every 5 minutes", "t", provider="ollama")
+        mgr.add_job("p", "every 5 minutes", "t", provider="ollama")
         assert mgr.list_jobs()[0].provider == "ollama"
 
     def test_schedule_string_preserved_verbatim(self, mgr: SchedulerManager) -> None:

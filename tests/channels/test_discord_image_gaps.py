@@ -620,9 +620,8 @@ class TestAnalyzeImageBytesRaiseForStatusPath:
         with patch(
             "missy.gateway.client.PolicyHTTPClient",
             return_value=mock_client,
-        ):
-            with pytest.raises(RuntimeError, match="Vision model request failed"):
-                analyze_image_bytes(b"\x89PNG\r\n", "What is this?")
+        ), pytest.raises(RuntimeError, match="Vision model request failed"):
+            analyze_image_bytes(b"\x89PNG\r\n", "What is this?")
 
     def test_raise_for_status_message_preserved_in_error(self):
         """The original HTTP error message is included in the RuntimeError."""
@@ -637,9 +636,8 @@ class TestAnalyzeImageBytesRaiseForStatusPath:
         with patch(
             "missy.gateway.client.PolicyHTTPClient",
             return_value=mock_client,
-        ):
-            with pytest.raises(RuntimeError, match="503 Service Unavailable"):
-                analyze_image_bytes(b"\xff\xd8\xff", "Describe this")
+        ), pytest.raises(RuntimeError, match="503 Service Unavailable"):
+            analyze_image_bytes(b"\xff\xd8\xff", "Describe this")
 
     def test_successful_post_and_raise_for_status_returns_content(self):
         """When neither post nor raise_for_status raise, content is returned."""
@@ -681,7 +679,7 @@ class TestSaveDiscordAttachmentPathTraversal:
         mock_rest = MagicMock()
         mock_rest.download_attachment.return_value = b"\x89PNG"
 
-        real_save_dir = os.path.realpath(save_dir)
+        os.path.realpath(save_dir)
         outside_resolved = os.path.realpath(outside_dir) + "/payload.png"
 
         original_realpath = os.path.realpath

@@ -6,21 +6,18 @@ Tests :func:`maybe_handle_image_command` and helpers in
 
 from __future__ import annotations
 
-import os
-import tempfile
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+from missy.channels.discord.image_analyze import (
+    find_latest_image,
+    is_image_attachment,
+)
 from missy.channels.discord.image_commands import (
     ImageCommandResult,
     maybe_handle_image_command,
 )
-from missy.channels.discord.image_analyze import (
-    is_image_attachment,
-    find_latest_image,
-)
-
 
 # ---------------------------------------------------------------------------
 # is_image_attachment

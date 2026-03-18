@@ -44,7 +44,6 @@ from missy.agent.circuit_breaker import CircuitBreaker, CircuitState
 from missy.core.exceptions import MissyError
 from missy.security.trust import DEFAULT_SCORE, MAX_SCORE, MIN_SCORE, TrustScorer
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

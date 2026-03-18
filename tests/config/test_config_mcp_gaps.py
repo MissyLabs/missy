@@ -10,10 +10,9 @@ Covers uncovered lines in:
 from __future__ import annotations
 
 import json
-import os
 import textwrap
 from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
@@ -169,10 +168,9 @@ class TestAddServerAuditEventFailure:
             patch(
                 "missy.core.events.event_bus.publish",
                 side_effect=RuntimeError("bus exploded"),
-            ),
+            ),pytest.raises(ValueError, match="digest mismatch")
         ):
-            with pytest.raises(ValueError, match="digest mismatch"):
-                mgr.add_server("s", command="cmd")
+            mgr.add_server("s", command="cmd")
 
 
 class TestGetServerDigestParseError:

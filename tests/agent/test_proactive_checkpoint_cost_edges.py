@@ -39,6 +39,7 @@ Cost tracking edge cases:
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sqlite3
 import threading
@@ -48,16 +49,14 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from missy.agent.checkpoint import (
-    CheckpointManager,
-    RecoveryResult,
-    _RESUME_THRESHOLD_SECS,
     _RESTART_THRESHOLD_SECS,
+    _RESUME_THRESHOLD_SECS,
+    CheckpointManager,
     scan_for_recovery,
 )
 from missy.agent.cost_tracker import BudgetExceededError, CostTracker, UsageRecord
 from missy.agent.proactive import ProactiveManager, ProactiveTrigger
 from missy.core.events import event_bus
-
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -82,12 +81,12 @@ def cm(tmp_db):
 
 
 def _make_trigger(name="t1", **kwargs) -> ProactiveTrigger:
-    defaults = dict(
-        trigger_type="schedule",
-        interval_seconds=5,
-        cooldown_seconds=0,
-        prompt_template="ping from {trigger_name}",
-    )
+    defaults = {
+        "trigger_type": "schedule",
+        "interval_seconds": 5,
+        "cooldown_seconds": 0,
+        "prompt_template": "ping from {trigger_name}",
+    }
     defaults.update(kwargs)
     return ProactiveTrigger(name=name, **defaults)
 
@@ -170,7 +169,8 @@ class TestPromptTemplateSubstitution:
                 cooldown_seconds=0,
                 prompt_template="",
             )
-            mgr = _make_manager(t, callback=lambda p, s: received.append(p))
+            _received = received  # bind loop variable for lambda
+            mgr = _make_manager(t, callback=lambda p, s, _r=_received: _r.append(p))
             mgr._fire_trigger(t)
             assert received, f"No callback for trigger_type={ttype}"
             # Default template includes trigger name
@@ -738,7 +738,7 @@ class TestGetSummaryEdgeCases:
 
     def test_summary_call_count_increments_per_record(self):
         tracker = CostTracker()
-        for i in range(5):
+        for _i in range(5):
             tracker.record("gpt-4o", prompt_tokens=10, completion_tokens=5)
         assert tracker.get_summary()["call_count"] == 5
 
@@ -914,10 +914,8 @@ class TestConcurrentBudgetCheck:
 
         def _checker():
             while not done.is_set():
-                try:
+                with contextlib.suppress(BudgetExceededError):
                     tracker.check_budget()
-                except BudgetExceededError:
-                    pass
 
         rec_thread = threading.Thread(target=_recorder)
         chk_thread = threading.Thread(target=_checker)

@@ -46,20 +46,16 @@ RateLimiter:
 
 from __future__ import annotations
 
-import sqlite3
 import threading
 import time
 from dataclasses import dataclass
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from missy.agent.learnings import (
     TaskLearning,
     extract_learnings,
-    extract_outcome,
-    extract_task_type,
 )
 from missy.config.settings import (
     FilesystemPolicy,
@@ -385,7 +381,7 @@ class TestLearningsPersistence:
         tl = extract_learnings(["web_fetch"], "done", "fetch page")
         store.save_learning(tl)
         lessons = store.get_learnings()
-        assert all(isinstance(l, str) for l in lessons)
+        assert all(isinstance(item, str) for item in lessons)
 
 
 # ===========================================================================
