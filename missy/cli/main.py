@@ -305,7 +305,7 @@ def init(ctx: click.Context) -> None:
     "--provider", "setup_provider", default=None, help="Provider name for non-interactive mode."
 )
 @click.option("--api-key", "setup_api_key", default=None, help="API key (direct value).")
-@click.option("--api-key-env", default=None, help="Environment variable containing the API key.")
+@click.option("--api-key-env", "setup_api_key_env", default=None, help="Environment variable containing the API key.")
 @click.option("--model", "setup_model", default=None, help="Model identifier.")
 @click.option("--workspace", "setup_workspace", default=None, help="Workspace directory path.")
 @click.option("--no-prompt", is_flag=True, default=False, help="Non-interactive mode (no prompts).")
