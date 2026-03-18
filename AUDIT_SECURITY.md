@@ -107,3 +107,8 @@ using `os.open()` with restrictive flags (`O_CREAT | O_TRUNC` or `O_CREAT | O_AP
 | `agent/prompt_patches.py` | 0o700 | — |
 | `agent/code_evolution.py` | 0o700 | — |
 | `channels/voice/registry.py` | 0o700 | — |
+| `agent/checkpoint.py` | 0o700 | — |
+| `channels/screencast/analyzer.py` | 0o700 | — |
+| `channels/discord/image_analyze.py` | 0o700 | 0o600 (os.open, 2 locations) |
+| `memory/vector_store.py` | 0o700 | 0o600 (os.open) |
+| `tools/builtin/tts_speak.py` | — | 0o600 (os.open) |
