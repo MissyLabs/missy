@@ -114,6 +114,27 @@ using `os.open()` with restrictive flags (`O_CREAT | O_TRUNC` or `O_CREAT | O_AP
 | `tools/builtin/tts_speak.py` | — | 0o600 (os.open) |
 | `tools/builtin/file_write.py` | — | 0o600 (os.open + O_NOFOLLOW) |
 
+## Session 9 Security Audit
+
+### Vulnerabilities Found and Fixed
+
+| # | Finding | Severity | Fix |
+|---|---------|----------|-----|
+| 1 | `self_create_tool.py` delete path traversal | **Medium** | Added `^[a-zA-Z0-9_-]+$` regex validation + `resolve()` parent check |
+| 2 | `gateway/client.py` REST policy fail-open | **Medium** | Changed `_check_rest_policy` catch-all to fail-closed (deny on error) |
+
+### Details
+
+**Path Traversal (self_create_tool.py):** The `delete` action did not validate `tool_name` with the same regex used by `create`. A tool_name like `../../.missy/config` could resolve to paths outside the custom tools directory, allowing arbitrary file deletion. Fixed by: (1) applying the same alphanumeric regex, (2) verifying resolved paths stay under tools_dir.
+
+**Fail-Open REST Policy (gateway/client.py):** The `_check_rest_policy` method had a broad `except Exception` that silently allowed requests when the REST policy engine threw unexpected errors. If the REST policy had a bug, requests would bypass L7 controls. Changed to fail-closed: unexpected errors now raise `PolicyViolationError`.
+
+### Additional Audit Findings (No Fix Required)
+
+- Input sanitizer is advisory (detection-only, callers decide policy) — by design
+- `self_create_tool` blocklist is bypassable via string concatenation — mitigated by Docker sandbox
+- Base64 detection has 20-char minimum — acceptable for practical payloads
+
 ## Session 6 Security Audit
 
 ### Vulnerabilities Found and Fixed

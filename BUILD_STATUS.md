@@ -1,19 +1,19 @@
 # Missy Build Status
 
-Last updated: 2026-03-18
+Last updated: 2026-03-18 (Session 9)
 
-## Status: FEATURE COMPLETE + HARDENED
+## Status: FEATURE COMPLETE + HARDENED + SECURITY AUDITED
 
 All required subsystems implemented including hatching, persona, and behavior layer.
 Hardening pass completed with bug fixes, security improvements, and expanded tests.
 
 ## Test Results
 
-- **Total tests: 11248**
-- **Passed: 11248**
+- **Total tests: 11479**
+- **Passed: 11479**
 - **Failed: 0**
 - **Skipped: 17**
-- **Duration: ~225s**
+- **Duration: ~235s**
 
 ## Completed Components
 
@@ -81,7 +81,7 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 
 - 157 Python source files
 - 320+ test files
-- 11248 tests total
+- 11479 tests total
 
 ## Session History
 
@@ -198,6 +198,21 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 11. Fixed cost CLI tests to use explicit mock stores instead of fragile module-level patching
 12. Total: 11248 tests passing, 0 failures, 17 skipped
 
+### Session 9 (2026-03-18) — Coverage Gaps + Security Audit + Vulnerability Fixes
+1. Coverage gap analysis: identified 6 modules with <100% coverage
+2. Added 32 vector_store.py tests (62%→~95%) — FAISS mocking, no-op degradation, save/load
+3. Added 38 memory_tools.py tests (80%→~98%) — search/describe/expand all paths
+4. Added 65 self_create_tool.py tests (new) — create/list/delete, 40+ dangerous pattern checks
+5. Added 38 skills/discovery.py tests (94%→~100%) — frontmatter, YAML, search
+6. Added 15 incus_tools.py tests — snapshot fallback, validation paths
+7. Added 5 sqlite_store.py tests (98%→~100%) — no-depth summaries, FTS5 errors
+8. Added 44 behavior layer robustness tests — adversarial, unicode, multilingual inputs
+9. Security audit: found and fixed 2 vulnerabilities:
+   - Path traversal in self_create_tool.py delete action (tool_name not validated)
+   - REST policy fail-open in gateway client (unexpected exceptions allowed requests)
+10. Added 5 fail-closed gateway tests, 2 path traversal tests
+11. Total: 11479 tests passing, 0 failures, 17 skipped
+
 ## Remaining Work (Future Hardening)
 - [x] Persona change audit trail (JSONL log of all edits) — done in session 2
 - [x] Fuzz testing for YAML parsing edge cases — done in session 3
@@ -238,5 +253,11 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 - [x] Anthropic auth deep tests — done in session 8
 - [x] Hatching stress test mock fix — done in session 8
 - [x] Fix 60 pre-existing test isolation failures (concurrent patch race + cost mock) — done in session 8
+- [x] Vector store coverage tests (62%→~95%) — done in session 9
+- [x] Memory tools coverage tests (80%→~98%) — done in session 9
+- [x] Self-create tool dedicated tests — done in session 9
+- [x] Skills discovery coverage tests (94%→~100%) — done in session 9
+- [x] Security audit: path traversal fix + fail-closed gateway — done in session 9
+- [x] Behavior layer robustness tests (adversarial, unicode, multilingual) — done in session 9
 - [ ] Discord voice channel deep protocol tests
 - [ ] Channel screencast integration tests
