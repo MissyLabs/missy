@@ -13,6 +13,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 pip install -e ".[dev]"
 pip install -e ".[voice]"       # adds faster-whisper, numpy, soundfile
 pip install -e ".[otel]"        # adds OpenTelemetry SDK + exporters
+pip install -e ".[vector]"      # adds faiss-cpu for semantic memory search
 
 # Tests
 python3 -m pytest tests/ -v
@@ -36,21 +37,34 @@ Secure-by-default: all capabilities (shell, plugins, network) are disabled until
 ```
 CLI (missy/cli/main.py)
   → missy setup (wizard.py + oauth.py + anthropic_auth.py)
+  → Config migration (config/migrate.py) — auto-upgrades old configs to preset format
   → load_config() (config/settings.py) + ConfigWatcher (config/hotreload.py)
   → AgentRuntime (agent/runtime.py)
        ├─ InputSanitizer + SecretsDetector + SecretCensor (security/)
-       ├─ PolicyEngine (policy/engine.py)
+       ├─ PromptDriftDetector (security/drift.py) — SHA-256 system prompt tamper detection
+       ├─ PolicyEngine (policy/engine.py) + RestPolicy (policy/rest_policy.py)
+       ├─ AgentIdentity (security/identity.py) — Ed25519 keypair, signs audit events
+       ├─ TrustScorer (security/trust.py) — 0-1000 reliability tracking per tool/provider
        ├─ CircuitBreaker (agent/circuit_breaker.py)
+       ├─ AttentionSystem (agent/attention.py) — 5 brain-inspired subsystems
        ├─ ContextManager (agent/context.py) — token budget with memory/learnings injection
+       ├─ MemoryConsolidator (agent/consolidation.py) — sleep mode at 80% context
+       ├─ MemorySynthesizer (memory/synthesizer.py) — unified relevance-ranked memory block
+       ├─ Playbook (agent/playbook.py) — auto-captured successful patterns
        ├─ ProviderRegistry + ModelRouter (providers/registry.py)
        ├─ RateLimiter (providers/rate_limiter.py)
-       ├─ PolicyHTTPClient (gateway/client.py)
+       ├─ PolicyHTTPClient (gateway/client.py) + InteractiveApproval (agent/interactive_approval.py)
        ├─ ToolRegistry (tools/registry.py) + built-in tools
-       ├─ McpManager (mcp/manager.py) — MCP server integration
+       ├─ McpManager (mcp/manager.py) — MCP server integration + digest pinning
+       ├─ SkillDiscovery (skills/discovery.py) — SKILL.md dynamic skill loading
        ├─ ResilientMemoryStore → SQLiteMemoryStore (memory/)
+       ├─ VectorMemoryStore (memory/vector_store.py) — optional FAISS semantic search
        ├─ DoneCriteria + Learnings + PromptPatchManager (agent/)
+       ├─ ProgressReporter (agent/progress.py) — Null/Audit/CLI implementations
        ├─ SubAgentRunner (agent/sub_agent.py)
        ├─ ApprovalGate (agent/approval.py)
+       ├─ ContainerSandbox (security/container.py) — optional Docker isolation
+       ├─ MessageBus (core/message_bus.py) — async event-driven routing
        └─ AuditLogger + OtelExporter (observability/)
 
 Channels:
@@ -66,12 +80,14 @@ VoiceChannel (channels/voice/):
 
 ### Key Subsystems
 
-**Policy Engine (`missy/policy/`)** — Three-layer enforcement facade:
+**Policy Engine (`missy/policy/`)** — Multi-layer enforcement facade:
 - `NetworkPolicyEngine`: CIDR blocks, domain suffix matching, per-category host allowlists (provider, tool, discord)
 - `FilesystemPolicyEngine`: Per-path read/write access control
 - `ShellPolicyEngine`: Command whitelisting
+- `RestPolicy`: L7 HTTP method + path glob rules per host (e.g. allow GET /repos/**, deny DELETE /**)
+- Network presets (`missy/policy/presets.py`): `presets: ["anthropic", "github"]` auto-expands to correct hosts/domains/CIDRs
 
-**Gateway (`missy/gateway/client.py`)** — `PolicyHTTPClient` wraps httpx; single enforcement point for ALL outbound HTTP. Every request checked against network policy before dispatch.
+**Gateway (`missy/gateway/client.py`)** — `PolicyHTTPClient` wraps httpx; single enforcement point for ALL outbound HTTP. Every request checked against network policy + REST policy before dispatch. `InteractiveApproval` TUI prompts operator on denied requests (y/n/a with session memory).
 
 **Providers (`missy/providers/`)** — `BaseProvider` defines the interface (`Message`, `CompletionResponse`, `ToolCall`, `ToolResult`). Implementations: `AnthropicProvider`, `OpenAIProvider`, `OllamaProvider`. `ProviderRegistry` handles resolution with fallback. `ProviderConfig` supports API key rotation (`api_keys` list), `fast_model`/`premium_model` tiers.
 
@@ -84,23 +100,41 @@ VoiceChannel (channels/voice/):
 **Agent Loop Components (`missy/agent/`)**:
 - `CircuitBreaker`: Closed/Open/HalfOpen state machine with exponential backoff (threshold=5, base_timeout=60s, max=300s)
 - `ContextManager`: Token budget (default 30k) with reserves for system prompt, tool definitions, memory fraction (15%), learnings fraction (5%). Prunes oldest history first.
+- `MemoryConsolidator`: Sleep mode — triggers at 80% context capacity, summarizes old turns, extracts key facts, preserves recent 4 messages
+- `MemorySynthesizer`: Unified memory block — merges learnings (0.7), playbook (0.6), summaries (0.4) into a single relevance-ranked, deduplicated context block using keyword overlap scoring
+- `AttentionSystem`: 5 brain-inspired subsystems — `AlertingAttention` (urgency keywords), `OrientingAttention` (topic extraction), `SustainedAttention` (focus continuity), `SelectiveAttention` (context filtering), `ExecutiveAttention` (tool prioritization)
+- `Playbook`: Auto-captures successful tool patterns (task_type + tool_sequence hash), injects proven approaches into context, auto-promotes patterns with 3+ successes to skill proposals. JSON persistence at `~/.missy/playbook.json`.
+- `ProgressReporter`: Protocol with `NullReporter`, `AuditReporter`, `CLIReporter`. Called in tool loop for structured progress events.
+- `InteractiveApproval`: Real-time Rich TUI for policy-denied operations (y=allow once, n=deny, a=allow always). Session-scoped memory. Non-TTY auto-denies.
 - `DoneCriteria`: Generates verification prompts injected after each tool-call round
 - `Learnings`: Extracts task_type/outcome/lesson from tool-augmented runs, persisted in SQLite
 - `PromptPatchManager`: Self-tuning prompt patches with approval workflow (proposed/approved/rejected)
 - `SubAgentRunner`: Spawns child agent instances
 - `ApprovalGate`: Human-in-the-loop approval for sensitive operations
 
-**MCP (`missy/mcp/`)** — `McpManager` manages MCP server connections. Config at `~/.missy/mcp.json`. Tools are namespaced as `server__tool`. Auto-restarts dead servers via `health_check()`.
+**MCP (`missy/mcp/`)** — `McpManager` manages MCP server connections. Config at `~/.missy/mcp.json`. Tools are namespaced as `server__tool`. Auto-restarts dead servers via `health_check()`. Digest pinning (`missy mcp pin`) records SHA-256 of tool manifests; mismatches refuse to load.
+
+**Skills (`missy/skills/`)** — `SkillDiscovery` scans directories for SKILL.md files (cross-agent portable skill format with YAML frontmatter). `missy skills scan` lists discovered skills. Fuzzy search by name/description.
 
 **Scheduler (`missy/scheduler/`)** — APScheduler-backed job management with JSON persistence at `~/.missy/jobs.json`. Parser converts human-friendly schedules to cron expressions.
 
 **Security (`missy/security/`)**:
-- `InputSanitizer`: Detects 13+ prompt injection patterns
-- `SecretsDetector`: Detects 9 credential patterns (API keys, JWTs, etc.)
-- `SecretCensor`: Redacts secrets from output
+- `InputSanitizer`: Detects 250+ prompt injection patterns with Unicode normalization, base64 decode, multi-language support
+- `SecretsDetector`: Detects 37+ credential patterns (API keys, JWTs, AWS, GCP, etc.)
+- `SecretCensor`: Redacts secrets from output with overlap merging
 - `Vault`: ChaCha20-Poly1305 encrypted key-value store. Key file at `~/.missy/secrets/vault.key`, encrypted data at `~/.missy/secrets/vault.enc`. Supports `vault://KEY_NAME` references in config.
+- `AgentIdentity`: Ed25519 keypair at `~/.missy/identity.pem`. Signs audit events. JWK export.
+- `TrustScorer`: 0-1000 reliability tracking per tool/provider/MCP server. Success (+10), failure (-50), violation (-200). Warns below threshold.
+- `PromptDriftDetector`: SHA-256 hashes system prompts at start, verifies before each provider call. Emits `security.prompt_drift` audit event on tamper.
+- `ContainerSandbox`: Optional Docker-based isolation for tool execution. Per-session containers with `--network=none`, memory/CPU limits. Config: `container: { enabled: true }`.
 
-**Memory (`missy/memory/`)** — `SQLiteMemoryStore` at `~/.missy/memory.db` with FTS5 search. Stores conversation turns and learnings. `cleanup()` removes turns older than N days.
+**Memory (`missy/memory/`)** — `SQLiteMemoryStore` at `~/.missy/memory.db` with FTS5 search. Stores conversation turns and learnings. `cleanup()` removes turns older than N days. Optional `VectorMemoryStore` with FAISS semantic search (`pip install -e ".[vector]"`).
+
+**Message Bus (`missy/core/message_bus.py`)** — Async event-driven routing with fnmatch topic wildcards (e.g. `channel.*`), priority queue, correlation IDs, worker thread. Standard topics in `missy/core/bus_topics.py`. Runtime publishes `AGENT_RUN_START/COMPLETE/ERROR`, `TOOL_REQUEST/RESULT`. Module-level singleton via `init_message_bus()` / `get_message_bus()`.
+
+**Config Migration (`missy/config/migrate.py`)** — Auto-migrates old configs on startup. Detects manual hosts matching presets, replaces with `presets: [...]`, stamps `config_version: 2`. Backs up before modifying. Idempotent.
+
+**Config Plan (`missy/config/plan.py`)** — Automatic backups on config writes (max 5, pruned). `missy config rollback/diff/plan/backups` commands.
 
 **Observability (`missy/observability/`)** — `AuditLogger` writes structured JSONL to `~/.missy/audit.jsonl`. `OtelExporter` sends traces/metrics to an OTLP endpoint when enabled.
 
@@ -109,27 +143,46 @@ VoiceChannel (channels/voice/):
 | Purpose | Path |
 |---|---|
 | Config | `~/.missy/config.yaml` |
+| Config backups | `~/.missy/config.d/config.yaml.<timestamp>` |
 | Audit log | `~/.missy/audit.jsonl` |
 | Memory DB | `~/.missy/memory.db` |
+| Vector index | `~/.missy/memory.faiss` (optional) |
 | Scheduler jobs | `~/.missy/jobs.json` |
 | MCP config | `~/.missy/mcp.json` |
 | Device registry | `~/.missy/devices.json` |
 | Vault key | `~/.missy/secrets/vault.key` |
 | Vault data | `~/.missy/secrets/vault.enc` |
+| Agent identity | `~/.missy/identity.pem` |
 | Prompt patches | `~/.missy/patches.json` |
+| Playbook | `~/.missy/playbook.json` |
+| Skills directory | `~/.missy/skills/` |
 | Workspace | `~/workspace` |
 
 ### Configuration Schema
 
 ```yaml
+config_version: 2                    # schema version (auto-migrated on startup)
+
 network:
   default_deny: true
+  presets:                           # auto-expand to hosts/domains/CIDRs
+    - anthropic
+    - github
   allowed_cidrs: []
   allowed_domains: []
   allowed_hosts: []               # host:port pairs
   provider_allowed_hosts: []      # per-category overrides
   tool_allowed_hosts: []
   discord_allowed_hosts: []
+  rest_policies:                  # L7 HTTP method + path controls
+    - host: "api.github.com"
+      method: "GET"
+      path: "/repos/**"
+      action: "allow"
+    - host: "api.github.com"
+      method: "DELETE"
+      path: "/**"
+      action: "deny"
 
 filesystem:
   allowed_write_paths: []
@@ -190,6 +243,13 @@ voice:
 discord:
   # See missy/channels/discord/config.py for full schema
 
+container:
+  enabled: false
+  image: "python:3.12-slim"
+  memory_limit: "256m"
+  cpu_quota: 0.5
+  network_mode: "none"              # no network in sandbox by default
+
 workspace_path: "~/workspace"
 audit_log_path: "~/.missy/audit.jsonl"
 max_spend_usd: 0.0                  # per-session budget cap; 0 = unlimited
@@ -200,10 +260,14 @@ max_spend_usd: 0.0                  # per-session budget cap; 0 = unlimited
 ```
 missy init                          Create default config at ~/.missy/config.yaml
 missy setup                         Interactive setup wizard (API keys, OAuth)
+missy setup --no-prompt             Non-interactive setup (--provider, --api-key-env, --model)
 missy ask PROMPT                    Single-turn query (--provider, --session)
 missy run                           Interactive REPL session (--provider)
-missy providers                     List configured providers and availability
+missy providers list                List configured providers and availability
+missy providers switch NAME         Switch active provider at runtime
 missy skills                        List registered skills
+missy skills scan                   Scan for SKILL.md files (--path)
+missy presets list                  Show built-in network policy presets
 missy plugins                       List plugins and their status
 missy doctor                        System health check
 
@@ -240,6 +304,7 @@ missy patches reject PATCH_ID       Reject a proposed patch
 missy mcp list                      List configured MCP servers
 missy mcp add NAME                  Connect to an MCP server (--command, --url)
 missy mcp remove NAME               Disconnect and remove an MCP server
+missy mcp pin NAME                  Pin tool manifest SHA-256 digest for verification
 
 missy devices list                  List all registered edge nodes
 missy devices pair                  Approve a pending pairing request (--node-id)
@@ -249,6 +314,13 @@ missy devices policy NODE_ID        Set node policy mode (--mode full|safe-chat|
 
 missy voice status                  Show voice channel config and STT/TTS status
 missy voice test NODE_ID            Test TTS synthesis for an edge node (--text)
+
+missy config backups                List config backups
+missy config diff                   Diff current config vs latest backup
+missy config rollback               Restore config from latest backup
+missy config plan                   Show what changed since last backup
+
+missy sandbox status                Show Docker container sandbox config and availability
 
 missy cost                          Show cost tracking config and budget status (--session)
 missy recover                       List incomplete checkpoints from previous sessions (--abandon-all)
@@ -260,13 +332,18 @@ missy recover                       List incomplete checkpoints from previous se
 pip install -e ".[dev]"     # pytest, pytest-asyncio, pytest-cov, black, ruff, mypy, watchdog
 pip install -e ".[voice]"   # faster-whisper, numpy, soundfile
 pip install -e ".[otel]"    # opentelemetry-sdk, OTLP gRPC + HTTP exporters
+pip install -e ".[vector]"  # faiss-cpu for semantic memory search
 ```
 
 Piper TTS is a separate binary, not a pip package. Install from https://github.com/rhasspy/piper.
 
+## Documentation
+
+Full docs site: **https://missylabs.github.io/** — 60+ pages covering getting started, configuration, security, architecture, CLI reference, channels, providers, extending, edge nodes, and operations. Source at `/home/missy/missylabs.github.io/` (MkDocs Material, deployed via GitHub Actions).
+
 ## Test Layout
 
-Tests under `tests/` with subdirectories: `agent/`, `channels/`, `cli/`, `config/`, `core/`, `integration/`, `memory/`, `observability/`, `plugins/`, `policy/`, `providers/`, `scheduler/`, `security/`, `skills/`, `tools/`, `unit/`. 52 test files, 1097 tests, coverage threshold 85% (configured in `pyproject.toml`).
+Tests under `tests/` with subdirectories: `agent/`, `channels/`, `cli/`, `config/`, `core/`, `integration/`, `memory/`, `observability/`, `plugins/`, `policy/`, `providers/`, `scheduler/`, `security/`, `skills/`, `tools/`, `unit/`. 70+ test files, 1300+ tests, coverage threshold 85% (configured in `pyproject.toml`).
 
 ## Companion Project: missy-edge
 
