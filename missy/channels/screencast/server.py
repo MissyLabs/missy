@@ -67,6 +67,7 @@ _SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
     "Cache-Control": "no-store",
+    "Referrer-Policy": "no-referrer",
     "Content-Security-Policy": (
         "default-src 'none'; "
         "script-src 'unsafe-inline'; "
@@ -590,12 +591,19 @@ class ScreencastServer:
                 if fmt not in ("jpeg", "png"):
                     fmt = "jpeg"
 
-                width = int(msg.get("width", 0))
-                height = int(msg.get("height", 0))
-                seq = int(msg.get("seq", state.frame_count + 1))
+                try:
+                    width = int(msg.get("width", 0))
+                    height = int(msg.get("height", 0))
+                    seq = int(msg.get("seq", state.frame_count + 1))
+                except (ValueError, TypeError):
+                    await self._send_json(
+                        websocket,
+                        {"type": "error", "message": "Invalid numeric field in frame message"},
+                    )
+                    continue
 
-                # Validate dimensions.
-                if width and height and not (_MIN_DIMENSION <= width <= _MAX_DIMENSION and _MIN_DIMENSION <= height <= _MAX_DIMENSION):
+                # Validate dimensions (reject if either is set but out of range).
+                if (width or height) and not (_MIN_DIMENSION <= width <= _MAX_DIMENSION and _MIN_DIMENSION <= height <= _MAX_DIMENSION):
                     await self._send_json(
                         websocket,
                         {"type": "error", "message": f"Invalid dimensions: {width}x{height}"},

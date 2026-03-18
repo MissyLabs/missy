@@ -815,3 +815,124 @@ class TestSendAnalysis:
         server._sessions.set_queue(queue)
         server._sessions.register_connection(session_id, "127.0.0.1:9999")
         await server.send_analysis(session_id, seq=1, text="analysis text")
+
+
+# ---------------------------------------------------------------------------
+# Security hardening tests
+# ---------------------------------------------------------------------------
+
+class TestSecurityHardening:
+    """Tests for security fixes: Referrer-Policy, int() validation, dimension checks."""
+
+    def test_referrer_policy_header_present(self) -> None:
+        """_SECURITY_HEADERS must include Referrer-Policy: no-referrer."""
+        from missy.channels.screencast.server import _SECURITY_HEADERS
+
+        assert "Referrer-Policy" in _SECURITY_HEADERS
+        assert _SECURITY_HEADERS["Referrer-Policy"] == "no-referrer"
+
+    @pytest.fixture
+    def srv(self, registry, session_manager):
+        s = ScreencastServer(
+            token_registry=registry,
+            session_manager=session_manager,
+            host="127.0.0.1",
+            port=0,
+        )
+        s._running = True
+        queue = asyncio.Queue(maxsize=50)
+        session_manager.set_queue(queue)
+        return s
+
+    def _make_iter_ws(self, *messages):
+        ws = MagicMock()
+        ws.send = AsyncMock()
+        ws.close = AsyncMock()
+
+        async def _aiter():
+            for m in messages:
+                yield m
+
+        ws.__aiter__ = lambda self_: _aiter()
+        return ws
+
+    @pytest.mark.asyncio
+    async def test_non_numeric_width_sends_error(
+        self, srv: ScreencastServer, registry: ScreencastTokenRegistry
+    ) -> None:
+        """Non-numeric width in frame message should send error, not crash."""
+        session_id, _ = registry.create_session()
+        state = SessionState(session_id=session_id)
+        srv._sessions.register_connection(session_id)
+        ws = self._make_iter_ws(
+            json.dumps({"type": "frame", "width": "abc", "height": 100, "seq": 1}),
+        )
+        await srv._message_loop(ws, session_id, state)
+        ws.send.assert_awaited_once()
+        payload = json.loads(ws.send.call_args[0][0])
+        assert payload["type"] == "error"
+        assert "numeric" in payload["message"].lower() or "invalid" in payload["message"].lower()
+
+    @pytest.mark.asyncio
+    async def test_non_numeric_height_sends_error(
+        self, srv: ScreencastServer, registry: ScreencastTokenRegistry
+    ) -> None:
+        """Non-numeric height in frame message should send error."""
+        session_id, _ = registry.create_session()
+        state = SessionState(session_id=session_id)
+        srv._sessions.register_connection(session_id)
+        ws = self._make_iter_ws(
+            json.dumps({"type": "frame", "width": 1920, "height": "not_a_number"}),
+        )
+        await srv._message_loop(ws, session_id, state)
+        ws.send.assert_awaited_once()
+        payload = json.loads(ws.send.call_args[0][0])
+        assert payload["type"] == "error"
+
+    @pytest.mark.asyncio
+    async def test_non_numeric_seq_sends_error(
+        self, srv: ScreencastServer, registry: ScreencastTokenRegistry
+    ) -> None:
+        """Non-numeric seq in frame message should send error."""
+        session_id, _ = registry.create_session()
+        state = SessionState(session_id=session_id)
+        srv._sessions.register_connection(session_id)
+        ws = self._make_iter_ws(
+            json.dumps({"type": "frame", "width": 1920, "height": 1080, "seq": "xyz"}),
+        )
+        await srv._message_loop(ws, session_id, state)
+        ws.send.assert_awaited_once()
+        payload = json.loads(ws.send.call_args[0][0])
+        assert payload["type"] == "error"
+
+    @pytest.mark.asyncio
+    async def test_width_zero_height_nonzero_rejected(
+        self, srv: ScreencastServer, registry: ScreencastTokenRegistry
+    ) -> None:
+        """width=0, height=1080 should be rejected (dimension bypass fix)."""
+        session_id, _ = registry.create_session()
+        state = SessionState(session_id=session_id)
+        srv._sessions.register_connection(session_id)
+        ws = self._make_iter_ws(
+            json.dumps({"type": "frame", "width": 0, "height": 1080, "seq": 1}),
+        )
+        await srv._message_loop(ws, session_id, state)
+        ws.send.assert_awaited_once()
+        payload = json.loads(ws.send.call_args[0][0])
+        assert payload["type"] == "error"
+        assert "dimension" in payload["message"].lower() or "invalid" in payload["message"].lower()
+
+    @pytest.mark.asyncio
+    async def test_both_zero_dimensions_accepted(
+        self, srv: ScreencastServer, registry: ScreencastTokenRegistry
+    ) -> None:
+        """width=0, height=0 (not provided) should be accepted (no dimensions)."""
+        session_id, _ = registry.create_session()
+        state = SessionState(session_id=session_id)
+        srv._sessions.register_connection(session_id)
+        ws = self._make_iter_ws(
+            json.dumps({"type": "frame", "format": "jpeg", "seq": 1}),
+        )
+        await srv._message_loop(ws, session_id, state)
+        # No error should be sent — only frame meta is prepared
+        ws.send.assert_not_awaited()
