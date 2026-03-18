@@ -410,8 +410,8 @@ def ask(
             console.print(
                 "[dim]Tip: Run [bold]missy hatch[/bold] to complete initial setup.[/dim]\n"
             )
-    except Exception:
-        pass
+    except Exception:  # noqa: BLE001
+        logger.debug("Hatching check skipped", exc_info=True)
 
     cfg = _load_subsystems(ctx.obj["config_path"])
 
@@ -517,8 +517,8 @@ def run(ctx: click.Context, provider: str | None, session: str, capability_mode:
             console.print(
                 "[dim]Tip: Run [bold]missy hatch[/bold] to complete initial setup.[/dim]\n"
             )
-    except Exception:
-        pass
+    except Exception:  # noqa: BLE001
+        logger.debug("Hatching check skipped", exc_info=True)
 
     provider_name = provider or (
         next(iter(cfg.providers), "anthropic") if cfg.providers else "anthropic"

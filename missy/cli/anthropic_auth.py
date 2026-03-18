@@ -128,8 +128,8 @@ def load_token() -> dict | None:
         return None
     try:
         return json.loads(TOKEN_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        logger.debug("Failed to read Anthropic token file %s", TOKEN_FILE)
+    except (json.JSONDecodeError, OSError) as exc:
+        logger.debug("Failed to read Anthropic token file %s: %s", TOKEN_FILE, exc)
         return None
 
 
