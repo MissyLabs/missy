@@ -7,10 +7,10 @@
 | Metric | Value |
 |---|---|
 | Total tests | 11248 |
-| Passed | 11188 |
-| Failed | 60 (pre-existing test isolation issue — all pass individually) |
+| Passed | 11248 |
+| Failed | 0 |
 | Skipped | 17 |
-| Duration | ~228s |
+| Duration | ~225s |
 
 ## Test Distribution
 

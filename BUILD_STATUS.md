@@ -10,10 +10,10 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 ## Test Results
 
 - **Total tests: 11248**
-- **Passed: 11188**
-- **Failed: 60** (pre-existing test isolation issue — all pass individually)
+- **Passed: 11248**
+- **Failed: 0**
 - **Skipped: 17**
-- **Duration: ~228s**
+- **Duration: ~225s**
 
 ## Completed Components
 
@@ -194,8 +194,9 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 7. Added 32 anthropic_auth tests (classify, store/load, expiry detection, vault integration, runtime resolution)
 8. Fixed MagicMock(new=...) misuse in hatching stress test that caused cross-test pollution
 9. Fixed 529 overflow tests from session 7 (screencast, events, gateway, codex, builtin tools)
-10. Investigated pre-existing 60 test isolation failures (all pass individually, ordering issue in full suite)
-11. Total: 11248 tests (11188 passing, 60 pre-existing isolation failures, 17 skipped)
+10. Fixed 60 pre-existing test isolation failures: concurrent patch race in hatching stress test
+11. Fixed cost CLI tests to use explicit mock stores instead of fragile module-level patching
+12. Total: 11248 tests passing, 0 failures, 17 skipped
 
 ## Remaining Work (Future Hardening)
 - [x] Persona change audit trail (JSONL log of all edits) — done in session 2
@@ -236,6 +237,6 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 - [x] Desktop tools (browser, TTS, X11, AT-SPI) tests — done in session 8
 - [x] Anthropic auth deep tests — done in session 8
 - [x] Hatching stress test mock fix — done in session 8
-- [ ] Fix 60 pre-existing test isolation failures (cost/memory store state pollution)
+- [x] Fix 60 pre-existing test isolation failures (concurrent patch race + cost mock) — done in session 8
 - [ ] Discord voice channel deep protocol tests
 - [ ] Channel screencast integration tests
