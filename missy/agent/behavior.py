@@ -362,7 +362,6 @@ class BehaviorLayer:
         lines: list[str] = []
 
         user_tone: str = context.get("user_tone", "casual")
-        turn_count: int = context.get("turn_count", 0)
         has_tool_results: bool = bool(context.get("has_tool_results", False))
         topic: str = context.get("topic", "")
         urgency: str = context.get("urgency", "low")
