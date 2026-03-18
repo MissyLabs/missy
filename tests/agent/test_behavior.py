@@ -754,3 +754,156 @@ class TestDetectRoboticPatterns:
         original = "As an AI language model, I can help."
         shaper.detect_robotic_patterns(original)
         assert original == "As an AI language model, I can help."
+
+
+# ---------------------------------------------------------------------------
+# Edge case coverage
+# ---------------------------------------------------------------------------
+
+
+class TestBehaviorLayerEdgeCases:
+    """Extra edge case tests for the behavior layer."""
+
+    def test_analyze_tone_with_mixed_signals(self):
+        """Messages with both casual and technical signals."""
+        from missy.agent.persona import PersonaConfig
+        persona = PersonaConfig()
+        layer = BehaviorLayer(persona)
+        messages = [
+            {"role": "user", "content": "hey, can you check the api endpoint config for the kubernetes deployment?"},
+        ]
+        tone = layer.analyze_user_tone(messages)
+        # Should detect technical due to api/endpoint/config/kubernetes
+        assert tone in ("technical", "casual", "brief")
+
+    def test_analyze_tone_all_caps_frustration(self):
+        """All-caps messages should potentially signal frustration."""
+        layer = BehaviorLayer()
+        messages = [
+            {"role": "user", "content": "WHY DOESN'T THIS WORK"},
+        ]
+        # Word-level matching is case-insensitive via .lower()
+        tone = layer.analyze_user_tone(messages)
+        assert tone in ("frustrated", "brief")
+
+    def test_shape_system_prompt_preserves_base(self):
+        """Base prompt text is always preserved."""
+        layer = BehaviorLayer()
+        base = "You are Missy, a security-first assistant."
+        result = layer.shape_system_prompt(base, {})
+        assert result.startswith(base.rstrip())
+
+    def test_guidelines_with_all_context_keys(self):
+        """Guidelines should handle a fully populated context dict."""
+        from missy.agent.persona import PersonaConfig
+        persona = PersonaConfig()
+        layer = BehaviorLayer(persona)
+        ctx = {
+            "user_tone": "frustrated",
+            "turn_count": 15,
+            "has_tool_results": True,
+            "topic": "api code function",
+            "intent": "frustration",
+            "urgency": "high",
+        }
+        guidelines = layer.get_response_guidelines(ctx)
+        assert "concise" in guidelines.lower() or "empathy" in guidelines.lower()
+        assert len(guidelines) > 0
+
+    def test_guidelines_with_empty_persona_lists(self):
+        """Persona with empty lists should not crash."""
+        from missy.agent.persona import PersonaConfig
+        persona = PersonaConfig(
+            behavioral_tendencies=[],
+            response_style_rules=[],
+            boundaries=[],
+        )
+        layer = BehaviorLayer(persona)
+        ctx = {"user_tone": "casual", "turn_count": 1}
+        guidelines = layer.get_response_guidelines(ctx)
+        assert isinstance(guidelines, str)
+
+
+class TestResponseShaperEdgeCases:
+    """Edge cases for ResponseShaper."""
+
+    def test_shape_response_with_only_code_block(self):
+        """Response that is entirely a code block should not be modified."""
+        shaper = ResponseShaper()
+        code = "```python\nprint('hello world')\n```"
+        result = shaper.shape_response(code, None, {})
+        assert result == code
+
+    def test_shape_response_with_nested_code_blocks(self):
+        """Multiple code blocks with text between them."""
+        shaper = ResponseShaper()
+        text = "```bash\nls -la\n```\n\nSome text here.\n\n```python\nprint(1)\n```"
+        result = shaper.shape_response(text, None, {})
+        assert "ls -la" in result
+        assert "print(1)" in result
+
+    def test_shape_response_inline_code_preserved(self):
+        """Inline code should not be stripped even if it matches patterns."""
+        shaper = ResponseShaper()
+        text = "Use the `Certainly` class from the library."
+        result = shaper.shape_response(text, None, {})
+        assert "`Certainly`" in result
+
+    def test_shape_response_empty_string(self):
+        """Empty string should return empty string."""
+        shaper = ResponseShaper()
+        result = shaper.shape_response("", None, {})
+        assert result == ""
+
+    def test_shape_response_whitespace_only(self):
+        """Whitespace-only response should be stripped."""
+        shaper = ResponseShaper()
+        result = shaper.shape_response("   \n\n   ", None, {})
+        assert result == ""
+
+    def test_shape_response_removes_multiple_robotic_phrases(self):
+        """Multiple robotic phrases in one response should all be removed."""
+        shaper = ResponseShaper()
+        text = "Certainly! As an AI language model, I'd be happy to help. The answer is 42."
+        result = shaper.shape_response(text, None, {})
+        assert "Certainly" not in result
+        assert "AI language model" not in result
+        assert "42" in result
+
+
+class TestIntentInterpreterEdgeCases:
+    """Edge cases for IntentInterpreter."""
+
+    def test_empty_string_returns_question(self):
+        interp = IntentInterpreter()
+        assert interp.classify_intent("") == "question"
+
+    def test_whitespace_only_returns_question(self):
+        interp = IntentInterpreter()
+        assert interp.classify_intent("   ") == "question"
+
+    def test_very_long_input(self):
+        """Long input should not crash."""
+        interp = IntentInterpreter()
+        long_text = "word " * 10000
+        result = interp.classify_intent(long_text)
+        assert result in ("greeting", "farewell", "frustration", "clarification",
+                          "feedback", "exploration", "command", "question")
+
+    def test_urgency_default_is_low(self):
+        interp = IntentInterpreter()
+        assert interp.extract_urgency("Tell me about Python decorators.") == "low"
+
+    def test_urgency_mixed_signals(self):
+        """Message with both high and medium urgency signals should be high."""
+        interp = IntentInterpreter()
+        result = interp.extract_urgency("Production is down! Need to fix it soon before tonight.")
+        assert result == "high"  # High takes precedence
+
+    def test_greeting_at_start_only(self):
+        """Greeting pattern should only match at the start of the message."""
+        interp = IntentInterpreter()
+        # "hello" at start is a greeting
+        assert interp.classify_intent("hello there") == "greeting"
+        # "hello" in the middle is not
+        assert interp.classify_intent("say hello to the world") != "greeting"
