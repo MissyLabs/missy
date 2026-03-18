@@ -175,9 +175,9 @@ class TestFileWriteToolCoverageGaps:
         """Non-permission exceptions during Path.open → failure result (generic except)."""
         target = tmp_path / "out.txt"
 
-        # Patch Path.open to raise a non-PermissionError so the generic
-        # except clause (lines 90-91) is exercised
-        with patch.object(Path, "open", side_effect=OSError("disk full")):
+        # Patch os.open to raise a non-PermissionError so the generic
+        # except clause is exercised (file_write uses os.open with O_NOFOLLOW)
+        with patch("os.open", side_effect=OSError("disk full")):
             result = FileWriteTool().execute(path=str(target), content="data")
 
         assert result.success is False

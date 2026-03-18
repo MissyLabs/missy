@@ -13,6 +13,7 @@ Example::
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -80,7 +81,15 @@ class FileWriteTool(BaseTool):
         try:
             p.parent.mkdir(parents=True, exist_ok=True)
             write_mode = "a" if mode == "append" else "w"
-            with p.open(write_mode, encoding=encoding) as fh:
+            # Use O_NOFOLLOW to prevent symlink TOCTOU attacks (matches
+            # file_read and file_delete which already do this).
+            flags = os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW
+            if mode == "append":
+                flags |= os.O_APPEND
+            else:
+                flags |= os.O_TRUNC
+            fd = os.open(str(p), flags, 0o600)
+            with os.fdopen(fd, write_mode, encoding=encoding) as fh:
                 fh.write(content)
             return ToolResult(
                 success=True,

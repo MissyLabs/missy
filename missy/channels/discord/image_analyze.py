@@ -202,13 +202,21 @@ def save_discord_attachment(
     if not url:
         raise ValueError("Attachment has no download URL.")
 
-    filename = attachment.get("filename", "screenshot.png")
+    raw_filename = attachment.get("filename", "screenshot.png")
+    # Sanitize filename: strip path separators and directory traversal to
+    # prevent writing outside save_dir (e.g. "../../etc/cron.d/backdoor").
+    safe_filename = os.path.basename(raw_filename).replace("\x00", "")
+    if not safe_filename:
+        safe_filename = "attachment"
     save_dir = os.path.expanduser(save_dir)
     os.makedirs(save_dir, exist_ok=True, mode=0o700)
 
     # Prefix with timestamp to avoid collisions.
     ts = time.strftime("%Y%m%d_%H%M%S")
-    dest = os.path.join(save_dir, f"{ts}_{filename}")
+    dest = os.path.join(save_dir, f"{ts}_{safe_filename}")
+    # Final guard: resolved path must stay inside save_dir.
+    if not os.path.realpath(dest).startswith(os.path.realpath(save_dir)):
+        raise ValueError(f"Attachment filename {raw_filename!r} resolves outside save directory.")
 
     image_data = rest_client.download_attachment(url)
     fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
