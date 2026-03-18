@@ -75,20 +75,25 @@ def _patch_module_paths(monkeypatch: Any, tmp_path: Path) -> None:
     monkeypatch.setattr(hatching_mod, "_MEMORY_DB_PATH", tmp_path / "memory.db")
 
 
-def _mock_sys_modules_for_hatching() -> dict[str, Any]:
-    """Return a patch.dict payload that stubs persona and memory imports."""
+import contextlib
+
+
+@contextlib.contextmanager
+def _mock_hatching_deps():
+    """Patch PersonaManager and SQLiteMemoryStore/ConversationTurn on the real
+    modules so that deferred imports inside hatching.py receive mocks without
+    replacing entire modules in sys.modules (which causes cross-test leaks).
+    """
     mock_turn = MagicMock()
     mock_turn.id = "turn-stub"
     mock_store = MagicMock()
-    return {
-        "missy.agent.persona": MagicMock(
-            PersonaManager=MagicMock(return_value=MagicMock())
-        ),
-        "missy.memory.sqlite_store": MagicMock(
-            SQLiteMemoryStore=MagicMock(return_value=mock_store),
-            ConversationTurn=MagicMock(new=MagicMock(return_value=mock_turn)),
-        ),
-    }
+
+    with (
+        patch("missy.agent.persona.PersonaManager", return_value=MagicMock()),
+        patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store),
+        patch("missy.memory.sqlite_store.ConversationTurn", MagicMock(new=MagicMock(return_value=mock_turn))),
+    ):
+        yield
 
 
 # ---------------------------------------------------------------------------
@@ -104,7 +109,7 @@ class TestHatching100RapidRestarts:
         monkeypatch.setenv("ANTHROPIC_API_KEY", "key-stress")
 
         mgr = _make_manager(tmp_path)
-        with patch.dict("sys.modules", _mock_sys_modules_for_hatching()):
+        with _mock_hatching_deps():
             for _ in range(100):
                 mgr.reset()
                 state = mgr.run_hatching(interactive=False)
@@ -132,7 +137,7 @@ class TestHatching100RapidRestarts:
         }
 
         mgr = _make_manager(tmp_path)
-        with patch.dict("sys.modules", _mock_sys_modules_for_hatching()):
+        with _mock_hatching_deps():
             for i in range(5):
                 mgr.reset()
                 state = mgr.run_hatching(interactive=False)
@@ -149,7 +154,7 @@ class TestHatching100RapidRestarts:
         log_path = tmp_path / "log.jsonl"
 
         mgr = _make_manager(tmp_path)
-        with patch.dict("sys.modules", _mock_sys_modules_for_hatching()):
+        with _mock_hatching_deps():
             for _ in range(10):
                 mgr.reset()
                 mgr.run_hatching(interactive=False)
@@ -188,7 +193,7 @@ class TestHatchingConcurrentExecution:
         errors: list[Exception] = []
 
         def _run() -> None:
-            with patch.dict("sys.modules", _mock_sys_modules_for_hatching()):
+            with _mock_hatching_deps():
                 mgr = HatchingManager(state_path=state_path, log_path=log_path)
                 try:
                     state = mgr.run_hatching(interactive=False)
@@ -272,7 +277,7 @@ class TestHatchingStepTimeout:
         mgr = _make_manager(tmp_path)
         mgr._finalize = _slow_finalize  # type: ignore[method-assign]
 
-        with patch.dict("sys.modules", _mock_sys_modules_for_hatching()):
+        with _mock_hatching_deps():
             state = mgr.run_hatching(interactive=False)
 
         assert state.status is HatchingStatus.FAILED
@@ -294,7 +299,7 @@ class TestHatchingStepTimeout:
         # Inject into verify_providers (a step that emits warnings normally).
         mgr._verify_providers = _slow_warning_step  # type: ignore[method-assign]
 
-        with patch.dict("sys.modules", _mock_sys_modules_for_hatching()):
+        with _mock_hatching_deps():
             state = mgr.run_hatching(interactive=False)
 
         # Hatching should still complete because warnings are non-fatal.

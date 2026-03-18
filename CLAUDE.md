@@ -63,6 +63,9 @@ CLI (missy/cli/main.py)
        ├─ ProgressReporter (agent/progress.py) — Null/Audit/CLI implementations
        ├─ SubAgentRunner (agent/sub_agent.py)
        ├─ ApprovalGate (agent/approval.py)
+       ├─ PersonaManager (agent/persona.py) — YAML-backed identity/tone/style with backup/rollback
+       ├─ BehaviorLayer (agent/behavior.py) — tone analysis, intent classification, response shaping
+       ├─ HatchingManager (agent/hatching.py) — 7-step first-run bootstrap
        ├─ ContainerSandbox (security/container.py) — optional Docker isolation
        ├─ MessageBus (core/message_bus.py) — async event-driven routing
        └─ AuditLogger + OtelExporter (observability/)
@@ -155,6 +158,11 @@ VoiceChannel (channels/voice/):
 | Agent identity | `~/.missy/identity.pem` |
 | Prompt patches | `~/.missy/patches.json` |
 | Playbook | `~/.missy/playbook.json` |
+| Persona | `~/.missy/persona.yaml` |
+| Persona backups | `~/.missy/persona.d/persona.yaml.<timestamp>` |
+| Persona audit log | `~/.missy/persona_audit.jsonl` |
+| Hatching state | `~/.missy/hatching.yaml` |
+| Hatching log | `~/.missy/hatching_log.jsonl` |
 | Skills directory | `~/.missy/skills/` |
 | Workspace | `~/workspace` |
 
@@ -321,6 +329,16 @@ missy config rollback               Restore config from latest backup
 missy config plan                   Show what changed since last backup
 
 missy sandbox status                Show Docker container sandbox config and availability
+
+missy hatch                         First-run bootstrap wizard (--non-interactive)
+
+missy persona show                  Display current persona configuration
+missy persona edit                  Edit persona fields (--name, --tone, --identity)
+missy persona reset                 Reset persona to factory defaults
+missy persona backups               List available persona backups
+missy persona diff                  Show diff between current persona and latest backup
+missy persona rollback              Restore persona from latest backup
+missy persona log                   Show persona change audit log (--limit)
 
 missy cost                          Show cost tracking config and budget status (--session)
 missy recover                       List incomplete checkpoints from previous sessions (--abandon-all)

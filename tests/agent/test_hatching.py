@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -261,6 +262,24 @@ def _make_manager(tmp_path: Path) -> HatchingManager:
     )
 
 
+@contextlib.contextmanager
+def _mock_hatching_deps(persona_manager=None):
+    """Patch PersonaManager and SQLiteMemoryStore/ConversationTurn on the real
+    modules instead of replacing sys.modules (avoids cross-test leaks).
+    """
+    mock_turn = MagicMock()
+    mock_turn.id = "turn-1"
+    mock_store = MagicMock()
+    pm = persona_manager or MagicMock()
+
+    with (
+        patch("missy.agent.persona.PersonaManager", return_value=pm),
+        patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store),
+        patch("missy.memory.sqlite_store.ConversationTurn", MagicMock(new=MagicMock(return_value=mock_turn))),
+    ):
+        yield
+
+
 def _patch_module_paths(monkeypatch, tmp_path: Path):
     """Redirect all module-level _*_PATH constants inside hatching.py to tmp_path."""
     import missy.agent.hatching as hatching_mod
@@ -278,20 +297,8 @@ class TestHatchingManagerRunHatching:
         _patch_module_paths(monkeypatch, tmp_path)
 
         mock_persona_manager = MagicMock()
-        mock_store = MagicMock()
-        mock_turn = MagicMock()
-        mock_turn.id = "turn-1"
 
-        with patch.dict(
-            "sys.modules",
-            {
-                "missy.agent.persona": MagicMock(PersonaManager=MagicMock(return_value=mock_persona_manager)),
-                "missy.memory.sqlite_store": MagicMock(
-                    SQLiteMemoryStore=MagicMock(return_value=mock_store),
-                    ConversationTurn=MagicMock(new=MagicMock(return_value=mock_turn)),
-                ),
-            },
-        ):
+        with _mock_hatching_deps(persona_manager=mock_persona_manager):
             mgr = _make_manager(tmp_path)
             monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
             state = mgr.run_hatching(interactive=False)
@@ -301,20 +308,7 @@ class TestHatchingManagerRunHatching:
     def test_run_hatching_records_all_steps_completed(self, tmp_path, monkeypatch):
         _patch_module_paths(monkeypatch, tmp_path)
 
-        mock_turn = MagicMock()
-        mock_turn.id = "turn-1"
-        mock_store = MagicMock()
-
-        with patch.dict(
-            "sys.modules",
-            {
-                "missy.agent.persona": MagicMock(PersonaManager=MagicMock(return_value=MagicMock())),
-                "missy.memory.sqlite_store": MagicMock(
-                    SQLiteMemoryStore=MagicMock(return_value=mock_store),
-                    ConversationTurn=MagicMock(new=MagicMock(return_value=mock_turn)),
-                ),
-            },
-        ):
+        with _mock_hatching_deps():
             mgr = _make_manager(tmp_path)
             monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
             state = mgr.run_hatching(interactive=False)
@@ -359,20 +353,7 @@ class TestHatchingManagerRunHatching:
         )
         state_path.write_text(yaml.safe_dump(partial_state.to_dict()), encoding="utf-8")
 
-        mock_turn = MagicMock()
-        mock_turn.id = "t"
-        mock_store = MagicMock()
-
-        with patch.dict(
-            "sys.modules",
-            {
-                "missy.agent.persona": MagicMock(PersonaManager=MagicMock(return_value=MagicMock())),
-                "missy.memory.sqlite_store": MagicMock(
-                    SQLiteMemoryStore=MagicMock(return_value=mock_store),
-                    ConversationTurn=MagicMock(new=MagicMock(return_value=mock_turn)),
-                ),
-            },
-        ):
+        with _mock_hatching_deps():
             mgr = HatchingManager(state_path=state_path, log_path=tmp_path / "log.jsonl")
             monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
             state = mgr.run_hatching(interactive=False)
@@ -391,20 +372,7 @@ class TestHatchingManagerRunHatching:
         )
         state_path.write_text(yaml.safe_dump(failed_state.to_dict()), encoding="utf-8")
 
-        mock_turn = MagicMock()
-        mock_turn.id = "t"
-        mock_store = MagicMock()
-
-        with patch.dict(
-            "sys.modules",
-            {
-                "missy.agent.persona": MagicMock(PersonaManager=MagicMock(return_value=MagicMock())),
-                "missy.memory.sqlite_store": MagicMock(
-                    SQLiteMemoryStore=MagicMock(return_value=mock_store),
-                    ConversationTurn=MagicMock(new=MagicMock(return_value=mock_turn)),
-                ),
-            },
-        ):
+        with _mock_hatching_deps():
             mgr = HatchingManager(state_path=state_path, log_path=tmp_path / "log.jsonl")
             monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
             state = mgr.run_hatching(interactive=False)
@@ -415,20 +383,7 @@ class TestHatchingManagerRunHatching:
     def test_run_hatching_sets_started_at_timestamp(self, tmp_path, monkeypatch):
         _patch_module_paths(monkeypatch, tmp_path)
 
-        mock_turn = MagicMock()
-        mock_turn.id = "t"
-        mock_store = MagicMock()
-
-        with patch.dict(
-            "sys.modules",
-            {
-                "missy.agent.persona": MagicMock(PersonaManager=MagicMock(return_value=MagicMock())),
-                "missy.memory.sqlite_store": MagicMock(
-                    SQLiteMemoryStore=MagicMock(return_value=mock_store),
-                    ConversationTurn=MagicMock(new=MagicMock(return_value=mock_turn)),
-                ),
-            },
-        ):
+        with _mock_hatching_deps():
             mgr = _make_manager(tmp_path)
             monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
             state = mgr.run_hatching(interactive=False)
@@ -452,20 +407,7 @@ class TestHatchingManagerRunHatching:
 
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
-        mock_turn = MagicMock()
-        mock_turn.id = "t"
-        mock_store = MagicMock()
-
-        with patch.dict(
-            "sys.modules",
-            {
-                "missy.agent.persona": MagicMock(PersonaManager=MagicMock(return_value=MagicMock())),
-                "missy.memory.sqlite_store": MagicMock(
-                    SQLiteMemoryStore=MagicMock(return_value=mock_store),
-                    ConversationTurn=MagicMock(new=MagicMock(return_value=mock_turn)),
-                ),
-            },
-        ):
+        with _mock_hatching_deps():
             state = mgr.run_hatching(interactive=False)
 
         assert state.status is HatchingStatus.FAILED
@@ -551,20 +493,7 @@ class TestHatchingManagerGetHatchingLog:
     def test_get_hatching_log_reflects_entries_after_run(self, tmp_path, monkeypatch):
         _patch_module_paths(monkeypatch, tmp_path)
 
-        mock_turn = MagicMock()
-        mock_turn.id = "t"
-        mock_store = MagicMock()
-
-        with patch.dict(
-            "sys.modules",
-            {
-                "missy.agent.persona": MagicMock(PersonaManager=MagicMock(return_value=MagicMock())),
-                "missy.memory.sqlite_store": MagicMock(
-                    SQLiteMemoryStore=MagicMock(return_value=mock_store),
-                    ConversationTurn=MagicMock(new=MagicMock(return_value=mock_turn)),
-                ),
-            },
-        ):
+        with _mock_hatching_deps():
             mgr = _make_manager(tmp_path)
             monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
             mgr.run_hatching(interactive=False)
