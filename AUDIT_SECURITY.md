@@ -71,3 +71,39 @@ The persona system enforces:
 - Flag security concerns proactively
 
 These boundaries are injected into every LLM system prompt.
+
+## File Permission Hardening (Session 3)
+
+All directory creation under `~/.missy/` now uses `mode=0o700` to prevent
+other users on shared systems from reading sensitive configuration, audit logs,
+memory databases, or identity keys.
+
+Sensitive files (persona, hatching state, vault) are created with `mode=0o600`
+using `os.open()` with restrictive flags (`O_CREAT | O_TRUNC` or `O_CREAT | O_APPEND`).
+
+### Files hardened
+
+| File | mkdir mode | File mode |
+|---|---|---|
+| `hatching.py` — state file | 0o700 | 0o600 (os.open) |
+| `hatching.py` — log file | 0o700 | 0o600 (os.open + O_APPEND) |
+| `hatching.py` — env validate | 0o700 | — |
+| `hatching.py` — config init | 0o700 | — |
+| `hatching.py` — secrets dir | 0o700 | — |
+| `persona.py` — persona file | 0o700 | 0o600 (chmod) |
+| `persona.py` — audit log | 0o700 | 0o600 (os.open + O_APPEND) |
+| `persona.py` — backup dir | 0o700 | — |
+| `cli/main.py` — init | 0o700 | — |
+| `cli/wizard.py` — config | 0o700 | — |
+| `config/plan.py` — backup | 0o700 | — |
+| `security/identity.py` — key | 0o700 | 0o600 (existing) |
+| `security/vault.py` — vault | 0o700 | 0o600 (existing) |
+| `memory/sqlite_store.py` | 0o700 | — |
+| `memory/store.py` | 0o700 | — |
+| `memory/vector_store.py` | 0o700 | — |
+| `mcp/manager.py` | 0o700 | 0o600 (existing) |
+| `scheduler/manager.py` | 0o700 | 0o600 (existing) |
+| `agent/playbook.py` | 0o700 | — |
+| `agent/prompt_patches.py` | 0o700 | — |
+| `agent/code_evolution.py` | 0o700 | — |
+| `channels/voice/registry.py` | 0o700 | — |

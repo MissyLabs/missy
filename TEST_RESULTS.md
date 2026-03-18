@@ -6,11 +6,11 @@
 
 | Metric | Value |
 |---|---|
-| Total tests | 7335 |
-| Passed | 7335 |
+| Total tests | 7388 |
+| Passed | 7388 |
 | Failed | 0 |
 | Skipped | 14 |
-| Duration | ~143s |
+| Duration | ~154s |
 
 ## Test Distribution
 

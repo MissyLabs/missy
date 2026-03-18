@@ -9,8 +9,8 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 
 ## Test Results
 
-- **Total tests: 7335**
-- **Passed: 7335**
+- **Total tests: 7388**
+- **Passed: 7388**
 - **Failed: 0**
 - **Skipped: 14**
 - **Duration: ~143s**
@@ -35,7 +35,7 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 - [x] Runtime integration (system prompt shaping + response post-processing)
 - [x] Hatching check in both `missy ask` and `missy run`
 - [x] Persona file permissions (0o600 on save)
-- [x] 243 dedicated tests (60 persona + 129 behavior + 51 hatching + CLI tests)
+- [x] 296 dedicated tests (60 persona + 152 behavior + 51 hatching + 21 integration/fuzz + CLI tests)
 
 ### Channels
 - [x] CLI channel (interactive REPL)
@@ -81,7 +81,7 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 
 - 157 Python source files
 - 254+ test files
-- 7335 tests total
+- 7388 tests total
 
 ## Session History
 
@@ -107,8 +107,23 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 9. Added 8 CLI tests for new persona commands
 10. Total: 7335 tests passing, 0 failures
 
+### Session 3 (2026-03-18) — Deep Security Hardening + Behavior Improvements
+1. Hardened ALL mkdir calls across 16 files to use mode=0o700
+2. Added os.open() with 0o600 for hatching state, hatching log, persona audit log
+3. Fixed playbook.py makedirs() to use mode=0o700
+4. Added conftest.py to exclude discord_live_test.py from pytest collection
+5. Added 8 integration tests for hatching→persona→behavior pipeline
+6. Added 13 YAML fuzz tests (binary, deeply nested, large, bomb, injection, concurrent writes)
+7. Added 2 new intent categories: troubleshooting (error/debug patterns) and confirmation (short affirmatives)
+8. Added intent-specific guidelines for troubleshooting, confirmation, clarification, and command intents
+9. Added 23 behavior tests for new intents and guidelines
+10. Updated AUDIT_SECURITY.md with file permission hardening audit
+11. Total: 7388 tests passing, 0 failures
+
 ## Remaining Work (Future Hardening)
-- [ ] Persona change audit trail (JSONL log of all edits)
-- [ ] Behavior layer: context carryover between sessions
-- [ ] Fuzz testing for YAML parsing edge cases
-- [ ] Integration tests for hatching → persona → behavior pipeline
+- [x] Persona change audit trail (JSONL log of all edits) — done in session 2
+- [x] Fuzz testing for YAML parsing edge cases — done in session 3
+- [x] Integration tests for hatching → persona → behavior pipeline — done in session 3
+- [ ] Additional runtime integration tests (agent runtime + behavior layer end-to-end)
+- [ ] Property-based testing with hypothesis for sanitizer/secrets patterns
+- [ ] Load testing for memory store under concurrent access
