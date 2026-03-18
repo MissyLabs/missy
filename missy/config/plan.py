@@ -32,7 +32,7 @@ def backup_config(config_path: str | Path, backup_dir: str | Path | None = None)
     """
     src = Path(config_path).expanduser()
     dest_dir = _backup_dir(Path(backup_dir) if backup_dir else None)
-    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
 
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     backup_path = dest_dir / f"config.yaml.{timestamp}"

@@ -63,7 +63,7 @@ class AgentIdentity:
             encryption_algorithm=serialization.NoEncryption(),
         )
         p = Path(path)
-        p.parent.mkdir(parents=True, exist_ok=True)
+        p.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         # Write with restrictive permissions: create file 0o600
         fd = os.open(str(p), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         try:

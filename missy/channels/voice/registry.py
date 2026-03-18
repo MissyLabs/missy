@@ -195,7 +195,7 @@ class DeviceRegistry:
         callers can handle it.
         """
         with self._lock:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
+            self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             payload = json.dumps(
                 [_node_to_dict(n) for n in self._nodes.values()],
                 indent=2,

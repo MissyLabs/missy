@@ -182,7 +182,7 @@ class VectorMemoryStore:
             logger.debug("faiss not available — save() is a no-op")
             return
 
-        Path(self.index_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(self.index_path).parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         faiss.write_index(self._index, self.index_path)
 
         with open(self._metadata_path, "w", encoding="utf-8") as f:

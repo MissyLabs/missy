@@ -108,7 +108,7 @@ class Vault:
         # This prevents data loss if the process is interrupted mid-write.
         import tempfile
 
-        self._vault_path.parent.mkdir(parents=True, exist_ok=True)
+        self._vault_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         fd, tmp_path = tempfile.mkstemp(
             dir=str(self._vault_path.parent), suffix=".tmp"
         )

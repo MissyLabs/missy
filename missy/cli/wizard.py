@@ -389,7 +389,7 @@ def _build_config_yaml(
 
 def _write_config_atomic(config_path: Path, content: str) -> None:
     """Write *content* to *config_path* atomically via a sibling temp file."""
-    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd, tmp = tempfile.mkstemp(dir=config_path.parent, prefix=".config_tmp_")
     try:
         os.fchmod(fd, 0o600)  # Config may contain API keys; restrict access

@@ -341,7 +341,7 @@ class MemoryStore:
         logged but not re-raised so callers are not disrupted.
         """
         try:
-            self.store_path.parent.mkdir(parents=True, exist_ok=True)
+            self.store_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             payload = [t.to_dict() for t in self._turns]
             self.store_path.write_text(
                 json.dumps(payload, indent=2, default=str),

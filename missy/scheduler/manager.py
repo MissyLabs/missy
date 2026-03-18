@@ -531,7 +531,7 @@ class SchedulerManager:
             import os
             import tempfile
 
-            self.jobs_file.parent.mkdir(parents=True, exist_ok=True)
+            self.jobs_file.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             payload = [job.to_dict() for job in self._jobs.values()]
             data = json.dumps(payload, indent=2, default=str).encode("utf-8")
             # Atomic write with restrictive permissions (0o600)

@@ -252,7 +252,7 @@ def init(ctx: click.Context) -> None:
     missy_dir = Path("~/.missy").expanduser()
 
     try:
-        missy_dir.mkdir(parents=True, exist_ok=True)
+        missy_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     except OSError as exc:
         _print_error(f"Cannot create directory {missy_dir}: {exc}")
         sys.exit(1)

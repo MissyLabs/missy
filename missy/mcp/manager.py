@@ -293,7 +293,7 @@ class McpManager:
                 {"name": name, "command": c._command, "url": c._url}
                 for name, c in self._clients.items()
             ]
-        self._config_path.parent.mkdir(parents=True, exist_ok=True)
+        self._config_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         # Write with restrictive permissions (owner read/write only) to
         # prevent other users from reading server commands or URLs.
         import os

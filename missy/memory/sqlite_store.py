@@ -264,7 +264,7 @@ class SQLiteMemoryStore:
 
     def __init__(self, db_path: str = "~/.missy/memory.db") -> None:
         self._path = Path(db_path).expanduser()
-        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self._local = threading.local()
         self._init_db()
 

@@ -207,7 +207,7 @@ class CodeEvolutionManager:
             return []
 
     def _save(self) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self._path.write_text(
             json.dumps([_serialize_proposal(p) for p in self._proposals], indent=2)
         )

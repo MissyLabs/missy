@@ -246,7 +246,7 @@ class PersonaManager:
             self._create_backup()
 
         self._persona.version += 1
-        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         data = _persona_to_dict(self._persona)
         dir_ = str(self._path.parent)
         fd, tmp_path = tempfile.mkstemp(dir=dir_, suffix=".yaml.tmp")
@@ -348,7 +348,7 @@ class PersonaManager:
             "details": details or {},
         }
         try:
-            audit_path.parent.mkdir(parents=True, exist_ok=True)
+            audit_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             with audit_path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(entry) + "\n")
         except OSError:
@@ -397,7 +397,7 @@ class PersonaManager:
             Path to the newly created backup file.
         """
         bdir = self.backup_dir
-        bdir.mkdir(parents=True, exist_ok=True)
+        bdir.mkdir(parents=True, exist_ok=True, mode=0o700)
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         backup_path = bdir / f"persona.yaml.{timestamp}"
         shutil.copy2(str(self._path), str(backup_path))

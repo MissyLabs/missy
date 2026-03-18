@@ -174,7 +174,7 @@ class HatchingLog:
             "details": details or {},
         }
         try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
+            self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             with self._path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(entry) + "\n")
         except OSError:
@@ -431,7 +431,7 @@ class HatchingManager:
     def _save_state(self, state: HatchingState) -> None:
         """Persist *state* to disk atomically."""
         try:
-            self._state_path.parent.mkdir(parents=True, exist_ok=True)
+            self._state_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             tmp_path = self._state_path.with_suffix(".yaml.tmp")
             with tmp_path.open("w", encoding="utf-8") as fh:
                 yaml.safe_dump(state.to_dict(), fh, default_flow_style=False, allow_unicode=True)
@@ -464,7 +464,7 @@ class HatchingManager:
 
         # Ensure ~/.missy/ can be created or already exists.
         try:
-            _MISSY_DIR.mkdir(parents=True, exist_ok=True)
+            _MISSY_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
         except OSError as exc:
             raise RuntimeError(
                 f"Cannot create Missy data directory {_MISSY_DIR}: {exc}"
@@ -502,7 +502,7 @@ class HatchingManager:
             return
 
         try:
-            _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             _CONFIG_PATH.write_text(_DEFAULT_CONFIG_YAML, encoding="utf-8")
             self._log.log(
                 "initialize_config",
@@ -589,7 +589,7 @@ class HatchingManager:
         """
         # Ensure secrets directory exists with restricted permissions.
         try:
-            _SECRETS_DIR.mkdir(parents=True, exist_ok=True)
+            _SECRETS_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
             _SECRETS_DIR.chmod(0o700)
         except OSError as exc:
             raise RuntimeError(
