@@ -29,8 +29,8 @@ Missy is a security-first, self-hosted local agentic AI assistant for Linux. It 
 ## Module Count
 
 - Source files: 157
-- Test files: 254
-- Total tests: 7265 (0 failures)
+- Test files: 270+
+- Total tests: 7830 (0 failures, 17 skipped)
 
 ## Key Metrics
 
