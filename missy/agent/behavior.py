@@ -139,6 +139,21 @@ _EXPLORATION_PATTERNS: re.Pattern[str] = re.compile(
     re.IGNORECASE,
 )
 
+_TROUBLESHOOT_PATTERNS: re.Pattern[str] = re.compile(
+    r"\b(error|exception|traceback|stack\s*trace|log|debug|diagnose|troubleshoot"
+    r"|segfault|core\s*dump|panic|errno|exit\s+code|return\s+code|status\s+code"
+    r"|failing|failed\s+with|throws?|raised?|caught|unhandled"
+    r"|timeout|connection\s+refused|permission\s+denied)\b",
+    re.IGNORECASE,
+)
+
+_CONFIRMATION_PATTERNS: re.Pattern[str] = re.compile(
+    r"^\s*(ok|okay|k|yes|yeah|yep|yup|sure|got\s+it|sounds?\s+good"
+    r"|makes?\s+sense|understood|perfect|great|go\s+ahead|proceed"
+    r"|do\s+it|confirmed?|approved?|agreed|right)\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
+
 _FRUSTRATION_PATTERNS: re.Pattern[str] = re.compile(
     r"\b(still\s+not|doesn'?t\s+work|not\s+working|tried\s+(that|this|again)"
     r"|you\s+already|i\s+already|same\s+(error|issue|problem)|again|why\s+(is|isn'?t"
@@ -398,6 +413,27 @@ class BehaviorLayer:
             )
         elif intent == "farewell":
             lines.append("Offer a friendly, brief farewell. No need to recap the session.")
+        elif intent == "troubleshooting":
+            lines.append(
+                "The user is debugging an issue. Structure your response as: "
+                "likely cause → diagnostic steps → fix. Include exact commands "
+                "or code where applicable."
+            )
+        elif intent == "confirmation":
+            lines.append(
+                "The user is confirming or acknowledging. Proceed with the "
+                "next action rather than restating what was already agreed upon."
+            )
+        elif intent == "clarification":
+            lines.append(
+                "The user needs more detail. Re-explain using a different "
+                "approach — analogies, examples, or step-by-step breakdowns."
+            )
+        elif intent == "command":
+            lines.append(
+                "Direct instruction detected. Execute the requested action "
+                "and report the result concisely."
+            )
 
         # Topic-based technical depth
         if topic:
@@ -505,15 +541,16 @@ class IntentInterpreter:
         """Return the most likely intent category for *user_input*.
 
         Categories, in evaluation order:
-        ``"greeting"``, ``"farewell"``, ``"frustration"``, ``"clarification"``,
-        ``"feedback"``, ``"exploration"``, ``"command"``, ``"question"``.
+        ``"greeting"``, ``"farewell"``, ``"confirmation"``, ``"frustration"``,
+        ``"troubleshooting"``, ``"clarification"``, ``"feedback"``,
+        ``"exploration"``, ``"command"``, ``"question"``.
         Falls back to ``"question"`` when no pattern matches.
 
         Args:
             user_input: Raw user message text.
 
         Returns:
-            One of the eight intent category strings.
+            One of the ten intent category strings.
         """
         text = user_input.strip()
 
@@ -523,8 +560,14 @@ class IntentInterpreter:
         if _FAREWELL_PATTERNS.search(text):
             return "farewell"
 
+        if _CONFIRMATION_PATTERNS.match(text):
+            return "confirmation"
+
         if _FRUSTRATION_PATTERNS.search(text):
             return "frustration"
+
+        if _TROUBLESHOOT_PATTERNS.search(text):
+            return "troubleshooting"
 
         if _CLARIFICATION_PATTERNS.search(text):
             return "clarification"

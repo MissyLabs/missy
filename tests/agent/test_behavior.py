@@ -887,8 +887,9 @@ class TestIntentInterpreterEdgeCases:
         interp = IntentInterpreter()
         long_text = "word " * 10000
         result = interp.classify_intent(long_text)
-        assert result in ("greeting", "farewell", "frustration", "clarification",
-                          "feedback", "exploration", "command", "question")
+        assert result in ("greeting", "farewell", "confirmation", "frustration",
+                          "troubleshooting", "clarification", "feedback",
+                          "exploration", "command", "question")
 
     def test_urgency_default_is_low(self):
         interp = IntentInterpreter()
@@ -907,3 +908,117 @@ class TestIntentInterpreterEdgeCases:
         assert interp.classify_intent("hello there") == "greeting"
         # "hello" in the middle is not
         assert interp.classify_intent("say hello to the world") != "greeting"
+
+
+class TestTroubleshootingIntent:
+    """Tests for the new troubleshooting intent category."""
+
+    def test_error_keyword(self):
+        interp = IntentInterpreter()
+        assert interp.classify_intent("I'm getting an error when I run the script") == "troubleshooting"
+
+    def test_traceback(self):
+        interp = IntentInterpreter()
+        assert interp.classify_intent("There's a traceback in the logs") == "troubleshooting"
+
+    def test_stack_trace(self):
+        interp = IntentInterpreter()
+        assert interp.classify_intent("Can you help me read this stack trace?") == "troubleshooting"
+
+    def test_permission_denied(self):
+        interp = IntentInterpreter()
+        assert interp.classify_intent("I'm seeing permission denied on the socket") == "troubleshooting"
+
+    def test_timeout(self):
+        interp = IntentInterpreter()
+        assert interp.classify_intent("The request is hitting a timeout after 30s") == "troubleshooting"
+
+    def test_exit_code(self):
+        interp = IntentInterpreter()
+        assert interp.classify_intent("Process exited with exit code 137") == "troubleshooting"
+
+    def test_exception(self):
+        interp = IntentInterpreter()
+        assert interp.classify_intent("Getting a ValueError exception in the parser") == "troubleshooting"
+
+    def test_debug(self):
+        interp = IntentInterpreter()
+        assert interp.classify_intent("How do I debug this issue?") == "troubleshooting"
+
+    def test_diagnose(self):
+        interp = IntentInterpreter()
+        assert interp.classify_intent("Help me diagnose why the service is slow") == "troubleshooting"
+
+    def test_connection_refused(self):
+        interp = IntentInterpreter()
+        assert interp.classify_intent("Getting connection refused on port 5432") == "troubleshooting"
+
+
+class TestConfirmationIntent:
+    """Tests for the new confirmation intent category."""
+
+    def test_ok(self):
+        interp = IntentInterpreter()
+        assert interp.classify_intent("ok") == "confirmation"
+
+    def test_yes(self):
+        interp = IntentInterpreter()
+        assert interp.classify_intent("yes") == "confirmation"
+
+    def test_sounds_good(self):
+        interp = IntentInterpreter()
+        assert interp.classify_intent("sounds good") == "confirmation"
+
+    def test_go_ahead(self):
+        interp = IntentInterpreter()
+        assert interp.classify_intent("go ahead") == "confirmation"
+
+    def test_got_it(self):
+        interp = IntentInterpreter()
+        assert interp.classify_intent("got it") == "confirmation"
+
+    def test_makes_sense(self):
+        interp = IntentInterpreter()
+        assert interp.classify_intent("makes sense") == "confirmation"
+
+    def test_proceed(self):
+        interp = IntentInterpreter()
+        assert interp.classify_intent("proceed") == "confirmation"
+
+    def test_yep_with_exclamation(self):
+        interp = IntentInterpreter()
+        assert interp.classify_intent("yep!") == "confirmation"
+
+    def test_long_text_not_confirmation(self):
+        """Confirmation should only match short affirmative responses."""
+        interp = IntentInterpreter()
+        result = interp.classify_intent("ok so I was thinking we should also add logging")
+        assert result != "confirmation"
+
+
+class TestTroubleshootingGuidelines:
+    """Test that troubleshooting intent produces appropriate guidelines."""
+
+    def test_troubleshoot_guidelines(self):
+        layer = BehaviorLayer()
+        ctx = _base_ctx(intent="troubleshooting")
+        guidelines = layer.get_response_guidelines(ctx)
+        assert "diagnostic" in guidelines.lower() or "cause" in guidelines.lower()
+
+    def test_confirmation_guidelines(self):
+        layer = BehaviorLayer()
+        ctx = _base_ctx(intent="confirmation")
+        guidelines = layer.get_response_guidelines(ctx)
+        assert "proceed" in guidelines.lower() or "next action" in guidelines.lower()
+
+    def test_clarification_guidelines(self):
+        layer = BehaviorLayer()
+        ctx = _base_ctx(intent="clarification")
+        guidelines = layer.get_response_guidelines(ctx)
+        assert "explain" in guidelines.lower() or "detail" in guidelines.lower()
+
+    def test_command_guidelines(self):
+        layer = BehaviorLayer()
+        ctx = _base_ctx(intent="command")
+        guidelines = layer.get_response_guidelines(ctx)
+        assert "execute" in guidelines.lower() or "action" in guidelines.lower()
