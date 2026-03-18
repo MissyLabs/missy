@@ -361,7 +361,7 @@ Full docs site: **https://missylabs.github.io/** — 60+ pages covering getting 
 
 ## Test Layout
 
-Tests under `tests/` with subdirectories: `agent/`, `channels/`, `cli/`, `config/`, `core/`, `integration/`, `memory/`, `observability/`, `plugins/`, `policy/`, `providers/`, `scheduler/`, `security/`, `skills/`, `tools/`, `unit/`. 70+ test files, 1300+ tests, coverage threshold 85% (configured in `pyproject.toml`).
+Tests under `tests/` with subdirectories: `agent/`, `channels/`, `cli/`, `config/`, `core/`, `gateway/`, `integration/`, `mcp/`, `memory/`, `observability/`, `plugins/`, `policy/`, `providers/`, `scheduler/`, `security/`, `skills/`, `tools/`, `unit/`. 340+ test files, 11,900+ tests, coverage threshold 85% (configured in `pyproject.toml`).
 
 ## Companion Project: missy-edge
 
