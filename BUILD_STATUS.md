@@ -9,8 +9,8 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 
 ## Test Results
 
-- **Total tests: 7830**
-- **Passed: 7830**
+- **Total tests: 7856**
+- **Passed: 7856**
 - **Failed: 0**
 - **Skipped: 17**
 - **Duration: ~163s**
@@ -81,7 +81,7 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 
 - 157 Python source files
 - 262+ test files
-- 7830 tests total
+- 7856 tests total
 
 ## Session History
 
@@ -144,7 +144,8 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 8. Added 10 concurrent memory store tests: thread-safe writes, read/write interleaving, search during writes, SQLite concurrent access, high-volume stress
 9. Added 15 core exception/bus_topics tests + 22 voice utils tests
 10. Fixed 2 lint issues (unused variable, unused import)
-11. Total: 7830 tests passing, 0 failures
+11. Added 26 ToolRegistry hardening tests (execution paths, permission checks, audit events)
+12. Total: 7856 tests passing, 0 failures
 
 ## Remaining Work (Future Hardening)
 - [x] Persona change audit trail (JSONL log of all edits) — done in session 2
