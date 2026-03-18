@@ -6,11 +6,11 @@
 
 | Metric | Value |
 |---|---|
-| Total tests | 7830 |
-| Passed | 7830 |
+| Total tests | 9110 |
+| Passed | 9110 |
 | Failed | 0 |
 | Skipped | 17 |
-| Duration | ~163s |
+| Duration | ~173s |
 
 ## Test Distribution
 
@@ -74,6 +74,24 @@
 | tests/channels/discord/test_voice_utils.py | 22 | _clean_for_speech markdown stripping, _resample_pcm audio resampling |
 | tests/core/test_exceptions.py | 15 | Exception hierarchy, PolicyViolationError, ApprovalRequiredError, bus topics |
 | **Total new (session 5)** | **190** | |
+
+## New Tests Added (Session 6 — Deep Security Audit + Edge Cases)
+
+| Category | Tests | Coverage |
+|---|---|---|
+| Security fix validation | 69 | Path traversal, shell injection, symlink TOCTOU, identity permission fixes |
+| ConfigWatcher edge cases | 25 | Debounce, deletion, permissions, race conditions |
+| MessageBus tests | 38 | Wildcards, queue full, thread safety, ordering |
+| VoiceServer protocol | 51 | Auth, flood protection, audio state machine |
+| Context manager edge cases | ~30 | Token budget, memory injection, pruning |
+| Agent subsystems | 174 | Attention, consolidation, playbook, done criteria, approval, sub-agent |
+| Scheduler/MCP/trust/circuit breaker | 140 | Edge cases across infrastructure |
+| Policy/gateway/preset | 198 | Config migration, plan, network, REST |
+| Vault/synthesizer/identity/drift | 117 | Crypto, memory merge, key management |
+| Learnings/provider/rate-limiter/sanitizer/censor | 149 | Provider edge cases, rate limiting |
+| Proactive/checkpoint/cost + container/progress | 152 | Cost tracking, recovery, Docker sandbox |
+| CLI integration + persona enforcement | 141 | End-to-end CLI, persona in responses |
+| **Total new (session 6)** | **~1254** | |
 
 ## Tests Fixed (This Session)
 

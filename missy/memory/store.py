@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -112,6 +113,7 @@ class MemoryStore:
     def __init__(self, store_path: str = "~/.missy/memory.json") -> None:
         self.store_path = Path(store_path).expanduser()
         self._turns: list[ConversationTurn] = []
+        self._lock = threading.Lock()
         self._load()
 
     # ------------------------------------------------------------------
@@ -142,8 +144,9 @@ class MemoryStore:
             content=content,
             provider=provider,
         )
-        self._turns.append(turn)
-        self._save()
+        with self._lock:
+            self._turns.append(turn)
+            self._save()
         return turn
 
     def clear_session(self, session_id: str) -> None:
@@ -152,11 +155,12 @@ class MemoryStore:
         Args:
             session_id: The session whose turns should be deleted.
         """
-        original_count = len(self._turns)
-        self._turns = [t for t in self._turns if t.session_id != session_id]
-        removed = original_count - len(self._turns)
-        if removed:
-            self._save()
+        with self._lock:
+            original_count = len(self._turns)
+            self._turns = [t for t in self._turns if t.session_id != session_id]
+            removed = original_count - len(self._turns)
+            if removed:
+                self._save()
         logger.debug("Cleared %d turn(s) for session %r.", removed, session_id)
 
     def compact_session(self, session_id: str, keep_recent: int = 10) -> int:
@@ -198,18 +202,19 @@ class MemoryStore:
         )
 
         # Rebuild the global turn list: drop removed turns, prepend summary
-        remaining = [
-            t for t in self._turns if not (t.session_id == session_id and t.id in to_remove_ids)
-        ]
-        # Insert the summary turn before all other turns for this session so
-        # it appears first in chronological order.
-        insert_pos = next(
-            (i for i, t in enumerate(remaining) if t.session_id == session_id),
-            0,
-        )
-        remaining.insert(insert_pos, summary_turn)
-        self._turns = remaining
-        self._save()
+        with self._lock:
+            remaining = [
+                t for t in self._turns if not (t.session_id == session_id and t.id in to_remove_ids)
+            ]
+            # Insert the summary turn before all other turns for this session so
+            # it appears first in chronological order.
+            insert_pos = next(
+                (i for i, t in enumerate(remaining) if t.session_id == session_id),
+                0,
+            )
+            remaining.insert(insert_pos, summary_turn)
+            self._turns = remaining
+            self._save()
 
         return removed_count
 

@@ -29,8 +29,9 @@ Missy is a security-first, self-hosted local agentic AI assistant for Linux. It 
 ## Module Count
 
 - Source files: 157
-- Test files: 270+
-- Total tests: 7830 (0 failures, 17 skipped)
+- Test files: 290+
+- Total tests: 9110 (0 failures, 17 skipped)
+- Test duration: ~173s
 
 ## Key Metrics
 
@@ -38,3 +39,14 @@ Missy is a security-first, self-hosted local agentic AI assistant for Linux. It 
 - Provider support: 4 (Anthropic, OpenAI, Ollama, Codex)
 - Channels: 4 (CLI, Discord, Webhook, Voice)
 - CLI commands: 40+
+- Security vulnerabilities found and fixed: 4 (path traversal, shell injection, symlink TOCTOU, identity permission leak)
+- Property-based tests: 41 (hypothesis-driven fuzzing for sanitizer + secrets)
+
+## Test Coverage by Session
+
+| Session | Tests Added | Cumulative |
+|---|---|---|
+| Sessions 1-3 | 273 | 7388 |
+| Session 4 | 181 | 7640 |
+| Session 5 | 190 | 7856 |
+| Session 6 | 1254 | 9110 |

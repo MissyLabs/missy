@@ -860,3 +860,443 @@ class TestContextCarryover:
         assert "Consistent" in block, (
             f"Expected persona name in block. Got:\n{block}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Test 11: Custom personality_traits appear in system prompt
+# ---------------------------------------------------------------------------
+
+
+class TestPersonalityTraitsInSystemPrompt:
+    """PersonaConfig.personality_traits must propagate through BehaviorLayer into the shaped prompt."""
+
+    def test_custom_personality_traits_in_persona_block(self) -> None:
+        """personality_traits are rendered inside the ## Persona block."""
+        persona = PersonaConfig(
+            name="Trait-Bot",
+            personality_traits=["methodical", "empathetic", "detail-oriented"],
+        )
+        layer = BehaviorLayer(persona=persona)
+        block = layer._build_persona_block()
+
+        assert "methodical" in block, f"Expected 'methodical' in persona block:\n{block}"
+        assert "empathetic" in block, f"Expected 'empathetic' in persona block:\n{block}"
+        assert "detail-oriented" in block, f"Expected 'detail-oriented' in persona block:\n{block}"
+        assert "Personality traits:" in block or "traits" in block.lower(), (
+            f"Expected 'Personality traits' label in block:\n{block}"
+        )
+
+    def test_personality_traits_surfaced_in_shaped_system_prompt(self, tmp_path: Path) -> None:
+        """personality_traits appear in the system prompt delivered to the provider."""
+        trait = "never-skips-verification-steps"
+        persona = PersonaConfig(
+            name="Verifier",
+            personality_traits=[trait],
+        )
+        runtime = _make_runtime_with_persona(persona, tmp_path=tmp_path)
+        provider = _make_mock_provider()
+
+        _run_with_mocks(runtime, "Help me deploy this", provider)
+
+        system_prompt = _capture_system_prompt(provider)
+        assert trait in system_prompt, (
+            f"Expected trait {trait!r} in system prompt. Got:\n{system_prompt}"
+        )
+
+    def test_get_system_prompt_prefix_includes_personality_traits(self, tmp_path: Path) -> None:
+        """PersonaManager.get_system_prompt_prefix renders personality_traits under # Personality."""
+        pm = PersonaManager(persona_path=tmp_path / "persona.yaml")
+        pm.update(personality_traits=["inquisitive", "security-conscious"])
+        prefix = pm.get_system_prompt_prefix()
+
+        assert "# Personality" in prefix, f"Expected '# Personality' header. Got:\n{prefix}"
+        assert "inquisitive" in prefix, f"Expected 'inquisitive' trait. Got:\n{prefix}"
+        assert "security-conscious" in prefix, f"Expected 'security-conscious' trait. Got:\n{prefix}"
+
+    def test_empty_personality_traits_omits_personality_section(self, tmp_path: Path) -> None:
+        """An empty personality_traits list produces no # Personality section in the prefix."""
+        pm = PersonaManager(persona_path=tmp_path / "persona.yaml")
+        pm.update(personality_traits=[])
+        prefix = pm.get_system_prompt_prefix()
+
+        assert "# Personality" not in prefix, (
+            f"Expected no '# Personality' section when traits=[]. Got:\n{prefix}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Test 12: Graceful handling of empty persona fields
+# ---------------------------------------------------------------------------
+
+
+class TestPersonaWithEmptyFields:
+    """PersonaConfig with empty strings and empty lists must not raise errors anywhere in the pipeline."""
+
+    def test_empty_persona_fields_do_not_raise_in_behavior_layer(self) -> None:
+        """BehaviorLayer with all-empty persona fields completes without exceptions."""
+        persona = PersonaConfig(
+            name="",
+            tone=[],
+            personality_traits=[],
+            behavioral_tendencies=[],
+            response_style_rules=[],
+            boundaries=[],
+            identity_description="",
+        )
+        layer = BehaviorLayer(persona=persona)
+        ctx = {
+            "user_tone": "casual",
+            "topic": "",
+            "turn_count": 1,
+            "has_tool_results": False,
+            "intent": "question",
+            "urgency": "low",
+        }
+        shaped = layer.shape_system_prompt("Base prompt.", ctx)
+        assert "Base prompt." in shaped
+
+    def test_empty_persona_block_with_all_empty_fields(self) -> None:
+        """BehaviorLayer._build_persona_block returns a minimal ## Persona when all fields are empty."""
+        persona = PersonaConfig(
+            name="",
+            tone=[],
+            personality_traits=[],
+            behavioral_tendencies=[],
+            response_style_rules=[],
+            boundaries=[],
+            identity_description="",
+        )
+        layer = BehaviorLayer(persona=persona)
+        block = layer._build_persona_block()
+        # Must not raise and must return a string; content may be minimal
+        assert isinstance(block, str)
+
+    def test_empty_persona_get_system_prompt_prefix_is_valid_string(self, tmp_path: Path) -> None:
+        """PersonaManager.get_system_prompt_prefix returns a string even when all list fields are empty."""
+        pm = PersonaManager(persona_path=tmp_path / "persona.yaml")
+        pm.update(
+            tone=[],
+            personality_traits=[],
+            behavioral_tendencies=[],
+            response_style_rules=[],
+            boundaries=[],
+            identity_description="",
+        )
+        prefix = pm.get_system_prompt_prefix()
+        assert isinstance(prefix, str)
+        # With no tone, personality, tendencies, rules, or boundaries, only the (empty) # Identity section remains
+        assert "# Identity" in prefix
+
+    def test_response_shaper_with_empty_persona_fields_does_not_raise(self) -> None:
+        """ResponseShaper handles a persona with all-empty fields without raising."""
+        persona = PersonaConfig(
+            name="",
+            tone=[],
+            personality_traits=[],
+            behavioral_tendencies=[],
+            response_style_rules=[],
+            boundaries=[],
+            identity_description="",
+        )
+        shaper = ResponseShaper()
+        result = shaper.shape_response(
+            "As an AI, here is the answer.", persona=persona, context={}
+        )
+        assert isinstance(result, str)
+        assert "As an AI" not in result
+
+    def test_runtime_with_empty_persona_does_not_crash(self, tmp_path: Path) -> None:
+        """AgentRuntime injected with an all-empty persona still runs successfully."""
+        persona = PersonaConfig(
+            name="",
+            tone=[],
+            personality_traits=[],
+            behavioral_tendencies=[],
+            response_style_rules=[],
+            boundaries=[],
+            identity_description="",
+        )
+        runtime = _make_runtime_with_persona(persona, tmp_path=tmp_path)
+        provider = _make_mock_provider("Empty persona response.")
+        result = _run_with_mocks(runtime, "Say something", provider)
+        assert isinstance(result, str)
+        assert len(result) > 0
+
+
+# ---------------------------------------------------------------------------
+# Test 13: Persona reset restores factory defaults
+# ---------------------------------------------------------------------------
+
+
+class TestPersonaResetRestoresDefaults:
+    """After edit + reset, the persona returned by PersonaManager matches factory defaults."""
+
+    def test_reset_after_deep_edit_restores_all_defaults(self, tmp_path: Path) -> None:
+        """Every editable field is reset to its default after calling pm.reset()."""
+        pm = PersonaManager(persona_path=tmp_path / "persona.yaml")
+        pm.update(
+            name="CustomName",
+            tone=["aggressive", "terse"],
+            personality_traits=["reckless"],
+            behavioral_tendencies=["ignores warnings"],
+            response_style_rules=["Never explain yourself"],
+            boundaries=[],
+            identity_description="A rogue agent.",
+        )
+        pm.save()
+
+        # Verify the edits stuck
+        saved = pm.get_persona()
+        assert saved.name == "CustomName"
+        assert saved.tone == ["aggressive", "terse"]
+
+        # Reset
+        pm.reset()
+        restored = pm.get_persona()
+
+        assert restored.name == "Missy", f"Expected default name. Got: {restored.name!r}"
+        assert "helpful" in restored.tone or len(restored.tone) > 0, (
+            f"Expected default tone list. Got: {restored.tone!r}"
+        )
+        assert len(restored.personality_traits) > 0
+        assert len(restored.behavioral_tendencies) > 0
+        assert len(restored.response_style_rules) > 0
+        assert len(restored.boundaries) > 0
+        assert "Missy" in restored.identity_description
+
+    def test_reset_persona_produces_same_system_prompt_prefix_as_fresh_manager(
+        self, tmp_path: Path
+    ) -> None:
+        """After reset, get_system_prompt_prefix() matches what a brand-new PersonaManager produces."""
+        pm_fresh = PersonaManager(persona_path=tmp_path / "fresh.yaml")
+        fresh_prefix = pm_fresh.get_system_prompt_prefix()
+
+        pm_edited = PersonaManager(persona_path=tmp_path / "edited.yaml")
+        pm_edited.update(name="Temp", tone=["weird"])
+        pm_edited.save()
+        pm_edited.reset()
+        reset_prefix = pm_edited.get_system_prompt_prefix()
+
+        # Both should contain the same default identity text
+        assert "Missy" in reset_prefix, f"Expected 'Missy' after reset. Got:\n{reset_prefix}"
+        # The core content should be the same class of information
+        assert "# Identity" in reset_prefix
+        assert "# Tone" in reset_prefix
+        assert "# Boundaries" in reset_prefix
+
+    def test_reset_persona_file_persisted_correctly(self, tmp_path: Path) -> None:
+        """After reset + reload, the new PersonaManager instance reads the factory defaults."""
+        persona_path = tmp_path / "persona.yaml"
+        pm = PersonaManager(persona_path=persona_path)
+        pm.update(name="Ephemeral", tone=["cold"])
+        pm.save()
+        pm.reset()
+
+        # Re-load from disk
+        pm2 = PersonaManager(persona_path=persona_path)
+        p2 = pm2.get_persona()
+
+        assert p2.name == "Missy", f"Expected 'Missy' after reload. Got: {p2.name!r}"
+        assert "helpful" in p2.tone or len(p2.tone) > 0, (
+            f"Expected non-empty default tone. Got: {p2.tone!r}"
+        )
+
+    def test_behavior_layer_after_reset_uses_defaults(self, tmp_path: Path) -> None:
+        """A BehaviorLayer built from a reset persona matches one built from a fresh default."""
+        pm = PersonaManager(persona_path=tmp_path / "persona.yaml")
+        pm.update(name="OverriddenBot")
+        pm.reset()
+        persona = pm.get_persona()
+
+        layer = BehaviorLayer(persona=persona)
+        ctx = {
+            "user_tone": "casual",
+            "topic": "",
+            "turn_count": 1,
+            "has_tool_results": False,
+            "intent": "question",
+            "urgency": "low",
+        }
+        shaped = layer.shape_system_prompt("Base.", ctx)
+        # Default persona name should appear
+        assert "Missy" in shaped, f"Expected 'Missy' after reset. Got:\n{shaped}"
+        # Should NOT contain the overridden name
+        assert "OverriddenBot" not in shaped
+
+
+# ---------------------------------------------------------------------------
+# Test 14: Full pipeline — persona -> behavior -> system prompt -> response
+# ---------------------------------------------------------------------------
+
+
+class TestFullPersonaPipelineEndToEnd:
+    """End-to-end pipeline: load a custom persona, run a query, verify the shaped system
+    prompt and cleaned response both reflect the persona configuration."""
+
+    def test_full_pipeline_persona_to_response(self, tmp_path: Path) -> None:
+        """Pipeline: custom persona file -> PersonaManager -> BehaviorLayer ->
+        AgentRuntime system prompt -> provider call -> ResponseShaper -> final output."""
+        # 1. Build and save a custom persona
+        persona_path = tmp_path / "persona.yaml"
+        pm = PersonaManager(persona_path=persona_path)
+        pm.update(
+            name="Nexus",
+            identity_description="Nexus is a precision-focused systems engineer.",
+            tone=["technical", "concise"],
+            personality_traits=["methodical", "no-nonsense"],
+            boundaries=["Never guess when real data is available"],
+        )
+        pm.save()
+
+        # 2. Load the persona back from disk and wire the runtime
+        pm2 = PersonaManager(persona_path=persona_path)
+        loaded_persona = pm2.get_persona()
+
+        runtime = _make_runtime_with_persona(
+            loaded_persona,
+            system_prompt="You are a systems assistant.",
+            tmp_path=tmp_path,
+        )
+        # The provider returns a robotic response that shaping should clean up
+        robotic_text = (
+            "Certainly! As an AI assistant, I'd be happy to help you with that system issue. "
+            "The kernel parameter to tune is vm.swappiness."
+        )
+        provider = _make_mock_provider(robotic_text)
+
+        # 3. Run
+        result = _run_with_mocks(runtime, "How do I reduce swap usage?", provider)
+
+        # 4. Verify the system prompt that reached the provider contains persona data
+        system_prompt = _capture_system_prompt(provider)
+        assert "Nexus" in system_prompt, (
+            f"Expected persona name 'Nexus' in system prompt:\n{system_prompt}"
+        )
+        assert "Never guess when real data is available" in system_prompt, (
+            f"Expected custom boundary in system prompt:\n{system_prompt}"
+        )
+
+        # 5. Verify the response was shaped (robotic phrases stripped)
+        assert "Certainly!" not in result, f"Expected 'Certainly!' stripped. Got: {result!r}"
+        assert "As an AI assistant" not in result, (
+            f"Expected 'As an AI assistant' stripped. Got: {result!r}"
+        )
+        # The substantive content must survive shaping
+        assert "vm.swappiness" in result, f"Expected technical content preserved. Got: {result!r}"
+
+    def test_full_pipeline_intent_routing_to_guidelines(self, tmp_path: Path) -> None:
+        """Pipeline: troubleshooting user input -> IntentInterpreter -> BehaviorLayer guidelines
+        -> system prompt injected -> provider sees structured diagnosis directive."""
+        persona_path = tmp_path / "persona.yaml"
+        pm = PersonaManager(persona_path=persona_path)
+        pm.update(name="Debugger", identity_description="Debugger specialises in root-cause analysis.")
+        pm.save()
+
+        pm2 = PersonaManager(persona_path=persona_path)
+        loaded_persona = pm2.get_persona()
+
+        runtime = _make_runtime_with_persona(loaded_persona, tmp_path=tmp_path)
+        provider = _make_mock_provider("Check dmesg for kernel errors and review /var/log/syslog.")
+
+        _run_with_mocks(
+            runtime,
+            "I'm getting a connection refused error and a timeout in my service logs",
+            provider,
+        )
+
+        system_prompt = _capture_system_prompt(provider)
+        # Troubleshooting directive: "likely cause → diagnostic steps → fix"
+        assert (
+            "likely cause" in system_prompt
+            or "diagnostic" in system_prompt
+            or "fix" in system_prompt
+        ), f"Troubleshooting directive missing from system prompt:\n{system_prompt}"
+
+    def test_full_pipeline_persona_persistence_across_save_load_cycle(
+        self, tmp_path: Path
+    ) -> None:
+        """A persona saved and reloaded produces the same shaped system prompt in two independent runtimes."""
+        persona_path = tmp_path / "persona.yaml"
+
+        def _build_and_run(persona: PersonaConfig) -> str:
+            """Wire a runtime with the given persona, run a query, return the system prompt."""
+            rt = _make_runtime_with_persona(persona, system_prompt="Base.", tmp_path=tmp_path)
+            p = _make_mock_provider()
+            _run_with_mocks(rt, "Hello", p)
+            return _capture_system_prompt(p)
+
+        # First run: save persona
+        pm1 = PersonaManager(persona_path=persona_path)
+        pm1.update(
+            name="Persisted",
+            boundaries=["Always verify before deleting"],
+            tone=["cautious"],
+        )
+        pm1.save()
+        first_prompt = _build_and_run(pm1.get_persona())
+
+        # Second run: reload persona from disk
+        pm2 = PersonaManager(persona_path=persona_path)
+        second_prompt = _build_and_run(pm2.get_persona())
+
+        assert "Persisted" in first_prompt
+        assert "Persisted" in second_prompt
+        assert "Always verify before deleting" in first_prompt
+        assert "Always verify before deleting" in second_prompt
+
+    def test_full_pipeline_changing_persona_changes_behavior_output(
+        self, tmp_path: Path
+    ) -> None:
+        """Swapping the persona between runs causes measurably different system prompts."""
+        strict_persona = PersonaConfig(
+            name="Strict",
+            identity_description="Strict always validates input before acting.",
+            tone=["cautious", "precise"],
+            boundaries=["Validate every input before acting"],
+        )
+        relaxed_persona = PersonaConfig(
+            name="Relaxed",
+            identity_description="Relaxed prefers quick answers over thoroughness.",
+            tone=["casual", "brief"],
+            boundaries=[],
+        )
+
+        config = AgentConfig(
+            provider="mock",
+            system_prompt=_BASE_SYSTEM_PROMPT,
+            max_iterations=1,
+        )
+
+        # Run with strict persona
+        runtime = AgentRuntime(config)
+        runtime._behavior = BehaviorLayer(persona=strict_persona)
+        runtime._response_shaper = ResponseShaper()
+        runtime._intent_interpreter = IntentInterpreter()
+        pm_stub_strict = MagicMock()
+        pm_stub_strict.get_persona.return_value = strict_persona
+        runtime._persona_manager = pm_stub_strict
+
+        provider_strict = _make_mock_provider("Strict response.")
+        _run_with_mocks(runtime, "What should I do?", provider_strict)
+        strict_prompt = _capture_system_prompt(provider_strict)
+
+        # Run with relaxed persona
+        runtime._behavior = BehaviorLayer(persona=relaxed_persona)
+        pm_stub_relaxed = MagicMock()
+        pm_stub_relaxed.get_persona.return_value = relaxed_persona
+        runtime._persona_manager = pm_stub_relaxed
+
+        provider_relaxed = _make_mock_provider("Relaxed response.")
+        _run_with_mocks(runtime, "What should I do?", provider_relaxed)
+        relaxed_prompt = _capture_system_prompt(provider_relaxed)
+
+        # The two system prompts must differ in persona-specific content
+        assert "Strict" in strict_prompt, f"Expected 'Strict' in strict prompt:\n{strict_prompt}"
+        assert "Relaxed" in relaxed_prompt, f"Expected 'Relaxed' in relaxed prompt:\n{relaxed_prompt}"
+        assert "Validate every input before acting" in strict_prompt, (
+            f"Expected strict boundary in strict prompt:\n{strict_prompt}"
+        )
+        # Strict persona's boundary should not appear in the relaxed run
+        assert "Validate every input before acting" not in relaxed_prompt, (
+            f"Strict boundary leaked into relaxed prompt:\n{relaxed_prompt}"
+        )
