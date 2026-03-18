@@ -25,6 +25,7 @@ from urllib.parse import urlparse
 
 from missy.config.settings import MissyConfig, ProviderConfig
 
+from .acpx_provider import AcpxProvider
 from .anthropic_provider import AnthropicProvider
 from .base import BaseProvider
 from .codex_provider import CodexProvider
@@ -36,6 +37,7 @@ logger = logging.getLogger(__name__)
 # Maps the canonical provider *name* field in ProviderConfig to the
 # corresponding concrete provider class.
 _PROVIDER_CLASSES: dict[str, type[BaseProvider]] = {
+    "acpx": AcpxProvider,
     "anthropic": AnthropicProvider,
     "openai": OpenAIProvider,
     "openai-codex": CodexProvider,
