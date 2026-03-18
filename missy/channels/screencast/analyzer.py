@@ -218,7 +218,7 @@ class FrameAnalyzer:
     def _save_frame_sync(self, metadata: FrameMetadata, data: bytes) -> None:
         """Write frame bytes to ``{frame_save_dir}/{session_id}/{ts}_{seq}.jpg``."""
         session_dir = os.path.join(self._frame_save_dir, metadata.session_id)
-        os.makedirs(session_dir, exist_ok=True)
+        os.makedirs(session_dir, exist_ok=True, mode=0o700)
 
         ts = time.strftime("%Y%m%d_%H%M%S")
         ext = "png" if metadata.format == "png" else "jpg"

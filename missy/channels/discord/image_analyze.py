@@ -163,7 +163,7 @@ def analyze_discord_attachment(
     # Optionally save for documentation.
     saved_to = None
     if save_path:
-        os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+        os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True, mode=0o700)
         with open(save_path, "wb") as f:
             f.write(image_data)
         saved_to = save_path
@@ -203,7 +203,7 @@ def save_discord_attachment(
 
     filename = attachment.get("filename", "screenshot.png")
     save_dir = os.path.expanduser(save_dir)
-    os.makedirs(save_dir, exist_ok=True)
+    os.makedirs(save_dir, exist_ok=True, mode=0o700)
 
     # Prefix with timestamp to avoid collisions.
     ts = time.strftime("%Y%m%d_%H%M%S")
