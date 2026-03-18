@@ -9,11 +9,11 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 
 ## Test Results
 
-- **Total tests: 11479**
-- **Passed: 11479**
+- **Total tests: 11512**
+- **Passed: 11512**
 - **Failed: 0**
 - **Skipped: 17**
-- **Duration: ~235s**
+- **Duration: ~218s**
 
 ## Completed Components
 
@@ -81,7 +81,7 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 
 - 157 Python source files
 - 320+ test files
-- 11479 tests total
+- 11512 tests total
 
 ## Session History
 
@@ -211,7 +211,9 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
    - Path traversal in self_create_tool.py delete action (tool_name not validated)
    - REST policy fail-open in gateway client (unexpected exceptions allowed requests)
 10. Added 5 fail-closed gateway tests, 2 path traversal tests
-11. Total: 11479 tests passing, 0 failures, 17 skipped
+11. Added 16 hatching/persona CLI integration tests (persona show/edit/reset/backups/diff/rollback/log)
+12. Added 17 persona→behavior→response pipeline integration tests
+13. Total: 11512 tests passing, 0 failures, 17 skipped
 
 ## Remaining Work (Future Hardening)
 - [x] Persona change audit trail (JSONL log of all edits) — done in session 2

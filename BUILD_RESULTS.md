@@ -30,8 +30,8 @@ Missy is a security-first, self-hosted local agentic AI assistant for Linux. It 
 
 - Source files: 157
 - Test files: 310+
-- Total tests: 11479 (11479 passed, 0 failures, 17 skipped)
-- Test duration: ~235s
+- Total tests: 11512 (11512 passed, 0 failures, 17 skipped)
+- Test duration: ~218s
 
 ## Key Metrics
 
@@ -52,4 +52,4 @@ Missy is a security-first, self-hosted local agentic AI assistant for Linux. It 
 | Session 6 | 1254 | 9110 |
 | Session 7 | 1123 | 10233 |
 | Session 8 | 1015 | 11248 |
-| Session 9 | 231 | 11479 |
+| Session 9 | 264 | 11512 |
