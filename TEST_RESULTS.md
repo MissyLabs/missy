@@ -6,11 +6,11 @@
 
 | Metric | Value |
 |---|---|
-| Total tests | 7793 |
-| Passed | 7793 |
+| Total tests | 7830 |
+| Passed | 7830 |
 | Failed | 0 |
 | Skipped | 17 |
-| Duration | ~162s |
+| Duration | ~163s |
 
 ## Test Distribution
 
@@ -71,7 +71,9 @@
 | tests/channels/voice/test_stt_whisper.py | 11 | Lifecycle, device resolution, transcription, abstract base |
 | tests/channels/voice/test_tts_piper.py | 15 | PCM-to-WAV, env sanitization, lifecycle, model resolution, synthesis |
 | tests/memory/test_memory_concurrent.py | 10 | Thread-safe writes, read/write, search, compaction, SQLite concurrent |
-| **Total new (session 5)** | **153** | |
+| tests/channels/discord/test_voice_utils.py | 22 | _clean_for_speech markdown stripping, _resample_pcm audio resampling |
+| tests/core/test_exceptions.py | 15 | Exception hierarchy, PolicyViolationError, ApprovalRequiredError, bus topics |
+| **Total new (session 5)** | **190** | |
 
 ## Tests Fixed (This Session)
 

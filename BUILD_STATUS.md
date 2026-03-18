@@ -9,11 +9,11 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 
 ## Test Results
 
-- **Total tests: 7793**
-- **Passed: 7793**
+- **Total tests: 7830**
+- **Passed: 7830**
 - **Failed: 0**
 - **Skipped: 17**
-- **Duration: ~162s**
+- **Duration: ~163s**
 
 ## Completed Components
 
@@ -81,7 +81,7 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 
 - 157 Python source files
 - 262+ test files
-- 7793 tests total
+- 7830 tests total
 
 ## Session History
 
@@ -142,7 +142,9 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 6. Added 11 FasterWhisperSTT tests: lifecycle, device resolution, transcription with mocked whisper
 7. Added 15 PiperTTS tests: PCM-to-WAV conversion, env sanitization, lifecycle, model resolution, synthesis subprocess, timeout/error handling
 8. Added 10 concurrent memory store tests: thread-safe writes, read/write interleaving, search during writes, SQLite concurrent access, high-volume stress
-9. Total: 7793 tests passing, 0 failures
+9. Added 15 core exception/bus_topics tests + 22 voice utils tests
+10. Fixed 2 lint issues (unused variable, unused import)
+11. Total: 7830 tests passing, 0 failures
 
 ## Remaining Work (Future Hardening)
 - [x] Persona change audit trail (JSONL log of all edits) — done in session 2
