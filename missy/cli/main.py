@@ -20,6 +20,7 @@ import contextlib
 import json
 import logging
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -251,7 +252,7 @@ def init(ctx: click.Context) -> None:
     missy_dir = Path("~/.missy").expanduser()
 
     try:
-        missy_dir.mkdir(parents=True, exist_ok=True)
+        missy_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     except OSError as exc:
         _print_error(f"Cannot create directory {missy_dir}: {exc}")
         sys.exit(1)
@@ -305,7 +306,7 @@ def init(ctx: click.Context) -> None:
     "--provider", "setup_provider", default=None, help="Provider name for non-interactive mode."
 )
 @click.option("--api-key", "setup_api_key", default=None, help="API key (direct value).")
-@click.option("--api-key-env", default=None, help="Environment variable containing the API key.")
+@click.option("--api-key-env", "setup_api_key_env", default=None, help="Environment variable containing the API key.")
 @click.option("--model", "setup_model", default=None, help="Model identifier.")
 @click.option("--workspace", "setup_workspace", default=None, help="Workspace directory path.")
 @click.option("--no-prompt", is_flag=True, default=False, help="Non-interactive mode (no prompts).")
@@ -400,6 +401,17 @@ def ask(
     from missy.core.exceptions import ProviderError
     from missy.security.sanitizer import sanitizer
     from missy.security.secrets import secrets_detector
+
+    # Check hatching status (non-blocking hint)
+    try:
+        from missy.agent.hatching import HatchingManager
+
+        if HatchingManager().needs_hatching():
+            console.print(
+                "[dim]Tip: Run [bold]missy hatch[/bold] to complete initial setup.[/dim]\n"
+            )
+    except Exception:  # noqa: BLE001
+        logger.debug("Hatching check skipped", exc_info=True)
 
     cfg = _load_subsystems(ctx.obj["config_path"])
 
@@ -496,6 +508,17 @@ def run(ctx: click.Context, provider: str | None, session: str, capability_mode:
     from missy.security.secrets import secrets_detector
 
     cfg = _load_subsystems(ctx.obj["config_path"])
+
+    # Check hatching status (non-blocking hint)
+    try:
+        from missy.agent.hatching import HatchingManager
+
+        if HatchingManager().needs_hatching():
+            console.print(
+                "[dim]Tip: Run [bold]missy hatch[/bold] to complete initial setup.[/dim]\n"
+            )
+    except Exception:  # noqa: BLE001
+        logger.debug("Hatching check skipped", exc_info=True)
 
     provider_name = provider or (
         next(iter(cfg.providers), "anthropic") if cfg.providers else "anthropic"
@@ -3060,6 +3083,223 @@ def sandbox_status(ctx: click.Context) -> None:
         table.add_row("network_mode", container_cfg.network_mode)
     else:
         table.add_row("enabled", Text("false (not configured)", style="dim"))
+
+    console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# missy hatch
+# ---------------------------------------------------------------------------
+
+
+@cli.command()
+@click.option("--non-interactive", is_flag=True, default=False, help="Skip prompts, use defaults.")
+@click.pass_context
+def hatch(ctx: click.Context, non_interactive: bool) -> None:
+    """Run the hatching process — first-run bootstrapping for Missy.
+
+    Validates the environment, initialises configuration, verifies providers,
+    sets up security baselines, generates a default persona, and seeds memory.
+    Safe to re-run: skips already-completed steps.
+    """
+    from missy.agent.hatching import HatchingManager, HatchingStatus
+
+    mgr = HatchingManager()
+
+    if mgr.is_hatched():
+        console.print("[green]Missy is already hatched![/] Use [bold]missy hatch --non-interactive[/] to re-verify.")
+        state = mgr.get_state()
+        console.print(f"  Hatched at: [bold]{state.completed_at}[/]")
+        console.print(f"  Steps: {', '.join(state.steps_completed)}")
+        return
+
+    console.print(Panel(
+        "[bold cyan]Hatching Missy[/]\n\n"
+        "This will set up your environment, initialise configuration,\n"
+        "verify providers, create a persona, and seed memory.",
+        title="[cyan]Hatching[/]",
+        border_style="cyan",
+    ))
+
+    interactive = not non_interactive
+    state = mgr.run_hatching(interactive=interactive)
+
+    if state.status == HatchingStatus.HATCHED:
+        _print_success(
+            f"Missy has hatched successfully!\n\n"
+            f"  Steps completed: {len(state.steps_completed)}\n"
+            f"  Persona generated: {state.persona_generated}\n"
+            f"  Memory seeded: {state.memory_seeded}\n\n"
+            f"Run [bold cyan]missy persona show[/] to see your persona.\n"
+            f"Run [bold cyan]missy run[/] to start chatting."
+        )
+    elif state.status == HatchingStatus.FAILED:
+        _print_error(
+            f"Hatching failed: {state.error}",
+            hint="Check the hatching log with: missy hatch --non-interactive",
+        )
+        sys.exit(1)
+    else:
+        console.print(f"[yellow]Hatching status: {state.status.value}[/]")
+
+
+# ---------------------------------------------------------------------------
+# missy persona
+# ---------------------------------------------------------------------------
+
+
+@cli.group()
+def persona() -> None:
+    """View and manage Missy's persona — identity, tone, and response style."""
+
+
+@persona.command("show")
+def persona_show() -> None:
+    """Display the current persona configuration."""
+    from missy.agent.persona import PersonaManager
+
+    mgr = PersonaManager()
+    p = mgr.get_persona()
+
+    table = Table(title=f"Persona: {p.name} (v{p.version})", show_lines=True)
+    table.add_column("Field", style="bold")
+    table.add_column("Value")
+
+    table.add_row("Name", p.name)
+    table.add_row("Tone", ", ".join(p.tone))
+    table.add_row("Personality", ", ".join(p.personality_traits))
+    table.add_row("Tendencies", "\n".join(f"- {t}" for t in p.behavioral_tendencies))
+    table.add_row("Style Rules", "\n".join(f"- {r}" for r in p.response_style_rules))
+    table.add_row("Boundaries", "\n".join(f"- {b}" for b in p.boundaries))
+    table.add_row("Identity", p.identity_description)
+
+    console.print(table)
+
+
+@persona.command("edit")
+@click.option("--name", default=None, help="Set persona name.")
+@click.option("--tone", default=None, help="Comma-separated tone values.")
+@click.option("--identity", default=None, help="Identity description text.")
+def persona_edit(name: str | None, tone: str | None, identity: str | None) -> None:
+    """Edit persona fields.
+
+    \b
+    Examples:
+        missy persona edit --name "Missy"
+        missy persona edit --tone "friendly,casual,technical"
+        missy persona edit --identity "A helpful Linux assistant"
+    """
+    from missy.agent.persona import PersonaManager
+
+    mgr = PersonaManager()
+    updates: dict[str, Any] = {}
+
+    if name is not None:
+        updates["name"] = name
+    if tone is not None:
+        updates["tone"] = [t.strip() for t in tone.split(",") if t.strip()]
+    if identity is not None:
+        updates["identity_description"] = identity
+
+    if not updates:
+        console.print("[yellow]No changes specified. Use --name, --tone, or --identity.[/]")
+        return
+
+    mgr.update(**updates)
+    mgr.save()
+    console.print(f"[green]Persona updated (v{mgr.version}).[/]")
+    for key, val in updates.items():
+        console.print(f"  {key}: {val}")
+
+
+@persona.command("reset")
+def persona_reset() -> None:
+    """Reset the persona to factory defaults."""
+    from missy.agent.persona import PersonaManager
+
+    mgr = PersonaManager()
+    mgr.reset()
+    console.print(f"[green]Persona reset to defaults (v{mgr.version}).[/]")
+
+
+@persona.command("backups")
+def persona_backups() -> None:
+    """List available persona backups."""
+    from missy.agent.persona import PersonaManager
+
+    mgr = PersonaManager()
+    backups = mgr.list_backups()
+    if not backups:
+        console.print("[yellow]No persona backups found.[/]")
+        return
+
+    table = Table(title="Persona Backups")
+    table.add_column("#", style="dim")
+    table.add_column("File")
+    table.add_column("Size")
+    table.add_column("Modified")
+
+    for idx, bk in enumerate(backups, 1):
+        stat = bk.stat()
+        mod_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime))
+        table.add_row(str(idx), bk.name, f"{stat.st_size} B", mod_time)
+
+    console.print(table)
+
+
+@persona.command("diff")
+def persona_diff() -> None:
+    """Show diff between current persona and latest backup."""
+    from missy.agent.persona import PersonaManager
+
+    mgr = PersonaManager()
+    diff_text = mgr.diff()
+    if not diff_text:
+        console.print("[dim]No differences (or no backups to compare against).[/]")
+        return
+    console.print(diff_text)
+
+
+@persona.command("rollback")
+def persona_rollback() -> None:
+    """Restore persona from the latest backup."""
+    from missy.agent.persona import PersonaManager
+
+    mgr = PersonaManager()
+    restored = mgr.rollback()
+    if restored is None:
+        console.print("[yellow]No backups available to rollback to.[/]")
+        return
+    console.print(f"[green]Persona restored from {restored.name} (v{mgr.version}).[/]")
+
+
+@persona.command("log")
+@click.option("--limit", "-n", default=20, help="Number of recent entries to show.")
+def persona_log(limit: int) -> None:
+    """Show persona change audit log."""
+    from missy.agent.persona import PersonaManager
+
+    mgr = PersonaManager()
+    entries = mgr.get_audit_log()
+    if not entries:
+        console.print("[dim]No persona audit log entries.[/]")
+        return
+
+    recent = entries[-limit:]
+    table = Table(title="Persona Audit Log")
+    table.add_column("Time", style="dim")
+    table.add_column("Action")
+    table.add_column("Version")
+    table.add_column("Name")
+
+    for entry in recent:
+        ts = entry.get("timestamp", "?")[:19]
+        table.add_row(
+            ts,
+            entry.get("action", "?"),
+            str(entry.get("version", "?")),
+            entry.get("name", "?"),
+        )
 
     console.print(table)
 

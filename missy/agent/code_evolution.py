@@ -207,7 +207,7 @@ class CodeEvolutionManager:
             return []
 
     def _save(self) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self._path.write_text(
             json.dumps([_serialize_proposal(p) for p in self._proposals], indent=2)
         )
@@ -517,14 +517,16 @@ class CodeEvolutionManager:
                 "XDG_RUNTIME_DIR", "TMPDIR", "PWD", "DISPLAY",
             })
             safe_env = {k: os.environ[k] for k in _SAFE_ENV_VARS if k in os.environ}
+            # Use shlex.split to avoid shell=True injection risks.
+            import shlex
+            test_argv = shlex.split(self._test_command)
             test_result = subprocess.run(
-                self._test_command,
-                shell=True,
+                test_argv,
+                shell=False,
                 cwd=str(self._repo_root),
                 capture_output=True,
                 text=True,
                 timeout=300,
-                executable="/bin/bash",
                 env=safe_env,
             )
             test_output = test_result.stdout + test_result.stderr

@@ -271,7 +271,7 @@ def load_token() -> dict | None:
         return None
     try:
         return json.loads(TOKEN_FILE.read_text(encoding="utf-8"))
-    except Exception:
+    except (json.JSONDecodeError, OSError):
         return None
 
 

@@ -7,7 +7,12 @@ import tempfile
 
 import pytest
 
-from missy.memory.sqlite_store import LargeContentRecord, SQLiteMemoryStore
+from missy.memory.sqlite_store import (
+    ConversationTurn,
+    LargeContentRecord,
+    SQLiteMemoryStore,
+    SummaryRecord,
+)
 
 
 @pytest.fixture
@@ -73,8 +78,6 @@ class TestSummaryStore:
     """Test summary CRUD alongside large content (Feature 2A)."""
 
     def test_add_and_get_summary(self, memory_store):
-        from missy.memory.sqlite_store import SummaryRecord
-
         s = SummaryRecord.new("sess1", depth=0, content="Test summary")
         memory_store.add_summary(s)
         got = memory_store.get_summary_by_id(s.id)
@@ -83,8 +86,6 @@ class TestSummaryStore:
         assert got.depth == 0
 
     def test_get_uncompacted(self, memory_store):
-        from missy.memory.sqlite_store import SummaryRecord
-
         s1 = SummaryRecord.new("sess1", depth=0, content="A")
         s2 = SummaryRecord.new("sess1", depth=0, content="B")
         memory_store.add_summary(s1)
@@ -94,8 +95,6 @@ class TestSummaryStore:
         assert len(unc) == 2
 
     def test_mark_compacted(self, memory_store):
-        from missy.memory.sqlite_store import SummaryRecord
-
         s1 = SummaryRecord.new("sess1", depth=0, content="A")
         s2 = SummaryRecord.new("sess1", depth=0, content="B")
         memory_store.add_summary(s1)
@@ -109,8 +108,6 @@ class TestSummaryStore:
         assert len(unc) == 0
 
     def test_get_child_summaries(self, memory_store):
-        from missy.memory.sqlite_store import SummaryRecord
-
         child = SummaryRecord.new("sess1", depth=0, content="child")
         parent = SummaryRecord.new("sess1", depth=1, content="parent")
         memory_store.add_summary(child)
@@ -122,8 +119,6 @@ class TestSummaryStore:
         assert children[0].id == child.id
 
     def test_search_summaries(self, memory_store):
-        from missy.memory.sqlite_store import SummaryRecord
-
         s = SummaryRecord.new("sess1", depth=0, content="kubernetes deployment failed")
         memory_store.add_summary(s)
 
@@ -132,11 +127,6 @@ class TestSummaryStore:
         assert results[0].id == s.id
 
     def test_get_session_token_count(self, memory_store):
-        from missy.memory.sqlite_store import SummaryRecord
-
-        turn = LargeContentRecord.new("sess1", "tool", "x" * 400)
-        # Use add_turn with a ConversationTurn instead
-        from missy.memory.sqlite_store import ConversationTurn
         t = ConversationTurn.new("sess1", "user", "x" * 400)
         memory_store.add_turn(t)
 
@@ -147,8 +137,6 @@ class TestSummaryStore:
         assert count > 0
 
     def test_summary_record_serialization(self):
-        from missy.memory.sqlite_store import SummaryRecord
-
         s = SummaryRecord.new(
             "sess1", depth=1, content="test",
             source_turn_ids=["t1", "t2"],

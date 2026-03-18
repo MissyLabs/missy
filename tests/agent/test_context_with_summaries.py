@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import pytest
-
 from missy.agent.context import ContextManager, TokenBudget, _format_summary
 
 

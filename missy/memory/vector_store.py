@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from collections import Counter
 from pathlib import Path
@@ -182,10 +183,11 @@ class VectorMemoryStore:
             logger.debug("faiss not available — save() is a no-op")
             return
 
-        Path(self.index_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(self.index_path).parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         faiss.write_index(self._index, self.index_path)
 
-        with open(self._metadata_path, "w", encoding="utf-8") as f:
+        fd = os.open(self._metadata_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(self._entries, f)
 
         logger.info("Vector index saved: %d entries", len(self._entries))

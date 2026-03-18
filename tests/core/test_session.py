@@ -171,3 +171,86 @@ class TestSessionManager:
         manager = SessionManager()
         session = manager.create_session()
         assert isinstance(session.id, UUID)
+
+
+# ---------------------------------------------------------------------------
+# SessionManager.create_session_with_id
+# ---------------------------------------------------------------------------
+
+
+class TestCreateSessionWithId:
+    def test_returns_session_instance(self):
+        manager = SessionManager()
+        session = manager.create_session_with_id("user-42")
+        assert isinstance(session, Session)
+
+    def test_same_stable_id_produces_same_uuid(self):
+        manager = SessionManager()
+        s1 = manager.create_session_with_id("channel-99")
+        s2 = manager.create_session_with_id("channel-99")
+        assert s1.id == s2.id
+
+    def test_different_stable_ids_produce_different_uuids(self):
+        manager = SessionManager()
+        s1 = manager.create_session_with_id("user-a")
+        s2 = manager.create_session_with_id("user-b")
+        assert s1.id != s2.id
+
+    def test_session_is_bound_to_current_thread(self):
+        manager = SessionManager()
+        session = manager.create_session_with_id("thread-bound")
+        assert manager.get_current_session() is session
+
+    def test_custom_metadata_is_used_when_provided(self):
+        manager = SessionManager()
+        meta = {"channel": "discord", "guild": "12345"}
+        session = manager.create_session_with_id("discord-user-7", metadata=meta)
+        assert session.metadata == meta
+
+    def test_default_metadata_contains_caller_session_id_when_none_passed(self):
+        manager = SessionManager()
+        stable_id = "my-stable-id"
+        session = manager.create_session_with_id(stable_id)
+        assert session.metadata == {"caller_session_id": stable_id}
+
+    def test_created_at_is_timezone_aware_utc(self):
+        manager = SessionManager()
+        session = manager.create_session_with_id("tz-check")
+        assert session.created_at.tzinfo is not None
+        assert session.created_at.utcoffset().total_seconds() == 0
+
+    def test_uuid_is_version_5(self):
+        manager = SessionManager()
+        session = manager.create_session_with_id("version-check")
+        assert session.id.version == 5
+
+    def test_session_replaces_previously_bound_session(self):
+        manager = SessionManager()
+        manager.create_session_with_id("first")
+        second = manager.create_session_with_id("second")
+        assert manager.get_current_session() is second
+
+    def test_thread_isolation_across_two_threads(self):
+        """Sessions created on different threads do not cross-contaminate."""
+        manager = SessionManager()
+        captured: list[Session | None] = [None, None]
+        errors: list[Exception] = []
+
+        def worker(index: int, stable_id: str) -> None:
+            try:
+                captured[index] = manager.create_session_with_id(stable_id)
+            except Exception as exc:  # pragma: no cover
+                errors.append(exc)
+
+        t0 = threading.Thread(target=worker, args=(0, "stable-0"))
+        t1 = threading.Thread(target=worker, args=(1, "stable-1"))
+        t0.start()
+        t1.start()
+        t0.join()
+        t1.join()
+
+        assert not errors
+        assert captured[0] is not None
+        assert captured[1] is not None
+        # UUIDs differ because stable IDs differ
+        assert captured[0].id != captured[1].id

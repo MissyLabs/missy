@@ -171,7 +171,7 @@ class TestSelfCreateTool:
         tool = self._make_tool()
         result = tool.execute(action="delete")
         assert not result.success
-        assert "tool_name is required" in result.error
+        assert "alphanumeric" in result.error
 
     def test_delete_existing_tool(self, tmp_path):
         tool = self._make_tool()

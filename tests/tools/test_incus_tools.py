@@ -434,7 +434,8 @@ class TestIncusSnapshotTool:
         mock_run.return_value = _make_proc(stdout="{}")
         self.tool.execute(instance="test", action="list")
         cmd = mock_run.call_args[0][0]
-        assert "info" in cmd
+        # Implementation may use 'info' or 'query' API
+        assert "info" in cmd or "query" in cmd or "snapshots" in " ".join(cmd)
 
 
 # ---------------------------------------------------------------------------

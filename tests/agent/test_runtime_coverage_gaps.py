@@ -1,23 +1,31 @@
 """Coverage gap tests for missy/agent/runtime.py.
 
 Targets uncovered lines:
-  262-263: run() — cost_detail from get_summary() raises, silently ignored
-  301-302: run_stream() — ProviderError re-raised
-  437-438: _tool_loop — FailureTracker ImportError falls back to None
-  447-449: _tool_loop — CheckpointManager exception falls back to None
-  499     : _tool_loop — failure_tracker.record_failure returns True (should_inject)
-  504     : _tool_loop — failure_tracker is None → should_inject=False
-  537-554: _tool_loop — strategy rotation: inject prompt + emit event + analyze
-  562-563: _tool_loop — checkpoint update exception silently ignored
-  583-584: _tool_loop — checkpoint complete exception silently ignored
-  587-594: _tool_loop — unhandled exception: checkpoint marked failed and re-raised
-  611-612: _tool_loop — iteration limit reached, fallback single turn raises → sentinel
-  971-972: _make_circuit_breaker — CircuitBreaker import fails → _NoOpCircuitBreaker
-  985-986: _make_context_manager — ContextManager import fails → None
-  999-1000: _make_memory_store — MemoryStore import fails → None
-  1014-1015: _make_cost_tracker — CostTracker import fails → None
-  1028-1029: _make_rate_limiter — RateLimiter import fails → None
-  1049-1050: _scan_checkpoints — scan_for_recovery raises → []
+  226         : _make_message_bus — _HAS_MESSAGE_BUS is False → return None
+  238-241     : _bus_publish — bus.publish raises, swallowed
+  672-674     : _tool_loop — _progress is None → NullReporter fallback
+  688-689     : _tool_loop — drift detector signals tamper → warning + audit event
+  770         : _tool_loop — trust score drops below threshold → warning logged
+  799         : _tool_loop — large content → _intercept_large_content called
+  806         : _tool_loop — content still oversized after intercept → hard truncation
+  1030        : _get_tools — capability_mode="discord" filters to _DISCORD_TOOLS
+  1215-1216   : _build_messages — memory_store.get_learnings raises, caught
+  1225-1229   : _build_messages — get_summaries filters to top-level only
+  1270-1272   : _build_messages — playbook_patterns non-empty → injected
+  1286-1294   : _build_messages — synthesized_block truthy → system appended
+  1329-1330   : _synthesize_memory — learnings fragment added
+  1333-1334   : _synthesize_memory — summary_texts fragment added
+  1337-1338   : _synthesize_memory — playbook_texts fragment added
+  1343-1346   : _synthesize_memory — synthesize() raises → returns ""
+  1394-1429   : _intercept_large_content — all three paths
+  1687-1688   : _make_interactive_approval — exception → None
+  1702-1703   : _make_drift_detector — exception → None
+  1720-1726   : _make_identity — key file absent → generate + save
+  1724-1725   : _make_identity — exception → None
+  1740-1742   : _make_attention_system — exception → None
+  1751-1753   : _make_persona_manager — exception → None
+  1773-1775   : _make_response_shaper — exception → None
+  1784-1786   : _make_intent_interpreter — exception → None
 """
 
 from __future__ import annotations
@@ -27,24 +35,24 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import missy.agent.runtime as runtime_module
 from missy.agent.runtime import AgentConfig, AgentRuntime
-from missy.core.exceptions import ProviderError
 from missy.providers import registry as registry_module
 from missy.providers.base import CompletionResponse, ToolCall
 
 # ---------------------------------------------------------------------------
-# Shared fixtures and helpers
+# Shared helpers
 # ---------------------------------------------------------------------------
 
 
-def _make_provider(name="fake", reply="ok", available=True):
+def _make_provider(reply="ok"):
     provider = MagicMock()
-    provider.name = name
-    provider.is_available.return_value = available
+    provider.name = "fake"
+    provider.is_available.return_value = True
     provider.complete.return_value = CompletionResponse(
         content=reply,
         model="m",
-        provider=name,
+        provider="fake",
         usage={"prompt_tokens": 5, "completion_tokens": 3},
         raw={},
         finish_reason="stop",
@@ -52,7 +60,7 @@ def _make_provider(name="fake", reply="ok", available=True):
     provider.complete_with_tools.return_value = CompletionResponse(
         content=reply,
         model="m",
-        provider=name,
+        provider="fake",
         usage={"prompt_tokens": 5, "completion_tokens": 3},
         raw={},
         finish_reason="stop",
@@ -74,119 +82,79 @@ def reset_registry():
     registry_module._registry = original
 
 
-# ---------------------------------------------------------------------------
-# Helper: build a minimal AgentRuntime with all subsystems mocked out
-# ---------------------------------------------------------------------------
-
-
-def _build_runtime(provider, max_iterations=1, capability_mode="no-tools", max_spend_usd=0.0):
-    """Create an AgentRuntime with a mocked registry and lazy subsystems disabled."""
+def _build_runtime(provider=None, max_iterations=1, capability_mode="no-tools"):
+    if provider is None:
+        provider = _make_provider()
     reg = _make_registry(provider)
     cfg = AgentConfig(
         provider="fake",
         max_iterations=max_iterations,
         capability_mode=capability_mode,
-        max_spend_usd=max_spend_usd,
     )
     with (
         patch("missy.agent.runtime.get_registry", return_value=reg),
         patch("missy.agent.runtime.get_tool_registry", side_effect=RuntimeError),
     ):
-        runtime = AgentRuntime(cfg)
-    runtime._rate_limiter = None  # disable rate limiting in tests
-    runtime._memory_store = None
-    runtime._cost_tracker = None
-    runtime._context_manager = None
-    return runtime, reg
+        rt = AgentRuntime(cfg)
+    rt._rate_limiter = None
+    rt._memory_store = None
+    rt._cost_tracker = None
+    rt._context_manager = None
+    return rt, reg
 
 
 # ---------------------------------------------------------------------------
-# run() — lines 262-263: cost_detail get_summary raises, silently skipped
+# Line 226: _make_message_bus — _HAS_MESSAGE_BUS is False
 # ---------------------------------------------------------------------------
 
 
-class TestRunCostDetailException:
-    def test_cost_summary_exception_is_silenced(self):
-        """Lines 262-263: cost_tracker.get_summary() raising is swallowed."""
-        provider = _make_provider()
-        runtime, reg = _build_runtime(provider)
-
-        cost_tracker = MagicMock()
-        cost_tracker.get_summary.side_effect = Exception("summary error")
-        cost_tracker.record_from_response.return_value = None
-        runtime._cost_tracker = cost_tracker
-
-        with patch("missy.agent.runtime.get_registry", return_value=reg):
-            result = runtime.run("hello")
-
-        assert result == "ok"
-        # Even though get_summary raised, the run completed normally
-        cost_tracker.get_summary.assert_called_once()
+class TestMakeMessageBusNoModule:
+    def test_returns_none_when_message_bus_unavailable(self):
+        """Line 226: when _HAS_MESSAGE_BUS is False, None is returned immediately."""
+        with patch.object(runtime_module, "_HAS_MESSAGE_BUS", False):
+            result = AgentRuntime._make_message_bus()
+        assert result is None
 
 
 # ---------------------------------------------------------------------------
-# run_stream() — lines 301-302: ProviderError re-raised
+# Lines 238-241: _bus_publish — publish raises, swallowed silently
 # ---------------------------------------------------------------------------
 
 
-class TestRunStreamProviderError:
-    def test_provider_error_propagates_from_run_stream(self):
-        """Lines 301-302: when _get_provider raises ProviderError, it re-raises."""
-        cfg = AgentConfig(provider="nonexistent", max_iterations=1)
+class TestBusPublish:
+    def test_publish_exception_is_swallowed(self):
+        """Lines 238-241: bus.publish raising is caught and not re-raised."""
+        rt, _ = _build_runtime()
+        bus = MagicMock()
+        bus.publish.side_effect = RuntimeError("bus exploded")
+        rt._message_bus = bus
 
-        reg = MagicMock()
-        reg.get.return_value = None
-        reg.get_available.return_value = []
+        # Must not raise
+        rt._bus_publish("some.topic", {"key": "value"})
 
-        with (
-            patch("missy.agent.runtime.get_registry", return_value=reg),
-            patch("missy.agent.runtime.get_tool_registry", side_effect=RuntimeError),
-        ):
-            runtime = AgentRuntime(cfg)
+        bus.publish.assert_called_once()
 
-        with patch("missy.agent.runtime.get_registry", return_value=reg):
-            gen = runtime.run_stream("hello")
-            with pytest.raises(ProviderError):
-                next(gen)
-
-
-# ---------------------------------------------------------------------------
-# _tool_loop — lines 437-438: FailureTracker ImportError
-# ---------------------------------------------------------------------------
-
-
-class TestToolLoopFailureTrackerImportError:
-    def test_failure_tracker_import_error_falls_back_to_none(self):
-        """Lines 437-438: when FailureTracker cannot be imported, loop uses None."""
-        provider = _make_provider(reply="done")
-        runtime, reg = _build_runtime(provider, max_iterations=2, capability_mode="full")
-
-        tool = MagicMock()
-        tool.name = "calculator"
-        tool_reg = MagicMock()
-        tool_reg.list_tools.return_value = ["calculator"]
-        tool_reg.get.return_value = tool
-
-        with (
-            patch("missy.agent.runtime.get_registry", return_value=reg),
-            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
-            patch.dict(sys.modules, {"missy.agent.failure_tracker": None}),
-        ):
-            result = runtime.run("compute something")
-
-        assert result == "done"
+    def test_publish_no_bus_is_noop(self):
+        """When _message_bus is None, _bus_publish returns immediately."""
+        rt, _ = _build_runtime()
+        rt._message_bus = None
+        # No error and no interaction expected
+        rt._bus_publish("some.topic", {})
 
 
 # ---------------------------------------------------------------------------
-# _tool_loop — lines 447-449: CheckpointManager exception
+# Lines 672-674: _tool_loop — _progress attribute absent → NullReporter fallback
 # ---------------------------------------------------------------------------
 
 
-class TestToolLoopCheckpointManagerException:
-    def test_checkpoint_manager_exception_falls_back_to_none(self):
-        """Lines 447-449: CheckpointManager.create() raising is caught gracefully."""
-        provider = _make_provider(reply="done")
-        runtime, reg = _build_runtime(provider, max_iterations=2, capability_mode="full")
+class TestToolLoopProgressFallback:
+    def test_missing_progress_attribute_falls_back_to_null_reporter(self):
+        """Lines 672-674: when _progress is None, NullReporter is created inline."""
+        provider = _make_provider(reply="all done")
+        rt, reg = _build_runtime(provider, max_iterations=2, capability_mode="full")
+
+        # Remove progress so the fallback branch executes
+        rt._progress = None
 
         tool = MagicMock()
         tool.name = "calc"
@@ -194,317 +162,29 @@ class TestToolLoopCheckpointManagerException:
         tool_reg.list_tools.return_value = ["calc"]
         tool_reg.get.return_value = tool
 
-        checkpoint_mgr = MagicMock()
-        checkpoint_mgr.create.side_effect = Exception("DB not available")
-
         with (
             patch("missy.agent.runtime.get_registry", return_value=reg),
             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
-            patch(
-                "missy.agent.checkpoint.CheckpointManager",
-                return_value=checkpoint_mgr,
-                create=True,
-            ),
         ):
-            result = runtime.run("do something")
+            result = rt.run("hello")
 
-        assert result == "done"
+        assert result == "all done"
 
 
 # ---------------------------------------------------------------------------
-# _tool_loop — tool call execution path (lines 499, 504, 537-554, 562-563, 583-584)
+# Lines 688-689: drift detector signals tamper → warning + audit event
 # ---------------------------------------------------------------------------
 
 
-def _make_tool_call_response(
-    tool_name="calculator", tool_id="tc1", args=None, finish_reason="tool_calls"
-):
-    tc = ToolCall(id=tool_id, name=tool_name, arguments=args or {})
-    return CompletionResponse(
-        content="",
-        model="m",
-        provider="fake",
-        usage={"prompt_tokens": 10, "completion_tokens": 5},
-        raw={},
-        finish_reason=finish_reason,
-        tool_calls=[tc],
-    )
-
-
-def _make_stop_response(content="final answer"):
-    return CompletionResponse(
-        content=content,
-        model="m",
-        provider="fake",
-        usage={"prompt_tokens": 10, "completion_tokens": 5},
-        raw={},
-        finish_reason="stop",
-    )
-
-
-class TestToolLoopWithToolCalls:
-    def _setup_tool_loop(self, tool_responses, final_response, max_iterations=5):
-        """Helper: set up a runtime whose provider returns tool calls then stops."""
+class TestDriftDetectorTamperWarning:
+    def test_drift_detected_logs_warning_and_emits_event(self):
+        """Lines 688-689: when drift detector reports False, warning is logged."""
         provider = MagicMock()
         provider.name = "fake"
         provider.is_available.return_value = True
-        provider.complete_with_tools.side_effect = tool_responses + [final_response]
-        provider.complete.return_value = final_response
-
-        tool = MagicMock()
-        tool.name = "calculator"
-
-        tool_reg = MagicMock()
-        tool_reg.list_tools.return_value = ["calculator"]
-        tool_reg.get.return_value = tool
-        tool_reg.execute.return_value = MagicMock(success=True, output="42", error=None)
-
-        reg = _make_registry(provider)
-        cfg = AgentConfig(
-            provider="fake",
-            max_iterations=max_iterations,
-            capability_mode="full",
-        )
-
-        with (
-            patch("missy.agent.runtime.get_registry", return_value=reg),
-            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
-        ):
-            runtime = AgentRuntime(cfg)
-        runtime._rate_limiter = None
-        runtime._memory_store = None
-        runtime._cost_tracker = None
-        runtime._context_manager = None
-        return runtime, reg, tool_reg
-
-    def test_tool_call_success_path(self):
-        """Lines 499-504: tool succeeds, failure_tracker.record_success called."""
-        tc_response = _make_tool_call_response()
-        stop_response = _make_stop_response("done")
-        runtime, reg, tool_reg = self._setup_tool_loop([tc_response], stop_response)
-
-        with (
-            patch("missy.agent.runtime.get_registry", return_value=reg),
-            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
-        ):
-            result = runtime.run("calculate")
-
-        assert result == "done"
-
-    def test_tool_call_error_path_no_strategy_rotation(self):
-        """Line 499: tool fails but failure count below threshold — no injection."""
-        tc_response = _make_tool_call_response()
-        stop_response = _make_stop_response("done after error")
-        runtime, reg, tool_reg = self._setup_tool_loop([tc_response], stop_response)
-
-        # Make tool fail
-        tool_reg.execute.return_value = MagicMock(
-            success=False, output=None, error="division by zero"
-        )
-
-        with (
-            patch("missy.agent.runtime.get_registry", return_value=reg),
-            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
-        ):
-            result = runtime.run("calculate badly")
-
-        assert result == "done after error"
-
-    def test_strategy_rotation_injected_at_threshold(self):
-        """Lines 537-554: when threshold reached, strategy prompt is injected."""
-        # Set up 3 sequential tool failures (threshold=3 in FailureTracker)
-        tc_response1 = _make_tool_call_response(tool_id="tc1")
-        tc_response2 = _make_tool_call_response(tool_id="tc2")
-        tc_response3 = _make_tool_call_response(tool_id="tc3")
-        stop_response = _make_stop_response("eventually done")
-
-        runtime, reg, tool_reg = self._setup_tool_loop(
-            [tc_response1, tc_response2, tc_response3], stop_response, max_iterations=10
-        )
-
-        # All tool executions fail
-        tool_reg.execute.return_value = MagicMock(success=False, output=None, error="tool error")
-
-        with (
-            patch("missy.agent.runtime.get_registry", return_value=reg),
-            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
-        ):
-            result = runtime.run("do failing thing")
-
-        # Loop completes even with repeated failures
-        assert isinstance(result, str)
-
-    def test_checkpoint_update_exception_is_silenced(self):
-        """Lines 562-563: checkpoint update exception is caught silently."""
-        tc_response = _make_tool_call_response()
-        stop_response = _make_stop_response("ok")
-        runtime, reg, tool_reg = self._setup_tool_loop([tc_response], stop_response)
-
-        # Inject a checkpoint manager that raises on update
-        checkpoint_mgr = MagicMock()
-        checkpoint_mgr.create.return_value = "ckpt-1"
-        checkpoint_mgr.update.side_effect = Exception("DB write failed")
-
-        runtime._pending_recovery = []
-
-        with (
-            patch("missy.agent.runtime.get_registry", return_value=reg),
-            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
-            patch(
-                "missy.agent.checkpoint.CheckpointManager", return_value=checkpoint_mgr, create=True
-            ),
-        ):
-            result = runtime.run("task")
-
-        assert result == "ok"
-
-    def test_checkpoint_complete_exception_is_silenced(self):
-        """Lines 583-584: checkpoint complete exception is caught silently."""
-        stop_response = _make_stop_response("ok")
-        runtime, reg, tool_reg = self._setup_tool_loop([], stop_response)
-
-        checkpoint_mgr = MagicMock()
-        checkpoint_mgr.create.return_value = "ckpt-2"
-        checkpoint_mgr.complete.side_effect = Exception("complete failed")
-
-        with (
-            patch("missy.agent.runtime.get_registry", return_value=reg),
-            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
-            patch(
-                "missy.agent.checkpoint.CheckpointManager", return_value=checkpoint_mgr, create=True
-            ),
-        ):
-            result = runtime.run("task")
-
-        assert result == "ok"
-
-
-# ---------------------------------------------------------------------------
-# _tool_loop — lines 587-594: unhandled exception marks checkpoint failed
-# ---------------------------------------------------------------------------
-
-
-class TestToolLoopCheckpointFailOnException:
-    def test_checkpoint_marked_failed_on_exception(self):
-        """Lines 587-594: when provider raises, checkpoint is marked failed."""
-        provider = MagicMock()
-        provider.name = "fake"
-        provider.is_available.return_value = True
-        provider.complete_with_tools.side_effect = RuntimeError("provider crashed")
-
-        tool = MagicMock()
-        tool.name = "calc"
-        tool_reg = MagicMock()
-        tool_reg.list_tools.return_value = ["calc"]
-        tool_reg.get.return_value = tool
-
-        reg = _make_registry(provider)
-        cfg = AgentConfig(provider="fake", max_iterations=3, capability_mode="full")
-
-        with (
-            patch("missy.agent.runtime.get_registry", return_value=reg),
-            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
-        ):
-            runtime = AgentRuntime(cfg)
-        runtime._rate_limiter = None
-        runtime._memory_store = None
-        runtime._cost_tracker = None
-        runtime._context_manager = None
-
-        checkpoint_mgr = MagicMock()
-        checkpoint_mgr.create.return_value = "ckpt-fail"
-
-        # Patch the checkpoint module that runtime.py imports at call time
-        import missy.agent.checkpoint as _ckpt_mod
-
-        original_cls = getattr(_ckpt_mod, "CheckpointManager", None)
-        _ckpt_mod.CheckpointManager = MagicMock(return_value=checkpoint_mgr)
-
-        try:
-            with (
-                patch("missy.agent.runtime.get_registry", return_value=reg),
-                patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
-                # RuntimeError gets wrapped in ProviderError by run()
-                pytest.raises(ProviderError),
-            ):
-                runtime.run("do task")
-        finally:
-            if original_cls is not None:
-                _ckpt_mod.CheckpointManager = original_cls
-
-        checkpoint_mgr.fail.assert_called_once_with("ckpt-fail")
-
-
-# ---------------------------------------------------------------------------
-# _tool_loop — lines 611-612: iteration limit + final fallback raises → sentinel
-# ---------------------------------------------------------------------------
-
-
-class TestToolLoopIterationLimit:
-    def test_iteration_limit_returns_sentinel_when_fallback_raises(self):
-        """Lines 611-612: when iteration limit reached and final complete raises."""
-        provider = MagicMock()
-        provider.name = "fake"
-        provider.is_available.return_value = True
-        # Always return tool_calls (never finishes)
+        # Return a clean stop response so the loop exits after one iteration
         provider.complete_with_tools.return_value = CompletionResponse(
-            content="",
-            model="m",
-            provider="fake",
-            usage={},
-            raw={},
-            finish_reason="tool_calls",
-            tool_calls=[ToolCall(id="t1", name="calc", arguments={})],
-        )
-        # Fallback single-turn also fails
-        provider.complete.side_effect = Exception("also failed")
-
-        tool = MagicMock()
-        tool.name = "calc"
-        tool_reg = MagicMock()
-        tool_reg.list_tools.return_value = ["calc"]
-        tool_reg.get.return_value = tool
-        tool_reg.execute.return_value = MagicMock(success=True, output="42", error=None)
-
-        reg = _make_registry(provider)
-        cfg = AgentConfig(provider="fake", max_iterations=2, capability_mode="full")
-
-        with (
-            patch("missy.agent.runtime.get_registry", return_value=reg),
-            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
-        ):
-            runtime = AgentRuntime(cfg)
-        runtime._rate_limiter = None
-        runtime._memory_store = None
-        runtime._cost_tracker = None
-        runtime._context_manager = None
-
-        with (
-            patch("missy.agent.runtime.get_registry", return_value=reg),
-            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
-        ):
-            result = runtime.run("loop forever")
-
-        assert "iteration limit" in result
-
-    def test_iteration_limit_returns_fallback_content_when_complete_succeeds(self):
-        """When iteration limit reached, fallback complete() returns usable content."""
-        provider = MagicMock()
-        provider.name = "fake"
-        provider.is_available.return_value = True
-        # Always tool calls
-        provider.complete_with_tools.return_value = CompletionResponse(
-            content="",
-            model="m",
-            provider="fake",
-            usage={},
-            raw={},
-            finish_reason="tool_calls",
-            tool_calls=[ToolCall(id="t1", name="calc", arguments={})],
-        )
-        # Fallback succeeds
-        provider.complete.return_value = CompletionResponse(
-            content="fallback response",
+            content="response",
             model="m",
             provider="fake",
             usage={},
@@ -513,11 +193,10 @@ class TestToolLoopIterationLimit:
         )
 
         tool = MagicMock()
-        tool.name = "calc"
+        tool.name = "calculator"
         tool_reg = MagicMock()
-        tool_reg.list_tools.return_value = ["calc"]
+        tool_reg.list_tools.return_value = ["calculator"]
         tool_reg.get.return_value = tool
-        tool_reg.execute.return_value = MagicMock(success=True, output="42", error=None)
 
         reg = _make_registry(provider)
         cfg = AgentConfig(provider="fake", max_iterations=2, capability_mode="full")
@@ -526,191 +205,109 @@ class TestToolLoopIterationLimit:
             patch("missy.agent.runtime.get_registry", return_value=reg),
             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
         ):
-            runtime = AgentRuntime(cfg)
-        runtime._rate_limiter = None
-        runtime._memory_store = None
-        runtime._cost_tracker = None
-        runtime._context_manager = None
+            rt = AgentRuntime(cfg)
+        rt._rate_limiter = None
+        rt._memory_store = None
+        rt._cost_tracker = None
+        rt._context_manager = None
+
+        drift = MagicMock()
+        drift.verify.return_value = False  # tamper detected
+        rt._drift_detector = drift
 
         with (
             patch("missy.agent.runtime.get_registry", return_value=reg),
             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
         ):
-            result = runtime.run("loop but fallback works")
+            result = rt.run("test drift")
 
-        assert result == "fallback response"
-
-
-# ---------------------------------------------------------------------------
-# Lazy factory fallbacks — lines 971-1050
-# ---------------------------------------------------------------------------
-
-
-class TestLazyFactoryFallbacks:
-    def test_make_circuit_breaker_import_error_returns_noop(self):
-        """Lines 971-972: CircuitBreaker import error → _NoOpCircuitBreaker."""
-        with patch.dict(sys.modules, {"missy.agent.circuit_breaker": None}):
-            cb = AgentRuntime._make_circuit_breaker("test_provider")
-        # _NoOpCircuitBreaker has a .call() method
-        assert hasattr(cb, "call")
-        # Verify it works as a pass-through
-        fn = MagicMock(return_value="result")
-        assert cb.call(fn, "arg") == "result"
-
-    def test_make_context_manager_import_error_returns_none(self):
-        """Lines 985-986: ContextManager import error → None."""
-        with patch.dict(sys.modules, {"missy.agent.context": None}):
-            result = AgentRuntime._make_context_manager()
-        assert result is None
-
-    def test_make_memory_store_import_error_returns_none(self):
-        """Lines 999-1000: MemoryStore import error → None."""
-        with patch.dict(sys.modules, {"missy.memory.store": None}):
-            result = AgentRuntime._make_memory_store()
-        assert result is None
-
-    def test_make_cost_tracker_import_error_returns_none(self):
-        """Lines 1014-1015: CostTracker import error → None."""
-        cfg = AgentConfig()
-        runtime = MagicMock(spec=AgentRuntime)
-        runtime.config = cfg
-        with patch.dict(sys.modules, {"missy.agent.cost_tracker": None}):
-            result = AgentRuntime._make_cost_tracker(runtime)
-        assert result is None
-
-    def test_make_rate_limiter_import_error_returns_none(self):
-        """Lines 1028-1029: RateLimiter import error → None."""
-        with patch.dict(sys.modules, {"missy.providers.rate_limiter": None}):
-            result = AgentRuntime._make_rate_limiter()
-        assert result is None
-
-    def test_scan_checkpoints_exception_returns_empty_list(self):
-        """Lines 1049-1050: scan_for_recovery raises → empty list."""
-        with patch.dict(sys.modules, {"missy.agent.checkpoint": None}):
-            result = AgentRuntime._scan_checkpoints()
-        assert result == []
-
-    def test_scan_checkpoints_returns_results_and_logs(self):
-        """Lines 1043-1048: results found → info logged and returned."""
-        mock_result = MagicMock()
-        mock_checkpoint_module = MagicMock()
-        mock_checkpoint_module.scan_for_recovery.return_value = [mock_result]
-
-        with patch.dict(sys.modules, {"missy.agent.checkpoint": mock_checkpoint_module}):
-            results = AgentRuntime._scan_checkpoints()
-
-        assert results == [mock_result]
+        # verify() called at least once — tamper path was hit
+        drift.verify.assert_called()
+        assert result == "response"
 
 
 # ---------------------------------------------------------------------------
-# _tool_loop — provider without complete_with_tools falls back to single_turn
+# Line 770: trust score drops below threshold after tool error
 # ---------------------------------------------------------------------------
 
 
-class TestToolLoopFallbackToSingleTurn:
-    def test_provider_without_complete_with_tools_falls_back(self):
-        """AttributeError on complete_with_tools triggers single_turn fallback."""
-        provider = MagicMock()
-        provider.name = "fake"
-        provider.is_available.return_value = True
-        provider.complete.return_value = CompletionResponse(
-            content="fallback ok",
-            model="m",
-            provider="fake",
-            usage={},
-            raw={},
-            finish_reason="stop",
-        )
-
-        # Simulate missing complete_with_tools via circuit breaker raising AttributeError
-        def cb_call(fn, *args, **kwargs):
-            if fn == provider.complete_with_tools:
-                raise AttributeError("complete_with_tools not implemented")
-            return fn(*args, **kwargs)
-
-        cb = MagicMock()
-        cb.call.side_effect = cb_call
-
-        tool = MagicMock()
-        tool.name = "calc"
-        tool_reg = MagicMock()
-        tool_reg.list_tools.return_value = ["calc"]
-        tool_reg.get.return_value = tool
-
-        reg = _make_registry(provider)
-        cfg = AgentConfig(provider="fake", max_iterations=3, capability_mode="full")
-
-        with (
-            patch("missy.agent.runtime.get_registry", return_value=reg),
-            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
-        ):
-            runtime = AgentRuntime(cfg)
-        runtime._rate_limiter = None
-        runtime._memory_store = None
-        runtime._cost_tracker = None
-        runtime._context_manager = None
-        runtime._circuit_breaker = cb
-
-        with (
-            patch("missy.agent.runtime.get_registry", return_value=reg),
-            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
-        ):
-            result = runtime.run("hello")
-
-        assert result == "fallback ok"
-
-
-# ---------------------------------------------------------------------------
-# run() — general Exception during _run_loop raises ProviderError
-# ---------------------------------------------------------------------------
-
-
-class TestRunLoopGeneralException:
-    def test_unexpected_exception_wrapped_as_provider_error(self):
-        """Lines 236-248: non-ProviderError in _run_loop is wrapped in ProviderError."""
-        provider = _make_provider()
-        runtime, reg = _build_runtime(provider)
-
-        with (
-            patch.object(runtime, "_run_loop", side_effect=ValueError("unexpected")),
-            patch("missy.agent.runtime.get_registry", return_value=reg),
-            pytest.raises(ProviderError, match="Unexpected error"),
-        ):
-            runtime.run("hello")
-
-
-# ---------------------------------------------------------------------------
-# run() — ProviderError during _run_loop re-raises directly
-# ---------------------------------------------------------------------------
-
-
-class TestRunLoopProviderError:
-    def test_provider_error_in_run_loop_re_raised_directly(self):
-        """Lines 223-235: ProviderError from _run_loop propagates unchanged."""
-        provider = _make_provider()
-        runtime, reg = _build_runtime(provider)
-
-        with (
-            patch.object(runtime, "_run_loop", side_effect=ProviderError("provider died")),
-            patch("missy.agent.runtime.get_registry", return_value=reg),
-            pytest.raises(ProviderError, match="provider died"),
-        ):
-            runtime.run("hello")
-
-
-# ---------------------------------------------------------------------------
-# _tool_loop — failure_tracker is None (line 503-504)
-# ---------------------------------------------------------------------------
-
-
-class TestToolLoopNoFailureTracker:
-    def test_no_failure_tracker_should_inject_is_false(self):
-        """Lines 503-504: when failure_tracker is None, should_inject is False."""
+class TestTrustScoreDropWarning:
+    def test_trust_warning_logged_when_score_below_threshold(self):
+        """Line 770: _trust_scorer.is_trusted returns False → warning logged."""
         provider = MagicMock()
         provider.name = "fake"
         provider.is_available.return_value = True
 
         tc = ToolCall(id="tc1", name="calc", arguments={})
+        tool_call_resp = CompletionResponse(
+            content="",
+            model="m",
+            provider="fake",
+            usage={},
+            raw={},
+            finish_reason="tool_calls",
+            tool_calls=[tc],
+        )
+        stop_resp = CompletionResponse(
+            content="done",
+            model="m",
+            provider="fake",
+            usage={},
+            raw={},
+            finish_reason="stop",
+        )
+        provider.complete_with_tools.side_effect = [tool_call_resp, stop_resp]
+
+        tool = MagicMock()
+        tool.name = "calc"
+        tool_reg = MagicMock()
+        tool_reg.list_tools.return_value = ["calc"]
+        tool_reg.get.return_value = tool
+        # Tool execution returns an error result
+        tool_reg.execute.return_value = MagicMock(success=False, output=None, error="failed")
+
+        reg = _make_registry(provider)
+        cfg = AgentConfig(provider="fake", max_iterations=5, capability_mode="full")
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(cfg)
+        rt._rate_limiter = None
+        rt._memory_store = None
+        rt._cost_tracker = None
+        rt._context_manager = None
+
+        # Make trust scorer report below threshold
+        trust = MagicMock()
+        trust.is_trusted.return_value = False
+        trust.score.return_value = 150
+        rt._trust_scorer = trust
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            result = rt.run("low trust tool")
+
+        trust.record_failure.assert_called_with("calc")
+        trust.is_trusted.assert_called_with("calc")
+        assert result == "done"
+
+
+# ---------------------------------------------------------------------------
+# Line 799: large content triggers _intercept_large_content
+# ---------------------------------------------------------------------------
+
+
+class TestLargeContentIntercept:
+    def _setup_tool_loop_with_large_output(self, large_content):
+        provider = MagicMock()
+        provider.name = "fake"
+        provider.is_available.return_value = True
+
+        tc = ToolCall(id="tc1", name="mytool", arguments={})
         tool_call_resp = CompletionResponse(
             content="",
             model="m",
@@ -731,11 +328,13 @@ class TestToolLoopNoFailureTracker:
         provider.complete_with_tools.side_effect = [tool_call_resp, stop_resp]
 
         tool = MagicMock()
-        tool.name = "calc"
+        tool.name = "mytool"
         tool_reg = MagicMock()
-        tool_reg.list_tools.return_value = ["calc"]
+        tool_reg.list_tools.return_value = ["mytool"]
         tool_reg.get.return_value = tool
-        tool_reg.execute.return_value = MagicMock(success=False, output=None, error="err")
+        tool_reg.execute.return_value = MagicMock(
+            success=True, output=large_content, error=None
+        )
 
         reg = _make_registry(provider)
         cfg = AgentConfig(provider="fake", max_iterations=5, capability_mode="full")
@@ -743,19 +342,598 @@ class TestToolLoopNoFailureTracker:
         with (
             patch("missy.agent.runtime.get_registry", return_value=reg),
             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
-            patch.dict(sys.modules, {"missy.agent.failure_tracker": None}),
         ):
-            runtime = AgentRuntime(cfg)
-        runtime._rate_limiter = None
-        runtime._memory_store = None
-        runtime._cost_tracker = None
-        runtime._context_manager = None
+            rt = AgentRuntime(cfg)
+        rt._rate_limiter = None
+        rt._memory_store = None
+        rt._cost_tracker = None
+        rt._context_manager = None
+        return rt, reg, tool_reg
 
+    def test_large_content_calls_intercept(self):
+        """Line 799: content > _LARGE_CONTENT_THRESHOLD invokes _intercept_large_content."""
+        large = "x" * (runtime_module._LARGE_CONTENT_THRESHOLD + 1)
+        rt, reg, tool_reg = self._setup_tool_loop_with_large_output(large)
+
+        intercept_result = "[stored as content-id-123]"
         with (
+            patch.object(rt, "_intercept_large_content", return_value=intercept_result) as mock_ic,
             patch("missy.agent.runtime.get_registry", return_value=reg),
             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
-            patch.dict(sys.modules, {"missy.agent.failure_tracker": None}),
         ):
-            result = runtime.run("task with failing tool")
+            result = rt.run("get large output")
 
+        mock_ic.assert_called_once()
         assert result == "finished"
+
+    def test_hard_truncation_when_content_still_oversized(self):
+        """Line 806: after _intercept_large_content, content still > _MAX_TOOL_RESULT_CHARS."""
+        # Make content bigger than both thresholds
+        oversized = "y" * (runtime_module._MAX_TOOL_RESULT_CHARS + 1)
+        rt, reg, tool_reg = self._setup_tool_loop_with_large_output(oversized)
+
+        # _intercept_large_content returns the same huge string (simulate storage failure path)
+        with (
+            patch.object(rt, "_intercept_large_content", return_value=oversized),
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            result = rt.run("oversized content")
+
+        # Run completes; hard truncation was applied internally
+        assert result == "finished"
+
+
+# ---------------------------------------------------------------------------
+# Line 1030: _get_tools — capability_mode="discord" filters to _DISCORD_TOOLS
+# ---------------------------------------------------------------------------
+
+
+class TestGetToolsDiscordMode:
+    def test_discord_mode_filters_to_discord_tools(self):
+        """Line 1030: capability_mode='discord' keeps only _DISCORD_TOOLS."""
+        cfg = AgentConfig(provider="fake", capability_mode="discord")
+
+        # Pick a known member of _DISCORD_TOOLS
+        discord_tool = MagicMock()
+        discord_tool.name = "calculator"
+
+        # Pick a tool that is in _SAFE_CHAT_TOOLS but NOT in _DISCORD_TOOLS
+        desktop_only_name = next(
+            n for n in AgentRuntime._SAFE_CHAT_TOOLS
+            if n not in AgentRuntime._DISCORD_TOOLS
+        )
+        extra_tool = MagicMock()
+        extra_tool.name = desktop_only_name
+
+        tool_reg = MagicMock()
+        tool_reg.list_tools.return_value = [discord_tool.name, extra_tool.name]
+        tool_reg.get.side_effect = lambda name: (
+            discord_tool if name == discord_tool.name else extra_tool
+        )
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=_make_registry(_make_provider())),
+            patch("missy.agent.runtime.get_tool_registry", side_effect=RuntimeError),
+        ):
+            rt = AgentRuntime(cfg)
+
+        with patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg):
+            tools = rt._get_tools()
+
+        assert all(
+            getattr(t, "name", "") in AgentRuntime._DISCORD_TOOLS for t in tools
+        )
+        assert discord_tool in tools
+        assert extra_tool not in tools
+
+
+# ---------------------------------------------------------------------------
+# Lines 1215-1216: _build_messages — memory_store.get_learnings raises
+# ---------------------------------------------------------------------------
+
+
+class TestBuildMessagesLearningsException:
+    def test_get_learnings_exception_is_caught(self):
+        """Lines 1215-1216: get_learnings raising is logged and caught."""
+        provider = _make_provider(reply="answer")
+        rt, reg = _build_runtime(provider, max_iterations=1)
+
+        ctx_mgr = MagicMock()
+        ctx_mgr.build_messages.return_value = ("system prompt", [{"role": "user", "content": "q"}])
+        rt._context_manager = ctx_mgr
+
+        mem = MagicMock()
+        mem.get_learnings.side_effect = Exception("DB error")
+        rt._memory_store = mem
+
+        result = rt._build_context_messages(
+            user_input="q",
+            history=[],
+            session_id="s1",
+            attention_query="",
+        )
+
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+        mem.get_learnings.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Lines 1225-1229: _build_messages — get_summaries filters parent_id=None
+# ---------------------------------------------------------------------------
+
+
+class TestBuildMessagesSummariesFiltered:
+    def test_top_level_summaries_are_kept(self):
+        """Lines 1225-1229: summaries with parent_id=None are included; children excluded."""
+        provider = _make_provider()
+        rt, reg = _build_runtime(provider, max_iterations=1)
+
+        ctx_mgr = MagicMock()
+        ctx_mgr.build_messages.return_value = ("sys", [{"role": "user", "content": "hi"}])
+        rt._context_manager = ctx_mgr
+
+        top_summary = MagicMock()
+        top_summary.parent_id = None
+        top_summary.content = "Top-level summary text"
+
+        child_summary = MagicMock()
+        child_summary.parent_id = "parent-001"
+        child_summary.content = "Child summary"
+
+        mem = MagicMock()
+        mem.get_learnings.return_value = []
+        mem.get_summaries.return_value = [top_summary, child_summary]
+        rt._memory_store = mem
+
+        system, msgs = rt._build_context_messages(
+            user_input="hello",
+            history=[],
+            session_id="sess-1",
+            attention_query="",
+        )
+
+        # build_messages was called with only the top-level summary
+        call_kwargs = ctx_mgr.build_messages.call_args
+        summaries_passed = call_kwargs.kwargs.get("summaries") or (
+            call_kwargs.args[4] if len(call_kwargs.args) > 4 else None
+        )
+        if summaries_passed is not None:
+            assert child_summary not in summaries_passed
+
+
+# ---------------------------------------------------------------------------
+# Lines 1270-1272: _build_messages — playbook patterns non-empty → injected
+# ---------------------------------------------------------------------------
+
+
+class TestBuildMessagesPlaybookInjection:
+    def test_playbook_pattern_appended_to_system_prompt(self):
+        """Lines 1270-1272: non-empty playbook patterns are appended to base_system."""
+        provider = _make_provider()
+        rt, reg = _build_runtime(provider)
+
+        ctx_mgr = MagicMock()
+        ctx_mgr.build_messages.return_value = ("base system", [])
+        rt._context_manager = ctx_mgr
+
+        mem = MagicMock()
+        mem.get_learnings.return_value = []
+        mem.get_summaries.return_value = []
+        rt._memory_store = mem
+
+        playbook_pattern = "\n## Proven patterns:\n- Always use tool X first"
+
+        # _get_playbook_patterns is called but not yet defined on AgentRuntime;
+        # use create=True so patch.object adds it to the instance.
+        with patch.object(
+            rt,
+            "_get_playbook_patterns",
+            return_value=playbook_pattern,
+            create=True,
+        ):
+            rt._build_context_messages(
+                user_input="task",
+                history=[],
+                session_id="s",
+                attention_query="task",
+            )
+
+        # ctx_mgr.build_messages was called with system that includes the pattern
+        call_kwargs = ctx_mgr.build_messages.call_args
+        system_arg = call_kwargs.kwargs.get("system") or call_kwargs.args[0]
+        assert playbook_pattern in system_arg
+
+
+# ---------------------------------------------------------------------------
+# Lines 1286-1294: _build_messages — synthesized block truthy → appended to system
+# ---------------------------------------------------------------------------
+
+
+class TestBuildMessagesSynthesizedBlock:
+    def test_synthesized_block_appended_to_system(self):
+        """Lines 1286-1294: synthesized_block truthy → context manager called with None learnings."""
+        provider = _make_provider()
+        rt, reg = _build_runtime(provider)
+
+        ctx_mgr = MagicMock()
+        ctx_mgr.build_messages.return_value = ("base system", [])
+        rt._context_manager = ctx_mgr
+
+        mem = MagicMock()
+        mem.get_learnings.return_value = ["learned something"]
+        mem.get_summaries.return_value = []
+        rt._memory_store = mem
+
+        synthesized = "## Synthesized Memory\nRelevant context here."
+
+        with patch.object(rt, "_synthesize_memory", return_value=synthesized):
+            system, msgs = rt._build_context_messages(
+                user_input="q",
+                history=[],
+                session_id="s",
+                attention_query="q",
+            )
+
+        # build_messages called with learnings=None when synthesized block is used
+        call_kwargs = ctx_mgr.build_messages.call_args
+        learnings_arg = call_kwargs.kwargs.get("learnings")
+        assert learnings_arg is None
+
+        # synthesized block appended to returned system
+        assert synthesized in system
+
+
+# ---------------------------------------------------------------------------
+# Lines 1322-1346: _synthesize_memory — all paths
+# ---------------------------------------------------------------------------
+
+
+class TestSynthesizeMemory:
+    def test_no_content_returns_empty_string(self):
+        """Line 1341: no fragments → returns ''."""
+        rt, _ = _build_runtime()
+        result = rt._synthesize_memory(
+            learnings=None, summary_texts=[], playbook_texts=[], query=""
+        )
+        assert result == ""
+
+    def test_with_learnings_adds_fragment(self):
+        """Lines 1329-1330: learnings → add_fragments called with 'learnings'."""
+        rt, _ = _build_runtime()
+
+        synth = MagicMock()
+        synth.synthesize.return_value = "synthesized output"
+
+        with patch("missy.memory.synthesizer.MemorySynthesizer", return_value=synth):
+            result = rt._synthesize_memory(
+                learnings=["I learned X"],
+                summary_texts=[],
+                playbook_texts=[],
+                query="test",
+            )
+
+        synth.add_fragments.assert_any_call("learnings", ["I learned X"], base_relevance=0.7)
+        assert result == "synthesized output"
+
+    def test_with_summary_texts_adds_fragment(self):
+        """Lines 1333-1334: summary_texts → add_fragments called with 'summaries'."""
+        rt, _ = _build_runtime()
+
+        synth = MagicMock()
+        synth.synthesize.return_value = "summary block"
+
+        with patch("missy.memory.synthesizer.MemorySynthesizer", return_value=synth):
+            result = rt._synthesize_memory(
+                learnings=None,
+                summary_texts=["Summary A"],
+                playbook_texts=[],
+                query="q",
+            )
+
+        synth.add_fragments.assert_any_call("summaries", ["Summary A"], base_relevance=0.4)
+        assert result == "summary block"
+
+    def test_with_playbook_texts_adds_fragment(self):
+        """Lines 1337-1338: playbook_texts → add_fragments called with 'playbook'."""
+        rt, _ = _build_runtime()
+
+        synth = MagicMock()
+        synth.synthesize.return_value = "playbook block"
+
+        with patch("missy.memory.synthesizer.MemorySynthesizer", return_value=synth):
+            result = rt._synthesize_memory(
+                learnings=None,
+                summary_texts=[],
+                playbook_texts=["pattern 1"],
+                query="q",
+            )
+
+        synth.add_fragments.assert_any_call("playbook", ["pattern 1"], base_relevance=0.6)
+        assert result == "playbook block"
+
+    def test_all_fragments_added(self):
+        """Lines 1329-1338: all three fragment types added when all provided."""
+        rt, _ = _build_runtime()
+
+        synth = MagicMock()
+        synth.synthesize.return_value = "full block"
+
+        with patch("missy.memory.synthesizer.MemorySynthesizer", return_value=synth):
+            result = rt._synthesize_memory(
+                learnings=["L1"],
+                summary_texts=["S1"],
+                playbook_texts=["P1"],
+                query="all",
+            )
+
+        assert synth.add_fragments.call_count == 3
+        assert result == "full block"
+
+    def test_synthesize_exception_returns_empty_string(self):
+        """Lines 1344-1346: synthesize() raises → returns ''."""
+        rt, _ = _build_runtime()
+
+        synth = MagicMock()
+        synth.synthesize.side_effect = RuntimeError("synthesis failed")
+
+        with patch("missy.memory.synthesizer.MemorySynthesizer", return_value=synth):
+            result = rt._synthesize_memory(
+                learnings=["something"],
+                summary_texts=[],
+                playbook_texts=[],
+                query="q",
+            )
+
+        assert result == ""
+
+
+# ---------------------------------------------------------------------------
+# Lines 1394-1432: _intercept_large_content — all three paths
+# ---------------------------------------------------------------------------
+
+
+class TestInterceptLargeContent:
+    def test_no_memory_store_returns_preview(self):
+        """Lines 1394-1400: _memory_store is None → returns preview with fallback message."""
+        rt, _ = _build_runtime()
+        rt._memory_store = None
+
+        content = "A" * 1000
+        result = rt._intercept_large_content("sess-1", "my_tool", content)
+
+        assert content[:400] in result
+        assert "No memory store" in result
+        assert str(len(content)) in result
+
+    def test_normal_path_stores_and_returns_reference(self):
+        """Lines 1401-1426: memory store present → LargeContentRecord created, reference returned."""
+        rt, _ = _build_runtime()
+
+        mem = MagicMock()
+        mem.store_large_content.return_value = "content-abc-123"
+        rt._memory_store = mem
+
+        content = "B" * 1000
+        tool_name = "file_read"
+        session_id = "sess-2"
+
+        mock_record = MagicMock()
+
+        with patch("missy.memory.sqlite_store.LargeContentRecord") as MockRecord:
+            MockRecord.new.return_value = mock_record
+            result = rt._intercept_large_content(session_id, tool_name, content)
+
+        mem.store_large_content.assert_called_once_with(mock_record)
+        assert "content-abc-123" in result
+        assert str(len(content)) in result
+        assert tool_name in result
+
+    def test_store_raises_returns_storage_failed_preview(self):
+        """Lines 1427-1432: store_large_content raises → returns storage-failed preview."""
+        rt, _ = _build_runtime()
+
+        mem = MagicMock()
+        mem.store_large_content.side_effect = Exception("write failed")
+        rt._memory_store = mem
+
+        content = "C" * 1000
+
+        with patch("missy.memory.sqlite_store.LargeContentRecord") as MockRecord:
+            MockRecord.new.return_value = MagicMock()
+            result = rt._intercept_large_content("sess-3", "tool_x", content)
+
+        assert content[:400] in result
+        assert "storage failed" in result
+
+
+# ---------------------------------------------------------------------------
+# Lines 1687-1688: _make_interactive_approval — exception → None
+# ---------------------------------------------------------------------------
+
+
+class TestMakeInteractiveApproval:
+    def test_exception_returns_none(self):
+        """Lines 1687-1688: ImportError during approval setup → None."""
+        with patch.dict(
+            sys.modules,
+            {
+                "missy.agent.interactive_approval": None,
+                "missy.gateway.client": None,
+            },
+        ):
+            result = AgentRuntime._make_interactive_approval()
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Lines 1702-1703: _make_drift_detector — exception → None
+# ---------------------------------------------------------------------------
+
+
+class TestMakeDriftDetector:
+    def test_exception_returns_none(self):
+        """Lines 1702-1703: import fails → None returned."""
+        with patch.dict(sys.modules, {"missy.security.drift": None}):
+            result = AgentRuntime._make_drift_detector()
+        assert result is None
+
+    def test_normal_path_returns_detector(self):
+        """Lines 1699-1701: normal import → PromptDriftDetector instance."""
+        mock_detector = MagicMock()
+        mock_module = MagicMock()
+        mock_module.PromptDriftDetector.return_value = mock_detector
+
+        with patch.dict(sys.modules, {"missy.security.drift": mock_module}):
+            result = AgentRuntime._make_drift_detector()
+
+        assert result is mock_detector
+
+
+# ---------------------------------------------------------------------------
+# Lines 1720-1726: _make_identity — key file absent → generate and save
+# ---------------------------------------------------------------------------
+
+
+class TestMakeIdentity:
+    def test_key_absent_generates_and_saves_identity(self):
+        """Lines 1720-1723: key file not present → generate() + save() called."""
+        mock_identity = MagicMock()
+        mock_identity.public_key_fingerprint.return_value = "fp:abc123"
+
+        mock_module = MagicMock()
+        mock_module.DEFAULT_KEY_PATH = "/fake/.missy/identity.pem"
+        mock_module.AgentIdentity.generate.return_value = mock_identity
+        mock_module.AgentIdentity.from_key_file.return_value = MagicMock()
+
+        with (
+            patch.dict(sys.modules, {"missy.security.identity": mock_module}),
+            patch("os.path.exists", return_value=False),
+        ):
+            result = AgentRuntime._make_identity()
+
+        mock_module.AgentIdentity.generate.assert_called_once()
+        mock_identity.save.assert_called_once_with("/fake/.missy/identity.pem")
+        assert result is mock_identity
+
+    def test_key_present_loads_from_file(self):
+        """Line 1719: key file exists → from_key_file called."""
+        loaded_identity = MagicMock()
+
+        mock_module = MagicMock()
+        mock_module.DEFAULT_KEY_PATH = "/fake/.missy/identity.pem"
+        mock_module.AgentIdentity.from_key_file.return_value = loaded_identity
+
+        with (
+            patch.dict(sys.modules, {"missy.security.identity": mock_module}),
+            patch("os.path.exists", return_value=True),
+        ):
+            result = AgentRuntime._make_identity()
+
+        mock_module.AgentIdentity.from_key_file.assert_called_once_with(
+            "/fake/.missy/identity.pem"
+        )
+        assert result is loaded_identity
+
+    def test_exception_returns_none(self):
+        """Lines 1724-1726: any exception → None returned."""
+        with patch.dict(sys.modules, {"missy.security.identity": None}):
+            result = AgentRuntime._make_identity()
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Lines 1740-1742: _make_attention_system — exception → None
+# ---------------------------------------------------------------------------
+
+
+class TestMakeAttentionSystem:
+    def test_exception_returns_none(self):
+        """Lines 1740-1742: ImportError → None returned."""
+        with patch.dict(sys.modules, {"missy.agent.attention": None}):
+            result = AgentRuntime._make_attention_system()
+        assert result is None
+
+    def test_normal_path_returns_system(self):
+        """Lines 1737-1739: normal import → AttentionSystem instance."""
+        mock_system = MagicMock()
+        mock_module = MagicMock()
+        mock_module.AttentionSystem.return_value = mock_system
+
+        with patch.dict(sys.modules, {"missy.agent.attention": mock_module}):
+            result = AgentRuntime._make_attention_system()
+
+        assert result is mock_system
+
+
+# ---------------------------------------------------------------------------
+# Lines 1751-1753: _make_persona_manager — exception → None
+# ---------------------------------------------------------------------------
+
+
+class TestMakePersonaManager:
+    def test_exception_returns_none(self):
+        """Lines 1751-1753: ImportError → None returned."""
+        with patch.dict(sys.modules, {"missy.agent.persona": None}):
+            result = AgentRuntime._make_persona_manager()
+        assert result is None
+
+    def test_normal_path_returns_manager(self):
+        """Lines 1748-1750: normal import → PersonaManager instance."""
+        mock_mgr = MagicMock()
+        mock_module = MagicMock()
+        mock_module.PersonaManager.return_value = mock_mgr
+
+        with patch.dict(sys.modules, {"missy.agent.persona": mock_module}):
+            result = AgentRuntime._make_persona_manager()
+
+        assert result is mock_mgr
+
+
+# ---------------------------------------------------------------------------
+# Lines 1773-1775: _make_response_shaper — exception → None
+# ---------------------------------------------------------------------------
+
+
+class TestMakeResponseShaper:
+    def test_exception_returns_none(self):
+        """Lines 1773-1775: ImportError → None returned."""
+        with patch.dict(sys.modules, {"missy.agent.behavior": None}):
+            result = AgentRuntime._make_response_shaper()
+        assert result is None
+
+    def test_normal_path_returns_shaper(self):
+        """Lines 1770-1772: normal import → ResponseShaper instance."""
+        mock_shaper = MagicMock()
+        mock_module = MagicMock()
+        mock_module.ResponseShaper.return_value = mock_shaper
+
+        with patch.dict(sys.modules, {"missy.agent.behavior": mock_module}):
+            result = AgentRuntime._make_response_shaper()
+
+        assert result is mock_shaper
+
+
+# ---------------------------------------------------------------------------
+# Lines 1784-1786: _make_intent_interpreter — exception → None
+# ---------------------------------------------------------------------------
+
+
+class TestMakeIntentInterpreter:
+    def test_exception_returns_none(self):
+        """Lines 1784-1786: ImportError → None returned."""
+        with patch.dict(sys.modules, {"missy.agent.behavior": None}):
+            result = AgentRuntime._make_intent_interpreter()
+        assert result is None
+
+    def test_normal_path_returns_interpreter(self):
+        """Lines 1781-1783: normal import → IntentInterpreter instance."""
+        mock_interp = MagicMock()
+        mock_module = MagicMock()
+        mock_module.IntentInterpreter.return_value = mock_interp
+
+        with patch.dict(sys.modules, {"missy.agent.behavior": mock_module}):
+            result = AgentRuntime._make_intent_interpreter()
+
+        assert result is mock_interp

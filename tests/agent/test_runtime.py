@@ -166,7 +166,7 @@ class TestAgentRuntimeRun:
         messages: list[Message] = call_args[0][0]
         system_messages = [m for m in messages if m.role == "system"]
         assert len(system_messages) == 1
-        assert system_messages[0].content == "Custom prompt."
+        assert system_messages[0].content.startswith("Custom prompt.")
 
     def test_run_includes_user_input_in_messages(self):
         provider = _make_provider()

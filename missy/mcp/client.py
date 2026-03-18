@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import re
 import subprocess
 import threading
 import uuid
@@ -124,7 +125,7 @@ class McpClient:
             self._proc.stdin.flush()
 
     #: Tool names from MCP servers must match this pattern.
-    _SAFE_TOOL_NAME_RE = __import__("re").compile(r"^[a-zA-Z0-9_\-]+$")
+    _SAFE_TOOL_NAME_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
 
     def _list_tools(self) -> list[dict]:
         resp = self._rpc("tools/list")

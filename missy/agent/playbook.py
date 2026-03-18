@@ -176,7 +176,7 @@ class Playbook:
         data = [asdict(e) for e in self._entries.values()]
         dir_path = os.path.dirname(self._path)
         if dir_path:
-            os.makedirs(dir_path, exist_ok=True)
+            os.makedirs(dir_path, exist_ok=True, mode=0o700)
         try:
             fd, tmp_path = tempfile.mkstemp(dir=dir_path or ".", suffix=".tmp")
             try:

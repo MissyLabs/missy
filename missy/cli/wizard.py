@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import tempfile
 from pathlib import Path
 
@@ -257,6 +258,20 @@ def _verify_ollama(base_url: str, model: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _yaml_safe_value(value: str) -> str:
+    """Escape a string value for safe embedding in YAML.
+
+    Prevents YAML injection through special characters (quotes, newlines,
+    colons, etc.) in user-supplied values like API keys and tokens.
+    """
+    # If the value contains any characters that could break YAML structure,
+    # use single-quoted form with internal single-quotes escaped by doubling.
+    if re.search(r'["\n\r:\\#{}[\],&*?|>!%@`]', value):
+        escaped = value.replace("'", "''")
+        return f"'{escaped}'"
+    return f'"{value}"'
+
+
 def _build_config_yaml(
     workspace: str,
     providers_cfg: list[dict],
@@ -318,25 +333,25 @@ def _build_config_yaml(
         name = p["name"]
         lines.append(f"  {name}:")
         lines.append(f"    name: {name}")
-        lines.append(f'    model: "{p["model"]}"')
+        lines.append(f"    model: {_yaml_safe_value(p['model'])}")
         if p.get("fast_model"):
-            lines.append(f'    fast_model: "{p["fast_model"]}"')
+            lines.append(f"    fast_model: {_yaml_safe_value(p['fast_model'])}")
         if p.get("premium_model"):
-            lines.append(f'    premium_model: "{p["premium_model"]}"')
+            lines.append(f"    premium_model: {_yaml_safe_value(p['premium_model'])}")
         if p.get("api_key"):
-            lines.append(f'    api_key: "{p["api_key"]}"')
+            lines.append(f"    api_key: {_yaml_safe_value(p['api_key'])}")
         if p.get("base_url"):
-            lines.append(f'    base_url: "{p["base_url"]}"')
+            lines.append(f"    base_url: {_yaml_safe_value(p['base_url'])}")
         lines.append("    timeout: 30")
 
     # Discord section (optional)
     if discord_cfg:
         lines += ["", "discord:", "  enabled: true", "  accounts:"]
-        lines.append(f'    - token_env_var: "{discord_cfg["token_env_var"]}"')
+        lines.append(f"    - token_env_var: {_yaml_safe_value(discord_cfg['token_env_var'])}")
         if discord_cfg.get("bot_token"):
-            lines.append(f'      token: "{discord_cfg["bot_token"]}"')
+            lines.append(f"      token: {_yaml_safe_value(discord_cfg['bot_token'])}")
         if discord_cfg.get("application_id"):
-            lines.append(f'      application_id: "{discord_cfg["application_id"]}"')
+            lines.append(f"      application_id: {_yaml_safe_value(discord_cfg['application_id'])}")
         lines.append(f"      dm_policy: {discord_cfg['dm_policy']}")
         if discord_cfg.get("dm_allowlist"):
             lines.append("      dm_allowlist:")
@@ -389,7 +404,7 @@ def _build_config_yaml(
 
 def _write_config_atomic(config_path: Path, content: str) -> None:
     """Write *content* to *config_path* atomically via a sibling temp file."""
-    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd, tmp = tempfile.mkstemp(dir=config_path.parent, prefix=".config_tmp_")
     try:
         os.fchmod(fd, 0o600)  # Config may contain API keys; restrict access

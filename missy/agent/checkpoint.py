@@ -117,7 +117,7 @@ class CheckpointManager:
         self.db_path = os.path.expanduser(db_path)
         self._local = threading.local()
         # Ensure the parent directory exists before any connection is opened
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True, mode=0o700)
         # Eagerly initialise the schema on the calling thread
         conn = self._connect()
         conn.executescript(_DDL)

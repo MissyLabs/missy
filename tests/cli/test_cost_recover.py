@@ -37,16 +37,16 @@ class TestCostCommand:
             assert "unlimited" in result.output
 
     def test_cost_with_session(self, runner, mock_config, tmp_path):
-        db_path = str(tmp_path / "test.db")
-        from missy.memory.sqlite_store import SQLiteMemoryStore
-
-        store = SQLiteMemoryStore(db_path=db_path)
-        store.record_cost("test-session", "claude-sonnet-4", 500, 200, 0.0045)
-        store.record_cost("test-session", "claude-haiku-4", 100, 50, 0.0003)
+        mock_store = MagicMock()
+        mock_store.get_session_turns.return_value = [MagicMock(), MagicMock()]
+        mock_store.get_session_costs.return_value = [
+            {"model": "claude-sonnet-4", "cost_usd": 0.0045, "prompt_tokens": 500, "completion_tokens": 200},
+            {"model": "claude-haiku-4", "cost_usd": 0.0003, "prompt_tokens": 100, "completion_tokens": 50},
+        ]
 
         with (
             patch("missy.cli.main._load_subsystems", return_value=mock_config),
-            patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=store),
+            patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store),
         ):
             result = runner.invoke(cli, ["cost", "--session", "test-session"])
             assert result.exit_code == 0
@@ -54,14 +54,13 @@ class TestCostCommand:
             assert "2" in result.output  # 2 API calls
 
     def test_cost_with_session_no_data(self, runner, mock_config, tmp_path):
-        db_path = str(tmp_path / "test.db")
-        from missy.memory.sqlite_store import SQLiteMemoryStore
-
-        store = SQLiteMemoryStore(db_path=db_path)
+        mock_store = MagicMock()
+        mock_store.get_session_turns.return_value = []
+        mock_store.get_session_costs.return_value = []
 
         with (
             patch("missy.cli.main._load_subsystems", return_value=mock_config),
-            patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=store),
+            patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store),
         ):
             result = runner.invoke(cli, ["cost", "--session", "no-such-session"])
             assert result.exit_code == 0

@@ -207,6 +207,11 @@ class AgentRuntime:
         self._trust_scorer = TrustScorer()
         # Attention system (Feature B: brain-inspired attention subsystems)
         self._attention = self._make_attention_system()
+        # Persona and behavior layer (humanistic response shaping)
+        self._persona_manager = self._make_persona_manager()
+        self._behavior = self._make_behavior_layer()
+        self._response_shaper = self._make_response_shaper()
+        self._intent_interpreter = self._make_intent_interpreter()
         # Message bus (graceful degradation)
         self._message_bus = self._make_message_bus()
 
@@ -458,6 +463,17 @@ class AgentRuntime:
                     "tools_used": all_tool_names_used,
                 },
             )
+
+        # Apply response shaping (humanistic behavior layer)
+        if self._response_shaper is not None:
+            try:
+                persona = self._persona_manager.get_persona() if self._persona_manager else None
+                shape_ctx = {"turn_count": len(history), "has_tool_results": bool(all_tool_names_used)}
+                final_response = self._response_shaper.shape_response(
+                    final_response, persona, shape_ctx
+                )
+            except Exception:
+                logger.debug("Response shaping failed", exc_info=True)
 
         return censor_response(final_response)
 
@@ -1216,8 +1232,38 @@ class AgentRuntime:
                     except Exception:
                         logger.debug("Failed to load summaries", exc_info=True)
 
+                # Shape system prompt with persona and behavior layer.
+                base_system = self.config.system_prompt
+                if self._behavior is not None:
+                    try:
+                        behavior_context = {
+                            "turn_count": len(history),
+                            "has_tool_results": False,
+                            "topic": "",
+                            "intent": "question",
+                            "urgency": "low",
+                        }
+                        if history:
+                            user_msgs = [m for m in history if m.get("role") == "user"]
+                            if user_msgs:
+                                behavior_context["user_tone"] = self._behavior.analyze_user_tone(
+                                    user_msgs[-5:]
+                                )
+                        if self._intent_interpreter is not None and user_input:
+                            behavior_context["intent"] = self._intent_interpreter.classify_intent(
+                                user_input
+                            )
+                            behavior_context["urgency"] = self._intent_interpreter.extract_urgency(
+                                user_input
+                            )
+                        base_system = self._behavior.shape_system_prompt(
+                            base_system, behavior_context
+                        )
+                    except Exception:
+                        logger.debug("Behavior layer system prompt shaping failed", exc_info=True)
+
                 # Inject proven playbook patterns into system prompt.
-                playbook_system = self.config.system_prompt
+                playbook_system = base_system
                 playbook_texts: list[str] = []
                 try:
                     playbook_patterns = self._get_playbook_patterns(user_input)
@@ -1693,6 +1739,50 @@ class AgentRuntime:
             return AttentionSystem()
         except Exception:
             logger.debug("AttentionSystem unavailable; proceeding without it", exc_info=True)
+            return None
+
+    @staticmethod
+    def _make_persona_manager():
+        """Create a :class:`~missy.agent.persona.PersonaManager`."""
+        try:
+            from missy.agent.persona import PersonaManager
+
+            return PersonaManager()
+        except Exception:
+            logger.debug("PersonaManager unavailable", exc_info=True)
+            return None
+
+    def _make_behavior_layer(self):
+        """Create a :class:`~missy.agent.behavior.BehaviorLayer`."""
+        try:
+            from missy.agent.behavior import BehaviorLayer
+
+            persona = self._persona_manager.get_persona() if self._persona_manager else None
+            return BehaviorLayer(persona=persona)
+        except Exception:
+            logger.debug("BehaviorLayer unavailable", exc_info=True)
+            return None
+
+    @staticmethod
+    def _make_response_shaper():
+        """Create a :class:`~missy.agent.behavior.ResponseShaper`."""
+        try:
+            from missy.agent.behavior import ResponseShaper
+
+            return ResponseShaper()
+        except Exception:
+            logger.debug("ResponseShaper unavailable", exc_info=True)
+            return None
+
+    @staticmethod
+    def _make_intent_interpreter():
+        """Create a :class:`~missy.agent.behavior.IntentInterpreter`."""
+        try:
+            from missy.agent.behavior import IntentInterpreter
+
+            return IntentInterpreter()
+        except Exception:
+            logger.debug("IntentInterpreter unavailable", exc_info=True)
             return None
 
     @staticmethod

@@ -160,7 +160,8 @@ def _synth_espeak(
             return f"espeak-ng failed: {err}"
         if not synth.stdout:
             return "espeak-ng produced no audio"
-        with open(wav_path, "wb") as f:
+        fd = os.open(wav_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as f:
             f.write(synth.stdout)
         return None
     except FileNotFoundError:

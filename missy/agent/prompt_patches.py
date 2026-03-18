@@ -144,7 +144,7 @@ class PromptPatchManager:
 
     def _save(self) -> None:
         """Persist the current patch list to the JSON store file."""
-        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self._path.write_text(json.dumps([asdict(p) for p in self._patches], indent=2))
 
     # ------------------------------------------------------------------

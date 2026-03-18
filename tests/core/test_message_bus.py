@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import queue
+import threading
 import time
 import uuid
 
@@ -276,3 +278,500 @@ class TestBusMessageDefaults:
         ):
             assert isinstance(topic, str)
             assert "." in topic
+
+
+# ---------------------------------------------------------------------------
+# New test classes — edge cases and additional coverage
+# ---------------------------------------------------------------------------
+
+
+class TestWildcardPatternEdgeCases:
+    """fnmatch wildcard pattern matching edge cases.
+
+    The bus delegates to Python's :func:`fnmatch.fnmatch` which treats ``*``
+    as matching any sequence of characters *including* dots.  This means a
+    single ``*`` matches multi-level dotted topics.  The tests below document
+    the actual matching semantics of the implementation.
+    """
+
+    def test_bare_star_matches_single_level(self) -> None:
+        """'*' matches a flat (no-dot) topic."""
+        bus = MessageBus()
+        received: list[BusMessage] = []
+        bus.subscribe("*", received.append)
+        bus.publish(_make_message(topic="anything"))
+        assert len(received) == 1
+
+    def test_bare_star_matches_multi_level(self) -> None:
+        """'*' also matches a dotted topic because fnmatch '*' crosses dots."""
+        bus = MessageBus()
+        received: list[BusMessage] = []
+        bus.subscribe("*", received.append)
+        bus.publish(_make_message(topic="agent.run.start"))
+        assert len(received) == 1
+
+    def test_star_dot_star_matches_two_level_topic(self) -> None:
+        """'*.*' matches a two-level dotted topic."""
+        bus = MessageBus()
+        received: list[BusMessage] = []
+        bus.subscribe("*.*", received.append)
+        bus.publish(_make_message(topic="agent.run"))
+        assert len(received) == 1
+
+    def test_star_dot_star_matches_three_level_topic(self) -> None:
+        """'*.*' also matches a three-level topic; fnmatch '*' is greedy across dots."""
+        bus = MessageBus()
+        received: list[BusMessage] = []
+        bus.subscribe("*.*", received.append)
+        bus.publish(_make_message(topic="agent.run.start"))
+        assert len(received) == 1
+
+    def test_prefix_star_matches_deeper_levels(self) -> None:
+        """'agent.*' matches 'agent.run.start' because fnmatch '*' crosses dots."""
+        bus = MessageBus()
+        received: list[BusMessage] = []
+        bus.subscribe("agent.*", received.append)
+        bus.publish(_make_message(topic="agent.run.start"))
+        assert len(received) == 1
+
+    def test_double_star_segment_pattern_matches_three_level(self) -> None:
+        """'agent.*.*' matches 'agent.run.start'."""
+        bus = MessageBus()
+        received: list[BusMessage] = []
+        bus.subscribe("agent.*.*", received.append)
+        bus.publish(_make_message(topic="agent.run.start"))
+        assert len(received) == 1
+
+    def test_prefix_star_does_not_match_different_prefix(self) -> None:
+        """'agent.*' does not match a topic with a different prefix."""
+        bus = MessageBus()
+        received: list[BusMessage] = []
+        bus.subscribe("agent.*", received.append)
+        bus.publish(_make_message(topic="channel.inbound"))
+        assert len(received) == 0
+
+    def test_empty_topic_matches_empty_pattern(self) -> None:
+        """An empty topic string matches an empty pattern exactly."""
+        bus = MessageBus()
+        received: list[BusMessage] = []
+        bus.subscribe("", received.append)
+        bus.publish(_make_message(topic=""))
+        assert len(received) == 1
+
+    def test_empty_topic_does_not_match_nonempty_pattern(self) -> None:
+        """An empty topic does not match a non-empty literal pattern."""
+        bus = MessageBus()
+        received: list[BusMessage] = []
+        bus.subscribe("something", received.append)
+        bus.publish(_make_message(topic=""))
+        assert len(received) == 0
+
+    def test_topic_with_dashes_and_underscores(self) -> None:
+        """Topics containing hyphens and underscores are matched literally."""
+        bus = MessageBus()
+        received: list[BusMessage] = []
+        bus.subscribe("my-service.some_event.*", received.append)
+        bus.publish(_make_message(topic="my-service.some_event.fired"))
+        assert len(received) == 1
+
+    def test_topic_with_special_chars_no_spurious_match(self) -> None:
+        """A topic with special characters only matches patterns that describe it."""
+        bus = MessageBus()
+        received: list[BusMessage] = []
+        bus.subscribe("other.*", received.append)
+        bus.publish(_make_message(topic="my-service.some_event.fired"))
+        assert len(received) == 0
+
+    def test_pattern_is_case_sensitive(self) -> None:
+        """fnmatch pattern matching on Linux is case-sensitive."""
+        bus = MessageBus()
+        received: list[BusMessage] = []
+        bus.subscribe("UPPER.*", received.append)
+        bus.publish(_make_message(topic="upper.run"))
+        assert len(received) == 0
+
+    def test_matching_pattern_correct_case(self) -> None:
+        """Same pattern and topic with matching case does match."""
+        bus = MessageBus()
+        received: list[BusMessage] = []
+        bus.subscribe("UPPER.*", received.append)
+        bus.publish(_make_message(topic="UPPER.run"))
+        assert len(received) == 1
+
+
+class TestQueueFullBehavior:
+    """Behavior when the async queue is at capacity."""
+
+    def test_queue_reaches_max_size(self) -> None:
+        """Messages fill the queue up to max_queue_size."""
+        bus = MessageBus(max_queue_size=3)
+        for _ in range(3):
+            bus.publish_async(_make_message())
+        assert bus.pending_count() == 3
+
+    def test_queue_full_blocks_until_space_available(self) -> None:
+        """publish_async on a full queue blocks; draining frees space for new messages."""
+        bus = MessageBus(max_queue_size=2)
+        bus.publish_async(_make_message())
+        bus.publish_async(_make_message())
+        assert bus.pending_count() == 2
+
+        # Drain creates space; a subsequent publish_async must succeed.
+        bus.drain()
+        assert bus.pending_count() == 0
+        bus.publish_async(_make_message())  # must not raise or block
+        assert bus.pending_count() == 1
+
+    def test_put_nowait_raises_full_when_queue_at_capacity(self) -> None:
+        """The underlying PriorityQueue raises queue.Full on put_nowait when full.
+
+        This exercises the data structure used by the bus directly, verifying
+        that the queue is bounded.  The public publish_async API uses the
+        blocking put() and will block rather than raise when full; the docstring
+        description of the exception reflects the queue's inherent contract.
+        """
+        bus = MessageBus(max_queue_size=1)
+        bus.publish_async(_make_message())
+        assert bus.pending_count() == 1
+
+        with pytest.raises(queue.Full):
+            bus._queue.put_nowait((-0, 999, _make_message()))
+
+
+class TestStartIdempotent:
+    """start() must not create duplicate worker threads."""
+
+    def test_start_twice_creates_one_worker(self) -> None:
+        """Calling start() a second time when the worker is alive is a no-op."""
+        bus = MessageBus()
+        bus.start()
+        worker_after_first = bus._worker
+        bus.start()
+        worker_after_second = bus._worker
+        bus.stop()
+
+        assert worker_after_first is worker_after_second
+
+    def test_worker_thread_name(self) -> None:
+        """The background worker is named 'missy-message-bus' for diagnostics."""
+        bus = MessageBus()
+        bus.start()
+        name = bus._worker.name if bus._worker else None
+        bus.stop()
+        assert name == "missy-message-bus"
+
+
+class TestDrainEmptyQueue:
+    """drain() on an already-empty queue must be a no-op."""
+
+    def test_drain_empty_does_not_raise(self) -> None:
+        """drain() on an empty queue completes without error."""
+        bus = MessageBus()
+        bus.drain()  # must not raise
+        assert bus.pending_count() == 0
+
+    def test_drain_empty_calls_no_handlers(self) -> None:
+        """drain() on an empty queue invokes no subscriber handlers."""
+        bus = MessageBus()
+        received: list[BusMessage] = []
+        bus.subscribe("test.*", received.append)
+        bus.drain()
+        assert received == []
+
+    def test_drain_idempotent(self) -> None:
+        """Calling drain() twice on an empty queue is safe."""
+        bus = MessageBus()
+        bus.drain()
+        bus.drain()
+        assert bus.pending_count() == 0
+
+
+class TestUnsubscribeCleansUpEmptyPatterns:
+    """After the last handler is removed, the pattern key is deleted."""
+
+    def test_pattern_key_deleted_when_last_handler_removed(self) -> None:
+        """The pattern entry is absent from _subscribers after last handler removed."""
+        bus = MessageBus()
+        handler = lambda msg: None  # noqa: E731
+        bus.subscribe("test.topic", handler)
+        assert "test.topic" in bus._subscribers
+
+        bus.unsubscribe("test.topic", handler)
+        assert "test.topic" not in bus._subscribers
+
+    def test_pattern_key_kept_when_other_handlers_remain(self) -> None:
+        """The pattern entry is retained when at least one handler is still registered."""
+        bus = MessageBus()
+        handler_a = lambda msg: None  # noqa: E731
+        handler_b = lambda msg: None  # noqa: E731
+        bus.subscribe("test.topic", handler_a)
+        bus.subscribe("test.topic", handler_b)
+
+        bus.unsubscribe("test.topic", handler_a)
+        assert "test.topic" in bus._subscribers
+        assert handler_b in bus._subscribers["test.topic"]
+
+    def test_unsubscribe_unknown_pattern_noop(self) -> None:
+        """Unsubscribing a pattern that was never registered does not raise."""
+        bus = MessageBus()
+        bus.unsubscribe("never.registered", lambda msg: None)
+        assert "never.registered" not in bus._subscribers
+
+    def test_unsubscribe_same_handler_twice_noop(self) -> None:
+        """Removing the same handler a second time is a no-op."""
+        bus = MessageBus()
+        handler = lambda msg: None  # noqa: E731
+        bus.subscribe("test.topic", handler)
+        bus.unsubscribe("test.topic", handler)
+        bus.unsubscribe("test.topic", handler)  # must not raise
+
+
+class TestThreadSafety:
+    """Multiple threads publishing concurrently must not corrupt state."""
+
+    def test_concurrent_publish_does_not_crash(self) -> None:
+        """50 threads each publishing 20 messages — no exceptions, all delivered."""
+        bus = MessageBus(max_queue_size=2000)
+        received: list[BusMessage] = []
+        lock = threading.Lock()
+
+        def safe_append(msg: BusMessage) -> None:
+            with lock:
+                received.append(msg)
+
+        bus.subscribe("stress.*", safe_append)
+
+        n_threads = 50
+        n_messages_per_thread = 20
+        barriers: list[threading.Barrier] = [threading.Barrier(n_threads)]
+
+        def publisher() -> None:
+            barriers[0].wait()  # all threads start at the same time
+            for i in range(n_messages_per_thread):
+                bus.publish(_make_message(topic=f"stress.{i}"))
+
+        threads = [threading.Thread(target=publisher) for _ in range(n_threads)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+
+        expected = n_threads * n_messages_per_thread
+        assert len(received) == expected
+
+    def test_concurrent_subscribe_unsubscribe_does_not_crash(self) -> None:
+        """Simultaneous subscribe and unsubscribe operations are safe."""
+        bus = MessageBus()
+        errors: list[Exception] = []
+
+        def subscriber_worker() -> None:
+            try:
+                handler = lambda msg: None  # noqa: E731
+                for _ in range(100):
+                    bus.subscribe("concurrent.topic", handler)
+                    bus.unsubscribe("concurrent.topic", handler)
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=subscriber_worker) for _ in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+
+        assert errors == []
+
+
+class TestMessageOrdering:
+    """FIFO ordering within the same priority level."""
+
+    def test_fifo_within_same_priority(self) -> None:
+        """Messages at equal priority are dispatched in publication order."""
+        bus = MessageBus()
+        order: list[str] = []
+
+        def record_id(msg: BusMessage) -> None:
+            order.append(msg.message_id)
+
+        bus.subscribe("test.topic", record_id)
+
+        ids = [str(uuid.uuid4()) for _ in range(5)]
+        for mid in ids:
+            msg = BusMessage(topic="test.topic", payload={}, source="test")
+            msg.message_id = mid
+            bus.publish_async(msg)
+
+        bus.drain()
+
+        assert order == ids
+
+    def test_fifo_preserved_across_drain_calls(self) -> None:
+        """Sequential drain calls do not reorder within same priority."""
+        bus = MessageBus()
+        order: list[str] = []
+
+        def record_id(msg: BusMessage) -> None:
+            order.append(msg.message_id)
+
+        bus.subscribe("test.topic", record_id)
+
+        msg_a = BusMessage(topic="test.topic", payload={}, source="test")
+        msg_b = BusMessage(topic="test.topic", payload={}, source="test")
+        bus.publish_async(msg_a)
+        bus.publish_async(msg_b)
+
+        bus.drain()
+
+        assert order == [msg_a.message_id, msg_b.message_id]
+
+
+class TestRepr:
+    """__repr__ returns a meaningful human-readable string."""
+
+    def test_repr_format(self) -> None:
+        """repr includes subscriber count and pending message count."""
+        bus = MessageBus()
+        r = repr(bus)
+        assert "MessageBus" in r
+        assert "subscribers=" in r
+        assert "pending=" in r
+
+    def test_repr_reflects_subscriber_count(self) -> None:
+        """repr subscriber count increases as handlers are added."""
+        bus = MessageBus()
+        assert "subscribers=0" in repr(bus)
+
+        bus.subscribe("a.topic", lambda msg: None)
+        assert "subscribers=1" in repr(bus)
+
+        bus.subscribe("a.topic", lambda msg: None)
+        bus.subscribe("b.topic", lambda msg: None)
+        assert "subscribers=3" in repr(bus)
+
+    def test_repr_reflects_pending_count(self) -> None:
+        """repr pending count matches the number of queued async messages."""
+        bus = MessageBus()
+        assert "pending=0" in repr(bus)
+
+        bus.publish_async(_make_message())
+        bus.publish_async(_make_message())
+        assert "pending=2" in repr(bus)
+
+        bus.drain()
+        assert "pending=0" in repr(bus)
+
+
+class TestTargetField:
+    """Messages with a target field are dispatched normally."""
+
+    def test_targeted_message_dispatched_to_pattern_subscribers(self) -> None:
+        """Setting target does not suppress delivery to pattern-matched subscribers."""
+        bus = MessageBus()
+        received: list[BusMessage] = []
+        bus.subscribe("agent.*", received.append)
+
+        msg = BusMessage(
+            topic="agent.run",
+            payload={"x": 1},
+            source="orchestrator",
+            target="worker-1",
+        )
+        bus.publish(msg)
+
+        assert len(received) == 1
+        assert received[0].target == "worker-1"
+
+    def test_targeted_message_dispatched_to_exact_topic_subscriber(self) -> None:
+        """A subscriber on the exact topic receives the targeted message."""
+        bus = MessageBus()
+        received: list[BusMessage] = []
+        bus.subscribe("agent.run", received.append)
+
+        msg = BusMessage(
+            topic="agent.run",
+            payload={},
+            source="test",
+            target="specific-handler",
+        )
+        bus.publish(msg)
+
+        assert len(received) == 1
+
+    def test_target_is_informational_only(self) -> None:
+        """target does not filter delivery; all matching subscribers receive the message."""
+        bus = MessageBus()
+        received_a: list[BusMessage] = []
+        received_b: list[BusMessage] = []
+
+        bus.subscribe("agent.run", received_a.append)
+        bus.subscribe("agent.*", received_b.append)
+
+        msg = BusMessage(
+            topic="agent.run",
+            payload={},
+            source="test",
+            target="worker-a",  # intended for worker-a, but both subscribers get it
+        )
+        bus.publish(msg)
+
+        assert len(received_a) == 1
+        assert len(received_b) == 1
+
+
+class TestHighPriorityPreemption:
+    """Urgent messages published after normal ones are dispatched first."""
+
+    def test_urgent_dispatched_before_normal(self) -> None:
+        """priority=2 message enqueued after priority=0 is drained first."""
+        bus = MessageBus()
+        order: list[int] = []
+
+        def record_priority(msg: BusMessage) -> None:
+            order.append(msg.priority)
+
+        bus.subscribe("test.topic", record_priority)
+
+        bus.publish_async(_make_message(priority=0))  # normal — enqueued first
+        bus.publish_async(_make_message(priority=2))  # urgent — enqueued second
+
+        bus.drain()
+
+        assert order[0] == 2, "urgent message must be dispatched before normal"
+        assert order[1] == 0
+
+    def test_priority_2_before_1_before_0(self) -> None:
+        """Three-tier ordering: urgent (2) > high (1) > normal (0)."""
+        bus = MessageBus()
+        order: list[int] = []
+
+        def record_priority(msg: BusMessage) -> None:
+            order.append(msg.priority)
+
+        bus.subscribe("test.topic", record_priority)
+
+        bus.publish_async(_make_message(priority=0))
+        bus.publish_async(_make_message(priority=1))
+        bus.publish_async(_make_message(priority=2))
+
+        bus.drain()
+
+        assert order == [2, 1, 0]
+
+    def test_multiple_urgent_messages_preserved_fifo(self) -> None:
+        """Multiple urgent messages at the same priority are drained in FIFO order."""
+        bus = MessageBus()
+        ids: list[str] = []
+
+        def record_id(msg: BusMessage) -> None:
+            ids.append(msg.message_id)
+
+        bus.subscribe("test.topic", record_id)
+
+        msg_x = BusMessage(topic="test.topic", payload={}, source="test", priority=2)
+        msg_y = BusMessage(topic="test.topic", payload={}, source="test", priority=2)
+        bus.publish_async(msg_x)
+        bus.publish_async(msg_y)
+
+        bus.drain()
+
+        assert ids == [msg_x.message_id, msg_y.message_id]
