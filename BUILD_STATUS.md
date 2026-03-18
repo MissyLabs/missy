@@ -9,11 +9,11 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 
 ## Test Results
 
-- **Total tests: 7388**
-- **Passed: 7388**
+- **Total tests: 7793**
+- **Passed: 7793**
 - **Failed: 0**
-- **Skipped: 14**
-- **Duration: ~143s**
+- **Skipped: 17**
+- **Duration: ~162s**
 
 ## Completed Components
 
@@ -80,8 +80,8 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 ## Architecture
 
 - 157 Python source files
-- 254+ test files
-- 7388 tests total
+- 262+ test files
+- 7793 tests total
 
 ## Session History
 
@@ -120,10 +120,45 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 10. Updated AUDIT_SECURITY.md with file permission hardening audit
 11. Total: 7388 tests passing, 0 failures
 
+### Session 4 (2026-03-18) — Test Coverage Expansion for Untested Modules
+1. Added 29 HeartbeatRunner tests (fire, active hours, suppression, threading)
+2. Added 19 Watchdog tests (health checks, recovery, audit events, thread lifecycle)
+3. Added 24 anthropic_auth tests (token classification, storage, expiry, runtime resolution)
+4. Added 22 AnthropicProvider tests (init, complete, tools, error handling, setup-token rejection)
+5. Added 19 OpenAIProvider tests (init, complete, tools, streaming, error handling)
+6. Added 18 OllamaProvider tests (init, complete, tools, streaming, error handling)
+7. Added 13 gateway error path tests (URL validation, REST policy, graceful degradation)
+8. Added 14 voice PairingManager tests (initiate, approve, reject, unpair lifecycle)
+9. Added 9 MCP manager security tests (injection blocking, unsafe names, permissions, digest mismatch)
+10. Added 14 runtime behavior integration tests (subsystem creation, graceful degradation, factory methods)
+11. Total: 7640 tests passing, 0 failures
+
+### Session 5 (2026-03-18) — Hypothesis Testing + Voice/Discord/Memory Tests
+1. Added 31 property-based tests for InputSanitizer (hypothesis): never-crash, truncation, zero-width stripping, injection detection with random context, case insensitivity, obfuscation defeat, base64 injection, false positive prevention
+2. Added 10 property-based test classes for SecretsDetector: never-crash, known credential detection, redaction verification, scan ordering, DB connection strings, password patterns
+3. Added 20 Discord voice command tests: !join (by user/name/ID), !leave, !say, guard conditions, error handling, case sensitivity
+4. Added 22 Discord image command tests: is_image_attachment, find_latest_image, !analyze, !screenshot, edge cases
+5. Added 17 VoiceServer tests: auth success/fail/muted/unpaired, pair request, heartbeat, full audio pipeline, STT/TTS/agent failure handling
+6. Added 11 FasterWhisperSTT tests: lifecycle, device resolution, transcription with mocked whisper
+7. Added 15 PiperTTS tests: PCM-to-WAV conversion, env sanitization, lifecycle, model resolution, synthesis subprocess, timeout/error handling
+8. Added 10 concurrent memory store tests: thread-safe writes, read/write interleaving, search during writes, SQLite concurrent access, high-volume stress
+9. Total: 7793 tests passing, 0 failures
+
 ## Remaining Work (Future Hardening)
 - [x] Persona change audit trail (JSONL log of all edits) — done in session 2
 - [x] Fuzz testing for YAML parsing edge cases — done in session 3
 - [x] Integration tests for hatching → persona → behavior pipeline — done in session 3
-- [ ] Additional runtime integration tests (agent runtime + behavior layer end-to-end)
-- [ ] Property-based testing with hypothesis for sanitizer/secrets patterns
-- [ ] Load testing for memory store under concurrent access
+- [x] Additional runtime integration tests (agent runtime + behavior layer end-to-end) — done in session 4
+- [x] Provider implementation tests (Anthropic, OpenAI, Ollama) — done in session 4
+- [x] Gateway error path tests — done in session 4
+- [x] MCP security path tests — done in session 4
+- [x] Voice pairing lifecycle tests — done in session 4
+- [x] HeartbeatRunner and Watchdog tests — done in session 4
+- [x] Property-based testing with hypothesis for sanitizer/secrets patterns — done in session 5
+- [x] Load testing for memory store under concurrent access — done in session 5
+- [x] Voice STT/TTS subprocess management tests (whisper.py, piper.py) — done in session 5
+- [x] Discord voice_commands and image_commands tests — done in session 5
+- [ ] Discord voice manager integration tests (requires discord.py + voice_recv mocking)
+- [ ] End-to-end WebSocket protocol tests for VoiceServer
+- [ ] Config hotreload edge case tests
+- [ ] Message bus topic wildcard tests

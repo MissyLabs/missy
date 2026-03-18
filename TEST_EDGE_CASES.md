@@ -98,3 +98,81 @@
 | Unicode normalization | Homoglyph attacks caught | Covered |
 | Base64 encoded payloads | Decoded and checked | Covered |
 | Nested encoding | Multi-layer encoding caught | Covered |
+
+## Property-Based Testing (Session 5)
+
+| Test | Description | Status |
+|---|---|---|
+| Sanitizer: arbitrary text | Never crashes on any string input | Covered |
+| Sanitizer: binary decode | Never crashes on decoded binary data | Covered |
+| Sanitizer: truncation | Always enforces max length | Covered |
+| Sanitizer: zero-width strip | All zero-width chars removed | Covered |
+| Sanitizer: injection + context | Known injections detected with random prefix/suffix | Covered |
+| Sanitizer: case insensitive | Mixed-case injections still caught | Covered |
+| Sanitizer: obfuscation | Zero-width obfuscated injections detected | Covered |
+| Sanitizer: base64 injection | Base64-encoded injections decoded and caught | Covered |
+| Sanitizer: no false positives | Clean alphanumeric text not flagged | Covered |
+| Secrets: arbitrary text | scan/redact/has_secrets never crash | Covered |
+| Secrets: known credentials | All 17 credential types detected in context | Covered |
+| Secrets: redaction hides | Full secret value not in redacted output | Covered |
+| Secrets: ordered results | Findings sorted by position | Covered |
+| Secrets: DB connections | Postgres/MySQL/MongoDB/Redis URLs detected | Covered |
+| Secrets: password patterns | password=... detected | Covered |
+
+## Voice Channel Edge Cases (Session 5)
+
+| Test | Description | Status |
+|---|---|---|
+| Auth success | Valid token → auth_ok frame | Covered |
+| Auth invalid token | Bad token → auth_fail + close | Covered |
+| Auth unpaired node | Paired=false → rejected | Covered |
+| Auth muted node | Policy_mode=muted → muted frame | Covered |
+| Auth node not found | Missing node → auth_fail | Covered |
+| Pair request | New node → pair_pending + close | Covered |
+| Heartbeat update | Updates presence + marks online | Covered |
+| Heartbeat error resilience | Presence error → no crash | Covered |
+| Audio full pipeline | STT→agent→TTS→stream works | Covered |
+| Audio STT failure | Error frame sent | Covered |
+| Audio empty transcript | Agent not called | Covered |
+| Audio TTS failure | Text response still sent | Covered |
+| Whisper device resolution | Auto→CPU fallback | Covered |
+| Whisper compute type | Auto selects int8 for CPU | Covered |
+| Piper env sanitization | API keys excluded from subprocess | Covered |
+| Piper model resolution | Voice dir scan + fallback | Covered |
+| Piper synthesis subprocess | PCM→WAV conversion | Covered |
+| Piper timeout | Process killed on timeout | Covered |
+
+## Discord Command Edge Cases (Session 5)
+
+| Test | Description | Status |
+|---|---|---|
+| Non-command passthrough | No ! prefix → not handled | Covered |
+| No guild → error | Voice commands server-only | Covered |
+| No voice manager → error | Graceful message | Covered |
+| !join by user | Follows user's voice channel | Covered |
+| !join by name | Finds channel by name | Covered |
+| !join by ID | Joins by snowflake ID | Covered |
+| !join shows capabilities | Listen/speak status | Covered |
+| !leave not connected | "Not in channel" message | Covered |
+| !say no text | Usage hint | Covered |
+| Case-insensitive commands | !JOIN, !Leave work | Covered |
+| is_image_attachment | Content-type + extension detection | Covered |
+| find_latest_image | Skips non-images, handles empty | Covered |
+| !analyze no image | "No image found" message | Covered |
+| !screenshot bad subcmd | Usage hint | Covered |
+| ImageCommandResult frozen | Immutable dataclass | Covered |
+
+## Concurrent Memory Access (Session 5)
+
+| Test | Description | Status |
+|---|---|---|
+| 5 writers concurrent | All 50 turns stored | Covered |
+| Read+write concurrent | No crashes during interleaving | Covered |
+| Search+write concurrent | Correct results during writes | Covered |
+| Clear+write concurrent | Survivor session preserved | Covered |
+| Compact+read concurrent | No crashes | Covered |
+| SQLite 5 writers | All 50 turns persisted | Covered |
+| SQLite search+write | Concurrent access safe | Covered |
+| SQLite learnings concurrent | Save+read no errors | Covered |
+| High volume (100 writes) | ThreadPool stress test | Covered |
+| Persistence verification | Data survives reload after concurrent writes | Covered |

@@ -6,11 +6,11 @@
 
 | Metric | Value |
 |---|---|
-| Total tests | 7388 |
-| Passed | 7388 |
+| Total tests | 7793 |
+| Passed | 7793 |
 | Failed | 0 |
-| Skipped | 14 |
-| Duration | ~154s |
+| Skipped | 17 |
+| Duration | ~162s |
 
 ## Test Distribution
 
@@ -33,7 +33,7 @@
 | tests/tools/ | Built-in tools (file, shell, web, calculator, etc.) |
 | tests/unit/ | Focused unit tests, hardening tests |
 
-## New Tests Added (This Session)
+## New Tests Added (Sessions 1-3)
 
 | File | Tests | Coverage |
 |---|---|---|
@@ -41,7 +41,37 @@
 | tests/agent/test_behavior.py | 129 | BehaviorLayer, IntentInterpreter, ResponseShaper, edge cases |
 | tests/agent/test_hatching.py | 51 | HatchingManager, HatchingLog, state machine, edge cases |
 | tests/cli/test_cli_hatch_persona.py | 33 | CLI: hatch, persona show/edit/reset/backups/diff/rollback |
-| **Total new** | **273** | |
+| **Total new (sessions 1-3)** | **273** | |
+
+## New Tests Added (Session 4 — Coverage Expansion)
+
+| File | Tests | Coverage |
+|---|---|---|
+| tests/agent/test_heartbeat.py | 29 | HeartbeatRunner: fire, active hours, suppression, threading |
+| tests/agent/test_watchdog.py | 19 | Watchdog: health checks, recovery, audit events, thread lifecycle |
+| tests/cli/test_anthropic_auth.py | 24 | Token classification, storage, expiry, runtime resolution |
+| tests/providers/test_anthropic_provider.py | 22 | Init, complete, tools, error handling, setup-token rejection |
+| tests/providers/test_openai_provider.py | 19 | Init, complete, tools, streaming, error handling |
+| tests/providers/test_ollama_provider.py | 18 | Init, complete, tools, streaming, error handling |
+| tests/gateway/test_gateway_error_paths.py | 13 | URL validation, REST policy, graceful degradation |
+| tests/channels/voice/test_pairing.py | 14 | PairingManager: initiate, approve, reject, unpair lifecycle |
+| tests/mcp/test_mcp_manager.py (additions) | 9 | Injection blocking, unsafe names, permissions, digest mismatch |
+| tests/agent/test_runtime_behavior_integration.py | 14 | Subsystem creation, graceful degradation, factory methods |
+| **Total new (session 4)** | **181** | |
+
+## New Tests Added (Session 5 — Hypothesis + Voice + Discord + Concurrent)
+
+| File | Tests | Coverage |
+|---|---|---|
+| tests/security/test_sanitizer_hypothesis.py | 31 | Property-based: never-crash, truncation, zero-width, injection, base64, false positives |
+| tests/security/test_secrets_hypothesis.py | 10 classes | Property-based: never-crash, known secrets, redaction, ordering, passwords |
+| tests/channels/discord/test_voice_commands.py | 20 | !join/!leave/!say parsing, guards, errors, case sensitivity |
+| tests/channels/discord/test_image_commands.py | 22 | is_image_attachment, find_latest_image, !analyze, !screenshot |
+| tests/channels/voice/test_voice_server.py | 17 | Auth, pair request, heartbeat, audio pipeline, STT/TTS failure |
+| tests/channels/voice/test_stt_whisper.py | 11 | Lifecycle, device resolution, transcription, abstract base |
+| tests/channels/voice/test_tts_piper.py | 15 | PCM-to-WAV, env sanitization, lifecycle, model resolution, synthesis |
+| tests/memory/test_memory_concurrent.py | 10 | Thread-safe writes, read/write, search, compaction, SQLite concurrent |
+| **Total new (session 5)** | **153** | |
 
 ## Tests Fixed (This Session)
 
