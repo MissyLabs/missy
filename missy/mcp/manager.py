@@ -116,8 +116,10 @@ class McpManager:
                 try:
                     from missy.core.events import AuditEvent, event_bus
 
-                    event_bus.emit(
-                        AuditEvent(
+                    event_bus.publish(
+                        AuditEvent.now(
+                            session_id="",
+                            task_id="",
                             event_type="mcp.digest_mismatch",
                             category="security",
                             result="deny",
