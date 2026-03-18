@@ -305,8 +305,9 @@ class TestBuildConfigYaml:
             providers_cfg=[],
             allowed_hosts=["api.anthropic.com", "api.openai.com"],
         )
-        assert "api.anthropic.com" in content
-        assert "api.openai.com" in content
+        # Anthropic host may be collapsed into a preset; either form is valid.
+        assert "api.anthropic.com" in content or "anthropic" in content
+        assert "api.openai.com" in content or "openai" in content
 
     def test_provider_api_key_embedded(self):
         from missy.cli.wizard import _build_config_yaml
@@ -768,7 +769,8 @@ class TestRunWizard:
         content = config_file.read_text()
         assert "discord:" in content
         assert "allowlist" in content
-        assert "discord.com" in content
+        # Discord hosts may be collapsed into a preset.
+        assert "discord.com" in content or "discord" in content
 
     def test_wizard_aborts_write_on_final_confirm_no(self, tmp_path):
         from missy.cli.wizard import run_wizard

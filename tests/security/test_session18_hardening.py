@@ -36,7 +36,7 @@ class TestGatewayAsyncPut:
         with patch.object(client, "_emit_request_event"):
             resp = await client.aput("https://example.com/resource", json={"k": "v"})
 
-        client._check_url.assert_called_once_with("https://example.com/resource")
+        client._check_url.assert_called_once_with("https://example.com/resource", "PUT")
         assert resp.status_code == 200
 
     @pytest.mark.asyncio
@@ -94,7 +94,7 @@ class TestGatewayAsyncHead:
         with patch.object(client, "_emit_request_event"):
             resp = await client.ahead("https://example.com/check")
 
-        client._check_url.assert_called_once_with("https://example.com/check")
+        client._check_url.assert_called_once_with("https://example.com/check", "HEAD")
         assert resp.status_code == 200
 
     @pytest.mark.asyncio
@@ -380,7 +380,7 @@ class TestGatewaySyncHead:
         with patch.object(client, "_emit_request_event"):
             resp = client.head("https://example.com/health")
 
-        client._check_url.assert_called_once_with("https://example.com/health")
+        client._check_url.assert_called_once_with("https://example.com/health", "HEAD")
         assert resp.status_code == 200
 
 

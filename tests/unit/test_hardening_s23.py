@@ -124,6 +124,16 @@ class TestAgentToolLoopEdgeCases:
         rt._cost_tracker = None
         rt._sanitizer = None
         rt._pending_recovery = []
+        rt._progress = MagicMock()
+        rt._interactive_approval = None
+        rt._drift_detector = None
+        rt._identity = None
+        rt._trust_scorer = MagicMock()
+        rt._attention = None
+        rt._persona_manager = None
+        rt._behavior = None
+        rt._response_shaper = None
+        rt._message_bus = None
         return rt
 
     def test_iteration_limit_fallback_success(self) -> None:
