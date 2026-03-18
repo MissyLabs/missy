@@ -211,6 +211,7 @@ class AgentRuntime:
         self._persona_manager = self._make_persona_manager()
         self._behavior = self._make_behavior_layer()
         self._response_shaper = self._make_response_shaper()
+        self._intent_interpreter = self._make_intent_interpreter()
         # Message bus (graceful degradation)
         self._message_bus = self._make_message_bus()
 
@@ -1239,6 +1240,8 @@ class AgentRuntime:
                             "turn_count": len(history),
                             "has_tool_results": False,
                             "topic": "",
+                            "intent": "question",
+                            "urgency": "low",
                         }
                         if history:
                             user_msgs = [m for m in history if m.get("role") == "user"]
@@ -1246,6 +1249,13 @@ class AgentRuntime:
                                 behavior_context["user_tone"] = self._behavior.analyze_user_tone(
                                     user_msgs[-5:]
                                 )
+                        if self._intent_interpreter is not None and user_input:
+                            behavior_context["intent"] = self._intent_interpreter.classify_intent(
+                                user_input
+                            )
+                            behavior_context["urgency"] = self._intent_interpreter.extract_urgency(
+                                user_input
+                            )
                         base_system = self._behavior.shape_system_prompt(
                             base_system, behavior_context
                         )
@@ -1762,6 +1772,17 @@ class AgentRuntime:
             return ResponseShaper()
         except Exception:
             logger.debug("ResponseShaper unavailable", exc_info=True)
+            return None
+
+    @staticmethod
+    def _make_intent_interpreter():
+        """Create a :class:`~missy.agent.behavior.IntentInterpreter`."""
+        try:
+            from missy.agent.behavior import IntentInterpreter
+
+            return IntentInterpreter()
+        except Exception:
+            logger.debug("IntentInterpreter unavailable", exc_info=True)
             return None
 
     @staticmethod
