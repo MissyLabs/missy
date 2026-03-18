@@ -9,8 +9,8 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 
 ## Test Results
 
-- **Total tests: 11722**
-- **Passed: 11722**
+- **Total tests: 11779**
+- **Passed: 11779**
 - **Failed: 0**
 - **Skipped: 17**
 - **Duration: ~254s**
@@ -81,7 +81,7 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 
 - 157 Python source files
 - 340+ test files
-- 11722 tests total
+- 11779 tests total
 
 ## Session History
 
@@ -230,7 +230,10 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
     - int() ValueError crash on non-numeric frame fields
     - Dimension validation bypass when width=0 or height=0
 11. Added 6 security hardening validation tests
-12. Total: 11722 tests passing, 0 failures, 17 skipped
+12. Added 23 persona/playbook/Discord channel gap tests
+13. Added 34 config/MCP/settings/wizard/auth/screen_commands gap tests
+14. Fixed 3 lint issues (duplicate set item, missing from-clause, contextlib.suppress)
+15. Total: 11779 tests passing, 0 failures, 17 skipped, 0 lint errors
 
 ## Remaining Work (Future Hardening)
 - [x] Persona change audit trail (JSONL log of all edits) — done in session 2
