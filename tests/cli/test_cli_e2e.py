@@ -1056,13 +1056,13 @@ class TestCost:
         self, runner: CliRunner, mock_config: MagicMock, tmp_path: Path
     ) -> None:
         """``--session`` with no matching records prints 'No cost records'."""
-        from missy.memory.sqlite_store import SQLiteMemoryStore
-
-        store = SQLiteMemoryStore(db_path=str(tmp_path / "test.db"))
+        mock_store = MagicMock()
+        mock_store.get_session_turns.return_value = []
+        mock_store.get_session_costs.return_value = []
 
         with (
             patch("missy.cli.main._load_subsystems", return_value=mock_config),
-            patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=store),
+            patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store),
         ):
             result = runner.invoke(cli, ["cost", "--session", "nonexistent-session"])
 
