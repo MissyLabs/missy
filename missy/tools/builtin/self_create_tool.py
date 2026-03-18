@@ -81,18 +81,25 @@ class SelfCreateTool(BaseTool):
             )
 
         if action == "delete":
-            if not tool_name:
+            import re
+
+            if not tool_name or not re.match(r"^[a-zA-Z0-9_-]+$", tool_name):
                 return ToolResult(
-                    success=False, output="", error="tool_name is required for delete."
+                    success=False,
+                    output="",
+                    error="tool_name must be alphanumeric/underscore/hyphen only.",
                 )
             removed = False
             for ext in ALLOWED_LANGUAGES.values():
                 p = tools_dir / f"{tool_name}{ext}"
+                # Verify the resolved path is still under tools_dir
+                if p.resolve().parent != tools_dir.resolve():
+                    continue
                 if p.exists():
                     p.unlink()
                     removed = True
             meta = tools_dir / f"{tool_name}.json"
-            if meta.exists():
+            if meta.resolve().parent == tools_dir.resolve() and meta.exists():
                 meta.unlink()
                 removed = True
             if removed:

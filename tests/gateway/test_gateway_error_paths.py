@@ -73,15 +73,16 @@ class TestRESTPolicy:
         client._check_rest_policy("example.com", "GET", "/api/test")
 
     @patch("missy.gateway.client.get_policy_engine")
-    def test_rest_policy_exception_degrades_gracefully(self, mock_engine):
-        """When rest_policy.check() raises, the request should be allowed."""
+    def test_rest_policy_exception_denies_request(self, mock_engine):
+        """When rest_policy.check() raises, the request is denied (fail-closed)."""
         engine = MagicMock()
         engine.rest_policy.check.side_effect = RuntimeError("broken parser")
         mock_engine.return_value = engine
 
         client = PolicyHTTPClient(timeout=5)
-        # Should not raise — graceful degradation
-        client._check_rest_policy("example.com", "GET", "/api/test")
+        # Must raise — fail-closed denies the request
+        with pytest.raises(PolicyViolationError):
+            client._check_rest_policy("example.com", "GET", "/api/test")
 
     @patch("missy.gateway.client.get_policy_engine")
     def test_rest_policy_check_with_various_methods(self, mock_engine):

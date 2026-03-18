@@ -546,16 +546,17 @@ class TestRESTPolicyEnforcement:
         client._check_url("https://api.example.com/anything", method="POST")
 
     @patch("missy.gateway.client.get_policy_engine")
-    def test_rest_policy_exception_degrades_to_allow(self, mock_get_engine: MagicMock) -> None:
-        """Non-PolicyViolationError from REST policy check is swallowed; request proceeds."""
+    def test_rest_policy_exception_denies_request(self, mock_get_engine: MagicMock) -> None:
+        """Non-PolicyViolationError from REST policy check denies request (fail-closed)."""
         mock_engine = MagicMock()
         mock_engine.check_network.return_value = True
         mock_engine.rest_policy.check.side_effect = RuntimeError("parser broken")
         mock_get_engine.return_value = mock_engine
 
         client = PolicyHTTPClient()
-        # Must NOT raise — soft failure allows the request
-        client._check_url("https://api.example.com/resource", method="GET")
+        # Must raise — fail-closed denies the request
+        with pytest.raises(PolicyViolationError):
+            client._check_url("https://api.example.com/resource", method="GET")
 
     @patch("missy.gateway.client.get_policy_engine")
     def test_rest_policy_error_detail_includes_method_and_path(

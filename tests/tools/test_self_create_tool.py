@@ -86,12 +86,23 @@ class TestDeleteAction:
     def test_delete_no_name(self, tool, tools_dir):
         r = tool.execute(action="delete")
         assert not r.success
-        assert "tool_name is required" in r.error
+        assert "alphanumeric" in r.error
 
     def test_delete_nonexistent(self, tool, tools_dir):
         r = tool.execute(action="delete", tool_name="nonexistent")
         assert not r.success
         assert "not found" in r.error
+
+    def test_delete_path_traversal_blocked(self, tool, tools_dir):
+        """Path traversal in tool_name must be rejected."""
+        r = tool.execute(action="delete", tool_name="../../etc/passwd")
+        assert not r.success
+        assert "alphanumeric" in r.error
+
+    def test_delete_invalid_name_blocked(self, tool, tools_dir):
+        r = tool.execute(action="delete", tool_name="bad name!")
+        assert not r.success
+        assert "alphanumeric" in r.error
 
     def test_delete_existing_script(self, tool, tools_dir):
         (tools_dir / "my_tool.py").write_text("print('hi')")
