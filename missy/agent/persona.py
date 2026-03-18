@@ -258,6 +258,9 @@ class PersonaManager:
                     sort_keys=False,
                 )
             os.replace(tmp_path, self._path)
+            # Restrict file permissions — persona may contain sensitive identity info
+            with contextlib.suppress(OSError):
+                self._path.chmod(0o600)
             logger.debug(
                 "Persona saved to %s (version %d)",
                 self._path,

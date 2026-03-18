@@ -116,7 +116,7 @@ class HatchingState:
             status=status,
             started_at=data.get("started_at"),
             completed_at=data.get("completed_at"),
-            steps_completed=list(data.get("steps_completed", [])),
+            steps_completed=list(data.get("steps_completed") or []),
             persona_generated=bool(data.get("persona_generated", False)),
             environment_validated=bool(data.get("environment_validated", False)),
             provider_verified=bool(data.get("provider_verified", False)),
@@ -316,6 +316,9 @@ class HatchingManager:
         try:
             with self._state_path.open(encoding="utf-8") as fh:
                 raw = yaml.safe_load(fh) or {}
+            if not isinstance(raw, dict):
+                logger.warning("Hatching state file is not a mapping; using defaults.")
+                return HatchingState()
             return HatchingState.from_dict(raw)
         except (OSError, yaml.YAMLError) as exc:
             logger.warning("Could not load hatching state from %s: %s", self._state_path, exc)

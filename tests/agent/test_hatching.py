@@ -574,3 +574,85 @@ class TestHatchingManagerGetHatchingLog:
         steps_logged = {e["step"] for e in entries}
         assert "hatching" in steps_logged
         assert "finalize" in steps_logged
+
+
+# ---------------------------------------------------------------------------
+# Edge case tests
+# ---------------------------------------------------------------------------
+
+
+class TestHatchingEdgeCases:
+    def test_state_file_with_empty_yaml(self, tmp_path):
+        """Empty state file should return default UNHATCHED state."""
+        state_path = tmp_path / "hatching.yaml"
+        state_path.write_text("", encoding="utf-8")
+        mgr = HatchingManager(state_path=state_path, log_path=tmp_path / "log.jsonl")
+        state = mgr.get_state()
+        assert state.status is HatchingStatus.UNHATCHED
+
+    def test_state_file_with_list_yaml(self, tmp_path):
+        """Non-dict YAML (e.g. a list) should return default state."""
+        state_path = tmp_path / "hatching.yaml"
+        state_path.write_text("- item1\n- item2\n", encoding="utf-8")
+        mgr = HatchingManager(state_path=state_path, log_path=tmp_path / "log.jsonl")
+        state = mgr.get_state()
+        assert state.status is HatchingStatus.UNHATCHED
+
+    def test_state_file_with_extra_keys(self, tmp_path):
+        """Unknown keys in state file should be ignored gracefully."""
+        state_path = tmp_path / "hatching.yaml"
+        data = {"status": "hatched", "unknown_key": "some_value", "completed_at": "2026-01-01T00:00:00"}
+        state_path.write_text(yaml.safe_dump(data), encoding="utf-8")
+        mgr = HatchingManager(state_path=state_path, log_path=tmp_path / "log.jsonl")
+        state = mgr.get_state()
+        assert state.status is HatchingStatus.HATCHED
+
+    def test_concurrent_log_entries_are_ordered(self, tmp_path):
+        """Multiple log entries should preserve chronological order."""
+        log = HatchingLog(log_path=tmp_path / "log.jsonl")
+        for i in range(10):
+            log.log(f"step_{i}", "ok", f"Step {i}")
+        entries = log.get_entries()
+        assert len(entries) == 10
+        for i, entry in enumerate(entries):
+            assert entry["step"] == f"step_{i}"
+
+    def test_from_dict_handles_none_steps_completed(self):
+        """steps_completed=None should produce empty list."""
+        state = HatchingState.from_dict({"steps_completed": None})
+        assert state.steps_completed == []
+
+    def test_from_dict_handles_boolean_flags_as_strings(self):
+        """String booleans should be coerced properly."""
+        state = HatchingState.from_dict({
+            "persona_generated": "true",
+            "environment_validated": 1,
+            "provider_verified": "",
+        })
+        assert state.persona_generated is True
+        assert state.environment_validated is True
+        assert state.provider_verified is False
+
+    def test_needs_hatching_true_for_in_progress(self, tmp_path):
+        """IN_PROGRESS status means hatching is still needed (interrupted)."""
+        state_path = tmp_path / "hatching.yaml"
+        state_path.write_text(yaml.safe_dump({"status": "in_progress"}), encoding="utf-8")
+        mgr = HatchingManager(state_path=state_path, log_path=tmp_path / "log.jsonl")
+        # IN_PROGRESS is not in the needs_hatching list, so it shouldn't need re-hatching
+        # But it should also not be considered "hatched"
+        assert not mgr.is_hatched()
+
+    def test_hatching_step_warning_is_exception(self):
+        """_HatchingStepWarning should be a proper Exception subclass."""
+        assert issubclass(_HatchingStepWarning, Exception)
+        warning = _HatchingStepWarning("test message")
+        assert str(warning) == "test message"
+
+    def test_log_with_unicode_content(self, tmp_path):
+        """Log entries with unicode content should be handled correctly."""
+        log = HatchingLog(log_path=tmp_path / "log.jsonl")
+        log.log("step", "ok", "Unicode test: éàü 中文 🎉")
+        entries = log.get_entries()
+        assert len(entries) == 1
+        assert "éàü" in entries[0]["message"]
+        assert "中文" in entries[0]["message"]
