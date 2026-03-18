@@ -376,7 +376,7 @@ class PolicyHTTPClient:
                 )
         except PolicyViolationError:
             raise
-        except Exception:
+        except Exception as exc:
             logger.warning(
                 "REST policy check raised unexpected error; denying request (fail-closed)",
                 exc_info=True,
@@ -385,7 +385,7 @@ class PolicyHTTPClient:
                 f"REST policy check error for {method} {host}{path}",
                 category="network",
                 detail="Internal error during REST policy evaluation — request denied",
-            )
+            ) from exc
 
     #: Kwargs that are safe to pass through to httpx request methods.
     #: Everything else is stripped to prevent security bypass (e.g.

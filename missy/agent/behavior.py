@@ -81,7 +81,7 @@ _FRUSTRATED_SIGNALS: frozenset[str] = frozenset(
     {
         "wrong", "broken", "doesn't work", "not working", "still", "again",
         "useless", "failed", "why", "terrible", "ridiculous", "ugh", "argh",
-        "wtf", "seriously", "frustrated", "annoying", "waste", "useless",
+        "wtf", "seriously", "frustrated", "annoying", "waste",
     }
 )
 

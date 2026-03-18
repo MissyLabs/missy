@@ -372,10 +372,8 @@ class PersonaManager:
                     line = raw_line.strip()
                     if not line:
                         continue
-                    try:
+                    with contextlib.suppress(json.JSONDecodeError):
                         entries.append(json.loads(line))
-                    except json.JSONDecodeError:
-                        pass
         except OSError:
             pass
         return entries
