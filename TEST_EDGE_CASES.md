@@ -162,6 +162,48 @@
 | !screenshot bad subcmd | Usage hint | Covered |
 | ImageCommandResult frozen | Immutable dataclass | Covered |
 
+## Security Vulnerability Tests (Session 9)
+
+| Test | Description | Status |
+|---|---|---|
+| Delete path traversal blocked | `../..` in tool_name rejected | Covered |
+| Delete invalid name blocked | Spaces/special chars rejected | Covered |
+| Delete regex validation | Same regex as create action | Covered |
+| REST policy fail-closed | RuntimeError during check → deny | Covered |
+| REST policy TypeError → deny | TypeError during check → deny | Covered |
+| REST policy explicit deny | "deny" result → PolicyViolationError | Covered |
+| REST policy no config | No rest_policy → passes | Covered |
+
+## Behavior Layer Robustness (Session 9)
+
+| Test | Description | Status |
+|---|---|---|
+| Null bytes in input | IntentInterpreter handles \x00 | Covered |
+| Chinese text | Intent classification doesn't crash | Covered |
+| Arabic RTL text | Intent classification doesn't crash | Covered |
+| Emoji in input | 🔥🚨 handled correctly | Covered |
+| SQL injection attempt | Classified without error | Covered |
+| Prompt injection attempt | Classified without error | Covered |
+| Code snippet classification | Fenced code block handled | Covered |
+| Very long input (80k chars) | No crash or timeout | Covered |
+| Robotic phrase stripping | 15+ patterns removed | Covered |
+| Code preservation in response | ```blocks``` untouched | Covered |
+| Inline code preservation | `backtick` untouched | Covered |
+
+## Persona Pipeline Integration (Session 9)
+
+| Test | Description | Status |
+|---|---|---|
+| Technical question pipeline | Tone→intent→guidelines→shaping works | Covered |
+| Urgent troubleshooting | High urgency detected and handled | Covered |
+| Frustrated user pipeline | Empathetic guidelines generated | Covered |
+| Multi-turn tone analysis | Accumulates over message history | Covered |
+| Confirmation intent | Short affirmatives classified correctly | Covered |
+| Code preserved through pipeline | Full pipeline doesn't damage code | Covered |
+| No persona fallback | Pipeline works without persona | Covered |
+| Persona edit→behavior | Updated name reflected in prompts | Covered |
+| Persona reset→behavior | Reset returns to default name | Covered |
+
 ## Concurrent Memory Access (Session 5)
 
 | Test | Description | Status |
