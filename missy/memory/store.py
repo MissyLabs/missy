@@ -248,6 +248,33 @@ class MemoryStore:
                 matches.append(turn)
         return matches[:limit]
 
+    def get_summaries(
+        self,
+        session_id: str,  # noqa: ARG002
+        depth: int | None = None,  # noqa: ARG002
+        limit: int = 50,  # noqa: ARG002
+    ) -> list:
+        """No-op stub — summaries require :class:`~missy.memory.sqlite_store.SQLiteMemoryStore`.
+
+        Returns:
+            An empty list.
+        """
+        return []
+
+    def get_session_token_count(self, session_id: str) -> int:
+        """Estimate total tokens for a session by character count / 4.
+
+        Args:
+            session_id: Session identifier.
+
+        Returns:
+            Approximate token count.
+        """
+        total_chars = sum(
+            len(t.content) for t in self._turns if t.session_id == session_id
+        )
+        return max(total_chars // 4, 0)
+
     def save_learning(self, learning) -> None:  # noqa: ARG002
         """No-op stub — learnings require :class:`~missy.memory.sqlite_store.SQLiteMemoryStore`.
 
