@@ -88,7 +88,7 @@ class AgentIdentity:
         try:
             self._public_key.verify(signature, message)
             return True
-        except Exception:
+        except Exception:  # noqa: BLE001  — cryptography.exceptions.InvalidSignature + general errors
             return False
 
     # ------------------------------------------------------------------

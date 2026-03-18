@@ -38,7 +38,7 @@ def needs_migration(config_path: str) -> bool:
         return False
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except Exception:
+    except (yaml.YAMLError, OSError):
         return False
     if not isinstance(data, dict):
         return False
