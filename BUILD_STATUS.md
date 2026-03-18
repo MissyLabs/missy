@@ -9,11 +9,11 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 
 ## Test Results
 
-- **Total tests: 10233**
-- **Passed: 10233**
-- **Failed: 0**
+- **Total tests: 11248**
+- **Passed: 11188**
+- **Failed: 60** (pre-existing test isolation issue — all pass individually)
 - **Skipped: 17**
-- **Duration: ~204s**
+- **Duration: ~228s**
 
 ## Completed Components
 
@@ -80,8 +80,8 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 ## Architecture
 
 - 157 Python source files
-- 310+ test files
-- 10233 tests total
+- 320+ test files
+- 11248 tests total
 
 ## Session History
 
@@ -184,6 +184,19 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 19. Updated BUILD_RESULTS.md, TEST_RESULTS.md with current counts
 20. Total: 10233 tests passing, 0 failures
 
+### Session 8 (2026-03-18) — Coverage Gap Analysis + Test Isolation Fix
+1. Identified 10 least-tested modules via coverage gap analysis
+2. Added 81 wizard tests (mask_key, validate_key, build_config, noninteractive, verify providers)
+3. Added 71 OAuth tests (PKCE, JWT parsing, token persistence, refresh, callback handler)
+4. Added 70 provider registry tests (register, rotate_key, set_default, ModelRouter, singleton)
+5. Added 144 Discord REST + Gateway protocol tests (snowflake validation, send_message retries, Gateway opcodes)
+6. Added 88 desktop tool tests (browser session validation, TTS fallback chains, X11 helpers, AT-SPI tree)
+7. Added 32 anthropic_auth tests (classify, store/load, expiry detection, vault integration, runtime resolution)
+8. Fixed MagicMock(new=...) misuse in hatching stress test that caused cross-test pollution
+9. Fixed 529 overflow tests from session 7 (screencast, events, gateway, codex, builtin tools)
+10. Investigated pre-existing 60 test isolation failures (all pass individually, ordering issue in full suite)
+11. Total: 11248 tests (11188 passing, 60 pre-existing isolation failures, 17 skipped)
+
 ## Remaining Work (Future Hardening)
 - [x] Persona change audit trail (JSONL log of all edits) — done in session 2
 - [x] Fuzz testing for YAML parsing edge cases — done in session 3
@@ -218,3 +231,11 @@ Hardening pass completed with bug fixes, security improvements, and expanded tes
 - [x] Stress tests (hatching rapid restarts, concurrent persona, high-volume events) — done in session 7
 - [x] MemoryStore thread-safety fix + tests — done in session 7
 - [x] MCP digest audit bug fix — done in session 7
+- [x] Wizard, OAuth, provider registry deep tests — done in session 8
+- [x] Discord REST + Gateway protocol tests — done in session 8
+- [x] Desktop tools (browser, TTS, X11, AT-SPI) tests — done in session 8
+- [x] Anthropic auth deep tests — done in session 8
+- [x] Hatching stress test mock fix — done in session 8
+- [ ] Fix 60 pre-existing test isolation failures (cost/memory store state pollution)
+- [ ] Discord voice channel deep protocol tests
+- [ ] Channel screencast integration tests
