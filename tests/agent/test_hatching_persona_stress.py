@@ -88,10 +88,14 @@ def _mock_hatching_deps():
     mock_turn.id = "turn-stub"
     mock_store = MagicMock()
 
+    # Build a mock class whose .new(...) returns mock_turn
+    mock_turn_cls = MagicMock()
+    mock_turn_cls.new.return_value = mock_turn
+
     with (
         patch("missy.agent.persona.PersonaManager", return_value=MagicMock()),
         patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store),
-        patch("missy.memory.sqlite_store.ConversationTurn", MagicMock(new=MagicMock(return_value=mock_turn))),
+        patch("missy.memory.sqlite_store.ConversationTurn", mock_turn_cls),
     ):
         yield
 
