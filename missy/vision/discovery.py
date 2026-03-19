@@ -140,6 +140,103 @@ class CameraDiscovery:
         # Fall back to first device
         return devices[0]
 
+    def rediscover_device(
+        self,
+        vendor_id: str,
+        product_id: str,
+        old_path: str = "",
+        max_attempts: int = 5,
+        delay: float = 1.0,
+    ) -> CameraDevice | None:
+        """Wait for a specific USB device to reappear after disconnect.
+
+        Performs forced rescans with delay between attempts.  Useful for
+        handling USB reconnection where the device may get a new /dev/videoN
+        path.
+
+        Args:
+            vendor_id: USB vendor ID (e.g. ``"046d"``).
+            product_id: USB product ID (e.g. ``"085c"``).
+            old_path: Previous device path for change logging.
+            max_attempts: Maximum rescan attempts.
+            delay: Seconds between attempts.
+
+        Returns:
+            The rediscovered device, or None if not found.
+        """
+        for attempt in range(1, max_attempts + 1):
+            self.discover(force=True)
+            device = self.find_by_usb_id(vendor_id, product_id)
+            if device is not None:
+                if old_path and device.device_path != old_path:
+                    logger.info(
+                        "Device %s:%s reappeared at %s (was %s) on attempt %d",
+                        vendor_id,
+                        product_id,
+                        device.device_path,
+                        old_path,
+                        attempt,
+                    )
+                else:
+                    logger.info(
+                        "Device %s:%s found at %s on attempt %d",
+                        vendor_id,
+                        product_id,
+                        device.device_path,
+                        attempt,
+                    )
+                return device
+            logger.debug(
+                "Rediscovery attempt %d/%d: device %s:%s not found",
+                attempt,
+                max_attempts,
+                vendor_id,
+                product_id,
+            )
+            if attempt < max_attempts:
+                time.sleep(delay)
+
+        logger.warning(
+            "Device %s:%s not found after %d attempts",
+            vendor_id,
+            product_id,
+            max_attempts,
+        )
+        return None
+
+    def validate_device(self, device: CameraDevice) -> bool:
+        """Check if a previously discovered device is still accessible.
+
+        Verifies the device path exists and the sysfs entry is present.
+        Does NOT open the camera (no OpenCV needed).
+        """
+        dev_path = Path(device.device_path)
+        if not dev_path.exists():
+            logger.debug("Device path %s no longer exists", device.device_path)
+            return False
+
+        # Check sysfs entry
+        dev_name = dev_path.name  # e.g. "video0"
+        sysfs_entry = self._sysfs_base / dev_name
+        if not sysfs_entry.exists():
+            logger.debug("Sysfs entry %s no longer exists", sysfs_entry)
+            return False
+
+        # Verify USB IDs still match (guards against device number reuse)
+        vid, pid = self._read_usb_ids(sysfs_entry)
+        if vid != device.vendor_id or pid != device.product_id:
+            logger.warning(
+                "Device at %s has different USB IDs: %s:%s (expected %s:%s)",
+                device.device_path,
+                vid,
+                pid,
+                device.vendor_id,
+                device.product_id,
+            )
+            return False
+
+        return True
+
     # -- internal --
 
     def _scan_sysfs(self) -> list[CameraDevice]:

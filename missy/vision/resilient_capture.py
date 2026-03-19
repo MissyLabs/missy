@@ -96,6 +96,16 @@ class ResilientCamera:
 
     def capture(self) -> CaptureResult:
         """Capture a frame, reconnecting if necessary."""
+        # Validate that the device is still present before attempting capture
+        if self.is_connected and self._current_device is not None:
+            discovery = get_discovery()
+            if not discovery.validate_device(self._current_device):
+                logger.warning(
+                    "Device %s is no longer valid, will reconnect",
+                    self._current_device.device_path,
+                )
+                self.disconnect()
+
         if not self.is_connected:
             try:
                 self.connect()
@@ -198,7 +208,9 @@ class ResilientCamera:
         """Attempt to reconnect to the camera and capture.
 
         Uses exponential backoff between attempts to avoid hammering
-        a device that may be temporarily unavailable.
+        a device that may be temporarily unavailable.  When vendor/product
+        IDs are known, uses ``rediscover_device`` for faster path-change
+        detection.
         """
         self.disconnect()
         delay = self._reconnect_delay
@@ -211,11 +223,19 @@ class ResilientCamera:
                 delay,
             )
 
-            # Force rediscovery
+            # Use targeted rediscovery when we know the USB IDs
             discovery = get_discovery()
-            discovery.discover(force=True)
-
-            device = self._discover_camera()
+            old_path = self._current_device.device_path if self._current_device else ""
+            if self._vendor_id and self._product_id:
+                device = discovery.rediscover_device(
+                    self._vendor_id,
+                    self._product_id,
+                    old_path=old_path,
+                    max_attempts=1,  # one attempt per outer loop iteration
+                )
+            else:
+                discovery.discover(force=True)
+                device = self._discover_camera()
             if device is None:
                 logger.warning("Camera not found on attempt %d", attempt)
                 self._record_failure()
