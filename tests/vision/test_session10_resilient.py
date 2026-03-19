@@ -71,11 +71,13 @@ class TestResilientCameraReconnection:
         mock_handle.capture.return_value = CaptureResult(success=True, image=np.zeros((10, 10, 3), dtype=np.uint8))
         mock_handle._blank_detector = None
 
-        with patch("missy.vision.resilient_capture.get_discovery", return_value=mock_disc):
-            with patch("missy.vision.resilient_capture.CameraHandle", return_value=mock_handle):
-                with patch("missy.vision.resilient_capture.get_health_monitor"):
-                    with caplog.at_level(logging.WARNING):
-                        result = cam._reconnect_and_capture()
+        with (
+            patch("missy.vision.resilient_capture.get_discovery", return_value=mock_disc),
+            patch("missy.vision.resilient_capture.CameraHandle", return_value=mock_handle),
+            patch("missy.vision.resilient_capture.get_health_monitor"),
+            caplog.at_level(logging.WARNING),
+        ):
+            result = cam._reconnect_and_capture()
 
         assert result.success
         assert any("path changed" in r.message for r in caplog.records)
@@ -101,11 +103,13 @@ class TestResilientCameraReconnection:
         mock_handle.capture.return_value = CaptureResult(success=True, image=np.zeros((10, 10, 3), dtype=np.uint8))
         mock_handle._blank_detector = None
 
-        with patch("missy.vision.resilient_capture.get_discovery", return_value=mock_disc):
-            with patch("missy.vision.resilient_capture.CameraHandle", return_value=mock_handle):
-                with patch("missy.vision.resilient_capture.get_health_monitor"):
-                    with caplog.at_level(logging.WARNING):
-                        result = cam._reconnect_and_capture()
+        with (
+            patch("missy.vision.resilient_capture.get_discovery", return_value=mock_disc),
+            patch("missy.vision.resilient_capture.CameraHandle", return_value=mock_handle),
+            patch("missy.vision.resilient_capture.get_health_monitor"),
+            caplog.at_level(logging.WARNING),
+        ):
+            result = cam._reconnect_and_capture()
 
         assert result.success
         assert any("fallback camera" in r.message for r in caplog.records)
@@ -146,10 +150,12 @@ class TestResilientCameraReconnection:
         )
         mock_handle._blank_detector = None
 
-        with patch("missy.vision.resilient_capture.get_discovery", return_value=mock_disc):
-            with patch("missy.vision.resilient_capture.CameraHandle", return_value=mock_handle):
-                with patch("missy.vision.resilient_capture.get_health_monitor"):
-                    result = cam._reconnect_and_capture()
+        with (
+            patch("missy.vision.resilient_capture.get_discovery", return_value=mock_disc),
+            patch("missy.vision.resilient_capture.CameraHandle", return_value=mock_handle),
+            patch("missy.vision.resilient_capture.get_health_monitor"),
+        ):
+            result = cam._reconnect_and_capture()
 
         assert not result.success
         assert result.failure_type == FailureType.PERMISSION
@@ -168,9 +174,11 @@ class TestResilientCameraReconnection:
 
         mock_disc = _mock_discovery(None)
 
-        with patch("missy.vision.resilient_capture.get_discovery", return_value=mock_disc):
-            with patch("missy.vision.resilient_capture.get_health_monitor"):
-                result = cam._reconnect_and_capture()
+        with (
+            patch("missy.vision.resilient_capture.get_discovery", return_value=mock_disc),
+            patch("missy.vision.resilient_capture.get_health_monitor"),
+        ):
+            result = cam._reconnect_and_capture()
 
         assert not result.success
         assert "2 attempts" in result.error
@@ -195,9 +203,11 @@ class TestResilientCameraReconnection:
         mock_disc = _mock_discovery(device)
         mock_disc.validate_device.return_value = True
 
-        with patch("missy.vision.resilient_capture.get_discovery", return_value=mock_disc):
-            with patch("missy.vision.resilient_capture.get_health_monitor"):
-                result = cam.capture()
+        with (
+            patch("missy.vision.resilient_capture.get_discovery", return_value=mock_disc),
+            patch("missy.vision.resilient_capture.get_health_monitor"),
+        ):
+            result = cam.capture()
 
         assert result.success
         mock_disc.validate_device.assert_called_once_with(device)
@@ -233,10 +243,12 @@ class TestResilientCameraReconnection:
         )
         new_handle._blank_detector = None
 
-        with patch("missy.vision.resilient_capture.get_discovery", return_value=mock_disc):
-            with patch("missy.vision.resilient_capture.CameraHandle", return_value=new_handle):
-                with patch("missy.vision.resilient_capture.get_health_monitor"):
-                    result = cam.capture()
+        with (
+            patch("missy.vision.resilient_capture.get_discovery", return_value=mock_disc),
+            patch("missy.vision.resilient_capture.CameraHandle", return_value=new_handle),
+            patch("missy.vision.resilient_capture.get_health_monitor"),
+        ):
+            result = cam.capture()
 
         assert result.success
 
@@ -251,11 +263,13 @@ class TestResilientCameraReconnection:
         mock_handle = MagicMock()
         mock_handle._blank_detector = None
 
-        with patch("missy.vision.resilient_capture.get_discovery", return_value=mock_disc):
-            with patch("missy.vision.resilient_capture.CameraHandle", return_value=mock_handle):
-                with patch("missy.vision.resilient_capture.get_health_monitor"):
-                    with cam:
-                        assert cam.is_connected
+        with (
+            patch("missy.vision.resilient_capture.get_discovery", return_value=mock_disc),
+            patch("missy.vision.resilient_capture.CameraHandle", return_value=mock_handle),
+            patch("missy.vision.resilient_capture.get_health_monitor"),
+            cam,
+        ):
+            assert cam.is_connected
 
         assert not cam.is_connected
 

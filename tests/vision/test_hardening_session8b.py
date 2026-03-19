@@ -23,15 +23,10 @@ import sqlite3
 import threading
 import time
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any
-from unittest.mock import MagicMock, call, patch
-
-import pytest
+from unittest.mock import MagicMock, patch
 
 from missy.vision.health_monitor import VisionHealthMonitor
 from missy.vision.vision_memory import VisionMemoryBridge
-
 
 # ---------------------------------------------------------------------------
 # Helpers

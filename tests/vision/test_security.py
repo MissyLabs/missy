@@ -187,7 +187,7 @@ class TestIntentSecurity:
             classifier.classify(f"look at this {i}")
 
         log = classifier.activation_log
-        assert len(log) == 1000  # exact count
+        assert len(log) == 500  # capped at 500 entries
         classifier.clear_log()
         assert len(classifier.activation_log) == 0
 

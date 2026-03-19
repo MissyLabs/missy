@@ -1,9 +1,8 @@
 """Tests for frame quality scoring and capture_best auto-selection."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
-import pytest
 
 from missy.vision.capture import CaptureResult, _frame_quality_score
 

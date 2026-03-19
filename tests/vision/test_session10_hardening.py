@@ -254,27 +254,29 @@ class TestCaptureDeadlineAwareSleep:
         def tracking_sleep(secs: float) -> None:
             sleep_calls.append(secs)
 
-        with patch("time.sleep", side_effect=tracking_sleep):
-            with patch("time.monotonic") as mock_mono:
-                # deadline = 0 + 10 = 10
-                # attempt 1: check t=0 ok, read fails, remaining=10-1=9 → sleep min(2, 9)=2
-                # attempt 2: check t=3 ok, read fails, remaining=10-4=6 → sleep min(2, 6)=2
-                # attempt 3: check t=6 ok, read fails, remaining=10-7=3 → sleep min(2, 3)=2
-                # attempt 4: check t=8 ok, read fails, remaining=10-8.5=1.5 → sleep min(2, 1.5)=1.5
-                # attempt 5: check t=9.5 ok, read fails → last attempt, no sleep
-                mock_mono.side_effect = [
-                    0.0,   # deadline set
-                    0.0,   # attempt 1 check
-                    1.0,   # sleep remaining calc
-                    3.0,   # attempt 2 check
-                    4.0,   # sleep remaining calc
-                    6.0,   # attempt 3 check
-                    7.0,   # sleep remaining calc
-                    8.0,   # attempt 4 check
-                    8.5,   # sleep remaining calc
-                    9.5,   # attempt 5 check
-                ]
-                result = cam.capture()
+        with (
+            patch("time.sleep", side_effect=tracking_sleep),
+            patch("time.monotonic") as mock_mono,
+        ):
+            # deadline = 0 + 10 = 10
+            # attempt 1: check t=0 ok, read fails, remaining=10-1=9 → sleep min(2, 9)=2
+            # attempt 2: check t=3 ok, read fails, remaining=10-4=6 → sleep min(2, 6)=2
+            # attempt 3: check t=6 ok, read fails, remaining=10-7=3 → sleep min(2, 3)=2
+            # attempt 4: check t=8 ok, read fails, remaining=10-8.5=1.5 → sleep min(2, 1.5)=1.5
+            # attempt 5: check t=9.5 ok, read fails → last attempt, no sleep
+            mock_mono.side_effect = [
+                0.0,   # deadline set
+                0.0,   # attempt 1 check
+                1.0,   # sleep remaining calc
+                3.0,   # attempt 2 check
+                4.0,   # sleep remaining calc
+                6.0,   # attempt 3 check
+                7.0,   # sleep remaining calc
+                8.0,   # attempt 4 check
+                8.5,   # sleep remaining calc
+                9.5,   # attempt 5 check
+            ]
+            result = cam.capture()
 
         assert result.success is False
         # The 4th sleep should be capped at remaining time (1.5)
@@ -291,16 +293,18 @@ class TestCaptureDeadlineAwareSleep:
         def tracking_sleep(secs: float) -> None:
             sleep_calls.append(secs)
 
-        with patch("time.sleep", side_effect=tracking_sleep):
-            with patch("time.monotonic") as mock_mono:
-                # deadline=10; attempt 1 ok; remaining calc shows 0
-                mock_mono.side_effect = [
-                    0.0,    # deadline
-                    0.0,    # attempt 1 check
-                    11.0,   # remaining calc → negative → clamp to 0
-                    11.0,   # attempt 2 check → exceeds deadline
-                ]
-                result = cam.capture()
+        with (
+            patch("time.sleep", side_effect=tracking_sleep),
+            patch("time.monotonic") as mock_mono,
+        ):
+            # deadline=10; attempt 1 ok; remaining calc shows 0
+            mock_mono.side_effect = [
+                0.0,    # deadline
+                0.0,    # attempt 1 check
+                11.0,   # remaining calc → negative → clamp to 0
+                11.0,   # attempt 2 check → exceeds deadline
+            ]
+            result = cam.capture()
 
         assert result.success is False
         assert len(sleep_calls) == 1

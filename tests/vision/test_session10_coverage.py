@@ -37,10 +37,12 @@ class TestShutdownMultiFailure:
         """If every cleanup step raises, summary still includes all failures."""
         from missy.vision.shutdown import vision_shutdown
 
-        with patch("missy.vision.scene_memory.get_scene_manager", side_effect=RuntimeError("scene fail")):
-            with patch("missy.vision.health_monitor.get_health_monitor", side_effect=RuntimeError("health fail")):
-                with patch("missy.vision.audit.audit_vision_session", side_effect=RuntimeError("audit fail")):
-                    summary = vision_shutdown()
+        with (
+            patch("missy.vision.scene_memory.get_scene_manager", side_effect=RuntimeError("scene fail")),
+            patch("missy.vision.health_monitor.get_health_monitor", side_effect=RuntimeError("health fail")),
+            patch("missy.vision.audit.audit_vision_session", side_effect=RuntimeError("audit fail")),
+        ):
+            summary = vision_shutdown()
 
         assert summary["status"] == "shutdown"
         assert any("scene" in s.lower() for s in summary["steps"])
@@ -49,13 +51,15 @@ class TestShutdownMultiFailure:
     def test_shutdown_returns_already_on_second_call(self) -> None:
         from missy.vision.shutdown import vision_shutdown
 
-        with patch("missy.vision.scene_memory.get_scene_manager") as mock_mgr:
+        with (
+            patch("missy.vision.scene_memory.get_scene_manager") as mock_mgr,
+            patch("missy.vision.health_monitor.get_health_monitor") as mock_hm,
+            patch("missy.vision.audit.audit_vision_session"),
+        ):
             mock_mgr.return_value.list_sessions.return_value = []
-            with patch("missy.vision.health_monitor.get_health_monitor") as mock_hm:
-                mock_hm.return_value._persist_path = None
-                with patch("missy.vision.audit.audit_vision_session"):
-                    result1 = vision_shutdown()
-                    result2 = vision_shutdown()
+            mock_hm.return_value._persist_path = None
+            result1 = vision_shutdown()
+            result2 = vision_shutdown()
 
         assert result1["status"] == "shutdown"
         assert result2["status"] == "already_shutdown"
@@ -70,11 +74,13 @@ class TestShutdownMultiFailure:
             {"active": False},
         ]
 
-        with patch("missy.vision.scene_memory.get_scene_manager", return_value=mock_mgr):
-            with patch("missy.vision.health_monitor.get_health_monitor") as mock_hm:
-                mock_hm.return_value._persist_path = None
-                with patch("missy.vision.audit.audit_vision_session"):
-                    summary = vision_shutdown()
+        with (
+            patch("missy.vision.scene_memory.get_scene_manager", return_value=mock_mgr),
+            patch("missy.vision.health_monitor.get_health_monitor") as mock_hm,
+            patch("missy.vision.audit.audit_vision_session"),
+        ):
+            mock_hm.return_value._persist_path = None
+            summary = vision_shutdown()
 
         assert "2 active" in summary["steps"][0]
 
@@ -86,10 +92,12 @@ class TestShutdownMultiFailure:
         mock_hm = MagicMock()
         mock_hm._persist_path = None
 
-        with patch("missy.vision.scene_memory.get_scene_manager", return_value=mock_mgr):
-            with patch("missy.vision.health_monitor.get_health_monitor", return_value=mock_hm):
-                with patch("missy.vision.audit.audit_vision_session"):
-                    summary = vision_shutdown()
+        with (
+            patch("missy.vision.scene_memory.get_scene_manager", return_value=mock_mgr),
+            patch("missy.vision.health_monitor.get_health_monitor", return_value=mock_hm),
+            patch("missy.vision.audit.audit_vision_session"),
+        ):
+            summary = vision_shutdown()
 
         assert any("no persist path" in s for s in summary["steps"])
 
