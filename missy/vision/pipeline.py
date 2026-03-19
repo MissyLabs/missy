@@ -68,6 +68,10 @@ class ImagePipeline:
 
     def process(self, image: np.ndarray) -> np.ndarray:
         """Run the full preprocessing pipeline on an image."""
+        if image is None or not isinstance(image, np.ndarray):
+            raise ValueError("image must be a non-None numpy ndarray")
+        if image.ndim < 2 or image.shape[0] == 0 or image.shape[1] == 0:
+            raise ValueError(f"image has invalid shape: {image.shape}")
         result = image.copy()
 
         # 1. Resize
@@ -89,6 +93,8 @@ class ImagePipeline:
 
     def resize(self, image: np.ndarray, max_dim: int) -> np.ndarray:
         """Resize image so largest dimension is at most max_dim."""
+        if max_dim <= 0:
+            raise ValueError(f"max_dim must be positive, got {max_dim}")
         cv2 = _get_cv2()
         h, w = image.shape[:2]
 
@@ -105,8 +111,21 @@ class ImagePipeline:
         """Apply CLAHE (Contrast Limited Adaptive Histogram Equalization)."""
         cv2 = _get_cv2()
 
+        # Handle grayscale images directly
+        if image.ndim == 2:
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            return clahe.apply(image)
+
+        # Handle 4-channel (BGRA) by splitting alpha
+        channels = image.shape[2] if image.ndim == 3 else 1
+        alpha = None
+        work_img = image
+        if channels == 4:
+            work_img = image[:, :, :3]
+            alpha = image[:, :, 3]
+
         # Convert to LAB color space
-        lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+        lab = cv2.cvtColor(work_img, cv2.COLOR_BGR2LAB)
         l_channel, a, b = cv2.split(lab)
 
         # Apply CLAHE to L channel
@@ -115,7 +134,13 @@ class ImagePipeline:
 
         # Merge and convert back
         enhanced = cv2.merge([l_enhanced, a, b])
-        return cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
+        result = cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
+
+        # Restore alpha channel if present
+        if alpha is not None:
+            result = cv2.merge([result[:, :, 0], result[:, :, 1], result[:, :, 2], alpha])
+
+        return result
 
     def denoise(self, image: np.ndarray) -> np.ndarray:
         """Apply light denoising (fastNlMeansDenoisingColored)."""
@@ -130,11 +155,20 @@ class ImagePipeline:
 
     def assess_quality(self, image: np.ndarray) -> dict[str, Any]:
         """Assess basic image quality metrics."""
+        if image is None or not isinstance(image, np.ndarray):
+            raise ValueError("image must be a non-None numpy ndarray")
+        if image.ndim < 2 or image.shape[0] == 0 or image.shape[1] == 0:
+            raise ValueError(f"image has invalid shape: {image.shape}")
         cv2 = _get_cv2()
         h, w = image.shape[:2]
 
-        # Brightness
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        # Brightness — handle grayscale, BGR, and BGRA
+        if image.ndim == 2:
+            gray = image
+        elif image.shape[2] == 4:
+            gray = cv2.cvtColor(image[:, :, :3], cv2.COLOR_BGR2GRAY)
+        else:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         brightness = float(np.mean(gray))
 
         # Contrast (std dev of grayscale)

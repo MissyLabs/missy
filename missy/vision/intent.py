@@ -140,9 +140,14 @@ class VisionIntentClassifier:
         auto_threshold: float = 0.80,
         ask_threshold: float = 0.50,
     ) -> None:
+        if not (0.0 <= auto_threshold <= 1.0):
+            raise ValueError(f"auto_threshold must be 0.0-1.0, got {auto_threshold}")
+        if not (0.0 <= ask_threshold <= 1.0):
+            raise ValueError(f"ask_threshold must be 0.0-1.0, got {ask_threshold}")
         self._auto_threshold = auto_threshold
         self._ask_threshold = ask_threshold
         self._activation_log: list[IntentResult] = []
+        self._log_lock = __import__("threading").Lock()
 
     def classify(self, text: str) -> IntentResult:
         """Classify a user utterance for vision intent."""
@@ -220,7 +225,8 @@ class VisionIntentClassifier:
             suggested_mode=best_mode,
         )
 
-        self._activation_log.append(result)
+        with self._log_lock:
+            self._activation_log.append(result)
         logger.debug(
             "Vision intent: %s (%.2f) — %s [trigger: %r]",
             result.intent.value,
@@ -234,10 +240,12 @@ class VisionIntentClassifier:
     @property
     def activation_log(self) -> list[IntentResult]:
         """Return the activation decision log for auditing."""
-        return list(self._activation_log)
+        with self._log_lock:
+            return list(self._activation_log)
 
     def clear_log(self) -> None:
-        self._activation_log.clear()
+        with self._log_lock:
+            self._activation_log.clear()
 
 
 # ---------------------------------------------------------------------------

@@ -32,8 +32,14 @@ _cv2: Any = None
 def _get_cv2() -> Any:
     global _cv2
     if _cv2 is None:
-        import cv2
-        _cv2 = cv2
+        try:
+            import cv2
+            _cv2 = cv2
+        except ImportError:
+            raise ImportError(
+                "opencv-python is required for vision sources. "
+                "Install with: pip install opencv-python-headless"
+            )
     return _cv2
 
 
@@ -70,7 +76,9 @@ class ImageFrame:
     def to_jpeg_bytes(self, quality: int = 85) -> bytes:
         """Encode frame as JPEG bytes."""
         cv2 = _get_cv2()
-        _, buf = cv2.imencode(".jpg", self.image, [cv2.IMWRITE_JPEG_QUALITY, quality])
+        success, buf = cv2.imencode(".jpg", self.image, [cv2.IMWRITE_JPEG_QUALITY, quality])
+        if not success or buf is None:
+            raise RuntimeError("Failed to encode image as JPEG")
         return buf.tobytes()
 
     def to_base64(self, quality: int = 85) -> str:
@@ -80,7 +88,9 @@ class ImageFrame:
     def to_png_bytes(self) -> bytes:
         """Encode frame as PNG bytes."""
         cv2 = _get_cv2()
-        _, buf = cv2.imencode(".png", self.image)
+        success, buf = cv2.imencode(".png", self.image)
+        if not success or buf is None:
+            raise RuntimeError("Failed to encode image as PNG")
         return buf.tobytes()
 
 
@@ -165,9 +175,12 @@ class FileSource(ImageSource):
         if not self._path.exists():
             raise FileNotFoundError(f"Image file not found: {self._path}")
 
-        img = cv2.imread(str(self._path))
+        try:
+            img = cv2.imread(str(self._path))
+        except Exception as exc:
+            raise OSError(f"Error reading image {self._path}: {exc}") from exc
         if img is None:
-            raise ValueError(f"Failed to read image: {self._path}")
+            raise ValueError(f"Failed to decode image (unsupported format?): {self._path}")
 
         return ImageFrame(
             image=img,
@@ -291,11 +304,16 @@ class PhotoSource(ImageSource):
 
     def scan(self) -> list[Path]:
         """Scan directory for image files and return sorted list."""
-        self._files = sorted(
-            p
-            for p in self._directory.iterdir()
-            if p.is_file() and p.suffix.lower() in self.SUPPORTED_EXTENSIONS
-        )
+        if not self._directory.exists():
+            raise FileNotFoundError(f"Photo directory not found: {self._directory}")
+        try:
+            self._files = sorted(
+                p
+                for p in self._directory.iterdir()
+                if p.is_file() and p.suffix.lower() in self.SUPPORTED_EXTENSIONS
+            )
+        except OSError as exc:
+            raise OSError(f"Cannot scan directory {self._directory}: {exc}") from exc
         self._scanned = True
         self._index = 0
         return list(self._files)

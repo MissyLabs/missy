@@ -89,6 +89,8 @@ class ResilientCamera:
 
         # Try capture
         try:
+            if self._handle is None:
+                raise CaptureError("Camera handle is None after connect")
             result = self._handle.capture()
             if result.success:
                 return result

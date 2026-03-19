@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -255,11 +256,12 @@ class SceneSession:
 
 
 class SceneManager:
-    """Manages multiple concurrent scene sessions."""
+    """Manages multiple concurrent scene sessions.  Thread-safe."""
 
     def __init__(self, max_sessions: int = 5) -> None:
         self._sessions: dict[str, SceneSession] = {}
         self._max_sessions = max_sessions
+        self._lock = threading.Lock()
 
     def create_session(
         self,
@@ -268,41 +270,50 @@ class SceneManager:
         max_frames: int = 20,
     ) -> SceneSession:
         """Create a new scene session, evicting oldest if at capacity."""
-        # Evict oldest inactive session if at capacity
-        if len(self._sessions) >= self._max_sessions:
-            self._evict_oldest()
+        with self._lock:
+            # Evict oldest inactive session if at capacity
+            if len(self._sessions) >= self._max_sessions:
+                self._evict_oldest()
 
-        session = SceneSession(task_id, task_type, max_frames)
-        self._sessions[task_id] = session
-        logger.info("Created scene session: %s (%s)", task_id, task_type.value)
-        return session
+            session = SceneSession(task_id, task_type, max_frames)
+            self._sessions[task_id] = session
+            logger.info("Created scene session: %s (%s)", task_id, task_type.value)
+            return session
 
     def get_session(self, task_id: str) -> Optional[SceneSession]:
-        return self._sessions.get(task_id)
+        with self._lock:
+            return self._sessions.get(task_id)
 
     def get_active_session(self) -> Optional[SceneSession]:
         """Return the most recently created active session."""
-        for session in reversed(list(self._sessions.values())):
-            if session.is_active:
-                return session
-        return None
+        with self._lock:
+            for session in reversed(list(self._sessions.values())):
+                if session.is_active:
+                    return session
+            return None
 
     def close_session(self, task_id: str) -> None:
         """Close a session by task ID."""
-        session = self._sessions.get(task_id)
-        if session:
-            session.close()
-
-    def close_all(self) -> None:
-        for session in self._sessions.values():
-            if session.is_active:
+        with self._lock:
+            session = self._sessions.get(task_id)
+            if session:
                 session.close()
 
+    def close_all(self) -> None:
+        with self._lock:
+            for session in self._sessions.values():
+                if session.is_active:
+                    session.close()
+
     def list_sessions(self) -> list[dict[str, Any]]:
-        return [s.summarize() for s in self._sessions.values()]
+        with self._lock:
+            return [s.summarize() for s in self._sessions.values()]
 
     def _evict_oldest(self) -> None:
-        """Remove the oldest inactive session, or oldest overall."""
+        """Remove the oldest inactive session, or oldest overall.
+
+        Caller must hold ``self._lock``.
+        """
         # Prefer to evict inactive sessions
         for task_id, session in list(self._sessions.items()):
             if not session.is_active:

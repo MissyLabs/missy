@@ -113,7 +113,7 @@ class TestFileSource:
         f.write_bytes(b"not an image")
 
         source = FileSource(str(f))
-        with pytest.raises(ValueError, match="Failed to read"):
+        with pytest.raises(ValueError, match="Failed to decode image"):
             source.acquire()
 
 

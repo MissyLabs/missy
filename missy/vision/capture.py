@@ -15,6 +15,7 @@ Design decisions
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -111,11 +112,14 @@ class CameraHandle:
         device_path: str,
         config: CaptureConfig | None = None,
     ) -> None:
+        if not device_path:
+            raise ValueError("device_path must be a non-empty string")
         self._device_path = device_path
         self._config = config or CaptureConfig()
         self._cap: Any = None  # cv2.VideoCapture
         self._opened = False
         self._open_time: float = 0.0
+        self._lock = threading.Lock()
 
     @property
     def is_open(self) -> bool:
@@ -167,63 +171,73 @@ class CameraHandle:
         )
 
     def close(self) -> None:
-        """Release the camera device."""
-        if self._cap is not None:
-            try:
-                self._cap.release()
-            except Exception:
-                pass
-            self._cap = None
-        self._opened = False
+        """Release the camera device.  Thread-safe."""
+        with self._lock:
+            if self._cap is not None:
+                try:
+                    self._cap.release()
+                except Exception:
+                    pass
+                self._cap = None
+            self._opened = False
 
     def capture(self) -> CaptureResult:
-        """Capture a single frame with retry logic."""
-        if not self.is_open:
-            raise CaptureError("Camera is not open")
+        """Capture a single frame with retry logic.  Thread-safe."""
+        with self._lock:
+            if not self.is_open:
+                raise CaptureError("Camera is not open")
 
-        config = self._config
-        last_error = ""
+            config = self._config
+            last_error = ""
 
-        for attempt in range(1, config.max_retries + 1):
-            try:
-                ret, frame = self._cap.read()
-                if not ret or frame is None:
-                    last_error = f"read() returned {ret} on attempt {attempt}"
-                    logger.warning("Frame read failed: %s", last_error)
+            for attempt in range(1, config.max_retries + 1):
+                try:
+                    ret, frame = self._cap.read()
+                    if not ret or frame is None:
+                        last_error = f"read() returned {ret} on attempt {attempt}"
+                        logger.warning("Frame read failed: %s", last_error)
+                        if attempt < config.max_retries:
+                            time.sleep(config.retry_delay)
+                        continue
+
+                    # Validate frame shape
+                    if frame.ndim < 2 or frame.shape[0] == 0 or frame.shape[1] == 0:
+                        last_error = f"Invalid frame shape {frame.shape} on attempt {attempt}"
+                        logger.warning(last_error)
+                        if attempt < config.max_retries:
+                            time.sleep(config.retry_delay)
+                        continue
+
+                    # Check for blank frame
+                    if self._is_blank(frame):
+                        last_error = f"Blank frame detected on attempt {attempt}"
+                        logger.warning(last_error)
+                        if attempt < config.max_retries:
+                            time.sleep(config.retry_delay)
+                        continue
+
+                    h, w = frame.shape[:2]
+                    return CaptureResult(
+                        success=True,
+                        image=frame,
+                        device_path=self._device_path,
+                        width=w,
+                        height=h,
+                        attempt_count=attempt,
+                    )
+
+                except Exception as exc:
+                    last_error = str(exc)
+                    logger.error("Capture exception on attempt %d: %s", attempt, exc)
                     if attempt < config.max_retries:
                         time.sleep(config.retry_delay)
-                    continue
 
-                # Check for blank frame
-                if self._is_blank(frame):
-                    last_error = f"Blank frame detected on attempt {attempt}"
-                    logger.warning(last_error)
-                    if attempt < config.max_retries:
-                        time.sleep(config.retry_delay)
-                    continue
-
-                h, w = frame.shape[:2]
-                return CaptureResult(
-                    success=True,
-                    image=frame,
-                    device_path=self._device_path,
-                    width=w,
-                    height=h,
-                    attempt_count=attempt,
-                )
-
-            except Exception as exc:
-                last_error = str(exc)
-                logger.error("Capture exception on attempt %d: %s", attempt, exc)
-                if attempt < config.max_retries:
-                    time.sleep(config.retry_delay)
-
-        return CaptureResult(
-            success=False,
-            device_path=self._device_path,
-            error=f"Capture failed after {config.max_retries} attempts: {last_error}",
-            attempt_count=config.max_retries,
-        )
+            return CaptureResult(
+                success=False,
+                device_path=self._device_path,
+                error=f"Capture failed after {config.max_retries} attempts: {last_error}",
+                attempt_count=config.max_retries,
+            )
 
     def capture_to_file(self, path: str | Path, *, quality: int | None = None) -> CaptureResult:
         """Capture a frame and save it to disk."""

@@ -116,7 +116,11 @@ class CameraDiscovery:
 
     def find_by_name(self, name_pattern: str) -> list[CameraDevice]:
         """Find cameras whose name matches a regex pattern (case-insensitive)."""
-        pattern = re.compile(name_pattern, re.IGNORECASE)
+        try:
+            pattern = re.compile(name_pattern, re.IGNORECASE)
+        except re.error as exc:
+            logger.warning("Invalid regex pattern %r: %s", name_pattern, exc)
+            return []
         return [dev for dev in self.discover() if pattern.search(dev.name)]
 
     def find_preferred(self) -> Optional[CameraDevice]:
@@ -148,7 +152,13 @@ class CameraDiscovery:
             logger.warning("sysfs path %s does not exist", self._sysfs_base)
             return devices
 
-        for entry in sorted(self._sysfs_base.iterdir()):
+        try:
+            entries = sorted(self._sysfs_base.iterdir())
+        except OSError as exc:
+            logger.warning("Cannot read sysfs directory %s: %s", self._sysfs_base, exc)
+            return devices
+
+        for entry in entries:
             if not entry.name.startswith("video"):
                 continue
 

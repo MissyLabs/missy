@@ -76,6 +76,8 @@ def format_image_for_provider(
     dict
         A content block in the provider's expected format.
     """
+    if not provider_name:
+        raise ValueError("provider_name must be a non-empty string")
     name = provider_name.lower()
 
     if name == "anthropic":
