@@ -56,6 +56,8 @@ Camera discovery uses `/sys/class/video4linux/` sysfs traversal:
 - Stable identification by USB vendor/product ID, not volatile `/dev/videoN` paths
 - Handles re-enumeration when device paths change
 - Cache invalidation on forced rediscovery
+- `rediscover_device()`: targeted retry loop for USB reconnection with path-change logging
+- `validate_device()`: verifies device path + sysfs + USB IDs before capture (guards against device number reuse)
 
 ## Capture Pipeline
 
@@ -70,7 +72,7 @@ Camera Device → OpenCV VideoCapture → Warm-up → Frame Read → Blank Detec
 
 - **Warm-up**: Discards configurable number of initial frames (default 5) for auto-exposure/white-balance stabilization
 - **Retry**: Configurable retry count (default 3) with delay between attempts
-- **Blank detection**: Rejects frames with mean pixel value below threshold (default 5.0)
+- **Adaptive blank detection**: Learns ambient light level from successful captures; threshold adjusts dynamically (with floor of 2.0 and ceiling at base threshold)
 - **Resolution verification**: Requests preferred resolution, logs warning if camera silently downgrades
 - **Graceful failure**: Returns structured `CaptureResult` with error details
 - **Burst capture**: `capture_burst(count, interval)` for rapid multi-frame capture (1-20 frames)
@@ -125,7 +127,9 @@ Task-scoped scene memory for multi-step visual tasks:
 
 - Frames stored in-process (not persisted to disk for privacy)
 - Configurable max frames per session (default 20, oldest evicted)
-- Change detection between frames (normalized pixel difference)
+- **Perceptual hash (aHash)** for robust change detection across lighting/zoom variations
+- Change detection blends pixel difference (40%) with perceptual hash distance (60%)
+- `hamming_distance()` utility for comparing frame hashes (lower = more similar)
 - State tracking (e.g., puzzle completion progress)
 - Observation accumulation across frames
 - Session summary export for audit logging
@@ -166,6 +170,7 @@ missy vision capture     # Capture frames (--device, --output, --count)
 missy vision inspect     # Quality assessment (--file, --screenshot, --device)
 missy vision review      # LLM-powered analysis (--mode puzzle|painting|general)
 missy vision doctor      # Full diagnostics check
+missy vision health      # Capture stats and device health (includes history)
 ```
 
 ## Configuration
@@ -194,6 +199,8 @@ The vision subsystem handles these failure modes:
 | Stale device paths | USB ID-based identification, not path-based |
 | Permanent failures | Permission/unsupported errors skip reconnection |
 | Camera path changes | Logged warning when device moves to different /dev path |
+| USB disconnect/reconnect | `rediscover_device()` with targeted USB ID retry |
+| Device number reuse | `validate_device()` verifies USB IDs match before capture |
 | Unreliable device | Warning after cumulative failure threshold (10) |
 | Empty/oversized files | FileSource validates file size (0 to 100 MB) |
 | Large dimensions | Warning for images exceeding 16384px |
@@ -206,9 +213,13 @@ The `VisionHealthMonitor` tracks capture statistics across the session lifetime:
 
 - **Per-device stats**: success rate, average quality, average latency, consecutive failures
 - **Health assessment**: HEALTHY (>80% success), DEGRADED (50-80%), UNHEALTHY (<50% or 5+ consecutive failures)
+- **SQLite persistence**: `save()`/`load()` for cross-session data retention at `~/.missy/vision_health.db`
+- **Auto-load**: `persist_path` constructor parameter auto-loads on init
 - **Diagnostic reports**: JSON-serializable summaries for audit logging and CLI display
 - **Warnings**: Low success rate, consecutive failures, low quality scores
+- **Recommendations**: Actionable advice (permission fix, process conflict, resolution, lighting)
 - **Integration**: Automatically records captures via `ResilientCamera`, reported in `missy vision doctor`
+- **CLI**: `missy vision health` shows cumulative stats including persisted history
 
 ```python
 from missy.vision.health_monitor import get_health_monitor
