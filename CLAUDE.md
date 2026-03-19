@@ -143,7 +143,7 @@ VoiceChannel (channels/voice/):
 - `VisionIntentClassifier`: Audio-triggered vision activation with configurable thresholds
 - `VisionDoctor`: Diagnostics (opencv, video group, devices, capture test)
 - Provider-specific formatting: Anthropic/OpenAI/Ollama image message structures
-- Agent tools: `vision_capture`, `vision_analyze`, `vision_devices`, `vision_scene`
+- Agent tools: `vision_capture`, `vision_burst`, `vision_analyze`, `vision_devices`, `vision_scene`
 - Voice integration: Auto-captures image when audio intent implies vision need
 
 **Memory (`missy/memory/`)** — `SQLiteMemoryStore` at `~/.missy/memory.db` with FTS5 search. Stores conversation turns and learnings. `cleanup()` removes turns older than N days. Optional `VectorMemoryStore` with FAISS semantic search (`pip install -e ".[vector]"`).
