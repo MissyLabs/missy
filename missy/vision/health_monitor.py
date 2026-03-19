@@ -4,6 +4,10 @@ Tracks camera capture success/failure rates, quality metrics over time,
 and device availability history.  Provides health assessments and
 diagnostic summaries for ``missy vision doctor`` and audit logging.
 
+Supports optional SQLite persistence so health data survives process
+restarts.  Call :meth:`VisionHealthMonitor.save` / :meth:`load` or
+use ``persist_path`` in the constructor for automatic persistence.
+
 Example::
 
     from missy.vision.health_monitor import VisionHealthMonitor
@@ -18,12 +22,15 @@ Example::
 
 from __future__ import annotations
 
+import json
 import logging
+import sqlite3
 import threading
 import time
 from collections import deque
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +132,7 @@ class VisionHealthMonitor:
         self,
         max_events: int = _MAX_EVENTS,
         recent_window_secs: float = _RECENT_WINDOW_SECS,
+        persist_path: str | Path | None = None,
     ) -> None:
         self._max_events = max(1, max_events)
         self._recent_window = recent_window_secs
@@ -132,6 +140,14 @@ class VisionHealthMonitor:
         self._devices: dict[str, DeviceStats] = {}
         self._lock = threading.Lock()
         self._start_time = time.monotonic()
+        self._persist_path: Path | None = Path(persist_path) if persist_path else None
+
+        # Auto-load persisted data if path provided
+        if self._persist_path is not None:
+            try:
+                self.load(self._persist_path)
+            except Exception as exc:
+                logger.debug("No persisted health data loaded: %s", exc)
 
     # ------------------------------------------------------------------
     # Record events
@@ -365,6 +381,163 @@ class VisionHealthMonitor:
                     )
 
             return recs
+
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
+
+    def save(self, path: str | Path | None = None) -> None:
+        """Persist device stats and recent events to a SQLite database.
+
+        Args:
+            path: Database file path.  Falls back to ``persist_path``
+                given at construction time.
+        """
+        db_path = Path(path) if path else self._persist_path
+        if db_path is None:
+            raise ValueError("No persist_path provided")
+
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with self._lock:
+            conn = sqlite3.connect(str(db_path))
+            try:
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute(
+                    "CREATE TABLE IF NOT EXISTS device_stats ("
+                    "  device TEXT PRIMARY KEY,"
+                    "  data TEXT NOT NULL,"
+                    "  updated_at REAL NOT NULL"
+                    ")"
+                )
+                conn.execute(
+                    "CREATE TABLE IF NOT EXISTS capture_events ("
+                    "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                    "  timestamp REAL NOT NULL,"
+                    "  success INTEGER NOT NULL,"
+                    "  device TEXT NOT NULL,"
+                    "  quality_score REAL,"
+                    "  error TEXT,"
+                    "  latency_ms REAL,"
+                    "  source_type TEXT"
+                    ")"
+                )
+
+                # Upsert device stats
+                now = time.time()
+                for device, stats in self._devices.items():
+                    data = json.dumps({
+                        "total_captures": stats.total_captures,
+                        "successful_captures": stats.successful_captures,
+                        "failed_captures": stats.failed_captures,
+                        "total_quality": stats.total_quality,
+                        "total_latency_ms": stats.total_latency_ms,
+                        "last_seen": stats.last_seen,
+                        "last_error": stats.last_error,
+                        "consecutive_failures": stats.consecutive_failures,
+                    })
+                    conn.execute(
+                        "INSERT OR REPLACE INTO device_stats (device, data, updated_at) "
+                        "VALUES (?, ?, ?)",
+                        (device, data, now),
+                    )
+
+                # Save recent events (last N)
+                conn.execute("DELETE FROM capture_events")
+                for event in self._events:
+                    conn.execute(
+                        "INSERT INTO capture_events "
+                        "(timestamp, success, device, quality_score, error, latency_ms, source_type) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            event.timestamp,
+                            1 if event.success else 0,
+                            event.device,
+                            event.quality_score,
+                            event.error,
+                            event.latency_ms,
+                            event.source_type,
+                        ),
+                    )
+
+                conn.commit()
+            finally:
+                conn.close()
+
+        logger.info("Health data persisted to %s", db_path)
+
+    def load(self, path: str | Path | None = None) -> None:
+        """Load persisted device stats and events from a SQLite database.
+
+        Args:
+            path: Database file path.  Falls back to ``persist_path``
+                given at construction time.
+        """
+        db_path = Path(path) if path else self._persist_path
+        if db_path is None:
+            raise ValueError("No persist_path provided")
+
+        if not db_path.exists():
+            raise FileNotFoundError(f"No persisted data at {db_path}")
+
+        conn = sqlite3.connect(str(db_path))
+        try:
+            conn.row_factory = sqlite3.Row
+
+            # Load device stats
+            try:
+                rows = conn.execute("SELECT device, data FROM device_stats").fetchall()
+            except sqlite3.OperationalError:
+                rows = []
+
+            # Load events
+            try:
+                event_rows = conn.execute(
+                    "SELECT timestamp, success, device, quality_score, error, "
+                    "latency_ms, source_type FROM capture_events "
+                    "ORDER BY timestamp"
+                ).fetchall()
+            except sqlite3.OperationalError:
+                event_rows = []
+        finally:
+            conn.close()
+
+        with self._lock:
+            # Merge device stats (loaded stats are additive)
+            for row in rows:
+                data = json.loads(row["data"])
+                device = row["device"]
+                if device not in self._devices:
+                    self._devices[device] = DeviceStats(device=device)
+                stats = self._devices[device]
+                stats.total_captures += data.get("total_captures", 0)
+                stats.successful_captures += data.get("successful_captures", 0)
+                stats.failed_captures += data.get("failed_captures", 0)
+                stats.total_quality += data.get("total_quality", 0.0)
+                stats.total_latency_ms += data.get("total_latency_ms", 0.0)
+                stats.last_seen = max(stats.last_seen, data.get("last_seen", 0.0))
+                stats.last_error = data.get("last_error", "") or stats.last_error
+                stats.consecutive_failures = data.get("consecutive_failures", 0)
+
+            # Load events
+            for row in event_rows:
+                event = CaptureEvent(
+                    timestamp=row["timestamp"],
+                    success=bool(row["success"]),
+                    device=row["device"],
+                    quality_score=row["quality_score"] or 0.0,
+                    error=row["error"] or "",
+                    latency_ms=row["latency_ms"] or 0.0,
+                    source_type=row["source_type"] or "webcam",
+                )
+                self._events.append(event)
+
+        logger.info(
+            "Loaded health data from %s: %d devices, %d events",
+            db_path,
+            len(rows),
+            len(event_rows),
+        )
 
     def reset(self) -> None:
         """Clear all recorded data."""
