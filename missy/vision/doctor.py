@@ -82,6 +82,7 @@ class VisionDoctor:
         report.add(self.check_camera_discovery())
         report.add(self.check_screenshot_tools())
         report.add(self.check_numpy())
+        report.add(self.check_captures_directory())
 
         # Only attempt capture if we found devices and opencv is available
         has_opencv = any(
@@ -342,4 +343,38 @@ class VisionDoctor:
                 passed=False,
                 message=f"Capture test error: {exc}",
                 severity="error",
+            )
+
+    def check_captures_directory(self) -> DiagnosticResult:
+        """Check if the captures directory exists and is writable."""
+        captures_dir = Path.home() / ".missy" / "captures"
+        try:
+            if not captures_dir.exists():
+                captures_dir.mkdir(parents=True, exist_ok=True)
+                return DiagnosticResult(
+                    name="captures_dir",
+                    passed=True,
+                    message=f"Created captures directory: {captures_dir}",
+                )
+
+            if not os.access(str(captures_dir), os.W_OK):
+                return DiagnosticResult(
+                    name="captures_dir",
+                    passed=False,
+                    message=f"Captures directory not writable: {captures_dir}",
+                    severity="warning",
+                )
+
+            return DiagnosticResult(
+                name="captures_dir",
+                passed=True,
+                message=f"Captures directory ready: {captures_dir}",
+                details={"path": str(captures_dir)},
+            )
+        except OSError as exc:
+            return DiagnosticResult(
+                name="captures_dir",
+                passed=False,
+                message=f"Cannot access captures directory: {exc}",
+                severity="warning",
             )
