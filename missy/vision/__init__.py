@@ -42,4 +42,6 @@ vision_memory
     Integration between vision observations and the memory subsystem.
 shutdown
     Graceful shutdown and resource cleanup for the vision subsystem.
+orientation
+    Camera image orientation detection and auto-correction.
 """
