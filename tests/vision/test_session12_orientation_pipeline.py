@@ -12,11 +12,8 @@ Covers:
 from __future__ import annotations
 
 import struct
-from unittest.mock import MagicMock, patch
 
 import numpy as np
-import pytest
-
 
 # ---------------------------------------------------------------------------
 # Orientation detection from aspect ratio
@@ -25,7 +22,7 @@ import pytest
 
 class TestOrientationDetection:
     def test_landscape_16_9(self) -> None:
-        from missy.vision.orientation import detect_orientation, Orientation
+        from missy.vision.orientation import Orientation, detect_orientation
         img = np.zeros((1080, 1920, 3), dtype=np.uint8)
         result = detect_orientation(img)
         assert result.detected == Orientation.NORMAL
@@ -33,13 +30,13 @@ class TestOrientationDetection:
         assert result.method == "aspect_ratio"
 
     def test_landscape_4_3(self) -> None:
-        from missy.vision.orientation import detect_orientation, Orientation
+        from missy.vision.orientation import Orientation, detect_orientation
         img = np.zeros((480, 640, 3), dtype=np.uint8)
         result = detect_orientation(img)
         assert result.detected == Orientation.NORMAL
 
     def test_portrait_image(self) -> None:
-        from missy.vision.orientation import detect_orientation, Orientation
+        from missy.vision.orientation import Orientation, detect_orientation
         img = np.zeros((1920, 1080, 3), dtype=np.uint8)
         result = detect_orientation(img)
         # aspect = 1080/1920 ≈ 0.5625 < 0.8 → portrait
@@ -47,14 +44,14 @@ class TestOrientationDetection:
         assert result.confidence > 0.0
 
     def test_very_narrow_portrait(self) -> None:
-        from missy.vision.orientation import detect_orientation, Orientation
+        from missy.vision.orientation import Orientation, detect_orientation
         img = np.zeros((2000, 200, 3), dtype=np.uint8)
         result = detect_orientation(img)
         assert result.detected == Orientation.ROTATED_90_CW
         assert result.confidence > 0.5
 
     def test_square_image(self) -> None:
-        from missy.vision.orientation import detect_orientation, Orientation
+        from missy.vision.orientation import Orientation, detect_orientation
         img = np.zeros((500, 500, 3), dtype=np.uint8)
         result = detect_orientation(img)
         assert result.detected == Orientation.NORMAL
@@ -62,7 +59,7 @@ class TestOrientationDetection:
         assert result.method == "aspect_ratio"
 
     def test_near_square_image(self) -> None:
-        from missy.vision.orientation import detect_orientation, Orientation
+        from missy.vision.orientation import Orientation, detect_orientation
         # aspect = 500/450 ≈ 1.11 → between 0.8 and 1.25
         img = np.zeros((450, 500, 3), dtype=np.uint8)
         result = detect_orientation(img)
@@ -70,33 +67,33 @@ class TestOrientationDetection:
         assert result.confidence == 0.3
 
     def test_none_image(self) -> None:
-        from missy.vision.orientation import detect_orientation, Orientation
+        from missy.vision.orientation import Orientation, detect_orientation
         result = detect_orientation(None)
         assert result.detected == Orientation.NORMAL
         assert result.confidence == 0.0
         assert result.method == "invalid_input"
 
     def test_1d_array(self) -> None:
-        from missy.vision.orientation import detect_orientation, Orientation
+        from missy.vision.orientation import Orientation, detect_orientation
         result = detect_orientation(np.zeros(100))
         assert result.detected == Orientation.NORMAL
         assert result.method == "invalid_input"
 
     def test_zero_height(self) -> None:
-        from missy.vision.orientation import detect_orientation, Orientation
+        from missy.vision.orientation import Orientation, detect_orientation
         img = np.zeros((0, 640, 3), dtype=np.uint8)
         result = detect_orientation(img)
         assert result.detected == Orientation.NORMAL
         assert result.method == "zero_dimension"
 
     def test_zero_width(self) -> None:
-        from missy.vision.orientation import detect_orientation, Orientation
+        from missy.vision.orientation import detect_orientation
         img = np.zeros((480, 0, 3), dtype=np.uint8)
         result = detect_orientation(img)
         assert result.method == "zero_dimension"
 
     def test_grayscale_image(self) -> None:
-        from missy.vision.orientation import detect_orientation, Orientation
+        from missy.vision.orientation import Orientation, detect_orientation
         img = np.zeros((480, 640), dtype=np.uint8)
         result = detect_orientation(img)
         assert result.detected == Orientation.NORMAL
@@ -109,26 +106,26 @@ class TestOrientationDetection:
 
 class TestOrientationCorrection:
     def test_normal_returns_same(self) -> None:
-        from missy.vision.orientation import correct_orientation, Orientation
+        from missy.vision.orientation import Orientation, correct_orientation
         img = np.zeros((480, 640, 3), dtype=np.uint8)
         corrected = correct_orientation(img, Orientation.NORMAL)
         assert corrected is img  # same object, not a copy
 
     def test_90_cw_correction(self) -> None:
-        from missy.vision.orientation import correct_orientation, Orientation
+        from missy.vision.orientation import Orientation, correct_orientation
         # 1080x1920 portrait → should become 1920x1080 landscape
         img = np.zeros((1920, 1080, 3), dtype=np.uint8)
         corrected = correct_orientation(img, Orientation.ROTATED_90_CW)
         assert corrected.shape[:2] == (1080, 1920)
 
     def test_180_correction(self) -> None:
-        from missy.vision.orientation import correct_orientation, Orientation
+        from missy.vision.orientation import Orientation, correct_orientation
         img = np.zeros((480, 640, 3), dtype=np.uint8)
         corrected = correct_orientation(img, Orientation.ROTATED_180)
         assert corrected.shape == img.shape
 
     def test_90_ccw_correction(self) -> None:
-        from missy.vision.orientation import correct_orientation, Orientation
+        from missy.vision.orientation import Orientation, correct_orientation
         img = np.zeros((1920, 1080, 3), dtype=np.uint8)
         corrected = correct_orientation(img, Orientation.ROTATED_90_CCW)
         assert corrected.shape[:2] == (1080, 1920)
@@ -344,13 +341,13 @@ class TestPipelineQuality:
 
 class TestOrientationResult:
     def test_default_values(self) -> None:
-        from missy.vision.orientation import OrientationResult, Orientation
+        from missy.vision.orientation import Orientation, OrientationResult
         r = OrientationResult(detected=Orientation.NORMAL, confidence=0.5)
         assert not r.correction_applied
         assert r.method == ""
 
     def test_all_fields(self) -> None:
-        from missy.vision.orientation import OrientationResult, Orientation
+        from missy.vision.orientation import Orientation, OrientationResult
         r = OrientationResult(
             detected=Orientation.ROTATED_180,
             confidence=0.95,

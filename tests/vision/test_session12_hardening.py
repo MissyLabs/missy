@@ -12,14 +12,11 @@ Covers:
 from __future__ import annotations
 
 import threading
-import time
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import numpy as np
-import pytest
-
 
 # ---------------------------------------------------------------------------
 # Intent classifier thread-safe singleton
@@ -129,8 +126,8 @@ class TestMultiCameraErrorPaths:
 
     def test_discover_and_connect_duplicate_device(self) -> None:
         """discover_and_connect handles ValueError from add_camera for duplicates."""
-        from missy.vision.multi_camera import MultiCameraManager
         from missy.vision.discovery import CameraDevice
+        from missy.vision.multi_camera import MultiCameraManager
 
         mgr = MultiCameraManager()
         dev = CameraDevice(device_path="/dev/video0", name="Cam", vendor_id="046d", product_id="085c", bus_info="usb-0000:00:14.0-1")
@@ -170,8 +167,8 @@ class TestMultiCameraErrorPaths:
         assert not result.success
 
     def test_multi_capture_result_best_result_picks_highest_res(self) -> None:
-        from missy.vision.multi_camera import MultiCaptureResult
         from missy.vision.capture import CaptureResult
+        from missy.vision.multi_camera import MultiCaptureResult
 
         r1 = CaptureResult(success=True, width=640, height=480, image=np.zeros((480, 640, 3), dtype=np.uint8))
         r2 = CaptureResult(success=True, width=1920, height=1080, image=np.zeros((1080, 1920, 3), dtype=np.uint8))
@@ -189,13 +186,13 @@ class TestResilientCaptureEdgeCases:
 
     def _make_camera(self, **kwargs: Any) -> Any:
         from missy.vision.resilient_capture import ResilientCamera
-        defaults = dict(
-            preferred_vendor_id="046d",
-            preferred_product_id="085c",
-            max_reconnect_attempts=2,
-            reconnect_delay=0.01,
-            max_delay=0.05,
-        )
+        defaults = {
+            "preferred_vendor_id": "046d",
+            "preferred_product_id": "085c",
+            "max_reconnect_attempts": 2,
+            "reconnect_delay": 0.01,
+            "max_delay": 0.05,
+        }
         defaults.update(kwargs)
         return ResilientCamera(**defaults)
 
@@ -220,7 +217,6 @@ class TestResilientCaptureEdgeCases:
 
     def test_reconnect_all_attempts_fail(self) -> None:
         """All reconnection attempts fail — returns failure result."""
-        from missy.vision.capture import CaptureResult
         cam = self._make_camera(max_reconnect_attempts=2)
         cam._current_device = MagicMock()
         cam._current_device.device_path = "/dev/video0"
@@ -372,7 +368,6 @@ class TestVisionMemoryErrorPaths:
 
         bridge = VisionMemoryBridge()
         barrier = threading.Barrier(6)
-        errors: list[str] = []
 
         def worker() -> None:
             nonlocal init_count
@@ -464,16 +459,21 @@ class TestAnalysisConstants:
 
     def test_canny_thresholds_in_range(self) -> None:
         from missy.vision.analysis import (
-            _CANNY_EDGE_LOW, _CANNY_EDGE_HIGH,
-            _CANNY_CONTOUR_LOW, _CANNY_CONTOUR_HIGH,
+            _CANNY_CONTOUR_HIGH,
+            _CANNY_CONTOUR_LOW,
+            _CANNY_EDGE_HIGH,
+            _CANNY_EDGE_LOW,
         )
         assert 0 < _CANNY_EDGE_LOW < _CANNY_EDGE_HIGH <= 255
         assert 0 < _CANNY_CONTOUR_LOW < _CANNY_CONTOUR_HIGH <= 255
 
     def test_kmeans_params_valid(self) -> None:
         from missy.vision.analysis import (
-            _KMEANS_CLUSTERS, _KMEANS_MAX_ITER, _KMEANS_EPSILON,
-            _KMEANS_DOWNSAMPLE_SIZE, _KMEANS_MIN_COLOR_PCT,
+            _KMEANS_CLUSTERS,
+            _KMEANS_DOWNSAMPLE_SIZE,
+            _KMEANS_EPSILON,
+            _KMEANS_MAX_ITER,
+            _KMEANS_MIN_COLOR_PCT,
         )
         assert _KMEANS_CLUSTERS >= 2
         assert _KMEANS_MAX_ITER > 0
@@ -486,7 +486,7 @@ class TestAnalysisConstants:
         assert 0 < _COLOR_BLACK_MAX < _COLOR_WHITE_MIN < 256
 
     def test_overlay_weights_sum_to_one(self) -> None:
-        from missy.vision.analysis import _EDGE_OVERLAY_ORIGINAL, _EDGE_OVERLAY_EDGE
+        from missy.vision.analysis import _EDGE_OVERLAY_EDGE, _EDGE_OVERLAY_ORIGINAL
         assert abs((_EDGE_OVERLAY_ORIGINAL + _EDGE_OVERLAY_EDGE) - 1.0) < 0.01
 
 
@@ -499,12 +499,14 @@ class TestSceneMemoryConstants:
     """Verify scene memory change detection constants."""
 
     def test_change_weights_sum_to_one(self) -> None:
-        from missy.vision.scene_memory import _CHANGE_PIXEL_WEIGHT, _CHANGE_PHASH_WEIGHT
+        from missy.vision.scene_memory import _CHANGE_PHASH_WEIGHT, _CHANGE_PIXEL_WEIGHT
         assert abs((_CHANGE_PIXEL_WEIGHT + _CHANGE_PHASH_WEIGHT) - 1.0) < 0.01
 
     def test_thresholds_ascending(self) -> None:
         from missy.vision.scene_memory import (
-            _CHANGE_THRESHOLD_MINOR, _CHANGE_THRESHOLD_MODERATE, _CHANGE_THRESHOLD_MAJOR,
+            _CHANGE_THRESHOLD_MAJOR,
+            _CHANGE_THRESHOLD_MINOR,
+            _CHANGE_THRESHOLD_MODERATE,
         )
         assert 0 < _CHANGE_THRESHOLD_MINOR < _CHANGE_THRESHOLD_MODERATE < _CHANGE_THRESHOLD_MAJOR
 
@@ -600,16 +602,16 @@ class TestMultiCaptureResultProperties:
         assert not mcr.any_succeeded
 
     def test_best_result_none_when_all_failed(self) -> None:
-        from missy.vision.multi_camera import MultiCaptureResult
         from missy.vision.capture import CaptureResult
+        from missy.vision.multi_camera import MultiCaptureResult
         r = CaptureResult(success=False, error="failed")
         mcr = MultiCaptureResult(results={"/dev/video0": r})
         assert mcr.best_result is None
 
     def test_best_result_none_image(self) -> None:
         """Successful result but no image → not considered."""
-        from missy.vision.multi_camera import MultiCaptureResult
         from missy.vision.capture import CaptureResult
+        from missy.vision.multi_camera import MultiCaptureResult
         r = CaptureResult(success=True, image=None)
         mcr = MultiCaptureResult(results={"/dev/video0": r})
         assert mcr.best_result is None

@@ -11,13 +11,10 @@ Tests interactions between:
 from __future__ import annotations
 
 import threading
-from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy as np
-import pytest
-
 
 # ---------------------------------------------------------------------------
 # Discovery → Capture → Health Monitor integration
@@ -76,7 +73,7 @@ class TestSceneToMemoryBridgeFlow:
 
     def test_scene_summary_can_be_stored_in_bridge(self) -> None:
         """A scene session summary can be persisted via VisionMemoryBridge."""
-        from missy.vision.scene_memory import SceneSession, SceneFrame
+        from missy.vision.scene_memory import SceneSession
         from missy.vision.vision_memory import VisionMemoryBridge
 
         # Create a scene session with frames
@@ -102,7 +99,7 @@ class TestSceneToMemoryBridgeFlow:
 
     def test_scene_change_detection_between_frames(self) -> None:
         """Change detection produces valid SceneChange objects."""
-        from missy.vision.scene_memory import SceneSession, SceneFrame
+        from missy.vision.scene_memory import SceneFrame, SceneSession
 
         session = SceneSession(task_id="test", max_frames=10)
 
@@ -156,7 +153,7 @@ class TestIntentAuditFlow:
         assert isinstance(audit["confidence"], float)
 
     def test_high_confidence_triggers_activate(self) -> None:
-        from missy.vision.intent import VisionIntentClassifier, ActivationDecision
+        from missy.vision.intent import ActivationDecision, VisionIntentClassifier
 
         classifier = VisionIntentClassifier(auto_threshold=0.6)
         result = classifier.classify("Missy, look at this painting please")
@@ -165,7 +162,7 @@ class TestIntentAuditFlow:
         assert result.decision in (ActivationDecision.ACTIVATE, ActivationDecision.ASK)
 
     def test_irrelevant_text_skips_vision(self) -> None:
-        from missy.vision.intent import VisionIntentClassifier, ActivationDecision
+        from missy.vision.intent import ActivationDecision, VisionIntentClassifier
 
         classifier = VisionIntentClassifier()
         result = classifier.classify("What is the capital of France?")
@@ -181,8 +178,8 @@ class TestPipelineOrientationChain:
     """Tests the preprocessing → orientation correction → quality assessment chain."""
 
     def test_pipeline_then_orientation_check(self) -> None:
+        from missy.vision.orientation import Orientation, detect_orientation
         from missy.vision.pipeline import ImagePipeline
-        from missy.vision.orientation import detect_orientation, Orientation
 
         pipeline = ImagePipeline()
         img = np.zeros((1080, 1920, 3), dtype=np.uint8)
@@ -196,8 +193,8 @@ class TestPipelineOrientationChain:
         assert result.detected == Orientation.NORMAL
 
     def test_portrait_pipeline_and_auto_correct(self) -> None:
-        from missy.vision.pipeline import ImagePipeline
         from missy.vision.orientation import auto_correct
+        from missy.vision.pipeline import ImagePipeline
 
         pipeline = ImagePipeline()
         # Very tall portrait image
@@ -284,7 +281,7 @@ class TestShutdownCoordination:
 
 class TestAnalysisPromptIntegration:
     def _request(self, mode: str) -> Any:
-        from missy.vision.analysis import AnalysisRequest, AnalysisMode
+        from missy.vision.analysis import AnalysisMode, AnalysisRequest
         img = np.zeros((100, 100, 3), dtype=np.uint8)
         return AnalysisRequest(image=img, mode=AnalysisMode(mode))
 

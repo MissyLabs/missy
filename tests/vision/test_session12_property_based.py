@@ -12,10 +12,8 @@ Uses Hypothesis to find edge cases in:
 from __future__ import annotations
 
 import numpy as np
-import pytest
-from hypothesis import given, settings, assume
+from hypothesis import assume, given, settings
 from hypothesis import strategies as st
-
 
 # ---------------------------------------------------------------------------
 # Orientation detection properties
@@ -29,7 +27,7 @@ class TestOrientationProperties:
     )
     @settings(max_examples=100)
     def test_detect_always_returns_valid_result(self, h: int, w: int) -> None:
-        from missy.vision.orientation import detect_orientation, Orientation
+        from missy.vision.orientation import Orientation, detect_orientation
         img = np.zeros((h, w, 3), dtype=np.uint8)
         result = detect_orientation(img)
         assert isinstance(result.detected, Orientation)
@@ -59,7 +57,7 @@ class TestOrientationProperties:
     def test_landscape_always_detected_as_normal(self, h: int, w: int) -> None:
         """Images with aspect ratio > 1.25 should be NORMAL."""
         assume(w / h > 1.25)
-        from missy.vision.orientation import detect_orientation, Orientation
+        from missy.vision.orientation import Orientation, detect_orientation
         img = np.zeros((h, w, 3), dtype=np.uint8)
         result = detect_orientation(img)
         assert result.detected == Orientation.NORMAL
@@ -100,7 +98,7 @@ class TestIntentClassificationProperties:
     @given(text=st.text(min_size=0, max_size=500))
     @settings(max_examples=100)
     def test_classify_returns_valid_result(self, text: str) -> None:
-        from missy.vision.intent import VisionIntentClassifier, VisionIntent, ActivationDecision
+        from missy.vision.intent import ActivationDecision, VisionIntent, VisionIntentClassifier
         classifier = VisionIntentClassifier()
         result = classifier.classify(text)
         assert 0.0 <= result.confidence <= 1.0
@@ -111,7 +109,7 @@ class TestIntentClassificationProperties:
     @settings(max_examples=50)
     def test_empty_or_whitespace_skips_vision(self, text: str) -> None:
         """Pure whitespace or empty strings should not trigger vision."""
-        from missy.vision.intent import VisionIntentClassifier, ActivationDecision
+        from missy.vision.intent import ActivationDecision, VisionIntentClassifier
         classifier = VisionIntentClassifier()
         result = classifier.classify(text)
         assert result.decision == ActivationDecision.SKIP
