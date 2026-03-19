@@ -453,9 +453,12 @@ class CameraHandle:
         return results
 
     def capture_best(self, burst_count: int = 3) -> CaptureResult:
-        """Capture a burst and return the sharpest frame.
+        """Capture a burst and return the best-quality frame.
 
-        Uses Laplacian variance as a sharpness proxy.
+        Scores each frame using a weighted combination of:
+        - Sharpness (Laplacian variance) — 60 %
+        - Brightness quality (penalty for very dark or overexposed) — 20 %
+        - Contrast (std deviation of grayscale) — 20 %
         """
         results = self.capture_burst(count=burst_count, interval=0.2)
         successful = [r for r in results if r.success and r.image is not None]
@@ -466,13 +469,7 @@ class CameraHandle:
                 error="No successful frames in burst",
             )
 
-        cv2 = _get_cv2()
-
-        def sharpness(r: CaptureResult) -> float:
-            gray = cv2.cvtColor(r.image, cv2.COLOR_BGR2GRAY)
-            return float(cv2.Laplacian(gray, cv2.CV_64F).var())
-
-        return max(successful, key=sharpness)
+        return max(successful, key=lambda r: _frame_quality_score(r.image))
 
     # -- context manager --
 
@@ -560,6 +557,38 @@ class CameraHandle:
         if m:
             return int(m.group(1))
         return None
+
+
+# ---------------------------------------------------------------------------
+# Frame quality scoring
+# ---------------------------------------------------------------------------
+
+
+def _frame_quality_score(image: np.ndarray) -> float:
+    """Compute a composite quality score for frame auto-selection.
+
+    Higher is better.  Combines sharpness, brightness quality, and contrast.
+    Used by ``capture_best`` to pick the best frame from a burst.
+    """
+    cv2 = _get_cv2()
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+
+    # Sharpness: Laplacian variance (higher = sharper)
+    sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+
+    # Brightness quality: 0–1, peaks at ~128, penalizes extreme dark/bright
+    brightness = float(np.mean(gray))
+    brightness_score = 1.0 - abs(brightness - 128.0) / 128.0
+
+    # Contrast: std deviation of grayscale (higher = more detail)
+    contrast = float(np.std(gray))
+
+    # Normalize sharpness to a reasonable 0–1 range (cap at 500)
+    sharpness_norm = min(sharpness / 500.0, 1.0)
+    # Normalize contrast (cap at 80)
+    contrast_norm = min(contrast / 80.0, 1.0)
+
+    return 0.6 * sharpness_norm + 0.2 * brightness_score + 0.2 * contrast_norm
 
 
 # ---------------------------------------------------------------------------
