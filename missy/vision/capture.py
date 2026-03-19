@@ -250,15 +250,28 @@ class CameraHandle:
             self._opened = False
 
     def capture(self) -> CaptureResult:
-        """Capture a single frame with retry logic.  Thread-safe."""
+        """Capture a single frame with retry logic.  Thread-safe.
+
+        Enforces the ``timeout_seconds`` setting from the capture config.
+        If all retries exceed the timeout, returns a failure result.
+        """
         with self._lock:
             if not self.is_open:
                 raise CaptureError("Camera is not open")
 
             config = self._config
             last_error = ""
+            deadline = time.monotonic() + config.timeout_seconds
 
             for attempt in range(1, config.max_retries + 1):
+                if time.monotonic() > deadline:
+                    return CaptureResult(
+                        success=False,
+                        device_path=self._device_path,
+                        error=f"Capture timed out after {config.timeout_seconds}s",
+                        failure_type=FailureType.TRANSIENT,
+                        attempt_count=attempt - 1,
+                    )
                 try:
                     ret, frame = self._cap.read()
                     if not ret or frame is None:

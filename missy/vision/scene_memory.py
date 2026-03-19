@@ -196,8 +196,33 @@ class SceneSession:
         source: str = "",
         analysis: dict[str, Any] | None = None,
         notes: list[str] | None = None,
-    ) -> SceneFrame:
-        """Add a new frame to the session."""
+        deduplicate: bool = True,
+        dedup_threshold: int = 5,
+    ) -> SceneFrame | None:
+        """Add a new frame to the session.
+
+        Parameters
+        ----------
+        image:
+            BGR numpy array to store.
+        source:
+            Source description (e.g. "webcam:/dev/video0").
+        analysis:
+            Analysis results dict.
+        notes:
+            Textual notes about this frame.
+        deduplicate:
+            If True, skip storing frames that are near-duplicates of the
+            most recent frame (based on perceptual hash Hamming distance).
+        dedup_threshold:
+            Maximum Hamming distance to consider a frame a duplicate.
+            Lower values require more similarity.  Default 5 (very similar).
+
+        Returns
+        -------
+        SceneFrame or None
+            The stored frame, or None if deduplicated (skipped).
+        """
         self._frame_counter += 1
         frame = SceneFrame(
             frame_id=self._frame_counter,
@@ -206,6 +231,20 @@ class SceneSession:
             analysis=analysis or {},
             notes=notes or [],
         )
+
+        # Deduplication: skip near-identical frames
+        if deduplicate and self._frames:
+            latest = self._frames[-1]
+            dist = hamming_distance(latest.thumbnail_hash, frame.thumbnail_hash)
+            if 0 <= dist <= dedup_threshold:
+                logger.debug(
+                    "Scene '%s': frame %d deduplicated (distance=%d, threshold=%d)",
+                    self.task_id,
+                    frame.frame_id,
+                    dist,
+                    dedup_threshold,
+                )
+                return None
 
         self._frames.append(frame)
 

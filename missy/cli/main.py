@@ -3746,6 +3746,143 @@ def vision_doctor_cmd() -> None:
         console.print("\n  [red]Vision subsystem has issues that need attention.[/]")
 
 
+@vision.command("benchmark")
+def vision_benchmark_cmd() -> None:
+    """Show capture performance benchmark statistics."""
+    from missy.vision.benchmark import get_benchmark
+
+    bench = get_benchmark()
+    report = bench.report()
+
+    console.print("[bold]Vision Capture Benchmarks[/]\n")
+    console.print(f"  Uptime: {report['uptime_seconds']:.1f}s\n")
+
+    categories = report.get("categories", {})
+    if not categories:
+        console.print("  [dim]No benchmark data collected yet.[/]")
+        console.print("  [dim]Run some captures to collect latency data.[/]")
+        return
+
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Category")
+    table.add_column("Count", justify="right")
+    table.add_column("Min (ms)", justify="right")
+    table.add_column("Mean (ms)", justify="right")
+    table.add_column("Median (ms)", justify="right")
+    table.add_column("P95 (ms)", justify="right")
+    table.add_column("Max (ms)", justify="right")
+
+    for cat, stats in categories.items():
+        table.add_row(
+            cat,
+            str(stats["count"]),
+            f"{stats['min_ms']:.1f}",
+            f"{stats['mean_ms']:.1f}",
+            f"{stats['median_ms']:.1f}",
+            f"{stats['p95_ms']:.1f}",
+            f"{stats['max_ms']:.1f}",
+        )
+
+    console.print(table)
+
+
+@vision.command("validate")
+def vision_validate_cmd() -> None:
+    """Validate the current vision configuration."""
+    from missy.vision.config_validator import validate_vision_config
+
+    # Try to load config
+    try:
+        from missy.config.settings import load_config
+
+        cfg = load_config()
+        vision_cfg = {}
+        if hasattr(cfg, "vision"):
+            vc = cfg.vision
+            for field_name in (
+                "enabled",
+                "capture_width",
+                "capture_height",
+                "warmup_frames",
+                "max_retries",
+                "auto_activate_threshold",
+                "scene_memory_max_frames",
+                "scene_memory_max_sessions",
+                "preferred_device",
+            ):
+                if hasattr(vc, field_name):
+                    vision_cfg[field_name] = getattr(vc, field_name)
+    except Exception:
+        vision_cfg = {}
+
+    result = validate_vision_config(vision_cfg)
+
+    console.print("[bold]Vision Configuration Validation[/]\n")
+
+    if result.valid and not result.warnings:
+        console.print("  [green]All settings are valid.[/]\n")
+        return
+
+    for issue in result.issues:
+        if issue.severity == "error":
+            icon = "[red]ERROR[/]"
+        elif issue.severity == "warning":
+            icon = "[yellow]WARN [/]"
+        else:
+            icon = "[blue]INFO [/]"
+
+        console.print(f"  {icon}  {issue.field}: {issue.message}")
+        if issue.current_value is not None:
+            console.print(f"       [dim]Current: {issue.current_value}[/]")
+        if issue.suggested_value is not None:
+            console.print(f"       [dim]Suggested: {issue.suggested_value}[/]")
+
+    console.print()
+    if result.valid:
+        console.print("  [green]Configuration is valid[/] (with warnings)")
+    else:
+        console.print(f"  [red]Configuration has {len(result.errors)} error(s)[/]")
+
+
+@vision.command("memory")
+def vision_memory_cmd() -> None:
+    """Show vision scene memory usage."""
+    from missy.vision.memory_usage import get_memory_tracker
+
+    tracker = get_memory_tracker()
+    report = tracker.update_from_scene_manager()
+
+    console.print("[bold]Vision Scene Memory Usage[/]\n")
+
+    d = report.to_dict()
+    console.print(f"  Total: {d['total_mb']:.2f} MB / {d['limit_mb']:.2f} MB ({d['usage_fraction']:.1%})")
+    console.print(f"  Frames: {d['total_frames']}")
+    console.print(f"  Sessions: {d['session_count']} ({d['active_sessions']} active)")
+
+    if report.over_limit:
+        console.print("  [red]OVER LIMIT — consider closing inactive sessions[/]")
+
+    if d["sessions"]:
+        console.print()
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Task ID")
+        table.add_column("Frames", justify="right")
+        table.add_column("Memory (MB)", justify="right")
+        table.add_column("Active")
+
+        for s in d["sessions"]:
+            status = "[green]yes[/]" if s["active"] else "[dim]no[/]"
+            table.add_row(
+                s["task_id"],
+                str(s["frame_count"]),
+                f"{s['estimated_mb']:.2f}",
+                status,
+            )
+        console.print(table)
+    else:
+        console.print("\n  [dim]No active scene sessions.[/]")
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
