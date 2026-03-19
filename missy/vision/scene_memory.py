@@ -19,11 +19,10 @@ from __future__ import annotations
 import hashlib
 import logging
 import threading
-import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 
@@ -170,11 +169,11 @@ class SceneSession:
         """Update task-specific state (e.g. puzzle board state)."""
         self._state.update(kwargs)
 
-    def get_latest_frame(self) -> Optional[SceneFrame]:
+    def get_latest_frame(self) -> SceneFrame | None:
         """Return the most recent frame, or None."""
         return self._frames[-1] if self._frames else None
 
-    def get_frame(self, frame_id: int) -> Optional[SceneFrame]:
+    def get_frame(self, frame_id: int) -> SceneFrame | None:
         """Retrieve a specific frame by ID."""
         for f in self._frames:
             if f.frame_id == frame_id:
@@ -225,7 +224,7 @@ class SceneSession:
                 description=f"comparison failed: {exc}",
             )
 
-    def detect_latest_change(self) -> Optional[SceneChange]:
+    def detect_latest_change(self) -> SceneChange | None:
         """Compare the two most recent frames."""
         if len(self._frames) < 2:
             return None
@@ -235,7 +234,7 @@ class SceneSession:
         self,
         frame_a: SceneFrame,
         frame_b: SceneFrame,
-    ) -> Optional[np.ndarray]:
+    ) -> np.ndarray | None:
         """Generate a visual diff image highlighting changes between frames.
 
         Returns a BGR image where changed regions are highlighted in red,
@@ -318,11 +317,11 @@ class SceneManager:
             logger.info("Created scene session: %s (%s)", task_id, task_type.value)
             return session
 
-    def get_session(self, task_id: str) -> Optional[SceneSession]:
+    def get_session(self, task_id: str) -> SceneSession | None:
         with self._lock:
             return self._sessions.get(task_id)
 
-    def get_active_session(self) -> Optional[SceneSession]:
+    def get_active_session(self) -> SceneSession | None:
         """Return the most recently created active session."""
         with self._lock:
             for session in reversed(list(self._sessions.values())):

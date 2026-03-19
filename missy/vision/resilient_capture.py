@@ -12,10 +12,10 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Optional
+from typing import Any
 
 from missy.vision.capture import CameraHandle, CaptureConfig, CaptureError, CaptureResult
-from missy.vision.discovery import CameraDevice, find_preferred_camera, get_discovery
+from missy.vision.discovery import CameraDevice, get_discovery
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +65,7 @@ class ResilientCamera:
         return self._connected and self._handle is not None and self._handle.is_open
 
     @property
-    def current_device(self) -> Optional[CameraDevice]:
+    def current_device(self) -> CameraDevice | None:
         return self._current_device
 
     @property
@@ -122,7 +122,7 @@ class ResilientCamera:
 
     # -- internal --
 
-    def _discover_camera(self) -> Optional[CameraDevice]:
+    def _discover_camera(self) -> CameraDevice | None:
         """Find the target camera."""
         discovery = get_discovery()
 

@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-import concurrent.futures
 import time
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 
-from missy.vision.capture import CaptureConfig, CaptureError, CaptureResult
-from missy.vision.sources import WebcamSource, SourceType
+from missy.vision.capture import CaptureError
+from missy.vision.sources import SourceType, WebcamSource
 
 
 class TestWebcamSourceTimeout:

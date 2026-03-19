@@ -17,11 +17,10 @@ from __future__ import annotations
 import logging
 import re
 import threading
-import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 

@@ -29,9 +29,12 @@ class TestResilientCamera:
         assert cam.current_device is None
         assert cam.total_reconnects == 0
 
-    @patch("missy.vision.resilient_capture.find_preferred_camera")
-    def test_connect_no_camera(self, mock_find):
-        mock_find.return_value = None
+    @patch("missy.vision.resilient_capture.get_discovery")
+    def test_connect_no_camera(self, mock_get_disc):
+        mock_disc = MagicMock()
+        mock_disc.find_preferred.return_value = None
+        mock_disc.find_by_usb_id.return_value = None
+        mock_get_disc.return_value = mock_disc
         cam = ResilientCamera()
         with pytest.raises(CaptureError, match="No camera"):
             cam.connect()

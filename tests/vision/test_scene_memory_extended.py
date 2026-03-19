@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import time
-from datetime import UTC, datetime, timedelta
-from unittest.mock import patch
+from datetime import UTC, datetime
+from unittest.mock import MagicMock, patch
 
 import numpy as np
-import pytest
 
 from missy.vision.scene_memory import SceneFrame, SceneManager, SceneSession, TaskType
 
@@ -17,7 +15,7 @@ class TestSceneSessionClose:
 
     def test_close_clears_frames(self):
         session = SceneSession("test", max_frames=10)
-        for i in range(5):
+        for _ in range(5):
             session.add_frame(np.zeros((50, 50, 3), dtype=np.uint8))
         assert session.frame_count == 5
 
@@ -72,11 +70,11 @@ class TestSceneManagerEviction:
         """Inactive sessions should be evicted before active ones."""
         mgr = SceneManager(max_sessions=2)
         s1 = mgr.create_session("task-1")
-        s2 = mgr.create_session("task-2")
+        mgr.create_session("task-2")
         s1.close()  # mark inactive
 
         # Creating a third should evict s1 (inactive)
-        s3 = mgr.create_session("task-3")
+        mgr.create_session("task-3")
         assert mgr.get_session("task-1") is None
         assert mgr.get_session("task-2") is not None
         assert mgr.get_session("task-3") is not None
@@ -84,13 +82,13 @@ class TestSceneManagerEviction:
     def test_evict_oldest_when_all_active(self):
         """When all sessions are active, evict the oldest by creation time."""
         mgr = SceneManager(max_sessions=2)
-        s1 = mgr.create_session("task-1")
+        mgr.create_session("task-1")
         s2 = mgr.create_session("task-2")
 
         # Manually backdated s2 to be older than s1
         s2._created = datetime(2020, 1, 1, tzinfo=UTC)
 
-        s3 = mgr.create_session("task-3")
+        mgr.create_session("task-3")
         # s2 (oldest by creation time) should be evicted
         assert mgr.get_session("task-2") is None
         assert mgr.get_session("task-1") is not None
@@ -109,7 +107,7 @@ class TestSceneManagerEviction:
         s3._created = datetime(2025, 6, 1, tzinfo=UTC)
 
         # Create fourth — should evict "second" (oldest by timestamp)
-        s4 = mgr.create_session("fourth")
+        mgr.create_session("fourth")
         assert mgr.get_session("second") is None
         assert mgr.get_session("first") is not None
 
@@ -177,7 +175,7 @@ class TestSceneFrameHash:
 class TestSceneSessionFrameEviction:
     def test_frame_eviction_at_limit(self):
         session = SceneSession("test", max_frames=3)
-        for i in range(5):
+        for _ in range(5):
             session.add_frame(np.zeros((10, 10, 3), dtype=np.uint8))
 
         assert session.frame_count == 3
@@ -188,7 +186,7 @@ class TestSceneSessionFrameEviction:
 
     def test_get_recent_frames(self):
         session = SceneSession("test", max_frames=10)
-        for i in range(8):
+        for _ in range(8):
             session.add_frame(np.zeros((10, 10, 3), dtype=np.uint8))
 
         recent = session.get_recent_frames(3)
@@ -199,7 +197,3 @@ class TestSceneSessionFrameEviction:
         session = SceneSession("test")
         session.add_frame(np.zeros((10, 10, 3), dtype=np.uint8))
         assert session.detect_latest_change() is None
-
-
-# Need to import MagicMock for test_hash_ultimate_fallback
-from unittest.mock import MagicMock
