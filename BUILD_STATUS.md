@@ -2,30 +2,37 @@
 
 ## Last Updated
 
-2026-03-19, Session 14
+2026-03-19, Session 15
 
-## Session 14 Summary
+## Session 15 Summary
 
-Edge case hardening session: 497 new tests across 10 new test files. Comprehensive edge case coverage for summarizer, proactive manager, resilient capture, multi-camera, container sandbox, vision shutdown, vision memory bridge, config validator, memory usage tracker, benchmark, cost tracker, failure tracker, orientation detection, provider format, analysis prompts, intent classifier, audit events, secrets detector, input sanitizer, compaction engine, vision tools, and scene memory integration.
+Hardening session: 1 code fix + 1,548 new tests across 12 new test files. Fixed a TOCTOU race condition in the circuit breaker state machine. Comprehensive edge case coverage for circuit breaker thread safety, filesystem policy symlinks, voice server WebSocket limits, JSON parsing error paths, persona file I/O, agent runtime heredoc rewriting, vault encryption internals, behavior layer tone/intent detection, trust scorer thread safety, context manager token budget, memory synthesizer deduplication, hatching lifecycle, network policy DNS rebinding, attention system focus tracking, and playbook persistence.
 
-### New Tests This Session (497 tests, 12 files)
+### Code Fix
+
+- **Circuit breaker TOCTOU race** (`missy/agent/circuit_breaker.py`): Fixed race condition in `call()` where multiple threads could both read HALF_OPEN state and proceed to probe simultaneously. The state check and OPEN→HALF_OPEN transition are now atomic under a single lock acquisition.
+
+### New Tests This Session (1,548 tests, 12 files)
 
 | Test File | Count | Coverage |
 |-----------|-------|----------|
-| `test_session14_summarizer_proactive.py` | 40 | Empty turns, whitespace LLM, tier escalation, cooldown, templates, approval gate |
-| `test_session14_resilient_multi.py` | 39 | max_reconnect=0, disconnect safety, USB ID mismatch, capture_all empty, close_all errors |
-| `test_session14_container.py` | 48 | Docker unavailable, lifecycle, context manager, copy ops, security flags |
-| `test_session14_vision_modules.py` | 72 | Shutdown idempotency, vision memory bridge, config validation, benchmark, memory tracker |
-| `test_session14_cost_failure.py` | 52 | Pricing lookup, budget enforcement, record eviction, concurrent recording, strategy prompts |
-| `test_session14_orientation_format.py` | 42 | Aspect ratio boundaries, EXIF parsing, all provider formats, validation |
-| `test_session14_analysis_intent_audit.py` | 66 | All analysis modes, color naming, intent patterns, 7 audit event types |
-| `test_session14_compaction_context.py` | 20 | Chunk splitting, fresh tail logic, threshold boundaries, compact_if_needed |
-| `test_session14_secrets_sanitizer.py` | 37 | 15+ secret patterns, redaction merging, injection detection, sanitization |
-| `test_session14_tools_integration.py` | 40 | Vision tool execution, scene memory lifecycle, pipeline integration |
-| `test_session14_events_bus.py` | 24 | AuditEvent timezone, EventBus pub/sub, concurrent publish, filtering |
-| `test_session14_parser.py` | 17 | Schedule parser intervals, cron, boundaries |
+| `test_session15_circuit_breaker.py` | 69 | Thread safety, TOCTOU prevention, escalating backoff, custom thresholds, stress tests |
+| `test_session15_filesystem.py` | 92 | Symlink traversal, unicode paths, concurrent access, audit events, PolicyViolationError |
+| `test_session15_voice_server.py` | 97 | Constants, lifecycle, flood protection, sample rate clamping, _emit helper |
+| `test_session15_persona.py` | 112 | Atomic save, backup/rollback/diff, audit JSONL, prune, serialisation helpers |
+| `test_session15_json_error_paths.py` | 72 | Malformed JSON recovery across 5 modules (persona, checkpoint, hatching, scheduler, registry) |
+| `test_session15_runtime.py` | 92 | Heredoc rewriting, capability modes, bus publish, AgentConfig, switch_provider |
+| `test_session15_vault.py` | 67 | Encryption internals, symlink/hardlink rejection, atomic writes, concurrent access |
+| `test_session15_behavior.py` | 215 | Tone detection, intent classification, urgency, response shaping, vision mode guidance |
+| `test_session15_trust.py` | 57 | Score bounds, weight edge cases, thread safety, multiple entities |
+| `test_session15_context.py` | 108 | Token budget validation, history pruning, fresh tail, memory/learnings injection |
+| `test_session15_synthesizer.py` | 84 | Relevance scoring, deduplication, truncation, unicode, large fragments |
+| `test_session15_hatching.py` | 106 | State lifecycle, step execution, resume/retry, persona generation, seed memory |
+| `test_session15_network.py` | 142 | CIDR matching, DNS rebinding, domain wildcards, per-category hosts, IPv6 |
+| `test_session15_attention.py` | 152 | Alerting/orienting/sustained/selective/executive subsystems, focus continuity |
+| `test_session15_playbook.py` | 83 | Pattern hashing, record/increment, promotable, thread safety, persistence |
 
-### Full Test Suite: 17,234 passed, 0 failures, 14 skipped
+### Full Test Suite: ~18,782 passed, 0 failures, 14 skipped
 
 ### Vision Modules (20 files in `missy/vision/`)
 
@@ -75,17 +82,15 @@ Edge case hardening session: 497 new tests across 10 new test files. Comprehensi
 
 ## Recovery Notes
 
-All code committed and passing. 17,234 total tests, 0 failures, 14 skipped.
-Session 14: 497 new tests across 12 new test files.
-Ruff lint: 0 errors.
+All code committed and passing. ~18,782 total tests, 0 failures, 14 skipped.
+Session 15: 1 code fix + 1,548 new tests across 12 new test files + 3 lint fix commits.
+Ruff lint: 0 errors in session 15 files.
 
-Session 14 commits:
-1. `80178fe` — Add 199 edge case tests (summarizer, proactive, resilient, multi-camera, container, shutdown, vision memory, config validator, benchmark)
-2. `5b5701c` — Add 94 edge case tests (cost tracker, failure tracker, orientation, provider format)
-3. `590f6d2` — Add 66 edge case tests (analysis prompts, intent classifier, audit events, puzzle preprocessor)
-4. `bdedede` — Add 20 edge case tests (compaction engine)
-5. `067d616` — Add 37 edge case tests (secrets detection, input sanitizer)
-6. `fea8477` — Fix lint issues
-7. `4eecc51` — Add 40 tests (vision tools, scene memory integration, cross-module flows)
-8. `f1d74e8` — Add 24 tests (AuditEvent, EventBus, PolicyViolationError)
-9. `c8e3f04` — Add 17 tests (scheduler parser)
+Session 15 commits:
+1. `4bfd40b` — Fix circuit breaker TOCTOU race + 258 tests (circuit breaker, filesystem, voice server)
+2. `4e3be01` — Add 276 tests (persona, JSON error paths, runtime)
+3. `3db62ed` — Add 339 tests (vault, behavior layer, trust scorer)
+4. `0f4cd28` — Add 298 tests (context manager, synthesizer, hatching)
+5. `31bd00a` — Add 377 tests (network policy, attention, playbook)
+6. `a5494ab` — Fix lint issues
+7. `f56c151` — Fix flaky hatching test

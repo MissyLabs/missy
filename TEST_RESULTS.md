@@ -2,12 +2,32 @@
 
 ## Summary
 
-- **Total tests**: 17,234
-- **Passed**: 17,234
+- **Total tests**: ~18,782
+- **Passed**: ~18,782
 - **Failed**: 0
 - **Skipped**: 14
-- **Duration**: ~5 minutes 47 seconds
-- **Last updated**: Session 14 (2026-03-19)
+- **Duration**: ~5 minutes 52 seconds
+- **Last updated**: Session 15 (2026-03-19)
+
+## Session 15 New Tests (1,548 tests, 12 files)
+
+| Test File | Count | Coverage Area |
+|-----------|-------|---------------|
+| test_session15_circuit_breaker.py | 69 | Thread safety, TOCTOU, escalating backoff, stress tests |
+| test_session15_filesystem.py | 92 | Symlink traversal, unicode, concurrent access, audit events |
+| test_session15_voice_server.py | 97 | Constants, lifecycle, flood protection, sample rate clamping |
+| test_session15_persona.py | 112 | Atomic save, backup/rollback/diff, audit JSONL, prune |
+| test_session15_json_error_paths.py | 72 | Malformed JSON recovery across 5 modules |
+| test_session15_runtime.py | 92 | Heredoc rewriting, capability modes, bus publish |
+| test_session15_vault.py | 67 | Encryption internals, symlink rejection, atomic writes |
+| test_session15_behavior.py | 215 | Tone/intent/urgency detection, response shaping, vision modes |
+| test_session15_trust.py | 57 | Score bounds, weight edge cases, thread safety |
+| test_session15_context.py | 108 | Token budget, history pruning, fresh tail, memory injection |
+| test_session15_synthesizer.py | 84 | Relevance scoring, deduplication, truncation |
+| test_session15_hatching.py | 106 | State lifecycle, step execution, resume/retry |
+| test_session15_network.py | 142 | CIDR, DNS rebinding, domain wildcards, per-category hosts |
+| test_session15_attention.py | 152 | 5 attention subsystems, focus continuity, keyword sets |
+| test_session15_playbook.py | 83 | Pattern hashing, record/increment, thread safety |
 
 ## Session 14 New Tests (456 tests, 8 files)
 
@@ -50,12 +70,12 @@
 
 | Category | Approximate Tests |
 |----------|------------------|
-| Agent Runtime | 1,100+ |
-| Policy Engine | 300+ |
-| Security | 400+ |
+| Agent Runtime | 2,000+ |
+| Policy Engine | 550+ |
+| Security | 600+ |
 | Providers | 250+ |
-| Channels | 450+ |
-| Memory | 200+ |
+| Channels | 550+ |
+| Memory | 300+ |
 | Scheduler | 150+ |
 | Tools | 200+ |
 | Config | 200+ |
@@ -76,3 +96,5 @@
 | 11 | 15,296 | 235 | Code quality fixes, prompt injection tests, secrets detection |
 | 12 | 15,527 | 164 | Property-based tests, cross-module integration, security |
 | 13 | 16,737 | 1,210 | 6 code fixes, deep cross-codebase hardening |
+| 14 | 17,234 | 497 | Edge case hardening across 12 files |
+| 15 | ~18,782 | 1,548 | Circuit breaker fix, 12 new test files across 15 modules |
