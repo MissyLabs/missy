@@ -11,13 +11,12 @@ from __future__ import annotations
 import threading
 import time
 from datetime import datetime
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from missy.agent.heartbeat import HEARTBEAT_FILE, HEARTBEAT_OK_FILE, HeartbeatRunner
 from missy.agent.watchdog import SubsystemHealth, Watchdog
-
 
 # ---------------------------------------------------------------------------
 # Helpers

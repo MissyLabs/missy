@@ -15,7 +15,6 @@ from missy.vision.health_monitor import (
     get_health_monitor,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -164,7 +163,7 @@ class TestRecordCapture:
 
     def test_max_events_respected(self):
         m = VisionHealthMonitor(max_events=5)
-        for i in range(10):
+        for _ in range(10):
             m.record_capture(success=True, device="d")
         report = m.get_health_report()
         assert report["total_captures"] == 5

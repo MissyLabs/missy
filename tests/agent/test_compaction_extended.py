@@ -12,16 +12,11 @@ Covers edge cases and scenarios not addressed in test_compaction.py:
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from missy.agent.compaction import (
-    _DEFAULT_CONDENSED_MIN_FANOUT,
-    _DEFAULT_CONTEXT_THRESHOLD,
-    _DEFAULT_FRESH_TAIL,
-    _DEFAULT_LEAF_CHUNK_TOKENS,
     _chunk_turns,
     compact_if_needed,
     compact_session,
@@ -29,7 +24,6 @@ from missy.agent.compaction import (
 )
 from missy.agent.context import TokenBudget
 from missy.memory.sqlite_store import ConversationTurn, SQLiteMemoryStore
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -236,14 +230,14 @@ class TestCompactSessionMaxCondenseDepth:
         # meaning it attempts depth=0 uncompacted summaries condensation once then stops
         # Condensation at depth 0 will try to condense existing depth-0 summaries
         # max_condense_depth=0 means we allow one condensation pass at depth=0 only
-        condensed = stats["condensed_summaries_created"]
+        _ = stats["condensed_summaries_created"]
         # Verify no depth-2 summaries exist
         depth2 = memory_store.get_summaries("s", depth=2)
         assert len(depth2) == 0
 
     def test_max_condense_depth_one_limits_to_two_levels(self, memory_store, summarizer):
         _add_turns(memory_store, "s", 200, content_size=2000)
-        stats = compact_session(
+        compact_session(
             "s", memory_store, summarizer,
             fresh_tail_count=4,
             leaf_chunk_tokens=200,

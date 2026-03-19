@@ -31,7 +31,6 @@ from missy.agent.cost_tracker import (
     _lookup_pricing,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -587,11 +586,11 @@ class TestThreadSafety:
                 done.set()
 
         def _checker():
+            import contextlib
+
             while not done.is_set():
-                try:
+                with contextlib.suppress(BudgetExceededError):
                     tracker.check_budget()
-                except BudgetExceededError:
-                    pass
 
         rec_thread = threading.Thread(target=_recorder)
         chk_thread = threading.Thread(target=_checker)

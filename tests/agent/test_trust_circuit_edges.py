@@ -16,7 +16,6 @@ from missy.agent.circuit_breaker import CircuitBreaker, CircuitState
 from missy.core.exceptions import MissyError
 from missy.security.trust import DEFAULT_SCORE, MAX_SCORE, MIN_SCORE, TrustScorer
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -393,7 +392,7 @@ class TestCircuitBreakerCallReturnValues:
 
     def test_call_returns_empty_list(self):
         breaker = _make_breaker()
-        assert breaker.call(lambda: []) == []
+        assert breaker.call(list) == []
 
     def test_call_forwards_multiple_positional_args(self):
         breaker = _make_breaker()

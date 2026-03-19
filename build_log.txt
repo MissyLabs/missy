@@ -53,3 +53,15 @@ Press Ctrl+C to stop.
 =============================================
   Starting session 4 of 20: Thu Mar 19 02:14:10 AM UTC 2026
 =============================================
+That was the `--co -q` collection count (12,868 collected at that point). After the final config/memory test additions and test isolation fix, the definitive run was **13,029 passed, 0 failures**. Session 4 is complete.
+
+Claude exit code: 0
+
+COMPLETE.md exists, but continuing because loop is fixed to 20 iterations.
+Use remaining sessions for hardening, testing, and parity review.
+
+Session finished. Next session starts in 30 seconds...
+Press Ctrl+C to stop.
+=============================================
+  Starting session 5 of 20: Thu Mar 19 03:30:03 AM UTC 2026
+=============================================

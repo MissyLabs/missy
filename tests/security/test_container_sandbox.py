@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -771,9 +771,8 @@ class TestContextManager:
             _make_proc(returncode=0, stdout=b"ctx003\n"),
             _make_proc(returncode=0),
         ]
-        with pytest.raises(ValueError):
-            with ContainerSandbox(workspace=_WORKSPACE) as sb:
-                raise ValueError("deliberate")
+        with pytest.raises(ValueError), ContainerSandbox(workspace=_WORKSPACE) as sb:
+            raise ValueError("deliberate")
 
         assert sb.container_id is None
         assert mock_run.call_count == 2
