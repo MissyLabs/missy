@@ -436,7 +436,7 @@ class BehaviorLayer:
             )
 
         # Vision-specific guidance
-        vision_mode = context.get("vision_mode", "")
+        vision_mode = ctx.get("vision_mode", "")
         if vision_mode == "painting":
             lines.append(
                 "You are reviewing artwork. Be warm, encouraging, and supportive. "

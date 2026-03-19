@@ -530,6 +530,9 @@ class VisionHealthMonitor:
                 except (json.JSONDecodeError, TypeError) as exc:
                     logger.warning("Skipping corrupt health record: %s", exc)
                     continue
+                if not isinstance(data, dict):
+                    logger.warning("Skipping non-dict health record: %r", type(data).__name__)
+                    continue
                 device = row["device"]
                 if device not in self._devices:
                     self._devices[device] = DeviceStats(device=device)
