@@ -91,11 +91,15 @@ class TestWebcamSourceTimeout:
 class TestResilientCameraBackoff:
     """Tests for exponential backoff in reconnection."""
 
+    @patch("missy.vision.resilient_capture.random")
     @patch("missy.vision.resilient_capture.get_discovery")
     @patch("missy.vision.resilient_capture.time")
-    def test_backoff_increases_delay(self, mock_time, mock_get_disc):
+    def test_backoff_increases_delay(self, mock_time, mock_get_disc, mock_random):
         """Delay should increase with each failed attempt."""
         from missy.vision.resilient_capture import ResilientCamera
+
+        # Fix jitter to midpoint so delays are deterministically increasing
+        mock_random.random.return_value = 0.5
 
         mock_disc = MagicMock()
         # Camera found but all reconnect captures fail
@@ -124,7 +128,7 @@ class TestResilientCameraBackoff:
         # Check sleep calls — should show increasing delays
         sleep_calls = [c[0][0] for c in mock_time.sleep.call_args_list]
         assert len(sleep_calls) >= 3
-        # Each delay should be >= previous
+        # Each delay should be >= previous (with fixed jitter, they're monotonic)
         for i in range(1, len(sleep_calls)):
             assert sleep_calls[i] >= sleep_calls[i - 1]
 
@@ -158,7 +162,8 @@ class TestResilientCameraBackoff:
 
         sleep_calls = [c[0][0] for c in mock_time.sleep.call_args_list]
         for delay in sleep_calls:
-            assert delay <= 5.0
+            # Jitter adds up to 25% on top of max_delay
+            assert delay <= 5.0 * 1.25 + 0.01
 
     def test_default_backoff_params(self):
         from missy.vision.resilient_capture import ResilientCamera
