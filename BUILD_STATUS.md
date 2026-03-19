@@ -2,59 +2,80 @@
 
 ## Last Updated
 
-2026-03-19, Session 10
+2026-03-19, Session 11
 
-## Session 10 Summary
+## Session 11 Summary
 
-Hardening session: memory cleanup, thread safety, timeouts, image size limits, 166 new tests across 5 new test files. 7 code fixes.
+Thread-safety hardening across vision subsystem, lint cleanup, 139 new tests across 3 test files, 8 code fixes.
 
-### Changes This Session (5 commits)
+### Changes This Session (6 commits)
 
-1. **Vision subsystem hardening** (`eb02aaf`)
-   - `scene_memory.py`: Eagerly release numpy arrays on frame eviction (`frame.image = None`), add re-entrance guard to `close()`, thread-safe `detect_latest_change()`
-   - `vision_memory.py`: Thread-safe lazy initialization with double-checked locking pattern
-   - `capture.py`: Deadline-aware retry sleeps (`min(retry_delay, remaining_time)`) prevent overshooting timeout
-   - `voice/server.py`: Add capture timeout (10s), image size limit (2MiB) with automatic quality downgrade for oversized images
-   - `intent.py`: Cap activation_log at 500 entries to prevent unbounded memory growth
-   - Fix SIM117 lint warnings in test files, auto-fix unused imports
+1. **Fix failing test + lint cleanup** (`691bd77`)
+   - Fix test_activation_log_is_bounded: expect 500 (matching code cap from session 10)
+   - Combine all 12 nested `with` statements in 3 test files (SIM117 fix)
+   - Remove unused imports in 2 test files
+   - Ruff now reports 0 errors
 
-2. **Memory cleanup and thread safety tests** (`b7fddbc`)
-   - 82 tests: frame eviction cleanup, close() idempotency, detect_latest_change thread safety, concurrent add+detect, VisionMemoryBridge init, capture deadline sleep, discovery find_by_name, SceneManager eviction, multi-camera status, perceptual hash edge cases, SceneFrame/Session state, deduplication thresholds, CameraDevice properties, visualize/detect change
+2. **Thread-safe singletons and lazy imports** (`ba73edb`)
+   - Add double-checked locking to `get_discovery()`, `get_scene_manager()`, `get_health_monitor()` singletons
+   - Add thread-safe lazy import for `_get_cv2()` in `capture.py`, `sources.py`, `pipeline.py`
+   - Clean up `multi_camera.py` `status()` method to avoid redundant dummy CameraDevice objects
 
-3. **Resilient capture and provider tests** (`b0932ff`)
-   - 26 tests: device path change warning, USB ID mismatch, cumulative failure threshold, unrecoverable failure abort, device validation, context manager, pipeline edge cases, intent classifier boundary conditions, provider format structure
+3. **43 thread-safety and edge case tests** (`8ba7bad`)
+   - Singleton thread-safety: 10-thread concurrent access for discovery/scene_manager/health_monitor
+   - Lazy cv2 import concurrency: capture, sources, pipeline
+   - Multi-camera status: known/unknown/empty/multiple cameras
+   - Health monitor: concurrent recording, empty reports, recommendations
+   - Scene session: closed session behavior, concurrent add+close, change detection
+   - Pipeline/discovery/capture edge cases
 
-4. **Audit, health monitor, and benchmark tests** (`1dcac28`)
-   - 30 tests: audit event verification (capture/failure/session/intent/analysis), health monitor counters/success rate/save-load/recommendations/reset, config validator boundary values, CaptureBenchmark categories/percentiles, MemoryTracker scene manager integration
+4. **48 source abstraction and provider format tests** (`82c7b02`)
+   - FileSource: empty/missing/oversized files, type/availability checks
+   - PhotoSource: empty directory, filtering, wrap-around, specific index
+   - WebcamSource: path validation, injection prevention
+   - ScreenshotSource: availability, tool fallback
+   - Source factory: all types, string type, invalid type
+   - Provider format: all providers, aliases, validation, message structure
+   - ImageFrame encoding: JPEG/PNG/base64
 
-5. **Integration tests and activation log fix** (`184ab9d`)
-   - 28 tests: analysis prompt mode selection, source factory types, orientation detection, doctor diagnostics, shutdown hook, intent activation log
+5. **48 behavior layer tests** (`3dda826`)
+   - Tone analysis: 9 tests (casual/formal/frustrated/technical/brief/verbose/empty)
+   - Prompt shaping: 14 tests (persona, guidelines, vision modes, conciseness)
+   - IntentInterpreter: 14 tests (all 10 intent types + urgency levels)
+   - ResponseShaper: 10 tests (robotic phrase stripping, code preservation)
+   - Integration: 1 end-to-end test
 
-### Full Test Suite: 15,033 passed, 0 failures, 14 skipped
+6. **Thread-safe orientation module** (`a9495f8`)
+   - Add double-checked locking to `_get_cv2()` in orientation.py
+
+### Full Test Suite: 15,200 passed, 0 failures, 14 skipped
 
 ### Code Changes Summary
 
 | Module | Change | Severity |
 |--------|--------|----------|
-| `scene_memory.py` | Eager numpy cleanup on eviction/close, close() re-entrance guard, thread-safe detect_latest_change | HIGH |
-| `voice/server.py` | Capture timeout + image size limit (2MiB) with quality downgrade | HIGH |
-| `vision_memory.py` | Double-checked locking for thread-safe lazy init | MEDIUM |
-| `capture.py` | Deadline-aware retry sleeps | MEDIUM |
-| `intent.py` | Bound activation_log to 500 entries | LOW |
+| `discovery.py` | Thread-safe `get_discovery()` singleton (double-checked locking) | MEDIUM |
+| `scene_memory.py` | Thread-safe `get_scene_manager()` singleton | MEDIUM |
+| `health_monitor.py` | Thread-safe `get_health_monitor()` singleton | MEDIUM |
+| `capture.py` | Thread-safe `_get_cv2()` lazy import | MEDIUM |
+| `sources.py` | Thread-safe `_get_cv2()` lazy import | MEDIUM |
+| `pipeline.py` | Thread-safe `_get_cv2()` lazy import | MEDIUM |
+| `orientation.py` | Thread-safe `_get_cv2()` lazy import | MEDIUM |
+| `multi_camera.py` | Clean up `status()` method (remove redundant dummy objects) | LOW |
 
 ### Vision Modules (20 files in `missy/vision/`)
 
 | Module | Purpose |
 |--------|---------|
 | `__init__.py` | Package docs with complete submodule listing |
-| `discovery.py` | USB camera discovery via sysfs + rediscover/validate + cycle detection |
-| `capture.py` | OpenCV capture with timeout, deadline-aware retries, warmup, fd leak prevention, quality scoring |
+| `discovery.py` | USB camera discovery via sysfs + rediscover/validate + cycle detection + thread-safe singleton |
+| `capture.py` | OpenCV capture with timeout, deadline-aware retries, warmup, fd leak prevention, quality scoring, thread-safe cv2 |
 | `resilient_capture.py` | Auto-reconnection with blank detector reset on device switch |
 | `multi_camera.py` | Concurrent multi-camera capture with deadline-based timeout + handle validation |
-| `sources.py` | Unified source abstraction with S_ISREG validation + traversal prevention |
-| `pipeline.py` | Image preprocessing + quality assessment (6 metrics) |
-| `scene_memory.py` | Task-scoped scene memory with perceptual hashing + deduplication + thread safety + eager cleanup |
-| `health_monitor.py` | Capture stats, health tracking, SQLite persistence, thread-safe auto-save |
+| `sources.py` | Unified source abstraction with S_ISREG validation + traversal prevention + thread-safe cv2 |
+| `pipeline.py` | Image preprocessing + quality assessment (6 metrics) + thread-safe cv2 |
+| `scene_memory.py` | Task-scoped scene memory with perceptual hashing + deduplication + thread safety + eager cleanup + thread-safe singleton |
+| `health_monitor.py` | Capture stats, health tracking, SQLite persistence, thread-safe auto-save + thread-safe singleton |
 | `benchmark.py` | Performance benchmarking with percentile statistics |
 | `memory_usage.py` | Scene memory usage monitoring with configurable limits |
 | `config_validator.py` | Vision configuration validation |
@@ -65,7 +86,7 @@ Hardening session: memory cleanup, thread safety, timeouts, image size limits, 1
 | `provider_format.py` | Provider-specific image API formatting with input validation |
 | `audit.py` | Vision audit event logging (7 event types) |
 | `shutdown.py` | Graceful shutdown and resource cleanup (atexit integration) |
-| `orientation.py` | Image orientation detection (aspect ratio + EXIF) and auto-correction |
+| `orientation.py` | Image orientation detection (aspect ratio + EXIF) and auto-correction + thread-safe cv2 |
 
 ### Integration Points
 - **CLI**: `missy vision devices/capture/inspect/review/doctor/health/benchmark/validate/memory`
@@ -87,16 +108,20 @@ Hardening session: memory cleanup, thread safety, timeouts, image size limits, 1
 - [ ] Discord credential message deletion
 - [ ] Additional fuzz testing for sanitizer patterns
 - [ ] Load testing for multi-camera concurrent capture
+- [ ] Property-based testing with Hypothesis for vision pipeline
+- [ ] End-to-end integration tests with mock camera devices
 
 ## Recovery Notes
 
-All code committed and passing. 15,033 total tests, 0 failures, 14 skipped.
-Session 10: 7 code fixes, 166 new tests across 5 new test files.
-Vision subsystem has 20 modules. Ruff lint: 12 SIM117 style-only warnings remaining (nested with statements in tests).
+All code committed and passing. 15,200 total tests, 0 failures, 14 skipped.
+Session 11: 8 code fixes (7 thread-safety + 1 cleanup), 139 new tests across 3 new test files.
+Ruff lint: 0 errors.
+All vision module singletons and lazy imports now use double-checked locking.
 
-Session 10 commits:
-1. `eb02aaf` — Vision hardening: memory cleanup, thread safety, timeouts (7 code fixes)
-2. `b7fddbc` — Memory cleanup and thread safety tests (82 tests)
-3. `b0932ff` — Resilient capture, pipeline, intent, provider tests (26 tests)
-4. `1dcac28` — Audit, health, benchmark, config validator tests (30 tests)
-5. `184ab9d` — Integration tests + activation log bounding (28 tests)
+Session 11 commits:
+1. `691bd77` — Fix failing test + resolve all SIM117 lint warnings
+2. `ba73edb` — Thread-safe singletons and lazy imports (7 files)
+3. `8ba7bad` — 43 thread-safety and edge case tests
+4. `82c7b02` — 48 source abstraction and provider format tests
+5. `3dda826` — 48 behavior layer tests
+6. `a9495f8` — Thread-safe orientation module lazy import
