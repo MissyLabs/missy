@@ -222,7 +222,15 @@ class AnalysisResult:
 
 
 class AnalysisPromptBuilder:
-    """Builds analysis prompts based on mode and context."""
+    """Builds analysis prompts based on mode and context.
+
+    User-provided context is truncated and wrapped in a clearly-delimited
+    block to mitigate prompt injection (the LLM may still follow injected
+    instructions, but the delimiters signal that the text is user-supplied).
+    """
+
+    #: Maximum character length for user-supplied context strings.
+    MAX_CONTEXT_LENGTH = 2000
 
     def build_prompt(self, request: AnalysisRequest) -> str:
         """Build the appropriate analysis prompt."""
@@ -235,10 +243,21 @@ class AnalysisPromptBuilder:
         else:
             return self._build_general_prompt(request)
 
+    @classmethod
+    def _sanitize_context(cls, context: str) -> str:
+        """Truncate and delimit user-supplied context."""
+        if not context:
+            return ""
+        truncated = context[: cls.MAX_CONTEXT_LENGTH]
+        if len(context) > cls.MAX_CONTEXT_LENGTH:
+            truncated += " [truncated]"
+        return truncated
+
     def _build_general_prompt(self, request: AnalysisRequest) -> str:
         prompt = GENERAL_ANALYSIS_PROMPT
-        if request.context:
-            prompt += f"\n\nAdditional context: {request.context}"
+        ctx = self._sanitize_context(request.context)
+        if ctx:
+            prompt += f"\n\n[User-provided context]: {ctx}"
         return prompt
 
     def _build_puzzle_prompt(self, request: AnalysisRequest) -> str:
@@ -250,8 +269,9 @@ class AnalysisPromptBuilder:
                 previous_state=_format_state(request.previous_state),
             )
         prompt = PUZZLE_ANALYSIS_PROMPT
-        if request.context:
-            prompt += f"\n\nUser note: {request.context}"
+        ctx = self._sanitize_context(request.context)
+        if ctx:
+            prompt += f"\n\n[User note]: {ctx}"
         return prompt
 
     def _build_painting_prompt(self, request: AnalysisRequest) -> str:
@@ -262,14 +282,16 @@ class AnalysisPromptBuilder:
                 ),
             )
         prompt = PAINTING_ANALYSIS_PROMPT
-        if request.context:
-            prompt += f"\n\nThe painter says: {request.context}"
+        ctx = self._sanitize_context(request.context)
+        if ctx:
+            prompt += f"\n\n[The painter says]: {ctx}"
         return prompt
 
     def _build_inspection_prompt(self, request: AnalysisRequest) -> str:
         prompt = INSPECTION_PROMPT
-        if request.context:
-            prompt += f"\n\nInspection focus: {request.context}"
+        ctx = self._sanitize_context(request.context)
+        if ctx:
+            prompt += f"\n\n[Inspection focus]: {ctx}"
         return prompt
 
 
