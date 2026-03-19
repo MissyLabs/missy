@@ -91,7 +91,7 @@ class TestSceneSession:
     def test_get_recent_frames(self):
         session = SceneSession("task-1")
         for _i in range(10):
-            session.add_frame(np.zeros((10, 10, 3), dtype=np.uint8))
+            session.add_frame(np.zeros((10, 10, 3), dtype=np.uint8), deduplicate=False)
 
         recent = session.get_recent_frames(3)
         assert len(recent) == 3
@@ -144,8 +144,8 @@ class TestSceneSession:
         session = SceneSession("task-1")
 
         img = np.full((100, 100, 3), 128, dtype=np.uint8)
-        f1 = session.add_frame(img.copy())
-        f2 = session.add_frame(img.copy())
+        f1 = session.add_frame(img.copy(), deduplicate=False)
+        f2 = session.add_frame(img.copy(), deduplicate=False)
 
         change = session.detect_change(f1, f2)
         assert change.change_score < 0.01

@@ -204,8 +204,8 @@ class TestSceneMemorySecurity:
 
         session = SceneSession("test", TaskType.GENERAL)
         img = np.ones((100, 100, 3), dtype=np.uint8) * 255
-        session.add_frame(img)
-        session.add_frame(img)
+        session.add_frame(img, deduplicate=False)
+        session.add_frame(img, deduplicate=False)
 
         assert session.frame_count == 2
 

@@ -203,8 +203,8 @@ class TestSceneMemoryEdgeCases:
         session = SceneSession("test")
 
         # Create frames with incompatible shapes
-        f1 = session.add_frame(np.zeros((10, 10, 3), dtype=np.uint8))
-        f2 = session.add_frame(np.zeros((10, 10, 3), dtype=np.uint8))
+        f1 = session.add_frame(np.zeros((10, 10, 3), dtype=np.uint8), deduplicate=False)
+        f2 = session.add_frame(np.zeros((10, 10, 3), dtype=np.uint8), deduplicate=False)
 
         # Should not raise even with odd inputs
         change = session.detect_change(f1, f2)

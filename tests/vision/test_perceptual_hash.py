@@ -153,8 +153,8 @@ class TestSceneSessionPhashIntegration:
         rng = np.random.RandomState(42)
         img = rng.randint(50, 200, (64, 64, 3), dtype=np.uint8)
 
-        f_a = session.add_frame(img.copy())
-        f_b = session.add_frame(img.copy())
+        f_a = session.add_frame(img.copy(), deduplicate=False)
+        f_b = session.add_frame(img.copy(), deduplicate=False)
 
         change = session.detect_change(f_a, f_b)
         assert change.change_score < 0.05

@@ -178,10 +178,39 @@ class CameraHandle:
         self._blank_detector = AdaptiveBlankDetector(
             base_threshold=self._config.blank_threshold,
         ) if self._config.adaptive_blank else None
+        self._warmup_intensities: list[float] = []
+        self._capture_count = 0
+        self._success_count = 0
 
     @property
     def is_open(self) -> bool:
         return self._opened and self._cap is not None and self._cap.isOpened()
+
+    @property
+    def capture_stats(self) -> dict[str, Any]:
+        """Return diagnostic statistics about this camera handle."""
+        uptime = time.monotonic() - self._open_time if self._opened else 0.0
+        return {
+            "device_path": self._device_path,
+            "is_open": self.is_open,
+            "uptime_seconds": round(uptime, 1),
+            "capture_count": self._capture_count,
+            "success_count": self._success_count,
+            "success_rate": (
+                round(self._success_count / self._capture_count, 4)
+                if self._capture_count > 0
+                else 0.0
+            ),
+            "warmup_frames": len(self._warmup_intensities),
+            "warmup_stable": self._is_warmup_stable(),
+        }
+
+    def _is_warmup_stable(self) -> bool:
+        """Check if the warmup phase showed stable exposure."""
+        if len(self._warmup_intensities) < 3:
+            return True  # too few frames to judge
+        recent = self._warmup_intensities[-3:]
+        return (max(recent) - min(recent)) < 5.0
 
     def open(self) -> None:
         """Open the camera device."""
@@ -306,6 +335,8 @@ class CameraHandle:
                         continue
 
                     self._record_successful_frame(frame)
+                    self._capture_count += 1
+                    self._success_count += 1
                     h, w = frame.shape[:2]
                     return CaptureResult(
                         success=True,
@@ -443,17 +474,47 @@ class CameraHandle:
 
     # -- internal --
 
-    def _warmup(self) -> None:
-        """Discard initial frames for auto-exposure stabilization."""
+    def _warmup(self) -> int:
+        """Discard initial frames for auto-exposure stabilization.
+
+        Tracks mean brightness across warmup frames to assess whether the
+        camera's auto-exposure has stabilized.  Returns the number of
+        frames actually discarded.
+        """
         n = self._config.warmup_frames
         if n <= 0:
-            return
+            return 0
         logger.debug("Warming up camera: discarding %d frames", n)
+        intensities: list[float] = []
+        discarded = 0
         for _ in range(n):
             try:
-                self._cap.read()
+                ret, frame = self._cap.read()
+                discarded += 1
+                if ret and frame is not None and frame.size > 0:
+                    intensities.append(float(np.mean(frame)))
             except Exception:
                 break
+
+        # Assess exposure stability
+        if len(intensities) >= 3:
+            recent = intensities[-3:]
+            spread = max(recent) - min(recent)
+            if spread < 5.0:
+                logger.debug(
+                    "Warmup stabilized after %d frames (spread=%.1f)",
+                    discarded,
+                    spread,
+                )
+            else:
+                logger.warning(
+                    "Warmup may not have stabilized after %d frames "
+                    "(brightness spread=%.1f, consider more warmup_frames)",
+                    discarded,
+                    spread,
+                )
+        self._warmup_intensities = intensities
+        return discarded
 
     def _is_blank(self, frame: np.ndarray) -> bool:
         """Detect blank/black frames using adaptive or fixed threshold."""

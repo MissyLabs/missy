@@ -16,7 +16,7 @@ class TestSceneSessionClose:
     def test_close_clears_frames(self):
         session = SceneSession("test", max_frames=10)
         for _ in range(5):
-            session.add_frame(np.zeros((50, 50, 3), dtype=np.uint8))
+            session.add_frame(np.zeros((50, 50, 3), dtype=np.uint8), deduplicate=False)
         assert session.frame_count == 5
 
         session.close()
@@ -179,7 +179,7 @@ class TestSceneSessionFrameEviction:
     def test_frame_eviction_at_limit(self):
         session = SceneSession("test", max_frames=3)
         for _ in range(5):
-            session.add_frame(np.zeros((10, 10, 3), dtype=np.uint8))
+            session.add_frame(np.zeros((10, 10, 3), dtype=np.uint8), deduplicate=False)
 
         assert session.frame_count == 3
         # First two frames should have been evicted
@@ -190,7 +190,7 @@ class TestSceneSessionFrameEviction:
     def test_get_recent_frames(self):
         session = SceneSession("test", max_frames=10)
         for _ in range(8):
-            session.add_frame(np.zeros((10, 10, 3), dtype=np.uint8))
+            session.add_frame(np.zeros((10, 10, 3), dtype=np.uint8), deduplicate=False)
 
         recent = session.get_recent_frames(3)
         assert len(recent) == 3

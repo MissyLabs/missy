@@ -61,6 +61,11 @@ class TestWarmup:
         mock_cap = MagicMock()
         mock_cap.isOpened.return_value = True
         mock_cap.get.return_value = 1920.0
+        # _warmup now unpacks ret, frame = self._cap.read()
+        import numpy as np
+
+        frame = np.full((100, 100, 3), 128, dtype=np.uint8)
+        mock_cap.read.return_value = (True, frame)
 
         handle = CameraHandle("/dev/video0", CaptureConfig(warmup_frames=5))
         handle._cap = mock_cap
@@ -85,7 +90,10 @@ class TestWarmup:
         mock_cv2 = MagicMock()
         mock_cv2_fn.return_value = mock_cv2
         mock_cap = MagicMock()
-        mock_cap.read.side_effect = [None, RuntimeError("device lost")]
+        import numpy as np
+
+        frame = np.full((100, 100, 3), 128, dtype=np.uint8)
+        mock_cap.read.side_effect = [(True, frame), RuntimeError("device lost")]
 
         handle = CameraHandle("/dev/video0", CaptureConfig(warmup_frames=10))
         handle._cap = mock_cap

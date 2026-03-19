@@ -31,7 +31,7 @@ class TestSceneSessionStress:
         session = SceneSession("ids")
         frames = []
         for _ in range(20):
-            f = session.add_frame(np.zeros((10, 10, 3), dtype=np.uint8))
+            f = session.add_frame(np.zeros((10, 10, 3), dtype=np.uint8), deduplicate=False)
             frames.append(f.frame_id)
         assert frames == list(range(1, 21))
 
@@ -184,8 +184,8 @@ class TestChangeDetectionEdgeCases:
     def test_visualize_identical_frames(self) -> None:
         session = SceneSession("test")
         img = np.full((64, 64, 3), 100, dtype=np.uint8)
-        f1 = session.add_frame(img.copy())
-        f2 = session.add_frame(img.copy())
+        f1 = session.add_frame(img.copy(), deduplicate=False)
+        f2 = session.add_frame(img.copy(), deduplicate=False)
         diff_img = session.visualize_change(f1, f2)
         assert diff_img is not None
 
