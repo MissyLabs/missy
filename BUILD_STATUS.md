@@ -2,13 +2,13 @@
 
 ## Last Updated
 
-2026-03-19, Session 3
+2026-03-19, Session 3 (final)
 
 ## Session 3 Summary
 
-Bug fixes, code quality improvements, and 147 new tests. 5 bugs fixed, 6 new test files.
+Bug fixes, code quality improvements, new features, and 157 new tests.
 
-### Changes This Session
+### Changes This Session (8 commits)
 
 1. **Fixed 5 vision bugs** (`03321e0`)
    - pipeline.py: Single-channel 3D images (H,W,1) crashed assess_quality() and normalize_exposure()
@@ -19,8 +19,8 @@ Bug fixes, code quality improvements, and 147 new tests. 5 bugs fixed, 6 new tes
    - intent.py: Used dynamic `__import__("threading")` instead of standard import
 
 2. **Updated existing tests for code changes** (`009ab73`)
-   - test_edge_cases.py: Updated closed_session_state for new close() behavior
-   - test_hardening.py: Patched Path.glob instead of Path.iterdir for PhotoSource
+   - test_edge_cases.py: Adapted for new close() behavior
+   - test_hardening.py: Patched Path.glob instead of Path.iterdir
 
 3. **104 new tests across 6 files** (`9c30b49`)
    - test_pipeline_extended.py (30): Single-channel, CLAHE, denoise, sharpen, full process()
@@ -34,7 +34,19 @@ Bug fixes, code quality improvements, and 147 new tests. 5 bugs fixed, 6 new tes
    - test_sources_extended.py (24): Pattern filtering, source factory, ImageFrame encoding
    - test_audit_extended.py (19): All 7 audit functions, error handling, privacy
 
-### Vision Tests: 474 (all passing)
+5. **WebcamSource timeout + exponential backoff** (`482f3f6`)
+   - sources.py: Capture runs in thread with configurable timeout (default 15s)
+   - resilient_capture.py: Exponential backoff (factor=1.5, max=30s) in reconnection
+   - 10 new tests
+
+6. **Ruff lint fixes** (`0922cad`)
+   - Removed unused imports, modernized type annotations
+   - Fixed test patches after import cleanup
+
+7. **Documentation updates** (`cd6b3b9`)
+   - Updated TEST_RESULTS.md and VISION_TEST_PLAN.md
+
+### Vision Tests: 484 (all passing)
 
 | Test File | Tests |
 |-----------|-------|
@@ -62,15 +74,11 @@ Bug fixes, code quality improvements, and 147 new tests. 5 bugs fixed, 6 new tes
 | test_hardening.py | 32 |
 | test_burst_and_diff.py | 14 |
 | test_security.py | 13 |
-
-### Cross-subsystem Vision Tests
-
-| Test File | Tests |
-|-----------|-------|
+| test_timeout_and_backoff.py | 10 |
 | tests/cli/test_vision_cli.py | 14 |
 | tests/channels/voice/test_voice_vision_integration.py | 11 |
 
-### Full Test Suite: 12,419 passed, 0 failures, 14 skipped
+### Full Test Suite: 12,429 passed, 0 failures, 14 skipped
 
 ### Vision Modules (12 files in `missy/vision/`)
 
@@ -79,7 +87,7 @@ Bug fixes, code quality improvements, and 147 new tests. 5 bugs fixed, 6 new tes
 | `__init__.py` | Package docs |
 | `discovery.py` | USB camera discovery via sysfs |
 | `capture.py` | OpenCV frame capture with thread safety + burst mode |
-| `sources.py` | Unified source abstraction (webcam/file/screenshot/photo) |
+| `sources.py` | Unified source abstraction with timeout protection |
 | `pipeline.py` | Image preprocessing (resize, CLAHE, denoise, sharpen) |
 | `scene_memory.py` | Task-scoped scene memory with diff visualization |
 | `analysis.py` | Domain-specific prompts (puzzle, painting, inspection) |
@@ -87,7 +95,7 @@ Bug fixes, code quality improvements, and 147 new tests. 5 bugs fixed, 6 new tes
 | `doctor.py` | Diagnostics and health checks |
 | `provider_format.py` | Provider-specific image API formatting |
 | `audit.py` | Vision audit event logging |
-| `resilient_capture.py` | Auto-reconnection on camera disconnect |
+| `resilient_capture.py` | Auto-reconnection with exponential backoff |
 
 ### Agent Tools (5)
 
@@ -114,15 +122,11 @@ Bug fixes, code quality improvements, and 147 new tests. 5 bugs fixed, 6 new tes
 - [ ] Container sandbox for vision operations
 - [ ] Performance benchmarking (capture latency, burst throughput)
 - [ ] Video stream capture (continuous frames for motion tracking)
-- [ ] WebcamSource timeout protection (hanging camera defense)
-- [ ] Exponential backoff in resilient_capture reconnection
 - [ ] Scene memory actual-memory-usage monitoring
 
 ## Recovery Notes
 
-All code committed and passing. 12,419 total tests, 0 failures.
-5 bugs fixed: single-channel pipeline crash, memory leak on session close,
-incorrect eviction ordering, hash fallback crash, dead pattern parameter.
-147 new tests added across vision, CLI, and voice-vision integration.
-Next session can continue with performance work, timeout protection, or
-other subsystem improvements.
+All code committed and passing. 12,429 total tests, 0 failures.
+Session 3: 5 bugs fixed, 2 new features (timeout protection, exponential backoff),
+157 new tests, lint cleanup. Vision subsystem has 484 tests with coverage across
+all 12 modules plus CLI and voice integration.
