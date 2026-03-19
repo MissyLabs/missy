@@ -15,13 +15,12 @@ from __future__ import annotations
 
 import threading
 import time
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 
-from missy.vision.capture import CameraHandle, CaptureConfig, CaptureResult
+from missy.vision.capture import CameraHandle, CaptureConfig
 from missy.vision.scene_memory import (
     SceneChange,
     SceneFrame,
@@ -31,7 +30,6 @@ from missy.vision.scene_memory import (
     compute_phash,
     hamming_distance,
 )
-
 
 # ---------------------------------------------------------------------------
 # SceneSession frame eviction memory cleanup
@@ -49,9 +47,9 @@ class TestFrameEvictionCleanup:
         img3 = np.ones((10, 10, 3), dtype=np.uint8) * 200
 
         frame1 = session.add_frame(img1, deduplicate=False)
-        frame2 = session.add_frame(img2, deduplicate=False)
+        session.add_frame(img2, deduplicate=False)
         # Adding frame3 should evict frame1
-        frame3 = session.add_frame(img3, deduplicate=False)
+        session.add_frame(img3, deduplicate=False)
 
         assert frame1 is not None
         # After eviction, the original frame1 object's image should be None
@@ -252,7 +250,6 @@ class TestCaptureDeadlineAwareSleep:
         cam._cap.read.return_value = (False, None)
 
         sleep_calls: list[float] = []
-        original_sleep = time.sleep
 
         def tracking_sleep(secs: float) -> None:
             sleep_calls.append(secs)
@@ -402,13 +399,13 @@ class TestSceneManagerEviction:
     def test_evict_prefers_inactive_sessions(self) -> None:
         mgr = SceneManager(max_sessions=2)
         s1 = mgr.create_session("task1")
-        s2 = mgr.create_session("task2")
+        mgr.create_session("task2")
 
         # Close s1 (make it inactive)
         s1.close()
 
         # Create s3 — should evict inactive s1, not active s2
-        s3 = mgr.create_session("task3")
+        mgr.create_session("task3")
 
         assert mgr.get_session("task1") is None
         assert mgr.get_session("task2") is not None
@@ -416,11 +413,11 @@ class TestSceneManagerEviction:
 
     def test_evict_oldest_when_all_active(self) -> None:
         mgr = SceneManager(max_sessions=2)
-        s1 = mgr.create_session("task1")
-        s2 = mgr.create_session("task2")
+        mgr.create_session("task1")
+        mgr.create_session("task2")
 
         # All active — oldest (s1) should be evicted
-        s3 = mgr.create_session("task3")
+        mgr.create_session("task3")
 
         assert mgr.get_session("task1") is None
         assert mgr.get_session("task2") is not None
@@ -545,7 +542,7 @@ class TestPerceptualHashEdgeCases:
         img2 = np.ones((100, 100, 3), dtype=np.uint8) * 255
         h1 = compute_phash(img1)
         h2 = compute_phash(img2)
-        dist = hamming_distance(h1, h2)
+        hamming_distance(h1, h2)
         # These are uniform images with different intensity, so hashes differ
         assert h1 != h2
 

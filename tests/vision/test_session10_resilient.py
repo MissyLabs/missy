@@ -17,9 +17,8 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from missy.vision.capture import CaptureConfig, CaptureResult, FailureType
+from missy.vision.capture import CaptureResult, FailureType
 from missy.vision.discovery import CameraDevice
-
 
 # ---------------------------------------------------------------------------
 # Helpers

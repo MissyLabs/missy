@@ -236,6 +236,9 @@ class VisionIntentClassifier:
 
         with self._log_lock:
             self._activation_log.append(result)
+            # Cap log size to prevent unbounded memory growth
+            if len(self._activation_log) > 500:
+                self._activation_log = self._activation_log[-500:]
         logger.debug(
             "Vision intent: %s (%.2f) — %s [trigger: %r]",
             result.intent.value,

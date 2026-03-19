@@ -12,12 +12,10 @@ Tests cover gaps identified in coverage analysis:
 
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Shutdown edge cases
@@ -104,7 +102,7 @@ class TestShutdownMultiFailure:
 class TestCaptureFrameShapeValidation:
     """CameraHandle.capture() should reject invalid frame shapes."""
 
-    def _make_camera(self, **overrides) -> "CameraHandle":
+    def _make_camera(self, **overrides):  # -> CameraHandle
         from missy.vision.capture import CameraHandle, CaptureConfig
 
         defaults = {
@@ -179,7 +177,7 @@ class TestCaptureFrameShapeValidation:
 class TestVisionMemoryBridgeRecall:
     """VisionMemoryBridge recall and clear operations."""
 
-    def _make_bridge(self) -> "VisionMemoryBridge":
+    def _make_bridge(self):  # -> VisionMemoryBridge
         from missy.vision.vision_memory import VisionMemoryBridge
 
         mock_store = MagicMock()
