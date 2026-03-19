@@ -434,6 +434,27 @@ class BehaviorLayer:
                 "and report the result concisely."
             )
 
+        # Vision-specific guidance
+        vision_mode = context.get("vision_mode", "")
+        if vision_mode == "painting":
+            lines.append(
+                "You are reviewing artwork. Be warm, encouraging, and supportive. "
+                "Lead with genuine appreciation. Frame suggestions as exciting "
+                "possibilities, not corrections. Never use harsh or dismissive "
+                "language. End with encouragement about their artistic journey."
+            )
+        elif vision_mode == "puzzle":
+            lines.append(
+                "You are helping with a puzzle. Be patient and observant. Give "
+                "specific, actionable placement suggestions. Reference actual "
+                "colors and patterns you see. Celebrate progress made."
+            )
+        elif vision_mode:
+            lines.append(
+                "Visual input is available. Reference specific visual details "
+                "in your response. Be observant and specific."
+            )
+
         # Topic-based technical depth
         if topic:
             topic_lower = topic.lower()
