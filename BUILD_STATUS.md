@@ -2,11 +2,11 @@
 
 ## Last Updated
 
-2026-03-19, Session 1
+2026-03-19, Session 1 (end)
 
 ## Completed This Session
 
-### Vision Subsystem — First-Class Implementation
+### Vision Subsystem — First-Class Implementation (Complete)
 
 1. **Camera Discovery** (`missy/vision/discovery.py`)
    - USB vendor/product ID detection via sysfs
@@ -58,11 +58,30 @@
    - `missy vision review` — LLM-powered analysis
    - `missy vision doctor` — full diagnostics
 
-10. **Tests** — 150 tests, all passing
+10. **Agent Tools** (`missy/tools/builtin/vision_tools.py`)
+    - `vision_capture` — capture from any source with base64 output
+    - `vision_analyze` — build domain-specific analysis prompts
+    - `vision_devices` — enumerate cameras for agent use
+    - `vision_scene` — manage task-scoped scene memory
 
-11. **Documentation** — VISION.md, VISION_AUDIT.md, VISION_TEST_PLAN.md, VISION_DEVICE_NOTES.md
+11. **Voice Channel Integration** (`missy/channels/voice/server.py`)
+    - Audio intent detection triggers vision capture
+    - Image data passed in agent callback metadata
+    - Graceful degradation when vision not available
 
-12. **Report Files** — BUILD_RESULTS.md, AUDIT_SECURITY.md, AUDIT_CONNECTIVITY.md, TEST_RESULTS.md, TEST_EDGE_CASES.md
+12. **Config Integration** (`missy/config/settings.py`)
+    - `VisionConfig` dataclass with all settings
+    - Parsed from `vision:` section in config.yaml
+
+13. **Hatching Integration** (`missy/agent/hatching.py`)
+    - `check_vision` step validates OpenCV, numpy, cameras
+    - Non-fatal warning if vision not fully available
+
+14. **Tests** — 203 tests, all passing
+
+15. **Documentation** — VISION.md, VISION_AUDIT.md, VISION_TEST_PLAN.md, VISION_DEVICE_NOTES.md
+
+16. **Report Files** — BUILD_RESULTS.md, AUDIT_SECURITY.md, AUDIT_CONNECTIVITY.md, TEST_RESULTS.md, TEST_EDGE_CASES.md
 
 ## Architecture
 
@@ -77,30 +96,28 @@ missy/vision/
 ├── analysis.py          # Domain-specific analysis
 ├── intent.py            # Audio-triggered vision intent
 └── doctor.py            # Diagnostics
+
+missy/tools/builtin/
+└── vision_tools.py      # Agent-callable vision tools
 ```
 
-## Remaining Work
+## Remaining Work for Future Sessions
 
-### Vision Hardening (Next Sessions)
-- [ ] Integration with AgentRuntime for automatic vision tool calling
-- [ ] Vision tool registration in tools/registry
-- [ ] Vision audit event integration with AuditLogger
+### Vision Hardening
 - [ ] Provider-specific vision API formatting (Anthropic vs OpenAI image format)
-- [ ] Configuration section for vision in config.yaml
-- [ ] Hatching step for vision readiness validation
 - [ ] Multi-camera session management
 - [ ] Video frame rate capture for motion tasks
 - [ ] Image diff overlay visualization
+- [ ] Vision audit events via AuditLogger
 
 ### General Hardening
-- [ ] Fix 9 pre-existing test failures
-- [ ] Increase test coverage for edge cases
+- [ ] Fix 9 pre-existing test failures (non-vision)
 - [ ] Performance profiling
 - [ ] Container sandbox for vision operations
 
 ## Test Results
 
-- Vision tests: 150/150 pass
+- Vision tests: 203/203 pass
 - Full suite: 12,086/12,095 pass (9 pre-existing failures)
 
 ## Known Blockers
@@ -109,9 +126,13 @@ None.
 
 ## Recovery Notes
 
-If next session resumes from partial work:
+If next session resumes:
 1. Vision subsystem is fully committed and functional
-2. All 150 tests pass
-3. CLI commands are integrated into missy/cli/main.py
-4. pyproject.toml has `vision` optional dependency
-5. Next focus: integrate vision with agent runtime and tool registry
+2. All 203 vision tests pass
+3. CLI commands integrated into missy/cli/main.py
+4. Tools registered in missy/tools/builtin/__init__.py
+5. Voice channel integration in missy/channels/voice/server.py
+6. Config parsing in missy/config/settings.py
+7. Hatching step in missy/agent/hatching.py
+8. pyproject.toml has `vision` optional dependency
+9. Next focus: provider-specific image formatting, more integration tests
