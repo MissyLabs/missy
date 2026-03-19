@@ -48,7 +48,7 @@ Thread-safety hardening across vision subsystem, lint cleanup, 139 new tests acr
 6. **Thread-safe orientation module** (`a9495f8`)
    - Add double-checked locking to `_get_cv2()` in orientation.py
 
-### Full Test Suite: 15,296 passed, 0 failures, 14 skipped
+### Full Test Suite: 15,342 passed, 0 failures, 14 skipped
 
 ### Code Changes Summary
 
@@ -118,7 +118,7 @@ Thread-safety hardening across vision subsystem, lint cleanup, 139 new tests acr
 ## Recovery Notes
 
 All code committed and passing. 15,200 total tests, 0 failures, 14 skipped.
-Session 11: 11 code fixes (7 thread-safety, 1 cleanup, 3 critical quality), 235 new tests across 6 new test files.
+Session 11: 11 code fixes (7 thread-safety, 1 cleanup, 3 critical quality), 281 new tests across 7 new test files.
 Ruff lint: 0 errors.
 All vision module singletons and lazy imports now use double-checked locking.
 
@@ -136,3 +136,5 @@ Session 11 commits:
 11. `8deb22c` — 27 doctor/health persistence tests + lint fixes across all session 11 files
 12. `e1cf971` — Final status update (15,296 tests)
 13. `d1b29b3` — Fix 3 critical code quality issues (null guards, encapsulation, image check)
+14. `7408c0b` — Status update
+15. `1146b85` — 46 security module gap tests (drift, identity, trust)
