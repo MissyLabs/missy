@@ -368,7 +368,7 @@ class TestSourcesHardening:
         d = tmp_path / "photos"
         d.mkdir()
         source = PhotoSource(d)
-        with patch.object(Path, "iterdir", side_effect=OSError("Permission denied")):
+        with patch.object(Path, "glob", side_effect=OSError("Permission denied")):
             with pytest.raises(OSError, match="Cannot scan"):
                 source.scan()
 

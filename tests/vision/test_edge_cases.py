@@ -236,13 +236,16 @@ class TestSceneMemoryEdgeCases:
     def test_closed_session_state(self):
         session = SceneSession("test")
         session.add_frame(np.zeros((50, 50, 3), dtype=np.uint8))
+        session.add_observation("note")
+        session.update_state(key="val")
         session.close()
 
         assert not session.is_active
-        # Frame images should be released
-        frame = session.get_latest_frame()
-        assert frame is not None
-        assert frame.image.size == 0  # emptied
+        # Frames, observations, and state should be fully released
+        assert session.get_latest_frame() is None
+        assert session.frame_count == 0
+        assert session.observations == []
+        assert session.state == {}
 
 
 # ---------------------------------------------------------------------------
