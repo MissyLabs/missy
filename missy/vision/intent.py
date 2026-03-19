@@ -98,6 +98,10 @@ _PUZZLE_PATTERNS: list[tuple[re.Pattern[str], float]] = [
     (re.compile(r"\b(sort|group|cluster)\s+(the\s+)?(pieces|parts)\b", re.I), 0.80),
     (re.compile(r"\bboard\s+state\b", re.I), 0.85),
     (re.compile(r"\b(puzzle|piece)\b.*\b(help|assist|guide)\b", re.I), 0.80),
+    (re.compile(r"\bmissing\s+piece\b", re.I), 0.85),
+    (re.compile(r"\b(top|bottom|left|right|middle|center)\s+(of\s+the\s+)?(puzzle|board)\b", re.I), 0.75),
+    (re.compile(r"\bfit\s+(this|that|it)\s+in\s+the\s+\w+\s+(area|region|part)\b", re.I), 0.85),
+    (re.compile(r"\b(which|what)\s+pieces?\s+(go|match|connect|fit)\b", re.I), 0.85),
 ]
 
 # Painting/art patterns
@@ -108,6 +112,10 @@ _PAINTING_PATTERNS: list[tuple[re.Pattern[str], float]] = [
     (re.compile(r"\b(color|composition|brushwork|technique|palette)\b", re.I), 0.60),
     (re.compile(r"\b(sketch|drawing|watercolor|oil|acrylic)\b", re.I), 0.70),
     (re.compile(r"\bhow\s+(does\s+)?this\s+look\b", re.I), 0.65),
+    (re.compile(r"\b(how\s+)?am\s+I\s+doing\b.*\b(paint|draw|art)\b", re.I), 0.80),
+    (re.compile(r"\b(mix|blend|shade)\s+(the\s+)?(colors?|paint)\b", re.I), 0.65),
+    (re.compile(r"\b(portrait|landscape|still\s+life|abstract)\b", re.I), 0.55),
+    (re.compile(r"\bhow\s+can\s+I\s+improve\s+(this|my)\b", re.I), 0.70),
 ]
 
 # Reading/inspection patterns
@@ -116,6 +124,9 @@ _INSPECT_PATTERNS: list[tuple[re.Pattern[str], float]] = [
     (re.compile(r"\bwhat\s+(does\s+)?(this|it|that)\s+say\b", re.I), 0.85),
     (re.compile(r"\b(identify|recognize|detect)\b", re.I), 0.70),
     (re.compile(r"\bwhat('s|\s+is)\s+(on|at)\s+(the\s+)?(table|desk|screen|board)\b", re.I), 0.80),
+    (re.compile(r"\b(zoom\s+in|look\s+closer|magnify)\b", re.I), 0.75),
+    (re.compile(r"\bwhat\s+(color|brand|type|model|size)\s+is\b", re.I), 0.70),
+    (re.compile(r"\b(measure|count|how\s+many)\b", re.I), 0.65),
 ]
 
 
