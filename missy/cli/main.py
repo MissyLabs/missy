@@ -3305,6 +3305,319 @@ def persona_log(limit: int) -> None:
 
 
 # ---------------------------------------------------------------------------
+# missy vision
+# ---------------------------------------------------------------------------
+
+
+@cli.group()
+def vision() -> None:
+    """Vision subsystem — camera discovery, capture, and visual analysis."""
+
+
+@vision.command("devices")
+def vision_devices() -> None:
+    """Enumerate and diagnose available cameras."""
+    from missy.vision.discovery import CameraDiscovery, KNOWN_CAMERAS
+
+    disc = CameraDiscovery()
+    cameras = disc.discover(force=True)
+
+    if not cameras:
+        console.print("[yellow]No cameras detected.[/]")
+        console.print(
+            "\n[dim]Troubleshooting:[/]\n"
+            "  1. Check USB connection\n"
+            "  2. Run [bold]lsusb[/] to verify device is detected\n"
+            "  3. Ensure user is in 'video' group: [bold]sudo usermod -aG video $USER[/]\n"
+            "  4. Run [bold]missy vision doctor[/] for full diagnostics"
+        )
+        return
+
+    table = Table(title=f"Cameras ({len(cameras)} found)")
+    table.add_column("Device", style="bold")
+    table.add_column("Name")
+    table.add_column("USB ID")
+    table.add_column("Bus Info", style="dim")
+    table.add_column("Known", style="green")
+
+    for cam in cameras:
+        known = KNOWN_CAMERAS.get(cam.usb_id, "")
+        table.add_row(
+            cam.device_path,
+            cam.name,
+            cam.usb_id,
+            cam.bus_info[:40] if cam.bus_info else "",
+            known or "[dim]—[/]",
+        )
+
+    console.print(table)
+
+    preferred = disc.find_preferred()
+    if preferred:
+        console.print(f"\n[green]Preferred camera:[/] {preferred.name} ({preferred.device_path})")
+
+
+@vision.command("capture")
+@click.option("--device", "-d", default=None, help="Device path (e.g. /dev/video0).")
+@click.option("--output", "-o", default=None, help="Output file path (default: auto-generated).")
+@click.option("--width", default=1920, help="Capture width.")
+@click.option("--height", default=1080, help="Capture height.")
+@click.option("--count", "-n", default=1, help="Number of frames to capture.")
+def vision_capture(
+    device: str | None, output: str | None, width: int, height: int, count: int
+) -> None:
+    """Capture one or more frames from a camera."""
+    from missy.vision.capture import CameraHandle, CaptureConfig, CaptureError
+    from missy.vision.discovery import find_preferred_camera
+
+    if device is None:
+        cam = find_preferred_camera()
+        if cam is None:
+            _print_error("No camera found", hint="Run missy vision devices")
+            sys.exit(1)
+        device = cam.device_path
+        console.print(f"[dim]Using camera: {cam.name} ({device})[/]")
+
+    config = CaptureConfig(width=width, height=height)
+    handle = CameraHandle(device, config)
+
+    try:
+        handle.open()
+        for i in range(count):
+            if output and count == 1:
+                out_path = output
+            elif output:
+                base = Path(output)
+                out_path = str(base.parent / f"{base.stem}_{i:03d}{base.suffix}")
+            else:
+                ts = time.strftime("%Y%m%d_%H%M%S")
+                out_path = str(Path.home() / f".missy/captures/capture_{ts}_{i:03d}.jpg")
+
+            Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+            result = handle.capture_to_file(out_path)
+
+            if result.success:
+                console.print(
+                    f"[green]Captured[/] {result.width}x{result.height} → {out_path}"
+                )
+            else:
+                console.print(f"[red]Failed[/] frame {i}: {result.error}")
+
+    except CaptureError as exc:
+        _print_error(str(exc), hint="Run missy vision doctor")
+        sys.exit(1)
+    finally:
+        handle.close()
+
+
+@vision.command("inspect")
+@click.option("--device", "-d", default=None, help="Camera device path.")
+@click.option("--file", "-f", "file_path", default=None, help="Image file to inspect.")
+@click.option("--screenshot", "-s", is_flag=True, help="Capture a screenshot to inspect.")
+@click.option("--context", "-c", default="", help="Additional context for analysis.")
+def vision_inspect(
+    device: str | None,
+    file_path: str | None,
+    screenshot: bool,
+    context: str,
+) -> None:
+    """Run general visual analysis on an image source."""
+    from missy.vision.sources import FileSource, ScreenshotSource, WebcamSource, SourceType
+
+    console.print("[bold]Visual Inspection[/]\n")
+
+    try:
+        if file_path:
+            source = FileSource(file_path)
+            console.print(f"[dim]Source: file ({file_path})[/]")
+        elif screenshot:
+            source = ScreenshotSource()
+            console.print("[dim]Source: screenshot[/]")
+        else:
+            if device is None:
+                from missy.vision.discovery import find_preferred_camera
+                cam = find_preferred_camera()
+                if cam is None:
+                    _print_error("No camera found", hint="Use --file or --screenshot")
+                    sys.exit(1)
+                device = cam.device_path
+            source = WebcamSource(device)
+            console.print(f"[dim]Source: webcam ({device})[/]")
+
+        frame = source.acquire()
+        console.print(
+            f"[green]Acquired[/] {frame.width}x{frame.height} image "
+            f"from {frame.source_type.value}"
+        )
+
+        # Run quality assessment
+        from missy.vision.pipeline import ImagePipeline
+        pipeline = ImagePipeline()
+        quality = pipeline.assess_quality(frame.image)
+
+        table = Table(title="Image Quality")
+        table.add_column("Metric", style="bold")
+        table.add_column("Value")
+        table.add_row("Resolution", f"{quality['width']}x{quality['height']}")
+        table.add_row("Brightness", str(quality["brightness"]))
+        table.add_row("Contrast", str(quality["contrast"]))
+        table.add_row("Sharpness", str(quality["sharpness"]))
+        table.add_row(
+            "Quality",
+            f"[green]{quality['quality']}[/]"
+            if quality["quality"] == "good"
+            else f"[yellow]{quality['quality']}[/]",
+        )
+        if quality["issues"]:
+            table.add_row("Issues", ", ".join(quality["issues"]))
+
+        console.print(table)
+        console.print(
+            "\n[dim]For LLM-powered analysis, use missy vision review --mode general[/]"
+        )
+
+    except Exception as exc:
+        _print_error(f"Inspection failed: {exc}")
+        sys.exit(1)
+
+
+@vision.command("review")
+@click.option("--device", "-d", default=None, help="Camera device path.")
+@click.option("--file", "-f", "file_path", default=None, help="Image file to review.")
+@click.option(
+    "--mode", "-m",
+    type=click.Choice(["general", "puzzle", "painting", "inspection"]),
+    default="general",
+    help="Analysis mode.",
+)
+@click.option("--context", "-c", default="", help="Additional context for analysis.")
+@click.option("--config", "config_path", default=DEFAULT_CONFIG, help="Config file path.")
+def vision_review(
+    device: str | None,
+    file_path: str | None,
+    mode: str,
+    context: str,
+    config_path: str,
+) -> None:
+    """Run domain-specific visual analysis (puzzle help, painting feedback)."""
+    from missy.vision.analysis import AnalysisMode, AnalysisPromptBuilder, AnalysisRequest
+    from missy.vision.sources import FileSource, WebcamSource
+
+    console.print(f"[bold]Visual Review[/] — mode: {mode}\n")
+
+    try:
+        # Acquire image
+        if file_path:
+            source = FileSource(file_path)
+            console.print(f"[dim]Source: {file_path}[/]")
+        else:
+            if device is None:
+                from missy.vision.discovery import find_preferred_camera
+                cam = find_preferred_camera()
+                if cam is None:
+                    _print_error("No camera found", hint="Use --file to provide an image")
+                    sys.exit(1)
+                device = cam.device_path
+            source = WebcamSource(device)
+            console.print(f"[dim]Source: webcam ({device})[/]")
+
+        frame = source.acquire()
+        console.print(f"[green]Acquired[/] {frame.width}x{frame.height} image\n")
+
+        # Preprocess
+        from missy.vision.pipeline import ImagePipeline
+        pipeline = ImagePipeline()
+        processed = pipeline.process(frame.image)
+
+        # Build analysis prompt
+        analysis_mode = AnalysisMode(mode)
+        request = AnalysisRequest(
+            image=processed,
+            mode=analysis_mode,
+            context=context,
+        )
+        builder = AnalysisPromptBuilder()
+        prompt = builder.build_prompt(request)
+
+        # Encode for LLM
+        import base64
+        import cv2
+        _, buf = cv2.imencode(".jpg", processed, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        b64_image = base64.b64encode(buf.tobytes()).decode("ascii")
+
+        # Send to provider
+        cfg = _load_subsystems(config_path)
+
+        from missy.providers.registry import get_registry
+        registry = get_registry()
+        provider = registry.get_provider()
+
+        from missy.providers.base import Message
+        messages = [
+            Message(role="user", content=[
+                {"type": "image", "source": {
+                    "type": "base64",
+                    "media_type": "image/jpeg",
+                    "data": b64_image,
+                }},
+                {"type": "text", "text": prompt},
+            ]),
+        ]
+
+        console.print("[dim]Analyzing...[/]\n")
+        response = provider.complete(messages)
+
+        console.print(Panel(
+            response.text,
+            title=f"[bold]{mode.title()} Analysis[/]",
+            border_style="cyan",
+            padding=(1, 2),
+        ))
+
+    except Exception as exc:
+        _print_error(f"Review failed: {exc}")
+        sys.exit(1)
+
+
+@vision.command("doctor")
+def vision_doctor_cmd() -> None:
+    """Run vision subsystem diagnostics."""
+    from missy.vision.doctor import VisionDoctor
+
+    console.print("[bold]Vision Subsystem Diagnostics[/]\n")
+    doc = VisionDoctor()
+    report = doc.run_all()
+
+    for result in report.results:
+        if result.passed:
+            icon = "[green]PASS[/]"
+        elif result.severity == "warning":
+            icon = "[yellow]WARN[/]"
+        else:
+            icon = "[red]FAIL[/]"
+
+        console.print(f"  {icon}  {result.name}: {result.message}")
+
+        if result.details and not result.passed:
+            for key, val in result.details.items():
+                if isinstance(val, list) and len(val) > 3:
+                    console.print(f"       [dim]{key}: ({len(val)} items)[/]")
+                else:
+                    console.print(f"       [dim]{key}: {val}[/]")
+
+    console.print()
+    console.print(
+        f"  [bold]Summary:[/] {report.passed} passed, "
+        f"{report.warnings} warnings, {report.errors} errors"
+    )
+
+    if report.overall_healthy:
+        console.print("\n  [green]Vision subsystem is healthy![/]")
+    else:
+        console.print("\n  [red]Vision subsystem has issues that need attention.[/]")
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 

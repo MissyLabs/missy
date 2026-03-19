@@ -1,0 +1,373 @@
+"""Domain-specific visual analysis for puzzle assistance and painting feedback.
+
+Provides structured prompts and local preprocessing for two primary visual
+task modes:
+
+1. **Puzzle assistance** — board-state tracking, piece identification,
+   edge/corner detection, color clustering, placement guidance.
+2. **Painting feedback** — warm, encouraging composition critique with
+   supportive coaching tone.
+
+The heavy analysis is delegated to the LLM via vision-capable API calls.
+This module handles prompt construction, local preprocessing, and
+response formatting.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, Optional
+
+import numpy as np
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Analysis modes
+# ---------------------------------------------------------------------------
+
+
+class AnalysisMode(str, Enum):
+    GENERAL = "general"
+    PUZZLE = "puzzle"
+    PAINTING = "painting"
+    INSPECTION = "inspection"
+
+
+# ---------------------------------------------------------------------------
+# Prompt templates
+# ---------------------------------------------------------------------------
+
+GENERAL_ANALYSIS_PROMPT = """\
+Analyze this image and provide a detailed description of what you see.
+Include observations about:
+- Main subjects and objects
+- Layout and composition
+- Colors and lighting
+- Any text or labels visible
+- Notable details
+"""
+
+PUZZLE_ANALYSIS_PROMPT = """\
+You are helping with a tabletop jigsaw puzzle. Analyze this image carefully.
+
+Provide structured observations:
+
+1. **Board State**: Describe the current state of the puzzle — what areas are \
+completed, what's in progress, what's empty.
+
+2. **Piece Identification**: Identify any loose pieces visible. For each:
+   - Describe its colors, patterns, and textures
+   - Note if it's an edge piece (flat side) or corner piece (two flat sides)
+   - Estimate which region of the puzzle it likely belongs to
+
+3. **Grouping Suggestions**: Suggest how loose pieces could be grouped by:
+   - Color similarity
+   - Texture/pattern matching
+   - Edge type (edge, corner, interior)
+
+4. **Placement Guidance**: If you can identify likely placement locations:
+   - Describe where specific pieces might fit
+   - Note any pattern continuity clues
+   - Suggest which area to focus on next
+
+5. **Next Steps**: Provide 2-3 actionable suggestions for the next steps \
+the puzzler should take.
+
+Be specific and reference actual colors, patterns, and positions you observe.
+"""
+
+PUZZLE_FOLLOWUP_PROMPT = """\
+Compare this new view of the puzzle with what we observed before.
+
+Previous observations:
+{previous_observations}
+
+Previous state:
+{previous_state}
+
+Describe:
+1. What progress has been made since last time?
+2. Which pieces have been placed?
+3. What should be tried next?
+4. Any pieces that look like they fit together?
+
+Be encouraging about progress made.
+"""
+
+PAINTING_ANALYSIS_PROMPT = """\
+You are a supportive painting coach reviewing a painter's work. Your role is \
+to provide warm, encouraging feedback that builds confidence while offering \
+genuinely helpful guidance.
+
+Approach this with the warmth and patience of a beloved art teacher. The \
+painter has put their heart into this work, and your feedback should honor that.
+
+Provide feedback on:
+
+1. **First Impression** — Share your genuine first reaction. Lead with what \
+catches your eye and what works well. Be specific about what draws you in.
+
+2. **Color & Light** — Comment on the color choices and how light plays \
+through the work. Note harmonies, contrasts, and mood created by the palette. \
+If something could be enhanced, frame it as an exciting possibility, not a \
+correction.
+
+3. **Composition** — Discuss how the eye moves through the painting. \
+Mention strong compositional choices. If balance could be improved, suggest \
+it gently as something to explore.
+
+4. **Technique** — Appreciate the brushwork, texture, and technique. Note \
+areas of particular skill or expressiveness. Offer technique suggestions \
+as "you might enjoy trying..." rather than corrections.
+
+5. **Emotional Impact** — Describe what the painting makes you feel. Art is \
+communication — tell the painter what their work communicates to you.
+
+6. **Growth Opportunity** — Offer ONE specific, actionable suggestion framed \
+positively: "One thing that could take this even further..."
+
+Guidelines:
+- Be warm, genuine, and encouraging — never harsh or dismissive
+- Lead every section with something positive
+- Frame suggestions as possibilities, not corrections
+- Use language like "I love how...", "This really works because...", \
+"You might enjoy exploring..."
+- Never use words like "wrong", "bad", "weak", "poor", "fail"
+- End with genuine encouragement about their artistic journey
+"""
+
+PAINTING_FOLLOWUP_PROMPT = """\
+Let's revisit this painting with fresh eyes. Here's what we noticed before:
+
+{previous_observations}
+
+Now look at this new view and:
+1. Notice any new details you missed before
+2. See how the painting looks from this angle/lighting
+3. Offer any additional encouragement or gentle suggestions
+4. Celebrate any changes or progress if this is an updated version
+
+Remember: warm, supportive, encouraging. Like a favorite art teacher.
+"""
+
+INSPECTION_PROMPT = """\
+Examine this image carefully and provide a detailed inspection report.
+
+Include:
+- Overall condition assessment
+- Specific details and observations
+- Any items of note or concern
+- Measurements or quantities if visible
+- Recommendations if applicable
+"""
+
+
+# ---------------------------------------------------------------------------
+# Analysis helpers
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class AnalysisRequest:
+    """A request to analyze an image."""
+
+    image: np.ndarray
+    mode: AnalysisMode = AnalysisMode.GENERAL
+    context: str = ""  # additional user context
+    previous_observations: list[str] = field(default_factory=list)
+    previous_state: dict[str, Any] = field(default_factory=dict)
+    is_followup: bool = False
+
+
+@dataclass
+class AnalysisResult:
+    """Result of visual analysis."""
+
+    text: str  # the analysis text from the LLM
+    mode: AnalysisMode
+    confidence: float = 1.0
+    metadata: dict[str, Any] = field(default_factory=dict)
+    prompt_used: str = ""
+
+
+class AnalysisPromptBuilder:
+    """Builds analysis prompts based on mode and context."""
+
+    def build_prompt(self, request: AnalysisRequest) -> str:
+        """Build the appropriate analysis prompt."""
+        if request.mode == AnalysisMode.PUZZLE:
+            return self._build_puzzle_prompt(request)
+        elif request.mode == AnalysisMode.PAINTING:
+            return self._build_painting_prompt(request)
+        elif request.mode == AnalysisMode.INSPECTION:
+            return self._build_inspection_prompt(request)
+        else:
+            return self._build_general_prompt(request)
+
+    def _build_general_prompt(self, request: AnalysisRequest) -> str:
+        prompt = GENERAL_ANALYSIS_PROMPT
+        if request.context:
+            prompt += f"\n\nAdditional context: {request.context}"
+        return prompt
+
+    def _build_puzzle_prompt(self, request: AnalysisRequest) -> str:
+        if request.is_followup and request.previous_observations:
+            return PUZZLE_FOLLOWUP_PROMPT.format(
+                previous_observations="\n".join(
+                    f"- {obs}" for obs in request.previous_observations
+                ),
+                previous_state=_format_state(request.previous_state),
+            )
+        prompt = PUZZLE_ANALYSIS_PROMPT
+        if request.context:
+            prompt += f"\n\nUser note: {request.context}"
+        return prompt
+
+    def _build_painting_prompt(self, request: AnalysisRequest) -> str:
+        if request.is_followup and request.previous_observations:
+            return PAINTING_FOLLOWUP_PROMPT.format(
+                previous_observations="\n".join(
+                    f"- {obs}" for obs in request.previous_observations
+                ),
+            )
+        prompt = PAINTING_ANALYSIS_PROMPT
+        if request.context:
+            prompt += f"\n\nThe painter says: {request.context}"
+        return prompt
+
+    def _build_inspection_prompt(self, request: AnalysisRequest) -> str:
+        prompt = INSPECTION_PROMPT
+        if request.context:
+            prompt += f"\n\nInspection focus: {request.context}"
+        return prompt
+
+
+def _format_state(state: dict[str, Any]) -> str:
+    """Format state dict as readable text."""
+    if not state:
+        return "No previous state recorded."
+    lines = []
+    for key, value in state.items():
+        lines.append(f"- {key}: {value}")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Local preprocessing for puzzle images
+# ---------------------------------------------------------------------------
+
+
+class PuzzlePreprocessor:
+    """Local image preprocessing for puzzle analysis.
+
+    Enhances puzzle images before sending to the LLM by improving
+    edge visibility and color separation.
+    """
+
+    def enhance_edges(self, image: np.ndarray) -> np.ndarray:
+        """Enhance piece edges for better visibility."""
+        try:
+            import cv2
+
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            edges = cv2.Canny(gray, 50, 150)
+            # Overlay edges on original
+            edge_colored = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
+            return cv2.addWeighted(image, 0.8, edge_colored, 0.2, 0)
+        except Exception:
+            return image
+
+    def extract_color_regions(self, image: np.ndarray) -> dict[str, Any]:
+        """Identify dominant color regions in the image."""
+        try:
+            import cv2
+
+            # Downsample for speed
+            small = cv2.resize(image, (200, 200))
+            # Convert to RGB for reporting
+            rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+
+            # Simple k-means clustering
+            pixels = rgb.reshape(-1, 3).astype(np.float32)
+            k = 8
+            criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 20, 1.0)
+            _, labels, centers = cv2.kmeans(
+                pixels, k, None, criteria, 3, cv2.KMEANS_PP_CENTERS
+            )
+
+            # Count pixels per cluster
+            unique, counts = np.unique(labels, return_counts=True)
+            total = len(labels)
+
+            regions = []
+            for idx in np.argsort(-counts):
+                center = centers[idx].astype(int)
+                pct = counts[idx] / total * 100
+                if pct < 2:
+                    continue
+                regions.append({
+                    "color_rgb": center.tolist(),
+                    "percentage": round(float(pct), 1),
+                    "description": _describe_color(center.tolist()),
+                })
+
+            return {"dominant_colors": regions}
+        except Exception as exc:
+            logger.warning("Color extraction failed: %s", exc)
+            return {"dominant_colors": [], "error": str(exc)}
+
+    def detect_edges_and_corners(self, image: np.ndarray) -> dict[str, Any]:
+        """Count potential edge and corner pieces based on contour analysis."""
+        try:
+            import cv2
+
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+            edges = cv2.Canny(blurred, 30, 100)
+
+            contours, _ = cv2.findContours(
+                edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+            )
+
+            return {
+                "contour_count": len(contours),
+                "analysis": "Contour detection complete — detailed piece analysis "
+                "is performed by the vision model.",
+            }
+        except Exception as exc:
+            return {"error": str(exc)}
+
+
+def _describe_color(rgb: list[int]) -> str:
+    """Provide a human-readable color description."""
+    r, g, b = rgb
+
+    # Simple color naming
+    if max(r, g, b) < 50:
+        return "black"
+    if min(r, g, b) > 200:
+        return "white"
+    if r > 180 and g < 80 and b < 80:
+        return "red"
+    if r < 80 and g > 150 and b < 80:
+        return "green"
+    if r < 80 and g < 80 and b > 150:
+        return "blue"
+    if r > 180 and g > 150 and b < 80:
+        return "yellow"
+    if r > 180 and g > 100 and b < 60:
+        return "orange"
+    if r > 140 and g < 80 and b > 140:
+        return "purple"
+    if r > 140 and g > 100 and b > 80:
+        return "tan/brown"
+    if abs(r - g) < 30 and abs(g - b) < 30:
+        if r > 160:
+            return "light gray"
+        return "gray"
+
+    return f"rgb({r},{g},{b})"
