@@ -53,7 +53,7 @@ Code quality hardening, bug fixes, constant extraction, property-based testing, 
    - Audit event integrity, intent classifier injection resistance
    - Provider format validation, scene session task ID edge cases
 
-### Full Test Suite: 15,506 passed, 0 failures, 14 skipped
+### Full Test Suite: 15,527 passed, 0 failures, 14 skipped
 
 ### Code Fixes Summary
 
@@ -113,7 +113,7 @@ Code quality hardening, bug fixes, constant extraction, property-based testing, 
 
 ## Recovery Notes
 
-All code committed and passing. 15,506 total tests, 0 failures, 14 skipped.
+All code committed and passing. 15,527 total tests, 0 failures, 14 skipped.
 Session 12: 4 code fixes, 164 new tests across 6 new test files.
 Ruff lint: 0 errors.
 
