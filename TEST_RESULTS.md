@@ -2,16 +2,16 @@
 
 ## Summary
 
-- **Total tests**: 13,722
-- **Passed**: 13,722
+- **Total tests**: 14,236
+- **Passed**: 14,236
 - **Failed**: 0
 - **Skipped**: 14
 - **Duration**: ~5 minutes
 
 ## Vision Tests
 
-- **Total**: 808
-- **Passed**: 808
+- **Total**: 1,269
+- **Passed**: 1,269
 - **Failed**: 0
 
 ### By Module (tests/vision/)
@@ -56,58 +56,46 @@
 | test_failure_classification.py | 33 | ALL PASS |
 | test_health_monitor.py | 51 | ALL PASS |
 | test_health_persistence.py | 22 | ALL PASS |
+| test_multi_camera.py | 79 | ALL PASS |
+| test_benchmark.py | 94 | ALL PASS |
+| test_memory_usage.py | 73 | ALL PASS |
+| test_config_validator.py | 114 | ALL PASS |
+| test_vision_memory.py | 67 | ALL PASS |
+| test_dedup_and_timeout.py | 30 | ALL PASS |
 
-### CLI Vision Tests
+### CLI Vision Tests (tests/cli/)
 
 | Module | Tests | Status |
 |--------|-------|--------|
-| tests/cli/test_vision_cli.py | 14 | ALL PASS |
+| test_vision_cli.py | 14 | ALL PASS |
+| test_vision_cli_extended.py | 22 | ALL PASS |
 
-### Voice-Vision Integration
+### Integration Tests
 
 | Module | Tests | Status |
 |--------|-------|--------|
-| tests/channels/voice/test_voice_vision_integration.py | 11 | ALL PASS |
+| test_voice_vision_integration.py | 11 | ALL PASS |
 
-## Non-Vision Test Breakdown
+## Non-Vision Test Categories
 
-| Directory | Tests | Status |
-|-----------|-------|--------|
-| tests/agent/ | 2,160 | ALL PASS |
-| tests/unit/ | 1,825 | ALL PASS |
-| tests/channels/ | 1,690 | ALL PASS |
-| tests/security/ | 1,444 | ALL PASS |
-| tests/tools/ | 1,199 | ALL PASS |
-| tests/cli/ | 986 | ALL PASS |
-| tests/providers/ | 683 | ALL PASS |
-| tests/vision/ | 808 | ALL PASS |
-| tests/integration/ | 531 | ALL PASS |
-| tests/memory/ | 415 | ALL PASS |
-| tests/policy/ | 375 | ALL PASS |
-| tests/scheduler/ | 316 | ALL PASS |
-| tests/core/ | 276 | ALL PASS |
-| tests/config/ | 275 | ALL PASS |
-| tests/gateway/ | 270 | ALL PASS |
-| tests/skills/ | 183 | ALL PASS |
-| tests/mcp/ | 133 | ALL PASS |
-| tests/plugins/ | 115 | ALL PASS |
-| tests/observability/ | 114 | ALL PASS |
+| Category | Approximate Tests |
+|----------|------------------|
+| Agent Runtime | 800+ |
+| Policy Engine | 200+ |
+| Security | 300+ |
+| Providers | 200+ |
+| Channels | 400+ |
+| Memory | 150+ |
+| Scheduler | 100+ |
+| Tools | 200+ |
+| Config | 150+ |
+| MCP | 100+ |
+| Observability | 50+ |
+| Plugins | 50+ |
 
-## Session 6 New Tests (125 total)
+## Session History
 
-| File | New Tests | Focus |
-|------|-----------|-------|
-| test_health_persistence.py | 22 | SQLite save/load, round-trip, merge |
-| test_perceptual_hash.py | 14 | aHash, hamming distance, boundaries |
-| test_adaptive_blank.py | 18 | Adaptive threshold, integration |
-| test_discovery_hardening.py | 19 | Rediscovery, validation, resilient capture |
-| test_resilient_edge_cases.py | 13 | Concurrency, permission, backoff |
-| test_pipeline_edge_cases.py | 18 | 1x1, BGRA, quality, denoise, sharpen |
-| test_scene_memory_stress.py | 21 | Eviction, concurrent, phash boundaries |
-| test_otel.py | 12 | OtelExporter mock tracer, factory |
-| test_plugin_hardening.py | 19 | Policy, audit events, singleton |
-
-## Lint Status
-
-- **ruff check**: All checks passed (0 errors)
-- **ruff format**: Clean
+| Session | Total Tests | New Tests | Key Changes |
+|---------|-------------|-----------|-------------|
+| 6 | 13,757 | 160 | Health persistence, perceptual hash, adaptive blank, rediscovery |
+| 7 | 14,236 | 479 | Multi-camera, benchmark, memory usage, config validator, vision memory, dedup, timeout |

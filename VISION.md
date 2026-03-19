@@ -10,16 +10,21 @@ Missy's vision subsystem provides on-demand visual capabilities for a Linux host
 missy/vision/
 ├── __init__.py          # Package documentation
 ├── discovery.py         # USB camera discovery via sysfs
-├── capture.py           # OpenCV-based frame capture with resilience + failure classification
+├── capture.py           # OpenCV frame capture with timeout, warmup quality, failure classification
 ├── resilient_capture.py # Auto-reconnection with exponential backoff + failure tracking
+├── multi_camera.py      # Concurrent multi-camera capture with ThreadPoolExecutor
 ├── sources.py           # Unified image source abstraction with security validation
 ├── pipeline.py          # Image preprocessing (resize, CLAHE, denoise, quality assessment)
-├── scene_memory.py      # Task-scoped scene memory with eviction logging
+├── scene_memory.py      # Task-scoped scene memory with perceptual hashing + deduplication
+├── benchmark.py         # Performance benchmarking with percentile statistics
+├── memory_usage.py      # Scene memory usage monitoring with configurable limits
+├── config_validator.py  # Vision configuration validation
+├── vision_memory.py     # Bridge to SQLite/vector memory for observation persistence
 ├── analysis.py          # Domain-specific analysis (puzzle, painting, inspection)
 ├── intent.py            # Audio-triggered vision intent classification (40+ patterns)
 ├── provider_format.py   # Provider-specific image API formatting
 ├── audit.py             # Vision audit event logging (7 event types)
-├── health_monitor.py    # Capture stats, device health tracking, diagnostic reports
+├── health_monitor.py    # Capture stats, device health tracking, SQLite persistence
 └── doctor.py            # Diagnostics: OpenCV, video group, permissions, disk, health
 ```
 
@@ -248,3 +253,110 @@ Seven distinct vision audit events logged:
 5. `vision.session_*` — session lifecycle (create/close)
 6. `vision.burst_capture` — burst count, success rate
 7. `vision.error` — operation, error detail, recoverability
+
+## Multi-Camera Capture
+
+The `MultiCameraManager` enables concurrent capture from multiple USB cameras:
+
+```python
+from missy.vision.multi_camera import MultiCameraManager
+
+with MultiCameraManager() as mgr:
+    connected = mgr.discover_and_connect(max_cameras=4)
+    result = mgr.capture_all()  # concurrent capture from all cameras
+    best = result.best_result   # highest resolution successful capture
+```
+
+Features:
+- Thread-safe concurrent capture via `ThreadPoolExecutor`
+- Auto-discovery with optional vendor filter
+- Per-camera health monitoring
+- Best-result selection by resolution
+- Graceful handling of individual camera failures
+
+## Frame Deduplication
+
+Scene memory now automatically deduplicates near-identical frames using perceptual hash comparison:
+
+```python
+session = SceneSession("task-1", TaskType.PUZZLE)
+frame1 = session.add_frame(img1)  # stored
+frame2 = session.add_frame(img1_copy)  # returns None (deduplicated)
+frame3 = session.add_frame(img2, deduplicate=False)  # forced storage
+```
+
+The dedup threshold (default Hamming distance ≤ 5) is configurable per `add_frame()` call.
+
+## Capture Timeout
+
+The `CameraHandle.capture()` method enforces the `timeout_seconds` config value:
+
+- A deadline is computed at the start of capture
+- Each retry iteration checks the deadline before attempting a read
+- Timeout failures are classified as `FailureType.TRANSIENT`
+
+## Performance Benchmarking
+
+```python
+from missy.vision.benchmark import get_benchmark, BenchmarkTimer
+
+bench = get_benchmark()
+with BenchmarkTimer(bench, "capture", device="/dev/video0"):
+    result = camera.capture()
+
+stats = bench.get_stats("capture")
+# {"count": 42, "mean_ms": 45.2, "p95_ms": 82.1, ...}
+```
+
+CLI: `missy vision benchmark`
+
+## Memory Usage Monitoring
+
+```python
+from missy.vision.memory_usage import get_memory_tracker
+
+tracker = get_memory_tracker()
+report = tracker.update_from_scene_manager()
+print(f"Using {report.total_mb:.1f} MB / {report.limit_mb:.1f} MB")
+```
+
+Default limit: 500 MB. Warns at 80% usage, logs error when exceeded.
+
+CLI: `missy vision memory`
+
+## Configuration Validation
+
+```python
+from missy.vision.config_validator import validate_vision_config
+
+result = validate_vision_config({"capture_width": 99999})
+# result.valid == False, result.errors[0].field == "capture_width"
+```
+
+Validates: resolution ranges, warmup frames, retries, thresholds, device path format, scene memory limits.
+
+CLI: `missy vision validate`
+
+## Vision Memory Bridge
+
+Persists vision observations to SQLite/vector memory for cross-session recall:
+
+```python
+from missy.vision.vision_memory import VisionMemoryBridge
+
+bridge = VisionMemoryBridge()
+bridge.store_observation(
+    session_id="s1", task_type="puzzle",
+    observation="Found 3 edge pieces matching sky region",
+    confidence=0.85,
+)
+results = bridge.recall_observations(query="sky pieces")
+
+## Warmup Quality Assessment
+
+Camera warmup now tracks frame brightness stability:
+
+- Records mean pixel intensity across warmup frames
+- Assesses whether auto-exposure has stabilized (brightness spread < 5.0)
+- Logs warnings when warmup appears unstable
+- Accessible via `CameraHandle.capture_stats["warmup_stable"]`

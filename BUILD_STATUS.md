@@ -2,77 +2,59 @@
 
 ## Last Updated
 
-2026-03-19, Session 6
+2026-03-19, Session 7
 
-## Session 6 Summary
+## Session 7 Summary
 
-Vision hardening: health persistence with auto-save, perceptual hashing, adaptive blank detection, device re-enumeration, 160 new tests (plus OtelExporter and plugin loader tests).
+Major vision expansion: 5 new production modules, 3 new CLI commands, frame deduplication, capture timeout enforcement, warmup quality assessment, 479 new tests.
 
-### Changes This Session (7 commits)
+### Changes This Session (3 commits)
 
-1. **Health monitor SQLite persistence** (`1973d1e`)
-   - `VisionHealthMonitor.save()/load()` persist device stats and capture events to SQLite
-   - Optional `persist_path` constructor parameter for auto-load on init
-   - Merge semantics for combining persisted data with runtime data
-   - 22 new tests: save, load, round-trip, merge, corrupt DB handling
+1. **5 new vision modules** (`61937cf`)
+   - `multi_camera.py`: Concurrent capture from multiple USB cameras using ThreadPoolExecutor, with thread-safe management, auto-discovery, and best-result selection
+   - `benchmark.py`: Capture performance benchmarking with percentile stats (p50/p95/p99), throughput measurement, and `BenchmarkTimer` context manager
+   - `memory_usage.py`: Scene memory usage monitoring with configurable limits (default 500 MB), per-session tracking, and over-limit warnings
+   - `config_validator.py`: Vision configuration validation with error/warning severity levels, range checking, and resolution validation
+   - `vision_memory.py`: Bridge between vision observations and SQLite/vector memory stores for durable cross-session recall
+   - 427 new tests across 5 test files
 
-2. **Perceptual average hash (aHash)** (`0166f67`)
-   - Replaced MD5-of-raw-pixels with proper 64-bit perceptual hash
-   - Resilient to minor zoom, rotation, lighting, and compression changes
-   - New `compute_phash()` and `hamming_distance()` utilities
-   - Scene change detection now blends pixel diff (40%) + phash distance (60%)
-   - Handles uniform images (solid black/white/gray) with intensity-based hash
-   - 14 new tests for hash computation, distance, and integration
+2. **Frame deduplication, capture timeout, 3 CLI commands** (`641354e`)
+   - `scene_memory.py`: `add_frame()` now deduplicates near-identical frames via perceptual hash Hamming distance (returns `None` when skipped, configurable threshold)
+   - `capture.py`: Enforces `timeout_seconds` deadline across retry attempts
+   - CLI: `missy vision benchmark`, `missy vision validate`, `missy vision memory` commands
+   - 52 new tests for deduplication, timeout, and CLI commands
 
-3. **Adaptive blank frame detection** (`df9129a`)
-   - `AdaptiveBlankDetector` learns ambient light from successful captures
-   - Rolling window of mean pixel intensities, dynamic threshold adjustment
-   - Prevents false-positive blank detection in dim environments
-   - Configurable floor, ceiling, adaptation factor, and window size
-   - Wired into `CameraHandle` when `adaptive_blank=True` (default)
-   - 18 new tests for detector behavior and CameraHandle integration
+3. **Warmup quality assessment + test fixes** (`8383bca`)
+   - `capture.py`: `_warmup()` tracks frame intensity, assesses auto-exposure stability, logs warnings when unstable
+   - `CameraHandle.capture_stats` property for diagnostics (uptime, success rate, warmup stability)
+   - Fixed 10 existing tests to use `deduplicate=False` where identical frames are intentionally stored
 
-4. **Device re-enumeration hardening** (`fc1b158`)
-   - `CameraDiscovery.rediscover_device()`: targeted USB ID-based reconnection retry
-   - `CameraDiscovery.validate_device()`: verifies device path + sysfs + USB IDs match
-   - Guards against device number reuse by different hardware
-   - `ResilientCamera` proactively validates device presence before capture
-   - Uses targeted rediscovery during reconnection when USB IDs are known
-   - 19 new tests for rediscovery, validation, and resilient capture integration
+### Full Test Suite: 14,236 passed, 0 failures, 14 skipped
 
-5. **CLI health persistence** (`74a3ce3`)
-   - `missy vision health` loads persisted history from `~/.missy/vision_health.db`
-   - Shows cumulative capture statistics across process restarts
-
-6. **52 edge-case and stress tests** (`f5c321d`)
-   - Resilient capture: permission failures, concurrent captures, device path changes, context manager, backoff
-   - Pipeline: 1x1 images, BGRA, grayscale, quality categories, denoise, sharpen, single-channel 3D
-   - Scene memory: large frame counts, eviction order, concurrent session creation, change detection, phash boundaries
-
-7. **VISION.md update** (`a37be22`)
-   - Documented all session 6 features: persistence, perceptual hashing, adaptive blank, rediscovery, validation
-
-### Full Test Suite: 13,757 passed, 0 failures, 14 skipped
-
-### Vision Modules (13 files in `missy/vision/`)
+### Vision Modules (18 files in `missy/vision/`)
 
 | Module | Purpose |
 |--------|---------|
 | `__init__.py` | Package docs with complete submodule listing |
 | `discovery.py` | USB camera discovery via sysfs + rediscover/validate |
-| `capture.py` | OpenCV frame capture with adaptive blank detection + burst mode |
+| `capture.py` | OpenCV frame capture with adaptive blank detection, timeout, warmup quality |
 | `resilient_capture.py` | Auto-reconnection with validation + targeted rediscovery |
+| `multi_camera.py` | Concurrent multi-camera capture with ThreadPoolExecutor |
 | `sources.py` | Unified source abstraction with security validation |
 | `pipeline.py` | Image preprocessing + quality assessment (6 metrics) |
-| `scene_memory.py` | Task-scoped scene memory with perceptual hashing |
+| `scene_memory.py` | Task-scoped scene memory with perceptual hashing + deduplication |
 | `health_monitor.py` | Capture stats, health tracking, SQLite persistence |
+| `benchmark.py` | Performance benchmarking with percentile statistics |
+| `memory_usage.py` | Scene memory usage monitoring with configurable limits |
+| `config_validator.py` | Vision configuration validation |
+| `vision_memory.py` | Bridge to SQLite/vector memory for observation persistence |
 | `analysis.py` | Domain-specific prompts (puzzle, painting, inspection) |
 | `intent.py` | Audio-triggered vision intent classification (40+ patterns) |
 | `doctor.py` | Diagnostics: OpenCV, video group, permissions, disk space, health |
 | `provider_format.py` | Provider-specific image API formatting |
 | `audit.py` | Vision audit event logging (7 event types) |
 
-### Vision Tests: 808 (all passing)
+### Vision Tests: 1,269 (all passing)
 
 | Test File | Tests |
 |-----------|-------|
@@ -114,38 +96,48 @@ Vision hardening: health persistence with auto-save, perceptual hashing, adaptiv
 | test_failure_classification.py | 33 |
 | test_health_monitor.py | 51 |
 | test_health_persistence.py | 22 |
+| test_multi_camera.py | 79 |
+| test_benchmark.py | 94 |
+| test_memory_usage.py | 73 |
+| test_config_validator.py | 114 |
+| test_vision_memory.py | 67 |
+| test_dedup_and_timeout.py | 30 |
 | tests/cli/test_vision_cli.py | 14 |
+| tests/cli/test_vision_cli_extended.py | 22 |
 | tests/channels/voice/test_voice_vision_integration.py | 11 |
 
 ### Integration Points
-- **CLI**: `missy vision devices/capture/inspect/review/doctor/health`
+- **CLI**: `missy vision devices/capture/inspect/review/doctor/health/benchmark/validate/memory`
 - **Tools**: vision_capture, vision_burst, vision_analyze, vision_devices, vision_scene
 - **Voice**: Audio intent detection → auto-capture in voice server
-- **Config**: `VisionConfig` in settings schema
+- **Config**: `VisionConfig` in settings schema + config validation
 - **Hatching**: `check_vision` readiness step
 - **Persona**: Vision coaching guidance in identity description
 - **Behavior**: Vision-specific response guidelines (painting/puzzle modes)
 - **Health Monitor**: Auto-captures in resilient_capture, SQLite persistence, doctor + CLI
+- **Memory**: Vision observations persisted to SQLite/vector store for cross-session recall
 
 ## Remaining Work for Future Sessions
 
 - [ ] Provider-specific multi-modal message testing with real APIs
 - [ ] Container sandbox for vision operations
-- [ ] Performance benchmarking (capture latency, burst throughput)
 - [ ] Video stream capture (continuous frames for motion tracking)
-- [ ] Scene memory actual-memory-usage monitoring
-- [ ] Perceptual hash for rotation/zoom-invariant change detection → DONE (aHash)
+- [x] Performance benchmarking (capture latency, burst throughput) → DONE (benchmark.py)
+- [x] Scene memory actual-memory-usage monitoring → DONE (memory_usage.py)
+- [x] Perceptual hash for rotation/zoom-invariant change detection → DONE (aHash)
 - [ ] Discord credential message deletion
-- [ ] Health monitor persistence across sessions → DONE (SQLite)
-- [ ] Adaptive blank frame detection thresholds → DONE
-- [ ] Health monitor periodic auto-save during long capture sessions
-- [ ] Vector memory integration for vision observations
-- [ ] Multi-camera concurrent capture
+- [x] Health monitor persistence across sessions → DONE (SQLite)
+- [x] Adaptive blank frame detection thresholds → DONE
+- [x] Health monitor periodic auto-save during long capture sessions → DONE
+- [x] Vector memory integration for vision observations → DONE (vision_memory.py)
+- [x] Multi-camera concurrent capture → DONE (multi_camera.py)
+- [ ] Camera rotation/orientation detection
+- [ ] Frame quality auto-selection in burst mode
+- [ ] Vision subsystem graceful shutdown hooks
 
 ## Recovery Notes
 
-All code committed and passing. 13,757 total tests, 0 failures, 14 skipped.
-Session 6: 5 new production features (health persistence + auto-save, perceptual
-hashing, adaptive blank detection, device re-enumeration hardening), 1 CLI
-enhancement, 160 new tests across vision, observability, and plugins subsystems,
-VISION.md and TEST_RESULTS.md documentation updates. Ruff lint is fully clean.
+All code committed and passing. 14,236 total tests, 0 failures, 14 skipped.
+Session 7: 5 new production modules, 3 new CLI commands, frame deduplication,
+capture timeout enforcement, warmup quality assessment, 479 new tests.
+Vision subsystem now has 18 modules and 1,269 tests. Ruff lint fully clean.
