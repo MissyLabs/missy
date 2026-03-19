@@ -122,10 +122,19 @@ class ImageSource(ABC):
 
 
 class WebcamSource(ImageSource):
-    """Acquires frames from a USB webcam via OpenCV."""
+    """Acquires frames from a USB webcam via OpenCV.
 
-    def __init__(self, device_path: str = "/dev/video0") -> None:
+    Parameters
+    ----------
+    device_path:
+        V4L2 device path (e.g. ``/dev/video0``).
+    timeout:
+        Maximum seconds to wait for a frame before giving up.
+    """
+
+    def __init__(self, device_path: str = "/dev/video0", *, timeout: float = 15.0) -> None:
         self._device_path = device_path
+        self._timeout = timeout
 
     def source_type(self) -> SourceType:
         return SourceType.WEBCAM
@@ -134,23 +143,38 @@ class WebcamSource(ImageSource):
         return Path(self._device_path).exists()
 
     def acquire(self) -> ImageFrame:
-        from missy.vision.capture import CameraHandle, CaptureError
+        import concurrent.futures
 
-        handle = CameraHandle(self._device_path)
-        try:
-            handle.open()
-            result = handle.capture()
-            if not result.success:
-                raise CaptureError(result.error)
-            return ImageFrame(
-                image=result.image,
-                source_type=SourceType.WEBCAM,
-                source_path=self._device_path,
-                width=result.width,
-                height=result.height,
-            )
-        finally:
-            handle.close()
+        from missy.vision.capture import CameraHandle, CaptureConfig, CaptureError
+
+        def _do_capture() -> ImageFrame:
+            config = CaptureConfig(timeout_seconds=self._timeout)
+            handle = CameraHandle(self._device_path, config)
+            try:
+                handle.open()
+                result = handle.capture()
+                if not result.success:
+                    raise CaptureError(result.error)
+                return ImageFrame(
+                    image=result.image,
+                    source_type=SourceType.WEBCAM,
+                    source_path=self._device_path,
+                    width=result.width,
+                    height=result.height,
+                )
+            finally:
+                handle.close()
+
+        # Run capture in a thread with timeout to defend against frozen cameras
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(_do_capture)
+            try:
+                return future.result(timeout=self._timeout)
+            except concurrent.futures.TimeoutError:
+                raise CaptureError(
+                    f"Camera at {self._device_path} did not respond within "
+                    f"{self._timeout}s — device may be frozen or busy"
+                )
 
 
 # ---------------------------------------------------------------------------

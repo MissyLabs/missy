@@ -44,12 +44,16 @@ class ResilientCamera:
         config: CaptureConfig | None = None,
         max_reconnect_attempts: int = 5,
         reconnect_delay: float = 2.0,
+        backoff_factor: float = 1.5,
+        max_delay: float = 30.0,
     ) -> None:
         self._vendor_id = preferred_vendor_id
         self._product_id = preferred_product_id
         self._config = config or CaptureConfig()
         self._max_reconnect = max_reconnect_attempts
         self._reconnect_delay = reconnect_delay
+        self._backoff_factor = backoff_factor
+        self._max_delay = max_delay
 
         self._handle: CameraHandle | None = None
         self._current_device: CameraDevice | None = None
@@ -145,12 +149,20 @@ class ResilientCamera:
         )
 
     def _reconnect_and_capture(self) -> CaptureResult:
-        """Attempt to reconnect to the camera and capture."""
+        """Attempt to reconnect to the camera and capture.
+
+        Uses exponential backoff between attempts to avoid hammering
+        a device that may be temporarily unavailable.
+        """
         self.disconnect()
+        delay = self._reconnect_delay
 
         for attempt in range(1, self._max_reconnect + 1):
             logger.info(
-                "Reconnection attempt %d/%d", attempt, self._max_reconnect
+                "Reconnection attempt %d/%d (delay %.1fs)",
+                attempt,
+                self._max_reconnect,
+                delay,
             )
 
             # Force rediscovery
@@ -160,7 +172,8 @@ class ResilientCamera:
             device = self._discover_camera()
             if device is None:
                 logger.warning("Camera not found on attempt %d", attempt)
-                time.sleep(self._reconnect_delay)
+                time.sleep(delay)
+                delay = min(delay * self._backoff_factor, self._max_delay)
                 continue
 
             try:
@@ -178,7 +191,8 @@ class ResilientCamera:
                 logger.warning("Reconnection attempt %d failed: %s", attempt, exc)
                 self.disconnect()
 
-            time.sleep(self._reconnect_delay)
+            time.sleep(delay)
+            delay = min(delay * self._backoff_factor, self._max_delay)
 
         return CaptureResult(
             success=False,
