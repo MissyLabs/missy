@@ -2,14 +2,14 @@
 
 ## Summary
 
-- **Total tests**: ~18,782
-- **Passed**: ~18,782
+- **Total tests**: ~19,271
+- **Passed**: ~19,271
 - **Failed**: 0
 - **Skipped**: 14
 - **Duration**: ~5 minutes 52 seconds
 - **Last updated**: Session 15 (2026-03-19)
 
-## Session 15 New Tests (1,548 tests, 12 files)
+## Session 15 New Tests (2,319 tests, 17 files)
 
 | Test File | Count | Coverage Area |
 |-----------|-------|---------------|
@@ -28,6 +28,11 @@
 | test_session15_network.py | 142 | CIDR, DNS rebinding, domain wildcards, per-category hosts |
 | test_session15_attention.py | 152 | 5 attention subsystems, focus continuity, keyword sets |
 | test_session15_playbook.py | 83 | Pattern hashing, record/increment, thread safety |
+| test_session15_consolidation.py | 92 | Threshold boundaries, fact extraction, keyword detection |
+| test_session15_migrate.py | 63 | needs_migration edge cases, preset detection, atomic write |
+| test_session15_manager.py | 127 | MCP name validation, permission checks, digest pinning |
+| test_session15_learnings_done.py | 150 | Task type extraction, outcome scanning, compound tasks |
+| test_session15_drift_identity.py | 57 | SHA-256 vectors, Ed25519 signing, JWK export |
 
 ## Session 14 New Tests (456 tests, 8 files)
 
@@ -97,4 +102,4 @@
 | 12 | 15,527 | 164 | Property-based tests, cross-module integration, security |
 | 13 | 16,737 | 1,210 | 6 code fixes, deep cross-codebase hardening |
 | 14 | 17,234 | 497 | Edge case hardening across 12 files |
-| 15 | ~18,782 | 1,548 | Circuit breaker fix, 12 new test files across 15 modules |
+| 15 | ~19,271 | 2,319 | Circuit breaker fix, 17 new test files across 20+ modules |

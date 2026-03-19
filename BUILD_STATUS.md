@@ -6,13 +6,13 @@
 
 ## Session 15 Summary
 
-Hardening session: 1 code fix + 1,548 new tests across 12 new test files. Fixed a TOCTOU race condition in the circuit breaker state machine. Comprehensive edge case coverage for circuit breaker thread safety, filesystem policy symlinks, voice server WebSocket limits, JSON parsing error paths, persona file I/O, agent runtime heredoc rewriting, vault encryption internals, behavior layer tone/intent detection, trust scorer thread safety, context manager token budget, memory synthesizer deduplication, hatching lifecycle, network policy DNS rebinding, attention system focus tracking, and playbook persistence.
+Hardening session: 1 code fix + 2,319 new tests across 17 new test files. Fixed a TOCTOU race condition in the circuit breaker state machine. Comprehensive edge case coverage across 20+ modules including circuit breaker thread safety, filesystem policy symlinks, voice server WebSocket limits, JSON parsing error paths, persona file I/O, agent runtime heredoc rewriting, vault encryption internals, behavior layer tone/intent detection, trust scorer thread safety, context manager token budget, memory synthesizer deduplication, hatching lifecycle, network policy DNS rebinding, attention system focus tracking, playbook persistence, memory consolidation, config migration, MCP manager, learnings/done criteria, prompt drift detection, and agent identity.
 
 ### Code Fix
 
 - **Circuit breaker TOCTOU race** (`missy/agent/circuit_breaker.py`): Fixed race condition in `call()` where multiple threads could both read HALF_OPEN state and proceed to probe simultaneously. The state check and OPEN→HALF_OPEN transition are now atomic under a single lock acquisition.
 
-### New Tests This Session (1,548 tests, 12 files)
+### New Tests This Session (2,319 tests, 17 files)
 
 | Test File | Count | Coverage |
 |-----------|-------|----------|
@@ -31,8 +31,13 @@ Hardening session: 1 code fix + 1,548 new tests across 12 new test files. Fixed 
 | `test_session15_network.py` | 142 | CIDR matching, DNS rebinding, domain wildcards, per-category hosts, IPv6 |
 | `test_session15_attention.py` | 152 | Alerting/orienting/sustained/selective/executive subsystems, focus continuity |
 | `test_session15_playbook.py` | 83 | Pattern hashing, record/increment, promotable, thread safety, persistence |
+| `test_session15_consolidation.py` | 92 | Threshold boundaries, fact extraction, keyword detection |
+| `test_session15_migrate.py` | 63 | needs_migration edge cases, preset detection, atomic write |
+| `test_session15_manager.py` | 127 | MCP name validation, permission checks, digest pinning, injection |
+| `test_session15_learnings_done.py` | 150 | Task type extraction, outcome scanning, compound tasks, verification |
+| `test_session15_drift_identity.py` | 57 | SHA-256 vectors, Ed25519 signing, JWK export, PEM format |
 
-### Full Test Suite: ~18,782 passed, 0 failures, 14 skipped
+### Full Test Suite: ~19,271 passed, 0 failures, 14 skipped
 
 ### Vision Modules (20 files in `missy/vision/`)
 
@@ -82,8 +87,8 @@ Hardening session: 1 code fix + 1,548 new tests across 12 new test files. Fixed 
 
 ## Recovery Notes
 
-All code committed and passing. ~18,782 total tests, 0 failures, 14 skipped.
-Session 15: 1 code fix + 1,548 new tests across 12 new test files + 3 lint fix commits.
+All code committed and passing. ~19,271 total tests, 0 failures, 14 skipped.
+Session 15: 1 code fix + 2,319 new tests across 17 new test files + 3 lint/fix commits.
 Ruff lint: 0 errors in session 15 files.
 
 Session 15 commits:
@@ -94,3 +99,5 @@ Session 15 commits:
 5. `31bd00a` — Add 377 tests (network policy, attention, playbook)
 6. `a5494ab` — Fix lint issues
 7. `f56c151` — Fix flaky hatching test
+8. `22977d4` — Add 282 tests (consolidation, config migration, MCP manager)
+9. `25662e9` — Add 207 tests (learnings, done criteria, drift, identity)
