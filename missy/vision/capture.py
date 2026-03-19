@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections import deque
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -91,8 +92,60 @@ class CaptureConfig:
     max_retries: int = 3
     retry_delay: float = 0.5
     blank_threshold: float = 5.0  # mean pixel value below this = blank
+    adaptive_blank: bool = True  # auto-adjust blank threshold from history
     quality: int = 95  # JPEG quality for saves
     timeout_seconds: float = 10.0
+
+
+# ---------------------------------------------------------------------------
+# Adaptive blank frame detection
+# ---------------------------------------------------------------------------
+
+
+class AdaptiveBlankDetector:
+    """Learns ambient light levels from successful captures and adjusts
+    the blank-frame threshold to avoid false positives in dim environments.
+
+    Maintains a rolling window of mean pixel intensities from recent
+    successful frames.  The adaptive threshold is a fraction of the
+    observed minimum intensity, with a floor of ``min_threshold``.
+    """
+
+    def __init__(
+        self,
+        base_threshold: float = 5.0,
+        min_threshold: float = 2.0,
+        window_size: int = 20,
+        adaptation_factor: float = 0.25,
+    ) -> None:
+        self._base = base_threshold
+        self._min = min_threshold
+        self._window: deque[float] = deque(maxlen=window_size)
+        self._factor = adaptation_factor
+
+    def record_intensity(self, mean_pixel: float) -> None:
+        """Record the mean pixel intensity of a successful capture."""
+        if mean_pixel > 0:
+            self._window.append(mean_pixel)
+
+    @property
+    def threshold(self) -> float:
+        """Current adaptive blank-frame threshold."""
+        if len(self._window) < 3:
+            return self._base
+        # Use a fraction of the minimum observed intensity
+        min_observed = min(self._window)
+        adaptive = min_observed * self._factor
+        return max(self._min, min(adaptive, self._base))
+
+    def is_blank(self, frame: np.ndarray) -> bool:
+        """Check if a frame is blank using the adaptive threshold."""
+        mean_val = float(np.mean(frame))
+        return mean_val < self.threshold
+
+    def reset(self) -> None:
+        """Clear recorded history."""
+        self._window.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +175,9 @@ class CameraHandle:
         self._opened = False
         self._open_time: float = 0.0
         self._lock = threading.Lock()
+        self._blank_detector = AdaptiveBlankDetector(
+            base_threshold=self._config.blank_threshold,
+        ) if self._config.adaptive_blank else None
 
     @property
     def is_open(self) -> bool:
@@ -236,6 +292,7 @@ class CameraHandle:
                             time.sleep(config.retry_delay)
                         continue
 
+                    self._record_successful_frame(frame)
                     h, w = frame.shape[:2]
                     return CaptureResult(
                         success=True,
@@ -386,9 +443,17 @@ class CameraHandle:
                 break
 
     def _is_blank(self, frame: np.ndarray) -> bool:
-        """Detect blank/black frames by checking mean pixel intensity."""
+        """Detect blank/black frames using adaptive or fixed threshold."""
+        if self._blank_detector is not None:
+            return self._blank_detector.is_blank(frame)
         mean_val = float(np.mean(frame))
         return mean_val < self._config.blank_threshold
+
+    def _record_successful_frame(self, frame: np.ndarray) -> None:
+        """Record a successful frame's intensity for adaptive blank detection."""
+        if self._blank_detector is not None:
+            mean_val = float(np.mean(frame))
+            self._blank_detector.record_intensity(mean_val)
 
     @staticmethod
     def _parse_device_index(path: str) -> int | None:
