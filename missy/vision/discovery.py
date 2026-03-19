@@ -321,9 +321,14 @@ class CameraDiscovery:
         except OSError:
             return ("0000", "0000")
 
-        # Walk up looking for idVendor/idProduct files
+        # Walk up looking for idVendor/idProduct files.
+        # Track visited paths to detect symlink cycles.
         current = real_path
+        visited: set[Path] = set()
         for _ in range(10):  # limit depth
+            if current in visited:
+                break  # symlink cycle detected
+            visited.add(current)
             vid_path = current / "idVendor"
             pid_path = current / "idProduct"
             if vid_path.exists() and pid_path.exists():

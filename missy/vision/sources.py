@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import stat
 import subprocess
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -215,8 +216,15 @@ class FileSource(ImageSource):
         if not self._path.exists():
             raise FileNotFoundError(f"Image file not found: {self._path}")
 
+        # Verify it's a regular file (not a device node, socket, or pipe)
+        file_stat = self._path.stat()
+        if not stat.S_ISREG(file_stat.st_mode):
+            raise ValueError(
+                f"Not a regular file (mode 0o{file_stat.st_mode:o}): {self._path}"
+            )
+
         # Check file size before loading
-        file_size = self._path.stat().st_size
+        file_size = file_stat.st_size  # reuse stat result from above
         if file_size == 0:
             raise ValueError(f"Image file is empty: {self._path}")
         if file_size > self.MAX_FILE_SIZE:

@@ -165,6 +165,7 @@ class TestFileSourceAcquireGuards:
         large.write_bytes(b"x")
 
         mock_stat = MagicMock()
+        mock_stat.st_mode = 0o100644  # regular file
         mock_stat.st_size = FileSource.MAX_FILE_SIZE + 1
 
         with patch("pathlib.Path.stat", return_value=mock_stat):

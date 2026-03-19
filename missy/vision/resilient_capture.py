@@ -194,14 +194,26 @@ class ResilientCamera:
         return discovery.find_preferred()
 
     def _open_device(self, device: CameraDevice) -> None:
-        """Open a specific camera device."""
-        if self._handle is not None:
-            self._handle.close()
+        """Open a specific camera device.
+
+        Resets the adaptive blank detector when switching to a different
+        physical device, since ambient light / sensor characteristics differ.
+        """
+        old_handle = self._handle
+        if old_handle is not None:
+            old_handle.close()
 
         self._handle = CameraHandle(device.device_path, self._config)
         self._handle.open()
         self._current_device = device
         self._connected = True
+
+        # Reset blank detector when switching devices — calibration from the
+        # old camera does not apply to the new one.
+        if self._handle._blank_detector is not None:
+            self._handle._blank_detector.reset()
+            logger.debug("Reset blank detector for new device %s", device.device_path)
+
         logger.info("Connected to camera: %s at %s", device.name, device.device_path)
 
     def _reconnect_and_capture(self) -> CaptureResult:

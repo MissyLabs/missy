@@ -63,6 +63,7 @@ class TestFileSourceSizeValidation:
 
         # Simpler: patch the Path.stat() return value
         mock_stat = MagicMock()
+        mock_stat.st_mode = 0o100644  # regular file
         mock_stat.st_size = MAX_FILE_SIZE + 1
         with patch("pathlib.Path.stat", return_value=mock_stat):
             source = FileSource(str(large))
@@ -79,6 +80,7 @@ class TestFileSourceSizeValidation:
         boundary.write_bytes(b"x")
 
         mock_stat = MagicMock()
+        mock_stat.st_mode = 0o100644  # regular file
         mock_stat.st_size = MAX_FILE_SIZE  # exactly at the limit — allowed
         with patch("pathlib.Path.stat", return_value=mock_stat):
             source = FileSource(str(boundary))

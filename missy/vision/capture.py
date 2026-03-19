@@ -213,7 +213,12 @@ class CameraHandle:
         return (max(recent) - min(recent)) < 5.0
 
     def open(self) -> None:
-        """Open the camera device."""
+        """Open the camera device.
+
+        Guarantees that the ``cv2.VideoCapture`` object is released if any
+        step after creation fails (resolution set, warmup, etc.), preventing
+        file-descriptor leaks.
+        """
         if self.is_open:
             return
 
@@ -232,42 +237,48 @@ class CameraHandle:
                 f"Failed to create VideoCapture for {self._device_path}: {exc}"
             ) from exc
 
-        if not self._cap.isOpened():
-            self._cap.release()
-            self._cap = None
-            raise CaptureError(
-                f"Cannot open camera at {self._device_path}. "
-                "Check permissions (user in 'video' group?) and device availability."
-            )
+        try:
+            if not self._cap.isOpened():
+                raise CaptureError(
+                    f"Cannot open camera at {self._device_path}. "
+                    "Check permissions (user in 'video' group?) and device availability."
+                )
 
-        # Set resolution
-        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._config.width)
-        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._config.height)
+            # Set resolution
+            self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._config.width)
+            self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._config.height)
 
-        # Verify resolution was accepted
-        actual_w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        actual_h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        if actual_w != self._config.width or actual_h != self._config.height:
-            logger.warning(
-                "Requested resolution %dx%d but camera set %dx%d",
-                self._config.width,
-                self._config.height,
+            # Verify resolution was accepted
+            actual_w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            actual_h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            if actual_w != self._config.width or actual_h != self._config.height:
+                logger.warning(
+                    "Requested resolution %dx%d but camera set %dx%d",
+                    self._config.width,
+                    self._config.height,
+                    actual_w,
+                    actual_h,
+                )
+
+            self._opened = True
+            self._open_time = time.monotonic()
+
+            # Warm-up: discard initial frames for auto-exposure/white-balance
+            self._warmup()
+
+            logger.info(
+                "Camera opened: %s (%dx%d)",
+                self._device_path,
                 actual_w,
                 actual_h,
             )
-
-        self._opened = True
-        self._open_time = time.monotonic()
-
-        # Warm-up: discard initial frames for auto-exposure/white-balance
-        self._warmup()
-
-        logger.info(
-            "Camera opened: %s (%dx%d)",
-            self._device_path,
-            actual_w,
-            actual_h,
-        )
+        except Exception:
+            # Release the VideoCapture to avoid fd leak on partial init
+            with suppress(Exception):
+                self._cap.release()
+            self._cap = None
+            self._opened = False
+            raise
 
     def close(self) -> None:
         """Release the camera device.  Thread-safe."""
@@ -478,7 +489,8 @@ class CameraHandle:
         """Discard initial frames for auto-exposure stabilization.
 
         Tracks mean brightness across warmup frames to assess whether the
-        camera's auto-exposure has stabilized.  Returns the number of
+        camera's auto-exposure has stabilized.  Enforces a timeout to avoid
+        blocking indefinitely on a frozen camera.  Returns the number of
         frames actually discarded.
         """
         n = self._config.warmup_frames
@@ -487,7 +499,17 @@ class CameraHandle:
         logger.debug("Warming up camera: discarding %d frames", n)
         intensities: list[float] = []
         discarded = 0
+        # Warmup gets half the capture timeout (at least 3 s) so a frozen
+        # camera doesn't block open() indefinitely.
+        warmup_deadline = time.monotonic() + max(self._config.timeout_seconds / 2, 3.0)
         for _ in range(n):
+            if time.monotonic() > warmup_deadline:
+                logger.warning(
+                    "Warmup timed out after %d/%d frames — camera may be slow",
+                    discarded,
+                    n,
+                )
+                break
             try:
                 ret, frame = self._cap.read()
                 discarded += 1

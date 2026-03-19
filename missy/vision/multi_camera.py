@@ -193,6 +193,13 @@ class MultiCameraManager:
 
         def _capture_one(path: str, handle: CameraHandle) -> tuple[str, CaptureResult]:
             try:
+                # Guard against handle closed by concurrent remove_camera()
+                if not handle.is_open:
+                    return path, CaptureResult(
+                        success=False,
+                        device_path=path,
+                        error="Camera handle closed before capture",
+                    )
                 result = handle.capture()
                 latency = (time.monotonic() - t0) * 1000
                 get_health_monitor().record_capture(
@@ -210,6 +217,7 @@ class MultiCameraManager:
                     error=str(exc),
                 )
 
+        deadline = time.monotonic() + timeout
         with ThreadPoolExecutor(max_workers=self._max_workers) as pool:
             futures = {
                 pool.submit(_capture_one, path, handle): path
@@ -219,7 +227,10 @@ class MultiCameraManager:
             for future in as_completed(futures, timeout=timeout):
                 path = futures[future]
                 try:
-                    dev_path, result = future.result(timeout=timeout)
+                    # Use remaining time as the per-future timeout to
+                    # avoid applying the full timeout twice.
+                    remaining = max(0.1, deadline - time.monotonic())
+                    dev_path, result = future.result(timeout=remaining)
                     results[dev_path] = result
                     if not result.success:
                         errors[dev_path] = result.error
