@@ -431,9 +431,9 @@ class TestDiscordVoiceResamplingBreak:
 
 
 # ===========================================================================
-# 7. Code evolution lines 709-710 (already covered in test_coverage_gaps_s13.py)
+# 7. Code evolution lines 709-710 (already covered in test_coverage_gaps_vault_hotreload.py)
 # ===========================================================================
-# Verified: TestCodeEvolutionMalformedFileLine in test_coverage_gaps_s13.py
+# Verified: TestCodeEvolutionMalformedFileLine in test_coverage_gaps_vault_hotreload.py
 # covers both the IndexError path (malformed File line) and the ValueError
 # (relative_to failure). No duplicate tests needed here.
 
