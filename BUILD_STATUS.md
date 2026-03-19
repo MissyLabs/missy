@@ -6,7 +6,7 @@
 
 ## Session 5 Summary
 
-Vision health monitoring, production hardening, and 458 new tests across all major subsystems.
+Vision health monitoring, production hardening, and 550 new tests across all major subsystems.
 
 ### Changes This Session (8 commits)
 
@@ -48,7 +48,21 @@ Vision health monitoring, production hardening, and 458 new tests across all maj
 8. **Lint cleanup** (`f792790`)
    - Fixed 20 ruff issues in new test files: import sorting, unused vars, contextlib.suppress
 
-### Full Test Suite: 13,487 passed, 0 failures, 16 skipped
+9. **Health monitor recommendations** (`95cb51c`)
+   - `get_recommendations()`: actionable advice (permission→usermod, busy→lsof, latency→resolution, quality→lighting)
+   - CLI `vision health` shows recommendations
+   - 9 new recommendation tests (60 total health monitor tests)
+
+10. **93 memory subsystem tests** (session 4, verified passing)
+    - FTS5 search, WAL mode, thread safety, turn ordering, cleanup, Unicode, summaries, vectorizer
+
+11. **83 scheduler tests** (`adfd10b`)
+    - Schedule parsing (natural language to cron), job CRUD, pause/resume, persistence round-trip, concurrency
+
+12. **CLAUDE.md update** (`1422531`)
+    - Added `missy vision health` command and `VisionHealthMonitor` to architecture
+
+### Full Test Suite: 13,579 passed, 0 failures, 16 skipped
 
 ### Vision Modules (13 files in `missy/vision/`)
 
@@ -130,8 +144,9 @@ Vision health monitoring, production hardening, and 458 new tests across all maj
 
 ## Recovery Notes
 
-All code committed and passing. 13,487 total tests, 0 failures, 16 skipped.
-Session 5: 1 new production module (VisionHealthMonitor with 13 submodules),
-1 new CLI command (vision health), health monitor integration into capture
-pipeline and doctor diagnostics, 458 new tests, 20 lint fixes, documentation updates.
+All code committed and passing. 13,579 total tests, 0 failures, 16 skipped.
+Session 5: 1 new production module (VisionHealthMonitor), 1 new CLI command
+(vision health), health monitor integration into capture pipeline and doctor
+diagnostics, recommendations engine, 550 new tests across vision, agent,
+security, scheduler, and memory subsystems, 20 lint fixes, documentation updates.
 Ruff lint is fully clean.
