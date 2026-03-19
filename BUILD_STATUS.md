@@ -6,9 +6,9 @@
 
 ## Session 7 Summary
 
-Major vision expansion: 5 new production modules, 3 new CLI commands, frame deduplication, capture timeout enforcement, warmup quality assessment, 479 new tests.
+Major vision expansion: 5 new production modules, 3 new CLI commands, frame deduplication, capture timeout enforcement, warmup quality assessment, 631 new tests.
 
-### Changes This Session (3 commits)
+### Changes This Session (7 commits)
 
 1. **5 new vision modules** (`61937cf`)
    - `multi_camera.py`: Concurrent capture from multiple USB cameras using ThreadPoolExecutor, with thread-safe management, auto-discovery, and best-result selection
@@ -29,7 +29,18 @@ Major vision expansion: 5 new production modules, 3 new CLI commands, frame dedu
    - `CameraHandle.capture_stats` property for diagnostics (uptime, success rate, warmup stability)
    - Fixed 10 existing tests to use `deduplicate=False` where identical frames are intentionally stored
 
-### Full Test Suite: 14,236 passed, 0 failures, 14 skipped
+4. **Documentation updates** (`728ea2a`)
+   - Updated BUILD_STATUS.md, TEST_RESULTS.md, VISION.md for session 7
+
+5. **Warmup quality and multi-camera stress tests** (`b786f52`)
+   - 54 tests for warmup stability tracking, intensity recording, capture_stats
+   - 45 tests for timeout handling, 8-camera saturation, resolution ranking, churn
+
+6. **Security and integration tests** (`d6fc7f9`)
+   - 53 tests: path injection, SQL injection, code injection, extreme values
+   - Config→capture integration, benchmark+timer, tracker+session
+
+### Full Test Suite: 14,388 passed, 0 failures, 14 skipped
 
 ### Vision Modules (18 files in `missy/vision/`)
 
@@ -54,7 +65,7 @@ Major vision expansion: 5 new production modules, 3 new CLI commands, frame dedu
 | `provider_format.py` | Provider-specific image API formatting |
 | `audit.py` | Vision audit event logging (7 event types) |
 
-### Vision Tests: 1,269 (all passing)
+### Vision Tests: 1,421 (all passing)
 
 | Test File | Tests |
 |-----------|-------|
@@ -104,6 +115,11 @@ Major vision expansion: 5 new production modules, 3 new CLI commands, frame dedu
 | test_dedup_and_timeout.py | 30 |
 | tests/cli/test_vision_cli.py | 14 |
 | tests/cli/test_vision_cli_extended.py | 22 |
+| test_warmup_quality.py | 54 |
+| test_multi_camera_stress.py | 45 |
+| test_new_modules_security.py | 53 |
+| tests/cli/test_vision_cli.py | 14 |
+| tests/cli/test_vision_cli_extended.py | 22 |
 | tests/channels/voice/test_voice_vision_integration.py | 11 |
 
 ### Integration Points
@@ -137,7 +153,7 @@ Major vision expansion: 5 new production modules, 3 new CLI commands, frame dedu
 
 ## Recovery Notes
 
-All code committed and passing. 14,236 total tests, 0 failures, 14 skipped.
+All code committed and passing. 14,388 total tests, 0 failures, 14 skipped.
 Session 7: 5 new production modules, 3 new CLI commands, frame deduplication,
-capture timeout enforcement, warmup quality assessment, 479 new tests.
-Vision subsystem now has 18 modules and 1,269 tests. Ruff lint fully clean.
+capture timeout enforcement, warmup quality assessment, 631 new tests.
+Vision subsystem now has 18 modules and 1,421 tests. Ruff lint fully clean.

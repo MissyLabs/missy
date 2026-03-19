@@ -2,16 +2,16 @@
 
 ## Summary
 
-- **Total tests**: 14,236
-- **Passed**: 14,236
+- **Total tests**: 14,388
+- **Passed**: 14,388
 - **Failed**: 0
 - **Skipped**: 14
 - **Duration**: ~5 minutes
 
 ## Vision Tests
 
-- **Total**: 1,269
-- **Passed**: 1,269
+- **Total**: 1,421
+- **Passed**: 1,421
 - **Failed**: 0
 
 ### By Module (tests/vision/)
@@ -62,6 +62,9 @@
 | test_config_validator.py | 114 | ALL PASS |
 | test_vision_memory.py | 67 | ALL PASS |
 | test_dedup_and_timeout.py | 30 | ALL PASS |
+| test_warmup_quality.py | 54 | ALL PASS |
+| test_multi_camera_stress.py | 45 | ALL PASS |
+| test_new_modules_security.py | 53 | ALL PASS |
 
 ### CLI Vision Tests (tests/cli/)
 
@@ -98,4 +101,4 @@
 | Session | Total Tests | New Tests | Key Changes |
 |---------|-------------|-----------|-------------|
 | 6 | 13,757 | 160 | Health persistence, perceptual hash, adaptive blank, rediscovery |
-| 7 | 14,236 | 479 | Multi-camera, benchmark, memory usage, config validator, vision memory, dedup, timeout |
+| 7 | 14,388 | 631 | Multi-camera, benchmark, memory usage, config validator, vision memory, dedup, timeout, warmup quality, security |
