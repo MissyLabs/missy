@@ -116,8 +116,13 @@ class ImagePipeline:
             clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
             return clahe.apply(image)
 
-        # Handle 4-channel (BGRA) by splitting alpha
+        # Handle single-channel 3D (H,W,1), 4-channel (BGRA), and normal BGR
         channels = image.shape[2] if image.ndim == 3 else 1
+        if channels == 1:
+            # Single-channel 3D array — squeeze and apply CLAHE directly
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            return clahe.apply(image[:, :, 0])[:, :, np.newaxis]
+
         alpha = None
         work_img = image
         if channels == 4:
@@ -162,9 +167,11 @@ class ImagePipeline:
         cv2 = _get_cv2()
         h, w = image.shape[:2]
 
-        # Brightness — handle grayscale, BGR, and BGRA
+        # Brightness — handle grayscale, BGR, BGRA, and single-channel 3D
         if image.ndim == 2:
             gray = image
+        elif image.shape[2] == 1:
+            gray = image[:, :, 0]
         elif image.shape[2] == 4:
             gray = cv2.cvtColor(image[:, :, :3], cv2.COLOR_BGR2GRAY)
         else:

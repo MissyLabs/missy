@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -147,7 +148,7 @@ class VisionIntentClassifier:
         self._auto_threshold = auto_threshold
         self._ask_threshold = ask_threshold
         self._activation_log: list[IntentResult] = []
-        self._log_lock = __import__("threading").Lock()
+        self._log_lock = threading.Lock()
 
     def classify(self, text: str) -> IntentResult:
         """Classify a user utterance for vision intent."""

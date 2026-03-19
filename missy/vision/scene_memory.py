@@ -67,7 +67,10 @@ class SceneFrame:
             gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
             return hashlib.md5(gray.tobytes()).hexdigest()[:12]
         except Exception:
-            return hashlib.md5(image.tobytes()[:1024]).hexdigest()[:12]
+            try:
+                return hashlib.md5(image.tobytes()[:1024]).hexdigest()[:12]
+            except Exception:
+                return "unknown_hash"
 
 
 @dataclass
@@ -264,10 +267,12 @@ class SceneSession:
     def close(self) -> None:
         """Mark session as inactive and release frame data."""
         self._active = False
-        # Keep lightweight references but free image data
-        for frame in self._frames:
-            frame.image = np.array([])  # release memory
-        logger.info("Scene session %s closed (%d frames)", self.task_id, self._frame_counter)
+        frame_count = self._frame_counter
+        # Fully release frame data and references
+        self._frames.clear()
+        self._observations.clear()
+        self._state.clear()
+        logger.info("Scene session %s closed (%d frames)", self.task_id, frame_count)
 
     def summarize(self) -> dict[str, Any]:
         """Produce a serializable summary for audit logging."""
@@ -353,9 +358,12 @@ class SceneManager:
                 del self._sessions[task_id]
                 return
 
-        # All active — evict the oldest
+        # All active — evict the oldest by creation time
         if self._sessions:
-            oldest = next(iter(self._sessions))
+            oldest = min(
+                self._sessions,
+                key=lambda tid: self._sessions[tid]._created,
+            )
             self._sessions[oldest].close()
             del self._sessions[oldest]
 

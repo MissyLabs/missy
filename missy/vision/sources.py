@@ -303,13 +303,16 @@ class PhotoSource(ImageSource):
         return self._directory.exists() and self._directory.is_dir()
 
     def scan(self) -> list[Path]:
-        """Scan directory for image files and return sorted list."""
+        """Scan directory for image files and return sorted list.
+
+        Respects the ``pattern`` parameter (glob-style) passed at construction.
+        """
         if not self._directory.exists():
             raise FileNotFoundError(f"Photo directory not found: {self._directory}")
         try:
             self._files = sorted(
                 p
-                for p in self._directory.iterdir()
+                for p in self._directory.glob(self._pattern)
                 if p.is_file() and p.suffix.lower() in self.SUPPORTED_EXTENSIONS
             )
         except OSError as exc:
