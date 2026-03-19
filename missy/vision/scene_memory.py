@@ -28,6 +28,17 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Change detection constants
+# ---------------------------------------------------------------------------
+_CHANGE_COMPARE_SIZE = (64, 64)
+_CHANGE_PIXEL_WEIGHT = 0.4
+_CHANGE_PHASH_WEIGHT = 0.6
+_CHANGE_THRESHOLD_MAJOR = 0.3
+_CHANGE_THRESHOLD_MODERATE = 0.15
+_CHANGE_THRESHOLD_MINOR = 0.05
+_PHASH_BITS = 64
+
 
 # ---------------------------------------------------------------------------
 # Types
@@ -317,9 +328,8 @@ class SceneSession:
             import cv2
 
             # Resize both to same small size for comparison
-            size = (64, 64)
-            a = cv2.resize(frame_a.image, size)
-            b = cv2.resize(frame_b.image, size)
+            a = cv2.resize(frame_a.image, _CHANGE_COMPARE_SIZE)
+            b = cv2.resize(frame_b.image, _CHANGE_COMPARE_SIZE)
 
             # Convert to grayscale
             ga = cv2.cvtColor(a, cv2.COLOR_BGR2GRAY).astype(np.float32)
@@ -329,19 +339,19 @@ class SceneSession:
             diff = np.abs(ga - gb)
             pixel_score = float(np.mean(diff) / 255.0)
 
-            # Perceptual hash distance (0-64 bits differ → normalize to 0-1)
+            # Perceptual hash distance (0-N bits differ → normalize to 0-1)
             hdist = hamming_distance(frame_a.thumbnail_hash, frame_b.thumbnail_hash)
-            phash_score = hdist / 64.0 if hdist >= 0 else pixel_score
+            phash_score = hdist / _PHASH_BITS if hdist >= 0 else pixel_score
 
             # Blend: weight perceptual hash more (robust to lighting)
-            score = 0.4 * pixel_score + 0.6 * phash_score
+            score = _CHANGE_PIXEL_WEIGHT * pixel_score + _CHANGE_PHASH_WEIGHT * phash_score
 
             description = "no change"
-            if score > 0.3:
+            if score > _CHANGE_THRESHOLD_MAJOR:
                 description = "major change"
-            elif score > 0.15:
+            elif score > _CHANGE_THRESHOLD_MODERATE:
                 description = "moderate change"
-            elif score > 0.05:
+            elif score > _CHANGE_THRESHOLD_MINOR:
                 description = "minor change"
 
             return SceneChange(

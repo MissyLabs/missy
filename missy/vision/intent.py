@@ -265,12 +265,15 @@ class VisionIntentClassifier:
 # ---------------------------------------------------------------------------
 
 _default_classifier: VisionIntentClassifier | None = None
+_classifier_lock = threading.Lock()
 
 
 def get_intent_classifier() -> VisionIntentClassifier:
     global _default_classifier
     if _default_classifier is None:
-        _default_classifier = VisionIntentClassifier()
+        with _classifier_lock:
+            if _default_classifier is None:
+                _default_classifier = VisionIntentClassifier()
     return _default_classifier
 
 

@@ -26,6 +26,34 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Image analysis constants
+# ---------------------------------------------------------------------------
+
+# Canny edge detection thresholds
+_CANNY_EDGE_LOW = 50
+_CANNY_EDGE_HIGH = 150
+_CANNY_CONTOUR_LOW = 30
+_CANNY_CONTOUR_HIGH = 100
+
+# K-means color clustering
+_KMEANS_CLUSTERS = 8
+_KMEANS_MAX_ITER = 20
+_KMEANS_EPSILON = 1.0
+_KMEANS_DOWNSAMPLE_SIZE = (200, 200)
+_KMEANS_MIN_COLOR_PCT = 2
+
+# Edge overlay blending weights
+_EDGE_OVERLAY_ORIGINAL = 0.8
+_EDGE_OVERLAY_EDGE = 0.2
+
+# Color classification thresholds
+_COLOR_BLACK_MAX = 50
+_COLOR_WHITE_MIN = 200
+
+# Change detection (scene_memory uses its own constants)
+_CHANGE_COMPARE_SIZE = (64, 64)
+
+# ---------------------------------------------------------------------------
 # Analysis modes
 # ---------------------------------------------------------------------------
 
@@ -323,10 +351,12 @@ class PuzzlePreprocessor:
             import cv2
 
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-            edges = cv2.Canny(gray, 50, 150)
+            edges = cv2.Canny(gray, _CANNY_EDGE_LOW, _CANNY_EDGE_HIGH)
             # Overlay edges on original
             edge_colored = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
-            return cv2.addWeighted(image, 0.8, edge_colored, 0.2, 0)
+            return cv2.addWeighted(
+                image, _EDGE_OVERLAY_ORIGINAL, edge_colored, _EDGE_OVERLAY_EDGE, 0
+            )
         except Exception:
             return image
 
@@ -336,16 +366,19 @@ class PuzzlePreprocessor:
             import cv2
 
             # Downsample for speed
-            small = cv2.resize(image, (200, 200))
+            small = cv2.resize(image, _KMEANS_DOWNSAMPLE_SIZE)
             # Convert to RGB for reporting
             rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
 
             # Simple k-means clustering
             pixels = rgb.reshape(-1, 3).astype(np.float32)
-            k = 8
-            criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 20, 1.0)
+            criteria = (
+                cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER,
+                _KMEANS_MAX_ITER,
+                _KMEANS_EPSILON,
+            )
             _, labels, centers = cv2.kmeans(
-                pixels, k, None, criteria, 3, cv2.KMEANS_PP_CENTERS
+                pixels, _KMEANS_CLUSTERS, None, criteria, 3, cv2.KMEANS_PP_CENTERS
             )
 
             # Count pixels per cluster
@@ -356,7 +389,7 @@ class PuzzlePreprocessor:
             for idx in np.argsort(-counts):
                 center = centers[idx].astype(int)
                 pct = counts[idx] / total * 100
-                if pct < 2:
+                if pct < _KMEANS_MIN_COLOR_PCT:
                     continue
                 regions.append({
                     "color_rgb": center.tolist(),
@@ -376,7 +409,7 @@ class PuzzlePreprocessor:
 
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
             blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-            edges = cv2.Canny(blurred, 30, 100)
+            edges = cv2.Canny(blurred, _CANNY_CONTOUR_LOW, _CANNY_CONTOUR_HIGH)
 
             contours, _ = cv2.findContours(
                 edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
@@ -396,9 +429,9 @@ def _describe_color(rgb: list[int]) -> str:
     r, g, b = rgb
 
     # Simple color naming
-    if max(r, g, b) < 50:
+    if max(r, g, b) < _COLOR_BLACK_MAX:
         return "black"
-    if min(r, g, b) > 200:
+    if min(r, g, b) > _COLOR_WHITE_MIN:
         return "white"
     if r > 180 and g < 80 and b < 80:
         return "red"
