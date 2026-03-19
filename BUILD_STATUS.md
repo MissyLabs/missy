@@ -87,8 +87,8 @@ Hardening session: 1 code fix + 2,319 new tests across 17 new test files. Fixed 
 
 ## Recovery Notes
 
-All code committed and passing. ~19,271 total tests, 0 failures, 14 skipped.
-Session 15: 1 code fix + 2,319 new tests across 17 new test files + 3 lint/fix commits.
+All code committed and passing. ~19,489 total tests, 0 failures, 14 skipped.
+Session 15: 1 code fix + 2,537 new tests across 19 new test files + 3 lint/fix commits.
 Ruff lint: 0 errors in session 15 files.
 
 Session 15 commits:
@@ -101,3 +101,4 @@ Session 15 commits:
 7. `f56c151` — Fix flaky hatching test
 8. `22977d4` — Add 282 tests (consolidation, config migration, MCP manager)
 9. `25662e9` — Add 207 tests (learnings, done criteria, drift, identity)
+10. `b639da9` — Add 218 tests (rate limiter, REST policy, gateway client)
