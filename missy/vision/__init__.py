@@ -30,4 +30,14 @@ provider_format
     Provider-specific image API formatting.
 audit
     Vision audit event logging.
+multi_camera
+    Concurrent capture from multiple USB cameras.
+benchmark
+    Capture performance benchmarking and latency profiling.
+memory_usage
+    Scene memory usage monitoring and limits enforcement.
+config_validator
+    Vision configuration validation.
+vision_memory
+    Integration between vision observations and the memory subsystem.
 """
