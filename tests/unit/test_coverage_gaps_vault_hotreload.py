@@ -1,4 +1,5 @@
-"""Session 13 coverage gap tests.
+"""Coverage gap tests.
+
 
 Targets uncovered paths in:
 - missy/security/vault.py          (atomic write failure, symlink check)

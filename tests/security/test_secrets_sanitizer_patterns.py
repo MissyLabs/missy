@@ -1,4 +1,5 @@
-"""Session 14: Edge case tests for SecretsDetector and InputSanitizer.
+"""Edge case tests for SecretsDetector and InputSanitizer.
+
 
 Covers:
 - SecretsDetector: all 37+ patterns, overlapping redaction, empty input,

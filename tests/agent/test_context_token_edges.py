@@ -1,4 +1,5 @@
-"""Session 15 comprehensive tests for missy.agent.context.
+"""Comprehensive tests for missy.agent.context.
+
 
 Covers _approx_tokens, TokenBudget, and ContextManager.build_messages with a
 focus on scenarios not already addressed in:

@@ -1,4 +1,5 @@
-"""Session 22 agent runtime tests.
+"""Agent runtime tests.
+
 
 Tests for tool result truncation constant and resource bounds.
 """

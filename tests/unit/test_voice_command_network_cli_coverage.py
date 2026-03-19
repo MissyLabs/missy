@@ -1,4 +1,5 @@
-"""Session 15: coverage gap tests for voice_commands, network policy, and CLI.
+"""Coverage gap tests for voice_commands, network policy, and CLI.
+
 
 Targets:
   voice_commands.py:130 — unrecognized voice command fallthrough

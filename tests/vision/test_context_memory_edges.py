@@ -1,4 +1,5 @@
-"""Session 12: Context manager edge cases and vision memory bridge robustness.
+"""Context manager edge cases and vision memory bridge robustness.
+
 
 Covers:
 - ContextManager with malformed history entries

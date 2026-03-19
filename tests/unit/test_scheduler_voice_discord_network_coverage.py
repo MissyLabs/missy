@@ -1,4 +1,5 @@
-"""Session 19: Coverage gap tests for scheduler, voice, discord, network policy."""
+"""Coverage gap tests for scheduler, voice, discord, network policy."""
+
 
 from __future__ import annotations
 

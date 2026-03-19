@@ -1,4 +1,5 @@
-"""Session 21: Tests for security audit findings fixes.
+"""Tests for security audit findings fixes.
+
 
 Fixes tested:
 - Finding 19: user_input sanitized in AgentRuntime.run() and run_stream()

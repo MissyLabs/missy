@@ -1,4 +1,5 @@
-"""Session 16 security hardening tests.
+"""Security hardening tests.
+
 
 Tests for fixes applied this session:
   1. Shell heredoc (<<EOF) rejection via _SUBSHELL_MARKERS

@@ -1,4 +1,5 @@
-"""Session 14: Edge case tests for vision support modules.
+"""Edge case tests for vision support modules.
+
 
 Covers:
 - shutdown: idempotency, reset, atexit registration, exception handling

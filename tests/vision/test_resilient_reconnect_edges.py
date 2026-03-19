@@ -1,4 +1,5 @@
-"""Session 10 resilient capture and security tests.
+"""Resilient capture and security tests.
+
 
 Covers under-tested paths in:
 - ResilientCamera reconnection logic (device path change, USB ID mismatch)

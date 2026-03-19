@@ -1,4 +1,5 @@
-"""Session 16 tool hardening tests.
+"""Tool hardening tests.
+
 
 Tests for fixes applied this session:
   1. self_create_tool script content validation — dangerous patterns in

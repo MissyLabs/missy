@@ -1,4 +1,5 @@
-"""Session 12: Hardening tests for error paths and edge cases.
+"""Hardening tests for error paths and edge cases.
+
 
 Covers:
 - Intent classifier thread-safe singleton

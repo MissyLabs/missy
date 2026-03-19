@@ -1,4 +1,5 @@
-"""Session 21: Agent runtime and subsystem edge case tests.
+"""Agent runtime and subsystem edge case tests.
+
 
 Tests for:
 - Agent runtime initialization edge cases

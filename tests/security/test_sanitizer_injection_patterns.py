@@ -1,4 +1,5 @@
-"""Session 11: Comprehensive prompt injection detection tests.
+"""Comprehensive prompt injection detection tests.
+
 
 Tests the InputSanitizer against a wide variety of attack vectors including:
 - Basic instruction override

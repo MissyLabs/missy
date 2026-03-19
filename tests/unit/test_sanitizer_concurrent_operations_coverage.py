@@ -1,4 +1,5 @@
-"""Session 21: Coverage gap tests and concurrency safety tests.
+"""Coverage gap tests and concurrency safety tests.
+
 
 Covers:
 - Sanitizer unquote/html.unescape exception paths (lines 289-294)

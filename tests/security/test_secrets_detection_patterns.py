@@ -1,4 +1,5 @@
-"""Session 11: Secrets detection and redaction tests.
+"""Secrets detection and redaction tests.
+
 
 Tests SecretsDetector against various credential formats and
 verifies the redaction mechanism works correctly.

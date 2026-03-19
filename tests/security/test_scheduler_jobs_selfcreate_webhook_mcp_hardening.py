@@ -1,4 +1,5 @@
-"""Session 17 security hardening tests.
+"""Security hardening tests.
+
 
 Tests for fixes applied this session:
   1. Scheduler jobs file permission checks in _load_jobs():

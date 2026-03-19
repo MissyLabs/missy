@@ -1,4 +1,5 @@
-"""Session 10 integration and cross-module tests.
+"""Integration and cross-module tests.
+
 
 Tests cover:
 - Vision CLI command argument parsing

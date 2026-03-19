@@ -1,4 +1,4 @@
-"""Session 15 — comprehensive tests for MemoryConsolidator.
+"""Comprehensive tests for MemoryConsolidator.
 
 Covers the full behavioural spec for missy.agent.consolidation.MemoryConsolidator
 with focus on boundary conditions, keyword detection, deduplication, summary
@@ -6,7 +6,7 @@ message structure, and static token estimation.
 
 Tests in this file are distinct from those already exercised in:
   - tests/agent/test_consolidation.py
-  - tests/agent/test_session13_consolidation_approval.py
+  - tests/agent/test_consolidation_approval_edges.py
   - tests/agent/test_attention_consolidation_edges.py
 """
 

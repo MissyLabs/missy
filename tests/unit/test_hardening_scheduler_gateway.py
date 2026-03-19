@@ -1,4 +1,5 @@
-"""Session 24: Additional hardening and edge-case tests.
+"""Additional hardening and edge-case tests.
+
 
 Covers:
 - Scheduler input validation edge cases

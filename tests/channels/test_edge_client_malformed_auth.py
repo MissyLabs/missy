@@ -1,4 +1,5 @@
-"""Session 22 edge client coverage tests.
+"""Edge client coverage tests.
+
 
 Targets uncovered lines in missy/channels/voice/edge_client.py:
 - lines 271-273: malformed auth response JSON

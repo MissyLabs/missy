@@ -1,4 +1,5 @@
-"""Session 13b coverage gap tests.
+"""Coverage gap tests.
+
 
 Targets uncovered paths in:
 - missy/policy/shell.py             (empty/whitespace command in _extract_program)

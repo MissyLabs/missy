@@ -1,4 +1,5 @@
-"""Session 11: Source abstraction and provider format edge case tests.
+"""Source abstraction and provider format edge case tests.
+
 
 Covers:
 - FileSource: symlink rejection, empty file, oversized file, zero-dimension image

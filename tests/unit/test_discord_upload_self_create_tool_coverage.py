@@ -1,4 +1,5 @@
-"""Session 19: Tests for untested tools (discord_upload, self_create_tool)."""
+"""Tests for untested tools (discord_upload, self_create_tool)."""
+
 
 from __future__ import annotations
 

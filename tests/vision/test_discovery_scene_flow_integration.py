@@ -1,4 +1,5 @@
-"""Session 12: Cross-module integration tests for vision subsystem.
+"""Cross-module integration tests for vision subsystem.
+
 
 Tests interactions between:
 - Discovery → Capture → Health monitor flow

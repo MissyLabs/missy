@@ -1,4 +1,5 @@
-"""Session 15 comprehensive tests for missy.agent.playbook.
+"""Comprehensive tests for missy.agent.playbook.
+
 
 Covers angles not yet exercised by test_playbook.py and test_playbook_done_edges.py:
 

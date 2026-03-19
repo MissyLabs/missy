@@ -1,4 +1,5 @@
-"""Session 19: Security hardening tests for new injection and secret patterns."""
+"""Security hardening tests for new injection and secret patterns."""
+
 
 from __future__ import annotations
 

@@ -1,4 +1,5 @@
-"""Session 13: Comprehensive edge-case tests for ToolRegistry.
+"""Comprehensive edge-case tests for ToolRegistry.
+
 
 Covers gaps not addressed by the existing test files:
 

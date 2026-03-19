@@ -1,4 +1,5 @@
-"""Session 11: Deep protocol tests for the Voice channel.
+"""Deep protocol tests for the Voice channel.
+
 
 Tests the VoiceServer WebSocket protocol including:
 - Connection limits

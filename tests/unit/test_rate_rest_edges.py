@@ -1,4 +1,5 @@
-"""Session 15: comprehensive tests for RateLimiter and RestPolicy.
+"""Comprehensive tests for RateLimiter and RestPolicy.
+
 
 Covers:
   missy/providers/rate_limiter.py  – RateLimiter, RateLimitExceeded

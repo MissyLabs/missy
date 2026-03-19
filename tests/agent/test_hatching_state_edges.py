@@ -1,4 +1,5 @@
-"""Session 15 — comprehensive tests for HatchingManager, HatchingState,
+"""Comprehensive tests for HatchingManager, HatchingState,
+
 HatchingStatus, and HatchingLog from missy/agent/hatching.py.
 
 Coverage targets:

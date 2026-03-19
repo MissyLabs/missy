@@ -1,4 +1,5 @@
-"""Session 13 supplemental edge-case tests for persona.py and behavior.py.
+"""Supplemental edge-case tests for persona.py and behavior.py.
+
 
 Covers gaps not addressed in test_persona.py / test_behavior.py:
 

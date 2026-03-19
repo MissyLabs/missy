@@ -1,4 +1,5 @@
-"""Session 13 edge-case tests for CircuitBreaker and AttentionSystem.
+"""Edge-case tests for CircuitBreaker and AttentionSystem.
+
 
 Covers gaps not addressed by the existing test_circuit_breaker.py and
 test_attention.py suites:

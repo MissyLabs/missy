@@ -1,4 +1,5 @@
-"""Session 15: Comprehensive behavior layer tests.
+"""Comprehensive behavior layer tests.
+
 
 Tests for BehaviorLayer, IntentInterpreter, and ResponseShaper covering:
 - Tone analysis (casual, formal, frustrated, technical, brief, verbose, neutral)

@@ -1,4 +1,5 @@
-"""Session 13 edge-case tests for Vault and TrustScorer.
+"""Edge-case tests for Vault and TrustScorer.
+
 
 Covers scenarios not exercised by the existing test_vault.py /
 test_trust.py suites:

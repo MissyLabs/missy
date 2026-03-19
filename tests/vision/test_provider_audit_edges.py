@@ -1,4 +1,5 @@
-"""Session 13: Comprehensive tests for vision provider_format and audit modules.
+"""Comprehensive tests for vision provider_format and audit modules.
+
 
 Covers gaps not addressed by the existing test files:
 - test_provider_format.py

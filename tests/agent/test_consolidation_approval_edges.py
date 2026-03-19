@@ -1,4 +1,5 @@
-"""Session 13 — comprehensive tests for MemoryConsolidator and ApprovalGate.
+"""Comprehensive tests for MemoryConsolidator and ApprovalGate.
+
 
 Covers the full behavioural spec for both modules including boundary conditions,
 keyword detection, threading, and exception message content.  All scenarios are

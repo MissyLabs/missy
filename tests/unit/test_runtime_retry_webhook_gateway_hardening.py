@@ -1,4 +1,5 @@
-"""Session 14 hardening tests.
+"""Hardening tests.
+
 
 Tests for:
 - Tool execution retry with exponential backoff for transient errors

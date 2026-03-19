@@ -1,4 +1,5 @@
-"""Session 11: Tests covering security module gaps.
+"""Tests covering security module gaps.
+
 
 Fills identified coverage gaps in:
 - PromptDriftDetector: verify_all, overwrite, empty state

@@ -1,4 +1,5 @@
-"""Session 26 property-based fuzz tests.
+"""Property-based fuzz tests.
+
 
 Uses hypothesis to verify robustness invariants across security-critical
 components: InputSanitizer, SecretsDetector, policy engines, gateway URL

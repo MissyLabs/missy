@@ -1,4 +1,5 @@
-"""Session 15 comprehensive tests for missy/config/migrate.py.
+"""Comprehensive tests for missy/config/migrate.py.
+
 
 Covers needs_migration, detect_presets, migrate_config, CURRENT_CONFIG_VERSION,
 and edge cases not addressed by the primary test suites.

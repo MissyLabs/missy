@@ -1,4 +1,5 @@
-"""Session 14 security edge case tests.
+"""Security edge case tests.
+
 
 Additional security tests covering:
 - Secret detection edge cases (near-misses, false positives)

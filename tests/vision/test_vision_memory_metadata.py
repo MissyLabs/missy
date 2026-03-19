@@ -1,4 +1,5 @@
-"""Session 8b hardening tests.
+"""Hardening tests.
+
 
 Covers the specific fixes made in session 8b:
 

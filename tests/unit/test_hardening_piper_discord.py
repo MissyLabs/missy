@@ -1,4 +1,5 @@
-"""Session 23 hardening tests.
+"""Hardening tests.
+
 
 Tests for:
 - Piper TTS subprocess timeout enforcement

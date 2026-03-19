@@ -1,4 +1,5 @@
-"""Session 13: Targeted tests for missy.vision.multi_camera.
+"""Targeted tests for missy.vision.multi_camera.
+
 
 Covers scenarios NOT exercised by test_multi_camera.py or
 test_multi_camera_stress.py:

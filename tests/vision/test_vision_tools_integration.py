@@ -1,4 +1,5 @@
-"""Session 14: Edge case tests for vision tools and cross-module integration.
+"""Edge case tests for vision tools and cross-module integration.
+
 
 Covers:
 - VisionCaptureTool: source types, missing camera, file source, save path

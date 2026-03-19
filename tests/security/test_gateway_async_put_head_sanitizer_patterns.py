@@ -1,4 +1,5 @@
-"""Session 18 hardening tests.
+"""Hardening tests.
+
 
 Tests for:
 1. Gateway async aput/ahead methods

@@ -1,4 +1,5 @@
-"""Session 13: Comprehensive tests for Watchdog and RateLimiter.
+"""Comprehensive tests for Watchdog and RateLimiter.
+
 
 Covers angles not exercised by earlier test files:
 

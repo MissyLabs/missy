@@ -1,4 +1,5 @@
-"""Session 21: Resilience tests for corrupted state recovery.
+"""Resilience tests for corrupted state recovery.
+
 
 Tests that the system gracefully handles corrupted/invalid state files:
 - Corrupted JSON files (scheduler jobs, MCP config)

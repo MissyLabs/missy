@@ -1,4 +1,5 @@
-"""Session 13: Scheduler and memory store edge case tests.
+"""Scheduler and memory store edge case tests.
+
 
 Covers gaps not addressed by any existing test suite:
 

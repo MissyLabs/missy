@@ -1,4 +1,5 @@
-"""Session 13 edge-case tests for MCP manager, skills discovery, and plugin loader.
+"""Edge-case tests for MCP manager, skills discovery, and plugin loader.
+
 
 Covers gaps not addressed by existing test suites:
 - MCP: digest pinning/persistence, concurrent start/stop, empty config, duplicate

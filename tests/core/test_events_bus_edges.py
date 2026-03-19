@@ -1,4 +1,5 @@
-"""Session 14: Edge case tests for AuditEvent, EventBus, and core exceptions.
+"""Edge case tests for AuditEvent, EventBus, and core exceptions.
+
 
 Covers:
 - AuditEvent: timezone validation, now() factory, detail defaults

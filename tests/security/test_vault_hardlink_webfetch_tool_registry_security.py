@@ -1,4 +1,5 @@
-"""Session 15 additional security tests.
+"""Additional security tests.
+
 
 Tests for:
   - MCP config file atomic write with 0o600 permissions

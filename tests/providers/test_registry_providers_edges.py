@@ -1,4 +1,5 @@
-"""Session 13 – comprehensive edge-case tests for ProviderRegistry and base dataclasses.
+"""Comprehensive edge-case tests for ProviderRegistry and base dataclasses.
+
 
 Coverage targets NOT already in test_registry.py / test_registry_deep.py / test_base.py:
 

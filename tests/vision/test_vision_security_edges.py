@@ -1,4 +1,5 @@
-"""Session 12: Security-focused tests for vision subsystem.
+"""Security-focused tests for vision subsystem.
+
 
 Covers:
 - Context sanitization in analysis prompts (prompt injection prevention)

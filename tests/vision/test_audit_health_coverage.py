@@ -1,4 +1,5 @@
-"""Session 10 audit and health monitor hardening tests.
+"""Audit and health monitor hardening tests.
+
 
 Covers under-tested paths in:
 - VisionAudit event logging

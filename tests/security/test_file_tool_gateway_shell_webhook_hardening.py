@@ -1,4 +1,5 @@
-"""Session 15 security hardening tests.
+"""Security hardening tests.
+
 
 Tests for fixes applied this session:
   H2: File tools enforce filesystem policy on actual path from kwargs

@@ -1,4 +1,5 @@
-"""Session 19: Gateway hardening tests — response size limits."""
+"""Gateway hardening tests — response size limits."""
+
 
 from __future__ import annotations
 

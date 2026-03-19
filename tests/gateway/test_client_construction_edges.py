@@ -1,4 +1,5 @@
-"""Session 15 tests for missy/gateway/client.py.
+"""Tests for missy/gateway/client.py.
+
 
 Comprehensive coverage of PolicyHTTPClient focusing on angles not deeply
 exercised in earlier test files:

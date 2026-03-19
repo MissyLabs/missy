@@ -1,4 +1,5 @@
-"""Session 12: Property-based tests for vision subsystem.
+"""Property-based tests for vision subsystem.
+
 
 Uses Hypothesis to find edge cases in:
 - Orientation detection (any aspect ratio → valid result)

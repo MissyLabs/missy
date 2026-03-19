@@ -1,4 +1,5 @@
-"""Session 20 security hardening tests.
+"""Security hardening tests.
+
 
 Tests for:
 - Shell exec environment sanitization

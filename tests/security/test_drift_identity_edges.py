@@ -1,4 +1,5 @@
-"""Session 15 comprehensive tests for PromptDriftDetector and AgentIdentity.
+"""Comprehensive tests for PromptDriftDetector and AgentIdentity.
+
 
 Covers areas not exercised by earlier suites (test_drift.py, test_identity.py,
 test_identity_drift_edges.py):

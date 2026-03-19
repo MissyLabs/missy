@@ -1,4 +1,5 @@
-"""Session 12: Orientation detection, EXIF parsing, and pipeline edge cases.
+"""Orientation detection, EXIF parsing, and pipeline edge cases.
+
 
 Covers:
 - Orientation detection from aspect ratio (landscape, portrait, square)

@@ -1,4 +1,5 @@
-"""Session 22 security hardening tests.
+"""Security hardening tests.
+
 
 Tests for:
 - ReDoS-safe regex patterns in sanitizer

@@ -1,4 +1,5 @@
-"""Session 22 edge-case tests.
+"""Edge-case tests.
+
 
 Covers specific boundary conditions that are unlikely to be exercised by
 existing tests:

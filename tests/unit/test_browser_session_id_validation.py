@@ -1,4 +1,5 @@
-"""Session 19: Browser session_id validation to prevent directory traversal."""
+"""Browser session_id validation to prevent directory traversal."""
+
 
 from __future__ import annotations
 

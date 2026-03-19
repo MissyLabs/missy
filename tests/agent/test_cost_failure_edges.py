@@ -1,4 +1,5 @@
-"""Session 14: Edge case tests for CostTracker and FailureTracker.
+"""Edge case tests for CostTracker and FailureTracker.
+
 
 Covers:
 - CostTracker: pricing lookup, unknown models, record eviction, budget enforcement,

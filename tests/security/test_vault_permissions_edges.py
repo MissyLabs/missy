@@ -1,6 +1,6 @@
-"""Session 15 comprehensive Vault tests.
+"""Comprehensive Vault tests.
 
-Covers areas not fully exercised by test_vault.py and test_session13_vault_trust.py:
+Covers areas not fully exercised by test_vault.py and test_vault_trust_edges.py:
 
 - Directory created with 0o700 mode
 - Key file created with 0o600 permissions

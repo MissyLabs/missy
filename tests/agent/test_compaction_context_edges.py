@@ -1,4 +1,5 @@
-"""Session 14: Edge case tests for compaction and context modules.
+"""Edge case tests for compaction and context modules.
+
 
 Covers:
 - _chunk_turns: empty list, single large turn, boundary splitting

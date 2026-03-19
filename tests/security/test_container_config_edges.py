@@ -1,4 +1,5 @@
-"""Session 14: Edge case tests for ContainerSandbox.
+"""Edge case tests for ContainerSandbox.
+
 
 Covers:
 - Docker unavailable graceful degradation

@@ -1,4 +1,5 @@
-"""Session 15 — comprehensive edge-case and boundary tests for learnings and done_criteria.
+"""Comprehensive edge-case and boundary tests for learnings and done_criteria.
+
 
 Covers missy.agent.learnings and missy.agent.done_criteria with focus on:
   - TaskLearning dataclass invariants and field types

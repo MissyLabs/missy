@@ -1,4 +1,5 @@
-"""Session 24: Tests for security fixes from audit.
+"""Tests for security fixes from audit.
+
 
 Tests for:
 1. TTS env sanitization (API key filtering)

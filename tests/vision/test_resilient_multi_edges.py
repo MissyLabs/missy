@@ -1,4 +1,5 @@
-"""Session 14: Edge case tests for ResilientCamera and MultiCameraManager.
+"""Edge case tests for ResilientCamera and MultiCameraManager.
+
 
 Covers:
 - ResilientCamera: max_reconnect=0, disconnect without connect, device path changes,

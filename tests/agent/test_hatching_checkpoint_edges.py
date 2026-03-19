@@ -1,4 +1,5 @@
-"""Session 13 — edge-case tests for hatching and checkpoint subsystems.
+"""Edge-case tests for hatching and checkpoint subsystems.
+
 
 Covers gaps not addressed by the existing test suites:
 - HatchingManager: first-run detection logic, step completion tracking,

@@ -1,4 +1,5 @@
-"""Session 11: Tests for YAML injection prevention in wizard config builder.
+"""Tests for YAML injection prevention in wizard config builder.
+
 
 Validates that _yaml_safe_value() properly escapes special characters in
 user-supplied values (API keys, tokens, URLs) to prevent YAML injection.

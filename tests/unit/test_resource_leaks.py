@@ -1,4 +1,5 @@
-"""Session 23 resource leak and robustness tests.
+"""Resource leak and robustness tests.
+
 
 Tests for:
 - MCP client subprocess pipe closure on disconnect

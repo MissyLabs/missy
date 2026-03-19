@@ -1,4 +1,5 @@
-"""Session 11: Thread-safety tests for vision subsystem singletons and lazy imports.
+"""Thread-safety tests for vision subsystem singletons and lazy imports.
+
 
 Tests the double-checked locking patterns added to:
 - get_discovery() singleton

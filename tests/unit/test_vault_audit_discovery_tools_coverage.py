@@ -1,4 +1,5 @@
-"""Session 11: Targeted tests for remaining coverage gaps.
+"""Targeted tests for remaining coverage gaps.
+
 
 Covers specific uncovered lines identified in the 99% coverage report:
 - vault.py lines 25-26 (crypto import fallback)

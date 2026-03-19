@@ -1,4 +1,5 @@
-"""Session 21: File permission hardening tests.
+"""File permission hardening tests.
+
 
 Verifies that sensitive files are written with restrictive permissions (0o600).
 """

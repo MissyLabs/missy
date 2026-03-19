@@ -1,7 +1,7 @@
-"""Session 15 comprehensive tests for missy.agent.circuit_breaker.CircuitBreaker.
+"""Comprehensive tests for missy.agent.circuit_breaker.CircuitBreaker.
 
 Covers angles not yet exercised by test_circuit_breaker.py and
-test_session13_circuitbreaker_attention.py:
+test_circuit_breaker_boundaries.py:
 
 - Deterministic clock control via unittest.mock.patch on time.monotonic
 - TOCTOU / concurrent HALF_OPEN probe serialisation (only first thread probes)

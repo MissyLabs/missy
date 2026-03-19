@@ -1,4 +1,5 @@
-"""Session 15 coverage tests for missy/agent/runtime.py.
+"""Coverage tests for missy/agent/runtime.py.
+
 
 Targets remaining uncovered lines:
   533-538: Tool output injection scanning — warning log + content prefix

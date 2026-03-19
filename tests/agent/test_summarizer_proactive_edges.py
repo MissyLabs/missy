@@ -1,4 +1,5 @@
-"""Session 14: Edge case tests for Summarizer and ProactiveManager.
+"""Edge case tests for Summarizer and ProactiveManager.
+
 
 Covers:
 - Summarizer: empty turns, timestamp edge cases, whitespace-only LLM responses,

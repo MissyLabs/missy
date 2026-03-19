@@ -1,4 +1,5 @@
-"""Session 13: Comprehensive tests for missy.vision.scene_memory.
+"""Comprehensive tests for missy.vision.scene_memory.
+
 
 Covers gaps not addressed in test_scene_memory.py,
 test_scene_memory_extended.py, or test_scene_memory_stress.py:

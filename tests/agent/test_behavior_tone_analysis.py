@@ -1,4 +1,5 @@
-"""Session 11: Comprehensive behavior layer tests.
+"""Comprehensive behavior layer tests.
+
 
 Tests for BehaviorLayer, IntentInterpreter, and ResponseShaper
 covering tone analysis, intent classification, urgency extraction,

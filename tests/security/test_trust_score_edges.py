@@ -1,6 +1,6 @@
-"""Session 15 comprehensive tests for TrustScorer.
+"""Comprehensive tests for TrustScorer.
 
-Covers areas not yet exercised by test_trust.py or test_session13_vault_trust.py:
+Covers areas not yet exercised by test_trust.py or test_vault_trust_edges.py:
 
 Default / initialisation
 ------------------------

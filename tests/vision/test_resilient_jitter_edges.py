@@ -1,4 +1,5 @@
-"""Session 13 comprehensive tests for missy.vision.resilient_capture.
+"""Comprehensive tests for missy.vision.resilient_capture.
+
 
 Focus areas:
 - Backoff jitter: verifying ±25% jitter range is applied to sleep delays

@@ -1,4 +1,5 @@
-"""Session 20 sanitizer hardening tests.
+"""Sanitizer hardening tests.
+
 
 Tests for:
 - New injection patterns (few-shot, URL-encoded, markdown, payload concat)

@@ -1,4 +1,5 @@
-"""Session 22 coverage gap tests.
+"""Coverage gap tests.
+
 
 Targets remaining uncovered lines across multiple modules.
 """

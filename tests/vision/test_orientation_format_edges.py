@@ -1,4 +1,5 @@
-"""Session 14: Edge case tests for orientation detection and provider formatting.
+"""Edge case tests for orientation detection and provider formatting.
+
 
 Covers:
 - Orientation: aspect ratio boundaries, zero dimensions, None/empty images,

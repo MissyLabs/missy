@@ -1,4 +1,5 @@
-"""Session 21: Security hardening tests.
+"""Security hardening tests.
+
 
 Tests for:
 - 6 new secret detection patterns (grafana, confluent, datadog, newrelic, pagerduty, ssh)

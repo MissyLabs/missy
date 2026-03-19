@@ -1,4 +1,5 @@
-"""Session 10 coverage tests.
+"""Coverage tests.
+
 
 Targets missed lines across:
 - missy/channels/voice/edge_client.py (lines 48-50, 487)

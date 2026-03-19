@@ -1,4 +1,5 @@
-"""Session 24: Tests for new injection patterns and secret detection patterns.
+"""Tests for new injection patterns and secret detection patterns.
+
 
 Tests new patterns added in session 24:
 - 9 new injection patterns (tool-call tokens, urgency override, meta-AI, XML injection)

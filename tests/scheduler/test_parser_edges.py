@@ -1,4 +1,5 @@
-"""Session 14: Edge case tests for scheduler parser.
+"""Edge case tests for scheduler parser.
+
 
 Covers:
 - Human-readable schedule parsing: intervals, cron, daily, weekly

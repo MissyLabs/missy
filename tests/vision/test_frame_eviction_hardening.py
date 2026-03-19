@@ -1,4 +1,5 @@
-"""Session 10 hardening tests: memory cleanup, thread safety, edge cases.
+"""Hardening tests: memory cleanup, thread safety, edge cases.
+
 
 Tests cover:
 - Frame eviction numpy cleanup

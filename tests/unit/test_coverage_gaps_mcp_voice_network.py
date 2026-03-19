@@ -1,4 +1,5 @@
-"""Session 16 coverage gap tests.
+"""Coverage gap tests.
+
 
 Targets uncovered paths in:
 - missy/mcp/manager.py              (lines 189-195 — _save_config error: fd close + tmp unlink)

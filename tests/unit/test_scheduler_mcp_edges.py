@@ -8,8 +8,8 @@ These tests target scenarios not covered by existing test files:
   - tests/scheduler/test_manager_coverage.py
   - tests/mcp/test_mcp_manager.py
   - tests/mcp/test_mcp_digest.py
-  - tests/unit/test_session14_scheduler_validation.py
-  - tests/unit/test_session14_mcp_security.py
+  - tests/unit/test_hardening_scheduler_gateway.py
+  - tests/unit/test_mcp_skills_plugins_edges.py
 """
 
 from __future__ import annotations

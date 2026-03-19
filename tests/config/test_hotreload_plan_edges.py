@@ -1,4 +1,5 @@
-"""Session 13: targeted coverage for hotreload and plan config modules.
+"""Targeted coverage for hotreload and plan config modules.
+
 
 Focuses on gaps not addressed by existing test files:
 - test_hotreload.py

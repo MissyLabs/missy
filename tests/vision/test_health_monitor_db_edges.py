@@ -1,4 +1,5 @@
-"""Session 13: Comprehensive tests for VisionHealthMonitor.
+"""Comprehensive tests for VisionHealthMonitor.
+
 
 Covers:
 - Auto-save counter recovery after save failure
