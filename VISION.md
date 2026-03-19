@@ -10,13 +10,16 @@ Missy's vision subsystem provides on-demand visual capabilities for a Linux host
 missy/vision/
 ├── __init__.py          # Package documentation
 ├── discovery.py         # USB camera discovery via sysfs
-├── capture.py           # OpenCV-based frame capture with resilience
-├── sources.py           # Unified image source abstraction
-├── pipeline.py          # Image preprocessing (resize, CLAHE, denoise)
-├── scene_memory.py      # Task-scoped scene memory for multi-step tasks
-├── analysis.py          # Domain-specific analysis (puzzle, painting)
-├── intent.py            # Audio-triggered vision intent classification
-└── doctor.py            # Diagnostics and health checks
+├── capture.py           # OpenCV-based frame capture with resilience + failure classification
+├── resilient_capture.py # Auto-reconnection with exponential backoff + failure tracking
+├── sources.py           # Unified image source abstraction with security validation
+├── pipeline.py          # Image preprocessing (resize, CLAHE, denoise, quality assessment)
+├── scene_memory.py      # Task-scoped scene memory with eviction logging
+├── analysis.py          # Domain-specific analysis (puzzle, painting, inspection)
+├── intent.py            # Audio-triggered vision intent classification (40+ patterns)
+├── provider_format.py   # Provider-specific image API formatting
+├── audit.py             # Vision audit event logging (7 event types)
+└── doctor.py            # Diagnostics: OpenCV, video group, permissions, disk space
 ```
 
 ## Image Sources
@@ -67,12 +70,15 @@ Camera Device → OpenCV VideoCapture → Warm-up → Frame Read → Blank Detec
 - **Warm-up**: Discards configurable number of initial frames (default 5) for auto-exposure/white-balance stabilization
 - **Retry**: Configurable retry count (default 3) with delay between attempts
 - **Blank detection**: Rejects frames with mean pixel value below threshold (default 5.0)
-- **Resolution negotiation**: Requests preferred resolution, accepts what camera provides
+- **Resolution verification**: Requests preferred resolution, logs warning if camera silently downgrades
 - **Graceful failure**: Returns structured `CaptureResult` with error details
 - **Burst capture**: `capture_burst(count, interval)` for rapid multi-frame capture (1-20 frames)
 - **Best-frame selection**: `capture_best(burst_count)` selects sharpest frame via Laplacian variance
 - **Thread safety**: All capture/close operations are protected by `threading.Lock`
 - **Input validation**: Device path, frame shape, and configuration validated on entry
+- **Failure classification**: `FailureType` enum (TRANSIENT/PERMISSION/DEVICE_GONE/UNSUPPORTED) for smart retry decisions
+- **Timeout protection**: WebcamSource runs capture in thread with configurable timeout (default 15s)
+- **Resilient reconnection**: `ResilientCamera` with exponential backoff, cumulative failure tracking, device change detection
 
 ## Image Preprocessing
 
@@ -89,8 +95,10 @@ Returns metrics for:
 - Brightness (mean grayscale intensity)
 - Contrast (grayscale standard deviation)
 - Sharpness (Laplacian variance)
+- Saturation (mean HSV S-channel for color images)
+- Noise level (MAD-of-Laplacian estimator)
 - Overall quality classification (good/fair/poor)
-- Specific issues (dark, blurry, overexposed, etc.)
+- Specific issues (dark, blurry, overexposed, noisy, desaturated, oversaturated)
 
 ## Analysis Modes
 
@@ -183,3 +191,30 @@ The vision subsystem handles these failure modes:
 | Unsupported resolution | Accept camera's preferred resolution |
 | Camera warm-up | Discard initial frames |
 | Stale device paths | USB ID-based identification, not path-based |
+| Permanent failures | Permission/unsupported errors skip reconnection |
+| Camera path changes | Logged warning when device moves to different /dev path |
+| Unreliable device | Warning after cumulative failure threshold (10) |
+| Empty/oversized files | FileSource validates file size (0 to 100 MB) |
+| Large dimensions | Warning for images exceeding 16384px |
+| Invalid device paths | WebcamSource rejects non-/dev/videoN paths |
+| Path traversal | FileSource resolves paths to prevent traversal attacks |
+
+## Security
+
+### Input Validation
+
+- **Device paths**: Only `/dev/videoN` format accepted, prevents command injection
+- **File paths**: Resolved to absolute paths, prevents symlink-based traversal
+- **File sizes**: Empty and oversized files (>100 MB) rejected before loading
+- **Image dimensions**: Extremely large images logged as warnings
+
+### Audit Trail
+
+Seven distinct vision audit events logged:
+1. `vision.capture` — device, source type, trigger reason, dimensions
+2. `vision.analyze` — mode, source type, success/failure
+3. `vision.intent` — text length, classified intent, confidence, decision
+4. `vision.device_discovery` — camera count, preferred device
+5. `vision.session_*` — session lifecycle (create/close)
+6. `vision.burst_capture` — burst count, success rate
+7. `vision.error` — operation, error detail, recoverability
