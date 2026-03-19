@@ -2,70 +2,62 @@
 
 ## Last Updated
 
-2026-03-19, Session 11
+2026-03-19, Session 12
 
-## Session 11 Summary
+## Session 12 Summary
 
-Thread-safety hardening across vision subsystem, lint cleanup, 139 new tests across 3 test files, 8 code fixes.
+Code quality hardening, bug fixes, constant extraction, property-based testing, and cross-module integration tests. 137 new tests across 5 new test files.
 
-### Changes This Session (6 commits)
+### Changes This Session
 
-1. **Fix failing test + lint cleanup** (`691bd77`)
-   - Fix test_activation_log_is_bounded: expect 500 (matching code cap from session 10)
-   - Combine all 12 nested `with` statements in 3 test files (SIM117 fix)
-   - Remove unused imports in 2 test files
-   - Ruff now reports 0 errors
+1. **Thread-safe intent classifier singleton + constant extraction** (`934f7f1`)
+   - Add double-checked locking to `get_intent_classifier()` singleton
+   - Extract magic numbers to named constants in `analysis.py` (Canny thresholds, k-means params, color thresholds, overlay weights)
+   - Extract change detection constants in `scene_memory.py` (weights, thresholds, compare size, phash bits)
 
-2. **Thread-safe singletons and lazy imports** (`ba73edb`)
-   - Add double-checked locking to `get_discovery()`, `get_scene_manager()`, `get_health_monitor()` singletons
-   - Add thread-safe lazy import for `_get_cv2()` in `capture.py`, `sources.py`, `pipeline.py`
-   - Clean up `multi_camera.py` `status()` method to avoid redundant dummy CameraDevice objects
+2. **Fix color classifier bug + 49 hardening tests** (`f4b6c9e`)
+   - Fix `_describe_color()`: check grays before tan/brown (neutral grays were misclassified)
+   - 49 tests: intent singleton thread-safety, multi-camera error paths, resilient capture edge cases, vision memory error handling, constants validation, color description branches, MultiCaptureResult properties
 
-3. **43 thread-safety and edge case tests** (`8ba7bad`)
-   - Singleton thread-safety: 10-thread concurrent access for discovery/scene_manager/health_monitor
-   - Lazy cv2 import concurrency: capture, sources, pipeline
-   - Multi-camera status: known/unknown/empty/multiple cameras
-   - Health monitor: concurrent recording, empty reports, recommendations
-   - Scene session: closed session behavior, concurrent add+close, change detection
-   - Pipeline/discovery/capture edge cases
+3. **34 context manager and vision memory bridge tests** (`b610440`)
+   - TokenBudget validation, ContextManager with empty/malformed history, memory truncation, learnings budget, fresh tail, summary formatting
+   - VisionMemoryBridge: non-vision filtering, task_type filter, fallback logic, limit enforcement, metadata handling
 
-4. **48 source abstraction and provider format tests** (`82c7b02`)
-   - FileSource: empty/missing/oversized files, type/availability checks
-   - PhotoSource: empty directory, filtering, wrap-around, specific index
-   - WebcamSource: path validation, injection prevention
-   - ScreenshotSource: availability, tool fallback
-   - Source factory: all types, string type, invalid type
-   - Provider format: all providers, aliases, validation, message structure
-   - ImageFrame encoding: JPEG/PNG/base64
+4. **42 orientation detection, EXIF parsing, and pipeline tests** (`774aba3`)
+   - All orientation cases: landscape, portrait, square, grayscale, None, zero dimensions
+   - All rotation corrections and auto_correct confidence thresholds
+   - EXIF parser: valid/invalid data, big/little endian, missing tags
+   - Pipeline quality assessment and processing
 
-5. **48 behavior layer tests** (`3dda826`)
-   - Tone analysis: 9 tests (casual/formal/frustrated/technical/brief/verbose/empty)
-   - Prompt shaping: 14 tests (persona, guidelines, vision modes, conciseness)
-   - IntentInterpreter: 14 tests (all 10 intent types + urgency levels)
-   - ResponseShaper: 10 tests (robotic phrase stripping, code preservation)
-   - Integration: 1 end-to-end test
+5. **12 property-based tests with Hypothesis** (`ecd9e0b`)
+   - Orientation: any dimensions → valid result, pixel count preservation
+   - Pipeline: any image → valid quality dict
+   - Intent: any text → valid IntentResult, whitespace → SKIP
+   - Color: any RGB → non-empty deterministic string
+   - Scene memory hash: deterministic, correct length
+   - Token budget: always positive, monotonic
 
-6. **Thread-safe orientation module** (`a9495f8`)
-   - Add double-checked locking to `_get_cv2()` in orientation.py
+6. **21 cross-module integration tests** (`3b1670c`)
+   - Health monitor: discovery, success rate, consecutive failure tracking
+   - Scene → Memory bridge: summary storage, change detection, deduplication
+   - Intent → Audit: serialization, activation decisions
+   - Pipeline → Orientation chain: processing, auto-correct, quality assessment
+   - Shutdown coordination: idempotency, concurrent calls
+   - Analysis prompts: puzzle/painting/general modes, preprocessor operations
 
-### Full Test Suite: 15,342 passed, 0 failures, 14 skipped
+7. **Lint cleanup** (`3e7a131`)
+   - Fix all ruff errors: import sorting, unused variable, dict literal
 
-### Code Changes Summary
+### Full Test Suite: 15,479 passed, 0 failures, 14 skipped
+
+### Code Fixes Summary
 
 | Module | Change | Severity |
 |--------|--------|----------|
-| `discovery.py` | Thread-safe `get_discovery()` singleton (double-checked locking) | MEDIUM |
-| `scene_memory.py` | Thread-safe `get_scene_manager()` singleton | MEDIUM |
-| `health_monitor.py` | Thread-safe `get_health_monitor()` singleton | MEDIUM |
-| `capture.py` | Thread-safe `_get_cv2()` lazy import | MEDIUM |
-| `sources.py` | Thread-safe `_get_cv2()` lazy import | MEDIUM |
-| `pipeline.py` | Thread-safe `_get_cv2()` lazy import | MEDIUM |
-| `orientation.py` | Thread-safe `_get_cv2()` lazy import | MEDIUM |
-| `multi_camera.py` | Clean up `status()` method (remove redundant dummy objects) | LOW |
-| `scene_memory.py` | Null image guards in `detect_change()` and `visualize_change()` | HIGH |
-| `capture.py` | Public `reset_blank_detector()` method (encapsulation fix) | MEDIUM |
-| `resilient_capture.py` | Use public API instead of private `_blank_detector` access | MEDIUM |
-| `sources.py` | Null check for `result.image` in `WebcamSource.acquire()` | HIGH |
+| `intent.py` | Thread-safe `get_intent_classifier()` singleton (double-checked locking) | MEDIUM |
+| `analysis.py` | Fix `_describe_color()` gray-before-tan ordering bug | HIGH |
+| `analysis.py` | Extract 12 magic numbers to named constants | LOW |
+| `scene_memory.py` | Extract 7 change detection constants | LOW |
 
 ### Vision Modules (20 files in `missy/vision/`)
 
@@ -84,8 +76,8 @@ Thread-safety hardening across vision subsystem, lint cleanup, 139 new tests acr
 | `memory_usage.py` | Scene memory usage monitoring with configurable limits |
 | `config_validator.py` | Vision configuration validation |
 | `vision_memory.py` | Bridge to SQLite/vector memory with metadata protection + thread-safe init |
-| `analysis.py` | Domain-specific prompts with context sanitization |
-| `intent.py` | Audio-triggered vision intent classification (40+ patterns) + bounded activation log |
+| `analysis.py` | Domain-specific prompts with context sanitization + named constants |
+| `intent.py` | Audio-triggered vision intent classification (40+ patterns) + bounded activation log + thread-safe singleton |
 | `doctor.py` | Diagnostics: OpenCV, video group, permissions, disk space, health |
 | `provider_format.py` | Provider-specific image API formatting with input validation |
 | `audit.py` | Vision audit event logging (7 event types) |
@@ -110,31 +102,21 @@ Thread-safety hardening across vision subsystem, lint cleanup, 139 new tests acr
 - [ ] Container sandbox for vision operations
 - [ ] Video stream capture (continuous frames for motion tracking)
 - [ ] Discord credential message deletion
-- [ ] Additional fuzz testing for sanitizer patterns
 - [ ] Load testing for multi-camera concurrent capture
-- [ ] Property-based testing with Hypothesis for vision pipeline
 - [ ] End-to-end integration tests with mock camera devices
+- [ ] Stress testing for health monitor SQLite persistence under load
 
 ## Recovery Notes
 
-All code committed and passing. 15,200 total tests, 0 failures, 14 skipped.
-Session 11: 11 code fixes (7 thread-safety, 1 cleanup, 3 critical quality), 281 new tests across 7 new test files.
+All code committed and passing. 15,479 total tests, 0 failures, 14 skipped.
+Session 12: 4 code fixes, 137 new tests across 5 new test files.
 Ruff lint: 0 errors.
-All vision module singletons and lazy imports now use double-checked locking.
 
-Session 11 commits:
-1. `691bd77` — Fix failing test + resolve all SIM117 lint warnings
-2. `ba73edb` — Thread-safe singletons and lazy imports (7 files)
-3. `8ba7bad` — 43 thread-safety and edge case tests
-4. `82c7b02` — 48 source abstraction and provider format tests
-5. `3dda826` — 48 behavior layer tests
-6. `a9495f8` — Thread-safe orientation module lazy import
-7. `70c26f0` — Build status update
-8. `944ce7f` — 45 prompt injection detection tests (10 attack categories)
-9. `43dfdd4` — 24 secrets detection and redaction tests
-10. `9a0c535` — Status update (15,269 tests)
-11. `8deb22c` — 27 doctor/health persistence tests + lint fixes across all session 11 files
-12. `e1cf971` — Final status update (15,296 tests)
-13. `d1b29b3` — Fix 3 critical code quality issues (null guards, encapsulation, image check)
-14. `7408c0b` — Status update
-15. `1146b85` — 46 security module gap tests (drift, identity, trust)
+Session 12 commits:
+1. `934f7f1` — Thread-safe intent singleton + constant extraction (3 files)
+2. `f4b6c9e` — Fix color classifier bug + 49 hardening tests
+3. `b610440` — 34 context manager and vision memory bridge tests
+4. `774aba3` — 42 orientation detection, EXIF parsing, pipeline tests
+5. `ecd9e0b` — 12 property-based tests with Hypothesis
+6. `3b1670c` — 21 cross-module integration tests
+7. `3e7a131` — Lint cleanup (import sorting, unused var, dict literal)
