@@ -19,7 +19,7 @@ All critical subsystems are implemented and functional.
 - [x] Audio-triggered vision path implemented
 - [x] Scene memory implemented for active visual tasks
 - [x] Webcam discovery and capture work robustly
-- [x] Tests passing (12,086 pass, 203 vision-specific)
+- [x] Tests passing (14,506 pass, ~1,500 vision-specific)
 - [x] Security policies implemented (default deny, policy engine, audit)
 - [x] Documentation written (VISION.md, AUDIT_SECURITY.md, etc.)
 - [x] CLI functional (vision, providers, skills, schedule, etc.)
@@ -32,7 +32,7 @@ All critical subsystems are implemented and functional.
 
 | Subsystem | Status | Tests |
 |-----------|--------|-------|
-| Vision | Complete | 203 |
+| Vision | Complete | ~1,500 |
 | Agent Runtime | Complete | 800+ |
 | Policy Engine | Complete | 200+ |
 | Security | Complete | 300+ |

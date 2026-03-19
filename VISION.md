@@ -25,7 +25,9 @@ missy/vision/
 ├── provider_format.py   # Provider-specific image API formatting
 ├── audit.py             # Vision audit event logging (7 event types)
 ├── health_monitor.py    # Capture stats, device health tracking, SQLite persistence
-└── doctor.py            # Diagnostics: OpenCV, video group, permissions, disk, health
+├── doctor.py            # Diagnostics: OpenCV, video group, permissions, disk, health
+├── shutdown.py          # Graceful shutdown and resource cleanup (atexit hook)
+└── orientation.py       # Image orientation detection (aspect ratio + EXIF) and correction
 ```
 
 ## Image Sources

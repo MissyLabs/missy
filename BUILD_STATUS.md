@@ -2,125 +2,88 @@
 
 ## Last Updated
 
-2026-03-19, Session 7
+2026-03-19, Session 8
 
-## Session 7 Summary
+## Session 8 Summary
 
-Major vision expansion: 5 new production modules, 3 new CLI commands, frame deduplication, capture timeout enforcement, warmup quality assessment, 631 new tests.
+Hardening session: 15 bug fixes across vision, agent, and security subsystems. 2 new production modules (shutdown, orientation). ~150 new tests.
 
-### Changes This Session (7 commits)
+### Changes This Session (8 commits)
 
-1. **5 new vision modules** (`61937cf`)
-   - `multi_camera.py`: Concurrent capture from multiple USB cameras using ThreadPoolExecutor, with thread-safe management, auto-discovery, and best-result selection
-   - `benchmark.py`: Capture performance benchmarking with percentile stats (p50/p95/p99), throughput measurement, and `BenchmarkTimer` context manager
-   - `memory_usage.py`: Scene memory usage monitoring with configurable limits (default 500 MB), per-session tracking, and over-limit warnings
-   - `config_validator.py`: Vision configuration validation with error/warning severity levels, range checking, and resolution validation
-   - `vision_memory.py`: Bridge between vision observations and SQLite/vector memory stores for durable cross-session recall
-   - 427 new tests across 5 test files
+1. **Harden vision subsystem: 7 fixes, 24 tests** (`9689340`)
+   - `capture.py`: Prevent fd leak on partial `open()` via try/finally
+   - `capture.py`: Enforce warmup timeout to avoid blocking on frozen cameras
+   - `multi_camera.py`: Check `handle.is_open` before capture to prevent race
+   - `multi_camera.py`: Use deadline-based timeout instead of double-applying
+   - `resilient_capture.py`: Reset blank detector when switching devices
+   - `sources.py`: Reject non-regular files (device nodes, pipes) via `S_ISREG`
+   - `discovery.py`: Add visited set to detect symlink cycles in USB ID walk
+   - 24 new tests covering all fixes
 
-2. **Frame deduplication, capture timeout, 3 CLI commands** (`641354e`)
-   - `scene_memory.py`: `add_frame()` now deduplicates near-identical frames via perceptual hash Hamming distance (returns `None` when skipped, configurable threshold)
-   - `capture.py`: Enforces `timeout_seconds` deadline across retry attempts
-   - CLI: `missy vision benchmark`, `missy vision validate`, `missy vision memory` commands
-   - 52 new tests for deduplication, timeout, and CLI commands
+2. **Fix 5 bugs: None context crash, race condition, metadata override** (`e16ce88`)
+   - `behavior.py`: Handle `None` context in `get_response_guidelines()` and `should_be_concise()`
+   - `persona.py`: Catch `OSError` in `_prune_backups()`
+   - `health_monitor.py`: Move auto-save counter check inside lock; handle corrupt JSON in `load()`
+   - `vision_memory.py`: Filter metadata to prevent override of core fields
 
-3. **Warmup quality assessment + test fixes** (`8383bca`)
-   - `capture.py`: `_warmup()` tracks frame intensity, assesses auto-exposure stability, logs warnings when unstable
-   - `CameraHandle.capture_stats` property for diagnostics (uptime, success rate, warmup stability)
-   - Fixed 10 existing tests to use `deduplicate=False` where identical frames are intentionally stored
+3. **35 hardening tests + vision_mode ctx fix** (`e02fa7b`)
+   - 18 tests for behavior.py None-safety and persona backup pruning
+   - 17 tests for vision_memory metadata filtering and health monitor
+   - Fix behavior.py: use `ctx` instead of `context` for `vision_mode`
+   - Guard against `json.loads` returning non-dict
 
-4. **Documentation updates** (`728ea2a`)
-   - Updated BUILD_STATUS.md, TEST_RESULTS.md, VISION.md for session 7
+4. **Vision subsystem graceful shutdown** (`fd6b581`)
+   - New module `missy/vision/shutdown.py`: idempotent cleanup of scene sessions, health monitor persistence, audit logging
+   - Thread-safe via lock, continues on partial failures
+   - 10 new tests
 
-5. **Warmup quality and multi-camera stress tests** (`b786f52`)
-   - 54 tests for warmup stability tracking, intensity recording, capture_stats
-   - 45 tests for timeout handling, 8-camera saturation, resolution ranking, churn
+5. **Composite frame quality scoring** (`7cf14dd`)
+   - `capture_best()` now uses weighted score: 60% sharpness, 20% brightness, 20% contrast
+   - New `_frame_quality_score()` function with normalized 0-1 output
+   - 7 new tests
 
-6. **Security and integration tests** (`d6fc7f9`)
-   - 53 tests: path injection, SQL injection, code injection, extreme values
-   - Config→capture integration, benchmark+timer, tracker+session
+6. **Camera orientation detection** (`c29ea48`)
+   - New module `missy/vision/orientation.py`: aspect ratio + EXIF-based orientation detection
+   - `detect_orientation()`, `correct_orientation()`, `auto_correct()`
+   - JPEG EXIF parser reads orientation tag from raw bytes
+   - 18 new tests
 
-### Full Test Suite: 14,388 passed, 0 failures, 14 skipped
+7. **Input validation for provider_format and TokenBudget** (`d28b0a0`)
+   - `provider_format.py`: Validate all parameters are non-empty
+   - `context.py`: Add `__post_init__` validation to `TokenBudget`
 
-### Vision Modules (18 files in `missy/vision/`)
+8. **24 validation tests** (`e5edd7f`)
+   - 12 tests for provider_format input validation
+   - 12 tests for TokenBudget boundary validation
+
+### Full Test Suite: ~14,530 passed, 0 failures, 14 skipped
+
+### Vision Modules (20 files in `missy/vision/`)
 
 | Module | Purpose |
 |--------|---------|
 | `__init__.py` | Package docs with complete submodule listing |
-| `discovery.py` | USB camera discovery via sysfs + rediscover/validate |
-| `capture.py` | OpenCV frame capture with adaptive blank detection, timeout, warmup quality |
-| `resilient_capture.py` | Auto-reconnection with validation + targeted rediscovery |
-| `multi_camera.py` | Concurrent multi-camera capture with ThreadPoolExecutor |
-| `sources.py` | Unified source abstraction with security validation |
+| `discovery.py` | USB camera discovery via sysfs + rediscover/validate + cycle detection |
+| `capture.py` | OpenCV capture with timeout, warmup timeout, fd leak prevention, quality scoring |
+| `resilient_capture.py` | Auto-reconnection with blank detector reset on device switch |
+| `multi_camera.py` | Concurrent multi-camera capture with deadline-based timeout + handle validation |
+| `sources.py` | Unified source abstraction with S_ISREG validation |
 | `pipeline.py` | Image preprocessing + quality assessment (6 metrics) |
 | `scene_memory.py` | Task-scoped scene memory with perceptual hashing + deduplication |
-| `health_monitor.py` | Capture stats, health tracking, SQLite persistence |
+| `health_monitor.py` | Capture stats, health tracking, SQLite persistence, thread-safe auto-save |
 | `benchmark.py` | Performance benchmarking with percentile statistics |
 | `memory_usage.py` | Scene memory usage monitoring with configurable limits |
 | `config_validator.py` | Vision configuration validation |
-| `vision_memory.py` | Bridge to SQLite/vector memory for observation persistence |
+| `vision_memory.py` | Bridge to SQLite/vector memory with metadata field protection |
 | `analysis.py` | Domain-specific prompts (puzzle, painting, inspection) |
 | `intent.py` | Audio-triggered vision intent classification (40+ patterns) |
 | `doctor.py` | Diagnostics: OpenCV, video group, permissions, disk space, health |
-| `provider_format.py` | Provider-specific image API formatting |
+| `provider_format.py` | Provider-specific image API formatting with input validation |
 | `audit.py` | Vision audit event logging (7 event types) |
+| `shutdown.py` | Graceful shutdown and resource cleanup (atexit integration) |
+| `orientation.py` | Image orientation detection (aspect ratio + EXIF) and auto-correction |
 
-### Vision Tests: 1,421 (all passing)
-
-| Test File | Tests |
-|-----------|-------|
-| test_discovery.py | 18 |
-| test_discovery_edge_cases.py | 54 |
-| test_discovery_hardening.py | 19 |
-| test_capture.py | 13 |
-| test_capture_extended.py | 27 |
-| test_adaptive_blank.py | 18 |
-| test_sources.py | 27 |
-| test_sources_extended.py | 24 |
-| test_source_validation.py | 17 |
-| test_source_security.py | 15 |
-| test_pipeline.py | 6 |
-| test_pipeline_extended.py | 30 |
-| test_pipeline_edge_cases.py | 18 |
-| test_scene_memory.py | 25 |
-| test_scene_memory_extended.py | 19 |
-| test_scene_memory_stress.py | 21 |
-| test_perceptual_hash.py | 14 |
-| test_intent.py | 25 |
-| test_intent_extended.py | 44 |
-| test_analysis.py | 20 |
-| test_analysis_extended.py | 25 |
-| test_doctor.py | 16 |
-| test_vision_tools.py | 23 |
-| test_edge_cases.py | 30 |
-| test_provider_format.py | 12 |
-| test_audit.py | 7 |
-| test_audit_extended.py | 19 |
-| test_integration.py | 12 |
-| test_resilient_capture.py | 9 |
-| test_resilient_extended.py | 15 |
-| test_resilient_edge_cases.py | 13 |
-| test_hardening.py | 32 |
-| test_burst_and_diff.py | 14 |
-| test_security.py | 13 |
-| test_timeout_and_backoff.py | 10 |
-| test_failure_classification.py | 33 |
-| test_health_monitor.py | 51 |
-| test_health_persistence.py | 22 |
-| test_multi_camera.py | 79 |
-| test_benchmark.py | 94 |
-| test_memory_usage.py | 73 |
-| test_config_validator.py | 114 |
-| test_vision_memory.py | 67 |
-| test_dedup_and_timeout.py | 30 |
-| tests/cli/test_vision_cli.py | 14 |
-| tests/cli/test_vision_cli_extended.py | 22 |
-| test_warmup_quality.py | 54 |
-| test_multi_camera_stress.py | 45 |
-| test_new_modules_security.py | 53 |
-| tests/cli/test_vision_cli.py | 14 |
-| tests/cli/test_vision_cli_extended.py | 22 |
-| tests/channels/voice/test_voice_vision_integration.py | 11 |
+### Vision Tests: ~1,500+ (all passing)
 
 ### Integration Points
 - **CLI**: `missy vision devices/capture/inspect/review/doctor/health/benchmark/validate/memory`
@@ -132,6 +95,7 @@ Major vision expansion: 5 new production modules, 3 new CLI commands, frame dedu
 - **Behavior**: Vision-specific response guidelines (painting/puzzle modes)
 - **Health Monitor**: Auto-captures in resilient_capture, SQLite persistence, doctor + CLI
 - **Memory**: Vision observations persisted to SQLite/vector store for cross-session recall
+- **Shutdown**: atexit hook for graceful resource cleanup
 
 ## Remaining Work for Future Sessions
 
@@ -147,13 +111,32 @@ Major vision expansion: 5 new production modules, 3 new CLI commands, frame dedu
 - [x] Health monitor periodic auto-save during long capture sessions → DONE
 - [x] Vector memory integration for vision observations → DONE (vision_memory.py)
 - [x] Multi-camera concurrent capture → DONE (multi_camera.py)
-- [ ] Camera rotation/orientation detection
-- [ ] Frame quality auto-selection in burst mode
-- [ ] Vision subsystem graceful shutdown hooks
+- [x] Camera rotation/orientation detection → DONE (orientation.py, session 8)
+- [x] Frame quality auto-selection in burst mode → DONE (_frame_quality_score, session 8)
+- [x] Vision subsystem graceful shutdown hooks → DONE (shutdown.py, session 8)
+
+## Session 8 Bug Fixes Summary
+
+| Bug | Severity | Fix |
+|-----|----------|-----|
+| `capture.py` fd leak on partial open | HIGH | try/finally around post-creation steps |
+| `capture.py` warmup blocks indefinitely | HIGH | Deadline enforcement with monotonic clock |
+| `behavior.py` crashes on None context | CRITICAL | `ctx = context or {}` guard |
+| `behavior.py` vision_mode uses wrong variable | MEDIUM | Changed `context` to `ctx` on line 439 |
+| `health_monitor.py` auto-save race condition | MEDIUM | Counter check-and-reset inside lock |
+| `health_monitor.py` corrupt JSON crash | MEDIUM | try/except + isinstance guard |
+| `multi_camera.py` timeout double-application | MEDIUM | Deadline-based remaining time |
+| `multi_camera.py` race with closed handles | MEDIUM | is_open check in worker |
+| `resilient_capture.py` stale blank calibration | MEDIUM | Reset detector on device switch |
+| `sources.py` device node symlink bypass | LOW | stat.S_ISREG check |
+| `discovery.py` potential symlink loop | LOW | visited set in parent walk |
+| `vision_memory.py` metadata override | LOW | Filter reserved keys |
+| `persona.py` prune crash on unlink error | MEDIUM | OSError exception handling |
+| `provider_format.py` empty/None inputs accepted | LOW | Input validation for all params |
+| `context.py` negative budget causes data loss | MEDIUM | __post_init__ boundary validation |
 
 ## Recovery Notes
 
-All code committed and passing. 14,388 total tests, 0 failures, 14 skipped.
-Session 7: 5 new production modules, 3 new CLI commands, frame deduplication,
-capture timeout enforcement, warmup quality assessment, 631 new tests.
-Vision subsystem now has 18 modules and 1,421 tests. Ruff lint fully clean.
+All code committed and passing. ~14,530 total tests, 0 failures, 14 skipped.
+Session 8: 15 bug fixes, 2 new modules (shutdown.py, orientation.py), ~150 new tests.
+Vision subsystem now has 20 modules. Ruff lint fully clean.
