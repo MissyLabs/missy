@@ -76,9 +76,13 @@ def format_image_for_provider(
     dict
         A content block in the provider's expected format.
     """
-    if not provider_name:
+    if not provider_name or not provider_name.strip():
         raise ValueError("provider_name must be a non-empty string")
-    name = provider_name.lower()
+    if not image_base64:
+        raise ValueError("image_base64 must be a non-empty string")
+    if not media_type or not media_type.strip():
+        raise ValueError("media_type must be a non-empty string")
+    name = provider_name.strip().lower()
 
     if name == "anthropic":
         return format_image_for_anthropic(image_base64, media_type)
@@ -109,6 +113,8 @@ def build_vision_message(
     dict
         A message dict with ``role`` and ``content`` fields.
     """
+    if not prompt:
+        raise ValueError("prompt must be a non-empty string")
     image_block = format_image_for_provider(provider_name, image_base64, media_type)
     text_block = {"type": "text", "text": prompt}
 

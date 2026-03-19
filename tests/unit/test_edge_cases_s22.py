@@ -442,19 +442,14 @@ class TestContextManagerZeroBudget:
         assert len(messages) == 1
         assert messages[0]["content"] == "ping"
 
-    def test_negative_budget_behaves_like_zero(self) -> None:
-        """A negative total budget should not crash and yields just the new message."""
-        from missy.agent.context import ContextManager, TokenBudget
+    def test_negative_budget_raises_value_error(self) -> None:
+        """A negative total budget must raise ValueError."""
+        import pytest
 
-        budget = TokenBudget(total=-100, system_reserve=0, tool_definitions_reserve=0)
-        mgr = ContextManager(budget)
+        from missy.agent.context import TokenBudget
 
-        system, messages = mgr.build_messages(
-            system="sys",
-            new_message="test",
-            history=[{"role": "user", "content": "old msg"}],
-        )
-        assert messages[-1]["content"] == "test"
+        with pytest.raises(ValueError, match="total must be >= 0"):
+            TokenBudget(total=-100, system_reserve=0, tool_definitions_reserve=0)
 
 
 # ===========================================================================

@@ -446,7 +446,7 @@ class TestCompactIfNeededBudgetForwarding:
         _add_turns(memory_store, "sess", 5, content_size=200)
 
         # Make budget very small so should_compact triggers, and fresh_tail_count=1
-        budget = TokenBudget(total=1, fresh_tail_count=1)
+        budget = TokenBudget(total=1, system_reserve=0, tool_definitions_reserve=0, fresh_tail_count=1)
         result = compact_if_needed("sess", memory_store, s, budget)
         assert result is not None
         assert result["turns_compacted"] == 4
@@ -458,7 +458,7 @@ class TestCompactIfNeededBudgetForwarding:
         s = Summarizer(mock_provider)
         _add_turns(memory_store, "sess", 10, content_size=400)
 
-        budget = TokenBudget(total=1, fresh_tail_count=1)
+        budget = TokenBudget(total=1, system_reserve=0, tool_definitions_reserve=0, fresh_tail_count=1)
         # Inject leaf_chunk_tokens as attribute on the budget object
         budget.leaf_chunk_tokens = 10  # very small → many chunks
         result = compact_if_needed("sess", memory_store, s, budget)
@@ -472,7 +472,7 @@ class TestCompactIfNeededBudgetForwarding:
         s = Summarizer(mock_provider)
         _add_turns(memory_store, "sess", 30, content_size=1000)
 
-        budget = TokenBudget(total=1, fresh_tail_count=2)
+        budget = TokenBudget(total=1, system_reserve=0, tool_definitions_reserve=0, fresh_tail_count=2)
         budget.condensed_min_fanout = 100  # very high → condensation never triggers
         result = compact_if_needed("sess", memory_store, s, budget)
         assert result is not None

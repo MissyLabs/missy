@@ -54,6 +54,22 @@ class TokenBudget:
     learnings_fraction: float = 0.05
     fresh_tail_count: int = 16
 
+    def __post_init__(self) -> None:
+        if self.total < 0:
+            raise ValueError(f"total must be >= 0, got {self.total}")
+        if not 0.0 <= self.memory_fraction <= 1.0:
+            raise ValueError(f"memory_fraction must be 0.0-1.0, got {self.memory_fraction}")
+        if not 0.0 <= self.learnings_fraction <= 1.0:
+            raise ValueError(f"learnings_fraction must be 0.0-1.0, got {self.learnings_fraction}")
+        if self.fresh_tail_count < 0:
+            raise ValueError(f"fresh_tail_count must be >= 0, got {self.fresh_tail_count}")
+        reserves = self.system_reserve + self.tool_definitions_reserve
+        if reserves > self.total:
+            raise ValueError(
+                f"system_reserve + tool_definitions_reserve ({reserves}) "
+                f"exceeds total ({self.total})"
+            )
+
 
 class ContextManager:
     """Assembles conversation context within token budget limits.

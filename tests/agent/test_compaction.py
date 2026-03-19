@@ -113,7 +113,7 @@ class TestCompactIfNeeded:
 
     def test_compacts_when_large(self, memory_store, summarizer):
         _add_turns(memory_store, "sess1", 50, content_size=1000)
-        budget = TokenBudget(total=100)  # very small budget forces compaction
+        budget = TokenBudget(total=100, system_reserve=0, tool_definitions_reserve=0)  # very small budget forces compaction
         result = compact_if_needed("sess1", memory_store, summarizer, budget)
         assert result is not None
         assert result["leaf_summaries_created"] > 0
