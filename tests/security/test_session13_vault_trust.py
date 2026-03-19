@@ -54,7 +54,6 @@ import pytest
 from missy.security.trust import DEFAULT_SCORE, MAX_SCORE, MIN_SCORE, TrustScorer
 from missy.security.vault import Vault, VaultError
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

@@ -39,7 +39,6 @@ test_multi_camera_stress.py:
 
 from __future__ import annotations
 
-import threading
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, call, patch
 
@@ -49,7 +48,6 @@ import pytest
 from missy.vision.capture import CaptureConfig, CaptureResult
 from missy.vision.discovery import CameraDevice
 from missy.vision.multi_camera import MultiCameraManager, MultiCaptureResult
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -630,19 +628,17 @@ class TestContextManagerExceptionPropagation:
     def test_exception_inside_context_propagates(self):
         """__exit__ must not swallow exceptions."""
         sentinel = RuntimeError("must propagate")
-        with pytest.raises(RuntimeError, match="must propagate"):
-            with MultiCameraManager():
-                raise sentinel
+        with pytest.raises(RuntimeError, match="must propagate"), MultiCameraManager():
+            raise sentinel
 
     @patch("missy.vision.multi_camera.CameraHandle")
     def test_close_all_called_even_when_exception_propagates(self, MockHandle):
         handle = _mock_handle()
         MockHandle.return_value = handle
 
-        with pytest.raises(ValueError):
-            with MultiCameraManager() as mgr:
-                mgr.add_camera(_device("/dev/video0"))
-                raise ValueError("propagated")
+        with pytest.raises(ValueError), MultiCameraManager() as mgr:
+            mgr.add_camera(_device("/dev/video0"))
+            raise ValueError("propagated")
 
         handle.close.assert_called_once()
 

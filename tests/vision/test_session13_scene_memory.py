@@ -48,7 +48,7 @@ from __future__ import annotations
 import threading
 import time
 from datetime import UTC, datetime
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
@@ -62,7 +62,6 @@ from missy.vision.scene_memory import (
     compute_phash,
     hamming_distance,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -701,7 +700,7 @@ class TestSceneSessionMaxFramesOne:
     def test_only_one_frame_retained(self) -> None:
         session = SceneSession("one-frame", max_frames=1)
         imgs = _unique_imgs(5)
-        frames = [session.add_frame(img) for img in imgs]
+        [session.add_frame(img) for img in imgs]  # noqa: C416
         # Deduplicated frames count as None; non-None ones advance the counter
         assert session.frame_count == 1
 

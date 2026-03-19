@@ -23,19 +23,14 @@ from __future__ import annotations
 
 import threading
 import time
-import uuid
 
-import pytest
-
-from missy.core.bus_topics import AGENT_RUN_START, TOOL_REQUEST
+from missy.core.bus_topics import AGENT_RUN_START
 from missy.core.message_bus import (
     BusMessage,
     MessageBus,
-    get_message_bus,
     init_message_bus,
     reset_message_bus,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -736,7 +731,6 @@ class TestBusTopicsNamingConvention:
         from missy.core.bus_topics import (
             AGENT_RUN_COMPLETE,
             AGENT_RUN_ERROR,
-            AGENT_RUN_START,
         )
 
         for topic in (AGENT_RUN_START, AGENT_RUN_COMPLETE, AGENT_RUN_ERROR):

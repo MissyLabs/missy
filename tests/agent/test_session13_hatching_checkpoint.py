@@ -23,10 +23,9 @@ import pytest
 import yaml
 
 from missy.agent.checkpoint import (
-    CheckpointManager,
-    RecoveryResult,
     _RESTART_THRESHOLD_SECS,
     _RESUME_THRESHOLD_SECS,
+    CheckpointManager,
     scan_for_recovery,
 )
 from missy.agent.hatching import (
@@ -37,7 +36,6 @@ from missy.agent.hatching import (
     _HatchingStepWarning,
 )
 from missy.core.events import event_bus
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -874,7 +872,7 @@ class TestCheckpointExpirationAndCleanup:
         assert count == 3
 
     def test_cleanup_returns_zero_when_nothing_to_clean(self, cm):
-        cid = cm.create("s", "t", "p")
+        cm.create("s", "t", "p")
         # Running state must not be cleaned
         count = cm.cleanup(older_than_days=0)
         assert count == 0

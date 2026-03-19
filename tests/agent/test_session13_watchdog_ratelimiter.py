@@ -37,13 +37,12 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from missy.agent.watchdog import SubsystemHealth, Watchdog
-from missy.providers.rate_limiter import RateLimitExceeded, RateLimiter
-
+from missy.agent.watchdog import Watchdog
+from missy.providers.rate_limiter import RateLimiter, RateLimitExceeded
 
 # ===========================================================================
 # Watchdog — _check_all with no registered checks

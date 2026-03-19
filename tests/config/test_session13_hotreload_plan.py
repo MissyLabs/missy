@@ -13,9 +13,7 @@ backup/rollback interactions not exercised by prior suites.
 
 from __future__ import annotations
 
-import os
 import pathlib
-import stat
 import threading
 import time
 from pathlib import Path
@@ -31,7 +29,6 @@ from missy.config.plan import (
     list_backups,
     rollback,
 )
-
 
 # ---------------------------------------------------------------------------
 # ConfigWatcher — constructor internals and defaults
@@ -320,7 +317,7 @@ class TestBackupConfigStringPaths:
         """If the source file does not exist, backup_config propagates the error."""
         missing = tmp_path / "nonexistent.yaml"
         bd = tmp_path / "bk"
-        with pytest.raises(Exception):
+        with pytest.raises(OSError):
             backup_config(missing, bd)
 
 

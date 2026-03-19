@@ -13,6 +13,7 @@ Focus areas:
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import threading
 from unittest.mock import MagicMock, call, patch
@@ -23,7 +24,6 @@ import pytest
 from missy.vision.capture import CaptureError, CaptureResult, FailureType
 from missy.vision.discovery import CameraDevice
 from missy.vision.resilient_capture import ResilientCamera
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -450,10 +450,8 @@ def test_concurrent_disconnect_does_not_raise(
     t = threading.Thread(target=disconnect_thread, daemon=True)
     t.start()
 
-    try:
+    with contextlib.suppress(Exception):
         cam.capture()
-    except Exception:  # noqa: BLE001
-        pass  # The result is irrelevant; we only care there's no crash
 
     t.join(timeout=5)
     assert not errors, f"Thread raised: {errors}"
@@ -549,11 +547,8 @@ def test_disconnect_during_reconnect_loop_is_safe(
     t = threading.Thread(target=disconnector, daemon=True)
     t.start()
 
-    with patch("missy.vision.resilient_capture.time.sleep", side_effect=slow_sleep):
-        try:
-            cam.capture()
-        except Exception:  # noqa: BLE001
-            pass
+    with patch("missy.vision.resilient_capture.time.sleep", side_effect=slow_sleep), contextlib.suppress(Exception):
+        cam.capture()
 
     t.join(timeout=5)
     assert not errors, f"Disconnector raised: {errors}"
@@ -1011,10 +1006,9 @@ def test_context_manager_exit_calls_disconnect_after_exception(
     with patch("missy.vision.resilient_capture.CameraHandle", return_value=handle):
         cam = ResilientCamera()
 
-        with pytest.raises(ValueError):
-            with cam:
-                assert cam.is_connected
-                raise ValueError("body error")
+        with pytest.raises(ValueError), cam:
+            assert cam.is_connected
+            raise ValueError("body error")
 
         # disconnect() should have been called → handle set to None
         assert cam._handle is None

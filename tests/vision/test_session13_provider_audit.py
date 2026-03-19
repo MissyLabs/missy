@@ -11,9 +11,7 @@ from __future__ import annotations
 
 import base64
 from datetime import UTC, datetime
-from unittest.mock import MagicMock, call, patch
-
-import pytest
+from unittest.mock import MagicMock, patch
 
 from missy.vision.audit import (
     _emit_audit_event,
@@ -31,7 +29,6 @@ from missy.vision.provider_format import (
     format_image_for_openai,
     format_image_for_provider,
 )
-
 
 # ---------------------------------------------------------------------------
 # provider_format.py — deeper structural coverage
