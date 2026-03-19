@@ -2,16 +2,16 @@
 
 ## Summary
 
-- **Total tests**: 13,029+
-- **Passed**: 13,029
+- **Total tests**: 13,487
+- **Passed**: 13,487
 - **Failed**: 0
 - **Skipped**: 16
 - **Duration**: ~5 minutes
 
 ## Vision Tests
 
-- **Total**: 623
-- **Passed**: 623
+- **Total**: 674
+- **Passed**: 674
 - **Failed**: 0
 
 ### By Module (tests/vision/)
@@ -48,6 +48,7 @@
 | test_security.py | 13 | ALL PASS |
 | test_timeout_and_backoff.py | 10 | ALL PASS |
 | test_failure_classification.py | 33 | ALL PASS |
+| test_health_monitor.py | 51 | ALL PASS |
 
 ### CLI Vision Tests
 

@@ -2,73 +2,73 @@
 
 ## Last Updated
 
-2026-03-19, Session 4
+2026-03-19, Session 5
 
-## Session 4 Summary
+## Session 5 Summary
 
-Comprehensive hardening, lint cleanup, security improvements, and 439 new tests across vision, observability, plugins, MCP, and gateway subsystems.
+Vision health monitoring, production hardening, and 458 new tests across all major subsystems.
 
-### Changes This Session (11 commits)
+### Changes This Session (8 commits)
 
-1. **Fix 111 ruff lint issues** (`76e96b2`)
-   - Migrate `str+Enum` to `StrEnum` (Python 3.11+) across 4 vision modules
-   - Add `from None`/`from err` to re-raised exceptions (B904)
-   - Use `contextlib.suppress` instead of try/except/pass
-   - Collapse 84 nested `with` statements (SIM117) in test files
-   - Remove 9 unused variables, fix import ordering
-   - Fix parenthesized context manager syntax for `_SubsystemsPatch`
+1. **VisionHealthMonitor** (`93852fe`)
+   - New `missy/vision/health_monitor.py`: per-device capture stats, success/failure rates, quality tracking, latency metrics
+   - Health assessment: HEALTHY/DEGRADED/UNHEALTHY based on success rate and consecutive failure thresholds
+   - Diagnostic reports (JSON-serializable) with device summaries and actionable warnings
+   - Thread-safe with configurable event retention and time windows
+   - 51 tests covering APIs, edge cases, thread safety, singleton
 
-2. **Vision failure classification** (`013d0df`)
-   - `FailureType` enum: TRANSIENT/PERMISSION/DEVICE_GONE/UNSUPPORTED/UNKNOWN
-   - Capture method classifies failures for smart retry decisions
-   - Resolution verification: logs warning when camera silently downgrades
-   - ResilientCamera: cumulative failure tracking, device change detection
-   - Pipeline: added saturation (HSV) and noise (MAD-of-Laplacian) metrics
-   - Scene memory: eviction logging for frames and sessions
+2. **Health monitor integration** (`ab1a9e2`)
+   - `ResilientCamera.capture()` automatically records success/failure/latency to the health monitor
+   - `VisionDoctor.run_all()` includes health_monitor diagnostic check
+   - Reports overall status, success rate, and warnings in doctor output
 
-3. **87 new vision tests** (`2a0f71b`)
-   - test_failure_classification.py (33): FailureType, resolution, ResilientCamera
-   - test_discovery_edge_cases.py (54): multi-camera, sysfs, symlinks, USB IDs
+3. **301 new subsystem tests** (`c2cfb45`)
+   - `test_cost_tracker.py` (143): pricing lookup, budget enforcement, thread safety, record eviction, response extraction, prefix matching
+   - `test_container_sandbox.py` (97): Docker mocking, security flags, bind mounts, context manager, config parsing, graceful degradation
+   - `test_trust_circuit_edges.py` (61): score bounds, concurrent updates, state transitions, backoff, half-open probing, clock mocking
 
-4. **FileSource/ScreenshotSource hardening** (`c7397ff`)
-   - File size validation (reject empty, >100 MB)
-   - Image dimension validation (warn >16384px, reject 0-dim)
-   - Screenshot tool name in error messages
+4. **Vision docs update** (`373510e`)
+   - Updated `__init__.py` with complete 13-module submodule listing
+   - Added health_monitor.py to architecture diagram in VISION.md
+   - Added Health Monitoring section with usage examples
 
-5. **Vision doctor improvements** (`fe82b44`)
-   - OpenCV minimum version check (4.0+)
-   - Video group membership via os.getgroups()
-   - Per-camera device readability check
-   - Disk space check in captures directory (<100 MB warning)
-   - 17 new source validation tests
+5. **CLI `missy vision health`** (`1bb9c97`)
+   - New CLI command showing overall health status, per-device breakdown, success rates, latency, and warnings
 
-6. **Intent pattern expansion** (`e8c5f58`)
-   - 4 new puzzle patterns: missing piece, board regions, area fit, piece matching
-   - 4 new painting patterns: progress check, color mixing, improvement, art types
-   - 3 new inspection patterns: zoom/magnify, property queries, counting
-   - 44 new intent tests with edge cases and threshold coverage
+6. **43 compaction engine tests** (`91e163b`)
+   - `_chunk_turns` edge cases: varying sizes, empty content, single large turn
+   - `compact_session`: fresh tail boundaries, condensation depth limits, idempotency
+   - `should_compact`: threshold edge cases (0.0, 1.0, empty sessions)
+   - `compact_if_needed`: budget attribute forwarding, missing optional attrs
 
-7. **Security hardening** (`fa48f90`)
-   - WebcamSource: validate device path matches `/dev/videoN` format
-   - FileSource: resolve paths to prevent traversal attacks
-   - 15 new security validation tests
+7. **85 heartbeat/watchdog tests** (`e0ef9ec`)
+   - HeartbeatRunner lifecycle, config validation, active hours, workspace scanning
+   - Watchdog subsystem registration, health checks, thread lifecycle, concurrent access
 
-8. **95 observability + plugin tests** (`ac0eb96`)
-   - test_audit_logger_extended.py (48): JSONL format, thread safety, OtelExporter
-   - test_plugin_extended.py (47): lifecycle, permissions, isolation, thread safety
+8. **Lint cleanup** (`f792790`)
+   - Fixed 20 ruff issues in new test files: import sorting, unused vars, contextlib.suppress
 
-9. **74 MCP tests** (`d6f07c7`)
-   - Lifecycle, tool namespacing, health checks, digest pinning
-   - Config loading, error handling, tool execution, thread safety
+### Full Test Suite: 13,487 passed, 0 failures, 16 skipped
 
-10. **93 gateway tests** (`73b0a09`)
-    - REST L7 policy, TLS, rate limiting, thread safety
-    - URL edge cases, network failures, interactive approval
+### Vision Modules (13 files in `missy/vision/`)
 
-11. **Documentation updates** (`153fb9c`)
-    - Updated VISION.md with all session 4 improvements
+| Module | Purpose |
+|--------|---------|
+| `__init__.py` | Package docs with complete submodule listing |
+| `discovery.py` | USB camera discovery via sysfs |
+| `capture.py` | OpenCV frame capture with failure classification + burst mode |
+| `resilient_capture.py` | Auto-reconnection with exponential backoff + health monitoring |
+| `sources.py` | Unified source abstraction with security validation |
+| `pipeline.py` | Image preprocessing + quality assessment (6 metrics) |
+| `scene_memory.py` | Task-scoped scene memory with eviction logging |
+| `health_monitor.py` | Capture stats, device health tracking, diagnostic reports |
+| `analysis.py` | Domain-specific prompts (puzzle, painting, inspection) |
+| `intent.py` | Audio-triggered vision intent classification (40+ patterns) |
+| `doctor.py` | Diagnostics: OpenCV, video group, permissions, disk space, health |
+| `provider_format.py` | Provider-specific image API formatting |
+| `audit.py` | Vision audit event logging (7 event types) |
 
-### Vision Tests: 623 (all passing)
+### Vision Tests: 674 (all passing)
 
 | Test File | Tests |
 |-----------|-------|
@@ -102,46 +102,19 @@ Comprehensive hardening, lint cleanup, security improvements, and 439 new tests 
 | test_security.py | 13 |
 | test_timeout_and_backoff.py | 10 |
 | test_failure_classification.py | 33 |
+| test_health_monitor.py | 51 |
 | tests/cli/test_vision_cli.py | 14 |
 | tests/channels/voice/test_voice_vision_integration.py | 11 |
 
-### Full Test Suite: 13,029 passed, 0 failures, 16 skipped
-
-### Vision Modules (12 files in `missy/vision/`)
-
-| Module | Purpose |
-|--------|---------|
-| `__init__.py` | Package docs |
-| `discovery.py` | USB camera discovery via sysfs |
-| `capture.py` | OpenCV frame capture with failure classification + burst mode |
-| `resilient_capture.py` | Auto-reconnection with exponential backoff + failure tracking |
-| `sources.py` | Unified source abstraction with security validation |
-| `pipeline.py` | Image preprocessing + quality assessment (6 metrics) |
-| `scene_memory.py` | Task-scoped scene memory with eviction logging |
-| `analysis.py` | Domain-specific prompts (puzzle, painting, inspection) |
-| `intent.py` | Audio-triggered vision intent classification (40+ patterns) |
-| `doctor.py` | Diagnostics: OpenCV, video group, permissions, disk space |
-| `provider_format.py` | Provider-specific image API formatting |
-| `audit.py` | Vision audit event logging (7 event types) |
-
-### Agent Tools (5)
-
-| Tool | Purpose |
-|------|---------|
-| `vision_capture` | Capture from webcam/file/screenshot |
-| `vision_burst` | Burst capture + sharpest-frame selection |
-| `vision_analyze` | Domain-specific analysis prompt building |
-| `vision_devices` | Enumerate available cameras |
-| `vision_scene` | Scene memory management for multi-step tasks |
-
 ### Integration Points
-- **CLI**: `missy vision devices/capture/inspect/review/doctor` (+ --burst, --best flags)
+- **CLI**: `missy vision devices/capture/inspect/review/doctor/health`
 - **Tools**: vision_capture, vision_burst, vision_analyze, vision_devices, vision_scene
 - **Voice**: Audio intent detection → auto-capture in voice server
 - **Config**: `VisionConfig` in settings schema
 - **Hatching**: `check_vision` readiness step
 - **Persona**: Vision coaching guidance in identity description
 - **Behavior**: Vision-specific response guidelines (painting/puzzle modes)
+- **Health Monitor**: Auto-captures in resilient_capture, reported in doctor
 
 ## Remaining Work for Future Sessions
 
@@ -152,11 +125,13 @@ Comprehensive hardening, lint cleanup, security improvements, and 439 new tests 
 - [ ] Scene memory actual-memory-usage monitoring
 - [ ] Adaptive blank frame detection thresholds
 - [ ] Perceptual hash for rotation/zoom-invariant change detection
+- [ ] Discord credential message deletion
+- [ ] Health monitor persistence across sessions
 
 ## Recovery Notes
 
-All code committed and passing. 13,029 total tests, 0 failures, 16 skipped.
-Session 4: 111 lint fixes, 6 production code improvements (failure classification,
-quality metrics, resolution verification, security hardening, doctor diagnostics,
-intent patterns), 600 new tests across all subsystems, documentation updates.
-Ruff lint is fully clean. Test isolation issue fixed for MCP server name validation.
+All code committed and passing. 13,487 total tests, 0 failures, 16 skipped.
+Session 5: 1 new production module (VisionHealthMonitor with 13 submodules),
+1 new CLI command (vision health), health monitor integration into capture
+pipeline and doctor diagnostics, 458 new tests, 20 lint fixes, documentation updates.
+Ruff lint is fully clean.
