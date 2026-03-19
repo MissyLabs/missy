@@ -2,61 +2,45 @@
 
 ## Last Updated
 
-2026-03-19, Session 9
+2026-03-19, Session 10
 
-## Session 9 Summary
+## Session 10 Summary
 
-Hardening session: thread safety, security, prompt injection mitigation, 168 new tests across vision and security subsystems.
+Hardening session: memory cleanup, thread safety, timeouts, image size limits, 166 new tests across 5 new test files. 7 code fixes.
 
-### Changes This Session (8 commits)
+### Changes This Session (5 commits)
 
-1. **Thread safety and security hardening** (`fddce6f`)
-   - `scene_memory.py`: Add `threading.Lock` to all SceneSession methods (add_frame, add_observation, update_state, close, summarize, get_frame, get_recent_frames, get_latest_frame)
-   - `capture.py`: Fix `_capture_count` to increment on both success and failure (success_rate was always 100%)
-   - `sources.py`: PhotoSource resolves directory and filters symlinks pointing outside to prevent traversal
-   - `trust.py`: Add `threading.Lock` to all TrustScorer operations
-   - `vault.py`: Reject zero-filled keys, warn on permissive key file permissions (mode wider than 0o600)
-   - 22 new tests
+1. **Vision subsystem hardening** (`eb02aaf`)
+   - `scene_memory.py`: Eagerly release numpy arrays on frame eviction (`frame.image = None`), add re-entrance guard to `close()`, thread-safe `detect_latest_change()`
+   - `vision_memory.py`: Thread-safe lazy initialization with double-checked locking pattern
+   - `capture.py`: Deadline-aware retry sleeps (`min(retry_delay, remaining_time)`) prevent overshooting timeout
+   - `voice/server.py`: Add capture timeout (10s), image size limit (2MiB) with automatic quality downgrade for oversized images
+   - `intent.py`: Cap activation_log at 500 entries to prevent unbounded memory growth
+   - Fix SIM117 lint warnings in test files, auto-fix unused imports
 
-2. **Analysis context sanitization** (`52fd3b1`)
-   - `analysis.py`: Truncate user-provided context to 2000 chars max
-   - Wrap all user context in `[User-provided context]` delimiters to signal untrusted input
-   - Add `_sanitize_context()` classmethod to AnalysisPromptBuilder
-   - 13 new tests
+2. **Memory cleanup and thread safety tests** (`b7fddbc`)
+   - 82 tests: frame eviction cleanup, close() idempotency, detect_latest_change thread safety, concurrent add+detect, VisionMemoryBridge init, capture deadline sleep, discovery find_by_name, SceneManager eviction, multi-camera status, perceptual hash edge cases, SceneFrame/Session state, deduplication thresholds, CameraDevice properties, visualize/detect change
 
-3. **Resilient capture edge case tests** (`4302c0c`)
-   - 13 new tests covering reconnection, backoff, failure limits, multi-camera
+3. **Resilient capture and provider tests** (`b0932ff`)
+   - 26 tests: device path change warning, USB ID mismatch, cumulative failure threshold, unrecoverable failure abort, device validation, context manager, pipeline edge cases, intent classifier boundary conditions, provider format structure
 
-4. **Source, shutdown, orientation tests** (`5eade9d`)
-   - 34 new tests: source factory, device path injection, shutdown idempotency, scene eviction, orientation detection
+4. **Audit, health monitor, and benchmark tests** (`1dcac28`)
+   - 30 tests: audit event verification (capture/failure/session/intent/analysis), health monitor counters/success rate/save-load/recommendations/reset, config validator boundary values, CaptureBenchmark categories/percentiles, MemoryTracker scene manager integration
 
-5. **Analysis test compatibility** (`2cb20fe`)
-   - Update pre-existing analysis tests for new context sanitization labels
+5. **Integration tests and activation log fix** (`184ab9d`)
+   - 28 tests: analysis prompt mode selection, source factory types, orientation detection, doctor diagnostics, shutdown hook, intent activation log
 
-6. **Security tests** (`f9fc2ee`)
-   - 25 new tests: gateway URL validation, trust scorer boundaries, circuit breaker state machine, prompt drift detector
-
-7. **Vision memory bridge tests** (`03a5d05`)
-   - 11 new tests: metadata protection, graceful store failures, session context
-
-8. **Config validator tests** (`752f761`)
-   - 29 new tests: valid configs, invalid types, boundary values, warnings
-
-9. **Benchmark and intent classifier tests** (`4c61663`)
-   - 21 new tests: benchmark recording/reporting, intent classification
-
-### Full Test Suite: 14,895 passed, 0 failures, 14 skipped
+### Full Test Suite: 15,033 passed, 0 failures, 14 skipped
 
 ### Code Changes Summary
 
 | Module | Change | Severity |
 |--------|--------|----------|
-| `scene_memory.py` | Thread safety via Lock on all methods | HIGH |
-| `capture.py` | Fix capture_count tracking on failure | MEDIUM |
-| `sources.py` | PhotoSource directory traversal prevention | MEDIUM |
-| `trust.py` | Thread safety via Lock | MEDIUM |
-| `vault.py` | Zero-filled key rejection, permission warning | MEDIUM |
-| `analysis.py` | User context truncation and delimiting | MEDIUM |
+| `scene_memory.py` | Eager numpy cleanup on eviction/close, close() re-entrance guard, thread-safe detect_latest_change | HIGH |
+| `voice/server.py` | Capture timeout + image size limit (2MiB) with quality downgrade | HIGH |
+| `vision_memory.py` | Double-checked locking for thread-safe lazy init | MEDIUM |
+| `capture.py` | Deadline-aware retry sleeps | MEDIUM |
+| `intent.py` | Bound activation_log to 500 entries | LOW |
 
 ### Vision Modules (20 files in `missy/vision/`)
 
@@ -64,19 +48,19 @@ Hardening session: thread safety, security, prompt injection mitigation, 168 new
 |--------|---------|
 | `__init__.py` | Package docs with complete submodule listing |
 | `discovery.py` | USB camera discovery via sysfs + rediscover/validate + cycle detection |
-| `capture.py` | OpenCV capture with timeout, warmup timeout, fd leak prevention, quality scoring, accurate stats |
+| `capture.py` | OpenCV capture with timeout, deadline-aware retries, warmup, fd leak prevention, quality scoring |
 | `resilient_capture.py` | Auto-reconnection with blank detector reset on device switch |
 | `multi_camera.py` | Concurrent multi-camera capture with deadline-based timeout + handle validation |
 | `sources.py` | Unified source abstraction with S_ISREG validation + traversal prevention |
 | `pipeline.py` | Image preprocessing + quality assessment (6 metrics) |
-| `scene_memory.py` | Task-scoped scene memory with perceptual hashing + deduplication + thread safety |
+| `scene_memory.py` | Task-scoped scene memory with perceptual hashing + deduplication + thread safety + eager cleanup |
 | `health_monitor.py` | Capture stats, health tracking, SQLite persistence, thread-safe auto-save |
 | `benchmark.py` | Performance benchmarking with percentile statistics |
 | `memory_usage.py` | Scene memory usage monitoring with configurable limits |
 | `config_validator.py` | Vision configuration validation |
-| `vision_memory.py` | Bridge to SQLite/vector memory with metadata field protection |
+| `vision_memory.py` | Bridge to SQLite/vector memory with metadata protection + thread-safe init |
 | `analysis.py` | Domain-specific prompts with context sanitization |
-| `intent.py` | Audio-triggered vision intent classification (40+ patterns) |
+| `intent.py` | Audio-triggered vision intent classification (40+ patterns) + bounded activation log |
 | `doctor.py` | Diagnostics: OpenCV, video group, permissions, disk space, health |
 | `provider_format.py` | Provider-specific image API formatting with input validation |
 | `audit.py` | Vision audit event logging (7 event types) |
@@ -86,7 +70,7 @@ Hardening session: thread safety, security, prompt injection mitigation, 168 new
 ### Integration Points
 - **CLI**: `missy vision devices/capture/inspect/review/doctor/health/benchmark/validate/memory`
 - **Tools**: vision_capture, vision_burst, vision_analyze, vision_devices, vision_scene
-- **Voice**: Audio intent detection → auto-capture in voice server
+- **Voice**: Audio intent detection → auto-capture with timeout + size limits
 - **Config**: `VisionConfig` in settings schema + config validation
 - **Hatching**: `check_vision` readiness step
 - **Persona**: Vision coaching guidance in identity description
@@ -106,17 +90,13 @@ Hardening session: thread safety, security, prompt injection mitigation, 168 new
 
 ## Recovery Notes
 
-All code committed and passing. 14,895 total tests, 0 failures, 14 skipped.
-Session 9: 6 code fixes, 168 new tests across 8 new test files.
-Vision subsystem has 20 modules. Ruff lint fully clean.
+All code committed and passing. 15,033 total tests, 0 failures, 14 skipped.
+Session 10: 7 code fixes, 166 new tests across 5 new test files.
+Vision subsystem has 20 modules. Ruff lint: 12 SIM117 style-only warnings remaining (nested with statements in tests).
 
-Session 9 commits:
-1. `fddce6f` — Thread safety + security hardening (22 tests)
-2. `52fd3b1` — Analysis context sanitization (13 tests)
-3. `4302c0c` — Resilient capture edge case tests (13 tests)
-4. `5eade9d` — Source, shutdown, orientation tests (34 tests)
-5. `2cb20fe` — Analysis test compatibility update
-6. `f9fc2ee` — Security tests (25 tests)
-7. `03a5d05` — Vision memory bridge tests (11 tests)
-8. `752f761` — Config validator tests (29 tests)
-9. `4c61663` — Benchmark and intent classifier tests (21 tests)
+Session 10 commits:
+1. `eb02aaf` — Vision hardening: memory cleanup, thread safety, timeouts (7 code fixes)
+2. `b7fddbc` — Memory cleanup and thread safety tests (82 tests)
+3. `b0932ff` — Resilient capture, pipeline, intent, provider tests (26 tests)
+4. `1dcac28` — Audit, health, benchmark, config validator tests (30 tests)
+5. `184ab9d` — Integration tests + activation log bounding (28 tests)

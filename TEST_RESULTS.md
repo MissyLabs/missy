@@ -2,12 +2,12 @@
 
 ## Summary
 
-- **Total tests**: 14,711
-- **Passed**: 14,711
+- **Total tests**: 15,033
+- **Passed**: 15,033
 - **Failed**: 0
 - **Skipped**: 14
 - **Duration**: ~5 minutes
-- **Last updated**: Session 8 (2026-03-19)
+- **Last updated**: Session 10 (2026-03-19)
 
 ## Vision Tests
 
@@ -103,3 +103,6 @@
 |---------|-------------|-----------|-------------|
 | 6 | 13,757 | 160 | Health persistence, perceptual hash, adaptive blank, rediscovery |
 | 7 | 14,388 | 631 | Multi-camera, benchmark, memory usage, config validator, vision memory, dedup, timeout, warmup quality, security |
+| 8 | 14,711 | 323 | Orientation, EXIF parsing, doctor diagnostics, intent hardening, analysis edge cases |
+| 9 | 14,895 | 168 | Thread safety, security hardening, context sanitization, config validator, benchmark tests |
+| 10 | 15,033 | 138 | Memory cleanup, thread safety fixes, timeout hardening, image size limits, activation log bounding |
