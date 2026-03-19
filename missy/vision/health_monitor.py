@@ -313,6 +313,59 @@ class VisionHealthMonitor:
                 consecutive_failures=stats.consecutive_failures,
             )
 
+    def get_recommendations(self) -> list[str]:
+        """Generate actionable recommendations based on collected statistics.
+
+        Returns:
+            A list of recommendation strings.  Empty when no issues are
+            detected or when insufficient data has been collected.
+        """
+        with self._lock:
+            recs: list[str] = []
+
+            for device, stats in self._devices.items():
+                if stats.total_captures < 3:
+                    continue  # not enough data
+
+                # Consecutive failure recommendations
+                if stats.consecutive_failures >= _CONSECUTIVE_FAILURE_LIMIT:
+                    if "permission" in stats.last_error.lower():
+                        recs.append(
+                            f"Device {device}: add user to 'video' group "
+                            f"(sudo usermod -aG video $USER) and re-login"
+                        )
+                    elif "busy" in stats.last_error.lower():
+                        recs.append(
+                            f"Device {device}: close other applications "
+                            f"using the camera (lsof {device})"
+                        )
+                    else:
+                        recs.append(
+                            f"Device {device}: check physical connection "
+                            f"and try 'missy vision doctor' for diagnostics"
+                        )
+
+                # High latency recommendation
+                if stats.average_latency_ms > 2000 and stats.total_captures >= 5:
+                    recs.append(
+                        f"Device {device}: high average latency "
+                        f"({stats.average_latency_ms:.0f}ms) — consider "
+                        f"reducing capture resolution"
+                    )
+
+                # Low quality recommendation
+                if (
+                    stats.average_quality > 0
+                    and stats.average_quality < _LOW_QUALITY_THRESHOLD
+                    and stats.successful_captures >= 5
+                ):
+                    recs.append(
+                        f"Device {device}: low image quality — check "
+                        f"lighting conditions and camera lens cleanliness"
+                    )
+
+            return recs
+
     def reset(self) -> None:
         """Clear all recorded data."""
         with self._lock:

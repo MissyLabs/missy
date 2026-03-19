@@ -3363,6 +3363,12 @@ def vision_health_cmd() -> None:
         for w in report["warnings"]:
             console.print(f"  [yellow]• {w}[/]")
 
+    recommendations = monitor.get_recommendations()
+    if recommendations:
+        console.print("\n[bold cyan]Recommendations:[/]")
+        for r in recommendations:
+            console.print(f"  [cyan]→ {r}[/]")
+
 
 @vision.command("devices")
 def vision_devices() -> None:

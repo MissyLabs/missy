@@ -475,3 +475,60 @@ class TestEdgeCases:
         report = m.get_health_report()
         # Only the most recent event is within the window
         assert report["recent_success_rate"] == pytest.approx(0.0)
+
+
+# ---------------------------------------------------------------------------
+# get_recommendations
+# ---------------------------------------------------------------------------
+
+
+class TestGetRecommendations:
+    def test_no_recommendations_when_empty(self, monitor):
+        assert monitor.get_recommendations() == []
+
+    def test_no_recommendations_with_few_captures(self, monitor):
+        monitor.record_capture(success=False, device="d", error="timeout")
+        assert monitor.get_recommendations() == []
+
+    def test_permission_error_recommends_video_group(self, monitor):
+        for _ in range(5):
+            monitor.record_capture(success=False, device="/dev/video0", error="permission denied")
+        recs = monitor.get_recommendations()
+        assert any("video" in r and "usermod" in r for r in recs)
+
+    def test_busy_error_recommends_lsof(self, monitor):
+        for _ in range(5):
+            monitor.record_capture(success=False, device="/dev/video0", error="device busy")
+        recs = monitor.get_recommendations()
+        assert any("lsof" in r for r in recs)
+
+    def test_generic_failure_recommends_doctor(self, monitor):
+        for _ in range(5):
+            monitor.record_capture(success=False, device="/dev/video0", error="unknown error")
+        recs = monitor.get_recommendations()
+        assert any("doctor" in r for r in recs)
+
+    def test_high_latency_recommends_lower_resolution(self, monitor):
+        for _ in range(5):
+            monitor.record_capture(success=True, device="d", latency_ms=3000)
+        recs = monitor.get_recommendations()
+        assert any("resolution" in r for r in recs)
+
+    def test_low_quality_recommends_lighting(self, monitor):
+        for _ in range(5):
+            monitor.record_capture(success=True, device="d", quality_score=0.2)
+        recs = monitor.get_recommendations()
+        assert any("lighting" in r for r in recs)
+
+    def test_healthy_device_no_recommendations(self, monitor):
+        for _ in range(10):
+            monitor.record_capture(success=True, device="d", quality_score=0.9, latency_ms=50)
+        assert monitor.get_recommendations() == []
+
+    def test_multiple_devices_independent_recommendations(self, monitor):
+        for _ in range(5):
+            monitor.record_capture(success=False, device="a", error="permission denied")
+        for _ in range(5):
+            monitor.record_capture(success=True, device="b", quality_score=0.1)
+        recs = monitor.get_recommendations()
+        assert len(recs) == 2
