@@ -315,9 +315,11 @@ class TestSecurityPaths:
         mock_client.tools = [{"name": "t1"}]
         mock_client_cls.return_value = mock_client
 
-        with patch("missy.mcp.digest.compute_tool_manifest_digest", return_value="actual-hash-456"), \
-             patch("missy.mcp.digest.verify_digest", return_value=False), \
-             patch("missy.core.events.event_bus"):
-            with pytest.raises(ValueError, match="digest mismatch"):
-                mgr.add_server("srv", command="echo")
+        with (
+            patch("missy.mcp.digest.compute_tool_manifest_digest", return_value="actual-hash-456"),
+            patch("missy.mcp.digest.verify_digest", return_value=False),
+            patch("missy.core.events.event_bus"),
+            pytest.raises(ValueError, match="digest mismatch"),
+        ):
+            mgr.add_server("srv", command="echo")
         mock_client.disconnect.assert_called_once()

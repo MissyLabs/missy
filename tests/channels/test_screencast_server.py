@@ -308,9 +308,8 @@ class TestImportFallback:
         with patch.dict(
             sys.modules,
             {"websockets.asyncio.server": None},
-        ):
-            with contextlib.suppress(Exception):
-                import missy.channels.screencast.server as srv_mod  # noqa: F401
+        ), contextlib.suppress(Exception):
+            import missy.channels.screencast.server as srv_mod  # noqa: F401
         if cached is not None:
             sys.modules["missy.channels.screencast.server"] = cached
 

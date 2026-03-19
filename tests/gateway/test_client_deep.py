@@ -701,9 +701,8 @@ class TestResponseSizeLimits:
     def test_get_blocks_oversized_response_via_content_length(self) -> None:
         client = PolicyHTTPClient(max_response_bytes=100)
         resp = _mock_response(200, headers={"content-length": "200"})
-        with patch.object(httpx.Client, "get", return_value=resp):
-            with pytest.raises(ValueError, match="too large"):
-                client.get("https://api.example.com/big-resource")
+        with patch.object(httpx.Client, "get", return_value=resp), pytest.raises(ValueError, match="too large"):
+            client.get("https://api.example.com/big-resource")
 
 
 # ---------------------------------------------------------------------------
@@ -822,29 +821,25 @@ class TestConnectionErrorHandling:
 
     def test_connect_error_propagates_from_get(self) -> None:
         client = PolicyHTTPClient()
-        with patch.object(httpx.Client, "get", side_effect=httpx.ConnectError("refused")):
-            with pytest.raises(httpx.ConnectError):
-                client.get("https://api.example.com/")
+        with patch.object(httpx.Client, "get", side_effect=httpx.ConnectError("refused")), pytest.raises(httpx.ConnectError):
+            client.get("https://api.example.com/")
 
     def test_timeout_error_propagates_from_post(self) -> None:
         client = PolicyHTTPClient()
-        with patch.object(httpx.Client, "post", side_effect=httpx.TimeoutException("timed out")):
-            with pytest.raises(httpx.TimeoutException):
-                client.post("https://api.example.com/items")
+        with patch.object(httpx.Client, "post", side_effect=httpx.TimeoutException("timed out")), pytest.raises(httpx.TimeoutException):
+            client.post("https://api.example.com/items")
 
     def test_http_status_error_propagates_from_delete(self) -> None:
         client = PolicyHTTPClient()
         exc = httpx.HTTPStatusError("500 error", request=MagicMock(), response=MagicMock())
-        with patch.object(httpx.Client, "delete", side_effect=exc):
-            with pytest.raises(httpx.HTTPStatusError):
-                client.delete("https://api.example.com/resource/1")
+        with patch.object(httpx.Client, "delete", side_effect=exc), pytest.raises(httpx.HTTPStatusError):
+            client.delete("https://api.example.com/resource/1")
 
     def test_connection_error_does_not_emit_audit_event(self) -> None:
         """No network_request event should be emitted when the request never completes."""
         client = PolicyHTTPClient()
-        with patch.object(httpx.Client, "get", side_effect=httpx.ConnectError("refused")):
-            with pytest.raises(httpx.ConnectError):
-                client.get("https://api.example.com/")
+        with patch.object(httpx.Client, "get", side_effect=httpx.ConnectError("refused")), pytest.raises(httpx.ConnectError):
+            client.get("https://api.example.com/")
         assert event_bus.get_events(event_type="network_request") == []
 
     async def test_async_connect_error_propagates(self) -> None:
@@ -983,9 +978,8 @@ class TestInteractiveApprovalFlow:
         self._use_restrictive()
         # _interactive_approval is already None from fixture
         client = PolicyHTTPClient()
-        with patch.object(httpx.Client, "get") as mock_get:
-            with pytest.raises(PolicyViolationError):
-                client.get("https://denied.example.com/")
+        with patch.object(httpx.Client, "get") as mock_get, pytest.raises(PolicyViolationError):
+            client.get("https://denied.example.com/")
         mock_get.assert_not_called()
 
     def test_non_interactive_approval_object_raises(self) -> None:
@@ -995,9 +989,8 @@ class TestInteractiveApprovalFlow:
         set_interactive_approval(MagicMock())
 
         client = PolicyHTTPClient()
-        with patch.object(httpx.Client, "get") as mock_get:
-            with pytest.raises(PolicyViolationError):
-                client.get("https://denied.example.com/")
+        with patch.object(httpx.Client, "get") as mock_get, pytest.raises(PolicyViolationError):
+            client.get("https://denied.example.com/")
         mock_get.assert_not_called()
 
     def test_set_interactive_approval_stores_instance(self) -> None:

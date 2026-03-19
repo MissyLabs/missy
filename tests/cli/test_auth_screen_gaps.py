@@ -49,18 +49,16 @@ class TestStoreTokenWriteFailure:
         """Tmp file is unlinked when json.dump raises so no partial file is left."""
         tmp_path_expected = self.token_file.with_suffix(".tmp")
 
-        with patch("json.dump", side_effect=OSError("disk full")):
-            with pytest.raises(OSError, match="disk full"):
-                store_token("sk-ant-api03-test", "api_key")
+        with patch("json.dump", side_effect=OSError("disk full")), pytest.raises(OSError, match="disk full"):
+            store_token("sk-ant-api03-test", "api_key")
 
         # The tmp file must have been cleaned up on exception.
         assert not tmp_path_expected.exists()
 
     def test_write_error_does_not_leave_token_file(self, tmp_path):
         """The final token file must not exist after a failed write."""
-        with patch("json.dump", side_effect=ValueError("serialise fail")):
-            with pytest.raises(ValueError):
-                store_token("bad-token", "setup_token")
+        with patch("json.dump", side_effect=ValueError("serialise fail")), pytest.raises(ValueError):
+            store_token("bad-token", "setup_token")
 
         assert not self.token_file.exists()
 
@@ -69,9 +67,8 @@ class TestStoreTokenWriteFailure:
         class _CustomError(Exception):
             pass
 
-        with patch("json.dump", side_effect=_CustomError("custom")):
-            with pytest.raises(_CustomError, match="custom"):
-                store_token("tok", "api_key")
+        with patch("json.dump", side_effect=_CustomError("custom")), pytest.raises(_CustomError, match="custom"):
+            store_token("tok", "api_key")
 
     def test_successful_write_after_prior_failure_still_works(self):
         """A subsequent store_token call succeeds even after a prior failure."""
@@ -118,11 +115,13 @@ class TestSetupTokenFlowEmptyPasteLoopContinue:
         def _fake_confirm(msg, **kwargs):
             return confirm_returns.pop(0)
 
-        with patch.object(anthropic_auth, "console"):
-            with patch("click.confirm", side_effect=_fake_confirm):
-                with patch("click.prompt", side_effect=_fake_prompt):
-                    with patch("shutil.which", return_value=None):
-                        result = anthropic_auth.run_anthropic_setup_token_flow()
+        with (
+            patch.object(anthropic_auth, "console"),
+            patch("click.confirm", side_effect=_fake_confirm),
+            patch("click.prompt", side_effect=_fake_prompt),
+            patch("shutil.which", return_value=None),
+        ):
+            result = anthropic_auth.run_anthropic_setup_token_flow()
 
         assert result == valid_token
 
@@ -141,11 +140,13 @@ class TestSetupTokenFlowEmptyPasteLoopContinue:
         def _fake_confirm(msg, **kwargs):
             return confirm_returns.pop(0)
 
-        with patch.object(anthropic_auth, "console"):
-            with patch("click.confirm", side_effect=_fake_confirm):
-                with patch("click.prompt", side_effect=_fake_prompt):
-                    with patch("shutil.which", return_value=None):
-                        result = anthropic_auth.run_anthropic_setup_token_flow()
+        with (
+            patch.object(anthropic_auth, "console"),
+            patch("click.confirm", side_effect=_fake_confirm),
+            patch("click.prompt", side_effect=_fake_prompt),
+            patch("shutil.which", return_value=None),
+        ):
+            result = anthropic_auth.run_anthropic_setup_token_flow()
 
         assert result is None
 

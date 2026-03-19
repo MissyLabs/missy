@@ -108,6 +108,11 @@ observability:
 vault:
   enabled: false
   vault_dir: "~/.missy/secrets"
+
+# Vision: on-demand visual capabilities (requires pip install -e ".[vision]")
+vision:
+  enabled: true
+  auto_activate_threshold: 0.80
 """
 
 
@@ -3302,6 +3307,580 @@ def persona_log(limit: int) -> None:
         )
 
     console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# missy vision
+# ---------------------------------------------------------------------------
+
+
+@cli.group()
+def vision() -> None:
+    """Vision subsystem — camera discovery, capture, and visual analysis."""
+
+
+@vision.command("health")
+def vision_health_cmd() -> None:
+    """Show vision subsystem health statistics (includes persisted history)."""
+    from pathlib import Path
+
+    from missy.vision.health_monitor import get_health_monitor
+
+    monitor = get_health_monitor()
+
+    # Load persisted history if available
+    import contextlib
+
+    persist_path = Path.home() / ".missy" / "vision_health.db"
+    if persist_path.exists():
+        with contextlib.suppress(Exception):
+            monitor.load(persist_path)
+
+    report = monitor.get_health_report()
+
+    status = report["overall_status"]
+    status_color = {"healthy": "green", "degraded": "yellow", "unhealthy": "red"}.get(
+        status, "dim"
+    )
+
+    console.print(f"[bold]Vision Health:[/] [{status_color}]{status.upper()}[/]")
+    console.print(
+        f"  Total captures: {report['total_captures']}  "
+        f"Failures: {report['total_failures']}  "
+        f"Recent success rate: {report['recent_success_rate']:.0%}"
+    )
+    console.print(f"  Uptime: {report['uptime_seconds']:.0f}s")
+
+    if report["devices"]:
+        console.print("\n[bold]Devices:[/]")
+        for device, stats in report["devices"].items():
+            dev_color = {"healthy": "green", "degraded": "yellow", "unhealthy": "red"}.get(
+                stats["status"], "dim"
+            )
+            console.print(
+                f"  [{dev_color}]{stats['status'].upper():>9}[/]  {device}  "
+                f"({stats['total_captures']} captures, "
+                f"{stats['success_rate']:.0%} success, "
+                f"{stats['average_latency_ms']:.0f}ms avg)"
+            )
+            if stats["consecutive_failures"] > 0:
+                console.print(
+                    f"           [yellow]{stats['consecutive_failures']} consecutive failures: "
+                    f"{stats['last_error']}[/]"
+                )
+
+    if report["warnings"]:
+        console.print("\n[bold yellow]Warnings:[/]")
+        for w in report["warnings"]:
+            console.print(f"  [yellow]• {w}[/]")
+
+    recommendations = monitor.get_recommendations()
+    if recommendations:
+        console.print("\n[bold cyan]Recommendations:[/]")
+        for r in recommendations:
+            console.print(f"  [cyan]→ {r}[/]")
+
+
+@vision.command("devices")
+def vision_devices() -> None:
+    """Enumerate and diagnose available cameras."""
+    from missy.vision.discovery import KNOWN_CAMERAS, CameraDiscovery
+
+    disc = CameraDiscovery()
+    cameras = disc.discover(force=True)
+
+    if not cameras:
+        console.print("[yellow]No cameras detected.[/]")
+        console.print(
+            "\n[dim]Troubleshooting:[/]\n"
+            "  1. Check USB connection\n"
+            "  2. Run [bold]lsusb[/] to verify device is detected\n"
+            "  3. Ensure user is in 'video' group: [bold]sudo usermod -aG video $USER[/]\n"
+            "  4. Run [bold]missy vision doctor[/] for full diagnostics"
+        )
+        return
+
+    table = Table(title=f"Cameras ({len(cameras)} found)")
+    table.add_column("Device", style="bold")
+    table.add_column("Name")
+    table.add_column("USB ID")
+    table.add_column("Bus Info", style="dim")
+    table.add_column("Known", style="green")
+
+    for cam in cameras:
+        known = KNOWN_CAMERAS.get(cam.usb_id, "")
+        table.add_row(
+            cam.device_path,
+            cam.name,
+            cam.usb_id,
+            cam.bus_info[:40] if cam.bus_info else "",
+            known or "[dim]—[/]",
+        )
+
+    console.print(table)
+
+    preferred = disc.find_preferred()
+    if preferred:
+        console.print(f"\n[green]Preferred camera:[/] {preferred.name} ({preferred.device_path})")
+
+
+@vision.command("capture")
+@click.option("--device", "-d", default=None, help="Device path (e.g. /dev/video0).")
+@click.option("--output", "-o", default=None, help="Output file path (default: auto-generated).")
+@click.option("--width", default=1920, help="Capture width.")
+@click.option("--height", default=1080, help="Capture height.")
+@click.option("--count", "-n", default=1, help="Number of frames to capture.")
+@click.option("--burst", is_flag=True, help="Burst mode: capture multiple frames rapidly.")
+@click.option("--best", is_flag=True, help="Capture a burst and save only the sharpest frame.")
+def vision_capture(
+    device: str | None,
+    output: str | None,
+    width: int,
+    height: int,
+    count: int,
+    burst: bool,
+    best: bool,
+) -> None:
+    """Capture one or more frames from a camera."""
+    from missy.vision.capture import CameraHandle, CaptureConfig, CaptureError
+    from missy.vision.discovery import find_preferred_camera
+
+    if device is None:
+        cam = find_preferred_camera()
+        if cam is None:
+            _print_error("No camera found", hint="Run missy vision devices")
+            sys.exit(1)
+        device = cam.device_path
+        console.print(f"[dim]Using camera: {cam.name} ({device})[/]")
+
+    config = CaptureConfig(width=width, height=height)
+    handle = CameraHandle(device, config)
+
+    try:
+        handle.open()
+
+        # Best mode: burst + pick sharpest
+        if best:
+            burst_count = max(count, 3)
+            console.print(f"[dim]Burst capturing {burst_count} frames, selecting sharpest...[/]")
+            result = handle.capture_best(burst_count=burst_count)
+            if result.success:
+                ts = time.strftime("%Y%m%d_%H%M%S")
+                out_path = output or str(
+                    Path.home() / f".missy/captures/best_{ts}.jpg"
+                )
+                Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+                import cv2
+                cv2.imwrite(out_path, result.image, [cv2.IMWRITE_JPEG_QUALITY, config.quality])
+                console.print(
+                    f"[green]Best frame[/] {result.width}x{result.height} → {out_path}"
+                )
+            else:
+                console.print(f"[red]Failed[/]: {result.error}")
+            return
+
+        # Burst mode: capture rapid sequence
+        if burst:
+            console.print(f"[dim]Burst capturing {count} frames...[/]")
+            results = handle.capture_burst(count=count, interval=0.3)
+            for i, result in enumerate(results):
+                if output:
+                    base = Path(output)
+                    out_path = str(base.parent / f"{base.stem}_{i:03d}{base.suffix}")
+                else:
+                    ts = time.strftime("%Y%m%d_%H%M%S")
+                    out_path = str(
+                        Path.home() / f".missy/captures/burst_{ts}_{i:03d}.jpg"
+                    )
+                Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+                if result.success:
+                    import cv2
+                    cv2.imwrite(out_path, result.image, [cv2.IMWRITE_JPEG_QUALITY, config.quality])
+                    console.print(
+                        f"[green]Frame {i}[/] {result.width}x{result.height} → {out_path}"
+                    )
+                else:
+                    console.print(f"[red]Frame {i}[/]: {result.error}")
+            succeeded = sum(1 for r in results if r.success)
+            console.print(f"[dim]Burst complete: {succeeded}/{count} frames captured[/]")
+            return
+
+        # Standard capture
+        for i in range(count):
+            if output and count == 1:
+                out_path = output
+            elif output:
+                base = Path(output)
+                out_path = str(base.parent / f"{base.stem}_{i:03d}{base.suffix}")
+            else:
+                ts = time.strftime("%Y%m%d_%H%M%S")
+                out_path = str(Path.home() / f".missy/captures/capture_{ts}_{i:03d}.jpg")
+
+            Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+            result = handle.capture_to_file(out_path)
+
+            if result.success:
+                console.print(
+                    f"[green]Captured[/] {result.width}x{result.height} → {out_path}"
+                )
+            else:
+                console.print(f"[red]Failed[/] frame {i}: {result.error}")
+
+    except CaptureError as exc:
+        _print_error(str(exc), hint="Run missy vision doctor")
+        sys.exit(1)
+    finally:
+        handle.close()
+
+
+@vision.command("inspect")
+@click.option("--device", "-d", default=None, help="Camera device path.")
+@click.option("--file", "-f", "file_path", default=None, help="Image file to inspect.")
+@click.option("--screenshot", "-s", is_flag=True, help="Capture a screenshot to inspect.")
+@click.option("--context", "-c", default="", help="Additional context for analysis.")
+def vision_inspect(
+    device: str | None,
+    file_path: str | None,
+    screenshot: bool,
+    context: str,
+) -> None:
+    """Run general visual analysis on an image source."""
+    from missy.vision.sources import FileSource, ScreenshotSource, WebcamSource
+
+    console.print("[bold]Visual Inspection[/]\n")
+
+    try:
+        if file_path:
+            source = FileSource(file_path)
+            console.print(f"[dim]Source: file ({file_path})[/]")
+        elif screenshot:
+            source = ScreenshotSource()
+            console.print("[dim]Source: screenshot[/]")
+        else:
+            if device is None:
+                from missy.vision.discovery import find_preferred_camera
+                cam = find_preferred_camera()
+                if cam is None:
+                    _print_error("No camera found", hint="Use --file or --screenshot")
+                    sys.exit(1)
+                device = cam.device_path
+            source = WebcamSource(device)
+            console.print(f"[dim]Source: webcam ({device})[/]")
+
+        frame = source.acquire()
+        console.print(
+            f"[green]Acquired[/] {frame.width}x{frame.height} image "
+            f"from {frame.source_type.value}"
+        )
+
+        # Run quality assessment
+        from missy.vision.pipeline import ImagePipeline
+        pipeline = ImagePipeline()
+        quality = pipeline.assess_quality(frame.image)
+
+        table = Table(title="Image Quality")
+        table.add_column("Metric", style="bold")
+        table.add_column("Value")
+        table.add_row("Resolution", f"{quality['width']}x{quality['height']}")
+        table.add_row("Brightness", str(quality["brightness"]))
+        table.add_row("Contrast", str(quality["contrast"]))
+        table.add_row("Sharpness", str(quality["sharpness"]))
+        table.add_row(
+            "Quality",
+            f"[green]{quality['quality']}[/]"
+            if quality["quality"] == "good"
+            else f"[yellow]{quality['quality']}[/]",
+        )
+        if quality["issues"]:
+            table.add_row("Issues", ", ".join(quality["issues"]))
+
+        console.print(table)
+        console.print(
+            "\n[dim]For LLM-powered analysis, use missy vision review --mode general[/]"
+        )
+
+    except Exception as exc:
+        _print_error(f"Inspection failed: {exc}")
+        sys.exit(1)
+
+
+@vision.command("review")
+@click.option("--device", "-d", default=None, help="Camera device path.")
+@click.option("--file", "-f", "file_path", default=None, help="Image file to review.")
+@click.option(
+    "--mode", "-m",
+    type=click.Choice(["general", "puzzle", "painting", "inspection"]),
+    default="general",
+    help="Analysis mode.",
+)
+@click.option("--context", "-c", default="", help="Additional context for analysis.")
+@click.option("--config", "config_path", default=DEFAULT_CONFIG, help="Config file path.")
+def vision_review(
+    device: str | None,
+    file_path: str | None,
+    mode: str,
+    context: str,
+    config_path: str,
+) -> None:
+    """Run domain-specific visual analysis (puzzle help, painting feedback)."""
+    from missy.vision.analysis import AnalysisMode, AnalysisPromptBuilder, AnalysisRequest
+    from missy.vision.sources import FileSource, WebcamSource
+
+    console.print(f"[bold]Visual Review[/] — mode: {mode}\n")
+
+    try:
+        # Acquire image
+        if file_path:
+            source = FileSource(file_path)
+            console.print(f"[dim]Source: {file_path}[/]")
+        else:
+            if device is None:
+                from missy.vision.discovery import find_preferred_camera
+                cam = find_preferred_camera()
+                if cam is None:
+                    _print_error("No camera found", hint="Use --file to provide an image")
+                    sys.exit(1)
+                device = cam.device_path
+            source = WebcamSource(device)
+            console.print(f"[dim]Source: webcam ({device})[/]")
+
+        frame = source.acquire()
+        console.print(f"[green]Acquired[/] {frame.width}x{frame.height} image\n")
+
+        # Preprocess
+        from missy.vision.pipeline import ImagePipeline
+        pipeline = ImagePipeline()
+        processed = pipeline.process(frame.image)
+
+        # Build analysis prompt
+        analysis_mode = AnalysisMode(mode)
+        request = AnalysisRequest(
+            image=processed,
+            mode=analysis_mode,
+            context=context,
+        )
+        builder = AnalysisPromptBuilder()
+        prompt = builder.build_prompt(request)
+
+        # Encode for LLM
+        import base64
+
+        import cv2
+        _, buf = cv2.imencode(".jpg", processed, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        b64_image = base64.b64encode(buf.tobytes()).decode("ascii")
+
+        # Send to provider with provider-specific formatting
+        from missy.providers.registry import get_registry
+        registry = get_registry()
+        provider = registry.get_provider()
+        provider_name = getattr(provider, "name", "anthropic")
+
+        from missy.vision.provider_format import build_vision_message
+        msg_dict = build_vision_message(provider_name, b64_image, prompt)
+
+        from missy.providers.base import Message
+        messages = [Message(role=msg_dict["role"], content=msg_dict["content"])]
+
+        console.print("[dim]Analyzing...[/]\n")
+        response = provider.complete(messages)
+
+        # Log audit event
+        try:
+            from missy.vision.audit import audit_vision_analysis
+            audit_vision_analysis(
+                mode=mode,
+                source_type=frame.source_type.value,
+                trigger_reason="cli_command",
+                success=True,
+            )
+        except Exception:
+            pass
+
+        console.print(Panel(
+            response.text,
+            title=f"[bold]{mode.title()} Analysis[/]",
+            border_style="cyan",
+            padding=(1, 2),
+        ))
+
+    except Exception as exc:
+        _print_error(f"Review failed: {exc}")
+        sys.exit(1)
+
+
+@vision.command("doctor")
+def vision_doctor_cmd() -> None:
+    """Run vision subsystem diagnostics."""
+    from missy.vision.doctor import VisionDoctor
+
+    console.print("[bold]Vision Subsystem Diagnostics[/]\n")
+    doc = VisionDoctor()
+    report = doc.run_all()
+
+    for result in report.results:
+        if result.passed:
+            icon = "[green]PASS[/]"
+        elif result.severity == "warning":
+            icon = "[yellow]WARN[/]"
+        else:
+            icon = "[red]FAIL[/]"
+
+        console.print(f"  {icon}  {result.name}: {result.message}")
+
+        if result.details and not result.passed:
+            for key, val in result.details.items():
+                if isinstance(val, list) and len(val) > 3:
+                    console.print(f"       [dim]{key}: ({len(val)} items)[/]")
+                else:
+                    console.print(f"       [dim]{key}: {val}[/]")
+
+    console.print()
+    console.print(
+        f"  [bold]Summary:[/] {report.passed} passed, "
+        f"{report.warnings} warnings, {report.errors} errors"
+    )
+
+    if report.overall_healthy:
+        console.print("\n  [green]Vision subsystem is healthy![/]")
+    else:
+        console.print("\n  [red]Vision subsystem has issues that need attention.[/]")
+
+
+@vision.command("benchmark")
+def vision_benchmark_cmd() -> None:
+    """Show capture performance benchmark statistics."""
+    from missy.vision.benchmark import get_benchmark
+
+    bench = get_benchmark()
+    report = bench.report()
+
+    console.print("[bold]Vision Capture Benchmarks[/]\n")
+    console.print(f"  Uptime: {report['uptime_seconds']:.1f}s\n")
+
+    categories = report.get("categories", {})
+    if not categories:
+        console.print("  [dim]No benchmark data collected yet.[/]")
+        console.print("  [dim]Run some captures to collect latency data.[/]")
+        return
+
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Category")
+    table.add_column("Count", justify="right")
+    table.add_column("Min (ms)", justify="right")
+    table.add_column("Mean (ms)", justify="right")
+    table.add_column("Median (ms)", justify="right")
+    table.add_column("P95 (ms)", justify="right")
+    table.add_column("Max (ms)", justify="right")
+
+    for cat, stats in categories.items():
+        table.add_row(
+            cat,
+            str(stats["count"]),
+            f"{stats['min_ms']:.1f}",
+            f"{stats['mean_ms']:.1f}",
+            f"{stats['median_ms']:.1f}",
+            f"{stats['p95_ms']:.1f}",
+            f"{stats['max_ms']:.1f}",
+        )
+
+    console.print(table)
+
+
+@vision.command("validate")
+def vision_validate_cmd() -> None:
+    """Validate the current vision configuration."""
+    from missy.vision.config_validator import validate_vision_config
+
+    # Try to load config
+    try:
+        from missy.config.settings import load_config
+
+        cfg = load_config()
+        vision_cfg = {}
+        if hasattr(cfg, "vision"):
+            vc = cfg.vision
+            for field_name in (
+                "enabled",
+                "capture_width",
+                "capture_height",
+                "warmup_frames",
+                "max_retries",
+                "auto_activate_threshold",
+                "scene_memory_max_frames",
+                "scene_memory_max_sessions",
+                "preferred_device",
+            ):
+                if hasattr(vc, field_name):
+                    vision_cfg[field_name] = getattr(vc, field_name)
+    except Exception:
+        vision_cfg = {}
+
+    result = validate_vision_config(vision_cfg)
+
+    console.print("[bold]Vision Configuration Validation[/]\n")
+
+    if result.valid and not result.warnings:
+        console.print("  [green]All settings are valid.[/]\n")
+        return
+
+    for issue in result.issues:
+        if issue.severity == "error":
+            icon = "[red]ERROR[/]"
+        elif issue.severity == "warning":
+            icon = "[yellow]WARN [/]"
+        else:
+            icon = "[blue]INFO [/]"
+
+        console.print(f"  {icon}  {issue.field}: {issue.message}")
+        if issue.current_value is not None:
+            console.print(f"       [dim]Current: {issue.current_value}[/]")
+        if issue.suggested_value is not None:
+            console.print(f"       [dim]Suggested: {issue.suggested_value}[/]")
+
+    console.print()
+    if result.valid:
+        console.print("  [green]Configuration is valid[/] (with warnings)")
+    else:
+        console.print(f"  [red]Configuration has {len(result.errors)} error(s)[/]")
+
+
+@vision.command("memory")
+def vision_memory_cmd() -> None:
+    """Show vision scene memory usage."""
+    from missy.vision.memory_usage import get_memory_tracker
+
+    tracker = get_memory_tracker()
+    report = tracker.update_from_scene_manager()
+
+    console.print("[bold]Vision Scene Memory Usage[/]\n")
+
+    d = report.to_dict()
+    console.print(f"  Total: {d['total_mb']:.2f} MB / {d['limit_mb']:.2f} MB ({d['usage_fraction']:.1%})")
+    console.print(f"  Frames: {d['total_frames']}")
+    console.print(f"  Sessions: {d['session_count']} ({d['active_sessions']} active)")
+
+    if report.over_limit:
+        console.print("  [red]OVER LIMIT — consider closing inactive sessions[/]")
+
+    if d["sessions"]:
+        console.print()
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Task ID")
+        table.add_column("Frames", justify="right")
+        table.add_column("Memory (MB)", justify="right")
+        table.add_column("Active")
+
+        for s in d["sessions"]:
+            status = "[green]yes[/]" if s["active"] else "[dim]no[/]"
+            table.add_row(
+                s["task_id"],
+                str(s["frame_count"]),
+                f"{s['estimated_mb']:.2f}",
+                status,
+            )
+        console.print(table)
+    else:
+        console.print("\n  [dim]No active scene sessions.[/]")
 
 
 # ---------------------------------------------------------------------------

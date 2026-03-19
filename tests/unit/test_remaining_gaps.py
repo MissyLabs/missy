@@ -348,13 +348,20 @@ class TestFasterWhisperSTTTranscribe:
         stt = self._loaded_stt()
         import sys
 
-        saved = sys.modules.pop("numpy", None)
+        # Setting to None in sys.modules blocks the import with ImportError
+        saved = sys.modules.get("numpy")
+        saved_core = sys.modules.get("numpy.core")
+        sys.modules["numpy"] = None  # type: ignore[assignment]
         try:
             with pytest.raises(ImportError, match="numpy"):
                 await stt.transcribe(self._make_pcm())
         finally:
             if saved is not None:
                 sys.modules["numpy"] = saved
+            else:
+                sys.modules.pop("numpy", None)
+            if saved_core is not None:
+                sys.modules["numpy.core"] = saved_core
 
     async def test_transcribe_emits_audit_event(self):
         np_mod, extra = _make_numpy_mock()

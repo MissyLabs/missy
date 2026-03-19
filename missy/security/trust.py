@@ -7,6 +7,7 @@ Successes increase the score; failures and policy violations decrease it.
 from __future__ import annotations
 
 import logging
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -28,25 +29,30 @@ class TrustScorer:
 
     def __init__(self) -> None:
         self._scores: dict[str, int] = {}
+        self._lock = threading.Lock()
 
     def score(self, entity_id: str) -> int:
         """Return the current trust score for *entity_id* (default 500)."""
-        return self._scores.get(entity_id, DEFAULT_SCORE)
+        with self._lock:
+            return self._scores.get(entity_id, DEFAULT_SCORE)
 
     def record_success(self, entity_id: str, weight: int = 10) -> None:
         """Increase the score for *entity_id* by *weight* (capped at 1000)."""
-        current = self.score(entity_id)
-        self._scores[entity_id] = min(current + weight, MAX_SCORE)
+        with self._lock:
+            current = self._scores.get(entity_id, DEFAULT_SCORE)
+            self._scores[entity_id] = min(current + weight, MAX_SCORE)
 
     def record_failure(self, entity_id: str, weight: int = 50) -> None:
         """Decrease the score for *entity_id* by *weight* (floored at 0)."""
-        current = self.score(entity_id)
-        self._scores[entity_id] = max(current - weight, MIN_SCORE)
+        with self._lock:
+            current = self._scores.get(entity_id, DEFAULT_SCORE)
+            self._scores[entity_id] = max(current - weight, MIN_SCORE)
 
     def record_violation(self, entity_id: str, weight: int = 200) -> None:
         """Major decrease for a policy violation (floored at 0)."""
-        current = self.score(entity_id)
-        self._scores[entity_id] = max(current - weight, MIN_SCORE)
+        with self._lock:
+            current = self._scores.get(entity_id, DEFAULT_SCORE)
+            self._scores[entity_id] = max(current - weight, MIN_SCORE)
 
     def is_trusted(self, entity_id: str, threshold: int = 200) -> bool:
         """Return ``True`` if the entity's score is above *threshold*."""
@@ -54,8 +60,10 @@ class TrustScorer:
 
     def get_scores(self) -> dict[str, int]:
         """Return a copy of all current scores."""
-        return dict(self._scores)
+        with self._lock:
+            return dict(self._scores)
 
     def reset(self, entity_id: str) -> None:
         """Reset *entity_id* back to the default score (500)."""
-        self._scores[entity_id] = DEFAULT_SCORE
+        with self._lock:
+            self._scores[entity_id] = DEFAULT_SCORE

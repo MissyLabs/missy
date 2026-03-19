@@ -380,9 +380,8 @@ class TestSaveFrameSyncFailure:
             original_write(fd, b"")  # write nothing, then raise
             raise OSError("disk full")
 
-        with patch("os.write", side_effect=_failing_write):
-            with pytest.raises(OSError, match="disk full"):
-                analyzer._save_frame_sync(meta, data)
+        with patch("os.write", side_effect=_failing_write), pytest.raises(OSError, match="disk full"):
+            analyzer._save_frame_sync(meta, data)
 
         # No .tmp file should remain.
         session_dir = tmp_path / session_id
@@ -404,6 +403,5 @@ class TestSaveFrameSyncFailure:
         meta = FrameMetadata(session_id=session_id, frame_number=1, format="jpeg")
         data = b"\xff\xd8\xff" + b"\x00" * 50
 
-        with patch("os.open", side_effect=PermissionError("no permission")):
-            with pytest.raises(PermissionError):
-                analyzer._save_frame_sync(meta, data)
+        with patch("os.open", side_effect=PermissionError("no permission")), pytest.raises(PermissionError):
+            analyzer._save_frame_sync(meta, data)

@@ -692,13 +692,12 @@ class TestSaveDiscordAttachmentPathTraversal:
                 return outside_resolved
             return original_realpath(p)
 
-        with patch("os.path.realpath", side_effect=fake_realpath):
-            with pytest.raises(ValueError, match="resolves outside save directory"):
-                save_discord_attachment(
-                    mock_rest,
-                    {"url": "https://cdn.discordapp.com/a.png", "filename": "escape.png"},
-                    save_dir=save_dir,
-                )
+        with patch("os.path.realpath", side_effect=fake_realpath), pytest.raises(ValueError, match="resolves outside save directory"):
+            save_discord_attachment(
+                mock_rest,
+                {"url": "https://cdn.discordapp.com/a.png", "filename": "escape.png"},
+                save_dir=save_dir,
+            )
 
     def test_safe_filename_does_not_raise(self, tmp_path):
         """A normal filename that resolves inside save_dir completes successfully."""

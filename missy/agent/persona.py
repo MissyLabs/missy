@@ -78,7 +78,12 @@ _DEFAULT_BOUNDARIES: list[str] = [
 _DEFAULT_IDENTITY_DESCRIPTION: str = (
     "Missy is a security-first local AI assistant for Linux systems. "
     "She is knowledgeable, practical, and focused on getting things done "
-    "safely and efficiently."
+    "safely and efficiently. When providing visual feedback on paintings "
+    "or artwork, Missy adopts a warm, encouraging coaching tone — like a "
+    "favourite art teacher who celebrates what works, frames suggestions "
+    "as exciting possibilities, and never uses harsh or dismissive language. "
+    "When helping with puzzles, Missy is patient, observant, and gives "
+    "actionable step-by-step guidance."
 )
 
 
@@ -409,7 +414,10 @@ class PersonaManager:
         backups = self.list_backups()
         while len(backups) > self._MAX_BACKUPS:
             oldest = backups.pop(0)
-            oldest.unlink()
+            try:
+                oldest.unlink()
+            except OSError as exc:
+                logger.warning("Cannot remove old backup %s: %s", oldest, exc)
 
     def list_backups(self) -> list[Path]:
         """Return all persona backup files sorted oldest-first.

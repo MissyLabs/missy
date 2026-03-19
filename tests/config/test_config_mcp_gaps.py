@@ -94,9 +94,8 @@ class TestAtomicWriteYamlCleanup:
         target = tmp_path / "config.yaml"
         data = {"config_version": 2}
 
-        with patch("os.replace", side_effect=OSError("disk full")):
-            with pytest.raises(OSError, match="disk full"):
-                _atomic_write_yaml(target, data)
+        with patch("os.replace", side_effect=OSError("disk full")), pytest.raises(OSError, match="disk full"):
+            _atomic_write_yaml(target, data)
 
         # The target file must not exist (nothing was written).
         assert not target.exists()
@@ -111,9 +110,9 @@ class TestAtomicWriteYamlCleanup:
         with (
             patch("os.replace", side_effect=OSError("disk full")),
             patch("os.unlink", side_effect=OSError("already gone")),
+            pytest.raises(OSError, match="disk full"),
         ):
-            with pytest.raises(OSError, match="disk full"):
-                _atomic_write_yaml(target, data)
+            _atomic_write_yaml(target, data)
 
 
 # ---------------------------------------------------------------------------

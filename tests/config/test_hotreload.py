@@ -342,10 +342,12 @@ class TestOwnershipCheck:
                 return fake_st
             return original_stat(self_path, **kwargs)
 
-        with patch("missy.config.hotreload.os.getuid", return_value=os.getuid()):
-            with patch.object(pathlib.Path, "stat", patched_stat):
-                with patch.object(pathlib.Path, "is_symlink", return_value=False):
-                    result = w._check_file_safety()
+        with (
+            patch("missy.config.hotreload.os.getuid", return_value=os.getuid()),
+            patch.object(pathlib.Path, "stat", patched_stat),
+            patch.object(pathlib.Path, "is_symlink", return_value=False),
+        ):
+            result = w._check_file_safety()
 
         assert result is False
 
@@ -388,9 +390,8 @@ class TestOwnershipCheck:
                 raise OSError("permission denied")
             return original_stat(self_path, **kwargs)
 
-        with patch.object(pathlib.Path, "stat", raising_stat):
-            with patch.object(pathlib.Path, "is_symlink", return_value=False):
-                result = w._check_file_safety()
+        with patch.object(pathlib.Path, "stat", raising_stat), patch.object(pathlib.Path, "is_symlink", return_value=False):
+            result = w._check_file_safety()
 
         assert result is False
 

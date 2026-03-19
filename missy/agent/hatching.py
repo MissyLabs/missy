@@ -365,6 +365,7 @@ class HatchingManager:
             ("verify_providers", self._verify_providers),
             ("initialize_security", self._initialize_security),
             ("generate_persona", self._generate_persona),
+            ("check_vision", self._check_vision),
             ("seed_memory", self._seed_memory),
             ("finalize", self._finalize),
         ]
@@ -663,6 +664,57 @@ class HatchingManager:
             raise _HatchingStepWarning(
                 f"Could not write persona file to {_PERSONA_PATH}: {exc}"
             ) from exc
+
+    def _check_vision(self, state: HatchingState, *, interactive: bool) -> None:
+        """Check vision subsystem readiness.
+
+        Non-fatal: vision is optional.  Reports findings but does not fail
+        the hatching process.
+
+        Raises:
+            _HatchingStepWarning: When vision is not fully available (non-fatal).
+        """
+        issues: list[str] = []
+
+        # Check OpenCV
+        try:
+            import cv2  # noqa: F401
+        except ImportError:
+            issues.append("opencv-python-headless not installed")
+
+        # Check numpy
+        try:
+            import numpy  # noqa: F401
+        except ImportError:
+            issues.append("numpy not installed")
+
+        # Check camera discovery
+        try:
+            from missy.vision.discovery import discover_cameras
+            cameras = discover_cameras(force=True)
+            if not cameras:
+                issues.append("no cameras detected")
+            else:
+                self._log.log("check_vision", "info", f"Found {len(cameras)} camera(s): {cameras[0].name}")
+        except ImportError:
+            issues.append("vision module not importable")
+        except Exception as exc:
+            issues.append(f"camera discovery failed: {exc}")
+
+        # Check screenshot tools
+        try:
+            from missy.vision.doctor import VisionDoctor
+            doc = VisionDoctor()
+            ss_result = doc.check_screenshot_tools()
+            if not ss_result.passed:
+                issues.append("no screenshot tools found")
+        except Exception:
+            pass
+
+        if issues:
+            msg = "Vision partially available: " + "; ".join(issues)
+            self._log.log("check_vision", "warn", msg)
+            raise _HatchingStepWarning(msg)
 
     def _seed_memory(self, state: HatchingState, *, interactive: bool) -> None:
         """Initialise the SQLite memory DB and write a welcome entry.

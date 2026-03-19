@@ -496,9 +496,8 @@ class TestWriteConfigAtomic:
         def failing_replace(src, dst):
             raise OSError("simulated replace failure")
 
-        with patch("os.replace", side_effect=failing_replace):
-            with pytest.raises(OSError, match="simulated replace failure"):
-                _write_config_atomic(target, "content")
+        with patch("os.replace", side_effect=failing_replace), pytest.raises(OSError, match="simulated replace failure"):
+            _write_config_atomic(target, "content")
 
         # No orphan temp files should remain
         tmp_files = [f for f in tmp_path.iterdir() if f.name.startswith(".config_tmp_")]

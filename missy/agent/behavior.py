@@ -360,12 +360,13 @@ class BehaviorLayer:
             A newline-separated string of concise directive sentences.
         """
         lines: list[str] = []
+        ctx = context or {}
 
-        user_tone: str = context.get("user_tone", "casual")
-        has_tool_results: bool = bool(context.get("has_tool_results", False))
-        topic: str = context.get("topic", "")
-        urgency: str = context.get("urgency", "low")
-        intent: str = context.get("intent", "")
+        user_tone: str = ctx.get("user_tone", "casual")
+        has_tool_results: bool = bool(ctx.get("has_tool_results", False))
+        topic: str = ctx.get("topic", "")
+        urgency: str = ctx.get("urgency", "low")
+        intent: str = ctx.get("intent", "")
 
         # Tone adaptation
         tone_guidance = self.get_tone_adaptation(user_tone)
@@ -373,7 +374,7 @@ class BehaviorLayer:
             lines.append(tone_guidance)
 
         # Length guidance based on conversation depth
-        if self.should_be_concise(context):
+        if self.should_be_concise(ctx):
             lines.append(
                 "The conversation is long — keep your answer concise and avoid "
                 "restating context the user already knows."
@@ -434,6 +435,27 @@ class BehaviorLayer:
                 "and report the result concisely."
             )
 
+        # Vision-specific guidance
+        vision_mode = ctx.get("vision_mode", "")
+        if vision_mode == "painting":
+            lines.append(
+                "You are reviewing artwork. Be warm, encouraging, and supportive. "
+                "Lead with genuine appreciation. Frame suggestions as exciting "
+                "possibilities, not corrections. Never use harsh or dismissive "
+                "language. End with encouragement about their artistic journey."
+            )
+        elif vision_mode == "puzzle":
+            lines.append(
+                "You are helping with a puzzle. Be patient and observant. Give "
+                "specific, actionable placement suggestions. Reference actual "
+                "colors and patterns you see. Celebrate progress made."
+            )
+        elif vision_mode:
+            lines.append(
+                "Visual input is available. Reference specific visual details "
+                "in your response. Be observant and specific."
+            )
+
         # Topic-based technical depth
         if topic:
             topic_lower = topic.lower()
@@ -455,18 +477,19 @@ class BehaviorLayer:
 
         return "\n".join(f"- {line}" for line in lines if line.strip())
 
-    def should_be_concise(self, context: dict) -> bool:
+    def should_be_concise(self, context: dict | None) -> bool:
         """Return ``True`` when the response should be kept brief.
 
         Conciseness is recommended after 10 or more turns, when the detected
         user tone is ``"brief"``, or when urgency is ``"high"``.
 
         Args:
-            context: Context dict (see module docstring).
+            context: Context dict (see module docstring).  May be ``None``.
         """
-        turn_count: int = context.get("turn_count", 0)
-        user_tone: str = context.get("user_tone", "")
-        urgency: str = context.get("urgency", "low")
+        ctx = context or {}
+        turn_count: int = ctx.get("turn_count", 0)
+        user_tone: str = ctx.get("user_tone", "")
+        urgency: str = ctx.get("urgency", "low")
 
         return (
             turn_count >= 10

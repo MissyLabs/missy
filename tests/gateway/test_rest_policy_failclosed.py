@@ -24,18 +24,16 @@ class TestRestPolicyFailClosed:
         mock_engine = MagicMock()
         mock_engine.rest_policy.check.side_effect = RuntimeError("internal bug")
 
-        with patch("missy.gateway.client.get_policy_engine", return_value=mock_engine):
-            with pytest.raises(PolicyViolationError):
-                client._check_rest_policy("api.example.com", "GET", "/foo")
+        with patch("missy.gateway.client.get_policy_engine", return_value=mock_engine), pytest.raises(PolicyViolationError):
+            client._check_rest_policy("api.example.com", "GET", "/foo")
 
     def test_explicit_deny_still_raises(self, client):
         """An explicit deny result still raises PolicyViolationError."""
         mock_engine = MagicMock()
         mock_engine.rest_policy.check.return_value = "deny"
 
-        with patch("missy.gateway.client.get_policy_engine", return_value=mock_engine):
-            with pytest.raises(PolicyViolationError, match="REST policy denied"):
-                client._check_rest_policy("api.example.com", "DELETE", "/")
+        with patch("missy.gateway.client.get_policy_engine", return_value=mock_engine), pytest.raises(PolicyViolationError, match="REST policy denied"):
+            client._check_rest_policy("api.example.com", "DELETE", "/")
 
     def test_allow_result_passes(self, client):
         """An 'allow' result does not raise."""
@@ -60,6 +58,5 @@ class TestRestPolicyFailClosed:
         mock_engine = MagicMock()
         mock_engine.rest_policy.check.side_effect = TypeError("bad argument")
 
-        with patch("missy.gateway.client.get_policy_engine", return_value=mock_engine):
-            with pytest.raises(PolicyViolationError, match="REST policy check error"):
-                client._check_rest_policy("api.example.com", "POST", "/data")
+        with patch("missy.gateway.client.get_policy_engine", return_value=mock_engine), pytest.raises(PolicyViolationError, match="REST policy check error"):
+            client._check_rest_policy("api.example.com", "POST", "/data")

@@ -53,6 +53,10 @@ discord_voice = [
 vector = [
     "faiss-cpu>=1.7",
 ]
+vision = [
+    "opencv-python-headless>=4.8",
+    "numpy>=1.24",
+]
 # Browser automation (Firefox via Playwright) and GTK/X11 accessibility tools.
 # After installing playwright, run: playwright install firefox
 desktop = [

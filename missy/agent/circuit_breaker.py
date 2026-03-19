@@ -96,11 +96,16 @@ class CircuitBreaker:
             Exception: Re-raises any exception raised by *func* after
                 recording the failure.
         """
-        state = self.state
-        if state == CircuitState.OPEN:
-            from missy.core.exceptions import MissyError
+        # Atomically check-and-transition to prevent TOCTOU race where
+        # multiple threads could both see HALF_OPEN and all proceed to probe.
+        with self._lock:
+            if self._state == CircuitState.OPEN:
+                if time.monotonic() - self._last_failure_time >= self._recovery_timeout:
+                    self._state = CircuitState.HALF_OPEN
+                else:
+                    from missy.core.exceptions import MissyError
 
-            raise MissyError(f"Circuit breaker '{self.name}' is OPEN; skipping call")
+                    raise MissyError(f"Circuit breaker '{self.name}' is OPEN; skipping call")
         try:
             result = func(*args, **kwargs)
             self._on_success()

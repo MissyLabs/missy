@@ -468,9 +468,8 @@ class TestRuntimeCircuitBreakerIntegration:
         breaker._last_failure_time = time.monotonic()
         rt._circuit_breaker = breaker
 
-        with patch("missy.agent.runtime.get_registry", return_value=registry):
-            with pytest.raises((MissyError, ProviderError)):
-                rt.run("should be rejected")
+        with patch("missy.agent.runtime.get_registry", return_value=registry), pytest.raises((MissyError, ProviderError)):
+            rt.run("should be rejected")
 
         # Provider was never actually called
         provider.complete.assert_not_called()

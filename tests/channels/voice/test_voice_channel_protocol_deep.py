@@ -1,4 +1,5 @@
-"""Session 11: Deep protocol tests for the Voice channel.
+"""Deep protocol tests for the Voice channel.
+
 
 Tests the VoiceServer WebSocket protocol including:
 - Connection limits
@@ -15,11 +16,8 @@ Tests the VoiceServer WebSocket protocol including:
 
 from __future__ import annotations
 
-import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
 
 from missy.channels.voice.server import (
     _AUTH_TIMEOUT_SECONDS,
@@ -32,7 +30,6 @@ from missy.channels.voice.server import (
     _MIN_SAMPLE_RATE,
     VoiceServer,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -191,7 +188,7 @@ class TestAuthProtocol:
         )
         registry = _make_registry()
         registry.verify_token.return_value = node
-        server = _make_server(registry=registry)
+        _make_server(registry=registry)
 
         # Verify the node attribute is accessible
         assert node.node_id == "node-1"
@@ -201,7 +198,7 @@ class TestAuthProtocol:
         """Failed auth should send auth_fail frame."""
         registry = _make_registry()
         registry.verify_token.return_value = None
-        server = _make_server(registry=registry)
+        _make_server(registry=registry)
         assert registry.verify_token.return_value is None
 
 
@@ -242,11 +239,11 @@ class TestAudioConstraints:
 
     def test_sample_rate_below_min_rejected(self):
         """Sample rates below minimum should be rejected."""
-        assert 4000 < _MIN_SAMPLE_RATE
+        assert _MIN_SAMPLE_RATE > 4000
 
     def test_sample_rate_above_max_rejected(self):
         """Sample rates above maximum should be rejected."""
-        assert 96000 > _MAX_SAMPLE_RATE
+        assert _MAX_SAMPLE_RATE < 96000
 
     def test_mono_accepted(self):
         assert _MIN_CHANNELS <= 1 <= _MAX_CHANNELS
@@ -255,7 +252,7 @@ class TestAudioConstraints:
         assert _MIN_CHANNELS <= 2 <= _MAX_CHANNELS
 
     def test_surround_rejected(self):
-        assert 6 > _MAX_CHANNELS
+        assert _MAX_CHANNELS < 6
 
 
 # ---------------------------------------------------------------------------

@@ -90,18 +90,16 @@ class TestPersonaSaveExceptionCleanup:
             real_mkstemp(fd, *args, **kwargs)
             raise OSError("simulated disk full")
 
-        with patch("missy.agent.persona.os.fdopen", side_effect=fake_fdopen):
-            with pytest.raises(OSError, match="simulated disk full"):
-                pm.save()
+        with patch("missy.agent.persona.os.fdopen", side_effect=fake_fdopen), pytest.raises(OSError, match="simulated disk full"):
+            pm.save()
 
     def test_save_exception_propagates_original_error(self, tmp_path):
         """The original exception is re-raised, not swallowed."""
         persona_file = tmp_path / "persona.yaml"
         pm = PersonaManager(persona_path=persona_file)
 
-        with patch("missy.agent.persona.yaml.dump", side_effect=RuntimeError("yaml boom")):
-            with pytest.raises(RuntimeError, match="yaml boom"):
-                pm.save()
+        with patch("missy.agent.persona.yaml.dump", side_effect=RuntimeError("yaml boom")), pytest.raises(RuntimeError, match="yaml boom"):
+            pm.save()
 
     def test_save_cleanup_suppresses_unlink_oserror(self, tmp_path):
         """Even if os.unlink fails during cleanup, the original exception propagates cleanly."""
@@ -111,10 +109,10 @@ class TestPersonaSaveExceptionCleanup:
         with (
             patch("missy.agent.persona.yaml.dump", side_effect=ValueError("bad yaml")),
             patch("missy.agent.persona.os.unlink", side_effect=OSError("unlink failed")),
+            pytest.raises(ValueError, match="bad yaml"),
         ):
             # The original ValueError should still propagate, not the unlink OSError.
-            with pytest.raises(ValueError, match="bad yaml"):
-                pm.save()
+            pm.save()
 
 
 class TestPersonaAuditOSError:

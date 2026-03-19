@@ -14,6 +14,7 @@ pip install -e ".[dev]"
 pip install -e ".[voice]"       # adds faster-whisper, numpy, soundfile
 pip install -e ".[otel]"        # adds OpenTelemetry SDK + exporters
 pip install -e ".[vector]"      # adds faiss-cpu for semantic memory search
+pip install -e ".[vision]"      # adds opencv-python-headless, numpy
 
 # Tests
 python3 -m pytest tests/ -v
@@ -65,9 +66,10 @@ CLI (missy/cli/main.py)
        ├─ ApprovalGate (agent/approval.py)
        ├─ PersonaManager (agent/persona.py) — YAML-backed identity/tone/style with backup/rollback
        ├─ BehaviorLayer (agent/behavior.py) — tone analysis, intent classification, response shaping
-       ├─ HatchingManager (agent/hatching.py) — 7-step first-run bootstrap
+       ├─ HatchingManager (agent/hatching.py) — 8-step first-run bootstrap (incl. vision check)
        ├─ ContainerSandbox (security/container.py) — optional Docker isolation
        ├─ MessageBus (core/message_bus.py) — async event-driven routing
+       ├─ VisionSubsystem (vision/) — camera discovery, capture, analysis, scene memory
        └─ AuditLogger + OtelExporter (observability/)
 
 Channels:
@@ -131,6 +133,20 @@ VoiceChannel (channels/voice/):
 - `PromptDriftDetector`: SHA-256 hashes system prompts at start, verifies before each provider call. Emits `security.prompt_drift` audit event on tamper.
 - `ContainerSandbox`: Optional Docker-based isolation for tool execution. Per-session containers with `--network=none`, memory/CPU limits. Config: `container: { enabled: true }`.
 
+**Vision (`missy/vision/`)** — On-demand visual capabilities:
+- `CameraDiscovery`: USB camera detection via sysfs with vendor/product ID matching, Logitech C922x preferred
+- `CameraHandle`: OpenCV-based capture with warm-up, retry, blank-frame detection
+- `ImageSource` abstraction: WebcamSource, FileSource, ScreenshotSource, PhotoSource
+- `ImagePipeline`: Resize, CLAHE exposure normalization, quality assessment
+- `SceneSession`: Task-scoped multi-frame memory for puzzle/painting tasks with change detection
+- `AnalysisPromptBuilder`: Domain-specific prompts (puzzle board-state, painting coaching)
+- `VisionIntentClassifier`: Audio-triggered vision activation with configurable thresholds
+- `VisionDoctor`: Diagnostics (opencv, video group, devices, capture test, health)
+- `VisionHealthMonitor`: Per-device capture stats, success rates, quality tracking, recommendations
+- Provider-specific formatting: Anthropic/OpenAI/Ollama image message structures
+- Agent tools: `vision_capture`, `vision_burst`, `vision_analyze`, `vision_devices`, `vision_scene`
+- Voice integration: Auto-captures image when audio intent implies vision need
+
 **Memory (`missy/memory/`)** — `SQLiteMemoryStore` at `~/.missy/memory.db` with FTS5 search. Stores conversation turns and learnings. `cleanup()` removes turns older than N days. Optional `VectorMemoryStore` with FAISS semantic search (`pip install -e ".[vector]"`).
 
 **Message Bus (`missy/core/message_bus.py`)** — Async event-driven routing with fnmatch topic wildcards (e.g. `channel.*`), priority queue, correlation IDs, worker thread. Standard topics in `missy/core/bus_topics.py`. Runtime publishes `AGENT_RUN_START/COMPLETE/ERROR`, `TOOL_REQUEST/RESULT`. Module-level singleton via `init_message_bus()` / `get_message_bus()`.
@@ -164,6 +180,7 @@ VoiceChannel (channels/voice/):
 | Hatching state | `~/.missy/hatching.yaml` |
 | Hatching log | `~/.missy/hatching_log.jsonl` |
 | Skills directory | `~/.missy/skills/` |
+| Vision captures | `~/.missy/captures/` |
 | Workspace | `~/workspace` |
 
 ### Configuration Schema
@@ -258,6 +275,17 @@ container:
   cpu_quota: 0.5
   network_mode: "none"              # no network in sandbox by default
 
+vision:
+  enabled: true
+  preferred_device: ""               # auto-detect if empty
+  capture_width: 1920
+  capture_height: 1080
+  warmup_frames: 5
+  max_retries: 3
+  auto_activate_threshold: 0.80     # audio intent confidence for auto-activation
+  scene_memory_max_frames: 20
+  scene_memory_max_sessions: 5
+
 workspace_path: "~/workspace"
 audit_log_path: "~/.missy/audit.jsonl"
 max_spend_usd: 0.0                  # per-session budget cap; 0 = unlimited
@@ -330,6 +358,13 @@ missy config plan                   Show what changed since last backup
 
 missy sandbox status                Show Docker container sandbox config and availability
 
+missy vision devices                Enumerate and diagnose available USB cameras
+missy vision capture                Capture frames (--device, --output, --count, --width, --height)
+missy vision inspect                Run visual quality assessment (--file, --screenshot, --device)
+missy vision review                 LLM-powered visual analysis (--mode general|puzzle|painting|inspection, --file, --context)
+missy vision doctor                 Run vision subsystem diagnostics
+missy vision health                 Show capture statistics and device health status
+
 missy hatch                         First-run bootstrap wizard (--non-interactive)
 
 missy persona show                  Display current persona configuration
@@ -351,6 +386,7 @@ pip install -e ".[dev]"     # pytest, pytest-asyncio, pytest-cov, black, ruff, m
 pip install -e ".[voice]"   # faster-whisper, numpy, soundfile
 pip install -e ".[otel]"    # opentelemetry-sdk, OTLP gRPC + HTTP exporters
 pip install -e ".[vector]"  # faiss-cpu for semantic memory search
+pip install -e ".[vision]"  # opencv-python-headless, numpy for vision subsystem
 ```
 
 Piper TTS is a separate binary, not a pip package. Install from https://github.com/rhasspy/piper.
@@ -361,7 +397,7 @@ Full docs site: **https://missylabs.github.io/** — 60+ pages covering getting 
 
 ## Test Layout
 
-Tests under `tests/` with subdirectories: `agent/`, `channels/`, `cli/`, `config/`, `core/`, `gateway/`, `integration/`, `mcp/`, `memory/`, `observability/`, `plugins/`, `policy/`, `providers/`, `scheduler/`, `security/`, `skills/`, `tools/`, `unit/`. 340+ test files, 11,900+ tests, coverage threshold 85% (configured in `pyproject.toml`).
+Tests under `tests/` with subdirectories: `agent/`, `channels/`, `cli/`, `config/`, `core/`, `gateway/`, `integration/`, `mcp/`, `memory/`, `observability/`, `plugins/`, `policy/`, `providers/`, `scheduler/`, `security/`, `skills/`, `tools/`, `unit/`, `vision/`. 350+ test files, 12,000+ tests, coverage threshold 85% (configured in `pyproject.toml`).
 
 ## Companion Project: missy-edge
 

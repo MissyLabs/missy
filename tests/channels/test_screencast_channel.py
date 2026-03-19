@@ -370,9 +370,8 @@ class TestStartLifecycle:
         mock_analyzer = _make_mock_analyzer()
 
         ch = _make_channel()
-        with self._patch_constructors(mock_server, mock_analyzer):
-            with pytest.raises(RuntimeError, match="failed to start"):
-                ch.start()
+        with self._patch_constructors(mock_server, mock_analyzer), pytest.raises(RuntimeError, match="failed to start"):
+            ch.start()
 
         # After failure, _thread and _server must be cleared.
         assert ch._thread is None
@@ -385,9 +384,8 @@ class TestStartLifecycle:
         mock_analyzer.start = AsyncMock(side_effect=RuntimeError("analyzer init failed"))
 
         ch = _make_channel()
-        with self._patch_constructors(mock_server, mock_analyzer):
-            with pytest.raises(RuntimeError, match="failed to start"):
-                ch.start()
+        with self._patch_constructors(mock_server, mock_analyzer), pytest.raises(RuntimeError, match="failed to start"):
+            ch.start()
 
     def test_start_thread_is_daemon(self) -> None:
         """The background thread must be a daemon so it doesn't block process exit."""

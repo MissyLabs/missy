@@ -87,11 +87,10 @@ class TestPiperSubprocessEnv:
 
 class TestPiperTTSLifecycle:
     def test_load_raises_if_binary_not_found(self):
-        with patch("shutil.which", return_value=None):
-            with patch.object(Path, "is_file", return_value=False):
-                engine = PiperTTS(piper_bin="nonexistent_piper")
-                with pytest.raises(RuntimeError, match="not found"):
-                    engine.load()
+        with patch("shutil.which", return_value=None), patch.object(Path, "is_file", return_value=False):
+            engine = PiperTTS(piper_bin="nonexistent_piper")
+            with pytest.raises(RuntimeError, match="not found"):
+                engine.load()
 
     def test_load_success_with_model(self, tmp_path):
         model_file = tmp_path / "voice.onnx"
@@ -138,21 +137,19 @@ class TestPiperTTSModelResolution:
         model = voices_dir / "test-voice.onnx"
         model.write_bytes(b"model data")
 
-        with patch("missy.channels.voice.tts.piper._DEFAULT_VOICES_DIR", voices_dir):
-            with patch("shutil.which", return_value="/usr/bin/piper"):
-                engine = PiperTTS(voice="test-voice")
-                engine.load()
-                assert engine.is_loaded()
-                assert engine._model_file == model
+        with patch("missy.channels.voice.tts.piper._DEFAULT_VOICES_DIR", voices_dir), patch("shutil.which", return_value="/usr/bin/piper"):
+            engine = PiperTTS(voice="test-voice")
+            engine.load()
+            assert engine.is_loaded()
+            assert engine._model_file == model
 
     def test_resolve_model_not_in_voices_dir(self, tmp_path):
         voices_dir = tmp_path / "voices"
         voices_dir.mkdir()
-        with patch("missy.channels.voice.tts.piper._DEFAULT_VOICES_DIR", voices_dir):
-            with patch("shutil.which", return_value="/usr/bin/piper"):
-                engine = PiperTTS(voice="nonexistent-voice")
-                with pytest.raises(RuntimeError, match="not found"):
-                    engine.load()
+        with patch("missy.channels.voice.tts.piper._DEFAULT_VOICES_DIR", voices_dir), patch("shutil.which", return_value="/usr/bin/piper"):
+            engine = PiperTTS(voice="nonexistent-voice")
+            with pytest.raises(RuntimeError, match="not found"):
+                engine.load()
 
 
 # ---------------------------------------------------------------------------
@@ -230,9 +227,8 @@ class TestPiperTTSSynthesize:
             mock_proc.communicate = AsyncMock(return_value=(b"", b"Error: model invalid"))
             mock_proc.returncode = 1
 
-            with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
-                with pytest.raises(RuntimeError, match="code 1"):
-                    await engine.synthesize("Hello")
+            with patch("asyncio.create_subprocess_exec", return_value=mock_proc), pytest.raises(RuntimeError, match="code 1"):
+                await engine.synthesize("Hello")
 
     @pytest.mark.asyncio
     async def test_synthesize_empty_output(self, tmp_path):
@@ -247,9 +243,8 @@ class TestPiperTTSSynthesize:
             mock_proc.communicate = AsyncMock(return_value=(b"", b""))
             mock_proc.returncode = 0
 
-            with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
-                with pytest.raises(RuntimeError, match="no audio"):
-                    await engine.synthesize("Hello")
+            with patch("asyncio.create_subprocess_exec", return_value=mock_proc), pytest.raises(RuntimeError, match="no audio"):
+                await engine.synthesize("Hello")
 
     @pytest.mark.asyncio
     async def test_synthesize_timeout(self, tmp_path):
@@ -265,10 +260,8 @@ class TestPiperTTSSynthesize:
             mock_proc.kill = MagicMock()
             mock_proc.wait = AsyncMock()
 
-            with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
-                with patch("asyncio.wait_for", side_effect=TimeoutError()):
-                    with pytest.raises(RuntimeError, match="timed out"):
-                        await engine.synthesize("Hello")
+            with patch("asyncio.create_subprocess_exec", return_value=mock_proc), patch("asyncio.wait_for", side_effect=TimeoutError()), pytest.raises(RuntimeError, match="timed out"):
+                await engine.synthesize("Hello")
 
 
 # ---------------------------------------------------------------------------
