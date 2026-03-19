@@ -12,12 +12,10 @@ Covers:
 
 from __future__ import annotations
 
-from dataclasses import field
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Analysis module tests

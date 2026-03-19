@@ -21,7 +21,6 @@ import pytest
 
 from missy.security.container import ContainerConfig, ContainerSandbox, parse_container_config
 
-
 # ---------------------------------------------------------------------------
 # ContainerConfig and parse_container_config
 # ---------------------------------------------------------------------------
@@ -323,7 +322,7 @@ class TestContainerContextManager:
     @patch("missy.security.container.ContainerSandbox.stop")
     @patch("missy.security.container.ContainerSandbox.start", return_value="abc123")
     def test_context_manager_calls_start_stop(self, mock_start, mock_stop):
-        with ContainerSandbox() as sb:
+        with ContainerSandbox():
             mock_start.assert_called_once()
         mock_stop.assert_called_once()
 
@@ -331,9 +330,8 @@ class TestContainerContextManager:
     @patch("missy.security.container.ContainerSandbox.start", side_effect=OSError("fail"))
     def test_context_manager_start_raises(self, mock_start, mock_stop):
         """If start raises, __exit__ still calls stop."""
-        with pytest.raises(OSError):
-            with ContainerSandbox():
-                pass
+        with pytest.raises(OSError), ContainerSandbox():
+            pass
         # Note: __exit__ won't be called if __enter__ raises
 
     def test_workspace_expansion(self):

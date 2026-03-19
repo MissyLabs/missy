@@ -9,14 +9,10 @@ Covers:
 
 from __future__ import annotations
 
-import threading
-import time
 from dataclasses import dataclass
-from typing import Any
-from unittest.mock import MagicMock, PropertyMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Fake objects
@@ -206,14 +202,14 @@ class TestResilientCameraEdgeCases:
     def test_cumulative_failure_counter(self):
         """_record_failure should increment counter and warn at threshold."""
         cam = self._make_camera()
-        for i in range(15):
+        for _i in range(15):
             cam._record_failure()
         assert cam.cumulative_failures == 15
 
     def test_cumulative_failure_threshold_boundary(self):
         """Failure count exactly at threshold should trigger warning."""
         cam = self._make_camera()
-        for i in range(9):
+        for _i in range(9):
             cam._record_failure()
         assert cam.cumulative_failures == 9
         cam._record_failure()  # 10th — hits threshold

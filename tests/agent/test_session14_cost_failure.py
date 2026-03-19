@@ -14,7 +14,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # CostTracker tests
 # ---------------------------------------------------------------------------
@@ -155,7 +154,7 @@ class TestCostTrackerEdgeCases:
 
         tracker = CostTracker()
         tracker._MAX_RECORDS = 5  # Reduce for testing
-        for i in range(10):
+        for _i in range(10):
             tracker.record(model="test", prompt_tokens=100, completion_tokens=50)
         assert tracker.call_count == 5  # Only 5 retained
         assert tracker.total_prompt_tokens == 1000  # All 10 counted

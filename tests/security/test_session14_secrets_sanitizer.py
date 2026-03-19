@@ -8,10 +8,7 @@ Covers:
 
 from __future__ import annotations
 
-import pytest
-
 from missy.security.secrets import SecretsDetector, secrets_detector
-
 
 # ---------------------------------------------------------------------------
 # SecretsDetector tests

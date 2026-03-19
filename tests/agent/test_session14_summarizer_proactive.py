@@ -10,13 +10,9 @@ Covers:
 from __future__ import annotations
 
 import threading
-import time
 from dataclasses import dataclass
 from typing import Any
 from unittest.mock import MagicMock, patch
-
-import pytest
-
 
 # ---------------------------------------------------------------------------
 # Summarizer tests
@@ -463,7 +459,7 @@ class TestProactiveEdgeCases:
 
     def test_get_status_after_stop(self):
         """get_status should show active=False after stop."""
-        from missy.agent.proactive import ProactiveManager, ProactiveTrigger
+        from missy.agent.proactive import ProactiveManager
 
         callback = MagicMock()
         mgr = ProactiveManager(triggers=[], agent_callback=callback)
@@ -527,7 +523,7 @@ class TestProactiveEdgeCases:
 
     def test_start_stop_idempotent(self):
         """Multiple start/stop cycles should be safe."""
-        from missy.agent.proactive import ProactiveManager, ProactiveTrigger
+        from missy.agent.proactive import ProactiveManager
 
         callback = MagicMock()
         mgr = ProactiveManager(triggers=[], agent_callback=callback)
@@ -538,7 +534,7 @@ class TestProactiveEdgeCases:
 
     def test_stop_without_start(self):
         """Stopping without starting should be safe."""
-        from missy.agent.proactive import ProactiveManager, ProactiveTrigger
+        from missy.agent.proactive import ProactiveManager
 
         callback = MagicMock()
         mgr = ProactiveManager(triggers=[], agent_callback=callback)

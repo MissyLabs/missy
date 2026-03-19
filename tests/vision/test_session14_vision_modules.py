@@ -10,15 +10,9 @@ Covers:
 
 from __future__ import annotations
 
-import sys
 import threading
 import time
-from dataclasses import dataclass
-from typing import Any
 from unittest.mock import MagicMock, patch
-
-import pytest
-
 
 # ---------------------------------------------------------------------------
 # Shutdown tests
@@ -662,8 +656,9 @@ class TestBenchmarkEdgeCases:
 
     def test_throughput_zero_time_span(self):
         """Throughput with samples at same timestamp should return 0."""
-        from missy.vision.benchmark import BenchmarkSample, CaptureBenchmark
         from collections import deque
+
+        from missy.vision.benchmark import BenchmarkSample, CaptureBenchmark
 
         bench = CaptureBenchmark()
         now = time.time()
