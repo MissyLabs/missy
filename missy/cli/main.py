@@ -108,6 +108,11 @@ observability:
 vault:
   enabled: false
   vault_dir: "~/.missy/secrets"
+
+# Vision: on-demand visual capabilities (requires pip install -e ".[vision]")
+vision:
+  enabled: true
+  auto_activate_threshold: 0.80
 """
 
 
