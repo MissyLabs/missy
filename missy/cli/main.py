@@ -3545,27 +3545,34 @@ def vision_review(
         _, buf = cv2.imencode(".jpg", processed, [cv2.IMWRITE_JPEG_QUALITY, 85])
         b64_image = base64.b64encode(buf.tobytes()).decode("ascii")
 
-        # Send to provider
+        # Send to provider with provider-specific formatting
         cfg = _load_subsystems(config_path)
 
         from missy.providers.registry import get_registry
         registry = get_registry()
         provider = registry.get_provider()
+        provider_name = getattr(provider, "name", "anthropic")
+
+        from missy.vision.provider_format import build_vision_message
+        msg_dict = build_vision_message(provider_name, b64_image, prompt)
 
         from missy.providers.base import Message
-        messages = [
-            Message(role="user", content=[
-                {"type": "image", "source": {
-                    "type": "base64",
-                    "media_type": "image/jpeg",
-                    "data": b64_image,
-                }},
-                {"type": "text", "text": prompt},
-            ]),
-        ]
+        messages = [Message(role=msg_dict["role"], content=msg_dict["content"])]
 
         console.print("[dim]Analyzing...[/]\n")
         response = provider.complete(messages)
+
+        # Log audit event
+        try:
+            from missy.vision.audit import audit_vision_analysis
+            audit_vision_analysis(
+                mode=mode,
+                source_type=frame.source_type.value,
+                trigger_reason="cli_command",
+                success=True,
+            )
+        except Exception:
+            pass
 
         console.print(Panel(
             response.text,
