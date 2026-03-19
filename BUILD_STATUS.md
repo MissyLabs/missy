@@ -6,7 +6,7 @@
 
 ## Session 2 Summary
 
-Hardening, bug fixes, new features — 6 commits, 46 new tests, 0 failures.
+Hardening, bug fixes, new features — 11 commits, 93 new vision tests, 0 failures.
 
 ### Changes This Session
 
@@ -44,7 +44,20 @@ Hardening, bug fixes, new features — 6 commits, 46 new tests, 0 failures.
    - Puzzle: orientation hints, tab/blank patterns, anchor pieces, completion %
    - Inspection: structured numbered report format
 
-### Vision Tests: 289 (all passing)
+6. **Vision audit events** (`48302e7`)
+   - audit_vision_burst() and audit_vision_error()
+   - 13 security tests (audit emission, privacy, no-crash, session cleanup)
+
+7. **Doctor captures directory check** (`e37f583`)
+   - Verifies ~/.missy/captures/ writable
+
+8. **Vision documentation updates** (`cf20f91`)
+   - Updated VISION.md, VISION_AUDIT.md
+
+9. **Extended analysis tests** (`9316724`)
+   - 25 tests for color description, prompt builder, preprocessor
+
+### Vision Tests: 327 (all passing)
 
 | Test File | Tests |
 |-----------|-------|
@@ -64,8 +77,10 @@ Hardening, bug fixes, new features — 6 commits, 46 new tests, 0 failures.
 | test_resilient_capture.py | 9 |
 | test_hardening.py | 32 |
 | test_burst_and_diff.py | 14 |
+| test_security.py | 13 |
+| test_analysis_extended.py | 25 |
 
-### Full Test Suite: 12,234 passed, 0 failures, 14 skipped
+### Full Test Suite: 12,272 passed, 0 failures, 14 skipped
 
 ### Vision Modules (12 files in `missy/vision/`)
 
@@ -113,7 +128,7 @@ Hardening, bug fixes, new features — 6 commits, 46 new tests, 0 failures.
 
 ## Recovery Notes
 
-All code committed and passing. 12,234 total tests, 0 failures.
+All code committed and passing. 12,272 total tests, 0 failures.
 Vision subsystem is fully hardened with thread safety, input validation,
 and error handling. Burst capture and diff visualization are operational.
 Next session can continue with performance work, more integration tests,
