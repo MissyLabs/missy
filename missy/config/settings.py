@@ -213,6 +213,34 @@ class VaultConfig:
 
 
 @dataclass
+class VisionConfig:
+    """Vision subsystem configuration.
+
+    Attributes:
+        enabled: Master switch for vision capabilities.
+        preferred_device: Preferred camera device path (auto-detected if empty).
+        capture_width: Preferred capture width.
+        capture_height: Preferred capture height.
+        warmup_frames: Frames to discard for auto-exposure warm-up.
+        max_retries: Maximum capture retry attempts.
+        auto_activate_threshold: Confidence threshold for auto-activating vision
+            from audio intent (0.0-1.0).
+        scene_memory_max_frames: Maximum frames per scene session.
+        scene_memory_max_sessions: Maximum concurrent scene sessions.
+    """
+
+    enabled: bool = True
+    preferred_device: str = ""
+    capture_width: int = 1920
+    capture_height: int = 1080
+    warmup_frames: int = 5
+    max_retries: int = 3
+    auto_activate_threshold: float = 0.80
+    scene_memory_max_frames: int = 20
+    scene_memory_max_sessions: int = 5
+
+
+@dataclass
 class ProactiveTriggerConfig:
     """Configuration for a single proactive trigger loaded from YAML.
 
@@ -301,6 +329,7 @@ class MissyConfig:
     proactive: ProactiveConfig = field(default_factory=ProactiveConfig)
     sandbox: SandboxConfig | None = None
     container: ContainerConfig | None = None
+    vision: VisionConfig = field(default_factory=VisionConfig)
     max_spend_usd: float = 0.0  # 0 = unlimited; per-session budget cap
     config_version: int = 0  # schema version stamp (0 = pre-migration)
 
@@ -513,6 +542,21 @@ def _parse_sandbox(data: dict[str, Any]) -> SandboxConfig:
     return parse_sandbox_config(data)
 
 
+def _parse_vision(data: dict[str, Any]) -> VisionConfig:
+    """Parse the ``vision`` section of a Missy config dict."""
+    return VisionConfig(
+        enabled=bool(data.get("enabled", True)),
+        preferred_device=str(data.get("preferred_device", "")),
+        capture_width=int(data.get("capture_width", 1920)),
+        capture_height=int(data.get("capture_height", 1080)),
+        warmup_frames=int(data.get("warmup_frames", 5)),
+        max_retries=int(data.get("max_retries", 3)),
+        auto_activate_threshold=float(data.get("auto_activate_threshold", 0.80)),
+        scene_memory_max_frames=int(data.get("scene_memory_max_frames", 20)),
+        scene_memory_max_sessions=int(data.get("scene_memory_max_sessions", 5)),
+    )
+
+
 def _parse_container(data: dict[str, Any]) -> ContainerConfig:
     """Parse the ``container`` section of a Missy config dict."""
     from missy.security.container import parse_container_config
@@ -583,6 +627,7 @@ def load_config(path: str) -> MissyConfig:
             proactive=_parse_proactive(data.get("proactive") or {}),
             sandbox=_parse_sandbox(data.get("sandbox") or {}),
             container=_parse_container(data.get("container") or {}),
+            vision=_parse_vision(data.get("vision") or {}),
             max_spend_usd=float(data.get("max_spend_usd", 0.0)),
             config_version=int(data.get("config_version", 0)),
         )

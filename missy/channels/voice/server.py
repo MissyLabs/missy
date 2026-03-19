@@ -778,7 +778,7 @@ class VoiceServer:
             return
 
         # ------------------------------------------------------------------
-        # Agent callback.
+        # Vision intent detection — check if the utterance implies visual input.
         # ------------------------------------------------------------------
         metadata: dict[str, Any] = {
             "room": node.room,
@@ -787,6 +787,73 @@ class VoiceServer:
             "confidence": transcript.confidence,
             "language": transcript.language,
         }
+
+        try:
+            from missy.vision.intent import classify_vision_intent, ActivationDecision
+
+            vision_result = classify_vision_intent(transcript.text)
+            if vision_result.decision == ActivationDecision.ACTIVATE:
+                metadata["vision_intent"] = vision_result.intent.value
+                metadata["vision_confidence"] = vision_result.confidence
+                metadata["vision_suggested_mode"] = vision_result.suggested_mode
+                logger.info(
+                    "VoiceServer: vision intent detected for node %s: %s (%.2f)",
+                    node.node_id,
+                    vision_result.intent.value,
+                    vision_result.confidence,
+                )
+
+                # Attempt camera capture for vision-triggered requests
+                try:
+                    from missy.vision.discovery import find_preferred_camera
+                    from missy.vision.capture import CameraHandle, CaptureConfig
+                    from missy.vision.pipeline import ImagePipeline
+                    import base64
+
+                    camera = find_preferred_camera()
+                    if camera:
+                        config = CaptureConfig(warmup_frames=3, max_retries=2)
+                        handle = CameraHandle(camera.device_path, config)
+                        try:
+                            handle.open()
+                            capture = handle.capture()
+                            if capture.success:
+                                pipeline = ImagePipeline()
+                                processed = pipeline.process(capture.image)
+                                import cv2
+                                _, buf = cv2.imencode(
+                                    ".jpg", processed, [cv2.IMWRITE_JPEG_QUALITY, 85]
+                                )
+                                metadata["vision_image_base64"] = base64.b64encode(
+                                    buf.tobytes()
+                                ).decode("ascii")
+                                metadata["vision_capture_success"] = True
+                                logger.info(
+                                    "VoiceServer: captured image for vision intent (%dx%d)",
+                                    capture.width, capture.height,
+                                )
+                            else:
+                                metadata["vision_capture_success"] = False
+                                metadata["vision_capture_error"] = capture.error
+                        finally:
+                            handle.close()
+                    else:
+                        metadata["vision_capture_success"] = False
+                        metadata["vision_capture_error"] = "No camera available"
+                except ImportError:
+                    logger.debug("VoiceServer: vision dependencies not installed")
+                except Exception as _vision_exc:
+                    logger.warning("VoiceServer: vision capture failed: %s", _vision_exc)
+                    metadata["vision_capture_success"] = False
+                    metadata["vision_capture_error"] = str(_vision_exc)
+        except ImportError:
+            pass  # Vision module not installed — skip intent detection
+        except Exception as _intent_exc:
+            logger.debug("VoiceServer: vision intent detection failed: %s", _intent_exc)
+
+        # ------------------------------------------------------------------
+        # Agent callback.
+        # ------------------------------------------------------------------
         try:
             response_text: str = await self._agent_callback(transcript.text, node.node_id, metadata)
         except Exception:
