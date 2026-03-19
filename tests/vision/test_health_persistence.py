@@ -263,3 +263,50 @@ class TestHealthMonitorRoundTrip:
         monitor = VisionHealthMonitor()
         with pytest.raises(sqlite3.DatabaseError):
             monitor.load(db)
+
+
+class TestHealthMonitorAutoSave:
+    """Tests for periodic auto-save on record_capture."""
+
+    def test_auto_save_triggers_at_interval(self, tmp_path: Path) -> None:
+        db = tmp_path / "health.db"
+        monitor = VisionHealthMonitor(persist_path=db, auto_save_interval=5)
+        for _ in range(4):
+            monitor.record_capture(success=True, device="/dev/video0")
+        assert not db.exists()  # not yet reached interval
+
+        monitor.record_capture(success=True, device="/dev/video0")
+        assert db.exists()  # interval reached, auto-saved
+
+    def test_auto_save_resets_counter(self, tmp_path: Path) -> None:
+        db = tmp_path / "health.db"
+        monitor = VisionHealthMonitor(persist_path=db, auto_save_interval=3)
+        for _ in range(3):
+            monitor.record_capture(success=True, device="/dev/video0")
+        assert db.exists()
+
+        # Reset db to check second auto-save
+        db.unlink()
+        for _ in range(2):
+            monitor.record_capture(success=True, device="/dev/video0")
+        assert not db.exists()  # only 2 since last save
+        monitor.record_capture(success=True, device="/dev/video0")
+        assert db.exists()  # 3 since last save
+
+    def test_no_auto_save_without_persist_path(self) -> None:
+        monitor = VisionHealthMonitor(auto_save_interval=1)
+        # Should not raise
+        monitor.record_capture(success=True, device="/dev/video0")
+        monitor.record_capture(success=True, device="/dev/video0")
+
+    def test_auto_save_failure_non_fatal(self, tmp_path: Path) -> None:
+        # Use a directory as path (can't write SQLite to a directory)
+        db = tmp_path / "not_a_file"
+        db.mkdir()
+        monitor = VisionHealthMonitor(persist_path=db / "health.db", auto_save_interval=1)
+        # Remove parent dir to cause save failure
+        import shutil
+        shutil.rmtree(db)
+        db.mkdir()  # recreate as directory so path doesn't exist properly
+        # Should not raise even though save fails
+        monitor.record_capture(success=True, device="/dev/video0")

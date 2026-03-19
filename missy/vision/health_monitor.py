@@ -133,6 +133,7 @@ class VisionHealthMonitor:
         max_events: int = _MAX_EVENTS,
         recent_window_secs: float = _RECENT_WINDOW_SECS,
         persist_path: str | Path | None = None,
+        auto_save_interval: int = 50,
     ) -> None:
         self._max_events = max(1, max_events)
         self._recent_window = recent_window_secs
@@ -141,6 +142,8 @@ class VisionHealthMonitor:
         self._lock = threading.Lock()
         self._start_time = time.monotonic()
         self._persist_path: Path | None = Path(persist_path) if persist_path else None
+        self._auto_save_interval = max(1, auto_save_interval)
+        self._capture_count_since_save = 0
 
         # Auto-load persisted data if path provided
         if self._persist_path is not None:
@@ -205,6 +208,19 @@ class VisionHealthMonitor:
                         stats.consecutive_failures,
                         error,
                     )
+
+            self._capture_count_since_save += 1
+
+        # Auto-save outside the lock to avoid blocking captures
+        if (
+            self._persist_path is not None
+            and self._capture_count_since_save >= self._auto_save_interval
+        ):
+            try:
+                self.save()
+                self._capture_count_since_save = 0
+            except Exception as exc:
+                logger.debug("Auto-save failed: %s", exc)
 
     def record_device_discovery(self, device: str) -> None:
         """Record that a device was discovered (even without capture).
