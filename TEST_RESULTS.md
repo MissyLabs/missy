@@ -2,10 +2,10 @@
 
 ## Summary
 
-- **Total tests**: 12,868+
-- **Passed**: 12,868+
+- **Total tests**: 13,029+
+- **Passed**: 13,029
 - **Failed**: 0
-- **Skipped**: 14
+- **Skipped**: 16
 - **Duration**: ~5 minutes
 
 ## Vision Tests
@@ -75,17 +75,17 @@
 | tests/vision/ | 623 | ALL PASS |
 | tests/integration/ | 531 | ALL PASS |
 | tests/policy/ | 375 | ALL PASS |
-| tests/memory/ | 304 | ALL PASS |
+| tests/memory/ | 397 | ALL PASS |
 | tests/core/ | 276 | ALL PASS |
 | tests/gateway/ | 270 | ALL PASS |
 | tests/scheduler/ | 233 | ALL PASS |
-| tests/config/ | 193 | ALL PASS |
+| tests/config/ | 275 | ALL PASS |
 | tests/skills/ | 183 | ALL PASS |
 | tests/mcp/ | 133 | ALL PASS |
 | tests/plugins/ | 84 | ALL PASS |
 | tests/observability/ | 83 | ALL PASS |
 
-## Session 4 New Tests (439 total)
+## Session 4 New Tests (600 total)
 
 | File | New Tests | Focus |
 |------|-----------|-------|
@@ -98,6 +98,8 @@
 | test_plugin_extended.py | 47 | Lifecycle, permissions, isolation |
 | test_mcp_extended.py | 74 | Lifecycle, pinning, execution |
 | test_gateway_extended.py | 93 | REST policy, TLS, rate limiting |
+| test_config_extended.py | 82 | Migration, hot reload, plan, settings |
+| test_memory_extended.py | 93 | SQLite CRUD, FTS5, resilient, concurrency |
 
 ## Lint Status
 
