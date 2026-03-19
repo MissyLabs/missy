@@ -65,7 +65,11 @@ class ShellExecTool(BaseTool):
         "Execute a shell command. Pass the full command string in the 'command' parameter, "
         "e.g. command='ls -la /home' or command='sudo systemctl status cups'. "
         "Supports pipes, redirection, and compound commands with && or ;. "
-        "Always provide a non-empty command string."
+        "Always provide a non-empty command string. "
+        "IMPORTANT: Heredocs (<<) and here-strings (<<<) are NOT allowed. "
+        "To run multi-line scripts, first write the script to a file using file_write, "
+        "then execute it (e.g. file_write the script to /tmp/script.py, then shell_exec 'python3 /tmp/script.py'). "
+        "Subshells ($(...), backticks) are also forbidden."
     )
     permissions = ToolPermissions(shell=True)
 
@@ -205,7 +209,13 @@ class ShellExecTool(BaseTool):
                 "properties": {
                     "command": {
                         "type": "string",
-                        "description": "The shell command to execute, e.g. 'ls -la /tmp'.",
+                        "description": (
+                            "The shell command to execute, e.g. 'ls -la /tmp'. "
+                            "Do NOT use heredocs (<<), here-strings (<<<), "
+                            "subshells ($(...)), or backticks. "
+                            "For multi-line scripts, write to a file first with file_write, "
+                            "then execute the file."
+                        ),
                     },
                     "cwd": {
                         "type": "string",

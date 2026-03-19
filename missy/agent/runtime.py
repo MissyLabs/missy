@@ -64,6 +64,80 @@ logger = logging.getLogger(__name__)
 # Maximum size (chars) for a single tool result to prevent memory exhaustion.
 _MAX_TOOL_RESULT_CHARS = 200_000
 
+
+def _rewrite_heredoc_command(tool_args: dict) -> dict:
+    """Rewrite shell commands containing heredocs to use temp files.
+
+    Many external models (e.g. GPT-5.2 via Codex) generate heredoc-style
+    commands like ``python3 - <<'PY'\\n...\\nPY`` which the shell policy
+    rejects (``<<`` is a subshell marker).  This rewrites such commands by
+    extracting the heredoc body into a temporary file and replacing the
+    command with one that executes the file directly.
+
+    Only rewrites when ``<<`` is detected.  Returns *tool_args* unmodified
+    otherwise.
+    """
+    import os
+    import re
+    import tempfile
+
+    command = tool_args.get("command", "")
+    if "<<" not in command:
+        return tool_args
+
+    # Match patterns like:  python3 - <<'DELIM'\n...\nDELIM
+    # or:                   python3 - <<"DELIM"\n...\nDELIM
+    # or:                   python3 - <<DELIM\n...\nDELIM
+    # Also handles:         python3 <<'EOF'\n...\nEOF
+    m = re.match(
+        r"""^(\S+)          # interpreter (e.g. python3, bash, ruby)
+            \s*-?\s*        # optional stdin marker "-"
+            <<-?\s*         # heredoc operator (<<  or <<-)
+            ['"]?(\w+)['"]? # delimiter, optionally quoted
+            \n              # newline before body
+            (.*?)           # heredoc body (non-greedy)
+            \n\2\s*$        # closing delimiter
+        """,
+        command,
+        re.DOTALL | re.VERBOSE,
+    )
+    if not m:
+        logger.debug(
+            "Heredoc detected but pattern did not match; passing through: %s",
+            command[:120],
+        )
+        return tool_args
+
+    interpreter = m.group(1)
+    body = m.group(3)
+
+    # Determine file extension from interpreter name
+    ext_map = {
+        "python3": ".py", "python": ".py", "python2": ".py",
+        "ruby": ".rb", "node": ".js", "perl": ".pl",
+        "bash": ".sh", "sh": ".sh", "zsh": ".sh",
+    }
+    base = os.path.basename(interpreter)
+    ext = ext_map.get(base, ".tmp")
+
+    # Write body to a temp file (not auto-deleted so the shell can read it)
+    fd, tmppath = tempfile.mkstemp(suffix=ext, prefix="missy_heredoc_")
+    try:
+        os.write(fd, body.encode("utf-8"))
+    finally:
+        os.close(fd)
+
+    new_command = f"{interpreter} {tmppath}"
+    logger.info(
+        "Rewrote heredoc command to temp file: %s -> %s",
+        command[:80],
+        new_command,
+    )
+
+    rewritten = dict(tool_args)
+    rewritten["command"] = new_command
+    return rewritten
+
 # Threshold (chars) above which tool results are stored separately and replaced
 # with a compact reference.  Must be <= _MAX_TOOL_RESULT_CHARS.
 _LARGE_CONTENT_THRESHOLD = 50_000
@@ -424,6 +498,7 @@ class AgentRuntime:
                     AGENT_RUN_ERROR,
                     {"session_id": sid, "task_id": task_id, "error": str(exc)},
                 )
+            logger.exception("Unexpected error during completion")
             raise ProviderError(f"Unexpected error during completion: {exc}") from exc
 
         # Persist turn
@@ -694,15 +769,7 @@ class AgentRuntime:
                         detail={"prompt_id": "system_prompt"},
                     )
 
-                try:
-                    response: CompletionResponse = self._circuit_breaker.call(
-                        provider.complete_with_tools,
-                        provider_messages,
-                        tools,
-                        system_prompt,
-                    )
-                except AttributeError:
-                    # Provider doesn't implement complete_with_tools; fall back
+                if not hasattr(provider, "complete_with_tools"):
                     logger.debug(
                         "Provider %r does not implement complete_with_tools; using complete()",
                         provider.name,
@@ -715,6 +782,13 @@ class AgentRuntime:
                         task_id=task_id,
                     )
                     return fallback.content, tool_names_used
+
+                response: CompletionResponse = self._circuit_breaker.call(
+                    provider.complete_with_tools,
+                    provider_messages,
+                    tools,
+                    system_prompt,
+                )
 
                 # Record cost and enforce budget
                 self._record_cost(response, session_id=session_id)
@@ -1103,6 +1177,11 @@ class AgentRuntime:
         tool_args = {
             k: v for k, v in tool_call.arguments.items() if k not in ("session_id", "task_id")
         }
+
+        # Rewrite heredoc-style shell commands to temp files so they pass
+        # the shell policy (which blocks << as a subshell marker).
+        if tool_call.name == "shell_exec" and "command" in tool_args:
+            tool_args = _rewrite_heredoc_command(tool_args)
 
         last_exc: Exception | None = None
         for attempt in range(_MAX_TOOL_RETRIES + 1):

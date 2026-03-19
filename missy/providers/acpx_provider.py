@@ -728,8 +728,9 @@ class AcpxProvider(BaseProvider):
             messages = [Message(role="system", content=system), *messages]
 
         prompt = self._build_prompt(messages)
-        cmd = [self._binary, self._agent, "exec", prompt, "--format", "json"]
+        cmd = [self._binary, "--format", "json"]
         cmd.extend(self._extra_flags)
+        cmd.extend([self._agent, "exec", prompt])
 
         try:
             proc = subprocess.Popen(
@@ -802,13 +803,13 @@ class AcpxProvider(BaseProvider):
         Raises:
             ProviderError: On subprocess failure.
         """
-        cmd = [self._binary, self._agent, "exec", prompt]
-        cmd.extend(["--format", "json"])
+        cmd = [self._binary, "--format", "json"]
         if approve_all:
             cmd.append("--approve-all")
         cmd.extend(self._extra_flags)
         if cwd:
             cmd.extend(["--cwd", str(cwd)])
+        cmd.extend([self._agent, "exec", prompt])
 
         try:
             result = subprocess.run(
@@ -902,11 +903,24 @@ class AcpxProvider(BaseProvider):
 
         Handles several event shapes that ACPX may emit:
 
+        * ACP ``session/update`` with ``agent_message_chunk`` — the standard
+          format from ``--format json``.
         * ``{"type": "text_delta", "delta": "..."}``
         * ``{"type": "message", "content": "..."}``
         * ``{"type": "result", "text": "..."}``
         * ``{"content": "..."}`` (generic fallback)
         """
+        # ACP JSON-RPC session/update events (agent_message_chunk)
+        if event.get("method") == "session/update":
+            update = event.get("params", {}).get("update", {})
+            if update.get("sessionUpdate") == "agent_message_chunk":
+                content = update.get("content", {})
+                if isinstance(content, dict):
+                    return content.get("text", "")
+                if isinstance(content, str):
+                    return content
+            return ""
+
         etype = event.get("type", "")
 
         # Text delta events (streaming)

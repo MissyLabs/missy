@@ -32,37 +32,40 @@ class MemorySearchTool(BaseTool):
         "Search your conversation history and summaries for a keyword or phrase. "
         "Returns matching turns and summary excerpts with timestamps."
     )
-    parameters = {
-        "type": "object",
-        "properties": {
-            "query": {
-                "type": "string",
-                "description": "Search query (supports FTS5 syntax: phrases, AND/OR).",
-            },
-            "scope": {
-                "type": "string",
-                "enum": ["messages", "summaries", "both"],
-                "description": "What to search: messages, summaries, or both.",
-                "default": "both",
-            },
-            "session_id": {
-                "type": "string",
-                "description": "Restrict to a specific session. Empty = current session.",
-                "default": "",
-            },
-            "limit": {
-                "type": "integer",
-                "description": "Maximum results to return.",
-                "default": 10,
-            },
-        },
-        "required": ["query"],
-    }
 
     requires_filesystem_read = []
     requires_filesystem_write = []
     requires_network = []
     requires_shell = False
+
+    def get_schema(self) -> dict:
+        return {
+            "name": self.name,
+            "description": self.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query (supports FTS5 syntax: phrases, AND/OR).",
+                    },
+                    "scope": {
+                        "type": "string",
+                        "enum": ["messages", "summaries", "both"],
+                        "description": "What to search: messages, summaries, or both.",
+                    },
+                    "session_id": {
+                        "type": "string",
+                        "description": "Restrict to a specific session. Empty = current session.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum results to return.",
+                    },
+                },
+                "required": ["query"],
+            },
+        }
 
     def execute(self, **kwargs: Any) -> ToolResult:
         query = kwargs.get("query", "")
@@ -124,21 +127,27 @@ class MemoryDescribeTool(BaseTool):
         "large-content reference (ref_*). Shows depth, time range, "
         "parent/child relationships, and source turn count."
     )
-    parameters = {
-        "type": "object",
-        "properties": {
-            "item_id": {
-                "type": "string",
-                "description": "A summary ID (sum_...) or large-content ID (ref_...).",
-            },
-        },
-        "required": ["item_id"],
-    }
 
     requires_filesystem_read = []
     requires_filesystem_write = []
     requires_network = []
     requires_shell = False
+
+    def get_schema(self) -> dict:
+        return {
+            "name": self.name,
+            "description": self.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "item_id": {
+                        "type": "string",
+                        "description": "A summary ID (sum_...) or large-content ID (ref_...).",
+                    },
+                },
+                "required": ["item_id"],
+            },
+        }
 
     def execute(self, **kwargs: Any) -> ToolResult:
         item_id = kwargs.get("item_id", "")
@@ -215,26 +224,31 @@ class MemoryExpandTool(BaseTool):
         "For summaries: retrieves child summaries or original turns. "
         "For large-content refs: retrieves the full stored content."
     )
-    parameters = {
-        "type": "object",
-        "properties": {
-            "item_id": {
-                "type": "string",
-                "description": "A summary ID (sum_*) or large-content ID (ref_*).",
-            },
-            "max_tokens": {
-                "type": "integer",
-                "description": "Maximum tokens to return.",
-                "default": 4000,
-            },
-        },
-        "required": ["item_id"],
-    }
 
     requires_filesystem_read = []
     requires_filesystem_write = []
     requires_network = []
     requires_shell = False
+
+    def get_schema(self) -> dict:
+        return {
+            "name": self.name,
+            "description": self.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "item_id": {
+                        "type": "string",
+                        "description": "A summary ID (sum_*) or large-content ID (ref_*).",
+                    },
+                    "max_tokens": {
+                        "type": "integer",
+                        "description": "Maximum tokens to return.",
+                    },
+                },
+                "required": ["item_id"],
+            },
+        }
 
     def execute(self, **kwargs: Any) -> ToolResult:
         item_id = kwargs.get("item_id", "")
