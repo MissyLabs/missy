@@ -2,67 +2,48 @@
 
 ## Last Updated
 
-2026-03-19, Session 12
+2026-03-19, Session 13
 
-## Session 12 Summary
+## Session 13 Summary
 
-Code quality hardening, bug fixes, constant extraction, property-based testing, cross-module integration tests, and security-focused tests. 164 new tests across 6 new test files, 4 code fixes.
+Deep hardening session: 6 code fixes across 3 vision modules, 921 new tests across 12 new test files covering all major subsystems. Full cross-codebase edge case coverage.
 
-### Changes This Session
-
-1. **Thread-safe intent classifier singleton + constant extraction** (`934f7f1`)
-   - Add double-checked locking to `get_intent_classifier()` singleton
-   - Extract magic numbers to named constants in `analysis.py` (Canny thresholds, k-means params, color thresholds, overlay weights)
-   - Extract change detection constants in `scene_memory.py` (weights, thresholds, compare size, phash bits)
-
-2. **Fix color classifier bug + 49 hardening tests** (`f4b6c9e`)
-   - Fix `_describe_color()`: check grays before tan/brown (neutral grays were misclassified)
-   - 49 tests: intent singleton thread-safety, multi-camera error paths, resilient capture edge cases, vision memory error handling, constants validation, color description branches, MultiCaptureResult properties
-
-3. **34 context manager and vision memory bridge tests** (`b610440`)
-   - TokenBudget validation, ContextManager with empty/malformed history, memory truncation, learnings budget, fresh tail, summary formatting
-   - VisionMemoryBridge: non-vision filtering, task_type filter, fallback logic, limit enforcement, metadata handling
-
-4. **42 orientation detection, EXIF parsing, and pipeline tests** (`774aba3`)
-   - All orientation cases: landscape, portrait, square, grayscale, None, zero dimensions
-   - All rotation corrections and auto_correct confidence thresholds
-   - EXIF parser: valid/invalid data, big/little endian, missing tags
-   - Pipeline quality assessment and processing
-
-5. **12 property-based tests with Hypothesis** (`ecd9e0b`)
-   - Orientation: any dimensions → valid result, pixel count preservation
-   - Pipeline: any image → valid quality dict
-   - Intent: any text → valid IntentResult, whitespace → SKIP
-   - Color: any RGB → non-empty deterministic string
-   - Scene memory hash: deterministic, correct length
-   - Token budget: always positive, monotonic
-
-6. **21 cross-module integration tests** (`3b1670c`)
-   - Health monitor: discovery, success rate, consecutive failure tracking
-   - Scene → Memory bridge: summary storage, change detection, deduplication
-   - Intent → Audit: serialization, activation decisions
-   - Pipeline → Orientation chain: processing, auto-correct, quality assessment
-   - Shutdown coordination: idempotency, concurrent calls
-   - Analysis prompts: puzzle/painting/general modes, preprocessor operations
-
-7. **Lint cleanup** (`3e7a131`)
-   - Fix all ruff errors: import sorting, unused variable, dict literal
-
-8. **27 security-focused tests** (`e71cbf9`)
-   - Context sanitization, source path validation, metadata protection
-   - Audit event integrity, intent classifier injection resistance
-   - Provider format validation, scene session task ID edge cases
-
-### Full Test Suite: 15,527 passed, 0 failures, 14 skipped
-
-### Code Fixes Summary
+### Code Fixes This Session
 
 | Module | Change | Severity |
 |--------|--------|----------|
-| `intent.py` | Thread-safe `get_intent_classifier()` singleton (double-checked locking) | MEDIUM |
-| `analysis.py` | Fix `_describe_color()` gray-before-tan ordering bug | HIGH |
-| `analysis.py` | Extract 12 magic numbers to named constants | LOW |
-| `scene_memory.py` | Extract 7 change detection constants | LOW |
+| `resilient_capture.py` | Add jitter (±25%) to backoff delays preventing thundering herd | MEDIUM |
+| `resilient_capture.py` | Log when falling back to generic discovery (no USB IDs) | LOW |
+| `health_monitor.py` | Restore auto-save counter after save failure so retries fire | MEDIUM |
+| `health_monitor.py` | Wrap DELETE+INSERT in explicit transaction for crash safety | HIGH |
+| `health_monitor.py` | Add 5s timeout to sqlite3.connect to avoid blocking on contention | LOW |
+| `scene_memory.py` | Warn and close old session on task_id collision instead of silent replace | MEDIUM |
+
+### New Tests This Session (921 tests, 12 files)
+
+| Test File | Count | Coverage |
+|-----------|-------|----------|
+| `test_session13_resilient.py` | 41 | Jitter, thread safety, failure types, reconnect, context manager |
+| `test_session13_health_monitor.py` | 54 | Auto-save recovery, transactions, recommendations, concurrent save |
+| `test_session13_scene_memory.py` | 58 | Collisions, eviction, concurrency, phash edge cases, dedup |
+| `test_session13_consolidation_approval.py` | 81 | Threshold boundaries, fact extraction, concurrent approvals |
+| `test_session13_multi_camera.py` | 43 | Closed handle guard, health monitor args, close_all failures |
+| `test_session13_discovery_capture.py` | 72 | Symlink cycles, sysfs scanning, adaptive blank detector, lazy cv2 |
+| `test_session13_message_bus.py` | 44 | Worker lifecycle, self-unsubscribe, fnmatch edges, sequence counter |
+| `test_session13_watchdog_ratelimiter.py` | 64 | Log levels, audit events, bucket deduction, concurrent threads |
+| `test_session13_provider_audit.py` | 72 | Provider format routing, audit event fields, privacy guarantees |
+| `test_session13_hotreload_plan.py` | 43 | File safety, atomic save, backup fidelity, diff edge cases |
+| `test_session13_vault_trust.py` | 53 | Key rotation, corrupt data, concurrent vault, trust boundaries |
+| `test_session13_persona_behavior.py` | 87 | Defaults, version tracking, intent categories, vision guidelines |
+| `test_session13_hatching_checkpoint.py` | 59 | First-run detection, provider verification, checkpoint concurrency |
+| `test_session13_scheduler_memory.py` | 68 | Retry boundary, active hours, FTS search, concurrent writes |
+| `test_session13_policy_gateway.py` | 82 | CIDR IPv6, domain matching, REST policy globs, DNS rebinding |
+
+### Full Test Suite: 16,448 passed, 0 failures, 14 skipped
+
+### Pre-existing Test Fix
+
+- `test_timeout_and_backoff.py`: Fixed assertions for jitter-aware backoff delays (pinned random, adjusted max_delay cap)
 
 ### Vision Modules (20 files in `missy/vision/`)
 
@@ -71,12 +52,12 @@ Code quality hardening, bug fixes, constant extraction, property-based testing, 
 | `__init__.py` | Package docs with complete submodule listing |
 | `discovery.py` | USB camera discovery via sysfs + rediscover/validate + cycle detection + thread-safe singleton |
 | `capture.py` | OpenCV capture with timeout, deadline-aware retries, warmup, fd leak prevention, quality scoring, thread-safe cv2 |
-| `resilient_capture.py` | Auto-reconnection with blank detector reset on device switch |
+| `resilient_capture.py` | Auto-reconnection with jittered backoff + blank detector reset on device switch |
 | `multi_camera.py` | Concurrent multi-camera capture with deadline-based timeout + handle validation |
 | `sources.py` | Unified source abstraction with S_ISREG validation + traversal prevention + thread-safe cv2 |
 | `pipeline.py` | Image preprocessing + quality assessment (6 metrics) + thread-safe cv2 |
-| `scene_memory.py` | Task-scoped scene memory with perceptual hashing + deduplication + thread safety + eager cleanup + thread-safe singleton |
-| `health_monitor.py` | Capture stats, health tracking, SQLite persistence, thread-safe auto-save + thread-safe singleton |
+| `scene_memory.py` | Task-scoped scene memory with perceptual hashing + deduplication + collision detection + thread safety |
+| `health_monitor.py` | Capture stats, health tracking, SQLite persistence with atomic transactions + auto-save recovery |
 | `benchmark.py` | Performance benchmarking with percentile statistics |
 | `memory_usage.py` | Scene memory usage monitoring with configurable limits |
 | `config_validator.py` | Vision configuration validation |
@@ -107,22 +88,22 @@ Code quality hardening, bug fixes, constant extraction, property-based testing, 
 - [ ] Container sandbox for vision operations
 - [ ] Video stream capture (continuous frames for motion tracking)
 - [ ] Discord credential message deletion
-- [ ] Load testing for multi-camera concurrent capture
 - [ ] End-to-end integration tests with mock camera devices
-- [ ] Stress testing for health monitor SQLite persistence under load
+- [ ] Coverage report generation and gap analysis
 
 ## Recovery Notes
 
-All code committed and passing. 15,527 total tests, 0 failures, 14 skipped.
-Session 12: 4 code fixes, 164 new tests across 6 new test files.
+All code committed and passing. 16,448 total tests, 0 failures, 14 skipped.
+Session 13: 6 code fixes, 921 new tests across 12 new test files.
 Ruff lint: 0 errors.
 
-Session 12 commits:
-1. `934f7f1` — Thread-safe intent singleton + constant extraction (3 files)
-2. `f4b6c9e` — Fix color classifier bug + 49 hardening tests
-3. `b610440` — 34 context manager and vision memory bridge tests
-4. `774aba3` — 42 orientation detection, EXIF parsing, pipeline tests
-5. `ecd9e0b` — 12 property-based tests with Hypothesis
-6. `3b1670c` — 21 cross-module integration tests
-7. `3e7a131` — Lint cleanup (import sorting, unused var, dict literal)
-8. `e71cbf9` — 27 security-focused tests (context sanitization, path validation, metadata protection)
+Session 13 commits:
+1. `536d62f` — Fix 4 robustness issues, add 153 hardening tests
+2. `8f51889` — Add 124 tests for consolidation, approval gate, and multi-camera
+3. `3e55a69` — Add 116 tests for discovery, capture, and message bus edge cases
+4. `2a702be` — Add 136 tests for watchdog, rate limiter, provider format, and audit
+5. `199b94e` — Add 96 tests for config hotreload, plan, vault, and trust scorer
+6. `09f22fd` — Fix backoff tests for jitter
+7. `466b1c7` — Add 146 tests for persona, behavior, hatching, and checkpoint
+8. `afd26dc` — Fix lint: import sorting, unused vars, contextlib.suppress
+9. `153d35b` — Add 150 tests for scheduler, memory store, policy engine, and gateway
