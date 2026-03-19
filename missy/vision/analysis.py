@@ -57,25 +57,36 @@ You are helping with a tabletop jigsaw puzzle. Analyze this image carefully.
 Provide structured observations:
 
 1. **Board State**: Describe the current state of the puzzle — what areas are \
-completed, what's in progress, what's empty.
+completed, what's in progress, what's empty. Estimate completion percentage.
 
 2. **Piece Identification**: Identify any loose pieces visible. For each:
    - Describe its colors, patterns, and textures
-   - Note if it's an edge piece (flat side) or corner piece (two flat sides)
+   - Note if it's an edge piece (one flat side), corner piece (two flat sides), \
+or interior piece (no flat sides)
+   - Note the piece's tab/blank pattern (e.g. "2 tabs, 2 blanks")
    - Estimate which region of the puzzle it likely belongs to
 
-3. **Grouping Suggestions**: Suggest how loose pieces could be grouped by:
-   - Color similarity
-   - Texture/pattern matching
-   - Edge type (edge, corner, interior)
+3. **Orientation Hints**: For pieces that seem close to fitting:
+   - Suggest rotation (0°, 90°, 180°, 270°)
+   - Note which direction the image/pattern flows
+   - Identify alignment cues from neighboring pieces
 
-4. **Placement Guidance**: If you can identify likely placement locations:
+4. **Grouping Suggestions**: Suggest how loose pieces could be grouped by:
+   - Color similarity (group sky blues, greens, etc.)
+   - Texture/pattern matching (similar brushstrokes, gradients)
+   - Edge type (border pieces first, then interior)
+   - Region affinity (pieces that likely go near each other)
+
+5. **Placement Guidance**: If you can identify likely placement locations:
    - Describe where specific pieces might fit
-   - Note any pattern continuity clues
+   - Note any pattern continuity clues (lines, color gradients)
+   - Identify "anchor" pieces that connect completed regions
    - Suggest which area to focus on next
 
-5. **Next Steps**: Provide 2-3 actionable suggestions for the next steps \
-the puzzler should take.
+6. **Strategy Tips**: Provide 2-3 actionable next steps, such as:
+   - "Sort all remaining edge pieces and complete the border"
+   - "The blue gradient in the top-left suggests these 3 pieces connect"
+   - "Try rotating the piece with the tree pattern 90° clockwise"
 
 Be specific and reference actual colors, patterns, and positions you observe.
 """
@@ -157,12 +168,28 @@ Remember: warm, supportive, encouraging. Like a favorite art teacher.
 INSPECTION_PROMPT = """\
 Examine this image carefully and provide a detailed inspection report.
 
-Include:
-- Overall condition assessment
-- Specific details and observations
-- Any items of note or concern
-- Measurements or quantities if visible
-- Recommendations if applicable
+Structure your report as:
+
+1. **Overview**: What is the primary subject? Describe the scene at a high level.
+
+2. **Condition Assessment**: Rate the overall condition (if applicable) and \
+note any wear, damage, or irregularities.
+
+3. **Details & Observations**:
+   - List specific items, components, or features visible
+   - Note any text, labels, serial numbers, or markings
+   - Describe materials, textures, and finishes
+   - Identify any tools, equipment, or objects present
+
+4. **Measurements & Quantities**: Estimate sizes, counts, or quantities \
+where visible. Note relative scale using reference objects.
+
+5. **Concerns & Anomalies**: Flag anything unusual, potentially problematic, \
+or requiring attention.
+
+6. **Recommendations**: Suggest next steps or actions based on observations.
+
+Be precise and factual. Distinguish between observations and inferences.
 """
 
 
