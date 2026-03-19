@@ -73,11 +73,12 @@ class TestVisionDoctor:
     @patch("missy.vision.doctor.os")
     def test_check_video_group_member(self, mock_os, mock_grp):
         mock_os.getlogin.return_value = "testuser"
-        mock_os.getgid.return_value = 44
+        # Simulate membership via supplementary groups (os.getgroups returns video gid).
+        mock_os.getgroups.return_value = [44, 1000]
+        mock_os.getegid.return_value = 1000
         mock_os.environ = {}
 
         mock_group = MagicMock()
-        mock_group.gr_mem = ["testuser"]
         mock_group.gr_gid = 44
         mock_grp.getgrnam.return_value = mock_group
 
@@ -88,11 +89,12 @@ class TestVisionDoctor:
     @patch("missy.vision.doctor.os")
     def test_check_video_group_not_member(self, mock_os, mock_grp):
         mock_os.getlogin.return_value = "testuser"
-        mock_os.getgid.return_value = 1000
+        # Simulate no membership: supplementary groups and egid don't include video gid.
+        mock_os.getgroups.return_value = [1000, 1001]
+        mock_os.getegid.return_value = 1000
         mock_os.environ = {}
 
         mock_group = MagicMock()
-        mock_group.gr_mem = ["other"]
         mock_group.gr_gid = 44
         mock_grp.getgrnam.return_value = mock_group
 

@@ -96,15 +96,34 @@ class VisionDoctor:
         return report
 
     def check_opencv(self) -> DiagnosticResult:
-        """Check if OpenCV is installed and functional."""
+        """Check if OpenCV is installed, functional, and meets the minimum version."""
         try:
             import cv2
+
             version = cv2.__version__
+            parts = version.split(".")
+            try:
+                major = int(parts[0])
+            except (ValueError, IndexError):
+                major = 0
+
+            if major < 4:
+                return DiagnosticResult(
+                    name="opencv",
+                    passed=False,
+                    message=(
+                        f"OpenCV {version} is below the minimum required version 4.0. "
+                        "Upgrade with: pip install --upgrade opencv-python-headless"
+                    ),
+                    details={"version": version, "major": major, "minimum_major": 4},
+                    severity="error",
+                )
+
             return DiagnosticResult(
                 name="opencv",
                 passed=True,
-                message=f"OpenCV {version} is available",
-                details={"version": version},
+                message=f"OpenCV {version} is available (>= 4.0)",
+                details={"version": version, "major": major},
             )
         except ImportError:
             return DiagnosticResult(
@@ -133,30 +152,19 @@ class VisionDoctor:
             )
 
     def check_video_group(self) -> DiagnosticResult:
-        """Check if current user is in the 'video' group."""
+        """Check if current user is in the 'video' group.
+
+        Uses ``os.getgroups()`` to inspect the process's actual supplementary
+        group list, which correctly reflects ``newgrp`` / ``sg`` activations and
+        avoids false negatives from comparing usernames against ``gr_mem``.
+        """
         try:
             username = os.getlogin()
         except OSError:
             username = os.environ.get("USER", "unknown")
 
         try:
-            video_group = grp.getgrnam("video")
-            if username in video_group.gr_mem or os.getgid() == video_group.gr_gid:
-                return DiagnosticResult(
-                    name="video_group",
-                    passed=True,
-                    message=f"User '{username}' is in the 'video' group",
-                )
-            else:
-                return DiagnosticResult(
-                    name="video_group",
-                    passed=False,
-                    message=(
-                        f"User '{username}' is NOT in the 'video' group. "
-                        f"Run: sudo usermod -aG video {username}"
-                    ),
-                    severity="warning",
-                )
+            video_gid = grp.getgrnam("video").gr_gid
         except KeyError:
             return DiagnosticResult(
                 name="video_group",
@@ -164,6 +172,30 @@ class VisionDoctor:
                 message="'video' group does not exist on this system",
                 severity="warning",
             )
+
+        try:
+            current_gids = os.getgroups()
+        except OSError:
+            current_gids = []
+
+        if video_gid in current_gids or os.getegid() == video_gid:
+            return DiagnosticResult(
+                name="video_group",
+                passed=True,
+                message=f"User '{username}' is in the 'video' group (gid={video_gid})",
+                details={"video_gid": video_gid},
+            )
+
+        return DiagnosticResult(
+            name="video_group",
+            passed=False,
+            message=(
+                f"User '{username}' is NOT in the 'video' group. "
+                f"Run: sudo usermod -aG video {username}"
+            ),
+            details={"video_gid": video_gid, "current_gids": current_gids},
+            severity="warning",
+        )
 
     def check_video_devices(self) -> DiagnosticResult:
         """Check for /dev/video* device nodes."""
@@ -246,15 +278,34 @@ class VisionDoctor:
                     severity="warning",
                 )
 
-            info = [
-                {
-                    "device": c.device_path,
-                    "name": c.name,
-                    "usb_id": c.usb_id,
-                    "bus": c.bus_info,
-                }
-                for c in cameras
-            ]
+            info = []
+            unreadable: list[str] = []
+            for c in cameras:
+                readable = os.access(c.device_path, os.R_OK)
+                if not readable:
+                    unreadable.append(c.device_path)
+                info.append(
+                    {
+                        "device": c.device_path,
+                        "name": c.name,
+                        "usb_id": c.usb_id,
+                        "bus": c.bus_info,
+                        "readable": readable,
+                    }
+                )
+
+            if unreadable:
+                return DiagnosticResult(
+                    name="camera_discovery",
+                    passed=False,
+                    message=(
+                        f"Discovered {len(cameras)} camera(s) but "
+                        f"{len(unreadable)} are not readable by the current user: "
+                        f"{', '.join(unreadable)}"
+                    ),
+                    details={"cameras": info, "unreadable": unreadable},
+                    severity="warning",
+                )
 
             return DiagnosticResult(
                 name="camera_discovery",
@@ -345,16 +396,12 @@ class VisionDoctor:
             )
 
     def check_captures_directory(self) -> DiagnosticResult:
-        """Check if the captures directory exists and is writable."""
+        """Check if the captures directory exists, is writable, and has sufficient disk space."""
+        _MIN_FREE_MB = 100
         captures_dir = Path.home() / ".missy" / "captures"
         try:
             if not captures_dir.exists():
                 captures_dir.mkdir(parents=True, exist_ok=True)
-                return DiagnosticResult(
-                    name="captures_dir",
-                    passed=True,
-                    message=f"Created captures directory: {captures_dir}",
-                )
 
             if not os.access(str(captures_dir), os.W_OK):
                 return DiagnosticResult(
@@ -364,11 +411,37 @@ class VisionDoctor:
                     severity="warning",
                 )
 
+            usage = shutil.disk_usage(captures_dir)
+            free_mb = usage.free // (1024 * 1024)
+            total_mb = usage.total // (1024 * 1024)
+
+            if free_mb < _MIN_FREE_MB:
+                return DiagnosticResult(
+                    name="captures_dir",
+                    passed=False,
+                    message=(
+                        f"Low disk space for captures: {free_mb} MB free "
+                        f"(minimum {_MIN_FREE_MB} MB recommended). "
+                        f"Free up space on the partition containing {captures_dir}."
+                    ),
+                    details={
+                        "path": str(captures_dir),
+                        "free_mb": free_mb,
+                        "total_mb": total_mb,
+                        "minimum_free_mb": _MIN_FREE_MB,
+                    },
+                    severity="warning",
+                )
+
             return DiagnosticResult(
                 name="captures_dir",
                 passed=True,
-                message=f"Captures directory ready: {captures_dir}",
-                details={"path": str(captures_dir)},
+                message=f"Captures directory ready: {captures_dir} ({free_mb} MB free)",
+                details={
+                    "path": str(captures_dir),
+                    "free_mb": free_mb,
+                    "total_mb": total_mb,
+                },
             )
         except OSError as exc:
             return DiagnosticResult(
