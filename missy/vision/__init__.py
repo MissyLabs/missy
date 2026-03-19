@@ -40,4 +40,6 @@ config_validator
     Vision configuration validation.
 vision_memory
     Integration between vision observations and the memory subsystem.
+shutdown
+    Graceful shutdown and resource cleanup for the vision subsystem.
 """
