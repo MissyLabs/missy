@@ -23,18 +23,29 @@
 
 Vision operations produce the following audit events:
 
+| Action | Description |
+|--------|-------------|
+| `capture` | Single-frame capture from any source |
+| `burst_capture` | Multi-frame burst capture with count/success tracking |
+| `analyze` | Domain-specific analysis request |
+| `intent` | Audio intent classification (text NOT logged, only length) |
+| `device_discovery` | Camera enumeration |
+| `session_create/close` | Scene memory lifecycle |
+| `error` | Vision error with operation, device, recoverability |
+
 ```json
 {
   "category": "vision",
-  "action": "capture|inspect|review|activate",
+  "action": "capture|burst_capture|analyze|intent|error",
   "device": "/dev/video0",
   "source_type": "webcam|file|screenshot|photo",
   "trigger_reason": "user_command|audio_intent|api",
-  "intent_confidence": 0.92,
   "success": true,
   "timestamp": "2026-03-19T00:00:00Z"
 }
 ```
+
+**Privacy note**: Intent audit events log `text_length` instead of the raw user text to prevent sensitive content from appearing in audit logs.
 
 ### Intent Classification Audit
 
@@ -78,4 +89,7 @@ Raw V4L2 is NOT used. If a specific limitation is discovered, it should be docum
 - Configurable parameters via dataclasses
 - Context manager support for resource cleanup
 - Lazy imports for optional dependencies
-- 150 unit tests covering all modules
+- 302 tests covering all modules (including hardening, burst, security)
+- Thread-safe capture and session management
+- Input validation on all public APIs
+- Grayscale and BGRA image format support

@@ -69,6 +69,10 @@ Camera Device → OpenCV VideoCapture → Warm-up → Frame Read → Blank Detec
 - **Blank detection**: Rejects frames with mean pixel value below threshold (default 5.0)
 - **Resolution negotiation**: Requests preferred resolution, accepts what camera provides
 - **Graceful failure**: Returns structured `CaptureResult` with error details
+- **Burst capture**: `capture_burst(count, interval)` for rapid multi-frame capture (1-20 frames)
+- **Best-frame selection**: `capture_best(burst_count)` selects sharpest frame via Laplacian variance
+- **Thread safety**: All capture/close operations are protected by `threading.Lock`
+- **Input validation**: Device path, frame shape, and configuration validated on entry
 
 ## Image Preprocessing
 
