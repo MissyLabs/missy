@@ -193,10 +193,25 @@ class FileSource(ImageSource):
     def is_available(self) -> bool:
         return self._path.exists() and self._path.is_file()
 
+    # Maximum image dimensions to prevent resource exhaustion
+    MAX_DIMENSION = 16384
+    # Maximum file size to prevent loading huge files (100 MB)
+    MAX_FILE_SIZE = 100 * 1024 * 1024
+
     def acquire(self) -> ImageFrame:
         cv2 = _get_cv2()
         if not self._path.exists():
             raise FileNotFoundError(f"Image file not found: {self._path}")
+
+        # Check file size before loading
+        file_size = self._path.stat().st_size
+        if file_size == 0:
+            raise ValueError(f"Image file is empty: {self._path}")
+        if file_size > self.MAX_FILE_SIZE:
+            raise ValueError(
+                f"Image file too large ({file_size / 1024 / 1024:.1f} MB, "
+                f"max {self.MAX_FILE_SIZE / 1024 / 1024:.0f} MB): {self._path}"
+            )
 
         try:
             img = cv2.imread(str(self._path))
@@ -204,6 +219,16 @@ class FileSource(ImageSource):
             raise OSError(f"Error reading image {self._path}: {exc}") from exc
         if img is None:
             raise ValueError(f"Failed to decode image (unsupported format?): {self._path}")
+
+        # Validate dimensions
+        h, w = img.shape[:2]
+        if h == 0 or w == 0:
+            raise ValueError(f"Image has zero dimension ({w}x{h}): {self._path}")
+        if h > self.MAX_DIMENSION or w > self.MAX_DIMENSION:
+            logger.warning(
+                "Image %s has large dimensions (%dx%d), may be slow to process",
+                self._path, w, h,
+            )
 
         return ImageFrame(
             image=img,
@@ -252,10 +277,12 @@ class ScreenshotSource(ImageSource):
             tmp_path = tmp.name
 
         try:
-            self._take_screenshot(tmp_path)
+            tool_used = self._take_screenshot(tmp_path)
             img = cv2.imread(tmp_path)
             if img is None:
-                raise RuntimeError("Screenshot capture produced unreadable image")
+                raise RuntimeError(
+                    f"Screenshot tool '{tool_used}' created file but image is unreadable"
+                )
             return ImageFrame(
                 image=img,
                 source_type=SourceType.SCREENSHOT,
@@ -264,9 +291,11 @@ class ScreenshotSource(ImageSource):
         finally:
             Path(tmp_path).unlink(missing_ok=True)
 
-    def _take_screenshot(self, output_path: str) -> None:
-        """Try available screenshot tools in order."""
-        env = dict(__import__("os").environ)
+    def _take_screenshot(self, output_path: str) -> str:
+        """Try available screenshot tools in order.  Returns the tool name used."""
+        import os
+
+        env = dict(os.environ)
         if self._display:
             env["DISPLAY"] = self._display
 
@@ -284,7 +313,7 @@ class ScreenshotSource(ImageSource):
                 )
                 if result.returncode == 0 and Path(output_path).exists():
                     logger.debug("Screenshot captured with %s", name)
-                    return
+                    return name
                 errors.append(f"{name}: exit {result.returncode}")
             except FileNotFoundError:
                 errors.append(f"{name}: not found")
