@@ -6,7 +6,7 @@
 
 ## Session 6 Summary
 
-Vision hardening: health persistence, perceptual hashing, adaptive blank detection, device re-enumeration, 125 new tests.
+Vision hardening: health persistence with auto-save, perceptual hashing, adaptive blank detection, device re-enumeration, 160 new tests (plus OtelExporter and plugin loader tests).
 
 ### Changes This Session (7 commits)
 
@@ -52,7 +52,7 @@ Vision hardening: health persistence, perceptual hashing, adaptive blank detecti
 7. **VISION.md update** (`a37be22`)
    - Documented all session 6 features: persistence, perceptual hashing, adaptive blank, rediscovery, validation
 
-### Full Test Suite: 13,722 passed, 0 failures, 14 skipped
+### Full Test Suite: 13,757 passed, 0 failures, 14 skipped
 
 ### Vision Modules (13 files in `missy/vision/`)
 
@@ -144,8 +144,8 @@ Vision hardening: health persistence, perceptual hashing, adaptive blank detecti
 
 ## Recovery Notes
 
-All code committed and passing. 13,722 total tests, 0 failures, 14 skipped.
-Session 6: 4 new production features (health persistence, perceptual hashing,
-adaptive blank detection, device re-enumeration hardening), 1 CLI enhancement,
-125 new tests across vision subsystem, VISION.md documentation update.
-Ruff lint is fully clean.
+All code committed and passing. 13,757 total tests, 0 failures, 14 skipped.
+Session 6: 5 new production features (health persistence + auto-save, perceptual
+hashing, adaptive blank detection, device re-enumeration hardening), 1 CLI
+enhancement, 160 new tests across vision, observability, and plugins subsystems,
+VISION.md and TEST_RESULTS.md documentation updates. Ruff lint is fully clean.
