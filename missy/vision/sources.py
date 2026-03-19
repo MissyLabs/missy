@@ -132,6 +132,14 @@ class WebcamSource(ImageSource):
     """
 
     def __init__(self, device_path: str = "/dev/video0", *, timeout: float = 15.0) -> None:
+        # Validate device path to prevent command injection or unexpected access
+        import re
+
+        if not re.match(r"^/dev/video\d+$", device_path):
+            raise ValueError(
+                f"Invalid device path: {device_path!r} "
+                "(expected /dev/videoN format)"
+            )
         self._device_path = device_path
         self._timeout = timeout
 
@@ -182,10 +190,14 @@ class WebcamSource(ImageSource):
 
 
 class FileSource(ImageSource):
-    """Loads an image from a file path."""
+    """Loads an image from a file path.
+
+    Security: Resolves the path to detect traversal and verifies it is
+    a regular file (not a symlink to a device node, etc.).
+    """
 
     def __init__(self, path: str | Path) -> None:
-        self._path = Path(path)
+        self._path = Path(path).resolve()
 
     def source_type(self) -> SourceType:
         return SourceType.FILE
