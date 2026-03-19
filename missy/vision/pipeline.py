@@ -181,8 +181,29 @@ class ImagePipeline:
         # Contrast (std dev of grayscale)
         contrast = float(np.std(gray))
 
+        # Saturation — only meaningful for color images
+        saturation = 0.0
+        if image.ndim == 3 and image.shape[2] >= 3:
+            try:
+                hsv = cv2.cvtColor(image[:, :, :3], cv2.COLOR_BGR2HSV)
+                if isinstance(hsv, np.ndarray) and hsv.ndim == 3 and hsv.shape[2] >= 2:
+                    saturation = float(np.mean(hsv[:, :, 1]))
+            except Exception:
+                pass  # saturation stays 0.0 if conversion fails
+
         # Blur detection (Laplacian variance)
         laplacian_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+
+        # Noise estimation — high-frequency energy ratio
+        noise_level = 0.0
+        if gray.size > 0:
+            try:
+                # Use median absolute deviation of Laplacian as noise estimator
+                laplacian = cv2.Laplacian(gray, cv2.CV_64F)
+                if isinstance(laplacian, np.ndarray):
+                    noise_level = float(np.median(np.abs(laplacian))) * 1.4826
+            except (TypeError, ValueError):
+                pass  # noise_level stays 0.0 if computation fails
 
         # Classify quality
         issues: list[str] = []
@@ -199,6 +220,14 @@ class ImagePipeline:
         if laplacian_var < 50:
             issues.append("blurry")
 
+        if saturation > 0 and saturation < 20:
+            issues.append("desaturated")
+        if saturation > 230:
+            issues.append("oversaturated")
+
+        if noise_level > 30:
+            issues.append("noisy")
+
         quality = "good"
         if len(issues) >= 2:
             quality = "poor"
@@ -211,6 +240,8 @@ class ImagePipeline:
             "brightness": round(brightness, 1),
             "contrast": round(contrast, 1),
             "sharpness": round(laplacian_var, 1),
+            "saturation": round(saturation, 1),
+            "noise_level": round(noise_level, 1),
             "quality": quality,
             "issues": issues,
         }

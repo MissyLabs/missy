@@ -20,6 +20,7 @@ import time
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -69,6 +70,7 @@ class CaptureResult:
     width: int = 0
     height: int = 0
     error: str = ""
+    failure_type: str = ""
     attempt_count: int = 1
     warmup_frames_discarded: int = 0
 
@@ -157,6 +159,18 @@ class CameraHandle:
         self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._config.width)
         self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._config.height)
 
+        # Verify resolution was accepted
+        actual_w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        actual_h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        if actual_w != self._config.width or actual_h != self._config.height:
+            logger.warning(
+                "Requested resolution %dx%d but camera set %dx%d",
+                self._config.width,
+                self._config.height,
+                actual_w,
+                actual_h,
+            )
+
         self._opened = True
         self._open_time = time.monotonic()
 
@@ -166,8 +180,8 @@ class CameraHandle:
         logger.info(
             "Camera opened: %s (%dx%d)",
             self._device_path,
-            int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
-            int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+            actual_w,
+            actual_h,
         )
 
     def close(self) -> None:
@@ -196,6 +210,14 @@ class CameraHandle:
                         logger.warning("Frame read failed: %s", last_error)
                         if attempt < config.max_retries:
                             time.sleep(config.retry_delay)
+                        else:
+                            return CaptureResult(
+                                success=False,
+                                device_path=self._device_path,
+                                error=f"Capture failed after {config.max_retries} attempts: {last_error}",
+                                failure_type=FailureType.TRANSIENT,
+                                attempt_count=config.max_retries,
+                            )
                         continue
 
                     # Validate frame shape
@@ -229,11 +251,27 @@ class CameraHandle:
                     logger.error("Capture exception on attempt %d: %s", attempt, exc)
                     if attempt < config.max_retries:
                         time.sleep(config.retry_delay)
+                    else:
+                        exc_msg = last_error.lower()
+                        if "permission" in exc_msg:
+                            exc_failure_type: str = FailureType.PERMISSION
+                        elif "no such file" in exc_msg or "no such device" in exc_msg:
+                            exc_failure_type = FailureType.DEVICE_GONE
+                        else:
+                            exc_failure_type = FailureType.TRANSIENT
+                        return CaptureResult(
+                            success=False,
+                            device_path=self._device_path,
+                            error=f"Capture failed after {config.max_retries} attempts: {last_error}",
+                            failure_type=exc_failure_type,
+                            attempt_count=config.max_retries,
+                        )
 
             return CaptureResult(
                 success=False,
                 device_path=self._device_path,
                 error=f"Capture failed after {config.max_retries} attempts: {last_error}",
+                failure_type=FailureType.TRANSIENT,
                 attempt_count=config.max_retries,
             )
 
@@ -370,6 +408,16 @@ class CameraHandle:
 
 class CaptureError(Exception):
     """Raised when camera capture fails."""
+
+
+class FailureType(StrEnum):
+    """Classification of capture failures for retry decision-making."""
+
+    TRANSIENT = "transient"       # Device busy, frame read failed — may recover
+    PERMISSION = "permission"     # Permission denied — won't recover by retry
+    DEVICE_GONE = "device_gone"   # Device removed — needs rediscovery
+    UNSUPPORTED = "unsupported"   # Format/resolution unsupported — won't recover
+    UNKNOWN = "unknown"           # Unclassified failure
 
 
 # ---------------------------------------------------------------------------

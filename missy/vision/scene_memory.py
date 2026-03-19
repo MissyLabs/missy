@@ -155,8 +155,11 @@ class SceneSession:
         # Evict oldest if over limit
         while len(self._frames) > self.max_frames:
             evicted = self._frames.pop(0)
-            logger.debug(
-                "Evicted frame %d from session %s", evicted.frame_id, self.task_id
+            logger.info(
+                "Scene '%s': evicted frame %d (oldest by timestamp, %d frames remain)",
+                self.task_id,
+                evicted.frame_id,
+                len(self._frames),
             )
 
         return frame
@@ -355,6 +358,12 @@ class SceneManager:
         for task_id, session in list(self._sessions.items()):
             if not session.is_active:
                 del self._sessions[task_id]
+                logger.warning(
+                    "Evicted %s session '%s' to free resources (%d sessions remain)",
+                    "inactive",
+                    task_id,
+                    len(self._sessions),
+                )
                 return
 
         # All active — evict the oldest by creation time
@@ -365,6 +374,12 @@ class SceneManager:
             )
             self._sessions[oldest].close()
             del self._sessions[oldest]
+            logger.warning(
+                "Evicted %s session '%s' to free resources (%d sessions remain)",
+                "oldest",
+                oldest,
+                len(self._sessions),
+            )
 
 
 # ---------------------------------------------------------------------------

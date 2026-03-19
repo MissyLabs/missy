@@ -14,7 +14,13 @@ import logging
 import time
 from typing import Any
 
-from missy.vision.capture import CameraHandle, CaptureConfig, CaptureError, CaptureResult
+from missy.vision.capture import (
+    CameraHandle,
+    CaptureConfig,
+    CaptureError,
+    CaptureResult,
+    FailureType,
+)
 from missy.vision.discovery import CameraDevice, get_discovery
 
 logger = logging.getLogger(__name__)
@@ -59,6 +65,9 @@ class ResilientCamera:
         self._current_device: CameraDevice | None = None
         self._connected = False
         self._total_reconnects = 0
+        self._cumulative_failures = 0
+
+    _CUMULATIVE_FAILURE_THRESHOLD = 10
 
     @property
     def is_connected(self) -> bool:
@@ -71,6 +80,10 @@ class ResilientCamera:
     @property
     def total_reconnects(self) -> int:
         return self._total_reconnects
+
+    @property
+    def cumulative_failures(self) -> int:
+        return self._cumulative_failures
 
     def connect(self) -> None:
         """Connect to the preferred camera, discovering it if needed."""
@@ -98,8 +111,18 @@ class ResilientCamera:
             result = self._handle.capture()
             if result.success:
                 return result
+            # Non-exception capture failure — check failure type before reconnecting
+            self._record_failure()
+            if result.failure_type in (FailureType.PERMISSION, FailureType.UNSUPPORTED):
+                logger.error(
+                    "Unrecoverable capture failure (%s): %s — not retrying",
+                    result.failure_type,
+                    result.error,
+                )
+                return result
         except Exception as exc:
             logger.warning("Capture failed: %s", exc)
+            self._record_failure()
 
         # Capture failed — attempt reconnection
         return self._reconnect_and_capture()
@@ -121,6 +144,15 @@ class ResilientCamera:
         self.disconnect()
 
     # -- internal --
+
+    def _record_failure(self) -> None:
+        """Increment the cumulative failure counter and warn when threshold is crossed."""
+        self._cumulative_failures += 1
+        if self._cumulative_failures >= self._CUMULATIVE_FAILURE_THRESHOLD:
+            logger.warning(
+                "Camera may be unreliable: %d cumulative failures",
+                self._cumulative_failures,
+            )
 
     def _discover_camera(self) -> CameraDevice | None:
         """Find the target camera."""
@@ -144,9 +176,7 @@ class ResilientCamera:
         self._handle.open()
         self._current_device = device
         self._connected = True
-        logger.info(
-            "Connected to camera: %s at %s", device.name, device.device_path
-        )
+        logger.info("Connected to camera: %s at %s", device.name, device.device_path)
 
     def _reconnect_and_capture(self) -> CaptureResult:
         """Attempt to reconnect to the camera and capture.
@@ -172,9 +202,31 @@ class ResilientCamera:
             device = self._discover_camera()
             if device is None:
                 logger.warning("Camera not found on attempt %d", attempt)
+                self._record_failure()
                 time.sleep(delay)
                 delay = min(delay * self._backoff_factor, self._max_delay)
                 continue
+
+            # Warn when the discovered device differs from what we had before
+            if self._current_device is not None:
+                old_path = self._current_device.device_path
+                if device.device_path != old_path:
+                    logger.warning(
+                        "Camera path changed: %s → %s",
+                        old_path,
+                        device.device_path,
+                    )
+
+            # Warn when we got a different USB ID than requested
+            if (
+                self._vendor_id
+                and self._product_id
+                and (device.vendor_id != self._vendor_id or device.product_id != self._product_id)
+            ):
+                logger.warning(
+                    "Connected to fallback camera: %s (not preferred device)",
+                    device.name,
+                )
 
             try:
                 self._open_device(device)
@@ -187,8 +239,18 @@ class ResilientCamera:
                         self._total_reconnects,
                     )
                     return result
+                # Non-exception failure from the reconnect capture attempt
+                self._record_failure()
+                if result.failure_type in (FailureType.PERMISSION, FailureType.UNSUPPORTED):
+                    logger.error(
+                        "Unrecoverable failure during reconnection (%s): %s — aborting",
+                        result.failure_type,
+                        result.error,
+                    )
+                    return result
             except Exception as exc:
                 logger.warning("Reconnection attempt %d failed: %s", attempt, exc)
+                self._record_failure()
                 self.disconnect()
 
             time.sleep(delay)

@@ -90,8 +90,8 @@ class TestSingleChannelImages:
         quality = pipeline.assess_quality(img)
 
         assert quality["width"] == 50
-        # Should call cvtColor with BGR slice (first 3 channels)
-        mock_cv2.cvtColor.assert_called_once()
+        # Should call cvtColor for grayscale + HSV conversion
+        assert mock_cv2.cvtColor.call_count >= 1
 
 
 class TestNormalizeExposure:
