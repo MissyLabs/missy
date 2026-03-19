@@ -59,17 +59,74 @@ class SceneFrame:
 
     @staticmethod
     def _compute_hash(image: np.ndarray) -> str:
-        """Compute a perceptual hash of a downscaled version for change detection."""
+        """Compute a perceptual average hash (aHash) for change detection.
+
+        aHash is resilient to small changes in zoom, rotation, lighting,
+        and compression — much better than raw MD5 for scene comparison.
+        The 64-bit hash is returned as a 16-char hex string.
+        """
+        return compute_phash(image)
+
+
+def compute_phash(image: np.ndarray) -> str:
+    """Compute a perceptual average hash (aHash) of an image.
+
+    Produces a 64-bit hash that is resistant to minor changes in
+    scale, rotation, lighting, and compression.  Two similar images
+    will have a low Hamming distance between their hashes.
+
+    Returns a 16-character hex string, or ``"unknown_hash"`` on failure.
+    """
+    try:
+        import cv2
+
+        # 1. Shrink to 8x8 (discards high-frequency detail)
+        small = cv2.resize(image, (8, 8), interpolation=cv2.INTER_AREA)
+
+        # 2. Convert to grayscale
+        gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY) if small.ndim == 3 else small
+
+        # 3. Compute mean and standard deviation
+        mean_val = np.mean(gray)
+        std_val = np.std(gray)
+
+        # 4. Build 64-bit hash: each pixel above mean → 1
+        # For uniform images (std ≈ 0), use raw intensity as hash seed
+        if std_val < 0.5:
+            # Uniform image — use the intensity value itself as the hash
+            level = int(np.clip(mean_val, 0, 255))
+            return f"{level:02x}" * 8  # 16 hex chars, unique per intensity
+        bits = (gray.flatten() > mean_val).astype(np.uint8)
+
+        # 5. Pack bits into bytes and hex-encode
+        # bits is 64 values of 0/1
+        byte_vals = np.packbits(bits)
+        return byte_vals.tobytes().hex()
+    except Exception:
         try:
-            import cv2
-            small = cv2.resize(image, (16, 16))
-            gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-            return hashlib.md5(gray.tobytes()).hexdigest()[:12]
+            return hashlib.md5(image.tobytes()[:1024]).hexdigest()[:16]
         except Exception:
-            try:
-                return hashlib.md5(image.tobytes()[:1024]).hexdigest()[:12]
-            except Exception:
-                return "unknown_hash"
+            return "unknown_hash"
+
+
+def hamming_distance(hash_a: str, hash_b: str) -> int:
+    """Compute Hamming distance between two hex-encoded perceptual hashes.
+
+    Returns the number of differing bits.  Lower values mean more similar
+    images.  Typical thresholds: <5 = very similar, 5-10 = similar,
+    >10 = different.
+
+    Returns -1 if the hashes are invalid or incomparable.
+    """
+    try:
+        if len(hash_a) != len(hash_b):
+            return -1
+        a = int(hash_a, 16)
+        b = int(hash_b, 16)
+        xor = a ^ b
+        return bin(xor).count("1")
+    except (ValueError, TypeError):
+        return -1
 
 
 @dataclass
@@ -188,7 +245,11 @@ class SceneSession:
         return list(self._frames[-n:])
 
     def detect_change(self, frame_a: SceneFrame, frame_b: SceneFrame) -> SceneChange:
-        """Detect how much changed between two frames."""
+        """Detect how much changed between two frames.
+
+        Uses both pixel-level difference and perceptual hash distance
+        for robust change detection across lighting/zoom variations.
+        """
         try:
             import cv2
 
@@ -201,9 +262,16 @@ class SceneSession:
             ga = cv2.cvtColor(a, cv2.COLOR_BGR2GRAY).astype(np.float32)
             gb = cv2.cvtColor(b, cv2.COLOR_BGR2GRAY).astype(np.float32)
 
-            # Normalized difference
+            # Normalized pixel difference
             diff = np.abs(ga - gb)
-            score = float(np.mean(diff) / 255.0)
+            pixel_score = float(np.mean(diff) / 255.0)
+
+            # Perceptual hash distance (0-64 bits differ → normalize to 0-1)
+            hdist = hamming_distance(frame_a.thumbnail_hash, frame_b.thumbnail_hash)
+            phash_score = hdist / 64.0 if hdist >= 0 else pixel_score
+
+            # Blend: weight perceptual hash more (robust to lighting)
+            score = 0.4 * pixel_score + 0.6 * phash_score
 
             description = "no change"
             if score > 0.3:

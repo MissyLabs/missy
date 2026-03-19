@@ -136,12 +136,15 @@ class TestSceneFrameHash:
     """Tests for hash computation fallback."""
 
     def test_hash_computed_for_normal_image(self):
+        """aHash produces a 16-char hex string for non-uniform images."""
         img = np.random.randint(0, 256, (50, 50, 3), dtype=np.uint8)
-        with patch("cv2.resize", return_value=np.zeros((16, 16, 3), dtype=np.uint8)), \
-             patch("cv2.cvtColor", return_value=np.zeros((16, 16), dtype=np.uint8)):
+        # Use a non-uniform 8x8 grayscale result so aHash is meaningful
+        varied = np.arange(64, dtype=np.uint8).reshape((8, 8))
+        with patch("cv2.resize", return_value=varied.reshape(8, 8, 1)), \
+             patch("cv2.cvtColor", return_value=varied):
             frame = SceneFrame(frame_id=1, image=img)
             assert frame.thumbnail_hash != ""
-            assert len(frame.thumbnail_hash) == 12
+            assert len(frame.thumbnail_hash) == 16
 
     def test_hash_fallback_on_cv2_error(self):
         img = np.random.randint(0, 256, (50, 50, 3), dtype=np.uint8)
