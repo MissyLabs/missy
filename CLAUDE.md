@@ -141,7 +141,8 @@ VoiceChannel (channels/voice/):
 - `SceneSession`: Task-scoped multi-frame memory for puzzle/painting tasks with change detection
 - `AnalysisPromptBuilder`: Domain-specific prompts (puzzle board-state, painting coaching)
 - `VisionIntentClassifier`: Audio-triggered vision activation with configurable thresholds
-- `VisionDoctor`: Diagnostics (opencv, video group, devices, capture test)
+- `VisionDoctor`: Diagnostics (opencv, video group, devices, capture test, health)
+- `VisionHealthMonitor`: Per-device capture stats, success rates, quality tracking, recommendations
 - Provider-specific formatting: Anthropic/OpenAI/Ollama image message structures
 - Agent tools: `vision_capture`, `vision_burst`, `vision_analyze`, `vision_devices`, `vision_scene`
 - Voice integration: Auto-captures image when audio intent implies vision need
@@ -362,6 +363,7 @@ missy vision capture                Capture frames (--device, --output, --count,
 missy vision inspect                Run visual quality assessment (--file, --screenshot, --device)
 missy vision review                 LLM-powered visual analysis (--mode general|puzzle|painting|inspection, --file, --context)
 missy vision doctor                 Run vision subsystem diagnostics
+missy vision health                 Show capture statistics and device health status
 
 missy hatch                         First-run bootstrap wizard (--non-interactive)
 
