@@ -185,6 +185,7 @@ class VisionHealthMonitor:
             source_type=source_type,
         )
 
+        should_save = False
         with self._lock:
             self._events.append(event)
             stats = self._get_or_create_device(device)
@@ -210,15 +211,18 @@ class VisionHealthMonitor:
                     )
 
             self._capture_count_since_save += 1
+            should_save = (
+                self._persist_path is not None
+                and self._capture_count_since_save >= self._auto_save_interval
+            )
+            if should_save:
+                # Reset counter inside lock to prevent duplicate saves
+                self._capture_count_since_save = 0
 
-        # Auto-save outside the lock to avoid blocking captures
-        if (
-            self._persist_path is not None
-            and self._capture_count_since_save >= self._auto_save_interval
-        ):
+        # Perform the actual I/O outside the lock to avoid blocking captures
+        if should_save:
             try:
                 self.save()
-                self._capture_count_since_save = 0
             except Exception as exc:
                 logger.debug("Auto-save failed: %s", exc)
 
@@ -521,7 +525,11 @@ class VisionHealthMonitor:
         with self._lock:
             # Merge device stats (loaded stats are additive)
             for row in rows:
-                data = json.loads(row["data"])
+                try:
+                    data = json.loads(row["data"])
+                except (json.JSONDecodeError, TypeError) as exc:
+                    logger.warning("Skipping corrupt health record: %s", exc)
+                    continue
                 device = row["device"]
                 if device not in self._devices:
                     self._devices[device] = DeviceStats(device=device)

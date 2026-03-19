@@ -414,7 +414,10 @@ class PersonaManager:
         backups = self.list_backups()
         while len(backups) > self._MAX_BACKUPS:
             oldest = backups.pop(0)
-            oldest.unlink()
+            try:
+                oldest.unlink()
+            except OSError as exc:
+                logger.warning("Cannot remove old backup %s: %s", oldest, exc)
 
     def list_backups(self) -> list[Path]:
         """Return all persona backup files sorted oldest-first.

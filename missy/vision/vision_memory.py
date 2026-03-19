@@ -115,6 +115,15 @@ class VisionMemoryBridge:
         obs_id = str(uuid.uuid4())
         now = datetime.now(UTC).isoformat()
 
+        # Filter metadata to prevent override of core fields
+        _RESERVED_KEYS = {
+            "observation_id", "session_id", "task_type", "observation",
+            "confidence", "source", "frame_id", "timestamp",
+        }
+        safe_metadata = {
+            k: v for k, v in (metadata or {}).items()
+            if k not in _RESERVED_KEYS
+        }
         entry = {
             "observation_id": obs_id,
             "session_id": session_id,
@@ -124,7 +133,7 @@ class VisionMemoryBridge:
             "source": source,
             "frame_id": frame_id,
             "timestamp": now,
-            **(metadata or {}),
+            **safe_metadata,
         }
 
         # Store in SQLite memory as a "vision" role turn
