@@ -474,7 +474,7 @@ class TestOllamaProviderEmitEventFailure:
         config = ProviderConfig(name="ollama", model="llama3.2")
         provider = OllamaProvider(config)
 
-        with patch("missy.providers.ollama_provider.event_bus") as mock_bus:
+        with patch("missy.core.events.event_bus") as mock_bus:
             mock_bus.publish.side_effect = RuntimeError("dead bus")
             # Must not raise.
             provider._emit_event("s1", "t1", "allow", "ok")

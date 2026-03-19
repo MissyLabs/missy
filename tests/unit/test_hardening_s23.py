@@ -241,8 +241,6 @@ class TestAgentToolLoopEdgeCases:
 
         rt = self._make_runtime(max_iterations=3)
 
-        # complete_with_tools raises AttributeError
-        rt._circuit_breaker.call = MagicMock(side_effect=AttributeError("no method"))
         rt._record_cost = MagicMock()
         rt._check_budget = MagicMock()
         rt._acquire_rate_limit = MagicMock()
@@ -258,7 +256,8 @@ class TestAgentToolLoopEdgeCases:
         )
         rt._single_turn = MagicMock(return_value=fallback_resp)
 
-        mock_provider = MagicMock()
+        # Create a provider that does NOT have complete_with_tools
+        mock_provider = MagicMock(spec=["name", "complete"])
         mock_provider.name = "anthropic"
         result, tools = rt._tool_loop(
             provider=mock_provider,

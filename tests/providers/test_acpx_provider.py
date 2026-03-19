@@ -223,9 +223,12 @@ class TestAcpxComplete:
 
         cmd = mock_run.call_args[0][0]
         assert cmd[0].endswith("acpx") or cmd[0] == "acpx"
-        assert cmd[1] == "claude"
-        assert cmd[2] == "exec"
-        assert cmd[3] == "Hello"
+        # cmd layout: [binary, "--format", "json", agent, "exec", prompt]
+        assert "--format" in cmd
+        assert "json" in cmd
+        assert "claude" in cmd
+        assert "exec" in cmd
+        assert "Hello" in cmd
 
     @patch("missy.providers.acpx_provider.subprocess.run")
     def test_multi_message_prompt_flattening(self, mock_run):
@@ -241,7 +244,8 @@ class TestAcpxComplete:
         ])
 
         cmd = mock_run.call_args[0][0]
-        prompt = cmd[3]
+        # Prompt is the last element: [binary, "--format", "json", agent, "exec", prompt]
+        prompt = cmd[-1]
         assert "[System]: Be helpful" in prompt
         assert "[User]: Hi" in prompt
         assert "[Assistant]: Hello!" in prompt
@@ -256,7 +260,7 @@ class TestAcpxComplete:
         p.complete([Message(role="user", content="just this")])
 
         cmd = mock_run.call_args[0][0]
-        assert cmd[3] == "just this"
+        assert cmd[-1] == "just this"
 
 
 # ------------------------------------------------------------------
@@ -824,7 +828,7 @@ class TestCompleteWithTools:
             [Message(role="user", content="hi")], tools, system="Be helpful"
         )
         cmd = mock_run.call_args[0][0]
-        prompt = cmd[3]
+        prompt = cmd[-1]  # prompt is always last element
         assert "Available Tools" in prompt
         assert "calculator" in prompt
         assert "<tool_call>" in prompt
@@ -843,7 +847,7 @@ class TestCompleteWithTools:
             tools,
         )
         cmd = mock_run.call_args[0][0]
-        prompt = cmd[3]
+        prompt = cmd[-1]
         assert "Original system" in prompt
         assert "Available Tools" in prompt
 
@@ -863,7 +867,7 @@ class TestCompleteWithTools:
         ]
         resp = p.complete_with_tools(messages, tools)
         cmd = mock_run.call_args[0][0]
-        prompt = cmd[3]
+        prompt = cmd[-1]
         assert "[Tool result for calculator]: 4" in prompt
         assert resp.content == "The answer is 4."
 
