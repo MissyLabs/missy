@@ -6,7 +6,7 @@
 
 ## Session 9 Summary
 
-Hardening session: thread safety, security, prompt injection mitigation, 118 new tests across vision and security subsystems.
+Hardening session: thread safety, security, prompt injection mitigation, 168 new tests across vision and security subsystems.
 
 ### Changes This Session (8 commits)
 
@@ -39,7 +39,13 @@ Hardening session: thread safety, security, prompt injection mitigation, 118 new
 7. **Vision memory bridge tests** (`03a5d05`)
    - 11 new tests: metadata protection, graceful store failures, session context
 
-### Full Test Suite: 14,845 passed, 0 failures, 14 skipped
+8. **Config validator tests** (`752f761`)
+   - 29 new tests: valid configs, invalid types, boundary values, warnings
+
+9. **Benchmark and intent classifier tests** (`4c61663`)
+   - 21 new tests: benchmark recording/reporting, intent classification
+
+### Full Test Suite: 14,895 passed, 0 failures, 14 skipped
 
 ### Code Changes Summary
 
@@ -100,8 +106,8 @@ Hardening session: thread safety, security, prompt injection mitigation, 118 new
 
 ## Recovery Notes
 
-All code committed and passing. 14,845 total tests, 0 failures, 14 skipped.
-Session 9: 6 code fixes, 118 new tests across 6 new test files.
+All code committed and passing. 14,895 total tests, 0 failures, 14 skipped.
+Session 9: 6 code fixes, 168 new tests across 8 new test files.
 Vision subsystem has 20 modules. Ruff lint fully clean.
 
 Session 9 commits:
@@ -112,3 +118,5 @@ Session 9 commits:
 5. `2cb20fe` — Analysis test compatibility update
 6. `f9fc2ee` — Security tests (25 tests)
 7. `03a5d05` — Vision memory bridge tests (11 tests)
+8. `752f761` — Config validator tests (29 tests)
+9. `4c61663` — Benchmark and intent classifier tests (21 tests)
