@@ -2,52 +2,28 @@
 
 ## Last Updated
 
-2026-03-19, Session 13
+2026-03-19, Session 14
 
-## Session 13 Summary
+## Session 14 Summary
 
-Deep hardening session: 6 code fixes across 3 vision modules, 1,210 new tests across 16 new test files covering all major subsystems. Full cross-codebase edge case coverage.
+Edge case hardening session: 456 new tests across 8 new test files. Comprehensive edge case coverage for summarizer, proactive manager, resilient capture, multi-camera, container sandbox, vision shutdown, vision memory bridge, config validator, memory usage tracker, benchmark, cost tracker, failure tracker, orientation detection, provider format, analysis prompts, intent classifier, audit events, secrets detector, input sanitizer, compaction engine, vision tools, and scene memory integration.
 
-### Code Fixes This Session
-
-| Module | Change | Severity |
-|--------|--------|----------|
-| `resilient_capture.py` | Add jitter (±25%) to backoff delays preventing thundering herd | MEDIUM |
-| `resilient_capture.py` | Log when falling back to generic discovery (no USB IDs) | LOW |
-| `health_monitor.py` | Restore auto-save counter after save failure so retries fire | MEDIUM |
-| `health_monitor.py` | Wrap DELETE+INSERT in explicit transaction for crash safety | HIGH |
-| `health_monitor.py` | Add 5s timeout to sqlite3.connect to avoid blocking on contention | LOW |
-| `scene_memory.py` | Warn and close old session on task_id collision instead of silent replace | MEDIUM |
-
-### New Tests This Session (921 tests, 12 files)
+### New Tests This Session (456 tests, 8 files)
 
 | Test File | Count | Coverage |
 |-----------|-------|----------|
-| `test_session13_resilient.py` | 41 | Jitter, thread safety, failure types, reconnect, context manager |
-| `test_session13_health_monitor.py` | 54 | Auto-save recovery, transactions, recommendations, concurrent save |
-| `test_session13_scene_memory.py` | 58 | Collisions, eviction, concurrency, phash edge cases, dedup |
-| `test_session13_consolidation_approval.py` | 81 | Threshold boundaries, fact extraction, concurrent approvals |
-| `test_session13_multi_camera.py` | 43 | Closed handle guard, health monitor args, close_all failures |
-| `test_session13_discovery_capture.py` | 72 | Symlink cycles, sysfs scanning, adaptive blank detector, lazy cv2 |
-| `test_session13_message_bus.py` | 44 | Worker lifecycle, self-unsubscribe, fnmatch edges, sequence counter |
-| `test_session13_watchdog_ratelimiter.py` | 64 | Log levels, audit events, bucket deduction, concurrent threads |
-| `test_session13_provider_audit.py` | 72 | Provider format routing, audit event fields, privacy guarantees |
-| `test_session13_hotreload_plan.py` | 43 | File safety, atomic save, backup fidelity, diff edge cases |
-| `test_session13_vault_trust.py` | 53 | Key rotation, corrupt data, concurrent vault, trust boundaries |
-| `test_session13_persona_behavior.py` | 87 | Defaults, version tracking, intent categories, vision guidelines |
-| `test_session13_hatching_checkpoint.py` | 59 | First-run detection, provider verification, checkpoint concurrency |
-| `test_session13_scheduler_memory.py` | 68 | Retry boundary, active hours, FTS search, concurrent writes |
-| `test_session13_policy_gateway.py` | 82 | CIDR IPv6, domain matching, REST policy globs, DNS rebinding |
-| `test_session13_mcp_skills_plugins.py` | 66 | Digest pinning, frontmatter parsing, plugin manifest |
-| `test_session13_circuitbreaker_attention.py` | 79 | Threshold boundaries, attention pipeline, all subsystems |
-| `test_session13_registry_providers.py` | 90 | Fallback chains, key rotation, model tiers, dataclass contracts |
-| `test_session13_registry.py` | 54 | Registration edges, permissions, audit events, schema |
+| `test_session14_summarizer_proactive.py` | 40 | Empty turns, whitespace LLM, tier escalation, cooldown, templates, approval gate |
+| `test_session14_resilient_multi.py` | 39 | max_reconnect=0, disconnect safety, USB ID mismatch, capture_all empty, close_all errors |
+| `test_session14_container.py` | 48 | Docker unavailable, lifecycle, context manager, copy ops, security flags |
+| `test_session14_vision_modules.py` | 72 | Shutdown idempotency, vision memory bridge, config validation, benchmark, memory tracker |
+| `test_session14_cost_failure.py` | 52 | Pricing lookup, budget enforcement, record eviction, concurrent recording, strategy prompts |
+| `test_session14_orientation_format.py` | 42 | Aspect ratio boundaries, EXIF parsing, all provider formats, validation |
+| `test_session14_analysis_intent_audit.py` | 66 | All analysis modes, color naming, intent patterns, 7 audit event types |
+| `test_session14_compaction_context.py` | 20 | Chunk splitting, fresh tail logic, threshold boundaries, compact_if_needed |
+| `test_session14_secrets_sanitizer.py` | 37 | 15+ secret patterns, redaction merging, injection detection, sanitization |
+| `test_session14_tools_integration.py` | 40 | Vision tool execution, scene memory lifecycle, pipeline integration |
 
-### Full Test Suite: 16,737 passed, 0 failures, 14 skipped
-
-### Pre-existing Test Fix
-
-- `test_timeout_and_backoff.py`: Fixed assertions for jitter-aware backoff delays (pinned random, adjusted max_delay cap)
+### Full Test Suite: 17,193 passed, 0 failures, 14 skipped
 
 ### Vision Modules (20 files in `missy/vision/`)
 
@@ -97,19 +73,15 @@ Deep hardening session: 6 code fixes across 3 vision modules, 1,210 new tests ac
 
 ## Recovery Notes
 
-All code committed and passing. 16,737 total tests, 0 failures, 14 skipped.
-Session 13: 6 code fixes, 1,210 new tests across 16 new test files.
+All code committed and passing. 17,193 total tests, 0 failures, 14 skipped.
+Session 14: 456 new tests across 8 new test files.
 Ruff lint: 0 errors.
 
-Session 13 commits:
-1. `536d62f` — Fix 4 robustness issues, add 153 hardening tests
-2. `8f51889` — Add 124 tests for consolidation, approval gate, and multi-camera
-3. `3e55a69` — Add 116 tests for discovery, capture, and message bus edge cases
-4. `2a702be` — Add 136 tests for watchdog, rate limiter, provider format, and audit
-5. `199b94e` — Add 96 tests for config hotreload, plan, vault, and trust scorer
-6. `09f22fd` — Fix backoff tests for jitter
-7. `466b1c7` — Add 146 tests for persona, behavior, hatching, and checkpoint
-8. `afd26dc` — Fix lint: import sorting, unused vars, contextlib.suppress
-9. `153d35b` — Add 150 tests for scheduler, memory store, policy engine, and gateway
-10. `ccaba68` — Add 145 tests for MCP, skills, plugins, circuit breaker, and attention
-11. `25e4a1d` — Add 144 tests for provider registry, base providers, and tool registry
+Session 14 commits:
+1. `80178fe` — Add 199 edge case tests (summarizer, proactive, resilient, multi-camera, container, shutdown, vision memory, config validator, benchmark)
+2. `5b5701c` — Add 94 edge case tests (cost tracker, failure tracker, orientation, provider format)
+3. `590f6d2` — Add 66 edge case tests (analysis prompts, intent classifier, audit events, puzzle preprocessor)
+4. `bdedede` — Add 20 edge case tests (compaction engine)
+5. `067d616` — Add 37 edge case tests (secrets detection, input sanitizer)
+6. `fea8477` — Fix lint issues
+7. `4eecc51` — Add 40 tests (vision tools, scene memory integration, cross-module flows)

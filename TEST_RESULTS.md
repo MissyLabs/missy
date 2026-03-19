@@ -2,12 +2,27 @@
 
 ## Summary
 
-- **Total tests**: 16,737
-- **Passed**: 16,737
+- **Total tests**: 17,193
+- **Passed**: 17,193
 - **Failed**: 0
 - **Skipped**: 14
-- **Duration**: ~5 minutes 35 seconds
-- **Last updated**: Session 13 (2026-03-19)
+- **Duration**: ~5 minutes 47 seconds
+- **Last updated**: Session 14 (2026-03-19)
+
+## Session 14 New Tests (456 tests, 8 files)
+
+| Test File | Count | Coverage Area |
+|-----------|-------|---------------|
+| test_session14_summarizer_proactive.py | 40 | Summarizer tiers, proactive cooldown/templates/approval |
+| test_session14_resilient_multi.py | 39 | Reconnect edge cases, multi-camera properties |
+| test_session14_container.py | 48 | Docker sandbox lifecycle, security flags |
+| test_session14_vision_modules.py | 72 | Shutdown, vision memory, config validator, benchmark |
+| test_session14_cost_failure.py | 52 | Pricing, budget enforcement, failure strategy |
+| test_session14_orientation_format.py | 42 | EXIF parsing, aspect ratio, provider formats |
+| test_session14_analysis_intent_audit.py | 66 | Analysis prompts, intent classification, audit |
+| test_session14_compaction_context.py | 20 | Chunk splitting, compaction threshold, fresh tail |
+| test_session14_secrets_sanitizer.py | 37 | Secret patterns, redaction, injection detection |
+| test_session14_tools_integration.py | 40 | Vision tools, scene memory, pipeline integration |
 
 ## Session 13 New Tests (921 tests, 14 files)
 
