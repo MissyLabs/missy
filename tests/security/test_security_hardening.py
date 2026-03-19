@@ -64,15 +64,23 @@ class TestMcpServerNameValidation:
         """Valid names without __ should be accepted (connect may fail, that's ok)."""
         mgr = McpManager(config_path="/tmp/nonexistent_mcp.json")
         # connect() will fail since the command doesn't implement MCP, but
-        # the name validation should pass
-        with pytest.raises(Exception, match="(?!must not contain)"):
+        # the name validation should pass — no ValueError about "__"
+        try:
             mgr.add_server("valid_name", command="echo hi")
+        except ValueError as exc:
+            assert "must not contain" not in str(exc)
+        except Exception:
+            pass  # Any non-ValueError error is fine (connect failure)
 
     def test_accept_single_underscore(self):
         """Single underscores are fine."""
         mgr = McpManager(config_path="/tmp/nonexistent_mcp.json")
-        with pytest.raises(Exception, match="(?!must not contain)"):
+        try:
             mgr.add_server("my_server", command="echo hi")
+        except ValueError as exc:
+            assert "must not contain" not in str(exc)
+        except Exception:
+            pass  # Any non-ValueError error is fine (connect failure)
 
 
 class TestMcpClientTimeout:

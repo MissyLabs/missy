@@ -96,8 +96,12 @@ class TestMcpServerNameValidation:
         mgr = McpManager(config_path="/tmp/nonexistent_mcp.json")
         # This will fail at connect() since the command is fake,
         # but should not fail at name validation
-        with pytest.raises(Exception, match="(?!alphanumeric)"):
+        try:
             mgr.add_server("my-valid_server123", command="nonexistent-binary")
+        except ValueError as exc:
+            assert "alphanumeric" not in str(exc)
+        except Exception:
+            pass  # Any non-ValueError error is fine (connect failure)
 
 
 class TestMcpConfigPermissions:
