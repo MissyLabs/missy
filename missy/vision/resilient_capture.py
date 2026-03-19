@@ -210,9 +210,8 @@ class ResilientCamera:
 
         # Reset blank detector when switching devices — calibration from the
         # old camera does not apply to the new one.
-        if self._handle._blank_detector is not None:
-            self._handle._blank_detector.reset()
-            logger.debug("Reset blank detector for new device %s", device.device_path)
+        self._handle.reset_blank_detector()
+        logger.debug("Reset blank detector for new device %s", device.device_path)
 
         logger.info("Connected to camera: %s at %s", device.name, device.device_path)
 

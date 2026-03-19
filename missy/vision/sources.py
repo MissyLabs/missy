@@ -168,6 +168,8 @@ class WebcamSource(ImageSource):
                 result = handle.capture()
                 if not result.success:
                     raise CaptureError(result.error)
+                if result.image is None:
+                    raise CaptureError("Capture succeeded but returned no image data")
                 return ImageFrame(
                     image=result.image,
                     source_type=SourceType.WEBCAM,

@@ -302,7 +302,17 @@ class SceneSession:
 
         Uses both pixel-level difference and perceptual hash distance
         for robust change detection across lighting/zoom variations.
+
+        Returns a failure result if either frame's image has been evicted
+        (set to None).
         """
+        if frame_a.image is None or frame_b.image is None:
+            return SceneChange(
+                from_frame=frame_a.frame_id,
+                to_frame=frame_b.frame_id,
+                change_score=-1.0,
+                description="comparison failed: frame image was evicted",
+            )
         try:
             import cv2
 
@@ -366,8 +376,11 @@ class SceneSession:
         """Generate a visual diff image highlighting changes between frames.
 
         Returns a BGR image where changed regions are highlighted in red,
-        or None if comparison fails.
+        or None if comparison fails or either frame's image was evicted.
         """
+        if frame_a.image is None or frame_b.image is None:
+            logger.warning("Cannot visualize change: frame image was evicted")
+            return None
         try:
             import cv2
 

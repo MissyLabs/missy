@@ -550,6 +550,15 @@ class CameraHandle:
         mean_val = float(np.mean(frame))
         return mean_val < self._config.blank_threshold
 
+    def reset_blank_detector(self) -> None:
+        """Reset the adaptive blank frame detector's history.
+
+        Call when switching to a different physical device, since ambient
+        light and sensor characteristics will differ.
+        """
+        if self._blank_detector is not None:
+            self._blank_detector.reset()
+
     def _record_successful_frame(self, frame: np.ndarray) -> None:
         """Record a successful frame's intensity for adaptive blank detection."""
         if self._blank_detector is not None:

@@ -449,48 +449,35 @@ class TestResilientCaptureBlankDetectorReset:
     def test_blank_detector_reset_on_device_switch(
         self, mock_handle_cls: MagicMock
     ) -> None:
-        """After _open_device, the blank detector on the new handle is reset."""
+        """After _open_device, reset_blank_detector() is called on the new handle."""
         mock_handle = MagicMock()
         mock_handle.is_open = True
         mock_handle_cls.return_value = mock_handle
-
-        # Give the handle a real AdaptiveBlankDetector so reset() can be verified
-        from missy.vision.capture import AdaptiveBlankDetector
-
-        real_detector = AdaptiveBlankDetector()
-        # Pre-populate history so we can confirm it gets cleared
-        real_detector.record_intensity(100.0)
-        real_detector.record_intensity(120.0)
-        assert len(real_detector._window) == 2
-
-        mock_handle._blank_detector = real_detector
 
         cam = ResilientCamera()
         device = _make_device()
         cam._open_device(device)
 
-        # After _open_device, reset() must have been called
-        assert len(real_detector._window) == 0, (
-            "Blank detector window should be empty after device switch"
-        )
+        # After _open_device, the public reset_blank_detector() must be called
+        mock_handle.reset_blank_detector.assert_called_once()
 
     @patch("missy.vision.resilient_capture.CameraHandle")
     def test_blank_detector_reset_called_on_none_detector(
         self, mock_handle_cls: MagicMock
     ) -> None:
-        """_open_device must not crash when _blank_detector is None (adaptive=False)."""
+        """_open_device must not crash when blank detector is disabled (adaptive=False)."""
         mock_handle = MagicMock()
         mock_handle.is_open = True
-        mock_handle._blank_detector = None  # adaptive blank detection disabled
         mock_handle_cls.return_value = mock_handle
 
         cam = ResilientCamera()
         device = _make_device()
 
-        # Should not raise
+        # Should not raise — reset_blank_detector handles None internally
         cam._open_device(device)
 
         assert cam.is_connected
+        mock_handle.reset_blank_detector.assert_called_once()
 
     @patch("missy.vision.resilient_capture.CameraHandle")
     def test_old_handle_closed_before_new_open(self, mock_handle_cls: MagicMock) -> None:
