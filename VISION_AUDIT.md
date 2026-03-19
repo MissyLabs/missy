@@ -18,6 +18,11 @@
 | Data exfiltration via images | Images sent to LLM API are subject to existing network policy enforcement |
 | Prompt injection via image content | Input sanitization applies to all user-facing text; image analysis prompts are system-controlled |
 | Stale device path exploitation | USB vendor/product ID identification, not volatile `/dev/videoN` paths |
+| Device node symlink bypass | `FileSource` verifies `stat.S_ISREG` — rejects device nodes, pipes, sockets |
+| Sysfs symlink cycles | `_read_usb_ids` tracks visited paths to detect and break cycles |
+| Metadata field injection | `VisionMemoryBridge` filters reserved keys from caller-supplied metadata |
+| Resource leak on camera error | `CameraHandle.open()` uses try/finally to release fd on failure |
+| Warmup freeze on broken camera | Deadline-based timeout prevents indefinite blocking during warmup |
 
 ### Audit Events
 
@@ -89,7 +94,7 @@ Raw V4L2 is NOT used. If a specific limitation is discovered, it should be docum
 - Configurable parameters via dataclasses
 - Context manager support for resource cleanup
 - Lazy imports for optional dependencies
-- 302 tests covering all modules (including hardening, burst, security)
+- ~1,500+ tests covering all modules (including hardening, burst, security, edge cases)
 - Thread-safe capture and session management
 - Input validation on all public APIs
 - Grayscale and BGRA image format support

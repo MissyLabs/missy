@@ -24,7 +24,19 @@
 | timeout_and_backoff.py | 10 | PASS |
 | CLI vision commands | 14 | PASS |
 | Voice-vision integration | 11 | PASS |
-| **Total** | **484** | **ALL PASS** |
+| health_monitor.py | 51 + 22 | PASS |
+| multi_camera.py | 79 + 45 | PASS |
+| benchmark.py | 94 | PASS |
+| memory_usage.py | 73 | PASS |
+| config_validator.py | 114 | PASS |
+| vision_memory.py | 67 | PASS |
+| orientation.py | 18 | PASS |
+| shutdown.py | 10 | PASS |
+| quality_scoring.py | 7 | PASS |
+| Session 8 hardening tests | 24 + 35 + 17 + 12 | PASS |
+| Pipeline hardening | 40 | PASS |
+| Analysis hardening | 89 | PASS |
+| **Total** | **~1,500+** | **ALL PASS** |
 
 ## Unit Tests
 
