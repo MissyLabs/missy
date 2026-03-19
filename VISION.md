@@ -19,7 +19,8 @@ missy/vision/
 ├── intent.py            # Audio-triggered vision intent classification (40+ patterns)
 ├── provider_format.py   # Provider-specific image API formatting
 ├── audit.py             # Vision audit event logging (7 event types)
-└── doctor.py            # Diagnostics: OpenCV, video group, permissions, disk space
+├── health_monitor.py    # Capture stats, device health tracking, diagnostic reports
+└── doctor.py            # Diagnostics: OpenCV, video group, permissions, disk, health
 ```
 
 ## Image Sources
@@ -198,6 +199,24 @@ The vision subsystem handles these failure modes:
 | Large dimensions | Warning for images exceeding 16384px |
 | Invalid device paths | WebcamSource rejects non-/dev/videoN paths |
 | Path traversal | FileSource resolves paths to prevent traversal attacks |
+
+## Health Monitoring
+
+The `VisionHealthMonitor` tracks capture statistics across the session lifetime:
+
+- **Per-device stats**: success rate, average quality, average latency, consecutive failures
+- **Health assessment**: HEALTHY (>80% success), DEGRADED (50-80%), UNHEALTHY (<50% or 5+ consecutive failures)
+- **Diagnostic reports**: JSON-serializable summaries for audit logging and CLI display
+- **Warnings**: Low success rate, consecutive failures, low quality scores
+- **Integration**: Automatically records captures via `ResilientCamera`, reported in `missy vision doctor`
+
+```python
+from missy.vision.health_monitor import get_health_monitor
+
+monitor = get_health_monitor()
+report = monitor.get_health_report()
+# {"overall_status": "healthy", "total_captures": 42, "total_failures": 1, ...}
+```
 
 ## Security
 
