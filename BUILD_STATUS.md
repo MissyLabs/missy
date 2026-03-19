@@ -29,7 +29,7 @@ Built the complete vision subsystem from scratch:
 - Hatching: `check_vision` readiness step
 - Persona: Vision coaching guidance in identity description
 
-### Tests: 234 vision-specific, all passing
+### Tests: 243 vision-specific, all passing (12,179 total passing)
 - test_discovery.py (18 tests)
 - test_capture.py (13 tests)
 - test_sources.py (27 tests)
@@ -55,6 +55,10 @@ Built the complete vision subsystem from scratch:
 8. `8cc9060` — Provider-specific formatting and audit events
 9. `b9859f6` — CLI audit logging, persona enhancement
 10. `7739c51` — 12 integration tests
+11. `8cc9060` — Provider-specific formatting and audit events
+12. `b9859f6` — CLI audit logging, persona enhancement
+13. `1a793b7` — CLAUDE.md vision documentation
+14. `e66c79c` — ResilientCamera with auto-reconnection
 
 ## Remaining Work for Future Sessions
 
@@ -67,5 +71,6 @@ Built the complete vision subsystem from scratch:
 
 ## Recovery Notes
 
-Vision subsystem is fully committed and operational. All 234 tests pass.
+Vision subsystem is fully committed and operational. All 243 tests pass.
+12,179 total tests pass (9 pre-existing failures in non-vision code).
 Next session can focus on hardening, edge cases, or other subsystem work.
