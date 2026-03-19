@@ -143,6 +143,142 @@ class VisionCaptureTool(BaseTool):
 
 
 # ---------------------------------------------------------------------------
+# VisionBurstCaptureTool
+# ---------------------------------------------------------------------------
+
+
+class VisionBurstCaptureTool(BaseTool):
+    """Capture a rapid burst of frames and optionally pick the sharpest.
+
+    Useful for motion tasks, selecting the clearest frame, or recording
+    a sequence of changes.
+    """
+
+    name = "vision_burst"
+    description = (
+        "Capture a burst of frames from a webcam. Returns metadata for each "
+        "frame or just the sharpest frame if best_only is true."
+    )
+    permissions = ToolPermissions(filesystem_read=True, filesystem_write=True)
+    parameters = {
+        "count": {
+            "type": "integer",
+            "description": "Number of frames to capture (1-20, default 3).",
+            "required": False,
+        },
+        "interval": {
+            "type": "number",
+            "description": "Seconds between captures (default 0.3).",
+            "required": False,
+        },
+        "best_only": {
+            "type": "boolean",
+            "description": "If true, return only the sharpest frame from the burst.",
+            "required": False,
+        },
+        "device": {
+            "type": "string",
+            "description": "Camera device path. Auto-detected if omitted.",
+            "required": False,
+        },
+    }
+
+    def execute(
+        self,
+        *,
+        count: int = 3,
+        interval: float = 0.3,
+        best_only: bool = False,
+        device: str = "",
+        **kwargs: Any,
+    ) -> ToolResult:
+        try:
+            from missy.vision.capture import CameraHandle, CaptureConfig
+            from missy.vision.discovery import find_preferred_camera
+            from missy.vision.pipeline import ImagePipeline
+
+            if not device:
+                cam = find_preferred_camera()
+                if cam is None:
+                    return ToolResult(
+                        success=False, output=None,
+                        error="No camera found. Connect a USB webcam.",
+                    )
+                device = cam.device_path
+
+            handle = CameraHandle(device)
+            pipeline = ImagePipeline()
+
+            try:
+                handle.open()
+
+                if best_only:
+                    result = handle.capture_best(burst_count=count)
+                    if not result.success:
+                        return ToolResult(
+                            success=False, output=None,
+                            error=result.error or "No frames captured",
+                        )
+
+                    processed = pipeline.process(result.image)
+                    quality = pipeline.assess_quality(result.image)
+                    import base64, cv2
+                    _, buf = cv2.imencode(".jpg", processed, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                    b64 = base64.b64encode(buf.tobytes()).decode("ascii")
+
+                    return ToolResult(
+                        success=True,
+                        output=json.dumps({
+                            "mode": "best",
+                            "burst_count": count,
+                            "width": result.width,
+                            "height": result.height,
+                            "quality": quality,
+                            "image_base64": b64,
+                        }),
+                    )
+
+                # Full burst
+                results = handle.capture_burst(count=count, interval=interval)
+                frames = []
+                for i, r in enumerate(results):
+                    if r.success:
+                        quality = pipeline.assess_quality(r.image)
+                        frames.append({
+                            "index": i,
+                            "width": r.width,
+                            "height": r.height,
+                            "quality": quality,
+                            "success": True,
+                        })
+                    else:
+                        frames.append({"index": i, "success": False, "error": r.error})
+
+                return ToolResult(
+                    success=True,
+                    output=json.dumps({
+                        "mode": "burst",
+                        "count": count,
+                        "interval": interval,
+                        "frames": frames,
+                        "successful": sum(1 for f in frames if f.get("success")),
+                    }),
+                )
+
+            finally:
+                handle.close()
+
+        except ImportError as exc:
+            return ToolResult(
+                success=False, output=None,
+                error=f"Vision dependencies not installed: {exc}",
+            )
+        except Exception as exc:
+            logger.error("Vision burst capture failed: %s", exc, exc_info=True)
+            return ToolResult(success=False, output=None, error=str(exc))
+
+
+# ---------------------------------------------------------------------------
 # VisionAnalyzeTool
 # ---------------------------------------------------------------------------
 

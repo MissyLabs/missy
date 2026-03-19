@@ -228,6 +228,39 @@ class SceneSession:
             return None
         return self.detect_change(self._frames[-2], self._frames[-1])
 
+    def visualize_change(
+        self,
+        frame_a: SceneFrame,
+        frame_b: SceneFrame,
+    ) -> Optional[np.ndarray]:
+        """Generate a visual diff image highlighting changes between frames.
+
+        Returns a BGR image where changed regions are highlighted in red,
+        or None if comparison fails.
+        """
+        try:
+            import cv2
+
+            size = (256, 256)
+            a = cv2.resize(frame_a.image, size)
+            b = cv2.resize(frame_b.image, size)
+
+            ga = cv2.cvtColor(a, cv2.COLOR_BGR2GRAY)
+            gb = cv2.cvtColor(b, cv2.COLOR_BGR2GRAY)
+
+            diff = cv2.absdiff(ga, gb)
+            _, thresh = cv2.threshold(diff, 30, 255, cv2.THRESH_BINARY)
+
+            # Create overlay: original frame B with red highlights on changes
+            overlay = b.copy()
+            overlay[thresh > 0] = [0, 0, 255]  # red highlight
+            blended = cv2.addWeighted(b, 0.6, overlay, 0.4, 0)
+
+            return blended
+        except Exception as exc:
+            logger.warning("Failed to visualize change: %s", exc)
+            return None
+
     def close(self) -> None:
         """Mark session as inactive and release frame data."""
         self._active = False

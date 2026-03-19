@@ -268,6 +268,64 @@ class CameraHandle:
 
         return result
 
+    def capture_burst(
+        self,
+        count: int = 3,
+        interval: float = 0.5,
+    ) -> list[CaptureResult]:
+        """Capture multiple frames in rapid succession.
+
+        Useful for motion detection, multi-angle tasks, or selecting the
+        sharpest frame from a sequence.
+
+        Parameters
+        ----------
+        count:
+            Number of frames to capture (1-20).
+        interval:
+            Seconds between captures.
+
+        Returns
+        -------
+        list[CaptureResult]
+            One result per requested frame (some may have ``success=False``).
+        """
+        if count < 1:
+            raise ValueError(f"count must be >= 1, got {count}")
+        if count > 20:
+            count = 20
+            logger.warning("Burst count clamped to 20")
+
+        results: list[CaptureResult] = []
+        for i in range(count):
+            result = self.capture()
+            results.append(result)
+            if i < count - 1 and interval > 0:
+                time.sleep(interval)
+        return results
+
+    def capture_best(self, burst_count: int = 3) -> CaptureResult:
+        """Capture a burst and return the sharpest frame.
+
+        Uses Laplacian variance as a sharpness proxy.
+        """
+        results = self.capture_burst(count=burst_count, interval=0.2)
+        successful = [r for r in results if r.success and r.image is not None]
+        if not successful:
+            return CaptureResult(
+                success=False,
+                device_path=self._device_path,
+                error="No successful frames in burst",
+            )
+
+        cv2 = _get_cv2()
+
+        def sharpness(r: CaptureResult) -> float:
+            gray = cv2.cvtColor(r.image, cv2.COLOR_BGR2GRAY)
+            return float(cv2.Laplacian(gray, cv2.CV_64F).var())
+
+        return max(successful, key=sharpness)
+
     # -- context manager --
 
     def __enter__(self) -> CameraHandle:

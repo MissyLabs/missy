@@ -3368,8 +3368,16 @@ def vision_devices() -> None:
 @click.option("--width", default=1920, help="Capture width.")
 @click.option("--height", default=1080, help="Capture height.")
 @click.option("--count", "-n", default=1, help="Number of frames to capture.")
+@click.option("--burst", is_flag=True, help="Burst mode: capture multiple frames rapidly.")
+@click.option("--best", is_flag=True, help="Capture a burst and save only the sharpest frame.")
 def vision_capture(
-    device: str | None, output: str | None, width: int, height: int, count: int
+    device: str | None,
+    output: str | None,
+    width: int,
+    height: int,
+    count: int,
+    burst: bool,
+    best: bool,
 ) -> None:
     """Capture one or more frames from a camera."""
     from missy.vision.capture import CameraHandle, CaptureConfig, CaptureError
@@ -3388,6 +3396,54 @@ def vision_capture(
 
     try:
         handle.open()
+
+        # Best mode: burst + pick sharpest
+        if best:
+            burst_count = max(count, 3)
+            console.print(f"[dim]Burst capturing {burst_count} frames, selecting sharpest...[/]")
+            result = handle.capture_best(burst_count=burst_count)
+            if result.success:
+                ts = time.strftime("%Y%m%d_%H%M%S")
+                out_path = output or str(
+                    Path.home() / f".missy/captures/best_{ts}.jpg"
+                )
+                Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+                import cv2
+                cv2.imwrite(out_path, result.image, [cv2.IMWRITE_JPEG_QUALITY, config.quality])
+                console.print(
+                    f"[green]Best frame[/] {result.width}x{result.height} → {out_path}"
+                )
+            else:
+                console.print(f"[red]Failed[/]: {result.error}")
+            return
+
+        # Burst mode: capture rapid sequence
+        if burst:
+            console.print(f"[dim]Burst capturing {count} frames...[/]")
+            results = handle.capture_burst(count=count, interval=0.3)
+            for i, result in enumerate(results):
+                if output:
+                    base = Path(output)
+                    out_path = str(base.parent / f"{base.stem}_{i:03d}{base.suffix}")
+                else:
+                    ts = time.strftime("%Y%m%d_%H%M%S")
+                    out_path = str(
+                        Path.home() / f".missy/captures/burst_{ts}_{i:03d}.jpg"
+                    )
+                Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+                if result.success:
+                    import cv2
+                    cv2.imwrite(out_path, result.image, [cv2.IMWRITE_JPEG_QUALITY, config.quality])
+                    console.print(
+                        f"[green]Frame {i}[/] {result.width}x{result.height} → {out_path}"
+                    )
+                else:
+                    console.print(f"[red]Frame {i}[/]: {result.error}")
+            succeeded = sum(1 for r in results if r.success)
+            console.print(f"[dim]Burst complete: {succeeded}/{count} frames captured[/]")
+            return
+
+        # Standard capture
         for i in range(count):
             if output and count == 1:
                 out_path = output
