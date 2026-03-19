@@ -12,11 +12,8 @@ Tests for BehaviorLayer, IntentInterpreter, and ResponseShaper covering:
 
 from __future__ import annotations
 
-import pytest
-
 from missy.agent.behavior import BehaviorLayer, IntentInterpreter, ResponseShaper
 from missy.agent.persona import PersonaConfig
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers

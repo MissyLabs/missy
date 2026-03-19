@@ -15,6 +15,9 @@ import dataclasses
 import pytest
 
 from missy.agent.attention import (
+    _FILE_TOPIC_WORDS,
+    _TOPIC_PREPOSITIONS,
+    _URGENCY_KEYWORDS,
     AlertingAttention,
     AttentionState,
     AttentionSystem,
@@ -22,11 +25,7 @@ from missy.agent.attention import (
     OrientingAttention,
     SelectiveAttention,
     SustainedAttention,
-    _FILE_TOPIC_WORDS,
-    _TOPIC_PREPOSITIONS,
-    _URGENCY_KEYWORDS,
 )
-
 
 # ---------------------------------------------------------------------------
 # AttentionState — dataclass defaults and independence

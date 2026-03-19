@@ -64,7 +64,7 @@ from __future__ import annotations
 
 import socket
 from collections.abc import Generator
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -72,7 +72,6 @@ from missy.config.settings import NetworkPolicy
 from missy.core.events import AuditEvent, event_bus
 from missy.core.exceptions import PolicyViolationError
 from missy.policy.network import NetworkPolicyEngine
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -356,9 +355,8 @@ class TestBareIPNoDNS:
 
     def test_ip_denied_no_dns_call(self):
         engine = _make_engine(allowed_cidrs=["10.0.0.0/8"])
-        with patch("missy.policy.network.socket.getaddrinfo") as mock_dns:
-            with pytest.raises(PolicyViolationError):
-                engine.check_host("1.2.3.4")
+        with patch("missy.policy.network.socket.getaddrinfo") as mock_dns, pytest.raises(PolicyViolationError):
+            engine.check_host("1.2.3.4")
         mock_dns.assert_not_called()
 
     def test_ip_not_in_cidr_error_message_says_not_in_cidr(self):
@@ -1061,7 +1059,6 @@ class TestAdditionalEdgeCases:
 
     def test_mixed_ipv4_address_against_ipv6_network_no_crash(self):
         """IPv4 address checked against IPv6 CIDR must not propagate TypeError."""
-        import ipaddress
 
         engine = _make_engine(allowed_cidrs=["::1/128"])
         # _networks contains an IPv6 network; address is IPv4 — should deny cleanly.

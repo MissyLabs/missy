@@ -34,7 +34,7 @@ import concurrent.futures
 import threading
 from collections.abc import Generator
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -42,7 +42,6 @@ from missy.config.settings import FilesystemPolicy
 from missy.core.events import AuditEvent, event_bus
 from missy.core.exceptions import PolicyViolationError
 from missy.policy.filesystem import FilesystemPolicyEngine
-
 
 # ---------------------------------------------------------------------------
 # Helpers and fixtures
@@ -646,9 +645,8 @@ class TestAuditEventStructure:
 
     def test_mock_publish_called_once_on_deny_read(self, workspace: Path):
         engine = make_engine(read_paths=[])
-        with patch("missy.policy.filesystem.event_bus") as mock_bus:
-            with pytest.raises(PolicyViolationError):
-                engine.check_read(str(workspace / "notes.txt"))
+        with patch("missy.policy.filesystem.event_bus") as mock_bus, pytest.raises(PolicyViolationError):
+            engine.check_read(str(workspace / "notes.txt"))
         mock_bus.publish.assert_called_once()
         call_arg = mock_bus.publish.call_args[0][0]
         assert isinstance(call_arg, AuditEvent)

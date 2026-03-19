@@ -48,10 +48,8 @@ Covers areas not fully exercised by test_vault.py and test_session13_vault_trust
 
 from __future__ import annotations
 
-import os
 import secrets
 import stat
-import tempfile
 import threading
 from pathlib import Path
 
@@ -61,7 +59,6 @@ import pytest
 cryptography = pytest.importorskip("cryptography")
 
 from missy.security.vault import Vault, VaultError  # noqa: E402
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -513,7 +510,7 @@ class TestVaultErrorType:
 
     def test_vault_error_can_be_raised_and_caught(self):
         """VaultError can be raised and caught as Exception."""
-        with pytest.raises(Exception):
+        with pytest.raises(VaultError):
             raise VaultError("test message")
 
     def test_vault_error_preserves_message(self, tmp_path):

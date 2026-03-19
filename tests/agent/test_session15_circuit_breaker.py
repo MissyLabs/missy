@@ -35,15 +35,15 @@ test_session13_circuitbreaker_attention.py:
 
 from __future__ import annotations
 
+import contextlib
 import threading
 import time
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from missy.agent.circuit_breaker import CircuitBreaker, CircuitState
 from missy.core.exceptions import MissyError
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -74,7 +74,7 @@ def _trip(breaker: CircuitBreaker, n: int | None = None) -> None:
     """Drive *n* failures (default: exactly threshold) through the breaker."""
     count = n if n is not None else breaker._threshold
     for _ in range(count):
-        with pytest.raises(Exception):
+        with pytest.raises(RuntimeError):
             breaker.call(_always_raise())
 
 
@@ -268,10 +268,8 @@ def test_toctou_concurrent_probes_final_state_is_valid():
 
     def probe():
         barrier.wait()
-        try:
+        with contextlib.suppress(MissyError, RuntimeError):
             breaker.call(lambda: "ok")
-        except (MissyError, RuntimeError):
-            pass
 
     threads = [threading.Thread(target=probe) for _ in range(10)]
     for t in threads:
@@ -289,17 +287,13 @@ def test_concurrent_mixed_success_failure_no_deadlock():
 
     def succeed():
         while not stop.is_set():
-            try:
+            with contextlib.suppress(MissyError, RuntimeError):
                 breaker.call(lambda: "ok")
-            except (MissyError, RuntimeError):
-                pass
 
     def fail():
         while not stop.is_set():
-            try:
+            with contextlib.suppress(MissyError, RuntimeError):
                 breaker.call(_always_raise())
-            except (MissyError, RuntimeError):
-                pass
 
     workers = [threading.Thread(target=succeed, daemon=True) for _ in range(5)]
     workers += [threading.Thread(target=fail, daemon=True) for _ in range(5)]
@@ -323,10 +317,8 @@ def test_concurrent_failure_count_never_exceeds_threshold_plus_threads():
 
     def fail_once():
         barrier.wait()
-        try:
+        with contextlib.suppress(MissyError, RuntimeError):
             breaker.call(_always_raise())
-        except (MissyError, RuntimeError):
-            pass
 
     threads = [threading.Thread(target=fail_once) for _ in range(15)]
     for t in threads:
@@ -495,11 +487,11 @@ def test_call_returns_empty_string():
 
 
 def test_call_returns_empty_list():
-    assert _make().call(lambda: []) == []
+    assert _make().call(list) == []
 
 
 def test_call_returns_empty_dict():
-    assert _make().call(lambda: {}) == {}
+    assert _make().call(dict) == {}
 
 
 def test_call_returns_none():

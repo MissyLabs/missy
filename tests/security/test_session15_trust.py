@@ -93,12 +93,8 @@ from __future__ import annotations
 
 import sys
 import threading
-from typing import List
-
-import pytest
 
 from missy.security.trust import DEFAULT_SCORE, MAX_SCORE, MIN_SCORE, TrustScorer
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -426,8 +422,8 @@ class TestGetScores:
     def test_get_scores_consistent_during_concurrent_writes(self):
         """Snapshots taken during concurrent writes are always valid dicts."""
         scorer = fresh()
-        snapshots: List[dict] = []
-        errors: List[Exception] = []
+        snapshots: list[dict] = []
+        errors: list[Exception] = []
 
         def writer() -> None:
             for i in range(50):
@@ -542,7 +538,7 @@ class TestThreadSafety:
     def test_20_threads_concurrent_success_stays_in_bounds(self):
         """20 threads each recording success never push score above MAX_SCORE."""
         scorer = fresh()
-        errors: List[Exception] = []
+        errors: list[Exception] = []
 
         def worker() -> None:
             try:
@@ -563,7 +559,7 @@ class TestThreadSafety:
     def test_20_threads_concurrent_failure_stays_in_bounds(self):
         """20 threads each recording failure never push score below MIN_SCORE."""
         scorer = fresh()
-        errors: List[Exception] = []
+        errors: list[Exception] = []
 
         def worker() -> None:
             try:
@@ -584,7 +580,7 @@ class TestThreadSafety:
     def test_concurrent_reads_during_writes_raise_no_exceptions(self):
         """score() called concurrently with record_success must never throw."""
         scorer = fresh()
-        errors: List[Exception] = []
+        errors: list[Exception] = []
         stop = threading.Event()
 
         def reader() -> None:
@@ -615,7 +611,7 @@ class TestThreadSafety:
     def test_stress_20_threads_success_and_failure_simultaneously(self):
         """20 threads each doing record_success and record_failure concurrently."""
         scorer = fresh()
-        errors: List[Exception] = []
+        errors: list[Exception] = []
 
         def mixed_worker() -> None:
             try:
@@ -638,8 +634,8 @@ class TestThreadSafety:
     def test_concurrent_get_scores_returns_valid_copies(self):
         """Concurrent get_scores() calls return dicts with only valid scores."""
         scorer = fresh()
-        results: List[dict] = []
-        errors: List[Exception] = []
+        results: list[dict] = []
+        errors: list[Exception] = []
 
         def modifier() -> None:
             for i in range(40):

@@ -17,16 +17,10 @@ missy.agent.checkpoint is CheckpointManager.  Tests use the real class name.
 from __future__ import annotations
 
 import json
-import os
-import stat
-import time
-import uuid
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, patch
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -823,7 +817,7 @@ class TestDeviceRegistryLoadNullBytesInContent:
         from missy.channels.voice.registry import EdgeNode
 
         reg = _make_device_registry(tmp_path)
-        node = EdgeNode(
+        EdgeNode(
             node_id="node-002",
             friendly_name="Null Test",
             room="Garage",

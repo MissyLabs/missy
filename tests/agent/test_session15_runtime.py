@@ -16,21 +16,20 @@ Covers:
 from __future__ import annotations
 
 import os
-import tempfile
 from dataclasses import fields
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from missy.agent.runtime import (
+    _LARGE_CONTENT_THRESHOLD,
+    _MAX_TOOL_RESULT_CHARS,
     DISCORD_SYSTEM_PROMPT,
     AgentConfig,
     AgentRuntime,
-    _MAX_TOOL_RESULT_CHARS,
-    _LARGE_CONTENT_THRESHOLD,
     _rewrite_heredoc_command,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -209,7 +208,7 @@ class TestRewriteHeredocCommandPatterns:
         # Verify temp file contains the body
         tmppath = new_cmd.split(" ", 1)[1]
         assert os.path.exists(tmppath)
-        content = open(tmppath).read()
+        content = Path(tmppath).read_text()
         assert "print('hello')" in content
         os.unlink(tmppath)
 
@@ -222,7 +221,7 @@ class TestRewriteHeredocCommandPatterns:
         assert "<<" not in new_cmd
         tmppath = new_cmd.split(" ", 1)[1]
         assert tmppath.endswith(".sh")
-        content = open(tmppath).read()
+        content = Path(tmppath).read_text()
         assert "echo hi" in content
         os.unlink(tmppath)
 
@@ -243,7 +242,7 @@ class TestRewriteHeredocCommandPatterns:
         new_cmd = result["command"]
         assert "<<" not in new_cmd
         tmppath = new_cmd.split(" ", 1)[1]
-        content = open(tmppath).read()
+        content = Path(tmppath).read_text()
         assert "print(42)" in content
         os.unlink(tmppath)
 
@@ -254,7 +253,7 @@ class TestRewriteHeredocCommandPatterns:
         new_cmd = result["command"]
         assert "<<" not in new_cmd
         tmppath = new_cmd.split(" ", 1)[1]
-        content = open(tmppath).read()
+        content = Path(tmppath).read_text()
         assert "print('unquoted')" in content
         os.unlink(tmppath)
 
@@ -266,7 +265,7 @@ class TestRewriteHeredocCommandPatterns:
         new_cmd = result["command"]
         assert "<<" not in new_cmd
         tmppath = new_cmd.split(" ", 1)[1]
-        content = open(tmppath).read()
+        content = Path(tmppath).read_text()
         assert "print('no dash')" in content
         os.unlink(tmppath)
 
@@ -296,7 +295,7 @@ class TestRewriteHeredocCommandPatterns:
         new_cmd = result["command"]
         assert "<<" not in new_cmd
         tmppath = new_cmd.split(" ", 1)[1]
-        content = open(tmppath, encoding="utf-8").read()
+        content = Path(tmppath).read_text(encoding="utf-8")
         assert "héllo" in content
         os.unlink(tmppath)
 
@@ -306,7 +305,7 @@ class TestRewriteHeredocCommandPatterns:
         result = _rewrite_heredoc_command(args)
         new_cmd = result["command"]
         tmppath = new_cmd.split(" ", 1)[1]
-        content = open(tmppath).read()
+        content = Path(tmppath).read_text()
         assert "$HOME" in content
         assert "{braces}" in content
         os.unlink(tmppath)
@@ -412,7 +411,7 @@ class TestDiscordSystemPrompt:
 
     def test_discord_prompt_different_from_default(self):
         default = AgentConfig().system_prompt
-        assert DISCORD_SYSTEM_PROMPT != default
+        assert default != DISCORD_SYSTEM_PROMPT
 
     def test_discord_prompt_mentions_missy(self):
         assert "Missy" in DISCORD_SYSTEM_PROMPT
@@ -646,9 +645,8 @@ class TestSwitchProvider:
     def test_switch_provider_propagates_registry_error(self):
         runtime = _make_runtime()
 
-        with patch("missy.agent.runtime.get_registry", side_effect=ValueError("not found")):
-            with pytest.raises(ValueError):
-                runtime.switch_provider("nonexistent")
+        with patch("missy.agent.runtime.get_registry", side_effect=ValueError("not found")), pytest.raises(ValueError):
+            runtime.switch_provider("nonexistent")
 
 
 # ---------------------------------------------------------------------------

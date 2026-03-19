@@ -69,16 +69,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import threading
-import time
 from dataclasses import asdict
-from datetime import UTC, datetime
+from datetime import datetime
 
 import pytest
 
 from missy.agent.playbook import Playbook, PlaybookEntry, _compute_pattern_id
-
 
 # ---------------------------------------------------------------------------
 # Helpers

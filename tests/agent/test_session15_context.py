@@ -43,7 +43,6 @@ from missy.agent.context import (
     _format_summary,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers shared across test classes
 # ---------------------------------------------------------------------------
@@ -879,7 +878,7 @@ class TestBudgetArithmetic:
         assert b.total - b.system_reserve - b.tool_definitions_reserve == expected_available
 
     def test_memory_budget_derived_from_available(self):
-        b = TokenBudget(
+        TokenBudget(
             total=30_000,
             system_reserve=2_000,
             tool_definitions_reserve=2_000,
@@ -890,7 +889,7 @@ class TestBudgetArithmetic:
         assert expected_memory_budget == 3_900
 
     def test_history_budget_is_remainder(self):
-        b = TokenBudget(
+        TokenBudget(
             total=30_000,
             system_reserve=2_000,
             tool_definitions_reserve=2_000,

@@ -11,16 +11,14 @@ import os
 import stat
 import threading
 import time
-from dataclasses import asdict, fields
+from dataclasses import fields
 from pathlib import Path
-from unittest.mock import MagicMock, mock_open, patch
+from unittest.mock import patch
 
 import pytest
 import yaml
 
 from missy.agent.persona import (
-    PersonaConfig,
-    PersonaManager,
     _DEFAULT_BEHAVIORAL_TENDENCIES,
     _DEFAULT_BOUNDARIES,
     _DEFAULT_IDENTITY_DESCRIPTION,
@@ -28,10 +26,11 @@ from missy.agent.persona import (
     _DEFAULT_PERSONALITY_TRAITS,
     _DEFAULT_RESPONSE_STYLE_RULES,
     _DEFAULT_TONE,
+    PersonaConfig,
+    PersonaManager,
     _persona_from_dict,
     _persona_to_dict,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -190,18 +189,16 @@ class TestSave:
 class TestSaveAtomicWrite:
     def test_temp_file_removed_on_yaml_dump_failure(self, tmp_path):
         pm = make_manager(tmp_path)
-        with patch("missy.agent.persona.yaml.dump", side_effect=RuntimeError("boom")):
-            with pytest.raises(RuntimeError, match="boom"):
-                pm.save()
+        with patch("missy.agent.persona.yaml.dump", side_effect=RuntimeError("boom")), pytest.raises(RuntimeError, match="boom"):
+            pm.save()
         # No stale .yaml.tmp files should remain
         leftover = list(tmp_path.glob("*.yaml.tmp"))
         assert leftover == []
 
     def test_exception_propagated_on_failure(self, tmp_path):
         pm = make_manager(tmp_path)
-        with patch("missy.agent.persona.yaml.dump", side_effect=IOError("disk full")):
-            with pytest.raises(IOError):
-                pm.save()
+        with patch("missy.agent.persona.yaml.dump", side_effect=OSError("disk full")), pytest.raises(IOError):
+            pm.save()
 
 
 # ===========================================================================

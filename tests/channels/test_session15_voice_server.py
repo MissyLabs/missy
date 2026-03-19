@@ -10,28 +10,26 @@ No real network sockets are opened.
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from missy.channels.voice.registry import EdgeNode
 from missy.channels.voice.server import (
-    VoiceServer,
-    _MAX_AUDIO_BYTES,
-    _MAX_CONCURRENT_CONNECTIONS,
-    _MAX_WS_FRAME_BYTES,
     _AUTH_TIMEOUT_SECONDS,
-    _MIN_SAMPLE_RATE,
-    _MAX_SAMPLE_RATE,
     _DEFAULT_SAMPLE_RATE,
-    _MIN_CHANNELS,
+    _MAX_AUDIO_BYTES,
     _MAX_CHANNELS,
+    _MAX_CONCURRENT_CONNECTIONS,
+    _MAX_SAMPLE_RATE,
+    _MAX_WS_FRAME_BYTES,
+    _MIN_CHANNELS,
+    _MIN_SAMPLE_RATE,
     _TASK_ID,
+    VoiceServer,
     _emit,
 )
-from missy.channels.voice.registry import EdgeNode
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -86,14 +84,14 @@ def _make_server(**kwargs: Any) -> VoiceServer:
 
     Any keyword arg overrides the corresponding constructor parameter.
     """
-    defaults: dict[str, Any] = dict(
-        registry=_make_registry(),
-        pairing_manager=_make_pairing(),
-        presence_store=_make_presence(),
-        stt_engine=_make_stt(),
-        tts_engine=_make_tts(),
-        agent_callback=AsyncMock(return_value="response"),
-    )
+    defaults: dict[str, Any] = {
+        "registry": _make_registry(),
+        "pairing_manager": _make_pairing(),
+        "presence_store": _make_presence(),
+        "stt_engine": _make_stt(),
+        "tts_engine": _make_tts(),
+        "agent_callback": AsyncMock(return_value="response"),
+    }
     defaults.update(kwargs)
     return VoiceServer(**defaults)
 
@@ -108,16 +106,16 @@ def _make_ws(remote_address: tuple = ("127.0.0.1", 9999)) -> AsyncMock:
 
 
 def _make_edge_node(**kwargs: Any) -> EdgeNode:
-    defaults = dict(
-        node_id="node-unit-1",
-        friendly_name="Unit Test Node",
-        room="lab",
-        ip_address="10.0.0.1",
-        paired=True,
-        policy_mode="full",
-        audio_logging=False,
-        audio_log_dir="",
-    )
+    defaults = {
+        "node_id": "node-unit-1",
+        "friendly_name": "Unit Test Node",
+        "room": "lab",
+        "ip_address": "10.0.0.1",
+        "paired": True,
+        "policy_mode": "full",
+        "audio_logging": False,
+        "audio_log_dir": "",
+    }
     defaults.update(kwargs)
     return EdgeNode(**defaults)
 
@@ -775,7 +773,6 @@ class TestSampleRateClamping:
         ws = _make_ws()
 
         captured_rate: list[int] = []
-        orig_transcribe = server._stt.transcribe
 
         async def capture_transcribe(buf: bytes, *, sample_rate: int, channels: int):
             captured_rate.append(sample_rate)
@@ -971,7 +968,6 @@ class TestAuthTimeoutConstant:
         ws.recv = AsyncMock(side_effect=TimeoutError)
 
         # Patch asyncio.wait_for so that TimeoutError propagates as the server expects.
-        original_wait_for = asyncio.wait_for
 
         async def instant_timeout(coro, timeout):
             # Discard the coro to avoid ResourceWarning.
@@ -1023,7 +1019,6 @@ class TestPortZeroEdgeCase:
 class TestEmptyRegistry:
     @pytest.mark.asyncio
     async def test_auth_with_empty_registry_returns_none(self) -> None:
-        import json
 
         reg = _make_registry(verify_token=False)
         server = _make_server(registry=reg)
@@ -1056,8 +1051,8 @@ class TestAudioChunkSize:
 
     @pytest.mark.asyncio
     async def test_custom_chunk_size_used_when_streaming_audio(self) -> None:
-        from missy.channels.voice.tts.base import AudioBuffer
         from missy.channels.voice.stt.base import TranscriptionResult
+        from missy.channels.voice.tts.base import AudioBuffer
 
         chunk_size = 1024
         audio_size = 4096  # exactly 4 chunks

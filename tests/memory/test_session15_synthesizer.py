@@ -15,7 +15,6 @@ from missy.memory.synthesizer import (
     _word_set,
 )
 
-
 # ---------------------------------------------------------------------------
 # MemoryFragment defaults
 # ---------------------------------------------------------------------------
@@ -90,7 +89,7 @@ class TestApproxTokens:
 
     def test_minimum_floor_is_one(self):
         # Even for lengths that produce 0 when integer-divided
-        for n in range(0, 4):
+        for n in range(4):
             assert _approx_tokens("a" * n) == 1
 
 
@@ -505,7 +504,7 @@ class TestSynthesizeTruncation:
         synth.add_fragments("b", ["eeee ffff gggg hhhh"], base_relevance=0.8)
         synth.add_fragments("c", ["iiii jjjj kkkk llll"], base_relevance=0.7)
         result = synth.synthesize("")
-        lines = [l for l in result.split("\n") if l]
+        lines = [line for line in result.split("\n") if line]
         assert len(lines) <= 2
 
     def test_highest_relevance_fragments_kept_on_truncation(self):
@@ -528,7 +527,7 @@ class TestSynthesizeDeduplicate:
         synth.add_fragments("a", ["exact duplicate content here"])
         synth.add_fragments("b", ["exact duplicate content here"])
         result = synth.synthesize("duplicate")
-        lines = [l for l in result.split("\n") if l]
+        lines = [line for line in result.split("\n") if line]
         assert len(lines) == 1
 
 
