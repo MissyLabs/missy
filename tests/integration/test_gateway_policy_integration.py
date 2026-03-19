@@ -250,9 +250,8 @@ class TestRestPolicyMethodFiltering:
         """The raised exception must carry category='network'."""
         init_policy_engine(self._github_rest_config())
         client = PolicyHTTPClient()
-        with patch.object(httpx.Client, "delete"):
-            with pytest.raises(PolicyViolationError) as exc_info:
-                client.delete("https://api.github.com/repos/x/y")
+        with patch.object(httpx.Client, "delete"), pytest.raises(PolicyViolationError) as exc_info:
+            client.delete("https://api.github.com/repos/x/y")
         assert exc_info.value.category == "network"
 
     def test_method_comparison_is_case_insensitive(self) -> None:
@@ -979,9 +978,8 @@ class TestGatewayErrorHandling:
         mock_resp = _mock_http_response(200)
         # Override headers to report a large size.
         mock_resp.headers = {"content-length": "9999999"}
-        with patch.object(httpx.Client, "get", return_value=mock_resp):
-            with pytest.raises(ValueError, match="too large"):
-                client.get("https://api.example.com/huge")
+        with patch.object(httpx.Client, "get", return_value=mock_resp), pytest.raises(ValueError, match="too large"):
+            client.get("https://api.example.com/huge")
 
     def test_invalid_timeout_raises_on_construction(self) -> None:
         """A non-positive timeout must be rejected at construction time."""
@@ -1018,9 +1016,8 @@ class TestGatewayErrorHandling:
             call_log.append("httpx_called")
             return _mock_http_response()
 
-        with patch.object(httpx.Client, "get", side_effect=_httpx_get_called):
-            with pytest.raises(PolicyViolationError):
-                client.get("https://blocked.example.com/")
+        with patch.object(httpx.Client, "get", side_effect=_httpx_get_called), pytest.raises(PolicyViolationError):
+            client.get("https://blocked.example.com/")
         assert call_log == []
 
 

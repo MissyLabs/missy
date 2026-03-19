@@ -21,7 +21,7 @@ import logging
 import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 import numpy as np
@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-class TaskType(str, Enum):
+class TaskType(StrEnum):
     PUZZLE = "puzzle"
     PAINTING = "painting"
     GENERAL = "general"

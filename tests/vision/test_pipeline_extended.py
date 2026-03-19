@@ -180,7 +180,7 @@ class TestDenoise:
 
         pipeline = ImagePipeline()
         img = np.zeros((50, 50, 3), dtype=np.uint8)
-        result = pipeline.denoise(img)
+        pipeline.denoise(img)
 
         mock_cv2.fastNlMeansDenoisingColored.assert_called_once()
 
@@ -213,7 +213,7 @@ class TestSharpen:
 
         pipeline = ImagePipeline()
         img = np.zeros((50, 50, 3), dtype=np.uint8)
-        result = pipeline.sharpen(img)
+        pipeline.sharpen(img)
 
         mock_cv2.GaussianBlur.assert_called_once()
         mock_cv2.addWeighted.assert_called_once()
@@ -259,7 +259,7 @@ class TestFullProcess:
         )
         pipeline = ImagePipeline(cfg)
         img = np.zeros((2000, 2000, 3), dtype=np.uint8)
-        result = pipeline.process(img)
+        pipeline.process(img)
 
         # All steps should have been called
         mock_cv2.resize.assert_called_once()
@@ -280,7 +280,7 @@ class TestFullProcess:
         )
         pipeline = ImagePipeline(cfg)
         img = np.zeros((100, 100, 3), dtype=np.uint8)
-        result = pipeline.process(img)
+        pipeline.process(img)
 
         # Only resize should be attempted (but image is small enough to skip)
         mock_cv2.createCLAHE.assert_not_called()

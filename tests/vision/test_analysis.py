@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch, MagicMock
-
 import numpy as np
-import pytest
 
 from missy.vision.analysis import (
     AnalysisMode,
@@ -14,7 +11,6 @@ from missy.vision.analysis import (
     PuzzlePreprocessor,
     _describe_color,
 )
-
 
 # ---------------------------------------------------------------------------
 # AnalysisPromptBuilder tests

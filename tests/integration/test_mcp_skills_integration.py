@@ -489,9 +489,8 @@ class TestMcpDigestPinning:
         )
         mock_client = _make_mock_client(tools=tools)
 
-        with patch("missy.mcp.manager.McpClient", return_value=mock_client):
-            with pytest.raises(ValueError):
-                manager.add_server("srv", command="mcp-srv")
+        with patch("missy.mcp.manager.McpClient", return_value=mock_client), pytest.raises(ValueError):
+            manager.add_server("srv", command="mcp-srv")
 
         events = event_bus.get_events(event_type="mcp.digest_mismatch")
         assert len(events) == 1
@@ -1189,9 +1188,8 @@ class TestToolExecutionAuditTrail:
         )
         mock_client = _make_mock_client(tools=tools)
 
-        with patch("missy.mcp.manager.McpClient", return_value=mock_client):
-            with pytest.raises(ValueError):
-                manager.add_server("srv", command="c")
+        with patch("missy.mcp.manager.McpClient", return_value=mock_client), pytest.raises(ValueError):
+            manager.add_server("srv", command="c")
 
         events = event_bus.get_events(event_type="mcp.digest_mismatch")
         assert len(events) == 1

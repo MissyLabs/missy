@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import os
-import textwrap
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from missy.vision.discovery import CameraDevice, CameraDiscovery, KNOWN_CAMERAS
-
+from missy.vision.discovery import KNOWN_CAMERAS, CameraDevice, CameraDiscovery
 
 # ---------------------------------------------------------------------------
 # CameraDevice tests

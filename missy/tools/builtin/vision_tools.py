@@ -112,6 +112,7 @@ class VisionCaptureTool(BaseTool):
 
             # Encode for LLM
             import base64
+
             import cv2
             _, buf = cv2.imencode(".jpg", processed, [cv2.IMWRITE_JPEG_QUALITY, 85])
             b64 = base64.b64encode(buf.tobytes()).decode("ascii")
@@ -193,7 +194,7 @@ class VisionBurstCaptureTool(BaseTool):
         **kwargs: Any,
     ) -> ToolResult:
         try:
-            from missy.vision.capture import CameraHandle, CaptureConfig
+            from missy.vision.capture import CameraHandle
             from missy.vision.discovery import find_preferred_camera
             from missy.vision.pipeline import ImagePipeline
 
@@ -222,7 +223,9 @@ class VisionBurstCaptureTool(BaseTool):
 
                     processed = pipeline.process(result.image)
                     quality = pipeline.assess_quality(result.image)
-                    import base64, cv2
+                    import base64
+
+                    import cv2
                     _, buf = cv2.imencode(".jpg", processed, [cv2.IMWRITE_JPEG_QUALITY, 85])
                     b64 = base64.b64encode(buf.tobytes()).decode("ascii")
 
@@ -325,6 +328,7 @@ class VisionAnalyzeTool(BaseTool):
     ) -> ToolResult:
         try:
             import numpy as np
+
             from missy.vision.analysis import (
                 AnalysisMode,
                 AnalysisPromptBuilder,
@@ -387,7 +391,7 @@ class VisionDevicesTool(BaseTool):
 
     def execute(self, **kwargs: Any) -> ToolResult:
         try:
-            from missy.vision.discovery import CameraDiscovery, KNOWN_CAMERAS
+            from missy.vision.discovery import KNOWN_CAMERAS, CameraDiscovery
 
             disc = CameraDiscovery()
             cameras = disc.discover(force=True)
@@ -468,7 +472,7 @@ class VisionSceneMemoryTool(BaseTool):
         **kwargs: Any,
     ) -> ToolResult:
         try:
-            from missy.vision.scene_memory import SceneManager, TaskType, get_scene_manager
+            from missy.vision.scene_memory import TaskType, get_scene_manager
 
             mgr = get_scene_manager()
 

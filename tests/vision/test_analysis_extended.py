@@ -5,10 +5,7 @@ Covers color description, prompt building edge cases, and preprocessor behavior.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
-
 import numpy as np
-import pytest
 
 from missy.vision.analysis import (
     AnalysisMode,
@@ -17,7 +14,6 @@ from missy.vision.analysis import (
     PuzzlePreprocessor,
     _describe_color,
 )
-
 
 # ---------------------------------------------------------------------------
 # Color description tests

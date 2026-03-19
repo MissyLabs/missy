@@ -6,13 +6,12 @@ Covers error recovery, boundary conditions, and resilience scenarios.
 from __future__ import annotations
 
 import time
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 
-from missy.vision.capture import CameraHandle, CaptureConfig, CaptureError, CaptureResult
+from missy.vision.capture import CameraHandle, CaptureConfig, CaptureResult
 from missy.vision.discovery import CameraDevice, CameraDiscovery
 from missy.vision.intent import (
     ActivationDecision,
@@ -22,13 +21,10 @@ from missy.vision.intent import (
 from missy.vision.pipeline import ImagePipeline, PipelineConfig
 from missy.vision.scene_memory import SceneManager, SceneSession, TaskType
 from missy.vision.sources import (
-    FileSource,
     ImageFrame,
     PhotoSource,
     SourceType,
-    create_source,
 )
-
 
 # ---------------------------------------------------------------------------
 # Camera Discovery edge cases
@@ -55,7 +51,7 @@ class TestDiscoveryEdgeCases:
 
         # discover() should re-scan (empty sysfs = no results)
         with patch.object(disc, "_scan_sysfs", return_value=[]) as mock_scan:
-            result = disc.discover()
+            disc.discover()
             mock_scan.assert_called_once()
 
     def test_find_by_name_case_insensitive(self):

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from missy.vision.provider_format import (
     build_vision_message,
     format_image_for_anthropic,

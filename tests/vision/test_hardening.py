@@ -2,23 +2,20 @@
 
 from __future__ import annotations
 
-import re
 import threading
-import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 
-from missy.vision.capture import CameraHandle, CaptureConfig, CaptureError
+from missy.vision.capture import CameraHandle, CaptureConfig
 from missy.vision.discovery import CameraDevice, CameraDiscovery
 from missy.vision.intent import VisionIntentClassifier
-from missy.vision.pipeline import ImagePipeline, PipelineConfig
+from missy.vision.pipeline import ImagePipeline
 from missy.vision.provider_format import format_image_for_provider
-from missy.vision.scene_memory import SceneManager, SceneSession, TaskType
+from missy.vision.scene_memory import SceneManager, TaskType
 from missy.vision.sources import FileSource, ImageFrame, PhotoSource, SourceType
-
 
 # ---------------------------------------------------------------------------
 # capture.py hardening
@@ -170,7 +167,7 @@ class TestPipelineHardening:
 
         pipeline = ImagePipeline()
         gray_img = np.ones((50, 50), dtype=np.uint8) * 100
-        result = pipeline.normalize_exposure(gray_img)
+        pipeline.normalize_exposure(gray_img)
 
         # Should call createCLAHE and apply directly (no cvtColor)
         mock_cv2.createCLAHE.assert_called_once()
@@ -368,9 +365,8 @@ class TestSourcesHardening:
         d = tmp_path / "photos"
         d.mkdir()
         source = PhotoSource(d)
-        with patch.object(Path, "glob", side_effect=OSError("Permission denied")):
-            with pytest.raises(OSError, match="Cannot scan"):
-                source.scan()
+        with patch.object(Path, "glob", side_effect=OSError("Permission denied")), pytest.raises(OSError, match="Cannot scan"):
+            source.scan()
 
     @patch("missy.vision.sources._get_cv2")
     def test_jpeg_encode_failure(self, mock_get_cv2):

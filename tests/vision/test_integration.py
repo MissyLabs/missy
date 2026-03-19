@@ -10,14 +10,12 @@ import json
 from unittest.mock import MagicMock, patch
 
 import numpy as np
-import pytest
 
 from missy.vision.analysis import AnalysisMode, AnalysisPromptBuilder, AnalysisRequest
-from missy.vision.capture import CaptureConfig, CaptureResult
-from missy.vision.intent import VisionIntentClassifier, ActivationDecision, VisionIntent
+from missy.vision.intent import ActivationDecision, VisionIntent, VisionIntentClassifier
 from missy.vision.pipeline import ImagePipeline, PipelineConfig
 from missy.vision.provider_format import build_vision_message, format_image_for_provider
-from missy.vision.scene_memory import SceneManager, SceneSession, TaskType
+from missy.vision.scene_memory import SceneManager, TaskType
 from missy.vision.sources import FileSource, ImageFrame, SourceType
 
 
@@ -287,7 +285,7 @@ class TestVisionToolIntegration:
     """Test vision tools with the scene memory system."""
 
     def test_vision_scene_tool_creates_and_uses_session(self):
-        from missy.tools.builtin.vision_tools import VisionSceneMemoryTool, VisionAnalyzeTool
+        from missy.tools.builtin.vision_tools import VisionAnalyzeTool, VisionSceneMemoryTool
 
         scene_tool = VisionSceneMemoryTool()
         analyze_tool = VisionAnalyzeTool()

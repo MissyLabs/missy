@@ -3322,7 +3322,7 @@ def vision() -> None:
 @vision.command("devices")
 def vision_devices() -> None:
     """Enumerate and diagnose available cameras."""
-    from missy.vision.discovery import CameraDiscovery, KNOWN_CAMERAS
+    from missy.vision.discovery import KNOWN_CAMERAS, CameraDiscovery
 
     disc = CameraDiscovery()
     cameras = disc.discover(force=True)
@@ -3483,7 +3483,7 @@ def vision_inspect(
     context: str,
 ) -> None:
     """Run general visual analysis on an image source."""
-    from missy.vision.sources import FileSource, ScreenshotSource, WebcamSource, SourceType
+    from missy.vision.sources import FileSource, ScreenshotSource, WebcamSource
 
     console.print("[bold]Visual Inspection[/]\n")
 
@@ -3602,13 +3602,12 @@ def vision_review(
 
         # Encode for LLM
         import base64
+
         import cv2
         _, buf = cv2.imencode(".jpg", processed, [cv2.IMWRITE_JPEG_QUALITY, 85])
         b64_image = base64.b64encode(buf.tobytes()).decode("ascii")
 
         # Send to provider with provider-specific formatting
-        cfg = _load_subsystems(config_path)
-
         from missy.providers.registry import get_registry
         registry = get_registry()
         provider = registry.get_provider()

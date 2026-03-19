@@ -17,12 +17,10 @@ Design decisions
 from __future__ import annotations
 
 import logging
-import os
 import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +105,7 @@ class CameraDiscovery:
             logger.debug("  %s — %s [%s]", dev.device_path, dev.name, dev.usb_id)
         return list(devices)
 
-    def find_by_usb_id(self, vendor_id: str, product_id: str) -> Optional[CameraDevice]:
+    def find_by_usb_id(self, vendor_id: str, product_id: str) -> CameraDevice | None:
         """Find a specific camera by USB vendor/product ID."""
         for dev in self.discover():
             if dev.vendor_id == vendor_id and dev.product_id == product_id:
@@ -123,7 +121,7 @@ class CameraDiscovery:
             return []
         return [dev for dev in self.discover() if pattern.search(dev.name)]
 
-    def find_preferred(self) -> Optional[CameraDevice]:
+    def find_preferred(self) -> CameraDevice | None:
         """Find the preferred camera (Logitech C922x first, then any known, then first)."""
         devices = self.discover()
         if not devices:
@@ -279,6 +277,6 @@ def discover_cameras(*, force: bool = False) -> list[CameraDevice]:
     return get_discovery().discover(force=force)
 
 
-def find_preferred_camera() -> Optional[CameraDevice]:
+def find_preferred_camera() -> CameraDevice | None:
     """Convenience wrapper: find preferred camera."""
     return get_discovery().find_preferred()

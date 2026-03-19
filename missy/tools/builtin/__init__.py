@@ -62,8 +62,6 @@ from missy.tools.builtin.memory_tools import (
 from missy.tools.builtin.self_create_tool import SelfCreateTool
 from missy.tools.builtin.shell_exec import ShellExecTool
 from missy.tools.builtin.tts_speak import AudioListDevicesTool, AudioSetVolumeTool, TTSSpeakTool
-from missy.tools.builtin.web_fetch import WebFetchTool
-from missy.tools.builtin.x11_launch import X11LaunchTool
 from missy.tools.builtin.vision_tools import (
     VisionAnalyzeTool,
     VisionBurstCaptureTool,
@@ -71,6 +69,8 @@ from missy.tools.builtin.vision_tools import (
     VisionDevicesTool,
     VisionSceneMemoryTool,
 )
+from missy.tools.builtin.web_fetch import WebFetchTool
+from missy.tools.builtin.x11_launch import X11LaunchTool
 from missy.tools.builtin.x11_tools import (
     X11ClickTool,
     X11KeyTool,

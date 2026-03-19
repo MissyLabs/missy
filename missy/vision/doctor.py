@@ -10,7 +10,6 @@ import grp
 import logging
 import os
 import shutil
-import stat
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -183,7 +182,7 @@ class VisionDoctor:
         device_info = []
         for d in devices:
             try:
-                st = d.stat()
+                d.stat()
                 readable = os.access(str(d), os.R_OK)
                 writable = os.access(str(d), os.W_OK)
                 device_info.append({
@@ -297,7 +296,7 @@ class VisionDoctor:
     def check_capture(self) -> DiagnosticResult:
         """Attempt a test capture from the preferred camera."""
         try:
-            from missy.vision.capture import CameraHandle, CaptureConfig, CaptureError
+            from missy.vision.capture import CameraHandle, CaptureConfig
             from missy.vision.discovery import find_preferred_camera
 
             camera = find_preferred_camera()

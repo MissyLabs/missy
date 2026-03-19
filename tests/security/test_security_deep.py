@@ -734,33 +734,30 @@ class TestContainerNetworkIsolation:
         sb = ContainerSandbox(network_mode="none")
         # Verify the command that would be issued includes --network=none
         # We inspect the logic without actually calling docker
-        with patch("missy.security.container.ContainerSandbox.is_available", return_value=True):
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(returncode=0, stdout=b"abc123\n", stderr=b"")
-                sb.start()
-                called_cmd = mock_run.call_args[0][0]
-                assert "--network=none" in called_cmd
+        with patch("missy.security.container.ContainerSandbox.is_available", return_value=True), patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=b"abc123\n", stderr=b"")
+            sb.start()
+            called_cmd = mock_run.call_args[0][0]
+            assert "--network=none" in called_cmd
 
     def test_custom_network_mode_passed_through(self) -> None:
         sb = ContainerSandbox(network_mode="bridge")
-        with patch("missy.security.container.ContainerSandbox.is_available", return_value=True):
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(returncode=0, stdout=b"def456\n", stderr=b"")
-                sb.start()
-                called_cmd = mock_run.call_args[0][0]
-                assert "--network=bridge" in called_cmd
+        with patch("missy.security.container.ContainerSandbox.is_available", return_value=True), patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=b"def456\n", stderr=b"")
+            sb.start()
+            called_cmd = mock_run.call_args[0][0]
+            assert "--network=bridge" in called_cmd
 
     def test_network_isolation_flag_position_correct(self) -> None:
         # The network flag must appear before the image name
         sb = ContainerSandbox(network_mode="none", image="python:3.12-slim")
-        with patch("missy.security.container.ContainerSandbox.is_available", return_value=True):
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(returncode=0, stdout=b"ghi789\n", stderr=b"")
-                sb.start()
-                cmd = mock_run.call_args[0][0]
-                net_idx = cmd.index("--network=none")
-                img_idx = cmd.index("python:3.12-slim")
-                assert net_idx < img_idx, "--network flag must precede the image name"
+        with patch("missy.security.container.ContainerSandbox.is_available", return_value=True), patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=b"ghi789\n", stderr=b"")
+            sb.start()
+            cmd = mock_run.call_args[0][0]
+            net_idx = cmd.index("--network=none")
+            img_idx = cmd.index("python:3.12-slim")
+            assert net_idx < img_idx, "--network flag must precede the image name"
 
 
 # ---------------------------------------------------------------------------
@@ -773,35 +770,32 @@ class TestContainerResourceLimits:
 
     def test_memory_limit_in_docker_command(self) -> None:
         sb = ContainerSandbox(memory_limit="128m")
-        with patch("missy.security.container.ContainerSandbox.is_available", return_value=True):
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(returncode=0, stdout=b"id1\n", stderr=b"")
-                sb.start()
-                cmd = mock_run.call_args[0][0]
-                assert "--memory" in cmd
-                mem_idx = cmd.index("--memory")
-                assert cmd[mem_idx + 1] == "128m"
+        with patch("missy.security.container.ContainerSandbox.is_available", return_value=True), patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=b"id1\n", stderr=b"")
+            sb.start()
+            cmd = mock_run.call_args[0][0]
+            assert "--memory" in cmd
+            mem_idx = cmd.index("--memory")
+            assert cmd[mem_idx + 1] == "128m"
 
     def test_cpu_limit_in_docker_command(self) -> None:
         sb = ContainerSandbox(cpu_quota=0.25)
-        with patch("missy.security.container.ContainerSandbox.is_available", return_value=True):
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(returncode=0, stdout=b"id2\n", stderr=b"")
-                sb.start()
-                cmd = mock_run.call_args[0][0]
-                assert "--cpus" in cmd
-                cpu_idx = cmd.index("--cpus")
-                assert cmd[cpu_idx + 1] == "0.25"
+        with patch("missy.security.container.ContainerSandbox.is_available", return_value=True), patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=b"id2\n", stderr=b"")
+            sb.start()
+            cmd = mock_run.call_args[0][0]
+            assert "--cpus" in cmd
+            cpu_idx = cmd.index("--cpus")
+            assert cmd[cpu_idx + 1] == "0.25"
 
     def test_security_hardening_flags_present(self) -> None:
         sb = ContainerSandbox()
-        with patch("missy.security.container.ContainerSandbox.is_available", return_value=True):
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(returncode=0, stdout=b"id3\n", stderr=b"")
-                sb.start()
-                cmd = mock_run.call_args[0][0]
-                assert "--cap-drop=ALL" in cmd
-                assert "--security-opt=no-new-privileges" in cmd
+        with patch("missy.security.container.ContainerSandbox.is_available", return_value=True), patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=b"id3\n", stderr=b"")
+            sb.start()
+            cmd = mock_run.call_args[0][0]
+            assert "--cap-drop=ALL" in cmd
+            assert "--security-opt=no-new-privileges" in cmd
 
     def test_docker_unavailable_returns_none(self) -> None:
         sb = ContainerSandbox()

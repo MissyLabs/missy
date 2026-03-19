@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from missy.vision.scene_memory import (
-    SceneChange,
     SceneFrame,
     SceneManager,
     SceneSession,
     TaskType,
 )
-
 
 # ---------------------------------------------------------------------------
 # SceneFrame tests
@@ -93,7 +90,7 @@ class TestSceneSession:
 
     def test_get_recent_frames(self):
         session = SceneSession("task-1")
-        for i in range(10):
+        for _i in range(10):
             session.add_frame(np.zeros((10, 10, 3), dtype=np.uint8))
 
         recent = session.get_recent_frames(3)
@@ -186,8 +183,8 @@ class TestSceneManager:
 
     def test_get_active_session(self):
         mgr = SceneManager()
-        s1 = mgr.create_session("task-1")
-        s2 = mgr.create_session("task-2")
+        mgr.create_session("task-1")
+        mgr.create_session("task-2")
 
         active = mgr.get_active_session()
         assert active is not None
@@ -238,5 +235,5 @@ class TestSceneManager:
 
         listings = mgr.list_sessions()
         assert len(listings) == 2
-        types = {l["task_type"] for l in listings}
+        types = {entry["task_type"] for entry in listings}
         assert types == {"puzzle", "painting"}

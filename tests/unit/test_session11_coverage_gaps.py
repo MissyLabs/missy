@@ -13,9 +13,7 @@ Covers specific uncovered lines identified in the 99% coverage report:
 from __future__ import annotations
 
 import json
-import os
 import textwrap
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -31,9 +29,8 @@ class TestVaultCryptoFallback:
         """Vault should raise VaultError when crypto package is missing."""
         from missy.security.vault import Vault, VaultError
 
-        with patch("missy.security.vault._CRYPTO_AVAILABLE", False):
-            with pytest.raises(VaultError, match="cryptography"):
-                Vault(vault_dir=str(tmp_path))
+        with patch("missy.security.vault._CRYPTO_AVAILABLE", False), pytest.raises(VaultError, match="cryptography"):
+            Vault(vault_dir=str(tmp_path))
 
     def test_crypto_available_flag_is_true(self):
         """When cryptography is installed, _CRYPTO_AVAILABLE should be True."""
@@ -146,9 +143,8 @@ class TestSkillDiscoveryNonDictFrontmatter:
         # Force _parse_yaml to return a scalar to hit the isinstance check
         with patch.object(
             SkillDiscovery, "_parse_yaml", staticmethod(lambda text: "just a string")
-        ):
-            with pytest.raises(ValueError, match="not a YAML mapping"):
-                discovery.parse_skill_md(str(skill_file))
+        ), pytest.raises(ValueError, match="not a YAML mapping"):
+            discovery.parse_skill_md(str(skill_file))
 
     def test_list_frontmatter_raises(self, tmp_path):
         """When _parse_yaml returns a list, ValueError should be raised."""
@@ -167,9 +163,8 @@ class TestSkillDiscoveryNonDictFrontmatter:
         discovery = SkillDiscovery()
         with patch.object(
             SkillDiscovery, "_parse_yaml", staticmethod(lambda text: ["item1", "item2"])
-        ):
-            with pytest.raises(ValueError, match="not a YAML mapping"):
-                discovery.parse_skill_md(str(skill_file))
+        ), pytest.raises(ValueError, match="not a YAML mapping"):
+            discovery.parse_skill_md(str(skill_file))
 
 
 # ---------------------------------------------------------------------------

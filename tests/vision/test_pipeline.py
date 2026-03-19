@@ -5,7 +5,6 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import numpy as np
-import pytest
 
 from missy.vision.pipeline import ImagePipeline, PipelineConfig
 
@@ -62,7 +61,7 @@ class TestImagePipeline:
         gray = np.full((100, 100), 128, dtype=np.uint8)
         mock_cv2.cvtColor.return_value = gray
 
-        laplacian = np.full((100, 100), 100.0)
+        np.full((100, 100), 100.0)
         mock_lap = MagicMock()
         mock_lap.var.return_value = 100.0
         mock_cv2.Laplacian.return_value = mock_lap

@@ -6,7 +6,6 @@ import json
 from unittest.mock import MagicMock, patch
 
 import numpy as np
-import pytest
 
 from missy.tools.builtin.vision_tools import (
     VisionAnalyzeTool,
@@ -14,7 +13,6 @@ from missy.tools.builtin.vision_tools import (
     VisionDevicesTool,
     VisionSceneMemoryTool,
 )
-
 
 # ---------------------------------------------------------------------------
 # VisionDevicesTool tests
@@ -198,7 +196,6 @@ class TestVisionSceneMemoryTool:
 
     def test_observation_no_session(self):
         # Use a fresh manager
-        from missy.vision.scene_memory import SceneManager
         tool = VisionSceneMemoryTool()
         result = tool.execute(
             action="add_observation",

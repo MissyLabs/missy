@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from missy.vision.intent import (
     ActivationDecision,
     IntentResult,
@@ -11,7 +9,6 @@ from missy.vision.intent import (
     VisionIntentClassifier,
     classify_vision_intent,
 )
-
 
 # ---------------------------------------------------------------------------
 # VisionIntentClassifier tests

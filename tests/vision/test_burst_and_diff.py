@@ -10,7 +10,6 @@ import pytest
 from missy.vision.capture import CameraHandle, CaptureConfig, CaptureResult
 from missy.vision.scene_memory import SceneFrame, SceneSession, TaskType
 
-
 # ---------------------------------------------------------------------------
 # Burst capture tests
 # ---------------------------------------------------------------------------

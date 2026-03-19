@@ -6,7 +6,7 @@ camera auto-capture, metadata population, and error fallbacks.
 
 from __future__ import annotations
 
-import json
+import contextlib
 from dataclasses import dataclass
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -15,7 +15,6 @@ import pytest
 
 from missy.channels.voice.stt.base import TranscriptionResult
 from missy.channels.voice.tts.base import AudioBuffer
-
 
 # ---------------------------------------------------------------------------
 # Fixtures (matching test_voice_server.py patterns)
@@ -111,7 +110,7 @@ class TestVoiceVisionIntentDetection:
         node = MockEdgeNode()
 
         with patch("missy.vision.intent.classify_vision_intent") as mock_classify:
-            from missy.vision.intent import IntentResult, VisionIntent, ActivationDecision
+            from missy.vision.intent import ActivationDecision, IntentResult, VisionIntent
             mock_classify.return_value = IntentResult(
                 intent=VisionIntent.PUZZLE,
                 decision=ActivationDecision.ACTIVATE,
@@ -141,7 +140,7 @@ class TestVoiceVisionIntentDetection:
         node = MockEdgeNode()
 
         with patch("missy.vision.intent.classify_vision_intent") as mock_classify:
-            from missy.vision.intent import IntentResult, VisionIntent, ActivationDecision
+            from missy.vision.intent import ActivationDecision, IntentResult, VisionIntent
             mock_classify.return_value = IntentResult(
                 intent=VisionIntent.PAINTING,
                 decision=ActivationDecision.ACTIVATE,
@@ -185,7 +184,7 @@ class TestVoiceVisionIntentDetection:
         node = MockEdgeNode()
 
         with patch("missy.vision.intent.classify_vision_intent") as mock_classify:
-            from missy.vision.intent import IntentResult, VisionIntent, ActivationDecision
+            from missy.vision.intent import ActivationDecision, IntentResult, VisionIntent
             mock_classify.return_value = IntentResult(
                 intent=VisionIntent.LOOK,
                 decision=ActivationDecision.ACTIVATE,
@@ -229,7 +228,7 @@ class TestVoiceVisionCapture:
         mock_capture_result.height = 480
 
         with patch("missy.vision.intent.classify_vision_intent") as mock_classify:
-            from missy.vision.intent import IntentResult, VisionIntent, ActivationDecision
+            from missy.vision.intent import ActivationDecision, IntentResult, VisionIntent
             mock_classify.return_value = IntentResult(
                 intent=VisionIntent.PUZZLE,
                 decision=ActivationDecision.ACTIVATE,
@@ -271,7 +270,7 @@ class TestVoiceVisionCapture:
         node = MockEdgeNode()
 
         with patch("missy.vision.intent.classify_vision_intent") as mock_classify:
-            from missy.vision.intent import IntentResult, VisionIntent, ActivationDecision
+            from missy.vision.intent import ActivationDecision, IntentResult, VisionIntent
             mock_classify.return_value = IntentResult(
                 intent=VisionIntent.LOOK,
                 decision=ActivationDecision.ACTIVATE,
@@ -305,7 +304,7 @@ class TestVoiceVisionCapture:
         mock_capture_result.error = "Device busy"
 
         with patch("missy.vision.intent.classify_vision_intent") as mock_classify:
-            from missy.vision.intent import IntentResult, VisionIntent, ActivationDecision
+            from missy.vision.intent import ActivationDecision, IntentResult, VisionIntent
             mock_classify.return_value = IntentResult(
                 intent=VisionIntent.LOOK,
                 decision=ActivationDecision.ACTIVATE,
@@ -340,7 +339,7 @@ class TestVoiceVisionCapture:
         mock_camera.device_path = "/dev/video0"
 
         with patch("missy.vision.intent.classify_vision_intent") as mock_classify:
-            from missy.vision.intent import IntentResult, VisionIntent, ActivationDecision
+            from missy.vision.intent import ActivationDecision, IntentResult, VisionIntent
             mock_classify.return_value = IntentResult(
                 intent=VisionIntent.LOOK,
                 decision=ActivationDecision.ACTIVATE,
@@ -369,12 +368,9 @@ class TestVoiceVisionCapture:
         ws = AsyncMock()
         node = MockEdgeNode()
 
-        with patch("builtins.__import__", side_effect=ImportError("no vision")):
-            # Should not crash — the import failure is caught
-            try:
-                await server._handle_audio(ws, node=node, audio_buffer=b"\x00" * 16000, sample_rate=16000)
-            except ImportError:
-                pass  # Some internal imports may fail; the point is no crash
+        # Should not crash — the import failure is caught
+        with patch("builtins.__import__", side_effect=ImportError("no vision")), contextlib.suppress(ImportError):
+            await server._handle_audio(ws, node=node, audio_buffer=b"\x00" * 16000, sample_rate=16000)
 
 
 # ---------------------------------------------------------------------------
@@ -414,7 +410,7 @@ class TestVoiceVisionMetadata:
         node = MockEdgeNode()
 
         with patch("missy.vision.intent.classify_vision_intent") as mock_classify:
-            from missy.vision.intent import IntentResult, VisionIntent, ActivationDecision
+            from missy.vision.intent import ActivationDecision, IntentResult, VisionIntent
             mock_classify.return_value = IntentResult(
                 intent=VisionIntent.PAINTING,
                 decision=ActivationDecision.ASK,

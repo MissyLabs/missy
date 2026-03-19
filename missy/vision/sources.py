@@ -10,13 +10,12 @@ from __future__ import annotations
 import base64
 import logging
 import subprocess
-import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 
@@ -39,7 +38,7 @@ def _get_cv2() -> Any:
             raise ImportError(
                 "opencv-python is required for vision sources. "
                 "Install with: pip install opencv-python-headless"
-            )
+            ) from None
     return _cv2
 
 
@@ -48,7 +47,7 @@ def _get_cv2() -> Any:
 # ---------------------------------------------------------------------------
 
 
-class SourceType(str, Enum):
+class SourceType(StrEnum):
     WEBCAM = "webcam"
     FILE = "file"
     SCREENSHOT = "screenshot"
@@ -170,11 +169,11 @@ class WebcamSource(ImageSource):
             future = pool.submit(_do_capture)
             try:
                 return future.result(timeout=self._timeout)
-            except concurrent.futures.TimeoutError:
+            except concurrent.futures.TimeoutError as err:
                 raise CaptureError(
                     f"Camera at {self._device_path} did not respond within "
                     f"{self._timeout}s — device may be frozen or busy"
-                )
+                ) from err
 
 
 # ---------------------------------------------------------------------------

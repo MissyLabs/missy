@@ -17,8 +17,8 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any, Optional
+from enum import StrEnum
+from typing import Any
 
 import numpy as np
 
@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-class AnalysisMode(str, Enum):
+class AnalysisMode(StrEnum):
     GENERAL = "general"
     PUZZLE = "puzzle"
     PAINTING = "painting"

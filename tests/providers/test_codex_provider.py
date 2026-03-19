@@ -396,17 +396,15 @@ class TestCodexProviderGetToken:
         from missy.providers.codex_provider import CodexProvider
 
         p = CodexProvider(_make_config(api_key=None))
-        with patch("missy.providers.codex_provider._load_oauth_token", return_value=None):
-            with pytest.raises(ProviderError, match="no OAuth token"):
-                p._get_token()
+        with patch("missy.providers.codex_provider._load_oauth_token", return_value=None), pytest.raises(ProviderError, match="no OAuth token"):
+            p._get_token()
 
     def test_error_message_mentions_missy_setup(self):
         from missy.providers.codex_provider import CodexProvider
 
         p = CodexProvider(_make_config(api_key=None))
-        with patch("missy.providers.codex_provider._load_oauth_token", return_value=None):
-            with pytest.raises(ProviderError, match="missy setup"):
-                p._get_token()
+        with patch("missy.providers.codex_provider._load_oauth_token", return_value=None), pytest.raises(ProviderError, match="missy setup"):
+            p._get_token()
 
 
 # ===========================================================================
@@ -668,9 +666,8 @@ class TestCodexProviderStream:
 
     def test_raises_provider_error_on_response_failed_event(self):
         lines = _sse({"type": "response.failed", "message": "rate limit exceeded"})
-        with _mock_sse_stream(lines):
-            with pytest.raises(ProviderError, match="rate limit exceeded"):
-                list(self.provider.stream(self._messages()))
+        with _mock_sse_stream(lines), pytest.raises(ProviderError, match="rate limit exceeded"):
+            list(self.provider.stream(self._messages()))
 
     def test_raises_provider_error_on_error_event(self):
         lines = _sse({"type": "error", "error": {"message": "internal error"}})
@@ -685,10 +682,9 @@ class TestCodexProviderStream:
         mock_resp.text = "Unauthorized"
         http_error = httpx.HTTPStatusError("401", request=MagicMock(), response=mock_resp)
 
-        with patch("missy.providers.codex_provider.PolicyHTTPClient") as mock_cls:
+        with patch("missy.providers.codex_provider.PolicyHTTPClient") as mock_cls, pytest.raises(ProviderError, match="401"):
             mock_cls.return_value.post.side_effect = http_error
-            with pytest.raises(ProviderError, match="401"):
-                list(self.provider.stream(self._messages()))
+            list(self.provider.stream(self._messages()))
 
     def test_empty_stream_yields_nothing(self):
         lines = ["data: [DONE]"]
@@ -699,9 +695,8 @@ class TestCodexProviderStream:
 
     def test_stream_calls_get_token(self):
         lines = ["data: [DONE]"]
-        with _mock_sse_stream(lines):
-            with patch.object(self.provider, "_get_token", return_value="tok-test") as mock_tok:
-                list(self.provider.stream(self._messages()))
+        with _mock_sse_stream(lines), patch.object(self.provider, "_get_token", return_value="tok-test") as mock_tok:
+            list(self.provider.stream(self._messages()))
 
         mock_tok.assert_called_once()
 

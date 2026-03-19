@@ -789,7 +789,7 @@ class VoiceServer:
         }
 
         try:
-            from missy.vision.intent import classify_vision_intent, ActivationDecision
+            from missy.vision.intent import ActivationDecision, classify_vision_intent
 
             vision_result = classify_vision_intent(transcript.text)
             if vision_result.decision == ActivationDecision.ACTIVATE:
@@ -805,10 +805,11 @@ class VoiceServer:
 
                 # Attempt camera capture for vision-triggered requests
                 try:
-                    from missy.vision.discovery import find_preferred_camera
-                    from missy.vision.capture import CameraHandle, CaptureConfig
-                    from missy.vision.pipeline import ImagePipeline
                     import base64
+
+                    from missy.vision.capture import CameraHandle, CaptureConfig
+                    from missy.vision.discovery import find_preferred_camera
+                    from missy.vision.pipeline import ImagePipeline
 
                     camera = find_preferred_camera()
                     if camera:

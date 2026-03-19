@@ -4,10 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from missy.vision.doctor import DiagnosticResult, DoctorReport, VisionDoctor
-
 
 # ---------------------------------------------------------------------------
 # DiagnosticResult tests

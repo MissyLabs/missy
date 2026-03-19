@@ -9,7 +9,6 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import numpy as np
-import pytest
 
 from missy.vision.audit import (
     audit_vision_burst,
@@ -19,7 +18,6 @@ from missy.vision.audit import (
     audit_vision_session,
 )
 from missy.vision.intent import VisionIntentClassifier
-
 
 # ---------------------------------------------------------------------------
 # Audit event tests

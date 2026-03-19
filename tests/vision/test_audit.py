@@ -4,11 +4,9 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from missy.vision.audit import (
-    audit_vision_capture,
     audit_vision_analysis,
+    audit_vision_capture,
     audit_vision_device_discovery,
     audit_vision_intent,
     audit_vision_session,

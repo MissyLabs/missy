@@ -524,18 +524,16 @@ class TestExchangeCode:
         from missy.cli.oauth import _exchange_code
 
         resp = self._make_response(400, {"error": "invalid_grant"})
-        with patch("httpx.post", return_value=resp):
-            with pytest.raises(RuntimeError, match="Token exchange failed"):
-                _exchange_code("cid", "bad-code", "verifier")
+        with patch("httpx.post", return_value=resp), pytest.raises(RuntimeError, match="Token exchange failed"):
+            _exchange_code("cid", "bad-code", "verifier")
 
     def test_error_message_includes_status_code(self):
         from missy.cli.oauth import _exchange_code
 
         resp = self._make_response(401, {})
         resp.text = "Unauthorized"
-        with patch("httpx.post", return_value=resp):
-            with pytest.raises(RuntimeError, match="401"):
-                _exchange_code("cid", "code", "verifier")
+        with patch("httpx.post", return_value=resp), pytest.raises(RuntimeError, match="401"):
+            _exchange_code("cid", "code", "verifier")
 
     def test_uses_30_second_timeout(self):
         from missy.cli.oauth import _exchange_code
@@ -588,9 +586,8 @@ class TestDoRefresh:
         from missy.cli.oauth import _do_refresh
 
         resp = self._make_response(403, {"error": "forbidden"})
-        with patch("httpx.post", return_value=resp):
-            with pytest.raises(RuntimeError, match="Token refresh failed"):
-                _do_refresh("cid", "rt")
+        with patch("httpx.post", return_value=resp), pytest.raises(RuntimeError, match="Token refresh failed"):
+            _do_refresh("cid", "rt")
 
     def test_posts_to_token_url(self):
         from missy.cli.oauth import _do_refresh

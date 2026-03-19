@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 
-from missy.vision.capture import CaptureConfig, CaptureError, CaptureResult
+from missy.vision.capture import CaptureError, CaptureResult
 from missy.vision.resilient_capture import ResilientCamera
 
 
@@ -204,7 +204,7 @@ class TestResilientCameraReconnect:
 
         # Trigger reconnection path
         cam._connected = False
-        result = cam.capture()
+        cam.capture()
 
         # Should have called discover(force=True) during reconnection
         if mock_disc.discover.called:
@@ -236,9 +236,8 @@ class TestResilientCameraContextManager:
         mock_disc.find_preferred.return_value = None
         mock_get_disc.return_value = mock_disc
 
-        with pytest.raises(CaptureError):
-            with ResilientCamera() as cam:
-                pass
+        with pytest.raises(CaptureError), ResilientCamera():
+            pass
 
 
 class TestResilientCameraDisconnect:

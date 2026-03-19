@@ -19,7 +19,7 @@ import re
 import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-class VisionIntent(str, Enum):
+class VisionIntent(StrEnum):
     """Classified vision intent from user utterance."""
 
     NONE = "none"  # no vision needed
@@ -44,7 +44,7 @@ class VisionIntent(str, Enum):
     SCREENSHOT = "screenshot"  # desktop screenshot request
 
 
-class ActivationDecision(str, Enum):
+class ActivationDecision(StrEnum):
     """Whether to auto-activate vision."""
 
     ACTIVATE = "activate"  # strong signal — auto-activate
@@ -167,11 +167,10 @@ class VisionIntentClassifier:
         # Explicit look/check patterns
         for pattern, intent, base_conf in _EXPLICIT_LOOK_PATTERNS:
             m = pattern.search(text)
-            if m:
-                if base_conf > best_confidence:
-                    best_intent = intent
-                    best_confidence = base_conf
-                    best_trigger = m.group(0)
+            if m and base_conf > best_confidence:
+                best_intent = intent
+                best_confidence = base_conf
+                best_trigger = m.group(0)
 
         # Puzzle patterns
         for pattern, base_conf in _PUZZLE_PATTERNS:
@@ -202,12 +201,11 @@ class VisionIntentClassifier:
         # Inspect/read patterns
         for pattern, base_conf in _INSPECT_PATTERNS:
             m = pattern.search(text)
-            if m:
-                if base_conf > best_confidence:
-                    best_intent = VisionIntent.INSPECT
-                    best_confidence = base_conf
-                    best_trigger = m.group(0)
-                    best_mode = "inspection"
+            if m and base_conf > best_confidence:
+                best_intent = VisionIntent.INSPECT
+                best_confidence = base_conf
+                best_trigger = m.group(0)
+                best_mode = "inspection"
 
         # Determine activation decision
         if best_confidence >= self._auto_threshold:

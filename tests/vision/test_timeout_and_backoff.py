@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import time
 from unittest.mock import MagicMock, patch
 
@@ -80,10 +81,8 @@ class TestWebcamSourceTimeout:
         MockHandle.return_value = mock_handle
 
         src = WebcamSource("/dev/video0", timeout=0.3)
-        try:
+        with contextlib.suppress(CaptureError):
             src.acquire()
-        except CaptureError:
-            pass
 
         # The thread may still be running, but close should have been called
         # in the finally block inside _do_capture (if it completed)

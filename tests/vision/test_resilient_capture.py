@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 
-from missy.vision.capture import CaptureConfig, CaptureError, CaptureResult
+from missy.vision.capture import CaptureError, CaptureResult
 from missy.vision.discovery import CameraDevice
 from missy.vision.resilient_capture import ResilientCamera
 

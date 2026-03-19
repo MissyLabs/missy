@@ -17,11 +17,11 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -49,7 +49,7 @@ def _get_cv2() -> Any:
             raise ImportError(
                 "opencv-python is required for vision capture. "
                 "Install with: pip install opencv-python-headless"
-            )
+            ) from None
     return _cv2
 
 
@@ -63,7 +63,7 @@ class CaptureResult:
     """Result of a single frame capture."""
 
     success: bool
-    image: Optional[np.ndarray] = None  # BGR numpy array
+    image: np.ndarray | None = None  # BGR numpy array
     timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
     device_path: str = ""
     width: int = 0
@@ -174,10 +174,8 @@ class CameraHandle:
         """Release the camera device.  Thread-safe."""
         with self._lock:
             if self._cap is not None:
-                try:
+                with suppress(Exception):
                     self._cap.release()
-                except Exception:
-                    pass
                 self._cap = None
             self._opened = False
 

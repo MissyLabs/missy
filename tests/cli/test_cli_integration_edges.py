@@ -346,12 +346,12 @@ class TestDoctor:
         mock_mgr = MagicMock()
         mock_mgr.list_jobs.return_value = []
 
-        with _SubsystemsPatch():
-            with (
-                patch("missy.providers.registry.get_registry", return_value=mock_registry),
-                patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr),
-            ):
-                return runner.invoke(cli, ["--config", cfg_path, "doctor"])
+        with (
+            _SubsystemsPatch(),
+            patch("missy.providers.registry.get_registry", return_value=mock_registry),
+            patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr),
+        ):
+            return runner.invoke(cli, ["--config", cfg_path, "doctor"])
 
     def test_doctor_exits_zero(self, runner: CliRunner) -> None:
         """doctor exits 0 under normal conditions."""
@@ -373,12 +373,12 @@ class TestDoctor:
         mock_mgr = MagicMock()
         mock_mgr.list_jobs.return_value = []
 
-        with _SubsystemsPatch():
-            with (
-                patch("missy.providers.registry.get_registry", return_value=mock_registry),
-                patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr),
-            ):
-                result = runner.invoke(cli, ["--config", cfg_path, "doctor"])
+        with (
+            _SubsystemsPatch(),
+            patch("missy.providers.registry.get_registry", return_value=mock_registry),
+            patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr),
+        ):
+            result = runner.invoke(cli, ["--config", cfg_path, "doctor"])
 
         assert result.exit_code == 0
         assert "no providers configured" in result.output
@@ -396,12 +396,12 @@ class TestDoctor:
         mock_mgr = MagicMock()
         mock_mgr.list_jobs.return_value = []
 
-        with _SubsystemsPatch():
-            with (
-                patch("missy.providers.registry.get_registry", return_value=mock_registry),
-                patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr),
-            ):
-                result = runner.invoke(cli, ["--config", cfg_path, "doctor"])
+        with (
+            _SubsystemsPatch(),
+            patch("missy.providers.registry.get_registry", return_value=mock_registry),
+            patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr),
+        ):
+            result = runner.invoke(cli, ["--config", cfg_path, "doctor"])
 
         assert result.exit_code == 0
         assert "anthropic" in result.output
@@ -415,12 +415,12 @@ class TestDoctor:
         mock_mgr = MagicMock()
         mock_mgr.list_jobs.return_value = [mock_job, mock_job, mock_job]
 
-        with _SubsystemsPatch():
-            with (
-                patch("missy.providers.registry.get_registry", return_value=mock_registry),
-                patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr),
-            ):
-                result = runner.invoke(cli, ["--config", cfg_path, "doctor"])
+        with (
+            _SubsystemsPatch(),
+            patch("missy.providers.registry.get_registry", return_value=mock_registry),
+            patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr),
+        ):
+            result = runner.invoke(cli, ["--config", cfg_path, "doctor"])
 
         assert result.exit_code == 0
         assert "3 job" in result.output
@@ -433,13 +433,13 @@ class TestDoctor:
         mock_mgr = MagicMock()
         mock_mgr.list_jobs.return_value = []
 
-        with _SubsystemsPatch() as cfg:
+        with (
+            _SubsystemsPatch() as cfg,
+            patch("missy.providers.registry.get_registry", return_value=mock_registry),
+            patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr),
+        ):
             cfg.discord = None
-            with (
-                patch("missy.providers.registry.get_registry", return_value=mock_registry),
-                patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr),
-            ):
-                result = runner.invoke(cli, ["--config", cfg_path, "doctor"])
+            result = runner.invoke(cli, ["--config", cfg_path, "doctor"])
 
         assert result.exit_code == 0
         assert "not configured" in result.output
@@ -594,9 +594,8 @@ class TestAuditRecent:
         mock_al = MagicMock()
         mock_al.get_recent_events.return_value = []
 
-        with _SubsystemsPatch():
-            with patch("missy.observability.audit_logger.AuditLogger", return_value=mock_al):
-                result = runner.invoke(cli, ["--config", cfg_path, "audit", "recent"])
+        with _SubsystemsPatch(), patch("missy.observability.audit_logger.AuditLogger", return_value=mock_al):
+            result = runner.invoke(cli, ["--config", cfg_path, "audit", "recent"])
 
         assert result.exit_code == 0
         assert "No audit events found" in result.output
@@ -616,9 +615,8 @@ class TestAuditRecent:
         mock_al = MagicMock()
         mock_al.get_recent_events.return_value = events
 
-        with _SubsystemsPatch():
-            with patch("missy.observability.audit_logger.AuditLogger", return_value=mock_al):
-                result = runner.invoke(cli, ["--config", cfg_path, "audit", "recent"])
+        with _SubsystemsPatch(), patch("missy.observability.audit_logger.AuditLogger", return_value=mock_al):
+            result = runner.invoke(cli, ["--config", cfg_path, "audit", "recent"])
 
         assert result.exit_code == 0
         assert "network.request" in result.output
@@ -645,11 +643,10 @@ class TestAuditRecent:
         mock_al = MagicMock()
         mock_al.get_recent_events.return_value = events
 
-        with _SubsystemsPatch():
-            with patch("missy.observability.audit_logger.AuditLogger", return_value=mock_al):
-                result = runner.invoke(
-                    cli, ["--config", cfg_path, "audit", "recent", "--category", "shell"]
-                )
+        with _SubsystemsPatch(), patch("missy.observability.audit_logger.AuditLogger", return_value=mock_al):
+            result = runner.invoke(
+                cli, ["--config", cfg_path, "audit", "recent", "--category", "shell"]
+            )
 
         assert result.exit_code == 0
         assert "shell.exec" in result.output
@@ -673,12 +670,11 @@ class TestAuditRecent:
         mock_al = MagicMock()
         mock_al.get_recent_events.return_value = events
 
-        with _SubsystemsPatch():
-            with patch("missy.observability.audit_logger.AuditLogger", return_value=mock_al):
-                result = runner.invoke(
-                    cli,
-                    ["--config", cfg_path, "audit", "recent", "--category", "filesystem"],
-                )
+        with _SubsystemsPatch(), patch("missy.observability.audit_logger.AuditLogger", return_value=mock_al):
+            result = runner.invoke(
+                cli,
+                ["--config", cfg_path, "audit", "recent", "--category", "filesystem"],
+            )
 
         assert result.exit_code == 0
         assert "No audit events found" in result.output
@@ -689,11 +685,10 @@ class TestAuditRecent:
         mock_al = MagicMock()
         mock_al.get_recent_events.return_value = []
 
-        with _SubsystemsPatch():
-            with patch("missy.observability.audit_logger.AuditLogger", return_value=mock_al):
-                result = runner.invoke(
-                    cli, ["--config", cfg_path, "audit", "recent", "--limit", "10"]
-                )
+        with _SubsystemsPatch(), patch("missy.observability.audit_logger.AuditLogger", return_value=mock_al):
+            result = runner.invoke(
+                cli, ["--config", cfg_path, "audit", "recent", "--limit", "10"]
+            )
 
         assert result.exit_code == 0
 
@@ -770,9 +765,8 @@ class TestVaultList:
         mock_vault = MagicMock()
         mock_vault.list_keys.return_value = []
 
-        with _SubsystemsPatch():
-            with patch("missy.security.vault.Vault", return_value=mock_vault):
-                result = runner.invoke(cli, ["--config", cfg_path, "vault", "list"])
+        with _SubsystemsPatch(), patch("missy.security.vault.Vault", return_value=mock_vault):
+            result = runner.invoke(cli, ["--config", cfg_path, "vault", "list"])
 
         assert result.exit_code == 0
         assert "Vault is empty" in result.output
@@ -783,9 +777,8 @@ class TestVaultList:
         mock_vault = MagicMock()
         mock_vault.list_keys.return_value = ["ANTHROPIC_API_KEY", "OPENAI_KEY"]
 
-        with _SubsystemsPatch():
-            with patch("missy.security.vault.Vault", return_value=mock_vault):
-                result = runner.invoke(cli, ["--config", cfg_path, "vault", "list"])
+        with _SubsystemsPatch(), patch("missy.security.vault.Vault", return_value=mock_vault):
+            result = runner.invoke(cli, ["--config", cfg_path, "vault", "list"])
 
         assert result.exit_code == 0
         assert "ANTHROPIC_API_KEY" in result.output
@@ -797,9 +790,8 @@ class TestVaultList:
 
         cfg_path = _write_temp_config()
 
-        with _SubsystemsPatch():
-            with patch("missy.security.vault.Vault", side_effect=VaultError("key file missing")):
-                result = runner.invoke(cli, ["--config", cfg_path, "vault", "list"])
+        with _SubsystemsPatch(), patch("missy.security.vault.Vault", side_effect=VaultError("key file missing")):
+            result = runner.invoke(cli, ["--config", cfg_path, "vault", "list"])
 
         assert result.exit_code == 1
 
@@ -809,9 +801,8 @@ class TestVaultList:
         mock_vault = MagicMock()
         mock_vault.list_keys.return_value = ["MY_SECRET"]
 
-        with _SubsystemsPatch():
-            with patch("missy.security.vault.Vault", return_value=mock_vault):
-                result = runner.invoke(cli, ["--config", cfg_path, "vault", "list"])
+        with _SubsystemsPatch(), patch("missy.security.vault.Vault", return_value=mock_vault):
+            result = runner.invoke(cli, ["--config", cfg_path, "vault", "list"])
 
         assert result.exit_code == 0
 
@@ -835,9 +826,8 @@ class TestMcpList:
         mock_mgr = MagicMock()
         mock_mgr.list_servers.return_value = []
 
-        with _SubsystemsPatch():
-            with patch("missy.mcp.manager.McpManager", return_value=mock_mgr):
-                result = runner.invoke(cli, ["--config", cfg_path, "mcp", "list"])
+        with _SubsystemsPatch(), patch("missy.mcp.manager.McpManager", return_value=mock_mgr):
+            result = runner.invoke(cli, ["--config", cfg_path, "mcp", "list"])
 
         assert result.exit_code == 0
         assert "No MCP servers configured" in result.output
@@ -850,9 +840,8 @@ class TestMcpList:
             {"name": "filesystem-server", "alive": True, "tools": 5},
         ]
 
-        with _SubsystemsPatch():
-            with patch("missy.mcp.manager.McpManager", return_value=mock_mgr):
-                result = runner.invoke(cli, ["--config", cfg_path, "mcp", "list"])
+        with _SubsystemsPatch(), patch("missy.mcp.manager.McpManager", return_value=mock_mgr):
+            result = runner.invoke(cli, ["--config", cfg_path, "mcp", "list"])
 
         assert result.exit_code == 0
         assert "filesystem-server" in result.output
@@ -866,9 +855,8 @@ class TestMcpList:
             {"name": "dead-server", "alive": False, "tools": 0},
         ]
 
-        with _SubsystemsPatch():
-            with patch("missy.mcp.manager.McpManager", return_value=mock_mgr):
-                result = runner.invoke(cli, ["--config", cfg_path, "mcp", "list"])
+        with _SubsystemsPatch(), patch("missy.mcp.manager.McpManager", return_value=mock_mgr):
+            result = runner.invoke(cli, ["--config", cfg_path, "mcp", "list"])
 
         assert result.exit_code == 0
         assert "live-server" in result.output
@@ -882,9 +870,8 @@ class TestMcpList:
             {"name": "my-server", "alive": True, "tools": 12},
         ]
 
-        with _SubsystemsPatch():
-            with patch("missy.mcp.manager.McpManager", return_value=mock_mgr):
-                result = runner.invoke(cli, ["--config", cfg_path, "mcp", "list"])
+        with _SubsystemsPatch(), patch("missy.mcp.manager.McpManager", return_value=mock_mgr):
+            result = runner.invoke(cli, ["--config", cfg_path, "mcp", "list"])
 
         assert result.exit_code == 0
         assert "12" in result.output
@@ -909,9 +896,8 @@ class TestScheduleList:
         mock_mgr = MagicMock()
         mock_mgr.list_jobs.return_value = []
 
-        with _SubsystemsPatch():
-            with patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr):
-                result = runner.invoke(cli, ["--config", cfg_path, "schedule", "list"])
+        with _SubsystemsPatch(), patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr):
+            result = runner.invoke(cli, ["--config", cfg_path, "schedule", "list"])
 
         assert result.exit_code == 0
         assert "No scheduled jobs" in result.output
@@ -937,9 +923,8 @@ class TestScheduleList:
         mock_mgr = MagicMock()
         mock_mgr.list_jobs.return_value = [job]
 
-        with _SubsystemsPatch():
-            with patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr):
-                result = runner.invoke(cli, ["--config", cfg_path, "schedule", "list"])
+        with _SubsystemsPatch(), patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr):
+            result = runner.invoke(cli, ["--config", cfg_path, "schedule", "list"])
 
         assert result.exit_code == 0
         # Rich may wrap "Daily digest" across two lines; check for either word.
@@ -965,9 +950,8 @@ class TestScheduleList:
         mock_mgr = MagicMock()
         mock_mgr.list_jobs.return_value = [job]
 
-        with _SubsystemsPatch():
-            with patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr):
-                result = runner.invoke(cli, ["--config", cfg_path, "schedule", "list"])
+        with _SubsystemsPatch(), patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr):
+            result = runner.invoke(cli, ["--config", cfg_path, "schedule", "list"])
 
         assert result.exit_code == 0
         # Rich may wrap "every hour" across two table rows when the terminal is
@@ -996,9 +980,8 @@ class TestScheduleList:
         mock_mgr = MagicMock()
         mock_mgr.list_jobs.return_value = jobs
 
-        with _SubsystemsPatch():
-            with patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr):
-                result = runner.invoke(cli, ["--config", cfg_path, "schedule", "list"])
+        with _SubsystemsPatch(), patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr):
+            result = runner.invoke(cli, ["--config", cfg_path, "schedule", "list"])
 
         assert result.exit_code == 0
         assert "Task A" in result.output
@@ -1128,9 +1111,8 @@ class TestSandboxStatus:
         """sandbox status exits 0."""
         cfg_path = _write_temp_config()
 
-        with _SubsystemsPatch():
-            with patch("missy.security.container.ContainerSandbox.is_available", return_value=False):
-                result = runner.invoke(cli, ["--config", cfg_path, "sandbox", "status"])
+        with _SubsystemsPatch(), patch("missy.security.container.ContainerSandbox.is_available", return_value=False):
+            result = runner.invoke(cli, ["--config", cfg_path, "sandbox", "status"])
 
         assert result.exit_code == 0
 
@@ -1138,9 +1120,8 @@ class TestSandboxStatus:
         """When Docker is unavailable, output shows 'not found'."""
         cfg_path = _write_temp_config()
 
-        with _SubsystemsPatch():
-            with patch("missy.security.container.ContainerSandbox.is_available", return_value=False):
-                result = runner.invoke(cli, ["--config", cfg_path, "sandbox", "status"])
+        with _SubsystemsPatch(), patch("missy.security.container.ContainerSandbox.is_available", return_value=False):
+            result = runner.invoke(cli, ["--config", cfg_path, "sandbox", "status"])
 
         assert result.exit_code == 0
         assert "not found" in result.output
@@ -1149,9 +1130,8 @@ class TestSandboxStatus:
         """When Docker is available, output shows 'available'."""
         cfg_path = _write_temp_config()
 
-        with _SubsystemsPatch():
-            with patch("missy.security.container.ContainerSandbox.is_available", return_value=True):
-                result = runner.invoke(cli, ["--config", cfg_path, "sandbox", "status"])
+        with _SubsystemsPatch(), patch("missy.security.container.ContainerSandbox.is_available", return_value=True):
+            result = runner.invoke(cli, ["--config", cfg_path, "sandbox", "status"])
 
         assert result.exit_code == 0
         assert "available" in result.output
@@ -1160,10 +1140,9 @@ class TestSandboxStatus:
         """When container config is absent, shows 'not configured'."""
         cfg_path = _write_temp_config()
 
-        with _SubsystemsPatch() as cfg:
+        with _SubsystemsPatch() as cfg, patch("missy.security.container.ContainerSandbox.is_available", return_value=False):
             cfg.container = None
-            with patch("missy.security.container.ContainerSandbox.is_available", return_value=False):
-                result = runner.invoke(cli, ["--config", cfg_path, "sandbox", "status"])
+            result = runner.invoke(cli, ["--config", cfg_path, "sandbox", "status"])
 
         assert result.exit_code == 0
         assert "not configured" in result.output
