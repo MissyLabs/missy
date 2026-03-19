@@ -6,7 +6,7 @@
 
 ## Session 5 Summary
 
-Vision health monitoring, production hardening, and 550 new tests across all major subsystems.
+Vision health monitoring, production hardening, and 568 new tests across all major subsystems.
 
 ### Changes This Session (8 commits)
 
@@ -62,7 +62,7 @@ Vision health monitoring, production hardening, and 550 new tests across all maj
 12. **CLAUDE.md update** (`1422531`)
     - Added `missy vision health` command and `VisionHealthMonitor` to architecture
 
-### Full Test Suite: 13,579 passed, 0 failures, 16 skipped
+### Full Test Suite: 13,597 passed, 0 failures, 16 skipped
 
 ### Vision Modules (13 files in `missy/vision/`)
 
@@ -144,9 +144,9 @@ Vision health monitoring, production hardening, and 550 new tests across all maj
 
 ## Recovery Notes
 
-All code committed and passing. 13,579 total tests, 0 failures, 16 skipped.
+All code committed and passing. 13,597 total tests, 0 failures, 16 skipped.
 Session 5: 1 new production module (VisionHealthMonitor), 1 new CLI command
 (vision health), health monitor integration into capture pipeline and doctor
-diagnostics, recommendations engine, 550 new tests across vision, agent,
+diagnostics, recommendations engine, 568 new tests across vision, agent,
 security, scheduler, and memory subsystems, 20 lint fixes, documentation updates.
 Ruff lint is fully clean.
