@@ -469,6 +469,15 @@ class SceneManager:
             if len(self._sessions) >= self._max_sessions:
                 self._evict_oldest()
 
+            if task_id in self._sessions:
+                old = self._sessions[task_id]
+                logger.warning(
+                    "Replacing existing session '%s' (active=%s, frames=%d)",
+                    task_id,
+                    old.is_active,
+                    old.frame_count,
+                )
+                old.close()
             session = SceneSession(task_id, task_type, max_frames)
             self._sessions[task_id] = session
             logger.info("Created scene session: %s (%s)", task_id, task_type.value)

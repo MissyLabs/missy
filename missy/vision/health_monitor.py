@@ -225,6 +225,9 @@ class VisionHealthMonitor:
                 self.save()
             except Exception as exc:
                 logger.debug("Auto-save failed: %s", exc)
+                # Restore counter so auto-save will retry on future captures
+                with self._lock:
+                    self._capture_count_since_save += self._auto_save_interval
 
     def record_device_discovery(self, device: str) -> None:
         """Record that a device was discovered (even without capture).
@@ -420,7 +423,7 @@ class VisionHealthMonitor:
         db_path.parent.mkdir(parents=True, exist_ok=True)
 
         with self._lock:
-            conn = sqlite3.connect(str(db_path))
+            conn = sqlite3.connect(str(db_path), timeout=5.0)
             try:
                 conn.execute("PRAGMA journal_mode=WAL")
                 conn.execute(
@@ -443,44 +446,51 @@ class VisionHealthMonitor:
                     ")"
                 )
 
-                # Upsert device stats
-                now = time.time()
-                for device, stats in self._devices.items():
-                    data = json.dumps({
-                        "total_captures": stats.total_captures,
-                        "successful_captures": stats.successful_captures,
-                        "failed_captures": stats.failed_captures,
-                        "total_quality": stats.total_quality,
-                        "total_latency_ms": stats.total_latency_ms,
-                        "last_seen": stats.last_seen,
-                        "last_error": stats.last_error,
-                        "consecutive_failures": stats.consecutive_failures,
-                    })
-                    conn.execute(
-                        "INSERT OR REPLACE INTO device_stats (device, data, updated_at) "
-                        "VALUES (?, ?, ?)",
-                        (device, data, now),
-                    )
+                # Use explicit BEGIN to ensure DELETE + INSERT are atomic
+                conn.execute("BEGIN")
+                try:
+                    # Upsert device stats
+                    now = time.time()
+                    for device, stats in self._devices.items():
+                        data = json.dumps({
+                            "total_captures": stats.total_captures,
+                            "successful_captures": stats.successful_captures,
+                            "failed_captures": stats.failed_captures,
+                            "total_quality": stats.total_quality,
+                            "total_latency_ms": stats.total_latency_ms,
+                            "last_seen": stats.last_seen,
+                            "last_error": stats.last_error,
+                            "consecutive_failures": stats.consecutive_failures,
+                        })
+                        conn.execute(
+                            "INSERT OR REPLACE INTO device_stats (device, data, updated_at) "
+                            "VALUES (?, ?, ?)",
+                            (device, data, now),
+                        )
 
-                # Save recent events (last N)
-                conn.execute("DELETE FROM capture_events")
-                for event in self._events:
-                    conn.execute(
-                        "INSERT INTO capture_events "
-                        "(timestamp, success, device, quality_score, error, latency_ms, source_type) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                        (
-                            event.timestamp,
-                            1 if event.success else 0,
-                            event.device,
-                            event.quality_score,
-                            event.error,
-                            event.latency_ms,
-                            event.source_type,
-                        ),
-                    )
+                    # Save recent events (last N) — DELETE + INSERT in
+                    # same transaction so crash can't lose event history
+                    conn.execute("DELETE FROM capture_events")
+                    for event in self._events:
+                        conn.execute(
+                            "INSERT INTO capture_events "
+                            "(timestamp, success, device, quality_score, error, latency_ms, source_type) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                            (
+                                event.timestamp,
+                                1 if event.success else 0,
+                                event.device,
+                                event.quality_score,
+                                event.error,
+                                event.latency_ms,
+                                event.source_type,
+                            ),
+                        )
 
-                conn.commit()
+                    conn.execute("COMMIT")
+                except Exception:
+                    conn.execute("ROLLBACK")
+                    raise
             finally:
                 conn.close()
 

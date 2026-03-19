@@ -11,6 +11,7 @@ Handles:
 from __future__ import annotations
 
 import logging
+import random
 import time
 from typing import Any
 
@@ -245,12 +246,15 @@ class ResilientCamera:
                     max_attempts=1,  # one attempt per outer loop iteration
                 )
             else:
+                logger.debug("No USB IDs configured; using generic camera discovery")
                 discovery.discover(force=True)
                 device = self._discover_camera()
             if device is None:
                 logger.warning("Camera not found on attempt %d", attempt)
                 self._record_failure()
-                time.sleep(delay)
+                # Add jitter (±25%) to prevent thundering herd on reconnect
+                jittered = delay * (0.75 + random.random() * 0.5)  # noqa: S311
+                time.sleep(jittered)
                 delay = min(delay * self._backoff_factor, self._max_delay)
                 continue
 
@@ -300,7 +304,8 @@ class ResilientCamera:
                 self._record_failure()
                 self.disconnect()
 
-            time.sleep(delay)
+            jittered = delay * (0.75 + random.random() * 0.5)  # noqa: S311
+            time.sleep(jittered)
             delay = min(delay * self._backoff_factor, self._max_delay)
 
         return CaptureResult(
