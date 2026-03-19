@@ -850,14 +850,30 @@ class TestGeneratePersona:
             mgr._generate_persona(state, interactive=False)
 
     def test_oserror_on_write_raises_step_warning(self, tmp_path, monkeypatch):
+        import missy.agent.hatching as _h
+
         _patch_module_paths(monkeypatch, tmp_path)
+        # Ensure persona file does not exist so the early-return is skipped.
+        if _h._PERSONA_PATH.exists():
+            _h._PERSONA_PATH.unlink()
         mock_pm_instance = MagicMock()
         mock_pm_instance.save.side_effect = OSError("permission denied")
         mock_pm_class = MagicMock(return_value=mock_pm_instance)
-        monkeypatch.setattr("missy.agent.persona.PersonaManager", mock_pm_class)
+        # Patch the PersonaManager at the point of local import inside
+        # _generate_persona.  We wrap the real __import__ so only the
+        # specific import statement is intercepted.
+        _real_import = __builtins__.__import__ if hasattr(__builtins__, "__import__") else __import__
+        def _fake_import(name, *args, **kwargs):
+            if name == "missy.agent.persona":
+                import types
+                mod = types.ModuleType("missy.agent.persona")
+                mod.PersonaManager = mock_pm_class
+                return mod
+            return _real_import(name, *args, **kwargs)
         mgr = _make_manager(tmp_path)
         state = HatchingState()
-        with pytest.raises(_HatchingStepWarning, match="Could not write persona"):
+        with patch("builtins.__import__", side_effect=_fake_import), \
+             pytest.raises(_HatchingStepWarning, match="Could not write persona"):
             mgr._generate_persona(state, interactive=False)
 
 
