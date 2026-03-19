@@ -6,7 +6,7 @@
 
 ## Session 13 Summary
 
-Deep hardening session: 6 code fixes across 3 vision modules, 921 new tests across 12 new test files covering all major subsystems. Full cross-codebase edge case coverage.
+Deep hardening session: 6 code fixes across 3 vision modules, 1,210 new tests across 16 new test files covering all major subsystems. Full cross-codebase edge case coverage.
 
 ### Code Fixes This Session
 
@@ -38,8 +38,12 @@ Deep hardening session: 6 code fixes across 3 vision modules, 921 new tests acro
 | `test_session13_hatching_checkpoint.py` | 59 | First-run detection, provider verification, checkpoint concurrency |
 | `test_session13_scheduler_memory.py` | 68 | Retry boundary, active hours, FTS search, concurrent writes |
 | `test_session13_policy_gateway.py` | 82 | CIDR IPv6, domain matching, REST policy globs, DNS rebinding |
+| `test_session13_mcp_skills_plugins.py` | 66 | Digest pinning, frontmatter parsing, plugin manifest |
+| `test_session13_circuitbreaker_attention.py` | 79 | Threshold boundaries, attention pipeline, all subsystems |
+| `test_session13_registry_providers.py` | 90 | Fallback chains, key rotation, model tiers, dataclass contracts |
+| `test_session13_registry.py` | 54 | Registration edges, permissions, audit events, schema |
 
-### Full Test Suite: 16,448 passed, 0 failures, 14 skipped
+### Full Test Suite: 16,737 passed, 0 failures, 14 skipped
 
 ### Pre-existing Test Fix
 
@@ -93,8 +97,8 @@ Deep hardening session: 6 code fixes across 3 vision modules, 921 new tests acro
 
 ## Recovery Notes
 
-All code committed and passing. 16,448 total tests, 0 failures, 14 skipped.
-Session 13: 6 code fixes, 921 new tests across 12 new test files.
+All code committed and passing. 16,737 total tests, 0 failures, 14 skipped.
+Session 13: 6 code fixes, 1,210 new tests across 16 new test files.
 Ruff lint: 0 errors.
 
 Session 13 commits:
@@ -107,3 +111,5 @@ Session 13 commits:
 7. `466b1c7` — Add 146 tests for persona, behavior, hatching, and checkpoint
 8. `afd26dc` — Fix lint: import sorting, unused vars, contextlib.suppress
 9. `153d35b` — Add 150 tests for scheduler, memory store, policy engine, and gateway
+10. `ccaba68` — Add 145 tests for MCP, skills, plugins, circuit breaker, and attention
+11. `25e4a1d` — Add 144 tests for provider registry, base providers, and tool registry

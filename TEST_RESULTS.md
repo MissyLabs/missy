@@ -2,8 +2,8 @@
 
 ## Summary
 
-- **Total tests**: 16,448
-- **Passed**: 16,448
+- **Total tests**: 16,737
+- **Passed**: 16,737
 - **Failed**: 0
 - **Skipped**: 14
 - **Duration**: ~5 minutes 35 seconds
@@ -60,4 +60,4 @@
 | 10 | 15,033 | 138 | Memory cleanup, thread safety fixes, timeout hardening |
 | 11 | 15,296 | 235 | Code quality fixes, prompt injection tests, secrets detection |
 | 12 | 15,527 | 164 | Property-based tests, cross-module integration, security |
-| 13 | 16,448 | 921 | 6 code fixes, deep cross-codebase hardening |
+| 13 | 16,737 | 1,210 | 6 code fixes, deep cross-codebase hardening |
