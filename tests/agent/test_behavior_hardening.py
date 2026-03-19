@@ -22,7 +22,6 @@ import yaml
 from missy.agent.behavior import BehaviorLayer
 from missy.agent.persona import PersonaConfig, PersonaManager
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -228,9 +227,8 @@ class TestPruneBackupsUnlinkFailure:
 
         # Use the root logger level so the warning propagates to caplog regardless
         # of whether the missy.agent.persona logger has been initialised yet.
-        with caplog.at_level(logging.WARNING):
-            with patch.object(Path, "unlink", failing_unlink):
-                persona_manager._prune_backups()
+        with caplog.at_level(logging.WARNING), patch.object(Path, "unlink", failing_unlink):
+            persona_manager._prune_backups()
 
         warning_messages = [r.message for r in caplog.records if r.levelno == logging.WARNING]
         assert any(

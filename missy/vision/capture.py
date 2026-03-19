@@ -319,7 +319,9 @@ class CameraHandle:
                         last_error = f"read() returned {ret} on attempt {attempt}"
                         logger.warning("Frame read failed: %s", last_error)
                         if attempt < config.max_retries:
-                            time.sleep(config.retry_delay)
+                            # Sleep at most until the deadline
+                            remaining = deadline - time.monotonic()
+                            time.sleep(min(config.retry_delay, max(0, remaining)))
                         else:
                             return CaptureResult(
                                 success=False,
@@ -335,7 +337,8 @@ class CameraHandle:
                         last_error = f"Invalid frame shape {frame.shape} on attempt {attempt}"
                         logger.warning(last_error)
                         if attempt < config.max_retries:
-                            time.sleep(config.retry_delay)
+                            remaining = deadline - time.monotonic()
+                            time.sleep(min(config.retry_delay, max(0, remaining)))
                         continue
 
                     # Check for blank frame
@@ -343,7 +346,8 @@ class CameraHandle:
                         last_error = f"Blank frame detected on attempt {attempt}"
                         logger.warning(last_error)
                         if attempt < config.max_retries:
-                            time.sleep(config.retry_delay)
+                            remaining = deadline - time.monotonic()
+                            time.sleep(min(config.retry_delay, max(0, remaining)))
                         continue
 
                     self._record_successful_frame(frame)
@@ -362,7 +366,8 @@ class CameraHandle:
                     last_error = str(exc)
                     logger.error("Capture exception on attempt %d: %s", attempt, exc)
                     if attempt < config.max_retries:
-                        time.sleep(config.retry_delay)
+                        remaining = deadline - time.monotonic()
+                        time.sleep(min(config.retry_delay, max(0, remaining)))
                     else:
                         exc_msg = last_error.lower()
                         if "permission" in exc_msg:

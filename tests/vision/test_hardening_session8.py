@@ -29,7 +29,6 @@ from missy.vision.multi_camera import MultiCameraManager
 from missy.vision.resilient_capture import ResilientCamera
 from missy.vision.sources import FileSource
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -543,9 +542,9 @@ class TestFileSourceRejectsNonRegularFiles:
         source = FileSource(str(fake_file))
 
         with patch.object(Path, "stat", return_value=fake_stat), \
-             patch.object(Path, "exists", return_value=True):
-            with pytest.raises(ValueError, match="Not a regular file"):
-                source.acquire()
+             patch.object(Path, "exists", return_value=True), \
+             pytest.raises(ValueError, match="Not a regular file"):
+            source.acquire()
 
     def test_rejects_block_device(self, tmp_path: Path) -> None:
         """A file whose stat mode is S_IFBLK should raise ValueError."""
@@ -559,9 +558,9 @@ class TestFileSourceRejectsNonRegularFiles:
         source = FileSource(str(fake_file))
 
         with patch.object(Path, "stat", return_value=fake_stat), \
-             patch.object(Path, "exists", return_value=True):
-            with pytest.raises(ValueError, match="Not a regular file"):
-                source.acquire()
+             patch.object(Path, "exists", return_value=True), \
+             pytest.raises(ValueError, match="Not a regular file"):
+            source.acquire()
 
     def test_rejects_named_pipe(self, tmp_path: Path) -> None:
         """A file whose stat mode is S_IFIFO should raise ValueError."""
@@ -575,10 +574,9 @@ class TestFileSourceRejectsNonRegularFiles:
         source = FileSource(str(fake_file))
 
         with patch.object(Path, "stat", return_value=fake_stat), \
-             patch.object(Path, "exists", return_value=True):
-            # S_IFIFO with size 0 hits the empty-file check first
-            with pytest.raises(ValueError):
-                source.acquire()
+             patch.object(Path, "exists", return_value=True), \
+             pytest.raises(ValueError):
+            source.acquire()
 
     def test_accepts_regular_file(self, tmp_path: Path) -> None:
         """A regular image file should be accepted (mode S_IFREG)."""
@@ -619,9 +617,8 @@ class TestFileSourceRejectsNonRegularFiles:
         source = FileSource(str(fake_file))
 
         with patch.object(Path, "stat", return_value=fake_stat), \
-             patch.object(Path, "exists", return_value=True):
-            with pytest.raises(ValueError) as exc_info:
-                source.acquire()
+             patch.object(Path, "exists", return_value=True), pytest.raises(ValueError) as exc_info:
+            source.acquire()
 
         assert oct(chr_mode) in str(exc_info.value) or "regular file" in str(exc_info.value).lower()
 

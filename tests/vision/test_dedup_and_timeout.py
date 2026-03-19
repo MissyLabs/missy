@@ -362,8 +362,9 @@ class TestCaptureTimeoutExpired:
         with patch("time.monotonic") as mock_mono:
             # deadline set at t=0 → deadline=5
             # attempt 1 check: t=1 < 5  → ok, read fails
+            # deadline-aware sleep check: t=2 (within deadline)
             # attempt 2 check: t=6 > 5  → timeout
-            mock_mono.side_effect = [0.0, 1.0, 6.0]
+            mock_mono.side_effect = [0.0, 1.0, 2.0, 6.0]
             with patch("time.sleep"):  # suppress retry delay
                 result = cam.capture()
 

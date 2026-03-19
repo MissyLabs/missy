@@ -26,6 +26,7 @@ Example::
 from __future__ import annotations
 
 import logging
+import threading
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -58,24 +59,29 @@ class VisionMemoryBridge:
         self._memory = memory_store
         self._vector = vector_store
         self._initialized = False
+        self._init_lock = threading.Lock()
 
     def _ensure_init(self) -> None:
-        """Lazy-initialize stores if not provided."""
+        """Lazy-initialize stores if not provided.  Thread-safe."""
         if self._initialized:
             return
-        if self._memory is None:
-            try:
-                from missy.memory.sqlite_store import SQLiteMemoryStore
-                self._memory = SQLiteMemoryStore()
-            except Exception as exc:
-                logger.warning("Cannot init SQLiteMemoryStore: %s", exc)
-        if self._vector is None:
-            try:
-                from missy.memory.vector_store import VectorMemoryStore
-                self._vector = VectorMemoryStore()
-            except Exception:
-                logger.debug("VectorMemoryStore not available (faiss not installed)")
-        self._initialized = True
+        with self._init_lock:
+            # Double-check after acquiring lock
+            if self._initialized:
+                return
+            if self._memory is None:
+                try:
+                    from missy.memory.sqlite_store import SQLiteMemoryStore
+                    self._memory = SQLiteMemoryStore()
+                except Exception as exc:
+                    logger.warning("Cannot init SQLiteMemoryStore: %s", exc)
+            if self._vector is None:
+                try:
+                    from missy.memory.vector_store import VectorMemoryStore
+                    self._vector = VectorMemoryStore()
+                except Exception:
+                    logger.debug("VectorMemoryStore not available (faiss not installed)")
+            self._initialized = True
 
     def store_observation(
         self,

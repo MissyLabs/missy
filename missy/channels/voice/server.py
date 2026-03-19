@@ -804,6 +804,10 @@ class VoiceServer:
                 )
 
                 # Attempt camera capture for vision-triggered requests
+                # Timeout prevents camera hangs from blocking the voice channel.
+                # Image size is capped to avoid unbounded memory in metadata.
+                _VISION_CAPTURE_TIMEOUT = 10.0  # seconds
+                _MAX_IMAGE_BYTES = 2 * 1024 * 1024  # 2 MiB base64 limit
                 try:
                     import base64
 
@@ -813,7 +817,11 @@ class VoiceServer:
 
                     camera = find_preferred_camera()
                     if camera:
-                        config = CaptureConfig(warmup_frames=3, max_retries=2)
+                        config = CaptureConfig(
+                            warmup_frames=3,
+                            max_retries=2,
+                            timeout_seconds=_VISION_CAPTURE_TIMEOUT,
+                        )
                         handle = CameraHandle(camera.device_path, config)
                         try:
                             handle.open()
@@ -825,14 +833,27 @@ class VoiceServer:
                                 _, buf = cv2.imencode(
                                     ".jpg", processed, [cv2.IMWRITE_JPEG_QUALITY, 85]
                                 )
-                                metadata["vision_image_base64"] = base64.b64encode(
-                                    buf.tobytes()
-                                ).decode("ascii")
-                                metadata["vision_capture_success"] = True
-                                logger.info(
-                                    "VoiceServer: captured image for vision intent (%dx%d)",
-                                    capture.width, capture.height,
-                                )
+                                encoded = base64.b64encode(buf.tobytes())
+                                if len(encoded) > _MAX_IMAGE_BYTES:
+                                    logger.warning(
+                                        "VoiceServer: captured image too large (%d bytes), "
+                                        "re-encoding at lower quality",
+                                        len(encoded),
+                                    )
+                                    _, buf = cv2.imencode(
+                                        ".jpg", processed, [cv2.IMWRITE_JPEG_QUALITY, 50]
+                                    )
+                                    encoded = base64.b64encode(buf.tobytes())
+                                if len(encoded) <= _MAX_IMAGE_BYTES:
+                                    metadata["vision_image_base64"] = encoded.decode("ascii")
+                                    metadata["vision_capture_success"] = True
+                                    logger.info(
+                                        "VoiceServer: captured image for vision intent (%dx%d)",
+                                        capture.width, capture.height,
+                                    )
+                                else:
+                                    metadata["vision_capture_success"] = False
+                                    metadata["vision_capture_error"] = "Image too large after re-encoding"
                             else:
                                 metadata["vision_capture_success"] = False
                                 metadata["vision_capture_error"] = capture.error

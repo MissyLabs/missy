@@ -253,13 +253,17 @@ class SceneSession:
 
             self._frames.append(frame_candidate)
 
-            # Evict oldest if over limit
+            # Evict oldest if over limit, releasing numpy memory eagerly
             while len(self._frames) > self.max_frames:
                 evicted = self._frames.pop(0)
+                evicted_id = evicted.frame_id
+                # Explicitly release the numpy array to free memory
+                # immediately rather than waiting for GC
+                evicted.image = None  # type: ignore[assignment]
                 logger.info(
                     "Scene '%s': evicted frame %d (oldest by timestamp, %d frames remain)",
                     self.task_id,
-                    evicted.frame_id,
+                    evicted_id,
                     len(self._frames),
                 )
 
@@ -345,10 +349,14 @@ class SceneSession:
             )
 
     def detect_latest_change(self) -> SceneChange | None:
-        """Compare the two most recent frames."""
-        if len(self._frames) < 2:
-            return None
-        return self.detect_change(self._frames[-2], self._frames[-1])
+        """Compare the two most recent frames.  Thread-safe."""
+        with self._lock:
+            if len(self._frames) < 2:
+                return None
+            # Copy references under lock to prevent eviction during comparison
+            frame_a = self._frames[-2]
+            frame_b = self._frames[-1]
+        return self.detect_change(frame_a, frame_b)
 
     def visualize_change(
         self,
@@ -386,9 +394,13 @@ class SceneSession:
     def close(self) -> None:
         """Mark session as inactive and release frame data.  Thread-safe."""
         with self._lock:
+            if not self._active:
+                return  # already closed
             self._active = False
             frame_count = self._frame_counter
-            # Fully release frame data and references
+            # Eagerly release numpy arrays before clearing the list
+            for frame in self._frames:
+                frame.image = None  # type: ignore[assignment]
             self._frames.clear()
             self._observations.clear()
             self._state.clear()
