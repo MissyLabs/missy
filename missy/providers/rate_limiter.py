@@ -22,26 +22,8 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class RateLimiterConfig:
-    """Configuration for :class:`RateLimiter`.
-
-    Attributes:
-        requests_per_minute: Max API calls per minute (0 = unlimited).
-        tokens_per_minute: Max tokens per minute (0 = unlimited).
-        max_wait_seconds: Maximum time to block waiting for capacity.
-        retry_after_seconds: Default backoff when rate-limited by the API.
-    """
-
-    requests_per_minute: int = 60
-    tokens_per_minute: int = 100_000
-    max_wait_seconds: float = 30.0
-    retry_after_seconds: float = 5.0
 
 
 class RateLimitExceeded(Exception):
@@ -148,7 +130,9 @@ class RateLimiter:
         """Deduct actual token usage after a response is received.
 
         Call this after getting the actual token counts from the API response
-        to adjust the token budget retroactively.
+        to adjust the token budget.  The ``acquire()`` call already deducted
+        the *estimated* tokens; this method corrects the bucket to reflect
+        the *actual* consumption.
 
         Args:
             prompt_tokens: Actual input tokens consumed.
@@ -160,8 +144,7 @@ class RateLimiter:
         if total <= 0:
             return
         with self._lock:
-            # Only deduct excess beyond what was pre-allocated
-            self._tok_tokens = max(0.0, self._tok_tokens)
+            self._tok_tokens = max(0.0, self._tok_tokens - float(total))
 
     def on_rate_limit_response(self, retry_after: float = 0.0) -> None:
         """Handle a 429 response from the API.

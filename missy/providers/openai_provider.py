@@ -25,7 +25,6 @@ from collections.abc import Iterator
 from typing import Any
 
 from missy.config.settings import ProviderConfig
-from missy.core.events import AuditEvent, event_bus
 from missy.core.exceptions import ProviderError
 
 from .base import BaseProvider, CompletionResponse, Message, ToolCall
@@ -60,6 +59,7 @@ class OpenAIProvider(BaseProvider):
         self._base_url: str | None = config.base_url
         self._model: str = config.model or _DEFAULT_MODEL
         self._timeout: int = config.timeout
+        self._client: Any | None = None
 
     # ------------------------------------------------------------------
     # BaseProvider interface
@@ -73,6 +73,17 @@ class OpenAIProvider(BaseProvider):
             is present.
         """
         return _OPENAI_AVAILABLE and bool(self._api_key)
+
+    def _make_client(self) -> Any:
+        """Return a cached OpenAI client, creating one on first call."""
+        if self._client is None:
+            client_kwargs: dict[str, Any] = {"timeout": float(self._timeout)}
+            if self._api_key:
+                client_kwargs["api_key"] = self._api_key
+            if self._base_url:
+                client_kwargs["base_url"] = self._base_url
+            self._client = _openai_sdk.OpenAI(**client_kwargs)
+        return self._client
 
     def complete(self, messages: list[Message], **kwargs: Any) -> CompletionResponse:
         """Send *messages* to the OpenAI Chat Completions API.
@@ -113,14 +124,10 @@ class OpenAIProvider(BaseProvider):
             call_kwargs["max_tokens"] = kwargs.pop("max_tokens")
         call_kwargs.update(kwargs)
 
-        try:
-            client_kwargs: dict[str, Any] = {"timeout": float(self._timeout)}
-            if self._api_key:
-                client_kwargs["api_key"] = self._api_key
-            if self._base_url:
-                client_kwargs["base_url"] = self._base_url
+        self._acquire_rate_limit()
 
-            client = _openai_sdk.OpenAI(**client_kwargs)
+        try:
+            client = self._make_client()
             raw_response = client.chat.completions.create(**call_kwargs)
         except _openai_sdk.APITimeoutError as exc:
             self._emit_event(session_id, task_id, "error", str(exc))
@@ -130,6 +137,13 @@ class OpenAIProvider(BaseProvider):
             raise ProviderError(f"OpenAI authentication failed: {exc}") from exc
         except _openai_sdk.APIError as exc:
             self._emit_event(session_id, task_id, "error", str(exc))
+            if getattr(exc, "status_code", 0) == 429:
+                retry_after = float(
+                    getattr(getattr(exc, "response", None), "headers", {}).get("retry-after", 5)
+                )
+                if self.rate_limiter is not None:
+                    self.rate_limiter.on_rate_limit_response(retry_after)
+                raise ProviderError(f"OpenAI rate limited: {exc}") from exc
             raise ProviderError(f"OpenAI API error: {exc}") from exc
         except Exception as exc:
             self._emit_event(session_id, task_id, "error", str(exc))
@@ -146,13 +160,15 @@ class OpenAIProvider(BaseProvider):
 
         self._emit_event(session_id, task_id, "allow", "completion successful")
 
-        return CompletionResponse(
+        response = CompletionResponse(
             content=content_text or "",
             model=raw_response.model,
             provider=self.name,
             usage=usage,
             raw=raw_response.model_dump() if hasattr(raw_response, "model_dump") else {},
         )
+        self._record_rate_limit_usage(response)
+        return response
 
     def get_tool_schema(self, tools: list) -> list:
         """Convert BaseTool instances to OpenAI function-calling schema format.
@@ -227,20 +243,23 @@ class OpenAIProvider(BaseProvider):
             "tool_choice": "auto",
         }
 
-        try:
-            client_kwargs: dict[str, Any] = {"timeout": float(self._timeout)}
-            if self._api_key:
-                client_kwargs["api_key"] = self._api_key
-            if self._base_url:
-                client_kwargs["base_url"] = self._base_url
+        self._acquire_rate_limit()
 
-            client = _openai_sdk.OpenAI(**client_kwargs)
+        try:
+            client = self._make_client()
             raw_response = client.chat.completions.create(**call_kwargs)
         except _openai_sdk.APITimeoutError as exc:
             raise ProviderError(f"OpenAI request timed out after {self._timeout}s: {exc}") from exc
         except _openai_sdk.AuthenticationError as exc:
             raise ProviderError(f"OpenAI authentication failed: {exc}") from exc
         except _openai_sdk.APIError as exc:
+            if getattr(exc, "status_code", 0) == 429:
+                retry_after = float(
+                    getattr(getattr(exc, "response", None), "headers", {}).get("retry-after", 5)
+                )
+                if self.rate_limiter is not None:
+                    self.rate_limiter.on_rate_limit_response(retry_after)
+                raise ProviderError(f"OpenAI rate limited: {exc}") from exc
             raise ProviderError(f"OpenAI API error: {exc}") from exc
         except Exception as exc:
             raise ProviderError(f"Unexpected error calling OpenAI: {exc}") from exc
@@ -276,7 +295,7 @@ class OpenAIProvider(BaseProvider):
             "total_tokens": getattr(usage_obj, "total_tokens", 0),
         }
 
-        return CompletionResponse(
+        response = CompletionResponse(
             content=content_text,
             model=raw_response.model,
             provider=self.name,
@@ -285,6 +304,8 @@ class OpenAIProvider(BaseProvider):
             tool_calls=tool_calls,
             finish_reason=finish_reason,
         )
+        self._record_rate_limit_usage(response)
+        return response
 
     def stream(self, messages: list[Message], system: str = "") -> Iterator[str]:
         """Stream partial response tokens from the OpenAI API.
@@ -317,13 +338,7 @@ class OpenAIProvider(BaseProvider):
         }
 
         try:
-            client_kwargs: dict[str, Any] = {"timeout": float(self._timeout)}
-            if self._api_key:
-                client_kwargs["api_key"] = self._api_key
-            if self._base_url:
-                client_kwargs["base_url"] = self._base_url
-
-            client = _openai_sdk.OpenAI(**client_kwargs)
+            client = self._make_client()
             for chunk in client.chat.completions.create(**call_kwargs):
                 delta = chunk.choices[0].delta.content if chunk.choices else None
                 yield delta or ""
@@ -347,15 +362,10 @@ class OpenAIProvider(BaseProvider):
         result: str,
         detail_msg: str,
     ) -> None:
-        """Publish a provider audit event to the global event bus.
-
-        Args:
-            session_id: Calling session identifier.
-            task_id: Calling task identifier.
-            result: One of ``"allow"`` or ``"error"``.
-            detail_msg: Human-readable description to include in the event.
-        """
+        """Publish a provider audit event including the model name."""
         try:
+            from missy.core.events import AuditEvent, event_bus
+
             event = AuditEvent.now(
                 session_id=session_id,
                 task_id=task_id,

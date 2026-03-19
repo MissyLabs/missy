@@ -65,7 +65,7 @@ desktop = [
 missy = "missy.cli.main:cli"
 
 [tool.setuptools.package-data]
-missy = ["py.typed"]
+missy = ["py.typed", "channels/screencast/web/*.html"]
 
 [tool.setuptools.packages.find]
 where = ["."]

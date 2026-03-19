@@ -357,22 +357,17 @@ class TestRefillMathAccuracy:
 class TestRecordUsageBehaviour:
     """Document the contract of record_usage.
 
-    The current implementation does NOT retroactively deduct tokens; it only
-    ensures the counter cannot go below zero.  These tests pin this contract
-    so future changes are immediately visible.
+    record_usage deducts actual token consumption from the bucket so the
+    rate limiter tracks real usage accurately.
     """
 
-    def test_record_usage_does_not_decrement_tok_tokens(self) -> None:
-        """record_usage after an acquire does NOT reduce _tok_tokens further."""
+    def test_record_usage_deducts_actual_tokens(self) -> None:
+        """record_usage after an acquire should deduct the actual token count."""
         rl = RateLimiter(requests_per_minute=1000, tokens_per_minute=1000, max_wait_seconds=0.0)
         rl.acquire(tokens=100)  # _tok_tokens now 900
-        cap_before = rl._tok_tokens
         rl.record_usage(prompt_tokens=80, completion_tokens=20)
-        cap_after = rl._tok_tokens
-        # Implementation does max(0.0, self._tok_tokens) — not a deduction.
-        assert cap_after == cap_before, (
-            f"record_usage unexpectedly changed _tok_tokens from {cap_before} to {cap_after}"
-        )
+        # 900 - 100 = 800
+        assert rl._tok_tokens == 800.0
 
     def test_record_usage_is_no_op_when_tpm_zero(self) -> None:
         """record_usage must return immediately and leave state unchanged when tpm=0."""

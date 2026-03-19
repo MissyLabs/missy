@@ -26,7 +26,6 @@ from collections.abc import Iterator
 from typing import Any
 
 from missy.config.settings import ProviderConfig
-from missy.core.events import AuditEvent, event_bus
 from missy.core.exceptions import ProviderError
 from missy.gateway.client import PolicyHTTPClient
 
@@ -55,10 +54,26 @@ class OllamaProvider(BaseProvider):
         self._base_url: str = (config.base_url or _DEFAULT_BASE_URL).rstrip("/")
         self._model: str = config.model or _DEFAULT_MODEL
         self._timeout: int = config.timeout
+        self._client: PolicyHTTPClient | None = None
 
     # ------------------------------------------------------------------
     # BaseProvider interface
     # ------------------------------------------------------------------
+
+    def _make_client(
+        self,
+        session_id: str = "",
+        task_id: str = "",
+    ) -> PolicyHTTPClient:
+        """Return a cached PolicyHTTPClient, creating one on first call."""
+        if self._client is None:
+            self._client = PolicyHTTPClient(
+                session_id=session_id,
+                task_id=task_id,
+                timeout=self._timeout,
+                category="provider",
+            )
+        return self._client
 
     def is_available(self) -> bool:
         """Return ``True`` when the Ollama server responds to ``GET /api/tags``.
@@ -116,13 +131,10 @@ class OllamaProvider(BaseProvider):
         # Forward any remaining kwargs directly into the payload
         payload.update(kwargs)
 
+        self._acquire_rate_limit()
+
         try:
-            client = PolicyHTTPClient(
-                session_id=session_id,
-                task_id=task_id,
-                timeout=self._timeout,
-                category="provider",
-            )
+            client = self._make_client(session_id=session_id, task_id=task_id)
             response = client.post(
                 f"{self._base_url}/api/chat",
                 json=payload,
@@ -156,13 +168,15 @@ class OllamaProvider(BaseProvider):
 
         self._emit_event(session_id, task_id, "allow", "completion successful")
 
-        return CompletionResponse(
+        result = CompletionResponse(
             content=content_text,
             model=data.get("model", model),
             provider=self.name,
             usage=usage,
             raw=data,
         )
+        self._record_rate_limit_usage(result)
+        return result
 
     def get_tool_schema(self, tools: list) -> list:
         """Convert BaseTool instances to Ollama's native tool schema format.
@@ -238,11 +252,10 @@ class OllamaProvider(BaseProvider):
             "stream": False,
         }
 
+        self._acquire_rate_limit()
+
         try:
-            client = PolicyHTTPClient(
-                timeout=self._timeout,
-                category="provider",
-            )
+            client = self._make_client()
             response = client.post(
                 f"{self._base_url}/api/chat",
                 json=payload,
@@ -289,7 +302,7 @@ class OllamaProvider(BaseProvider):
 
         if parsed_tool_calls:
             self._emit_event("", "", "allow", "tool_calls")
-            return CompletionResponse(
+            result = CompletionResponse(
                 content=content_text,
                 model=data.get("model", self._model),
                 provider=self.name,
@@ -298,9 +311,11 @@ class OllamaProvider(BaseProvider):
                 tool_calls=parsed_tool_calls,
                 finish_reason="tool_calls",
             )
+            self._record_rate_limit_usage(result)
+            return result
 
         self._emit_event("", "", "allow", "completion successful")
-        return CompletionResponse(
+        result = CompletionResponse(
             content=content_text,
             model=data.get("model", self._model),
             provider=self.name,
@@ -309,6 +324,8 @@ class OllamaProvider(BaseProvider):
             tool_calls=[],
             finish_reason="stop",
         )
+        self._record_rate_limit_usage(result)
+        return result
 
     def stream(self, messages: list[Message], system: str = "") -> Iterator[str]:
         """Stream partial response tokens from the Ollama API.
@@ -342,7 +359,7 @@ class OllamaProvider(BaseProvider):
         }
 
         try:
-            client = PolicyHTTPClient(timeout=self._timeout, category="provider")
+            client = self._make_client()
             response = client.post(
                 f"{self._base_url}/api/chat",
                 json=payload,
@@ -379,15 +396,10 @@ class OllamaProvider(BaseProvider):
         result: str,
         detail_msg: str,
     ) -> None:
-        """Publish a provider audit event to the global event bus.
-
-        Args:
-            session_id: Calling session identifier.
-            task_id: Calling task identifier.
-            result: One of ``"allow"`` or ``"error"``.
-            detail_msg: Human-readable description to include in the event.
-        """
+        """Publish a provider audit event including model and base_url."""
         try:
+            from missy.core.events import AuditEvent, event_bus
+
             event = AuditEvent.now(
                 session_id=session_id,
                 task_id=task_id,

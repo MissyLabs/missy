@@ -14,7 +14,7 @@ from missy.providers.base import Message
 
 
 def _make_config(**overrides) -> ProviderConfig:
-    defaults = {"name": "anthropic", "model": "claude-3-5-sonnet-20241022", "api_key": "sk-ant-api03-test"}
+    defaults = {"name": "anthropic", "model": "claude-sonnet-4-6", "api_key": "sk-ant-api03-test"}
     defaults.update(overrides)
     return ProviderConfig(**defaults)
 
@@ -25,7 +25,7 @@ class TestAnthropicInit:
     def test_normal_api_key(self):
         p = AnthropicProvider(_make_config())
         assert p._api_key == "sk-ant-api03-test"
-        assert p._model == "claude-3-5-sonnet-20241022"
+        assert p._model == "claude-sonnet-4-6"
 
     def test_setup_token_rejected(self):
         p = AnthropicProvider(_make_config(api_key="sk-ant-oat01-shortlived"))
@@ -37,7 +37,7 @@ class TestAnthropicInit:
 
     def test_default_model_when_empty(self):
         p = AnthropicProvider(_make_config(model=""))
-        assert p._model == "claude-3-5-sonnet-20241022"
+        assert p._model == "claude-sonnet-4-6"
 
     def test_custom_timeout(self):
         p = AnthropicProvider(_make_config(timeout=60))
@@ -63,7 +63,7 @@ class TestAnthropicAvailability:
 class TestAnthropicComplete:
     """Tests for complete() with mocked SDK."""
 
-    def _mock_response(self, text="Hello!", model="claude-3-5-sonnet-20241022"):
+    def _mock_response(self, text="Hello!", model="claude-sonnet-4-6"):
         content_block = SimpleNamespace(text=text)
         usage = SimpleNamespace(input_tokens=10, output_tokens=20)
         return SimpleNamespace(
@@ -168,7 +168,7 @@ class TestAnthropicComplete:
     def test_empty_content(self, mock_sdk):
         resp = SimpleNamespace(
             content=[],
-            model="claude-3-5-sonnet-20241022",
+            model="claude-sonnet-4-6",
             usage=SimpleNamespace(input_tokens=5, output_tokens=0),
             model_dump=dict,
         )
@@ -233,7 +233,7 @@ class TestAnthropicCompleteWithTools:
         )
         resp = SimpleNamespace(
             content=[text_block, tool_block],
-            model="claude-3-5-sonnet-20241022",
+            model="claude-sonnet-4-6",
             stop_reason="tool_use",
             usage=SimpleNamespace(input_tokens=10, output_tokens=20),
             model_dump=dict,

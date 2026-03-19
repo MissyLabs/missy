@@ -145,15 +145,14 @@ def _make_sse_lines(*events) -> list[str]:
 
 @contextmanager
 def _mock_stream(lines: list[str]):
-    """Context manager that patches httpx.stream to return given SSE lines."""
+    """Context manager that patches PolicyHTTPClient.post to return given SSE lines."""
     mock_resp = MagicMock()
     mock_resp.raise_for_status = MagicMock()
     mock_resp.iter_lines = MagicMock(return_value=iter(lines))
-    mock_ctx = MagicMock()
-    mock_ctx.__enter__ = MagicMock(return_value=mock_resp)
-    mock_ctx.__exit__ = MagicMock(return_value=False)
+    mock_resp.close = MagicMock()
 
-    with patch("httpx.stream", return_value=mock_ctx):
+    with patch("missy.providers.codex_provider.PolicyHTTPClient") as mock_cls:
+        mock_cls.return_value.post.return_value = mock_resp
         yield
 
 

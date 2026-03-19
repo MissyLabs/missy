@@ -551,7 +551,7 @@ class TestAnthropicEmitEventFailure:
         from missy.providers.anthropic_provider import AnthropicProvider
 
         provider = AnthropicProvider(_provider_config())
-        with patch("missy.providers.anthropic_provider.event_bus") as mock_bus:
+        with patch("missy.core.events.event_bus") as mock_bus:
             mock_bus.publish.side_effect = RuntimeError("bus failure")
             # Should not raise.
             provider._emit_event("sess1", "task1", "allow", "test message")
@@ -561,7 +561,7 @@ class TestAnthropicEmitEventFailure:
 
         sdk_mock = _make_anthropic_sdk()
         resp = MagicMock()
-        resp.model = "claude-3-5-sonnet-20241022"
+        resp.model = "claude-sonnet-4-6"
         resp.content = [MagicMock(text="hi")]
         resp.usage.input_tokens = 5
         resp.usage.output_tokens = 2
@@ -569,7 +569,7 @@ class TestAnthropicEmitEventFailure:
 
         with _patch_anthropic_sdk(sdk_mock):
             sdk_mock.Anthropic.return_value.messages.create.return_value = resp
-            with patch("missy.providers.anthropic_provider.event_bus") as mock_bus:
+            with patch("missy.core.events.event_bus") as mock_bus:
                 mock_bus.publish.side_effect = RuntimeError("bus failure")
                 provider = AnthropicProvider(_provider_config())
                 result = provider.complete([Message(role="user", content="hi")])
@@ -1157,7 +1157,7 @@ class TestOpenAIEmitEventFailure:
         provider = OpenAIProvider(
             _provider_config(name="openai", model="gpt-4o", api_key="sk-test")
         )
-        with patch("missy.providers.openai_provider.event_bus") as mock_bus:
+        with patch("missy.core.events.event_bus") as mock_bus:
             mock_bus.publish.side_effect = RuntimeError("bus failure")
             provider._emit_event("sess", "task", "allow", "test")
 
@@ -1398,12 +1398,12 @@ class TestCodexProviderStream:
         provider = CodexProvider(config)
 
         mock_resp = MagicMock()
-        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
-        mock_resp.__exit__ = MagicMock(return_value=False)
         mock_resp.iter_lines.return_value = iter(sse_lines)
         mock_resp.raise_for_status = MagicMock()
+        mock_resp.close = MagicMock()
 
-        with patch("missy.providers.codex_provider.httpx.stream", return_value=mock_resp):
+        with patch("missy.providers.codex_provider.PolicyHTTPClient") as mock_cls:
+            mock_cls.return_value.post.return_value = mock_resp
             return list(provider.stream([Message(role="user", content="hi")]))
 
     def test_stream_yields_text_deltas(self):
@@ -1458,15 +1458,15 @@ class TestCodexProviderStream:
             ]
         )
         mock_resp = MagicMock()
-        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
-        mock_resp.__exit__ = MagicMock(return_value=False)
         mock_resp.iter_lines.return_value = iter(lines)
         mock_resp.raise_for_status = MagicMock()
+        mock_resp.close = MagicMock()
 
         with (
-            patch("missy.providers.codex_provider.httpx.stream", return_value=mock_resp),
+            patch("missy.providers.codex_provider.PolicyHTTPClient") as mock_cls,
             pytest.raises(ProviderError, match="rate limit exceeded"),
         ):
+            mock_cls.return_value.post.return_value = mock_resp
             list(provider.stream([Message(role="user", content="hi")]))
 
     def test_stream_raises_on_error_event_with_error_dict(self):
@@ -1481,15 +1481,15 @@ class TestCodexProviderStream:
             ]
         )
         mock_resp = MagicMock()
-        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
-        mock_resp.__exit__ = MagicMock(return_value=False)
         mock_resp.iter_lines.return_value = iter(lines)
         mock_resp.raise_for_status = MagicMock()
+        mock_resp.close = MagicMock()
 
         with (
-            patch("missy.providers.codex_provider.httpx.stream", return_value=mock_resp),
+            patch("missy.providers.codex_provider.PolicyHTTPClient") as mock_cls,
             pytest.raises(ProviderError, match="internal server error"),
         ):
+            mock_cls.return_value.post.return_value = mock_resp
             list(provider.stream([Message(role="user", content="hi")]))
 
     def test_stream_raises_on_http_status_error(self):
@@ -1505,15 +1505,11 @@ class TestCodexProviderStream:
         mock_resp_obj.text = "Unauthorized"
         http_error = httpx.HTTPStatusError("401", request=MagicMock(), response=mock_resp_obj)
 
-        mock_resp = MagicMock()
-        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
-        mock_resp.__exit__ = MagicMock(return_value=False)
-        mock_resp.raise_for_status.side_effect = http_error
-
         with (
-            patch("missy.providers.codex_provider.httpx.stream", return_value=mock_resp),
+            patch("missy.providers.codex_provider.PolicyHTTPClient") as mock_cls,
             pytest.raises(ProviderError, match="401"),
         ):
+            mock_cls.return_value.post.side_effect = http_error
             list(provider.stream([Message(role="user", content="hi")]))
 
     def test_stream_skips_invalid_json_data_lines(self):
@@ -1562,12 +1558,12 @@ class TestCodexProviderCompleteWithTools:
         provider = CodexProvider(config)
 
         mock_resp = MagicMock()
-        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
-        mock_resp.__exit__ = MagicMock(return_value=False)
         mock_resp.iter_lines.return_value = iter(sse_lines)
         mock_resp.raise_for_status = MagicMock()
+        mock_resp.close = MagicMock()
 
-        with patch("missy.providers.codex_provider.httpx.stream", return_value=mock_resp):
+        with patch("missy.providers.codex_provider.PolicyHTTPClient") as mock_cls:
+            mock_cls.return_value.post.return_value = mock_resp
             return provider.complete_with_tools(
                 [Message(role="user", content="hi")],
                 tools or [],
@@ -1672,15 +1668,12 @@ class TestCodexProviderCompleteWithTools:
         mock_resp_obj.status_code = 403
         mock_resp_obj.text = "Forbidden"
         http_error = httpx.HTTPStatusError("403", request=MagicMock(), response=mock_resp_obj)
-        mock_resp = MagicMock()
-        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
-        mock_resp.__exit__ = MagicMock(return_value=False)
-        mock_resp.raise_for_status.side_effect = http_error
 
         with (
-            patch("missy.providers.codex_provider.httpx.stream", return_value=mock_resp),
+            patch("missy.providers.codex_provider.PolicyHTTPClient") as mock_cls,
             pytest.raises(ProviderError, match="403"),
         ):
+            mock_cls.return_value.post.side_effect = http_error
             provider.complete_with_tools([Message(role="user", content="hi")], [])
 
     def test_response_failed_event_raises_provider_error(self):
@@ -1695,15 +1688,15 @@ class TestCodexProviderCompleteWithTools:
             ]
         )
         mock_resp = MagicMock()
-        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
-        mock_resp.__exit__ = MagicMock(return_value=False)
         mock_resp.iter_lines.return_value = iter(lines)
         mock_resp.raise_for_status = MagicMock()
+        mock_resp.close = MagicMock()
 
         with (
-            patch("missy.providers.codex_provider.httpx.stream", return_value=mock_resp),
+            patch("missy.providers.codex_provider.PolicyHTTPClient") as mock_cls,
             pytest.raises(ProviderError, match="quota exceeded"),
         ):
+            mock_cls.return_value.post.return_value = mock_resp
             provider.complete_with_tools([Message(role="user", content="hi")], [])
 
     def test_accepts_prebuilt_dict_tools(self):
