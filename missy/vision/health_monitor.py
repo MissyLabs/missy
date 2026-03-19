@@ -22,7 +22,7 @@ import logging
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
 
 logger = logging.getLogger(__name__)

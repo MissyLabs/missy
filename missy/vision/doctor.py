@@ -93,6 +93,8 @@ class VisionDoctor:
         if has_opencv and has_devices:
             report.add(self.check_capture())
 
+        report.add(self.check_health_monitor())
+
         return report
 
     def check_opencv(self) -> DiagnosticResult:
@@ -449,4 +451,65 @@ class VisionDoctor:
                 passed=False,
                 message=f"Cannot access captures directory: {exc}",
                 severity="warning",
+            )
+
+    def check_health_monitor(self) -> DiagnosticResult:
+        """Report vision health monitor statistics if any captures have been recorded."""
+        try:
+            from missy.vision.health_monitor import get_health_monitor
+
+            monitor = get_health_monitor()
+            report = monitor.get_health_report()
+
+            if report["total_captures"] == 0:
+                return DiagnosticResult(
+                    name="health_monitor",
+                    passed=True,
+                    message="Health monitor active, no captures recorded yet",
+                    details=report,
+                )
+
+            status = report["overall_status"]
+            warnings = report.get("warnings", [])
+
+            if status == "unhealthy":
+                return DiagnosticResult(
+                    name="health_monitor",
+                    passed=False,
+                    message=(
+                        f"Vision health is UNHEALTHY: {report['total_failures']} failures "
+                        f"out of {report['total_captures']} captures. "
+                        + (f"Warnings: {'; '.join(warnings)}" if warnings else "")
+                    ),
+                    details=report,
+                    severity="error",
+                )
+
+            if status == "degraded":
+                return DiagnosticResult(
+                    name="health_monitor",
+                    passed=False,
+                    message=(
+                        f"Vision health is DEGRADED: recent success rate "
+                        f"{report['recent_success_rate']:.0%}. "
+                        + (f"Warnings: {'; '.join(warnings)}" if warnings else "")
+                    ),
+                    details=report,
+                    severity="warning",
+                )
+
+            return DiagnosticResult(
+                name="health_monitor",
+                passed=True,
+                message=(
+                    f"Vision health OK: {report['total_captures']} captures, "
+                    f"recent success rate {report['recent_success_rate']:.0%}"
+                ),
+                details=report,
+            )
+        except Exception as exc:
+            return DiagnosticResult(
+                name="health_monitor",
+                passed=True,
+                message=f"Health monitor not available: {exc}",
             )

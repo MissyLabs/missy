@@ -22,6 +22,7 @@ from missy.vision.capture import (
     FailureType,
 )
 from missy.vision.discovery import CameraDevice, get_discovery
+from missy.vision.health_monitor import get_health_monitor
 
 logger = logging.getLogger(__name__)
 
@@ -105,14 +106,25 @@ class ResilientCamera:
                 )
 
         # Try capture
+        t0 = time.monotonic()
         try:
             if self._handle is None:
                 raise CaptureError("Camera handle is None after connect")
             result = self._handle.capture()
             if result.success:
+                latency = (time.monotonic() - t0) * 1000
+                get_health_monitor().record_capture(
+                    success=True,
+                    device=result.device_path or (self._current_device.device_path if self._current_device else ""),
+                    latency_ms=latency,
+                )
                 return result
             # Non-exception capture failure — check failure type before reconnecting
             self._record_failure()
+            device_path = self._current_device.device_path if self._current_device else ""
+            get_health_monitor().record_capture(
+                success=False, device=device_path, error=result.error or "capture failed",
+            )
             if result.failure_type in (FailureType.PERMISSION, FailureType.UNSUPPORTED):
                 logger.error(
                     "Unrecoverable capture failure (%s): %s — not retrying",
@@ -123,6 +135,10 @@ class ResilientCamera:
         except Exception as exc:
             logger.warning("Capture failed: %s", exc)
             self._record_failure()
+            device_path = self._current_device.device_path if self._current_device else ""
+            get_health_monitor().record_capture(
+                success=False, device=device_path, error=str(exc),
+            )
 
         # Capture failed — attempt reconnection
         return self._reconnect_and_capture()
