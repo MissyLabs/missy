@@ -139,3 +139,45 @@ def audit_vision_session(
             "frame_count": frame_count,
         },
     )
+
+
+def audit_vision_burst(
+    *,
+    device: str = "",
+    count: int = 0,
+    successful: int = 0,
+    best_only: bool = False,
+    trigger_reason: str = "user_command",
+) -> None:
+    """Log a burst capture event."""
+    _emit_audit_event(
+        "vision",
+        "burst_capture",
+        {
+            "device": device,
+            "requested_count": count,
+            "successful_count": successful,
+            "best_only": best_only,
+            "trigger_reason": trigger_reason,
+        },
+    )
+
+
+def audit_vision_error(
+    *,
+    operation: str = "",
+    error: str = "",
+    device: str = "",
+    recoverable: bool = True,
+) -> None:
+    """Log a vision error event for diagnostics."""
+    _emit_audit_event(
+        "vision",
+        "error",
+        {
+            "operation": operation,
+            "error": error,
+            "device": device,
+            "recoverable": recoverable,
+        },
+    )
