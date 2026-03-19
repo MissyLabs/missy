@@ -321,7 +321,7 @@ class TestContextIncorporation:
     def test_general_context_uses_additional_context_label(self, builder: AnalysisPromptBuilder) -> None:
         ctx = "unique-ctx-marker"
         prompt = builder.build_prompt(make_request(mode=AnalysisMode.GENERAL, context=ctx))
-        assert "Additional context" in prompt
+        assert "User-provided context" in prompt
 
     def test_puzzle_context_uses_user_note_label(self, builder: AnalysisPromptBuilder) -> None:
         ctx = "unique-puzzle-ctx-marker"
@@ -376,10 +376,12 @@ class TestEdgeCases:
         prompt = builder.build_prompt(make_request(mode=AnalysisMode.INSPECTION, context=""))
         assert "Inspection focus:" not in prompt
 
-    def test_very_long_context_is_included_intact(self, builder: AnalysisPromptBuilder) -> None:
+    def test_very_long_context_is_truncated(self, builder: AnalysisPromptBuilder) -> None:
         long_ctx = "A" * 5000
         prompt = builder.build_prompt(make_request(mode=AnalysisMode.GENERAL, context=long_ctx))
-        assert long_ctx in prompt
+        # Context should be truncated (max 2000 chars) for prompt injection mitigation
+        assert "[truncated]" in prompt
+        assert long_ctx not in prompt  # full string should not appear
 
     def test_very_long_context_does_not_corrupt_base_prompt(self, builder: AnalysisPromptBuilder) -> None:
         long_ctx = "B" * 5000
