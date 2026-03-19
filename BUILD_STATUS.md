@@ -6,7 +6,7 @@
 
 ## Session 8 Summary
 
-Hardening session: 15 bug fixes across vision, agent, and security subsystems. 2 new production modules (shutdown, orientation). ~150 new tests.
+Hardening session: 15 bug fixes across vision, agent, and security subsystems. 2 new production modules (shutdown, orientation). 323 new tests.
 
 ### Changes This Session (8 commits)
 
@@ -56,7 +56,7 @@ Hardening session: 15 bug fixes across vision, agent, and security subsystems. 2
    - 12 tests for provider_format input validation
    - 12 tests for TokenBudget boundary validation
 
-### Full Test Suite: ~14,530 passed, 0 failures, 14 skipped
+### Full Test Suite: 14,711 passed, 0 failures, 14 skipped
 
 ### Vision Modules (20 files in `missy/vision/`)
 
@@ -137,6 +137,21 @@ Hardening session: 15 bug fixes across vision, agent, and security subsystems. 2
 
 ## Recovery Notes
 
-All code committed and passing. ~14,530 total tests, 0 failures, 14 skipped.
-Session 8: 15 bug fixes, 2 new modules (shutdown.py, orientation.py), ~150 new tests.
+All code committed and passing. 14,711 total tests, 0 failures, 14 skipped.
+Session 8: 15 bug fixes, 2 new modules (shutdown.py, orientation.py), 323 new tests.
 Vision subsystem now has 20 modules. Ruff lint fully clean.
+
+Session 8 commits (12):
+1. `9689340` — 7 vision hardening fixes + 24 tests
+2. `e16ce88` — 5 bug fixes (None context, race condition, metadata override)
+3. `e02fa7b` — 35 hardening tests + vision_mode ctx fix
+4. `fd6b581` — Vision shutdown module + 10 tests
+5. `7cf14dd` — Quality scoring for burst auto-selection + 7 tests
+6. `c29ea48` — Orientation detection + EXIF parser + 18 tests
+7. `d28b0a0` — Input validation for provider_format + TokenBudget
+8. `e5edd7f` — 24 validation tests
+9. `223c515` — Docs update
+10. `a90d6aa` — 129 pipeline + analysis edge case tests
+11. `b4e2354` — Vision audit + test plan updates
+12. `f1eb712` — 76 intent + doctor edge case tests
+13. `21d596e` — 16 EXIF orientation tests
