@@ -3321,10 +3321,21 @@ def vision() -> None:
 
 @vision.command("health")
 def vision_health_cmd() -> None:
-    """Show vision subsystem health statistics."""
+    """Show vision subsystem health statistics (includes persisted history)."""
+    from pathlib import Path
+
     from missy.vision.health_monitor import get_health_monitor
 
     monitor = get_health_monitor()
+
+    # Load persisted history if available
+    import contextlib
+
+    persist_path = Path.home() / ".missy" / "vision_health.db"
+    if persist_path.exists():
+        with contextlib.suppress(Exception):
+            monitor.load(persist_path)
+
     report = monitor.get_health_report()
 
     status = report["overall_status"]
