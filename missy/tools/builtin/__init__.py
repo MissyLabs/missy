@@ -64,6 +64,12 @@ from missy.tools.builtin.shell_exec import ShellExecTool
 from missy.tools.builtin.tts_speak import AudioListDevicesTool, AudioSetVolumeTool, TTSSpeakTool
 from missy.tools.builtin.web_fetch import WebFetchTool
 from missy.tools.builtin.x11_launch import X11LaunchTool
+from missy.tools.builtin.vision_tools import (
+    VisionAnalyzeTool,
+    VisionCaptureTool,
+    VisionDevicesTool,
+    VisionSceneMemoryTool,
+)
 from missy.tools.builtin.x11_tools import (
     X11ClickTool,
     X11KeyTool,
@@ -125,6 +131,10 @@ __all__ = [
     "AudioListDevicesTool",
     "AudioSetVolumeTool",
     "TTSSpeakTool",
+    "VisionAnalyzeTool",
+    "VisionCaptureTool",
+    "VisionDevicesTool",
+    "VisionSceneMemoryTool",
     "register_builtin_tools",
 ]
 
@@ -180,6 +190,10 @@ _ALL_TOOL_CLASSES = [
     X11ScreenshotTool,
     X11TypeTool,
     X11WindowListTool,
+    VisionCaptureTool,
+    VisionAnalyzeTool,
+    VisionDevicesTool,
+    VisionSceneMemoryTool,
 ]
 
 
