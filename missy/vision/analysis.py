@@ -445,11 +445,12 @@ def _describe_color(rgb: list[int]) -> str:
         return "orange"
     if r > 140 and g < 80 and b > 140:
         return "purple"
-    if r > 140 and g > 100 and b > 80:
-        return "tan/brown"
+    # Gray check before tan/brown — otherwise neutral grays match tan/brown
     if abs(r - g) < 30 and abs(g - b) < 30:
         if r > 160:
             return "light gray"
         return "gray"
+    if r > 140 and g > 100 and b > 80:
+        return "tan/brown"
 
     return f"rgb({r},{g},{b})"
