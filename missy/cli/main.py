@@ -3319,6 +3319,51 @@ def vision() -> None:
     """Vision subsystem — camera discovery, capture, and visual analysis."""
 
 
+@vision.command("health")
+def vision_health_cmd() -> None:
+    """Show vision subsystem health statistics."""
+    from missy.vision.health_monitor import get_health_monitor
+
+    monitor = get_health_monitor()
+    report = monitor.get_health_report()
+
+    status = report["overall_status"]
+    status_color = {"healthy": "green", "degraded": "yellow", "unhealthy": "red"}.get(
+        status, "dim"
+    )
+
+    console.print(f"[bold]Vision Health:[/] [{status_color}]{status.upper()}[/]")
+    console.print(
+        f"  Total captures: {report['total_captures']}  "
+        f"Failures: {report['total_failures']}  "
+        f"Recent success rate: {report['recent_success_rate']:.0%}"
+    )
+    console.print(f"  Uptime: {report['uptime_seconds']:.0f}s")
+
+    if report["devices"]:
+        console.print("\n[bold]Devices:[/]")
+        for device, stats in report["devices"].items():
+            dev_color = {"healthy": "green", "degraded": "yellow", "unhealthy": "red"}.get(
+                stats["status"], "dim"
+            )
+            console.print(
+                f"  [{dev_color}]{stats['status'].upper():>9}[/]  {device}  "
+                f"({stats['total_captures']} captures, "
+                f"{stats['success_rate']:.0%} success, "
+                f"{stats['average_latency_ms']:.0f}ms avg)"
+            )
+            if stats["consecutive_failures"] > 0:
+                console.print(
+                    f"           [yellow]{stats['consecutive_failures']} consecutive failures: "
+                    f"{stats['last_error']}[/]"
+                )
+
+    if report["warnings"]:
+        console.print("\n[bold yellow]Warnings:[/]")
+        for w in report["warnings"]:
+            console.print(f"  [yellow]• {w}[/]")
+
+
 @vision.command("devices")
 def vision_devices() -> None:
     """Enumerate and diagnose available cameras."""
