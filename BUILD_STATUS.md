@@ -6,9 +6,9 @@
 
 ## Session 14 Summary
 
-Edge case hardening session: 456 new tests across 8 new test files. Comprehensive edge case coverage for summarizer, proactive manager, resilient capture, multi-camera, container sandbox, vision shutdown, vision memory bridge, config validator, memory usage tracker, benchmark, cost tracker, failure tracker, orientation detection, provider format, analysis prompts, intent classifier, audit events, secrets detector, input sanitizer, compaction engine, vision tools, and scene memory integration.
+Edge case hardening session: 497 new tests across 10 new test files. Comprehensive edge case coverage for summarizer, proactive manager, resilient capture, multi-camera, container sandbox, vision shutdown, vision memory bridge, config validator, memory usage tracker, benchmark, cost tracker, failure tracker, orientation detection, provider format, analysis prompts, intent classifier, audit events, secrets detector, input sanitizer, compaction engine, vision tools, and scene memory integration.
 
-### New Tests This Session (456 tests, 8 files)
+### New Tests This Session (497 tests, 12 files)
 
 | Test File | Count | Coverage |
 |-----------|-------|----------|
@@ -22,8 +22,10 @@ Edge case hardening session: 456 new tests across 8 new test files. Comprehensiv
 | `test_session14_compaction_context.py` | 20 | Chunk splitting, fresh tail logic, threshold boundaries, compact_if_needed |
 | `test_session14_secrets_sanitizer.py` | 37 | 15+ secret patterns, redaction merging, injection detection, sanitization |
 | `test_session14_tools_integration.py` | 40 | Vision tool execution, scene memory lifecycle, pipeline integration |
+| `test_session14_events_bus.py` | 24 | AuditEvent timezone, EventBus pub/sub, concurrent publish, filtering |
+| `test_session14_parser.py` | 17 | Schedule parser intervals, cron, boundaries |
 
-### Full Test Suite: 17,193 passed, 0 failures, 14 skipped
+### Full Test Suite: 17,234 passed, 0 failures, 14 skipped
 
 ### Vision Modules (20 files in `missy/vision/`)
 
@@ -73,8 +75,8 @@ Edge case hardening session: 456 new tests across 8 new test files. Comprehensiv
 
 ## Recovery Notes
 
-All code committed and passing. 17,193 total tests, 0 failures, 14 skipped.
-Session 14: 456 new tests across 8 new test files.
+All code committed and passing. 17,234 total tests, 0 failures, 14 skipped.
+Session 14: 497 new tests across 12 new test files.
 Ruff lint: 0 errors.
 
 Session 14 commits:
@@ -85,3 +87,5 @@ Session 14 commits:
 5. `067d616` — Add 37 edge case tests (secrets detection, input sanitizer)
 6. `fea8477` — Fix lint issues
 7. `4eecc51` — Add 40 tests (vision tools, scene memory integration, cross-module flows)
+8. `f1d74e8` — Add 24 tests (AuditEvent, EventBus, PolicyViolationError)
+9. `c8e3f04` — Add 17 tests (scheduler parser)
