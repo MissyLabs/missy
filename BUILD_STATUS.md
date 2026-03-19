@@ -6,7 +6,7 @@
 
 ## Session 12 Summary
 
-Code quality hardening, bug fixes, constant extraction, property-based testing, and cross-module integration tests. 137 new tests across 5 new test files.
+Code quality hardening, bug fixes, constant extraction, property-based testing, cross-module integration tests, and security-focused tests. 164 new tests across 6 new test files, 4 code fixes.
 
 ### Changes This Session
 
@@ -48,7 +48,12 @@ Code quality hardening, bug fixes, constant extraction, property-based testing, 
 7. **Lint cleanup** (`3e7a131`)
    - Fix all ruff errors: import sorting, unused variable, dict literal
 
-### Full Test Suite: 15,479 passed, 0 failures, 14 skipped
+8. **27 security-focused tests** (`e71cbf9`)
+   - Context sanitization, source path validation, metadata protection
+   - Audit event integrity, intent classifier injection resistance
+   - Provider format validation, scene session task ID edge cases
+
+### Full Test Suite: 15,506 passed, 0 failures, 14 skipped
 
 ### Code Fixes Summary
 
@@ -108,8 +113,8 @@ Code quality hardening, bug fixes, constant extraction, property-based testing, 
 
 ## Recovery Notes
 
-All code committed and passing. 15,479 total tests, 0 failures, 14 skipped.
-Session 12: 4 code fixes, 137 new tests across 5 new test files.
+All code committed and passing. 15,506 total tests, 0 failures, 14 skipped.
+Session 12: 4 code fixes, 164 new tests across 6 new test files.
 Ruff lint: 0 errors.
 
 Session 12 commits:
@@ -120,3 +125,4 @@ Session 12 commits:
 5. `ecd9e0b` — 12 property-based tests with Hypothesis
 6. `3b1670c` — 21 cross-module integration tests
 7. `3e7a131` — Lint cleanup (import sorting, unused var, dict literal)
+8. `e71cbf9` — 27 security-focused tests (context sanitization, path validation, metadata protection)
