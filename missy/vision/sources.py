@@ -362,7 +362,7 @@ class PhotoSource(ImageSource):
     SUPPORTED_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp"})
 
     def __init__(self, directory: str | Path, *, pattern: str = "*") -> None:
-        self._directory = Path(directory)
+        self._directory = Path(directory).resolve()
         self._pattern = pattern
         self._files: list[Path] = []
         self._index: int = 0
@@ -383,9 +383,11 @@ class PhotoSource(ImageSource):
             raise FileNotFoundError(f"Photo directory not found: {self._directory}")
         try:
             self._files = sorted(
-                p
+                p.resolve()
                 for p in self._directory.glob(self._pattern)
-                if p.is_file() and p.suffix.lower() in self.SUPPORTED_EXTENSIONS
+                if p.is_file()
+                and p.suffix.lower() in self.SUPPORTED_EXTENSIONS
+                and str(p.resolve()).startswith(str(self._directory))
             )
         except OSError as exc:
             raise OSError(f"Cannot scan directory {self._directory}: {exc}") from exc

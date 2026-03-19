@@ -78,9 +78,19 @@ class Vault:
         st = self._key_path.stat()
         if st.st_nlink > 1:
             raise VaultError("Vault key file has multiple hard links; refusing to read.")
+        # Warn if key file is world-readable (permissions wider than owner-only)
+        if st.st_mode & 0o077:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Vault key file %s has permissive mode 0o%o — recommend 0o600",
+                self._key_path,
+                st.st_mode & 0o777,
+            )
         key = self._key_path.read_bytes()
         if len(key) != 32:
             raise VaultError("Invalid vault key length; expected 32 bytes.")
+        if key == b"\x00" * 32:
+            raise VaultError("Vault key is all zeros; file may be corrupted.")
         return key
 
     def _encrypt(self, data: bytes) -> bytes:

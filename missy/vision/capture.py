@@ -302,6 +302,7 @@ class CameraHandle:
             config = self._config
             last_error = ""
             deadline = time.monotonic() + config.timeout_seconds
+            self._capture_count += 1
 
             for attempt in range(1, config.max_retries + 1):
                 if time.monotonic() > deadline:
@@ -346,7 +347,6 @@ class CameraHandle:
                         continue
 
                     self._record_successful_frame(frame)
-                    self._capture_count += 1
                     self._success_count += 1
                     h, w = frame.shape[:2]
                     return CaptureResult(

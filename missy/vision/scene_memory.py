@@ -173,6 +173,7 @@ class SceneSession:
         self._state: dict[str, Any] = {}  # task-specific state
         self._observations: list[str] = []  # accumulated observations
         self._active = True
+        self._lock = threading.Lock()
 
     @property
     def frame_count(self) -> int:
@@ -199,7 +200,7 @@ class SceneSession:
         deduplicate: bool = True,
         dedup_threshold: int = 5,
     ) -> SceneFrame | None:
-        """Add a new frame to the session.
+        """Add a new frame to the session.  Thread-safe.
 
         Parameters
         ----------
@@ -223,65 +224,74 @@ class SceneSession:
         SceneFrame or None
             The stored frame, or None if deduplicated (skipped).
         """
-        self._frame_counter += 1
-        frame = SceneFrame(
-            frame_id=self._frame_counter,
+        # Compute hash outside the lock (CPU-intensive)
+        frame_candidate = SceneFrame(
+            frame_id=0,  # placeholder, assigned under lock
             image=image,
             source=source,
             analysis=analysis or {},
             notes=notes or [],
         )
 
-        # Deduplication: skip near-identical frames
-        if deduplicate and self._frames:
-            latest = self._frames[-1]
-            dist = hamming_distance(latest.thumbnail_hash, frame.thumbnail_hash)
-            if 0 <= dist <= dedup_threshold:
-                logger.debug(
-                    "Scene '%s': frame %d deduplicated (distance=%d, threshold=%d)",
+        with self._lock:
+            self._frame_counter += 1
+            frame_candidate.frame_id = self._frame_counter
+
+            # Deduplication: skip near-identical frames
+            if deduplicate and self._frames:
+                latest = self._frames[-1]
+                dist = hamming_distance(latest.thumbnail_hash, frame_candidate.thumbnail_hash)
+                if 0 <= dist <= dedup_threshold:
+                    logger.debug(
+                        "Scene '%s': frame %d deduplicated (distance=%d, threshold=%d)",
+                        self.task_id,
+                        frame_candidate.frame_id,
+                        dist,
+                        dedup_threshold,
+                    )
+                    return None
+
+            self._frames.append(frame_candidate)
+
+            # Evict oldest if over limit
+            while len(self._frames) > self.max_frames:
+                evicted = self._frames.pop(0)
+                logger.info(
+                    "Scene '%s': evicted frame %d (oldest by timestamp, %d frames remain)",
                     self.task_id,
-                    frame.frame_id,
-                    dist,
-                    dedup_threshold,
+                    evicted.frame_id,
+                    len(self._frames),
                 )
-                return None
 
-        self._frames.append(frame)
-
-        # Evict oldest if over limit
-        while len(self._frames) > self.max_frames:
-            evicted = self._frames.pop(0)
-            logger.info(
-                "Scene '%s': evicted frame %d (oldest by timestamp, %d frames remain)",
-                self.task_id,
-                evicted.frame_id,
-                len(self._frames),
-            )
-
-        return frame
+            return frame_candidate
 
     def add_observation(self, text: str) -> None:
-        """Record a textual observation about the scene."""
-        self._observations.append(text)
+        """Record a textual observation about the scene.  Thread-safe."""
+        with self._lock:
+            self._observations.append(text)
 
     def update_state(self, **kwargs: Any) -> None:
-        """Update task-specific state (e.g. puzzle board state)."""
-        self._state.update(kwargs)
+        """Update task-specific state (e.g. puzzle board state).  Thread-safe."""
+        with self._lock:
+            self._state.update(kwargs)
 
     def get_latest_frame(self) -> SceneFrame | None:
-        """Return the most recent frame, or None."""
-        return self._frames[-1] if self._frames else None
+        """Return the most recent frame, or None.  Thread-safe."""
+        with self._lock:
+            return self._frames[-1] if self._frames else None
 
     def get_frame(self, frame_id: int) -> SceneFrame | None:
-        """Retrieve a specific frame by ID."""
-        for f in self._frames:
-            if f.frame_id == frame_id:
-                return f
-        return None
+        """Retrieve a specific frame by ID.  Thread-safe."""
+        with self._lock:
+            for f in self._frames:
+                if f.frame_id == frame_id:
+                    return f
+            return None
 
     def get_recent_frames(self, n: int = 5) -> list[SceneFrame]:
-        """Return the N most recent frames."""
-        return list(self._frames[-n:])
+        """Return the N most recent frames.  Thread-safe."""
+        with self._lock:
+            return list(self._frames[-n:])
 
     def detect_change(self, frame_a: SceneFrame, frame_b: SceneFrame) -> SceneChange:
         """Detect how much changed between two frames.
@@ -374,27 +384,29 @@ class SceneSession:
             return None
 
     def close(self) -> None:
-        """Mark session as inactive and release frame data."""
-        self._active = False
-        frame_count = self._frame_counter
-        # Fully release frame data and references
-        self._frames.clear()
-        self._observations.clear()
-        self._state.clear()
+        """Mark session as inactive and release frame data.  Thread-safe."""
+        with self._lock:
+            self._active = False
+            frame_count = self._frame_counter
+            # Fully release frame data and references
+            self._frames.clear()
+            self._observations.clear()
+            self._state.clear()
         logger.info("Scene session %s closed (%d frames)", self.task_id, frame_count)
 
     def summarize(self) -> dict[str, Any]:
-        """Produce a serializable summary for audit logging."""
-        return {
-            "task_id": self.task_id,
-            "task_type": self.task_type.value,
-            "created": self._created.isoformat(),
-            "frame_count": self._frame_counter,
-            "frames_retained": len(self._frames),
-            "observations": list(self._observations),
-            "state": dict(self._state),
-            "active": self._active,
-        }
+        """Produce a serializable summary for audit logging.  Thread-safe."""
+        with self._lock:
+            return {
+                "task_id": self.task_id,
+                "task_type": self.task_type.value,
+                "created": self._created.isoformat(),
+                "frame_count": self._frame_counter,
+                "frames_retained": len(self._frames),
+                "observations": list(self._observations),
+                "state": dict(self._state),
+                "active": self._active,
+            }
 
 
 # ---------------------------------------------------------------------------
