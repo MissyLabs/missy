@@ -62,6 +62,10 @@ Thread-safety hardening across vision subsystem, lint cleanup, 139 new tests acr
 | `pipeline.py` | Thread-safe `_get_cv2()` lazy import | MEDIUM |
 | `orientation.py` | Thread-safe `_get_cv2()` lazy import | MEDIUM |
 | `multi_camera.py` | Clean up `status()` method (remove redundant dummy objects) | LOW |
+| `scene_memory.py` | Null image guards in `detect_change()` and `visualize_change()` | HIGH |
+| `capture.py` | Public `reset_blank_detector()` method (encapsulation fix) | MEDIUM |
+| `resilient_capture.py` | Use public API instead of private `_blank_detector` access | MEDIUM |
+| `sources.py` | Null check for `result.image` in `WebcamSource.acquire()` | HIGH |
 
 ### Vision Modules (20 files in `missy/vision/`)
 
@@ -114,7 +118,7 @@ Thread-safety hardening across vision subsystem, lint cleanup, 139 new tests acr
 ## Recovery Notes
 
 All code committed and passing. 15,200 total tests, 0 failures, 14 skipped.
-Session 11: 8 code fixes (7 thread-safety + 1 cleanup), 235 new tests across 6 new test files.
+Session 11: 11 code fixes (7 thread-safety, 1 cleanup, 3 critical quality), 235 new tests across 6 new test files.
 Ruff lint: 0 errors.
 All vision module singletons and lazy imports now use double-checked locking.
 
@@ -130,3 +134,5 @@ Session 11 commits:
 9. `43dfdd4` — 24 secrets detection and redaction tests
 10. `9a0c535` — Status update (15,269 tests)
 11. `8deb22c` — 27 doctor/health persistence tests + lint fixes across all session 11 files
+12. `e1cf971` — Final status update (15,296 tests)
+13. `d1b29b3` — Fix 3 critical code quality issues (null guards, encapsulation, image check)
