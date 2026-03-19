@@ -6,8 +6,6 @@ verifies the redaction mechanism works correctly.
 
 from __future__ import annotations
 
-import pytest
-
 
 class TestSecretsDetectionAPIKeys:
     """API key and token detection."""

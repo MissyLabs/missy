@@ -15,8 +15,6 @@ Tests the InputSanitizer against a wide variety of attack vectors including:
 
 from __future__ import annotations
 
-import pytest
-
 
 class TestBasicInjectionDetection:
     """Basic prompt injection patterns."""
@@ -287,7 +285,7 @@ class TestSanitizeFunction:
     """Test the sanitize() method itself."""
 
     def test_truncation(self) -> None:
-        from missy.security.sanitizer import InputSanitizer, MAX_INPUT_LENGTH
+        from missy.security.sanitizer import MAX_INPUT_LENGTH, InputSanitizer
 
         s = InputSanitizer()
         long_input = "x" * (MAX_INPUT_LENGTH + 1000)

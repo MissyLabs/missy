@@ -9,9 +9,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-import pytest
-
-
 # ---------------------------------------------------------------------------
 # Mock PersonaConfig for tests (avoid importing real one if it has deps)
 # ---------------------------------------------------------------------------

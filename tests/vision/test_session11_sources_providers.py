@@ -11,14 +11,12 @@ Covers:
 
 from __future__ import annotations
 
-import os
 import stat
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # FileSource edge cases
@@ -55,15 +53,16 @@ class TestFileSourceEdgeCases:
 
         source = FileSource(large)
         # Mock stat to pretend file is huge
-        original_stat = large.stat
 
         class FakeStat:
             st_mode = stat.S_IFREG | 0o644
             st_size = 200 * 1024 * 1024  # 200 MB
 
-        with patch.object(Path, "stat", return_value=FakeStat()):
-            with pytest.raises(ValueError, match="too large"):
-                source.acquire()
+        with (
+            patch.object(Path, "stat", return_value=FakeStat()),
+            pytest.raises(ValueError, match="too large"),
+        ):
+            source.acquire()
 
     def test_source_type_is_file(self) -> None:
         """FileSource.source_type() should return FILE."""
@@ -161,8 +160,8 @@ class TestPhotoSourceEdgeCases:
         source.scan()
 
         # Acquire all photos
-        f1 = source.acquire()
-        f2 = source.acquire()
+        source.acquire()
+        source.acquire()
         # Wrap around
         f3 = source.acquire()
         assert f3.metadata["photo_index"] == 0
@@ -287,9 +286,11 @@ class TestScreenshotSourceEdgeCases:
         from missy.vision.sources import ScreenshotSource
 
         source = ScreenshotSource()
-        with patch("subprocess.run", side_effect=FileNotFoundError):
-            with pytest.raises(RuntimeError, match="No screenshot tool"):
-                source.acquire()
+        with (
+            patch("subprocess.run", side_effect=FileNotFoundError),
+            pytest.raises(RuntimeError, match="No screenshot tool"),
+        ):
+            source.acquire()
 
 
 # ---------------------------------------------------------------------------

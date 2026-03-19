@@ -11,11 +11,10 @@ Tests the double-checked locking patterns added to:
 from __future__ import annotations
 
 import threading
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Singleton thread-safety tests
@@ -50,7 +49,7 @@ class TestDiscoverySingletonThreadSafety:
         mod._default_discovery = original
 
         # All threads should have gotten the same instance
-        assert len(set(id(i) for i in instances)) == 1
+        assert len({id(i) for i in instances}) == 1
 
     def test_get_discovery_idempotent(self) -> None:
         """Calling get_discovery() twice returns the same instance."""
@@ -91,7 +90,7 @@ class TestSceneManagerSingletonThreadSafety:
 
         mod._scene_manager = original
 
-        assert len(set(id(i) for i in instances)) == 1
+        assert len({id(i) for i in instances}) == 1
 
     def test_get_scene_manager_idempotent(self) -> None:
         import missy.vision.scene_memory as mod
@@ -131,7 +130,7 @@ class TestHealthMonitorSingletonThreadSafety:
 
         mod._monitor = original
 
-        assert len(set(id(i) for i in instances)) == 1
+        assert len({id(i) for i in instances}) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -165,7 +164,7 @@ class TestLazyCV2ThreadSafety:
         mod._cv2 = original
 
         # All should be the same cv2 module
-        assert len(set(id(r) for r in results)) == 1
+        assert len({id(r) for r in results}) == 1
 
     def test_sources_get_cv2_concurrent(self) -> None:
         """sources._get_cv2() returns same module under concurrent access."""
@@ -189,7 +188,7 @@ class TestLazyCV2ThreadSafety:
 
         mod._cv2 = original
 
-        assert len(set(id(r) for r in results)) == 1
+        assert len({id(r) for r in results}) == 1
 
     def test_pipeline_get_cv2_concurrent(self) -> None:
         """pipeline._get_cv2() returns same module under concurrent access."""
@@ -213,7 +212,7 @@ class TestLazyCV2ThreadSafety:
 
         mod._cv2 = original
 
-        assert len(set(id(r) for r in results)) == 1
+        assert len({id(r) for r in results}) == 1
 
 
 # ---------------------------------------------------------------------------
