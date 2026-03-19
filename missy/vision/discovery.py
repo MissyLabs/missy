@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -364,13 +365,16 @@ class CameraDiscovery:
 # ---------------------------------------------------------------------------
 
 _default_discovery: CameraDiscovery | None = None
+_discovery_lock = threading.Lock()
 
 
 def get_discovery() -> CameraDiscovery:
-    """Return (or create) the module-level CameraDiscovery instance."""
+    """Return (or create) the module-level CameraDiscovery instance.  Thread-safe."""
     global _default_discovery
     if _default_discovery is None:
-        _default_discovery = CameraDiscovery()
+        with _discovery_lock:
+            if _default_discovery is None:
+                _default_discovery = CameraDiscovery()
     return _default_discovery
 
 

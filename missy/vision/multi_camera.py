@@ -278,17 +278,18 @@ class MultiCameraManager:
     def status(self) -> dict[str, Any]:
         """Return status info for all managed cameras."""
         with self._lock:
+            cameras: dict[str, dict[str, Any]] = {}
+            for path, handle in self._handles.items():
+                device = self._devices.get(path)
+                cameras[path] = {
+                    "name": device.name if device else "",
+                    "is_open": handle.is_open,
+                    "vendor_id": device.vendor_id if device else "",
+                    "product_id": device.product_id if device else "",
+                }
             return {
                 "camera_count": len(self._handles),
-                "cameras": {
-                    path: {
-                        "name": self._devices.get(path, CameraDevice("", "", "", "", "")).name,
-                        "is_open": handle.is_open,
-                        "vendor_id": self._devices.get(path, CameraDevice("", "", "", "", "")).vendor_id,
-                        "product_id": self._devices.get(path, CameraDevice("", "", "", "", "")).product_id,
-                    }
-                    for path, handle in self._handles.items()
-                },
+                "cameras": cameras,
             }
 
     # -- context manager --

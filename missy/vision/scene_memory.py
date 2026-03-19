@@ -518,10 +518,14 @@ class SceneManager:
 # ---------------------------------------------------------------------------
 
 _scene_manager: SceneManager | None = None
+_scene_manager_lock = threading.Lock()
 
 
 def get_scene_manager() -> SceneManager:
+    """Return the process-level singleton SceneManager.  Thread-safe."""
     global _scene_manager
     if _scene_manager is None:
-        _scene_manager = SceneManager()
+        with _scene_manager_lock:
+            if _scene_manager is None:
+                _scene_manager = SceneManager()
     return _scene_manager

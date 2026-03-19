@@ -8,6 +8,7 @@ and format conversion.
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass
 from typing import Any
 
@@ -20,13 +21,17 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _cv2: Any = None
+_cv2_lock = threading.Lock()
 
 
 def _get_cv2() -> Any:
+    """Lazily import OpenCV.  Thread-safe."""
     global _cv2
     if _cv2 is None:
-        import cv2
-        _cv2 = cv2
+        with _cv2_lock:
+            if _cv2 is None:
+                import cv2
+                _cv2 = cv2
     return _cv2
 
 

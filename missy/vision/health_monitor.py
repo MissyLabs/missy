@@ -640,11 +640,14 @@ class VisionHealthMonitor:
 # ---------------------------------------------------------------------------
 
 _monitor: VisionHealthMonitor | None = None
+_monitor_lock = threading.Lock()
 
 
 def get_health_monitor() -> VisionHealthMonitor:
-    """Return the process-level singleton VisionHealthMonitor."""
+    """Return the process-level singleton VisionHealthMonitor.  Thread-safe."""
     global _monitor
     if _monitor is None:
-        _monitor = VisionHealthMonitor()
+        with _monitor_lock:
+            if _monitor is None:
+                _monitor = VisionHealthMonitor()
     return _monitor
