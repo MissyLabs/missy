@@ -17,6 +17,7 @@ from missy.security.secrets import SecretsDetector
 # New injection patterns
 # ---------------------------------------------------------------------------
 
+
 class TestSession24InjectionPatterns:
     """Test the 9 new injection patterns added in session 24."""
 
@@ -78,13 +79,14 @@ class TestSession24InjectionPatterns:
 
     def test_normal_text_no_false_positive(self, sanitizer: InputSanitizer) -> None:
         """Normal text should not trigger new patterns."""
-        matches = sanitizer.check_for_injection(
-            "Please help me write a function that calls an API"
-        )
+        matches = sanitizer.check_for_injection("Please help me write a function that calls an API")
         # Should not match urgency or meta-AI patterns
         new_pattern_matches = [
-            m for m in matches
-            if any(kw in m for kw in ["tool_call", "function_calls", "pad", "IMPORTANT", "as\\s+an"])
+            m
+            for m in matches
+            if any(
+                kw in m for kw in ["tool_call", "function_calls", "pad", "IMPORTANT", "as\\s+an"]
+            )
         ]
         assert len(new_pattern_matches) == 0
 
@@ -96,6 +98,7 @@ class TestSession24InjectionPatterns:
 # ---------------------------------------------------------------------------
 # New secret detection patterns
 # ---------------------------------------------------------------------------
+
 
 class TestSession24SecretPatterns:
     """Test the 5 new secret detection patterns."""
@@ -166,15 +169,12 @@ class TestSession24SecretPatterns:
     def test_combined_detection_pipeline(self, detector: SecretsDetector) -> None:
         """Multiple new patterns in one text should all be detected."""
         text = (
-            'NETLIFY_KEY="' + "A" * 40 + '" '
-            "AGE-SECRET-KEY-" + "B" * 59 + " "
-            "dp.st.myenv." + "C" * 40
+            'NETLIFY_KEY="' + "A" * 40 + '" AGE-SECRET-KEY-' + "B" * 59 + " dp.st.myenv." + "C" * 40
         )
         findings = detector.scan(text)
         found_types = {f["type"] for f in findings}
         # At least 2 of the 3 should be detected
         matches = sum(
-            1 for kw in ["netlify", "age", "doppler"]
-            if any(kw in ft for ft in found_types)
+            1 for kw in ["netlify", "age", "doppler"] if any(kw in ft for ft in found_types)
         )
         assert matches >= 2

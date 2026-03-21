@@ -52,11 +52,14 @@ class TestStartRaisesSchedulerError:
 
 class TestAddJobRollbackOnSchedulerError:
     def test_add_job_rolls_back_when_schedule_job_raises(self, started_manager: SchedulerManager):
-        with patch.object(
-            started_manager,
-            "_schedule_job",
-            side_effect=SchedulerError("apscheduler refused"),
-        ), pytest.raises(SchedulerError):
+        with (
+            patch.object(
+                started_manager,
+                "_schedule_job",
+                side_effect=SchedulerError("apscheduler refused"),
+            ),
+            pytest.raises(SchedulerError),
+        ):
             started_manager.add_job("failing", "every 5 minutes", "task")
 
         # Job must not persist in memory after rollback

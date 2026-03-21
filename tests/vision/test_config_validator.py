@@ -623,9 +623,7 @@ class TestPreferredDevice:
         assert "preferred_device" in _fields_with_warnings(result)
 
     def test_invalid_extra_path_component(self):
-        result = validate_vision_config(
-            {**VALID_DEFAULTS, "preferred_device": "/dev/video0/extra"}
-        )
+        result = validate_vision_config({**VALID_DEFAULTS, "preferred_device": "/dev/video0/extra"})
         assert "preferred_device" in _fields_with_warnings(result)
 
     def test_invalid_device_warning_has_current_value(self):
@@ -675,8 +673,8 @@ class TestMultipleErrors:
     def test_error_and_warning_both_reported(self):
         config = {
             **VALID_DEFAULTS,
-            "capture_width": 50,           # error: out of range
-            "warmup_frames": 31,           # warning: excessive
+            "capture_width": 50,  # error: out of range
+            "warmup_frames": 31,  # warning: excessive
         }
         result = validate_vision_config(config)
         assert result.valid is False
@@ -686,10 +684,10 @@ class TestMultipleErrors:
     def test_warnings_only_result_is_valid(self):
         config = {
             **VALID_DEFAULTS,
-            "warmup_frames": 31,                  # warning
-            "auto_activate_threshold": 0.3,       # warning
-            "scene_memory_max_frames": 150,       # warning
-            "preferred_device": "/dev/cam0",      # warning
+            "warmup_frames": 31,  # warning
+            "auto_activate_threshold": 0.3,  # warning
+            "scene_memory_max_frames": 150,  # warning
+            "preferred_device": "/dev/cam0",  # warning
         }
         result = validate_vision_config(config)
         assert result.valid is True
@@ -708,9 +706,9 @@ class TestMultipleErrors:
     def test_to_dict_counts_match_issues(self):
         config = {
             **VALID_DEFAULTS,
-            "capture_width": 50,           # error
-            "warmup_frames": 31,           # warning
-            "auto_activate_threshold": 0.2, # warning
+            "capture_width": 50,  # error
+            "warmup_frames": 31,  # warning
+            "auto_activate_threshold": 0.2,  # warning
         }
         result = validate_vision_config(config)
         d = result.to_dict()

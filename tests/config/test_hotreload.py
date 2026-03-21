@@ -390,7 +390,10 @@ class TestOwnershipCheck:
                 raise OSError("permission denied")
             return original_stat(self_path, **kwargs)
 
-        with patch.object(pathlib.Path, "stat", raising_stat), patch.object(pathlib.Path, "is_symlink", return_value=False):
+        with (
+            patch.object(pathlib.Path, "stat", raising_stat),
+            patch.object(pathlib.Path, "is_symlink", return_value=False),
+        ):
             result = w._check_file_safety()
 
         assert result is False
@@ -447,9 +450,7 @@ class TestReloadCallbackException:
             call_count[0] += 1
             raise RuntimeError("callback explosion")
 
-        w = ConfigWatcher(
-            str(cfg), exploding_callback, debounce_seconds=0.1, poll_interval=0.02
-        )
+        w = ConfigWatcher(str(cfg), exploding_callback, debounce_seconds=0.1, poll_interval=0.02)
         w.start()
         time.sleep(0.05)
 
@@ -477,9 +478,7 @@ class TestReloadCallbackException:
                 raise RuntimeError("first attempt fails")
             # Second call succeeds silently.
 
-        w = ConfigWatcher(
-            str(cfg), sometimes_exploding, debounce_seconds=0.1, poll_interval=0.02
-        )
+        w = ConfigWatcher(str(cfg), sometimes_exploding, debounce_seconds=0.1, poll_interval=0.02)
         w.start()
         time.sleep(0.05)
 

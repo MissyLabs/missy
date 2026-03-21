@@ -140,8 +140,10 @@ class TestSceneFrameHash:
         img = np.random.randint(0, 256, (50, 50, 3), dtype=np.uint8)
         # Use a non-uniform 8x8 grayscale result so aHash is meaningful
         varied = np.arange(64, dtype=np.uint8).reshape((8, 8))
-        with patch("cv2.resize", return_value=varied.reshape(8, 8, 1)), \
-             patch("cv2.cvtColor", return_value=varied):
+        with (
+            patch("cv2.resize", return_value=varied.reshape(8, 8, 1)),
+            patch("cv2.cvtColor", return_value=varied),
+        ):
             frame = SceneFrame(frame_id=1, image=img)
             assert frame.thumbnail_hash != ""
             assert len(frame.thumbnail_hash) == 16

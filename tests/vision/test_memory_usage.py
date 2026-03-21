@@ -653,7 +653,9 @@ class TestMemoryTrackerLogging:
         # Verify our setup: usage < warn_fraction
         usage = frame_est / max_bytes
         if usage >= 0.8:
-            pytest.skip("floating point edge: cannot construct sub-threshold case for this frame size")
+            pytest.skip(
+                "floating point edge: cannot construct sub-threshold case for this frame size"
+            )
         session = _make_session_mock(frames=[_make_frame_mock(img)])
         manager = _make_manager_mock(sessions={"t": session})
         with caplog.at_level(logging.WARNING, logger="missy.vision.memory_usage"):

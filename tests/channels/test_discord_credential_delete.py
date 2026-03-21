@@ -170,7 +170,9 @@ class TestHandleMessageCredentialDetection:
             patch.object(ch, "_emit_audit"),
         ):
             self._run(
-                ch._handle_message(_message_payload("AKIA1234567890ABCDEF", channel_id="100000000000000012"))
+                ch._handle_message(
+                    _message_payload("AKIA1234567890ABCDEF", channel_id="100000000000000012")
+                )
             )
 
         # send_message should have been called with a warning.

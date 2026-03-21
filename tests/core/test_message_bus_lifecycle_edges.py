@@ -174,8 +174,8 @@ class TestHandlerRegistration:
         def handler(msg: BusMessage) -> None:
             call_count["n"] += 1
 
-        bus.subscribe("multi.test", handler)   # exact match
-        bus.subscribe("multi.*", handler)       # wildcard match
+        bus.subscribe("multi.test", handler)  # exact match
+        bus.subscribe("multi.*", handler)  # wildcard match
 
         bus.publish(_msg(topic="multi.test"))
 
@@ -395,7 +395,7 @@ class TestBusMessageFieldContract:
         bus.subscribe("test.topic", lambda m: order.append(m.priority))
 
         bus.publish_async(_msg(priority=-1))  # below normal
-        bus.publish_async(_msg(priority=0))   # normal
+        bus.publish_async(_msg(priority=0))  # normal
 
         bus.drain()
 
@@ -417,10 +417,10 @@ class TestFnmatchEdgeCases:
         received: list[BusMessage] = []
         bus.subscribe("run.?", received.append)
 
-        bus.publish(_msg(topic="run.a"))   # matches: one char
-        bus.publish(_msg(topic="run.b"))   # matches: one char
+        bus.publish(_msg(topic="run.a"))  # matches: one char
+        bus.publish(_msg(topic="run.b"))  # matches: one char
         bus.publish(_msg(topic="run.ab"))  # does NOT match: two chars
-        bus.publish(_msg(topic="run."))    # does NOT match: zero chars
+        bus.publish(_msg(topic="run."))  # does NOT match: zero chars
 
         assert len(received) == 2
 
@@ -434,7 +434,7 @@ class TestFnmatchEdgeCases:
         received: list[BusMessage] = []
         bus.subscribe("a.?.c", received.append)
 
-        bus.publish(_msg(topic="a.b.c"))   # matches: '?' = 'b'
+        bus.publish(_msg(topic="a.b.c"))  # matches: '?' = 'b'
         bus.publish(_msg(topic="a.bc.c"))  # does NOT match: 'bc' is two chars
 
         assert len(received) == 1
@@ -712,8 +712,7 @@ class TestBusTopicsNamingConvention:
         from missy.core import bus_topics
 
         topic_attrs = [
-            v for k, v in vars(bus_topics).items()
-            if not k.startswith("_") and isinstance(v, str)
+            v for k, v in vars(bus_topics).items() if not k.startswith("_") and isinstance(v, str)
         ]
         assert topic_attrs, "No string constants found in bus_topics"
         for topic in topic_attrs:

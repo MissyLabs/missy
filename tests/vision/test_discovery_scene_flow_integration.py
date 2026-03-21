@@ -230,10 +230,12 @@ class TestPipelineOrientationChain:
 class TestShutdownCoordination:
     def setup_method(self) -> None:
         from missy.vision.shutdown import reset_shutdown_state
+
         reset_shutdown_state()
 
     def teardown_method(self) -> None:
         from missy.vision.shutdown import reset_shutdown_state
+
         reset_shutdown_state()
 
     def test_shutdown_idempotent(self) -> None:
@@ -283,6 +285,7 @@ class TestShutdownCoordination:
 class TestAnalysisPromptIntegration:
     def _request(self, mode: str) -> Any:
         from missy.vision.analysis import AnalysisMode, AnalysisRequest
+
         img = np.zeros((100, 100, 3), dtype=np.uint8)
         return AnalysisRequest(image=img, mode=AnalysisMode(mode))
 
@@ -300,10 +303,20 @@ class TestAnalysisPromptIntegration:
         prompt = builder.build_prompt(self._request("painting"))
         prompt_lower = prompt.lower()
         # Should have encouraging/supportive language
-        assert any(word in prompt_lower for word in [
-            "encourage", "support", "gentle", "warm", "constructive",
-            "praise", "positive", "kind", "helpful",
-        ])
+        assert any(
+            word in prompt_lower
+            for word in [
+                "encourage",
+                "support",
+                "gentle",
+                "warm",
+                "constructive",
+                "praise",
+                "positive",
+                "kind",
+                "helpful",
+            ]
+        )
 
     def test_general_prompt_is_not_empty(self) -> None:
         from missy.vision.analysis import AnalysisPromptBuilder

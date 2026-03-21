@@ -231,9 +231,13 @@ class TestWebFetchBlockedHeaders:
         from missy.tools.builtin.web_fetch import WebFetchTool
 
         expected = {
-            "host", "authorization", "cookie",
-            "x-forwarded-for", "x-forwarded-host",
-            "x-forwarded-proto", "x-real-ip",
+            "host",
+            "authorization",
+            "cookie",
+            "x-forwarded-for",
+            "x-forwarded-host",
+            "x-forwarded-proto",
+            "x-real-ip",
             "proxy-authorization",
         }
         assert expected.issubset(WebFetchTool._BLOCKED_HEADERS)
@@ -327,7 +331,9 @@ class TestNewSecretPatterns:
         assert "azure_key" in types
 
     def test_azure_default_endpoints(self):
-        text = "DefaultEndpointsProtocol=https;AccountKey=abcdefghijklmnopqrstuvwxyz0123456789ABCD=="
+        text = (
+            "DefaultEndpointsProtocol=https;AccountKey=abcdefghijklmnopqrstuvwxyz0123456789ABCD=="
+        )
         findings = self._scan(text)
         types = [f["type"] for f in findings]
         assert "azure_key" in types
@@ -554,9 +560,7 @@ class TestCostTrackerEdgeCases:
 
         tracker = CostTracker()
         large = 10**15
-        rec = tracker.record(
-            model="claude-opus-4", prompt_tokens=large, completion_tokens=large
-        )
+        rec = tracker.record(model="claude-opus-4", prompt_tokens=large, completion_tokens=large)
         assert isinstance(rec.cost_usd, float)
         assert rec.cost_usd == rec.cost_usd  # not NaN
 
@@ -878,11 +882,13 @@ class TestMcpClientEdgeCases:
         from missy.mcp.client import McpClient
 
         fixed_id = "fixed-uuid-1234"
-        error_response = json.dumps({
-            "jsonrpc": "2.0",
-            "id": fixed_id,
-            "error": {"code": -32601, "message": "Method not found"},
-        })
+        error_response = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": fixed_id,
+                "error": {"code": -32601, "message": "Method not found"},
+            }
+        )
         client = McpClient(name="err-server", command="dummy")
         mock_proc = MagicMock()
         mock_proc.stdin = MagicMock()
@@ -1024,9 +1030,7 @@ class TestWebhookHandlerEdgeCases:
             try:
                 resp = self._post_raw(port, body)
                 # If a response is returned, it must not be a success.
-                assert resp.status != 202, (
-                    "prompt=null must not result in a 202 queued response"
-                )
+                assert resp.status != 202, "prompt=null must not result in a 202 queued response"
             except http.client.RemoteDisconnected:
                 # Server crashed on None.strip() — no message was queued.
                 pass
@@ -1254,8 +1258,11 @@ class TestSchedulerTaskLengthValidation:
         mgr._jobs = {}
         mgr.jobs_file = MagicMock()
 
-        with patch.object(mgr, "_schedule_job"), patch.object(mgr, "_save_jobs"), \
-             patch.object(mgr, "_emit_event"):
+        with (
+            patch.object(mgr, "_schedule_job"),
+            patch.object(mgr, "_save_jobs"),
+            patch.object(mgr, "_emit_event"),
+        ):
             job = mgr.add_job(
                 name="normal",
                 schedule="every 5 minutes",
@@ -1305,8 +1312,10 @@ class TestOAuthStateCsrf:
             oauth._callback_result["error"] = None
             return True
 
-        with patch.object(oauth._callback_event, "wait", side_effect=fake_wait), \
-             patch.object(oauth, "console"):
+        with (
+            patch.object(oauth._callback_event, "wait", side_effect=fake_wait),
+            patch.object(oauth, "console"),
+        ):
             result = oauth._wait_for_callback(
                 mock_server, timeout=5, expected_state="correct-state"
             )
@@ -1351,16 +1360,18 @@ class TestMcpToolNameValidationAtImport:
         mock_proc.stdin = MagicMock()
         mock_proc.stdout = MagicMock()
 
-        tools_response = json.dumps({
-            "jsonrpc": "2.0",
-            "id": None,
-            "result": {
-                "tools": [
-                    {"name": "safe_tool", "description": "OK"},
-                    {"name": "bad__tool", "description": "namespace injection"},
-                ]
-            },
-        })
+        tools_response = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": None,
+                "result": {
+                    "tools": [
+                        {"name": "safe_tool", "description": "OK"},
+                        {"name": "bad__tool", "description": "namespace injection"},
+                    ]
+                },
+            }
+        )
         mock_proc.stdout.readline.return_value = (tools_response + "\n").encode()
         client._proc = mock_proc
 
@@ -1379,17 +1390,19 @@ class TestMcpToolNameValidationAtImport:
         mock_proc.stdin = MagicMock()
         mock_proc.stdout = MagicMock()
 
-        tools_response = json.dumps({
-            "jsonrpc": "2.0",
-            "id": None,
-            "result": {
-                "tools": [
-                    {"name": "valid-tool", "description": "OK"},
-                    {"name": "evil; rm -rf /", "description": "injection"},
-                    {"name": "", "description": "empty name"},
-                ]
-            },
-        })
+        tools_response = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": None,
+                "result": {
+                    "tools": [
+                        {"name": "valid-tool", "description": "OK"},
+                        {"name": "evil; rm -rf /", "description": "injection"},
+                        {"name": "", "description": "empty name"},
+                    ]
+                },
+            }
+        )
         mock_proc.stdout.readline.return_value = (tools_response + "\n").encode()
         client._proc = mock_proc
 
@@ -1420,6 +1433,7 @@ class TestFileToolSymlinkResolution:
             assert result.success
             assert "hello world" in result.output
         import os
+
         os.unlink(f.name)
 
     def test_file_write_resolves_path(self):

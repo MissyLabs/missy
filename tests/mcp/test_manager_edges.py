@@ -168,7 +168,7 @@ class TestSafeNameReInvalid:
             "newline\nname",
             "tab\tname",
             "null\x00name",
-            "emoji\U0001F600",
+            "emoji\U0001f600",
             "unicode\u00e9",
         ],
     )
@@ -449,9 +449,7 @@ class TestGetTools:
 
     def test_mcp_server_metadata_injected(self, tmp_path):
         mgr = McpManager(config_path=str(tmp_path / "mcp.json"))
-        mgr._clients["db"] = _mock_client(
-            name="db", tools=[{"name": "query", "description": "Q"}]
-        )
+        mgr._clients["db"] = _mock_client(name="db", tools=[{"name": "query", "description": "Q"}])
         tool = mgr.all_tools()[0]
         assert tool["_mcp_server"] == "db"
         assert tool["_mcp_tool"] == "query"
@@ -736,12 +734,8 @@ class TestMultipleServersIndependent:
 
     def test_tools_from_multiple_servers_are_aggregated(self, tmp_path):
         mgr = McpManager(config_path=str(tmp_path / "mcp.json"))
-        mgr._clients["s1"] = _mock_client(
-            name="s1", tools=[{"name": "t1"}, {"name": "t2"}]
-        )
-        mgr._clients["s2"] = _mock_client(
-            name="s2", tools=[{"name": "t3"}]
-        )
+        mgr._clients["s1"] = _mock_client(name="s1", tools=[{"name": "t1"}, {"name": "t2"}])
+        mgr._clients["s2"] = _mock_client(name="s2", tools=[{"name": "t3"}])
         mgr._clients["s3"] = _mock_client(name="s3", tools=[])
         tools = mgr.all_tools()
         assert len(tools) == 3
@@ -866,7 +860,6 @@ class TestThreadSafety:
         slow_connect_called = threading.Event()
         list_before_lock_released = threading.Event()
 
-
         def slow_connect_side_effect():
             slow_connect_called.set()
             # Allow the listing thread to attempt list_servers
@@ -876,7 +869,10 @@ class TestThreadSafety:
         mc.connect.side_effect = slow_connect_side_effect
 
         def add_it():
-            with patch("missy.mcp.manager.McpClient", return_value=mc), contextlib.suppress(Exception):
+            with (
+                patch("missy.mcp.manager.McpClient", return_value=mc),
+                contextlib.suppress(Exception),
+            ):
                 mgr.add_server("slow", command="echo slow")
 
         def list_it():

@@ -337,6 +337,7 @@ class TestProactiveFileHandlerWithMockedWatchdog:
 
     def _reimport_with_watchdog(self) -> types.ModuleType:
         """Inject a mock watchdog and reimport proactive, returning the new module."""
+
         # Build a minimal mock PatternMatchingEventHandler that behaves like the real one.
         class MockPMEH:
             """Minimal stand-in for PatternMatchingEventHandler."""

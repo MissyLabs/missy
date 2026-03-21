@@ -391,11 +391,13 @@ class PuzzlePreprocessor:
                 pct = counts[idx] / total * 100
                 if pct < _KMEANS_MIN_COLOR_PCT:
                     continue
-                regions.append({
-                    "color_rgb": center.tolist(),
-                    "percentage": round(float(pct), 1),
-                    "description": _describe_color(center.tolist()),
-                })
+                regions.append(
+                    {
+                        "color_rgb": center.tolist(),
+                        "percentage": round(float(pct), 1),
+                        "description": _describe_color(center.tolist()),
+                    }
+                )
 
             return {"dominant_colors": regions}
         except Exception as exc:
@@ -411,9 +413,7 @@ class PuzzlePreprocessor:
             blurred = cv2.GaussianBlur(gray, (5, 5), 0)
             edges = cv2.Canny(blurred, _CANNY_CONTOUR_LOW, _CANNY_CONTOUR_HIGH)
 
-            contours, _ = cv2.findContours(
-                edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-            )
+            contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
             return {
                 "contour_count": len(contours),

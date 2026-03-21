@@ -175,9 +175,7 @@ class TestIncusToolEdgeCases:
         tool = IncusSnapshotTool()
         with patch("missy.tools.builtin.incus_tools._run_incus") as mock_run:
             mock_run.return_value = MagicMock(success=True)
-            tool.execute(
-                instance="myvm", action="create", snapshot_name="s1", project="myproj"
-            )
+            tool.execute(instance="myvm", action="create", snapshot_name="s1", project="myproj")
             args = mock_run.call_args[0][0]
             assert "--project" in args
             assert "myproj" in args

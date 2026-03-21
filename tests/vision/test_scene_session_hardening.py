@@ -50,10 +50,7 @@ class TestSceneSessionThreadSafety:
             except Exception as e:
                 errors.append(e)
 
-        threads = [
-            threading.Thread(target=add_frames, args=(i * 50, 20))
-            for i in range(4)
-        ]
+        threads = [threading.Thread(target=add_frames, args=(i * 50, 20)) for i in range(4)]
         for t in threads:
             t.start()
         for t in threads:
@@ -260,25 +257,25 @@ class TestPhotoSourcePathValidation:
         from missy.vision.sources import PhotoSource
 
         with tempfile.TemporaryDirectory() as tmpdir, tempfile.TemporaryDirectory() as outside:
-                # Create a real image file outside
-                outside_img = Path(outside) / "secret.jpg"
-                outside_img.write_bytes(b"\xff\xd8\xff\xe0")  # minimal JPEG header
+            # Create a real image file outside
+            outside_img = Path(outside) / "secret.jpg"
+            outside_img.write_bytes(b"\xff\xd8\xff\xe0")  # minimal JPEG header
 
-                # Create a symlink inside tmpdir pointing outside
-                link = Path(tmpdir) / "traversal.jpg"
-                link.symlink_to(outside_img)
+            # Create a symlink inside tmpdir pointing outside
+            link = Path(tmpdir) / "traversal.jpg"
+            link.symlink_to(outside_img)
 
-                # Also create a legitimate file
-                legit = Path(tmpdir) / "legit.jpg"
-                legit.write_bytes(b"\xff\xd8\xff\xe0")
+            # Also create a legitimate file
+            legit = Path(tmpdir) / "legit.jpg"
+            legit.write_bytes(b"\xff\xd8\xff\xe0")
 
-                source = PhotoSource(tmpdir)
-                files = source.scan()
+            source = PhotoSource(tmpdir)
+            files = source.scan()
 
-                # The symlink pointing outside should be excluded
-                file_names = [f.name for f in files]
-                assert "legit.jpg" in file_names
-                assert "traversal.jpg" not in file_names
+            # The symlink pointing outside should be excluded
+            file_names = [f.name for f in files]
+            assert "legit.jpg" in file_names
+            assert "traversal.jpg" not in file_names
 
     def test_scan_allows_files_inside_directory(self):
         """Legitimate files within the directory should be included."""
@@ -420,6 +417,7 @@ class TestVaultKeyValidation:
 
             try:
                 from missy.security.vault import Vault
+
                 with pytest.raises(VaultError, match="all zeros"):
                     Vault(vault_dir=tmpdir)
             except ImportError:
@@ -436,6 +434,7 @@ class TestVaultKeyValidation:
 
             try:
                 from missy.security.vault import Vault
+
                 with pytest.raises(VaultError, match="32 bytes"):
                     Vault(vault_dir=tmpdir)
             except ImportError:
@@ -452,6 +451,7 @@ class TestVaultKeyValidation:
                 import logging
 
                 from missy.security.vault import Vault
+
                 with caplog.at_level(logging.WARNING):
                     vault = Vault(vault_dir=tmpdir)
                     assert vault is not None
@@ -475,6 +475,7 @@ class TestVaultKeyValidation:
 
             try:
                 from missy.security.vault import Vault
+
                 with pytest.raises(VaultError, match="symlink"):
                     Vault(vault_dir=str(vault_dir))
             except ImportError:

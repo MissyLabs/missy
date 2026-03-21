@@ -33,9 +33,7 @@ _MAX_SANITIZED_LEN = MAX_INPUT_LENGTH + len(_TRUNCATION_SUFFIX)
 # Alphabets that must NOT trigger secret-pattern false positives.
 # We restrict to printable ASCII, avoiding prefix sequences used by real
 # secret formats (sk-, AKIA, ghp_, etc.).
-_SAFE_ALPHABET = st.sampled_from(
-    "abcdefghijklmnopqrstuvwxyz 0123456789.,!?()-"
-)
+_SAFE_ALPHABET = st.sampled_from("abcdefghijklmnopqrstuvwxyz 0123456789.,!?()-")
 
 # ---------------------------------------------------------------------------
 # 1. InputSanitizer properties
@@ -258,16 +256,13 @@ class TestSecretsDetectorProperties:
             ("npm_" + "A" * 36, "npm_token"),
         ],
     )
-    def test_known_secrets_always_detected(
-        self, secret: str, expected_type: str
-    ) -> None:
+    def test_known_secrets_always_detected(self, secret: str, expected_type: str) -> None:
         """Canonical secret strings must always be found by scan()."""
         d = SecretsDetector()
         findings = d.scan(secret)
         found_types = {f["type"] for f in findings}
         assert expected_type in found_types, (
-            f"Expected {expected_type!r} to be detected in {secret!r}; "
-            f"got types: {found_types}"
+            f"Expected {expected_type!r} to be detected in {secret!r}; got types: {found_types}"
         )
 
     @pytest.mark.parametrize(
@@ -302,9 +297,7 @@ class TestSecretsDetectorProperties:
         )
     )
     @settings(max_examples=50)
-    def test_random_lowercase_words_not_detected_as_secrets(
-        self, text: str
-    ) -> None:
+    def test_random_lowercase_words_not_detected_as_secrets(self, text: str) -> None:
         """Lowercase alphabetic strings of reasonable length should not be secrets.
 
         The secret patterns all require specific prefixes or structural markers
@@ -313,9 +306,7 @@ class TestSecretsDetectorProperties:
         """
         d = SecretsDetector()
         findings = d.scan(text)
-        assert findings == [], (
-            f"Unexpected secret detection in plain text {text!r}: {findings}"
-        )
+        assert findings == [], f"Unexpected secret detection in plain text {text!r}: {findings}"
 
 
 # ---------------------------------------------------------------------------
@@ -382,9 +373,7 @@ class TestCensorResponseProperties:
         text = f"My API key is {secret}. Please keep it safe."
         result = censor_response(text)
         # The redaction replaces with [REDACTED]; the literal secret must be gone.
-        assert secret not in result, (
-            f"Secret {secret!r} still present after censoring"
-        )
+        assert secret not in result, f"Secret {secret!r} still present after censoring"
 
     # ------------------------------------------------------------------
     # 3e. Censored text length is same or shorter than original
@@ -396,7 +385,7 @@ class TestCensorResponseProperties:
             # Long secrets — [REDACTED] (10 chars) is shorter than the match.
             "sk-ant-api03-" + "L" * 60,
             "AKIAIOSFODNN7EXAMPLE",  # 20 chars → [REDACTED] 10 chars
-            "ghp_" + "M" * 36,       # 40 chars → shorter
+            "ghp_" + "M" * 36,  # 40 chars → shorter
         ],
     )
     def test_censor_output_same_or_shorter(self, secret: str) -> None:
@@ -409,8 +398,7 @@ class TestCensorResponseProperties:
         text = f"Token: {secret}"
         result = censor_response(text)
         assert len(result) <= len(text), (
-            f"Censored text is longer than original: "
-            f"{len(result)} > {len(text)}"
+            f"Censored text is longer than original: {len(result)} > {len(text)}"
         )
 
     @given(

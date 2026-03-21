@@ -194,9 +194,7 @@ class TestCreateAction:
         assert not r.success
 
     def test_create_invalid_language(self, tool, tools_dir):
-        r = tool.execute(
-            action="create", tool_name="test", language="ruby", script="puts 'hi'"
-        )
+        r = tool.execute(action="create", tool_name="test", language="ruby", script="puts 'hi'")
         assert not r.success
         assert "language must be" in r.error
 

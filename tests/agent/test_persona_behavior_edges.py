@@ -491,7 +491,9 @@ class TestIntentInterpreterUrgency:
         assert self.interp.extract_urgency("") == "low"
 
     def test_normal_query_is_low(self):
-        assert self.interp.extract_urgency("What is the difference between lists and tuples?") == "low"
+        assert (
+            self.interp.extract_urgency("What is the difference between lists and tuples?") == "low"
+        )
 
     def test_high_takes_priority_over_medium(self):
         mixed = "This is important but also production is down right now"
@@ -524,9 +526,16 @@ class TestIntentInterpreterEdgeCasesExtra:
 
     def test_classify_very_long_input_returns_valid_category(self):
         categories = {
-            "greeting", "farewell", "confirmation", "frustration",
-            "troubleshooting", "clarification", "feedback",
-            "exploration", "command", "question",
+            "greeting",
+            "farewell",
+            "confirmation",
+            "frustration",
+            "troubleshooting",
+            "clarification",
+            "feedback",
+            "exploration",
+            "command",
+            "question",
         }
         result = self.interp.classify_intent("what " * 10_000)
         assert result in categories
@@ -554,16 +563,12 @@ class TestResponseShaperPreambleStripping:
         assert "Please note that I am an AI" not in result
 
     def test_absolutely_stripped(self):
-        result = self.shaper.shape_response(
-            "Absolutely! Here is how you do it.", None, {}
-        )
+        result = self.shaper.shape_response("Absolutely! Here is how you do it.", None, {})
         assert "Absolutely" not in result
         assert "Here is how you do it." in result
 
     def test_thats_a_great_question_stripped(self):
-        result = self.shaper.shape_response(
-            "That's a great question! The answer is 42.", None, {}
-        )
+        result = self.shaper.shape_response("That's a great question! The answer is 42.", None, {})
         assert "great question" not in result
         assert "42" in result
 
@@ -577,9 +582,7 @@ class TestResponseShaperPreambleStripping:
         assert "config" in result
 
     def test_trailing_whitespace_removed(self):
-        result = self.shaper.shape_response(
-            "Here is the answer.   \n  ", None, {}
-        )
+        result = self.shaper.shape_response("Here is the answer.   \n  ", None, {})
         assert result == result.strip()
 
 
@@ -719,6 +722,4 @@ class TestBehaviorLayerSystemPromptStructure:
         guidelines = layer.get_response_guidelines(ctx)
         for line in guidelines.splitlines():
             if line.strip():
-                assert line.startswith("- "), (
-                    f"Expected bullet prefix on: {line!r}"
-                )
+                assert line.startswith("- "), f"Expected bullet prefix on: {line!r}"

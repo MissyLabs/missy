@@ -242,7 +242,10 @@ class TestTTSSpeakToolExceptionBranches:
         """Line 270-271: subprocess.TimeoutExpired in execute → ToolResult with 'timed out'."""
         tool = TTSSpeakTool()
         with (
-            patch("missy.tools.builtin.tts_speak._synth_piper", side_effect=subprocess.TimeoutExpired("cmd", 60)),
+            patch(
+                "missy.tools.builtin.tts_speak._synth_piper",
+                side_effect=subprocess.TimeoutExpired("cmd", 60),
+            ),
             patch("missy.tools.builtin.tts_speak._piper_env", return_value={}),
         ):
             result = tool.execute(text="hello world")
@@ -254,7 +257,9 @@ class TestTTSSpeakToolExceptionBranches:
         """Line 272-273: FileNotFoundError in execute → ToolResult mentioning the binary."""
         tool = TTSSpeakTool()
         with (
-            patch("missy.tools.builtin.tts_speak._synth_piper", side_effect=FileNotFoundError("piper")),
+            patch(
+                "missy.tools.builtin.tts_speak._synth_piper", side_effect=FileNotFoundError("piper")
+            ),
             patch("missy.tools.builtin.tts_speak._piper_env", return_value={}),
         ):
             result = tool.execute(text="hello world")
@@ -273,7 +278,9 @@ class TestTTSSpeakToolExceptionBranches:
         tool = TTSSpeakTool()
         with (
             patch("missy.tools.builtin.tts_speak._synth_piper", return_value="piper not found"),
-            patch("missy.tools.builtin.tts_speak._synth_espeak", return_value="espeak not installed"),
+            patch(
+                "missy.tools.builtin.tts_speak._synth_espeak", return_value="espeak not installed"
+            ),
             patch("missy.tools.builtin.tts_speak._piper_env", return_value={}),
         ):
             result = tool.execute(text="hello world")
@@ -287,7 +294,10 @@ class TestTTSSpeakToolExceptionBranches:
         with (
             patch("missy.tools.builtin.tts_speak._synth_piper", return_value="piper not found"),
             patch("missy.tools.builtin.tts_speak._synth_espeak", return_value=None),
-            patch("missy.tools.builtin.tts_speak._play_wav", return_value="gst-launch-1.0 not installed. Install with: sudo apt install gstreamer1.0-tools"),
+            patch(
+                "missy.tools.builtin.tts_speak._play_wav",
+                return_value="gst-launch-1.0 not installed. Install with: sudo apt install gstreamer1.0-tools",
+            ),
             patch("missy.tools.builtin.tts_speak._piper_env", return_value={}),
         ):
             result = tool.execute(text="hello world")
@@ -313,7 +323,9 @@ class TestTTSSpeakToolExceptionBranches:
         """When piper fails but espeak succeeds, output mentions espeak-ng."""
         tool = TTSSpeakTool()
         with (
-            patch("missy.tools.builtin.tts_speak._synth_piper", return_value="piper binary not found"),
+            patch(
+                "missy.tools.builtin.tts_speak._synth_piper", return_value="piper binary not found"
+            ),
             patch("missy.tools.builtin.tts_speak._synth_espeak", return_value=None),
             patch("missy.tools.builtin.tts_speak._play_wav", return_value=None),
             patch("missy.tools.builtin.tts_speak._piper_env", return_value={}),

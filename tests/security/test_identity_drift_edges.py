@@ -271,7 +271,9 @@ class TestAgentIdentityPersistence:
 
     def test_load_corrupted_pem_raises(self, tmp_path):
         key_file = tmp_path / "bad.pem"
-        key_file.write_bytes(b"-----BEGIN PRIVATE KEY-----\nnotbase64!!!\n-----END PRIVATE KEY-----\n")
+        key_file.write_bytes(
+            b"-----BEGIN PRIVATE KEY-----\nnotbase64!!!\n-----END PRIVATE KEY-----\n"
+        )
         with pytest.raises((ValueError, OSError)):
             AgentIdentity.from_key_file(str(key_file))
 
@@ -383,7 +385,7 @@ class TestPromptDriftDetectorEdgeContent:
 
     def test_unicode_prompt_registers_and_verifies(self):
         detector = PromptDriftDetector()
-        prompt = "Vous \u00eates un assistant utile. \U0001F916"
+        prompt = "Vous \u00eates un assistant utile. \U0001f916"
         detector.register("fr", prompt)
         assert detector.verify("fr", prompt) is True
 
@@ -453,9 +455,7 @@ class TestPromptDriftDetectorMultiple:
         detector.register("clean", "unchanged content")
         detector.register("dirty", "original content")
 
-        report = detector.verify_all(
-            {"clean": "unchanged content", "dirty": "tampered content"}
-        )
+        report = detector.verify_all({"clean": "unchanged content", "dirty": "tampered content"})
         by_id = {r["prompt_id"]: r for r in report}
 
         assert by_id["clean"]["drifted"] is False
@@ -481,9 +481,7 @@ class TestPromptDriftDetectorMultiple:
         detector = PromptDriftDetector()
         detector.register("sys", "System prompt")
 
-        report = detector.verify_all(
-            {"sys": "System prompt", "unknown_id": "irrelevant"}
-        )
+        report = detector.verify_all({"sys": "System prompt", "unknown_id": "irrelevant"})
         assert len(report) == 1
         assert report[0]["prompt_id"] == "sys"
 

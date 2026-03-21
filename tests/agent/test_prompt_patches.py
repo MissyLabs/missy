@@ -18,7 +18,9 @@ from missy.agent.prompt_patches import (
 
 class TestPromptPatch:
     def test_default_created_at(self):
-        p = PromptPatch(id="abc", patch_type=PatchType.TOOL_USAGE_HINT, content="test", confidence=0.5)
+        p = PromptPatch(
+            id="abc", patch_type=PatchType.TOOL_USAGE_HINT, content="test", confidence=0.5
+        )
         assert p.created_at  # auto-populated
         assert p.status == PatchStatus.PROPOSED
 

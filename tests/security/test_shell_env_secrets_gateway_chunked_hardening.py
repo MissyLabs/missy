@@ -39,8 +39,15 @@ class TestShellExecEnvSanitization:
         """API keys and tokens must NOT be in the safe set."""
         from missy.tools.builtin.shell_exec import _SAFE_ENV_VARS
 
-        for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "AWS_SECRET_ACCESS_KEY",
-                     "GITHUB_TOKEN", "SLACK_TOKEN", "DATABASE_URL", "SECRET_KEY"):
+        for var in (
+            "ANTHROPIC_API_KEY",
+            "OPENAI_API_KEY",
+            "AWS_SECRET_ACCESS_KEY",
+            "GITHUB_TOKEN",
+            "SLACK_TOKEN",
+            "DATABASE_URL",
+            "SECRET_KEY",
+        ):
             assert var not in _SAFE_ENV_VARS
 
     def test_execute_direct_uses_safe_env(self):
@@ -49,9 +56,7 @@ class TestShellExecEnvSanitization:
 
         tool = ShellExecTool()
         with patch("missy.tools.builtin.shell_exec.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(
-                stdout=b"ok", stderr=b"", returncode=0
-            )
+            mock_run.return_value = MagicMock(stdout=b"ok", stderr=b"", returncode=0)
             tool._execute_direct(command="echo test", cwd=None, timeout=10)
 
             call_kwargs = mock_run.call_args
@@ -66,16 +71,16 @@ class TestShellExecEnvSanitization:
         from missy.tools.builtin.shell_exec import ShellExecTool
 
         tool = ShellExecTool()
-        with patch.dict(os.environ, {"PATH": "/usr/bin", "ANTHROPIC_API_KEY": "sk-ant-test123"}), \
-             patch("missy.tools.builtin.shell_exec.subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(
-                    stdout=b"", stderr=b"", returncode=0
-                )
-                tool._execute_direct(command="ls", cwd=None, timeout=10)
-                env = mock_run.call_args.kwargs.get("env") or mock_run.call_args[1].get("env")
-                assert "PATH" in env
-                assert env["PATH"] == "/usr/bin"
-                assert "ANTHROPIC_API_KEY" not in env
+        with (
+            patch.dict(os.environ, {"PATH": "/usr/bin", "ANTHROPIC_API_KEY": "sk-ant-test123"}),
+            patch("missy.tools.builtin.shell_exec.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(stdout=b"", stderr=b"", returncode=0)
+            tool._execute_direct(command="ls", cwd=None, timeout=10)
+            env = mock_run.call_args.kwargs.get("env") or mock_run.call_args[1].get("env")
+            assert "PATH" in env
+            assert env["PATH"] == "/usr/bin"
+            assert "ANTHROPIC_API_KEY" not in env
 
     def test_missing_safe_var_skipped(self):
         """If a safe var isn't in os.environ, it shouldn't appear in the env."""
@@ -84,15 +89,15 @@ class TestShellExecEnvSanitization:
         tool = ShellExecTool()
         # Use a controlled environment
         test_env = {"PATH": "/bin", "HOME": "/home/test"}
-        with patch.dict(os.environ, test_env, clear=True), \
-             patch("missy.tools.builtin.shell_exec.subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(
-                    stdout=b"", stderr=b"", returncode=0
-                )
-                tool._execute_direct(command="true", cwd=None, timeout=10)
-                env = mock_run.call_args.kwargs.get("env") or mock_run.call_args[1].get("env")
-                # Only PATH and HOME should be present
-                assert set(env.keys()) == {"PATH", "HOME"}
+        with (
+            patch.dict(os.environ, test_env, clear=True),
+            patch("missy.tools.builtin.shell_exec.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(stdout=b"", stderr=b"", returncode=0)
+            tool._execute_direct(command="true", cwd=None, timeout=10)
+            env = mock_run.call_args.kwargs.get("env") or mock_run.call_args[1].get("env")
+            # Only PATH and HOME should be present
+            assert set(env.keys()) == {"PATH", "HOME"}
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -106,9 +111,7 @@ class TestGatewayChunkedResponseLimit:
     def _make_client(self, max_bytes: int = 1024):
         from missy.gateway.client import PolicyHTTPClient
 
-        return PolicyHTTPClient(
-            session_id="s1", task_id="t1", max_response_bytes=max_bytes
-        )
+        return PolicyHTTPClient(session_id="s1", task_id="t1", max_response_bytes=max_bytes)
 
     def test_no_content_length_body_within_limit(self):
         """Response without Content-Length but within limit should pass."""
@@ -158,7 +161,9 @@ class TestGatewayChunkedResponseLimit:
         client = self._make_client(max_bytes=100)
         response = MagicMock()
         response.headers = {}
-        type(response).content = property(lambda self: (_ for _ in ()).throw(RuntimeError("stream closed")))
+        type(response).content = property(
+            lambda self: (_ for _ in ()).throw(RuntimeError("stream closed"))
+        )
         # Should not raise
         client._check_response_size(response, "http://example.com")
 
@@ -171,41 +176,53 @@ class TestGatewayChunkedResponseLimit:
 class TestNewSecretPatterns:
     """Verify detection of newly added secret patterns."""
 
-    @pytest.mark.parametrize("text,expected_type", [
-        ('vercel_token="vXxYzAbCdEfGhIjKlMnOpQrStUvWx"', "vercel_token"),
-        ('VERCEL_KEY = "abcdefghij1234567890abcdef"', "vercel_token"),
-        ('cf_api_token = "v1dot0abcdefghij1234567890abcdefghij12345ab"', "cloudflare_token"),
-        ('cloudflare_api_token="abcdefghij1234567890abcdefghij1234567ab"', "cloudflare_token"),
-        ("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", "shopify_token"),
-        ("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", "shopify_token"),
-        ("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", "shopify_token"),
-        ("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", "shopify_token"),
-        ('client_secret = "GOCSPX-abcdefghij1234567890ab"', "google_oauth_secret"),
-        ("hvs.CAESIAB1234567890abcdefghij", "hashicorp_vault_token"),
-        ("hvb.AAAAAQ1234567890abcdefghij", "hashicorp_vault_token"),
-        ("hvr.AAAAAQ1234567890abcdefghij", "hashicorp_vault_token"),
-        ('firebase_api_key="AIzaSyB1234567890abcdefgh"', "firebase_key"),
-        ('firebase_secret = "abcdefghij1234567890ab"', "firebase_key"),
-    ])
+    @pytest.mark.parametrize(
+        "text,expected_type",
+        [
+            ('vercel_token="vXxYzAbCdEfGhIjKlMnOpQrStUvWx"', "vercel_token"),
+            ('VERCEL_KEY = "abcdefghij1234567890abcdef"', "vercel_token"),
+            ('cf_api_token = "v1dot0abcdefghij1234567890abcdefghij12345ab"', "cloudflare_token"),
+            ('cloudflare_api_token="abcdefghij1234567890abcdefghij1234567ab"', "cloudflare_token"),
+            ("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", "shopify_token"),
+            ("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", "shopify_token"),
+            ("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", "shopify_token"),
+            ("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", "shopify_token"),
+            ('client_secret = "GOCSPX-abcdefghij1234567890ab"', "google_oauth_secret"),
+            ("hvs.CAESIAB1234567890abcdefghij", "hashicorp_vault_token"),
+            ("hvb.AAAAAQ1234567890abcdefghij", "hashicorp_vault_token"),
+            ("hvr.AAAAAQ1234567890abcdefghij", "hashicorp_vault_token"),
+            ('firebase_api_key="AIzaSyB1234567890abcdefgh"', "firebase_key"),
+            ('firebase_secret = "abcdefghij1234567890ab"', "firebase_key"),
+        ],
+    )
     def test_detects_new_patterns(self, text, expected_type):
         """Each new pattern should be detected."""
         findings = secrets_detector.scan(text)
         types = [f["type"] for f in findings]
         assert expected_type in types, f"Expected {expected_type} in {types} for: {text}"
 
-    @pytest.mark.parametrize("text", [
-        "vercel is a deployment platform",
-        "cloudflare provides CDN services",
-        "my shopify store is great",
-        "client_secret is required",  # too short value
-        "hvs.short",  # too short
-        "firebase is a google service",
-    ])
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "vercel is a deployment platform",
+            "cloudflare provides CDN services",
+            "my shopify store is great",
+            "client_secret is required",  # too short value
+            "hvs.short",  # too short
+            "firebase is a google service",
+        ],
+    )
     def test_no_false_positives(self, text):
         """Common text should NOT trigger new patterns."""
         findings = secrets_detector.scan(text)
-        new_types = {"vercel_token", "cloudflare_token", "shopify_token",
-                     "google_oauth_secret", "hashicorp_vault_token", "firebase_key"}
+        new_types = {
+            "vercel_token",
+            "cloudflare_token",
+            "shopify_token",
+            "google_oauth_secret",
+            "hashicorp_vault_token",
+            "firebase_key",
+        }
         triggered = {f["type"] for f in findings} & new_types
         assert not triggered, f"False positive: {triggered} for: {text}"
 

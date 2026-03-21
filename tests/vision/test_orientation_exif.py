@@ -129,7 +129,9 @@ class TestDetectOrientationFromExif:
         # Minimal JPEG with EXIF + end marker
         jpeg_data = (
             b"\xff\xd8"  # SOI
-            + b"\xff\xe1" + struct.pack(">H", app1_len) + exif_payload
+            + b"\xff\xe1"
+            + struct.pack(">H", app1_len)
+            + exif_payload
             + b"\xff\xd9"  # EOI
         )
 

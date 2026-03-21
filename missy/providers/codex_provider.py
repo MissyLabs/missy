@@ -218,9 +218,7 @@ class CodexProvider(BaseProvider):
                     continue
                 etype = event.get("type", "")
                 if etype in ("response.failed", "error"):
-                    msg = event.get("message") or event.get("error", {}).get(
-                        "message", "unknown"
-                    )
+                    msg = event.get("message") or event.get("error", {}).get("message", "unknown")
                     raise ProviderError(f"openai-codex stream error: {msg}")
                 yield event
         finally:
@@ -342,9 +340,7 @@ class CodexProvider(BaseProvider):
                         "arguments": item.get("arguments", ""),
                     }
             elif etype == "response.function_call_arguments.delta":
-                current_fn["arguments"] = current_fn.get("arguments", "") + event.get(
-                    "delta", ""
-                )
+                current_fn["arguments"] = current_fn.get("arguments", "") + event.get("delta", "")
             elif etype == "response.function_call_arguments.done" and current_fn.get("name"):
                 try:
                     args = json.loads(current_fn.get("arguments", "{}"))

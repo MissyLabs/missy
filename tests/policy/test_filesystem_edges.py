@@ -510,7 +510,9 @@ class TestSessionAndTaskIdPropagation:
     def test_session_id_in_deny_write_event(self, workspace: Path):
         engine = make_engine(write_paths=[])
         with pytest.raises(PolicyViolationError):
-            engine.check_write(str(workspace / "out.txt"), session_id="sess-xyz", task_id="task-002")
+            engine.check_write(
+                str(workspace / "out.txt"), session_id="sess-xyz", task_id="task-002"
+            )
         events = event_bus.get_events(result="deny")
         assert events[0].session_id == "sess-xyz"
         assert events[0].task_id == "task-002"
@@ -645,7 +647,10 @@ class TestAuditEventStructure:
 
     def test_mock_publish_called_once_on_deny_read(self, workspace: Path):
         engine = make_engine(read_paths=[])
-        with patch("missy.policy.filesystem.event_bus") as mock_bus, pytest.raises(PolicyViolationError):
+        with (
+            patch("missy.policy.filesystem.event_bus") as mock_bus,
+            pytest.raises(PolicyViolationError),
+        ):
             engine.check_read(str(workspace / "notes.txt"))
         mock_bus.publish.assert_called_once()
         call_arg = mock_bus.publish.call_args[0][0]

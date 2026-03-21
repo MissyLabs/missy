@@ -31,6 +31,7 @@ def approval() -> InteractiveApproval:
 # Helper
 # ---------------------------------------------------------------------------
 
+
 def _console_returning(response: str) -> MagicMock:
     """Return a Console mock whose .input() returns *response*."""
     console = MagicMock()
@@ -49,6 +50,7 @@ def _patched_rich(console: MagicMock):
 # ---------------------------------------------------------------------------
 # _do_prompt — exception paths (lines 116-117)
 # ---------------------------------------------------------------------------
+
 
 class TestDoPromptExceptions:
     """_do_prompt must return False for ImportError, EOFError, and KeyboardInterrupt."""
@@ -88,6 +90,7 @@ class TestDoPromptExceptions:
 # _do_prompt — "y" response path (lines 119-120)
 # ---------------------------------------------------------------------------
 
+
 class TestDoPromptYesResponse:
     """_do_prompt returns True when the operator enters 'y'."""
 
@@ -125,6 +128,7 @@ class TestDoPromptYesResponse:
 # _do_prompt — deny paths (line 128)
 # ---------------------------------------------------------------------------
 
+
 class TestDoPromptDenyResponse:
     """_do_prompt returns False for 'n', empty string, and any other non-approval input."""
 
@@ -157,6 +161,7 @@ class TestDoPromptDenyResponse:
 # ---------------------------------------------------------------------------
 # _is_tty — exception fallback (lines 141-142)
 # ---------------------------------------------------------------------------
+
 
 class TestIsTtyExceptionFallback:
     """_is_tty returns False when sys.stdin.isatty() raises any exception."""
@@ -209,12 +214,11 @@ class TestIsTtyExceptionFallback:
 # Integration: prompt_user → _do_prompt with real rich mocks
 # ---------------------------------------------------------------------------
 
+
 class TestPromptUserIntegration:
     """End-to-end prompt_user flows that exercise _do_prompt via actual dispatch."""
 
-    def test_prompt_user_tty_y_response_returns_true(
-        self, approval: InteractiveApproval
-    ) -> None:
+    def test_prompt_user_tty_y_response_returns_true(self, approval: InteractiveApproval) -> None:
         """prompt_user returns True when TTY is present and operator enters 'y'."""
         console = _console_returning("y")
 
@@ -248,9 +252,7 @@ class TestPromptUserIntegration:
         assert second_result is True
         mock_console_cls.assert_not_called()
 
-    def test_prompt_user_tty_n_response_returns_false(
-        self, approval: InteractiveApproval
-    ) -> None:
+    def test_prompt_user_tty_n_response_returns_false(self, approval: InteractiveApproval) -> None:
         """prompt_user returns False and stores nothing when operator enters 'n'."""
         console = _console_returning("n")
 

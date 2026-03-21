@@ -94,7 +94,10 @@ class TestAtomicWriteYamlCleanup:
         target = tmp_path / "config.yaml"
         data = {"config_version": 2}
 
-        with patch("os.replace", side_effect=OSError("disk full")), pytest.raises(OSError, match="disk full"):
+        with (
+            patch("os.replace", side_effect=OSError("disk full")),
+            pytest.raises(OSError, match="disk full"),
+        ):
             _atomic_write_yaml(target, data)
 
         # The target file must not exist (nothing was written).
@@ -160,14 +163,13 @@ class TestAddServerAuditEventFailure:
 
         with (
             patch("missy.mcp.manager.McpClient", return_value=mock_client),
-            patch(
-                "missy.mcp.digest.compute_tool_manifest_digest", return_value="actual-digest"
-            ),
+            patch("missy.mcp.digest.compute_tool_manifest_digest", return_value="actual-digest"),
             patch("missy.mcp.digest.verify_digest", return_value=False),
             patch(
                 "missy.core.events.event_bus.publish",
                 side_effect=RuntimeError("bus exploded"),
-            ),pytest.raises(ValueError, match="digest mismatch")
+            ),
+            pytest.raises(ValueError, match="digest mismatch"),
         ):
             mgr.add_server("s", command="cmd")
 
@@ -198,9 +200,7 @@ class TestPinServerDigestPersistFailure:
 
         # Make json.loads inside pin_server_digest raise so the except branch is hit.
         with (
-            patch(
-                "missy.mcp.digest.compute_tool_manifest_digest", return_value="sha256:abc123"
-            ),
+            patch("missy.mcp.digest.compute_tool_manifest_digest", return_value="sha256:abc123"),
             patch("missy.mcp.manager.json.loads", side_effect=OSError("disk error")),
         ):
             # Even though persisting fails, digest is still returned.
@@ -284,9 +284,7 @@ class TestParseNetworkCidrDeduplication:
         from missy.policy.presets import PRESETS
 
         # Find a preset that actually has CIDRs, or skip.
-        preset_with_cidrs = next(
-            (name for name, p in PRESETS.items() if p.get("cidrs")), None
-        )
+        preset_with_cidrs = next((name for name, p in PRESETS.items() if p.get("cidrs")), None)
         if preset_with_cidrs is None:
             pytest.skip("No preset with CIDRs found in PRESETS")
 

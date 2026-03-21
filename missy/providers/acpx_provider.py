@@ -267,7 +267,7 @@ You can request multiple tools at once:
 
 ### Tool Names Quick Reference
 
-{', '.join(tool_names)}
+{", ".join(tool_names)}
 """
 
 
@@ -412,13 +412,9 @@ def _validate_tool_calls(
             # Check for close matches (typos)
             close = _find_close_match(tc.name, list(available_tools.keys()))
             if close:
-                warnings.append(
-                    f"Unknown tool {tc.name!r} — did you mean {close!r}? Skipping."
-                )
+                warnings.append(f"Unknown tool {tc.name!r} — did you mean {close!r}? Skipping.")
             else:
-                warnings.append(
-                    f"Unknown tool {tc.name!r} — not in available tools. Skipping."
-                )
+                warnings.append(f"Unknown tool {tc.name!r} — not in available tools. Skipping.")
             continue
 
         # Check required parameters
@@ -662,9 +658,7 @@ class AcpxProvider(BaseProvider):
                     for m in augmented_messages
                 ]
             else:
-                augmented_messages.insert(
-                    0, Message(role="system", content=augmented_system)
-                )
+                augmented_messages.insert(0, Message(role="system", content=augmented_system))
 
         prompt = self._build_prompt(augmented_messages)
 
@@ -821,9 +815,7 @@ class AcpxProvider(BaseProvider):
             )
         except subprocess.TimeoutExpired as exc:
             self._emit_event(session_id, task_id, "error", "subprocess timed out")
-            raise ProviderError(
-                f"acpx subprocess timed out after {self._timeout}s"
-            ) from exc
+            raise ProviderError(f"acpx subprocess timed out after {self._timeout}s") from exc
         except FileNotFoundError as exc:
             self._emit_event(session_id, task_id, "error", "acpx binary not found")
             raise ProviderError(
@@ -835,12 +827,8 @@ class AcpxProvider(BaseProvider):
 
         if result.returncode != 0:
             stderr = result.stderr.strip()[:500]
-            self._emit_event(
-                session_id, task_id, "error", f"exit {result.returncode}: {stderr}"
-            )
-            raise ProviderError(
-                f"acpx exited with code {result.returncode}: {stderr}"
-            )
+            self._emit_event(session_id, task_id, "error", f"exit {result.returncode}: {stderr}")
+            raise ProviderError(f"acpx exited with code {result.returncode}: {stderr}")
 
         return self._parse_ndjson_output(result.stdout)
 

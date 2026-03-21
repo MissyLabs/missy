@@ -270,9 +270,7 @@ class MemoryStore:
         Returns:
             Approximate token count.
         """
-        total_chars = sum(
-            len(t.content) for t in self._turns if t.session_id == session_id
-        )
+        total_chars = sum(len(t.content) for t in self._turns if t.session_id == session_id)
         return max(total_chars // 4, 0)
 
     def save_learning(self, learning) -> None:  # noqa: ARG002

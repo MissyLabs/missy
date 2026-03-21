@@ -51,9 +51,17 @@ def layer(persona):
 class TestIntentInterpreterRobustness:
     def test_empty_string(self, interpreter):
         assert interpreter.classify_intent("") in (
-            "general", "greeting", "farewell", "question", "command",
-            "clarification", "feedback", "exploration", "troubleshoot",
-            "confirmation", "frustration",
+            "general",
+            "greeting",
+            "farewell",
+            "question",
+            "command",
+            "clarification",
+            "feedback",
+            "exploration",
+            "troubleshoot",
+            "confirmation",
+            "frustration",
         )
 
     def test_very_long_input(self, interpreter):
@@ -120,10 +128,16 @@ class TestIntentInterpreterClassifications:
         assert interpreter.classify_intent("ok") == "confirmation"
 
     def test_troubleshoot(self, interpreter):
-        assert interpreter.classify_intent("I'm getting an error: connection refused") == "troubleshooting"
+        assert (
+            interpreter.classify_intent("I'm getting an error: connection refused")
+            == "troubleshooting"
+        )
 
     def test_frustration(self, interpreter):
-        assert interpreter.classify_intent("this still doesn't work, I already tried that") == "frustration"
+        assert (
+            interpreter.classify_intent("this still doesn't work, I already tried that")
+            == "frustration"
+        )
 
 
 class TestUrgencyExtraction:
@@ -134,7 +148,9 @@ class TestUrgencyExtraction:
         assert interpreter.extract_urgency("need this done today before the deadline") == "medium"
 
     def test_low_urgency(self, interpreter):
-        assert interpreter.extract_urgency("when you get a chance, could you look at this?") == "low"
+        assert (
+            interpreter.extract_urgency("when you get a chance, could you look at this?") == "low"
+        )
 
     def test_empty_input(self, interpreter):
         assert interpreter.extract_urgency("") == "low"
@@ -230,22 +246,39 @@ class TestBehaviorLayerIntegration:
         assert isinstance(tone, str)
 
     def test_analyze_user_tone_casual(self, layer):
-        messages = [{"role": "user", "content": "hey yo what's up lol, I kinda wanna do something cool with this btw it's awesome thx"}]
+        messages = [
+            {
+                "role": "user",
+                "content": "hey yo what's up lol, I kinda wanna do something cool with this btw it's awesome thx",
+            }
+        ]
         tone = layer.analyze_user_tone(messages)
         assert tone == "casual"
 
     def test_analyze_user_tone_formal(self, layer):
-        messages = [{"role": "user", "content": "I would appreciate it if you could kindly assist me regarding this matter."}]
+        messages = [
+            {
+                "role": "user",
+                "content": "I would appreciate it if you could kindly assist me regarding this matter.",
+            }
+        ]
         tone = layer.analyze_user_tone(messages)
         assert tone == "formal"
 
     def test_analyze_user_tone_frustrated(self, layer):
-        messages = [{"role": "user", "content": "ugh this doesn't work again, it's broken and useless"}]
+        messages = [
+            {"role": "user", "content": "ugh this doesn't work again, it's broken and useless"}
+        ]
         tone = layer.analyze_user_tone(messages)
         assert tone == "frustrated"
 
     def test_analyze_user_tone_technical(self, layer):
-        messages = [{"role": "user", "content": "The async endpoint returns a 500 when the database query hits the index on the oauth token table"}]
+        messages = [
+            {
+                "role": "user",
+                "content": "The async endpoint returns a 500 when the database query hits the index on the oauth token table",
+            }
+        ]
         tone = layer.analyze_user_tone(messages)
         assert tone == "technical"
 

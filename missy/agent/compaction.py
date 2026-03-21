@@ -93,7 +93,8 @@ def compact_session(
 
         for chunk in chunks:
             summary_text, tier = summarizer.summarize_turns(
-                chunk, prior_summary=prior_summary,
+                chunk,
+                prior_summary=prior_summary,
             )
             time_start = chunk[0].timestamp if chunk else None
             time_end = chunk[-1].timestamp if chunk else None
@@ -137,9 +138,7 @@ def compact_session(
             descendant_count=total_descendants,
         )
         memory_store.add_summary(parent)
-        memory_store.mark_summary_compacted(
-            [s.id for s in uncompacted], parent.id
-        )
+        memory_store.mark_summary_compacted([s.id for s in uncompacted], parent.id)
 
         stats["condensed_summaries_created"] += 1
         stats["tiers_used"].append(tier)
@@ -200,9 +199,8 @@ def compact_if_needed(
 # Helpers
 # ------------------------------------------------------------------
 
-def _chunk_turns(
-    turns: list, max_tokens: int
-) -> list[list]:
+
+def _chunk_turns(turns: list, max_tokens: int) -> list[list]:
     """Split turns into chunks of approximately max_tokens each."""
     chunks: list[list] = []
     current: list = []

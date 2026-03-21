@@ -36,6 +36,7 @@ import pytest
 from click.testing import CliRunner
 
 from missy.cli.main import cli
+from tests.cli.conftest import _make_cli_runner
 
 # ---------------------------------------------------------------------------
 # Module-level helpers and constants
@@ -124,7 +125,7 @@ def _make_mock_config(**kwargs: Any) -> MagicMock:
 @pytest.fixture()
 def runner() -> CliRunner:
     """Return a CliRunner with separate stdout/stderr streams."""
-    return CliRunner(mix_stderr=False)
+    return _make_cli_runner(mix_stderr=False)
 
 
 @pytest.fixture()
@@ -460,9 +461,7 @@ class TestSkills:
 
         assert "no skills" in result.output.lower() or "not currently" in result.output.lower()
 
-    def test_skills_bare_group_also_lists(
-        self, runner: CliRunner, mock_config: MagicMock
-    ) -> None:
+    def test_skills_bare_group_also_lists(self, runner: CliRunner, mock_config: MagicMock) -> None:
         """``missy skills`` (no sub-command) delegates to list."""
         mock_registry = MagicMock()
         mock_registry.list_skills.return_value = []
@@ -475,9 +474,7 @@ class TestSkills:
 
         assert result.exit_code == 0
 
-    def test_skills_list_shows_skill_names(
-        self, runner: CliRunner, mock_config: MagicMock
-    ) -> None:
+    def test_skills_list_shows_skill_names(self, runner: CliRunner, mock_config: MagicMock) -> None:
         """Skill names returned by the registry appear in the table."""
         mock_registry = MagicMock()
         mock_registry.list_skills.return_value = ["greet", "summarise"]
@@ -584,8 +581,7 @@ class TestPresetsList:
         assert result.exit_code == 0
         # At least one of the column headers or table title is present
         assert any(
-            token in result.output
-            for token in ("Hosts", "Domains", "CIDRs", "Presets", "Name")
+            token in result.output for token in ("Hosts", "Domains", "CIDRs", "Presets", "Name")
         )
 
     def test_presets_help_exits_zero(self, runner: CliRunner) -> None:
@@ -631,9 +627,7 @@ class TestAuditRecent:
 
         assert "no audit events" in result.output.lower()
 
-    def test_audit_recent_renders_events(
-        self, runner: CliRunner, mock_config: MagicMock
-    ) -> None:
+    def test_audit_recent_renders_events(self, runner: CliRunner, mock_config: MagicMock) -> None:
         """When events are present they appear in the table output."""
         event = {
             "timestamp": "2026-03-18T12:00:00",
@@ -786,9 +780,7 @@ class TestDoctor:
 
         assert "doctor" in result.output.lower() or "missy" in result.output.lower()
 
-    def test_doctor_checks_config_loaded(
-        self, runner: CliRunner, mock_config: MagicMock
-    ) -> None:
+    def test_doctor_checks_config_loaded(self, runner: CliRunner, mock_config: MagicMock) -> None:
         """The doctor output includes a 'config loaded' check row."""
         mock_registry = MagicMock()
         mock_registry.list_providers.return_value = []
@@ -1031,9 +1023,7 @@ class TestCost:
         assert result.exit_code == 0
         assert "unlimited" in result.output.lower()
 
-    def test_cost_shows_configured_budget(
-        self, runner: CliRunner, mock_config: MagicMock
-    ) -> None:
+    def test_cost_shows_configured_budget(self, runner: CliRunner, mock_config: MagicMock) -> None:
         """When max_spend_usd is set the formatted value appears in the output."""
         mock_config.max_spend_usd = 10.0
 
@@ -1209,8 +1199,7 @@ class TestSandboxStatus:
         assert result.exit_code == 0
         # enabled, image, memory_limit, cpu_quota, or network_mode should appear
         assert any(
-            token in result.output
-            for token in ("enabled", "image", "memory", "cpu", "network")
+            token in result.output for token in ("enabled", "image", "memory", "cpu", "network")
         )
 
     def test_sandbox_help_exits_zero(self, runner: CliRunner) -> None:

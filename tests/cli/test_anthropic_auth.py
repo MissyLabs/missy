@@ -160,11 +160,15 @@ class TestGetCurrentToken:
     def test_stored_token_used_when_no_env(self, tmp_path, monkeypatch):
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         token_file = tmp_path / "anthropic-token.json"
-        token_file.write_text(json.dumps({
-            "token_type": "api_key",
-            "token": "stored-key",
-            "issued_at": int(time.time()),
-        }))
+        token_file.write_text(
+            json.dumps(
+                {
+                    "token_type": "api_key",
+                    "token": "stored-key",
+                    "issued_at": int(time.time()),
+                }
+            )
+        )
         monkeypatch.setattr("missy.cli.anthropic_auth.TOKEN_FILE", token_file)
         assert get_current_token() == "stored-key"
 
@@ -187,11 +191,15 @@ class TestGetCurrentToken:
     def test_expiring_token_triggers_reminder(self, tmp_path, monkeypatch):
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         token_file = tmp_path / "anthropic-token.json"
-        token_file.write_text(json.dumps({
-            "token_type": "setup_token",
-            "token": "expiring-tok",
-            "issued_at": 0,  # Very old
-        }))
+        token_file.write_text(
+            json.dumps(
+                {
+                    "token_type": "setup_token",
+                    "token": "expiring-tok",
+                    "issued_at": 0,  # Very old
+                }
+            )
+        )
         monkeypatch.setattr("missy.cli.anthropic_auth.TOKEN_FILE", token_file)
         with patch("missy.cli.anthropic_auth.remind_refresh") as mock_remind:
             result = get_current_token()

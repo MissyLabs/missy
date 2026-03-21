@@ -139,9 +139,7 @@ class MemoryConsolidator:
         summary_lines: list[str] = []
         for msg in condensed:
             content = str(msg.get("content", ""))
-            if content.startswith(
-                ("[Conversation Summary]", "[Session context consolidated]")
-            ):
+            if content.startswith(("[Conversation Summary]", "[Session context consolidated]")):
                 summary_lines.append(content)
 
         if summary_lines:

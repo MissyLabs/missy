@@ -257,15 +257,13 @@ class TestSecretsDetectorFuzz:
             return  # Nothing to check
         redacted = detector.redact(text)
         for finding in findings:
-            text[finding["match_start"]:finding["match_end"]]
+            text[finding["match_start"] : finding["match_end"]]
             # The exact match text must not appear in redacted at this location.
             # We verify by checking the redacted string does not contain the
             # original match text starting at the same offset (accounting for
             # the offset shift caused by earlier replacements is complex, so
             # we conservatively check that [REDACTED] appears in the output).
-            assert "[REDACTED]" in redacted, (
-                f"Expected [REDACTED] in output but got: {redacted!r}"
-            )
+            assert "[REDACTED]" in redacted, f"Expected [REDACTED] in output but got: {redacted!r}"
 
     @given(text=_unicode_text)
     @settings(max_examples=100)
@@ -387,7 +385,9 @@ class TestNetworkPolicyEngineFuzz:
 class TestFilesystemPolicyEngineFuzz:
     """Property-based fuzz tests for FilesystemPolicyEngine."""
 
-    def _make_engine(self, read_paths: list[str] | None = None, write_paths: list[str] | None = None) -> FilesystemPolicyEngine:
+    def _make_engine(
+        self, read_paths: list[str] | None = None, write_paths: list[str] | None = None
+    ) -> FilesystemPolicyEngine:
         policy = FilesystemPolicy(
             allowed_read_paths=read_paths or [],
             allowed_write_paths=write_paths or [],
@@ -461,7 +461,9 @@ class TestFilesystemPolicyEngineFuzz:
 class TestShellPolicyEngineFuzz:
     """Property-based fuzz tests for ShellPolicyEngine."""
 
-    def _make_engine(self, enabled: bool = True, allowed: list[str] | None = None) -> ShellPolicyEngine:
+    def _make_engine(
+        self, enabled: bool = True, allowed: list[str] | None = None
+    ) -> ShellPolicyEngine:
         policy = ShellPolicy(enabled=enabled, allowed_commands=allowed or [])
         return ShellPolicyEngine(policy)
 
@@ -503,13 +505,15 @@ class TestShellPolicyEngineFuzz:
             if result:
                 # Verify the leading token would be in the allow list
                 import shlex
+
                 tokens = shlex.split(command)
                 if tokens:
                     import os.path
+
                     basename = os.path.basename(tokens[0])
-                    assert any(
-                        os.path.basename(a) == basename for a in allowed_commands
-                    ), f"Command {command!r} was allowed but {basename!r} not in allow list"
+                    assert any(os.path.basename(a) == basename for a in allowed_commands), (
+                        f"Command {command!r} was allowed but {basename!r} not in allow list"
+                    )
         except (PolicyViolationError, ValueError):
             pass
 

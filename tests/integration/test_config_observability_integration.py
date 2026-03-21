@@ -363,17 +363,13 @@ class TestConfigPlanBackupCycle:
     def test_full_cycle_write_backup_modify_diff(self, tmp_path: Path) -> None:
         """End-to-end: write -> backup -> modify -> diff contains the changed key."""
         cfg_file = tmp_path / "config.yaml"
-        initial = yaml.dump(
-            {"network": {"default_deny": True}, "workspace_path": "/workspace"}
-        )
+        initial = yaml.dump({"network": {"default_deny": True}, "workspace_path": "/workspace"})
         cfg_file.write_text(initial, encoding="utf-8")
         backup_dir = tmp_path / "config.d"
 
         backup_path = backup_config(cfg_file, backup_dir)
 
-        modified = yaml.dump(
-            {"network": {"default_deny": False}, "workspace_path": "/workspace"}
-        )
+        modified = yaml.dump({"network": {"default_deny": False}, "workspace_path": "/workspace"})
         cfg_file.write_text(modified, encoding="utf-8")
 
         diff = diff_configs(backup_path, cfg_file)
@@ -407,9 +403,7 @@ class TestConfigRollback:
         result = rollback(cfg_file, tmp_path / "empty.d")
         assert result is None
 
-    def test_rollback_restores_latest_when_multiple_backups_exist(
-        self, tmp_path: Path
-    ) -> None:
+    def test_rollback_restores_latest_when_multiple_backups_exist(self, tmp_path: Path) -> None:
         cfg_file = tmp_path / "config.yaml"
         backup_dir = tmp_path / "config.d"
 
@@ -1068,9 +1062,7 @@ class TestConfigVaultReferences:
             """,
         )
 
-        with patch(
-            "missy.security.vault.Vault", side_effect=Exception("vault unavailable")
-        ):
+        with patch("missy.security.vault.Vault", side_effect=Exception("vault unavailable")):
             # load_config must not raise — it logs and falls back gracefully.
             cfg = load_config(str(cfg_path))
 
@@ -1166,9 +1158,7 @@ class TestProviderConfigKeyRotation:
         assert len(cfg.providers["anthropic"].api_keys) == 3
         assert cfg.providers["anthropic"].api_keys[0] == "sk-key-a"
 
-    def test_first_api_key_used_as_primary_when_api_key_missing(
-        self, tmp_path: Path
-    ) -> None:
+    def test_first_api_key_used_as_primary_when_api_key_missing(self, tmp_path: Path) -> None:
         cfg_path = _write_yaml(
             tmp_path,
             """

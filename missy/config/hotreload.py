@@ -83,9 +83,7 @@ class ConfigWatcher:
         """
         try:
             if self._path.is_symlink():
-                logger.warning(
-                    "ConfigWatcher: %s is a symlink; refusing to reload", self._path
-                )
+                logger.warning("ConfigWatcher: %s is a symlink; refusing to reload", self._path)
                 return False
             st = self._path.stat()
             if st.st_uid != os.getuid():

@@ -1,6 +1,5 @@
 """Coverage gap tests for scheduler, voice, discord, network policy."""
 
-
 from __future__ import annotations
 
 import json

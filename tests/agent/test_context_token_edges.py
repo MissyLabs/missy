@@ -277,9 +277,7 @@ class TestBuildMessagesReturnType:
 
     def test_last_message_is_dict_with_role_and_content(self):
         cm = ContextManager()
-        _, messages = cm.build_messages(
-            system="S", new_message="hello", history=[]
-        )
+        _, messages = cm.build_messages(system="S", new_message="hello", history=[])
         last = messages[-1]
         assert "role" in last
         assert "content" in last
@@ -298,9 +296,7 @@ class TestBuildMessagesReturnType:
 class TestSystemPromptPassthrough:
     def test_system_unchanged_without_enrichment(self):
         cm = ContextManager()
-        system, _ = cm.build_messages(
-            system="Exact system text.", new_message="hi", history=[]
-        )
+        system, _ = cm.build_messages(system="Exact system text.", new_message="hi", history=[])
         assert system == "Exact system text."
 
     def test_system_unchanged_when_all_enrichments_none(self):
@@ -356,20 +352,14 @@ class TestNewMessageAlwaysLast:
     def test_new_message_last_with_history(self):
         cm = ContextManager(_budget(total=50_000))
         history = [_msg("user", "a"), _msg("assistant", "b")]
-        _, messages = cm.build_messages(
-            system="S", new_message="FINAL", history=history
-        )
+        _, messages = cm.build_messages(system="S", new_message="FINAL", history=history)
         assert messages[-1]["content"] == "FINAL"
 
     def test_new_message_last_when_all_history_pruned(self):
         # Zero history budget: all history dropped.
-        cm = ContextManager(
-            _budget(total=100, system_reserve=50, tool_definitions_reserve=50)
-        )
+        cm = ContextManager(_budget(total=100, system_reserve=50, tool_definitions_reserve=50))
         history = [_msg("user", "old"), _msg("assistant", "older")]
-        _, messages = cm.build_messages(
-            system="S", new_message="ONLY", history=history
-        )
+        _, messages = cm.build_messages(system="S", new_message="ONLY", history=history)
         assert messages[-1]["content"] == "ONLY"
         assert len(messages) == 1
 
@@ -454,9 +444,7 @@ class TestMemoryInjection:
 
     def test_empty_memory_results_no_section(self):
         cm = ContextManager()
-        system, _ = cm.build_messages(
-            system="Base", new_message="x", history=[], memory_results=[]
-        )
+        system, _ = cm.build_messages(system="Base", new_message="x", history=[], memory_results=[])
         assert "## Relevant Memory" not in system
 
 
@@ -564,16 +552,12 @@ class TestLearningsInjection:
 
     def test_none_learnings_no_section(self):
         cm = ContextManager()
-        system, _ = cm.build_messages(
-            system="Base", new_message="x", history=[], learnings=None
-        )
+        system, _ = cm.build_messages(system="Base", new_message="x", history=[], learnings=None)
         assert "## Past Learnings" not in system
 
     def test_empty_learnings_no_section(self):
         cm = ContextManager()
-        system, _ = cm.build_messages(
-            system="Base", new_message="x", history=[], learnings=[]
-        )
+        system, _ = cm.build_messages(system="Base", new_message="x", history=[], learnings=[])
         assert "## Past Learnings" not in system
 
     def test_memory_appears_before_learnings_when_both_present(self):
@@ -628,9 +612,7 @@ class TestHistoryPruning:
     def test_history_all_kept_within_budget(self):
         cm = ContextManager(_budget(total=50_000))
         history = [_msg("user", "a"), _msg("assistant", "b"), _msg("user", "c")]
-        _, messages = cm.build_messages(
-            system="S", new_message="d", history=history
-        )
+        _, messages = cm.build_messages(system="S", new_message="d", history=history)
         assert len(messages) == 4
 
     def test_single_message_exact_fit(self):
@@ -667,9 +649,9 @@ class TestHistoryPruning:
         # each msg = 50 tokens; only newest (msg2) fits
         cm = ContextManager(b)
         history = [
-            _msg("user", _tok(50)),       # oldest
+            _msg("user", _tok(50)),  # oldest
             _msg("assistant", _tok(50)),  # middle
-            _msg("user", _tok(50)),       # newest evictable
+            _msg("user", _tok(50)),  # newest evictable
         ]
         _, messages = cm.build_messages(system="S", new_message="x", history=history)
         # Exactly one history entry of 50 tokens fits; the newest is kept.
@@ -683,9 +665,7 @@ class TestHistoryPruning:
             _msg("assistant", "second"),
             _msg("user", "third"),
         ]
-        _, messages = cm.build_messages(
-            system="S", new_message="fourth", history=history
-        )
+        _, messages = cm.build_messages(system="S", new_message="fourth", history=history)
         contents = [m["content"] for m in messages]
         assert contents.index("first") < contents.index("second")
         assert contents.index("second") < contents.index("third")
@@ -709,10 +689,10 @@ class TestFreshTailProtection:
         cm = ContextManager(b)
         # available = 100 tokens; each tail msg = 1 token; each evictable = 400 tokens
         history = [
-            _msg("user", _tok(400)),       # evictable, huge
+            _msg("user", _tok(400)),  # evictable, huge
             _msg("assistant", _tok(400)),  # evictable, huge
-            _msg("user", "tail-a"),        # fresh tail
-            _msg("assistant", "tail-b"),   # fresh tail
+            _msg("user", "tail-a"),  # fresh tail
+            _msg("assistant", "tail-b"),  # fresh tail
         ]
         _, messages = cm.build_messages(system="S", new_message="new", history=history)
         contents = [m["content"] for m in messages]
@@ -742,9 +722,7 @@ class TestFreshTailProtection:
         b = _budget(total=50_000, fresh_tail_count=100)
         cm = ContextManager(b)
         history = [_msg("user", "only"), _msg("assistant", "two")]
-        _, messages = cm.build_messages(
-            system="S", new_message="new", history=history
-        )
+        _, messages = cm.build_messages(system="S", new_message="new", history=history)
         assert len(messages) == 3
         assert messages[0]["content"] == "only"
 
@@ -765,7 +743,7 @@ class TestFreshTailZero:
         )
         cm = ContextManager(b)
         history = [
-            _msg("user", _tok(200)),       # 200 tokens, won't fit
+            _msg("user", _tok(200)),  # 200 tokens, won't fit
             _msg("assistant", _tok(200)),  # 200 tokens, won't fit
         ]
         _, messages = cm.build_messages(system="S", new_message="new", history=history)
@@ -780,9 +758,7 @@ class TestFreshTailZero:
             _msg("assistant", "msg2"),
             _msg("user", "msg3"),
         ]
-        _, messages = cm.build_messages(
-            system="S", new_message="msg4", history=history
-        )
+        _, messages = cm.build_messages(system="S", new_message="msg4", history=history)
         contents = [m["content"] for m in messages]
         assert "msg1" in contents
         assert "msg2" in contents
@@ -806,9 +782,7 @@ class TestLargeHistory:
         )
         cm = ContextManager(b)
         history = [_msg("user", _tok(20)) for _ in range(100)]
-        _, messages = cm.build_messages(
-            system="S", new_message="new", history=history
-        )
+        _, messages = cm.build_messages(system="S", new_message="new", history=history)
         # Should be far fewer than 100 history messages
         history_in_result = [m for m in messages if m["content"] != "new"]
         assert len(history_in_result) < 100
@@ -820,9 +794,7 @@ class TestLargeHistory:
         b = _budget(total=50_000)
         cm = ContextManager(b)
         history = [_msg("user", f"msg{i}") for i in range(100)]
-        _, messages = cm.build_messages(
-            system="S", new_message="final", history=history
-        )
+        _, messages = cm.build_messages(system="S", new_message="final", history=history)
         history_contents = [m["content"] for m in messages if m["content"] != "final"]
         # Preserved order: each label is numerically ordered
         indices = [int(c[3:]) for c in history_contents]
@@ -839,18 +811,14 @@ class TestVeryLongSingleMessage:
         b = _budget(total=200, fresh_tail_count=0)
         cm = ContextManager(b)
         huge = "Z" * 100_000
-        _, messages = cm.build_messages(
-            system="S", new_message="ok", history=[_msg("user", huge)]
-        )
+        _, messages = cm.build_messages(system="S", new_message="ok", history=[_msg("user", huge)])
         assert messages[-1]["content"] == "ok"
 
     def test_huge_evictable_message_dropped(self):
         b = _budget(total=200, fresh_tail_count=0)
         cm = ContextManager(b)
         huge = _tok(10_000)  # 10 000 tokens >> available
-        _, messages = cm.build_messages(
-            system="S", new_message="ok", history=[_msg("user", huge)]
-        )
+        _, messages = cm.build_messages(system="S", new_message="ok", history=[_msg("user", huge)])
         assert all(m["content"] != huge for m in messages)
 
     def test_huge_fresh_tail_message_still_included(self):
@@ -858,9 +826,7 @@ class TestVeryLongSingleMessage:
         b = _budget(total=200, fresh_tail_count=1)
         cm = ContextManager(b)
         huge = _tok(10_000)
-        _, messages = cm.build_messages(
-            system="S", new_message="ok", history=[_msg("user", huge)]
-        )
+        _, messages = cm.build_messages(system="S", new_message="ok", history=[_msg("user", huge)])
         contents = [m["content"] for m in messages]
         assert huge in contents
 
@@ -872,9 +838,7 @@ class TestVeryLongSingleMessage:
 
 class TestBudgetArithmetic:
     def test_available_tokens_formula(self):
-        b = TokenBudget(
-            total=30_000, system_reserve=2_000, tool_definitions_reserve=2_000
-        )
+        b = TokenBudget(total=30_000, system_reserve=2_000, tool_definitions_reserve=2_000)
         expected_available = 26_000
         assert b.total - b.system_reserve - b.tool_definitions_reserve == expected_available
 
@@ -898,7 +862,7 @@ class TestBudgetArithmetic:
             learnings_fraction=0.05,
         )
         available = 26_000
-        memory_budget = int(available * 0.15)    # 3900
+        memory_budget = int(available * 0.15)  # 3900
         learnings_budget = int(available * 0.05)  # 1300
         expected_history = available - memory_budget - learnings_budget  # 20800
         assert expected_history == 20_800
@@ -926,9 +890,7 @@ class TestSummariesPlacement:
         summary_idx = next(
             i for i, m in enumerate(messages) if "compressed past" in m.get("content", "")
         )
-        evictable_idx = next(
-            i for i, m in enumerate(messages) if m.get("content") == "evictable"
-        )
+        evictable_idx = next(i for i, m in enumerate(messages) if m.get("content") == "evictable")
         assert summary_idx < evictable_idx
 
     def test_summary_role_is_user(self):
@@ -959,10 +921,7 @@ class TestSummariesPlacement:
     def test_multiple_summaries_all_included_when_budget_allows(self):
         b = _budget(total=50_000)
         cm = ContextManager(b)
-        summaries = [
-            _Summary(depth=0, content=f"summary{i}", descendant_count=1)
-            for i in range(3)
-        ]
+        summaries = [_Summary(depth=0, content=f"summary{i}", descendant_count=1) for i in range(3)]
         _, messages = cm.build_messages(
             system="S", new_message="x", history=[], summaries=summaries
         )
@@ -973,9 +932,7 @@ class TestSummariesPlacement:
     def test_empty_summaries_list_no_effect(self):
         cm = ContextManager()
         history = [_msg("user", "h1")]
-        _, messages = cm.build_messages(
-            system="S", new_message="x", history=history, summaries=[]
-        )
+        _, messages = cm.build_messages(system="S", new_message="x", history=history, summaries=[])
         assert len(messages) == 2  # history + new
 
 
@@ -1093,27 +1050,21 @@ class TestMessageDictShape:
     def test_all_messages_have_role_key(self):
         cm = ContextManager(_budget(total=50_000))
         history = [_msg("user", "h1"), _msg("assistant", "h2")]
-        _, messages = cm.build_messages(
-            system="S", new_message="new", history=history
-        )
+        _, messages = cm.build_messages(system="S", new_message="new", history=history)
         for m in messages:
             assert "role" in m
 
     def test_all_messages_have_content_key(self):
         cm = ContextManager(_budget(total=50_000))
         history = [_msg("user", "h1"), _msg("assistant", "h2")]
-        _, messages = cm.build_messages(
-            system="S", new_message="new", history=history
-        )
+        _, messages = cm.build_messages(system="S", new_message="new", history=history)
         for m in messages:
             assert "content" in m
 
     def test_history_roles_preserved(self):
         cm = ContextManager(_budget(total=50_000))
         history = [_msg("user", "u"), _msg("assistant", "a")]
-        _, messages = cm.build_messages(
-            system="S", new_message="new", history=history
-        )
+        _, messages = cm.build_messages(system="S", new_message="new", history=history)
         roles = [m["role"] for m in messages[:-1]]
         assert "user" in roles
         assert "assistant" in roles
@@ -1121,7 +1072,5 @@ class TestMessageDictShape:
     def test_missing_content_in_history_does_not_crash(self):
         cm = ContextManager()
         history = [{"role": "user"}]  # no "content" key
-        _, messages = cm.build_messages(
-            system="S", new_message="ok", history=history
-        )
+        _, messages = cm.build_messages(system="S", new_message="ok", history=history)
         assert messages[-1]["content"] == "ok"

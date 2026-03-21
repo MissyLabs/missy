@@ -484,8 +484,12 @@ class TestHandleInteraction:
             await ch._handle_interaction(data)
 
         assert ch._current_channel_id == "chan-1"
-        ch._rest.send_interaction_response.assert_called_once_with("int-1", "tok-abc", response_type=5)
-        ch._rest.edit_interaction_response.assert_called_once_with("123456789", "tok-abc", "ok reply")
+        ch._rest.send_interaction_response.assert_called_once_with(
+            "int-1", "tok-abc", response_type=5
+        )
+        ch._rest.edit_interaction_response.assert_called_once_with(
+            "123456789", "tok-abc", "ok reply"
+        )
 
     @pytest.mark.asyncio
     async def test_handle_interaction_logs_on_deferred_response_error(self, caplog):
@@ -653,7 +657,6 @@ class TestEmitAuditExceptionSwallowed:
 
     def test_emit_audit_publishes_to_event_bus(self):
         ch = _make_channel()
-
 
         with patch("missy.channels.discord.channel.event_bus") as mock_bus:
             mock_bus.publish = MagicMock()

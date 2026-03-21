@@ -50,11 +50,13 @@ class TestSessionManager:
         sm.register_connection("s1")
 
         for i in range(5):
-            sm.store_result(AnalysisResult(
-                session_id="s1",
-                frame_number=i,
-                analysis_text=f"analysis {i}",
-            ))
+            sm.store_result(
+                AnalysisResult(
+                    session_id="s1",
+                    frame_number=i,
+                    analysis_text=f"analysis {i}",
+                )
+            )
 
         results = sm.get_results("s1", limit=3)
         assert len(results) == 3

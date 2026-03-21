@@ -70,10 +70,7 @@ class TestCaptureBenchmark:
             except Exception as e:
                 errors.append(e)
 
-        threads = [
-            threading.Thread(target=record_batch, args=(f"cat-{i}", 100))
-            for i in range(4)
-        ]
+        threads = [threading.Thread(target=record_batch, args=(f"cat-{i}", 100)) for i in range(4)]
         for t in threads:
             t.start()
         for t in threads:

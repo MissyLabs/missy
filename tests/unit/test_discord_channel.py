@@ -890,7 +890,9 @@ class TestDiscordRestThreads:
         self, rest_client: DiscordRestClient, mock_http_client: MagicMock
     ) -> None:
         mock_http_client.post.return_value.json.return_value = {"id": "500000000000000002"}
-        result = rest_client.create_thread("100000000000000001", "Thread", message_id="200000000000000099")
+        result = rest_client.create_thread(
+            "100000000000000001", "Thread", message_id="200000000000000099"
+        )
         assert result["id"] == "500000000000000002"
         call_args = mock_http_client.post.call_args
         assert "/messages/200000000000000099/threads" in call_args[0][0]
@@ -905,7 +907,10 @@ class TestDiscordRestThreads:
         assert len(call_args[1]["json"]["name"]) == 100
 
     def test_get_channel(self, rest_client: DiscordRestClient, mock_http_client: MagicMock) -> None:
-        mock_http_client.get.return_value.json.return_value = {"id": "100000000000000001", "type": 0}
+        mock_http_client.get.return_value.json.return_value = {
+            "id": "100000000000000001",
+            "type": 0,
+        }
         result = rest_client.get_channel("100000000000000001")
         assert result["id"] == "100000000000000001"
         call_args = mock_http_client.get.call_args

@@ -52,7 +52,9 @@ def _turn(
     content: str = "hello",
     provider: str = "",
 ) -> ConversationTurn:
-    return ConversationTurn.new(session_id=session_id, role=role, content=content, provider=provider)
+    return ConversationTurn.new(
+        session_id=session_id, role=role, content=content, provider=provider
+    )
 
 
 def _turn_at(
@@ -154,7 +156,9 @@ class TestFTS5Search:
         results_b = store.search("Python", session_id="sess-b")
         assert all(r.session_id == "sess-b" for r in results_b)
 
-    def test_search_without_session_filter_finds_all_sessions(self, store: SQLiteMemoryStore) -> None:
+    def test_search_without_session_filter_finds_all_sessions(
+        self, store: SQLiteMemoryStore
+    ) -> None:
         store.add_turn(_turn("s1", content="needle in session one"))
         store.add_turn(_turn("s2", content="another needle in session two"))
         results = store.search("needle", limit=10)
@@ -219,24 +223,24 @@ class TestFTS5Search:
 class TestSessionTurnOrdering:
     def test_turns_returned_in_chronological_order(self, store: SQLiteMemoryStore) -> None:
         for i in range(5):
-            store.add_turn(
-                _turn_at_seconds("ordered", f"message {i}", delta_seconds=50 - i)
-            )
+            store.add_turn(_turn_at_seconds("ordered", f"message {i}", delta_seconds=50 - i))
         turns = store.get_session_turns("ordered")
         contents = [t.content for t in turns]
         assert contents == [f"message {i}" for i in range(5)]
 
-    def test_get_session_turns_returns_most_recent_when_limited(self, store: SQLiteMemoryStore) -> None:
+    def test_get_session_turns_returns_most_recent_when_limited(
+        self, store: SQLiteMemoryStore
+    ) -> None:
         for i in range(20):
-            store.add_turn(
-                _turn_at_seconds("paged", f"msg {i}", delta_seconds=20 - i)
-            )
+            store.add_turn(_turn_at_seconds("paged", f"msg {i}", delta_seconds=20 - i))
         turns = store.get_session_turns("paged", limit=5)
         assert len(turns) == 5
         # The last element should be the most recent message
         assert turns[-1].content == "msg 19"
 
-    def test_get_recent_turns_across_sessions_preserves_order(self, store: SQLiteMemoryStore) -> None:
+    def test_get_recent_turns_across_sessions_preserves_order(
+        self, store: SQLiteMemoryStore
+    ) -> None:
         store.add_turn(_turn_at_seconds("s1", "first", delta_seconds=10))
         store.add_turn(_turn_at_seconds("s2", "second", delta_seconds=5))
         store.add_turn(_turn_at_seconds("s1", "third", delta_seconds=1))
@@ -260,7 +264,9 @@ class TestSessionTurnOrdering:
         recent = store.get_recent_turns(limit=10)
         assert len(recent) == 10
 
-    def test_get_session_turns_returns_empty_for_unknown_session(self, store: SQLiteMemoryStore) -> None:
+    def test_get_session_turns_returns_empty_for_unknown_session(
+        self, store: SQLiteMemoryStore
+    ) -> None:
         turns = store.get_session_turns("ghost-session")
         assert turns == []
 
@@ -390,10 +396,7 @@ class TestThreadSafety:
             except Exception as exc:
                 errors.append(exc)
 
-        threads = [
-            threading.Thread(target=write_batch, args=(f"sess-{j}", 25))
-            for j in range(6)
-        ]
+        threads = [threading.Thread(target=write_batch, args=(f"sess-{j}", 25)) for j in range(6)]
         for t in threads:
             t.start()
         for t in threads:
@@ -427,10 +430,9 @@ class TestThreadSafety:
             except Exception as exc:
                 errors.append(exc)
 
-        threads = (
-            [threading.Thread(target=reader) for _ in range(4)]
-            + [threading.Thread(target=writer) for _ in range(2)]
-        )
+        threads = [threading.Thread(target=reader) for _ in range(4)] + [
+            threading.Thread(target=writer) for _ in range(2)
+        ]
         for t in threads:
             t.start()
         for t in threads:
@@ -458,10 +460,9 @@ class TestThreadSafety:
             except Exception as exc:
                 errors.append(exc)
 
-        threads = (
-            [threading.Thread(target=cleaner) for _ in range(2)]
-            + [threading.Thread(target=writer) for _ in range(3)]
-        )
+        threads = [threading.Thread(target=cleaner) for _ in range(2)] + [
+            threading.Thread(target=writer) for _ in range(3)
+        ]
         for t in threads:
             t.start()
         for t in threads:
@@ -491,7 +492,9 @@ class TestLargeContentHandling:
         elapsed = time.monotonic() - start
         assert elapsed < 10.0
 
-    def test_fts_search_over_large_store_finds_unique_needle(self, store: SQLiteMemoryStore) -> None:
+    def test_fts_search_over_large_store_finds_unique_needle(
+        self, store: SQLiteMemoryStore
+    ) -> None:
         for i in range(200):
             content = "unique_needle_term" if i == 77 else f"unrelated content item {i}"
             store.add_turn(_turn("large-sess", content=content))
@@ -615,7 +618,9 @@ class TestSummaryRecords:
         assert retrieved is not None
         assert retrieved.source_turn_ids == ids
 
-    def test_summary_round_trip_preserves_source_summary_ids(self, store: SQLiteMemoryStore) -> None:
+    def test_summary_round_trip_preserves_source_summary_ids(
+        self, store: SQLiteMemoryStore
+    ) -> None:
         child_ids = [f"sum_{uuid.uuid4().hex[:16]}" for _ in range(2)]
         s = SummaryRecord.new("sess5", depth=1, content="condensed", source_summary_ids=child_ids)
         store.add_summary(s)
@@ -1243,10 +1248,9 @@ class TestResilientStoreThreadSafety:
             except Exception as exc:
                 errors.append(exc)
 
-        threads = (
-            [threading.Thread(target=check_health) for _ in range(3)]
-            + [threading.Thread(target=trigger_failure) for _ in range(2)]
-        )
+        threads = [threading.Thread(target=check_health) for _ in range(3)] + [
+            threading.Thread(target=trigger_failure) for _ in range(2)
+        ]
         for t in threads:
             t.start()
         for t in threads:

@@ -264,15 +264,37 @@ class FallbackSandbox:
         effective_timeout = min(timeout or self.config.timeout, 300)
 
         # Sanitize environment to prevent API key leakage to arbitrary commands
-        _SAFE_ENV_VARS = frozenset({
-            "PATH", "HOME", "USER", "LOGNAME", "SHELL",
-            "LANG", "LC_ALL", "LC_CTYPE", "LANGUAGE",
-            "TERM", "COLORTERM", "COLUMNS", "LINES",
-            "XDG_RUNTIME_DIR", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME",
-            "TMPDIR", "TMP", "TEMP",
-            "PWD", "OLDPWD", "HOSTNAME", "DISPLAY", "WAYLAND_DISPLAY",
-            "DBUS_SESSION_BUS_ADDRESS", "SSH_AUTH_SOCK",
-        })
+        _SAFE_ENV_VARS = frozenset(
+            {
+                "PATH",
+                "HOME",
+                "USER",
+                "LOGNAME",
+                "SHELL",
+                "LANG",
+                "LC_ALL",
+                "LC_CTYPE",
+                "LANGUAGE",
+                "TERM",
+                "COLORTERM",
+                "COLUMNS",
+                "LINES",
+                "XDG_RUNTIME_DIR",
+                "XDG_DATA_HOME",
+                "XDG_CONFIG_HOME",
+                "XDG_CACHE_HOME",
+                "TMPDIR",
+                "TMP",
+                "TEMP",
+                "PWD",
+                "OLDPWD",
+                "HOSTNAME",
+                "DISPLAY",
+                "WAYLAND_DISPLAY",
+                "DBUS_SESSION_BUS_ADDRESS",
+                "SSH_AUTH_SOCK",
+            }
+        )
         safe_env = {k: os.environ[k] for k in _SAFE_ENV_VARS if k in os.environ}
 
         try:

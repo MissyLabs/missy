@@ -220,9 +220,7 @@ class TestGetSourceTurns:
         result = store.get_source_turns("summary-does-not-exist")
         assert result == []
 
-    def test_returns_empty_list_for_summary_with_no_source_turns(
-        self, store: SQLiteMemoryStore
-    ):
+    def test_returns_empty_list_for_summary_with_no_source_turns(self, store: SQLiteMemoryStore):
         summary = SummaryRecord.new(
             session_id="sess-empty",
             depth=0,
@@ -277,10 +275,7 @@ class TestGetSourceTurns:
     def test_results_ordered_by_timestamp(self, store: SQLiteMemoryStore):
         """Turns are returned in chronological order (ORDER BY timestamp)."""
         session_id = "sess-order"
-        turns = [
-            ConversationTurn.new(session_id, "user", f"Message {i}")
-            for i in range(4)
-        ]
+        turns = [ConversationTurn.new(session_id, "user", f"Message {i}") for i in range(4)]
         for t in turns:
             store.add_turn(t)
 

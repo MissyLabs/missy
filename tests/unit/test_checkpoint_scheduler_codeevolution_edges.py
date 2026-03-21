@@ -150,12 +150,15 @@ class TestScanForRecoveryExceptions:
         ]
         mock_cm.classify.return_value = "resume"
 
-        with patch(
-            "missy.agent.checkpoint.CheckpointManager",
-            return_value=mock_cm,
-        ), patch(
-            "missy.agent.checkpoint.event_bus.publish",
-            side_effect=RuntimeError("event bus down"),
+        with (
+            patch(
+                "missy.agent.checkpoint.CheckpointManager",
+                return_value=mock_cm,
+            ),
+            patch(
+                "missy.agent.checkpoint.event_bus.publish",
+                side_effect=RuntimeError("event bus down"),
+            ),
         ):
             result = scan_for_recovery()
         assert len(result) == 1
@@ -232,10 +235,9 @@ class TestSchedulerLoadJobsSecurity:
         jobs_file.write_text("[]")
         mgr = self._make_manager(jobs_file)
 
-        with patch.object(
-            type(jobs_file), "stat", side_effect=OSError("permission denied")
-        ), patch.object(
-            type(jobs_file), "exists", return_value=True
+        with (
+            patch.object(type(jobs_file), "stat", side_effect=OSError("permission denied")),
+            patch.object(type(jobs_file), "exists", return_value=True),
         ):
             mgr._load_jobs()
 

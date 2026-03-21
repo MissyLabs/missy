@@ -15,18 +15,28 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # Image content types we accept for vision analysis.
-_IMAGE_CONTENT_TYPES = frozenset({
-    "image/png",
-    "image/jpeg",
-    "image/jpg",
-    "image/gif",
-    "image/webp",
-})
+_IMAGE_CONTENT_TYPES = frozenset(
+    {
+        "image/png",
+        "image/jpeg",
+        "image/jpg",
+        "image/gif",
+        "image/webp",
+    }
+)
 
 # File extensions we treat as images when content_type is missing.
-_IMAGE_EXTENSIONS = frozenset({
-    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff",
-})
+_IMAGE_EXTENSIONS = frozenset(
+    {
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".webp",
+        ".bmp",
+        ".tiff",
+    }
+)
 
 
 def is_image_attachment(attachment: dict[str, Any]) -> bool:

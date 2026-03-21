@@ -10,11 +10,12 @@ import pytest
 from click.testing import CliRunner
 
 from missy.cli.main import cli
+from tests.cli.conftest import _make_cli_runner
 
 
 @pytest.fixture
 def runner() -> CliRunner:
-    return CliRunner(mix_stderr=False)
+    return _make_cli_runner(mix_stderr=False)
 
 
 # ---------------------------------------------------------------------------
@@ -40,8 +41,10 @@ class TestVisionDevices:
         mock_cam.usb_id = "046d:085c"
         mock_cam.bus_info = "usb-0000:00:14.0-1"
 
-        with patch("missy.vision.discovery.CameraDiscovery") as MockDisc, \
-             patch("missy.vision.discovery.KNOWN_CAMERAS", {"046d:085c": "C922x Pro Stream"}):
+        with (
+            patch("missy.vision.discovery.CameraDiscovery") as MockDisc,
+            patch("missy.vision.discovery.KNOWN_CAMERAS", {"046d:085c": "C922x Pro Stream"}),
+        ):
             inst = MagicMock()
             inst.discover.return_value = [mock_cam]
             inst.find_preferred.return_value = mock_cam
@@ -88,11 +91,17 @@ class TestVisionCapture:
             inst.capture_to_file.return_value = mock_result
             MockHandle.return_value = inst
 
-            result = runner.invoke(cli, [
-                "vision", "capture",
-                "--device", "/dev/video0",
-                "--output", out_file,
-            ])
+            result = runner.invoke(
+                cli,
+                [
+                    "vision",
+                    "capture",
+                    "--device",
+                    "/dev/video0",
+                    "--output",
+                    out_file,
+                ],
+            )
             assert result.exit_code == 0
             assert "Captured" in result.output
 
@@ -105,19 +114,27 @@ class TestVisionCapture:
         mock_result.height = 1080
         mock_result.image = np.full((1080, 1920, 3), 128, dtype=np.uint8)
 
-        with patch("missy.vision.capture.CameraHandle") as MockHandle, \
-             patch("cv2.imwrite", return_value=True), \
-             patch("cv2.IMWRITE_JPEG_QUALITY", 1):
+        with (
+            patch("missy.vision.capture.CameraHandle") as MockHandle,
+            patch("cv2.imwrite", return_value=True),
+            patch("cv2.IMWRITE_JPEG_QUALITY", 1),
+        ):
             inst = MagicMock()
             inst.capture_best.return_value = mock_result
             MockHandle.return_value = inst
 
-            result = runner.invoke(cli, [
-                "vision", "capture",
-                "--device", "/dev/video0",
-                "--output", out_file,
-                "--best",
-            ])
+            result = runner.invoke(
+                cli,
+                [
+                    "vision",
+                    "capture",
+                    "--device",
+                    "/dev/video0",
+                    "--output",
+                    out_file,
+                    "--best",
+                ],
+            )
             assert result.exit_code == 0
             assert "Best frame" in result.output
 
@@ -128,19 +145,27 @@ class TestVisionCapture:
         mock_result.height = 480
         mock_result.image = np.full((480, 640, 3), 128, dtype=np.uint8)
 
-        with patch("missy.vision.capture.CameraHandle") as MockHandle, \
-             patch("cv2.imwrite", return_value=True), \
-             patch("cv2.IMWRITE_JPEG_QUALITY", 1):
+        with (
+            patch("missy.vision.capture.CameraHandle") as MockHandle,
+            patch("cv2.imwrite", return_value=True),
+            patch("cv2.IMWRITE_JPEG_QUALITY", 1),
+        ):
             inst = MagicMock()
             inst.capture_burst.return_value = [mock_result, mock_result, mock_result]
             MockHandle.return_value = inst
 
-            result = runner.invoke(cli, [
-                "vision", "capture",
-                "--device", "/dev/video0",
-                "--burst",
-                "--count", "3",
-            ])
+            result = runner.invoke(
+                cli,
+                [
+                    "vision",
+                    "capture",
+                    "--device",
+                    "/dev/video0",
+                    "--burst",
+                    "--count",
+                    "3",
+                ],
+            )
             assert result.exit_code == 0
             assert "Burst complete" in result.output
 
@@ -154,11 +179,17 @@ class TestVisionCapture:
             inst.capture_to_file.return_value = mock_result
             MockHandle.return_value = inst
 
-            result = runner.invoke(cli, [
-                "vision", "capture",
-                "--device", "/dev/video0",
-                "--output", str(tmp_path / "test.jpg"),
-            ])
+            result = runner.invoke(
+                cli,
+                [
+                    "vision",
+                    "capture",
+                    "--device",
+                    "/dev/video0",
+                    "--output",
+                    str(tmp_path / "test.jpg"),
+                ],
+            )
             assert "Failed" in result.output
 
 
@@ -237,8 +268,10 @@ class TestVisionInspect:
         mock_frame = MagicMock()
         mock_frame.image = np.full((100, 100, 3), 128, dtype=np.uint8)
 
-        with patch("missy.vision.sources.FileSource") as MockSource, \
-             patch("missy.vision.pipeline.ImagePipeline") as MockPipeline:
+        with (
+            patch("missy.vision.sources.FileSource") as MockSource,
+            patch("missy.vision.pipeline.ImagePipeline") as MockPipeline,
+        ):
             src_inst = MagicMock()
             src_inst.acquire.return_value = mock_frame
             MockSource.return_value = src_inst
@@ -255,10 +288,15 @@ class TestVisionInspect:
             }
             MockPipeline.return_value = pipe_inst
 
-            result = runner.invoke(cli, [
-                "vision", "inspect",
-                "--file", str(img_path),
-            ])
+            result = runner.invoke(
+                cli,
+                [
+                    "vision",
+                    "inspect",
+                    "--file",
+                    str(img_path),
+                ],
+            )
             # Should not crash; specifics depend on CLI output format
             assert result.exit_code == 0
 
@@ -271,10 +309,15 @@ class TestVisionInspect:
 class TestVisionReview:
     def test_review_mode_choices(self, runner: CliRunner):
         """Invalid mode should be rejected by Click."""
-        result = runner.invoke(cli, [
-            "vision", "review",
-            "--mode", "invalid_mode",
-        ])
+        result = runner.invoke(
+            cli,
+            [
+                "vision",
+                "review",
+                "--mode",
+                "invalid_mode",
+            ],
+        )
         assert result.exit_code != 0
 
     def test_review_valid_modes(self):
@@ -283,11 +326,17 @@ class TestVisionReview:
         for mode in ("general", "puzzle", "painting", "inspection"):
             # Just test that Click doesn't reject the mode;
             # actual execution will fail without camera, which is fine
-            result = runner.invoke(cli, [
-                "vision", "review",
-                "--mode", mode,
-                "--device", "/dev/nonexistent",
-            ])
+            result = runner.invoke(
+                cli,
+                [
+                    "vision",
+                    "review",
+                    "--mode",
+                    mode,
+                    "--device",
+                    "/dev/nonexistent",
+                ],
+            )
             # It's OK if it exits with error (no camera), but it shouldn't be
             # a Click usage error (exit code 2)
             assert result.exit_code != 2 or mode not in result.output

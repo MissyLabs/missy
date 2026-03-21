@@ -174,9 +174,7 @@ class TestHatchingLogWriteAndRead:
     def test_get_entries_handles_blank_lines_gracefully(self, tmp_path):
         log_path = tmp_path / "blanks.jsonl"
         log_path.write_text(
-            "\n"
-            '{"step": "s", "status": "ok", "message": "m", "details": {}, "timestamp": "t"}\n'
-            "\n",
+            '\n{"step": "s", "status": "ok", "message": "m", "details": {}, "timestamp": "t"}\n\n',
             encoding="utf-8",
         )
         log = HatchingLog(log_path=log_path)
@@ -272,7 +270,10 @@ def _mock_hatching_deps(persona_manager=None):
     with (
         patch("missy.agent.persona.PersonaManager", return_value=pm),
         patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store),
-        patch("missy.memory.sqlite_store.ConversationTurn", MagicMock(new=MagicMock(return_value=mock_turn))),
+        patch(
+            "missy.memory.sqlite_store.ConversationTurn",
+            MagicMock(new=MagicMock(return_value=mock_turn)),
+        ),
     ):
         yield
 
@@ -391,7 +392,6 @@ class TestHatchingManagerRunHatching:
     def test_run_hatching_fails_state_on_unrecoverable_step_error(self, tmp_path, monkeypatch):
         """A step raising a plain Exception (not _HatchingStepWarning) marks state FAILED."""
         _patch_module_paths(monkeypatch, tmp_path)
-
 
         def _bad_step(state, *, interactive):
             raise RuntimeError("disk exploded")
@@ -525,7 +525,11 @@ class TestHatchingEdgeCases:
     def test_state_file_with_extra_keys(self, tmp_path):
         """Unknown keys in state file should be ignored gracefully."""
         state_path = tmp_path / "hatching.yaml"
-        data = {"status": "hatched", "unknown_key": "some_value", "completed_at": "2026-01-01T00:00:00"}
+        data = {
+            "status": "hatched",
+            "unknown_key": "some_value",
+            "completed_at": "2026-01-01T00:00:00",
+        }
         state_path.write_text(yaml.safe_dump(data), encoding="utf-8")
         mgr = HatchingManager(state_path=state_path, log_path=tmp_path / "log.jsonl")
         state = mgr.get_state()
@@ -548,11 +552,13 @@ class TestHatchingEdgeCases:
 
     def test_from_dict_handles_boolean_flags_as_strings(self):
         """String booleans should be coerced properly."""
-        state = HatchingState.from_dict({
-            "persona_generated": "true",
-            "environment_validated": 1,
-            "provider_verified": "",
-        })
+        state = HatchingState.from_dict(
+            {
+                "persona_generated": "true",
+                "environment_validated": 1,
+                "provider_verified": "",
+            }
+        )
         assert state.persona_generated is True
         assert state.environment_validated is True
         assert state.provider_verified is False

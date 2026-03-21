@@ -55,7 +55,9 @@ def _make_breaker(
     base_timeout: float = 60.0,
     max_timeout: float = 300.0,
 ) -> CircuitBreaker:
-    return CircuitBreaker(name, threshold=threshold, base_timeout=base_timeout, max_timeout=max_timeout)
+    return CircuitBreaker(
+        name, threshold=threshold, base_timeout=base_timeout, max_timeout=max_timeout
+    )
 
 
 def _trip(breaker: CircuitBreaker, n: int) -> None:
@@ -295,10 +297,10 @@ class TestTrustScorerBoundaryArithmetic:
 
     def test_interleaved_ops_maintain_correct_running_total(self):
         scorer = TrustScorer()
-        scorer.record_success("e", weight=100)   # 500 + 100 = 600
-        scorer.record_failure("e", weight=50)    # 600 - 50  = 550
-        scorer.record_violation("e", weight=200) # 550 - 200 = 350
-        scorer.record_success("e", weight=10)    # 350 + 10  = 360
+        scorer.record_success("e", weight=100)  # 500 + 100 = 600
+        scorer.record_failure("e", weight=50)  # 600 - 50  = 550
+        scorer.record_violation("e", weight=200)  # 550 - 200 = 350
+        scorer.record_success("e", weight=10)  # 350 + 10  = 360
         assert scorer.score("e") == 360
 
 

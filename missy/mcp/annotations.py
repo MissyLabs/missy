@@ -337,9 +337,7 @@ class AnnotationRegistry:
             Filtered list of safe tool dicts.
         """
         return [
-            t
-            for t in tools
-            if self.get_or_default(t.get("name", "")).to_policy_hints()["is_safe"]
+            t for t in tools if self.get_or_default(t.get("name", "")).to_policy_hints()["is_safe"]
         ]
 
     def get_approval_required(self, tools: list[dict[str, Any]]) -> list[str]:

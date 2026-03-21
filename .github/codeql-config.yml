@@ -1,0 +1,6 @@
+name: "Missy CodeQL Config"
+
+paths-ignore:
+  - tests/
+  - docs/
+  - examples/

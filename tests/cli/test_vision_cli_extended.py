@@ -8,11 +8,12 @@ import pytest
 from click.testing import CliRunner
 
 from missy.cli.main import cli
+from tests.cli.conftest import _make_cli_runner
 
 
 @pytest.fixture
 def runner() -> CliRunner:
-    return CliRunner(mix_stderr=False)
+    return _make_cli_runner(mix_stderr=False)
 
 
 # ---------------------------------------------------------------------------
@@ -204,12 +205,15 @@ class TestVisionValidate:
         validate_return: MagicMock,
         cfg_raises: bool = False,
     ) -> object:
-        with patch(
-            "missy.vision.config_validator.validate_vision_config",
-            return_value=validate_return,
-        ), patch(
-            "missy.config.settings.load_config",
-            side_effect=RuntimeError("no config") if cfg_raises else None,
+        with (
+            patch(
+                "missy.vision.config_validator.validate_vision_config",
+                return_value=validate_return,
+            ),
+            patch(
+                "missy.config.settings.load_config",
+                side_effect=RuntimeError("no config") if cfg_raises else None,
+            ),
         ):
             if not cfg_raises:
                 # Provide a minimal config object
@@ -233,30 +237,28 @@ class TestVisionValidate:
     def test_valid_config_shows_success(self, runner: CliRunner) -> None:
         vr = _make_validation_result(valid=True)
 
-        with patch(
-            "missy.vision.config_validator.validate_vision_config", return_value=vr
-        ), patch("missy.config.settings.load_config", return_value=MagicMock()):
+        with (
+            patch("missy.vision.config_validator.validate_vision_config", return_value=vr),
+            patch("missy.config.settings.load_config", return_value=MagicMock()),
+        ):
             result = runner.invoke(cli, ["vision", "validate"])
 
         assert result.exit_code == 0
         assert "valid" in result.output.lower()
 
-    def test_valid_config_no_warnings_says_all_settings_valid(
-        self, runner: CliRunner
-    ) -> None:
+    def test_valid_config_no_warnings_says_all_settings_valid(self, runner: CliRunner) -> None:
         vr = _make_validation_result(valid=True, warnings=[])
 
-        with patch(
-            "missy.vision.config_validator.validate_vision_config", return_value=vr
-        ), patch("missy.config.settings.load_config", return_value=MagicMock()):
+        with (
+            patch("missy.vision.config_validator.validate_vision_config", return_value=vr),
+            patch("missy.config.settings.load_config", return_value=MagicMock()),
+        ):
             result = runner.invoke(cli, ["vision", "validate"])
 
         assert result.exit_code == 0
         assert "All settings are valid" in result.output
 
-    def test_valid_config_with_warnings_shows_warnings(
-        self, runner: CliRunner
-    ) -> None:
+    def test_valid_config_with_warnings_shows_warnings(self, runner: CliRunner) -> None:
         warn_issue = MagicMock()
         warn_issue.severity = "warning"
         warn_issue.field = "capture_width"
@@ -266,9 +268,10 @@ class TestVisionValidate:
 
         vr = _make_validation_result(valid=True, issues=[warn_issue], warnings=[warn_issue])
 
-        with patch(
-            "missy.vision.config_validator.validate_vision_config", return_value=vr
-        ), patch("missy.config.settings.load_config", return_value=MagicMock()):
+        with (
+            patch("missy.vision.config_validator.validate_vision_config", return_value=vr),
+            patch("missy.config.settings.load_config", return_value=MagicMock()),
+        ):
             result = runner.invoke(cli, ["vision", "validate"])
 
         assert result.exit_code == 0
@@ -284,14 +287,13 @@ class TestVisionValidate:
         err_issue.current_value = 9999
         err_issue.suggested_value = 1920
 
-        vr = _make_validation_result(
-            valid=False, issues=[err_issue], warnings=[]
-        )
+        vr = _make_validation_result(valid=False, issues=[err_issue], warnings=[])
         vr.errors = [err_issue]
 
-        with patch(
-            "missy.vision.config_validator.validate_vision_config", return_value=vr
-        ), patch("missy.config.settings.load_config", return_value=MagicMock()):
+        with (
+            patch("missy.vision.config_validator.validate_vision_config", return_value=vr),
+            patch("missy.config.settings.load_config", return_value=MagicMock()),
+        ):
             result = runner.invoke(cli, ["vision", "validate"])
 
         assert result.exit_code == 0
@@ -316,18 +318,17 @@ class TestVisionValidate:
         vr = _make_validation_result(valid=False, issues=[err1, err2], warnings=[])
         vr.errors = [err1, err2]
 
-        with patch(
-            "missy.vision.config_validator.validate_vision_config", return_value=vr
-        ), patch("missy.config.settings.load_config", return_value=MagicMock()):
+        with (
+            patch("missy.vision.config_validator.validate_vision_config", return_value=vr),
+            patch("missy.config.settings.load_config", return_value=MagicMock()),
+        ):
             result = runner.invoke(cli, ["vision", "validate"])
 
         assert result.exit_code == 0
         assert "2" in result.output
         assert "error" in result.output.lower()
 
-    def test_issue_current_and_suggested_values_displayed(
-        self, runner: CliRunner
-    ) -> None:
+    def test_issue_current_and_suggested_values_displayed(self, runner: CliRunner) -> None:
         issue = MagicMock()
         issue.severity = "error"
         issue.field = "capture_width"
@@ -338,9 +339,10 @@ class TestVisionValidate:
         vr = _make_validation_result(valid=False, issues=[issue], warnings=[])
         vr.errors = [issue]
 
-        with patch(
-            "missy.vision.config_validator.validate_vision_config", return_value=vr
-        ), patch("missy.config.settings.load_config", return_value=MagicMock()):
+        with (
+            patch("missy.vision.config_validator.validate_vision_config", return_value=vr),
+            patch("missy.config.settings.load_config", return_value=MagicMock()),
+        ):
             result = runner.invoke(cli, ["vision", "validate"])
 
         assert result.exit_code == 0
@@ -372,26 +374,28 @@ class TestVisionValidate:
             warnings=[warn_issue],
         )
 
-        with patch(
-            "missy.vision.config_validator.validate_vision_config", return_value=vr
-        ), patch("missy.config.settings.load_config", return_value=MagicMock()):
+        with (
+            patch("missy.vision.config_validator.validate_vision_config", return_value=vr),
+            patch("missy.config.settings.load_config", return_value=MagicMock()),
+        ):
             result = runner.invoke(cli, ["vision", "validate"])
 
         assert result.exit_code == 0
         assert "INFO" in result.output
         assert "preferred_device" in result.output
 
-    def test_load_config_failure_falls_back_to_empty(
-        self, runner: CliRunner
-    ) -> None:
+    def test_load_config_failure_falls_back_to_empty(self, runner: CliRunner) -> None:
         vr = _make_validation_result(valid=True)
 
         # When load_config raises, validate is still called (with empty dict)
-        with patch(
-            "missy.vision.config_validator.validate_vision_config", return_value=vr
-        ) as mock_validate, patch(
-            "missy.config.settings.load_config",
-            side_effect=RuntimeError("no config file"),
+        with (
+            patch(
+                "missy.vision.config_validator.validate_vision_config", return_value=vr
+            ) as mock_validate,
+            patch(
+                "missy.config.settings.load_config",
+                side_effect=RuntimeError("no config file"),
+            ),
         ):
             result = runner.invoke(cli, ["vision", "validate"])
 
@@ -443,9 +447,9 @@ class TestVisionMemory:
             result = runner.invoke(cli, ["vision", "memory"])
 
         assert result.exit_code == 0
-        assert "8" in result.output      # total_frames
-        assert "2" in result.output      # session_count
-        assert "1" in result.output      # active_sessions
+        assert "8" in result.output  # total_frames
+        assert "2" in result.output  # session_count
+        assert "1" in result.output  # active_sessions
 
     def test_with_sessions_shows_table(self, runner: CliRunner) -> None:
         tracker = MagicMock()

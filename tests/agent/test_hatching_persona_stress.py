@@ -140,9 +140,7 @@ class TestHatching100RapidRestarts:
                 mgr.reset()
                 state = mgr.run_hatching(interactive=False)
                 missing = expected_steps - set(state.steps_completed)
-                assert not missing, (
-                    f"Iteration {i}: missing steps {missing!r}"
-                )
+                assert not missing, f"Iteration {i}: missing steps {missing!r}"
 
     def test_log_file_is_always_valid_jsonl_after_restarts(
         self, tmp_path: Path, monkeypatch: Any
@@ -224,9 +222,7 @@ class TestHatchingConcurrentExecution:
 
         # Write a HATCHED state first.
         hatched = HatchingState(status=HatchingStatus.HATCHED)
-        state_path.write_text(
-            yaml.safe_dump(hatched.to_dict()), encoding="utf-8"
-        )
+        state_path.write_text(yaml.safe_dump(hatched.to_dict()), encoding="utf-8")
 
         errors: list[Exception] = []
 
@@ -418,7 +414,7 @@ class TestPersonaSpecialCharacters:
 
     def test_yaml_special_chars_in_name(self, tmp_path: Path) -> None:
         """Characters like : { } [ ] & * ! | ' " should not break YAML output."""
-        special_name = 'Missy: {agent} [v2] & *system* | "primary" \'sec\''
+        special_name = "Missy: {agent} [v2] & *system* | \"primary\" 'sec'"
         pm = PersonaManager(persona_path=tmp_path / "persona.yaml")
         pm.update(name=special_name)
         pm.save()
@@ -538,20 +534,21 @@ class TestPersonaRapidEditCycle:
 class TestPersonaYamlInjection:
     """YAML-hostile values in persona fields must not alter the structure."""
 
-    @pytest.mark.parametrize("injected_name", [
-        "!!python/object:os.system",
-        "!!str",
-        "&anchor value",
-        "*alias",
-        "key: injected\nnew_key: evil",
-        "---\ninjected: true",
-        "...\ninjected: true",
-        "> folded\n  scalar\n  here",
-        "| literal\n  block",
-    ])
-    def test_yaml_injection_in_name_is_safe(
-        self, tmp_path: Path, injected_name: str
-    ) -> None:
+    @pytest.mark.parametrize(
+        "injected_name",
+        [
+            "!!python/object:os.system",
+            "!!str",
+            "&anchor value",
+            "*alias",
+            "key: injected\nnew_key: evil",
+            "---\ninjected: true",
+            "...\ninjected: true",
+            "> folded\n  scalar\n  here",
+            "| literal\n  block",
+        ],
+    )
+    def test_yaml_injection_in_name_is_safe(self, tmp_path: Path, injected_name: str) -> None:
         """Injected YAML constructs must not execute or restructure the file."""
         pm = PersonaManager(persona_path=tmp_path / "persona.yaml")
         pm.update(name=injected_name)
@@ -615,9 +612,16 @@ class TestBehaviorLayerExtremeInputs:
         big_text = "a " * 50000  # ~100 KB
         result = interp.classify_intent(big_text)
         valid_intents = {
-            "greeting", "farewell", "confirmation", "frustration",
-            "troubleshooting", "clarification", "feedback",
-            "exploration", "command", "question",
+            "greeting",
+            "farewell",
+            "confirmation",
+            "frustration",
+            "troubleshooting",
+            "clarification",
+            "feedback",
+            "exploration",
+            "command",
+            "question",
         }
         assert result in valid_intents
 
@@ -647,9 +651,7 @@ class TestBehaviorLayerExtremeInputs:
             "I need to call the function via the API endpoint using "
             "the database query schema config yaml json async await thread"
         )
-        messages.extend(
-            {"role": "user", "content": technical_msg} for _ in range(5)
-        )
+        messages.extend({"role": "user", "content": technical_msg} for _ in range(5))
         # Only last 5 → all technical → should detect technical.
         tone = layer.analyze_user_tone(messages)
         assert tone == "technical"
@@ -685,36 +687,35 @@ class TestBehaviorLayerExtremeInputs:
 class TestBehaviorToneAnalysisStability:
     """Same input must produce the same tone on every invocation."""
 
-    @pytest.mark.parametrize("content,expected_tone", [
-        (
-            "I need to call the function via the API endpoint using "
-            "the database query schema config yaml json async await thread",
-            "technical",
-        ),
-        (
-            "Please kindly assist me regarding this matter and furthermore "
-            "I would appreciate your thorough response accordingly therefore "
-            "sincerely I ask",
-            "formal",
-        ),
-        (
-            "it still doesn't work I've tried everything same error again",
-            "frustrated",
-        ),
-        (
-            "hey cool thanks ya lol btw fyi gonna wanna kinda ngl tbh",
-            "casual",
-        ),
-    ])
-    def test_same_input_always_produces_same_tone(
-        self, content: str, expected_tone: str
-    ) -> None:
+    @pytest.mark.parametrize(
+        "content,expected_tone",
+        [
+            (
+                "I need to call the function via the API endpoint using "
+                "the database query schema config yaml json async await thread",
+                "technical",
+            ),
+            (
+                "Please kindly assist me regarding this matter and furthermore "
+                "I would appreciate your thorough response accordingly therefore "
+                "sincerely I ask",
+                "formal",
+            ),
+            (
+                "it still doesn't work I've tried everything same error again",
+                "frustrated",
+            ),
+            (
+                "hey cool thanks ya lol btw fyi gonna wanna kinda ngl tbh",
+                "casual",
+            ),
+        ],
+    )
+    def test_same_input_always_produces_same_tone(self, content: str, expected_tone: str) -> None:
         layer = BehaviorLayer()
         messages = [{"role": "user", "content": content}]
         results = {layer.analyze_user_tone(messages) for _ in range(20)}
-        assert len(results) == 1, (
-            f"Non-deterministic tone for {expected_tone!r}: got {results}"
-        )
+        assert len(results) == 1, f"Non-deterministic tone for {expected_tone!r}: got {results}"
         assert results.pop() == expected_tone
 
     def test_tone_is_deterministic_across_multiple_instances(self) -> None:
@@ -813,17 +814,20 @@ class TestIntentClassifierBoundaryCases:
 class TestResponseShaperIdempotency:
     """Applying the shaper twice must produce the same output as once."""
 
-    @pytest.mark.parametrize("raw_response", [
-        "Certainly! As an AI, I can help you. The answer is 42.",
-        "Great question! Of course I'll assist. Here is the code:\n```python\nprint(1)\n```",
-        "I'd be happy to help. As an AI language model, here is what you need.",
-        "As your assistant, I recommend this approach.",
-        "Absolutely! I'm here to help. Let me explain step by step.",
-        "The configuration lives at ~/.missy/config.yaml.",  # no robotic phrases
-        "```bash\necho 'hello'\n```",  # pure code block
-        "",  # empty
-        "   \n\n  ",  # whitespace only
-    ])
+    @pytest.mark.parametrize(
+        "raw_response",
+        [
+            "Certainly! As an AI, I can help you. The answer is 42.",
+            "Great question! Of course I'll assist. Here is the code:\n```python\nprint(1)\n```",
+            "I'd be happy to help. As an AI language model, here is what you need.",
+            "As your assistant, I recommend this approach.",
+            "Absolutely! I'm here to help. Let me explain step by step.",
+            "The configuration lives at ~/.missy/config.yaml.",  # no robotic phrases
+            "```bash\necho 'hello'\n```",  # pure code block
+            "",  # empty
+            "   \n\n  ",  # whitespace only
+        ],
+    )
     def test_applying_shaper_twice_is_idempotent(self, raw_response: str) -> None:
         shaper = ResponseShaper()
         once = shaper.shape_response(raw_response, persona=None, context={})
@@ -836,18 +840,20 @@ class TestResponseShaperIdempotency:
 
     def test_shaper_idempotent_on_many_code_blocks(self) -> None:
         shaper = ResponseShaper()
-        raw = "\n".join([
-            "Certainly! Here is the solution.",
-            "```python",
-            "# As an AI, I wrote this",
-            "def foo(): return 42",
-            "```",
-            "And also:",
-            "```bash",
-            "echo 'Of course!'",
-            "```",
-            "That completes it.",
-        ])
+        raw = "\n".join(
+            [
+                "Certainly! Here is the solution.",
+                "```python",
+                "# As an AI, I wrote this",
+                "def foo(): return 42",
+                "```",
+                "And also:",
+                "```bash",
+                "echo 'Of course!'",
+                "```",
+                "That completes it.",
+            ]
+        )
         once = shaper.shape_response(raw, persona=None, context={})
         twice = shaper.shape_response(once, persona=None, context={})
         assert once == twice
@@ -883,13 +889,15 @@ class TestHatchingLogRotation:
 
     def test_corrupt_lines_in_large_file_are_skipped(self, tmp_path: Path) -> None:
         log_path = tmp_path / "corrupted.jsonl"
-        good_entry = json.dumps({
-            "timestamp": "2026-01-01T00:00:00+00:00",
-            "step": "good",
-            "status": "ok",
-            "message": "fine",
-            "details": {},
-        })
+        good_entry = json.dumps(
+            {
+                "timestamp": "2026-01-01T00:00:00+00:00",
+                "step": "good",
+                "status": "ok",
+                "message": "fine",
+                "details": {},
+            }
+        )
 
         lines: list[str] = []
         for i in range(1000):
@@ -974,7 +982,9 @@ class TestPersonaAuditLogIntegrity:
         for a, b in zip(versions, versions[1:], strict=False):
             assert b > a, f"Audit version went backwards: {a} → {b}"
 
-    def test_audit_log_reset_and_rollback_entries_present(self, tmp_path: Path, monkeypatch: Any) -> None:
+    def test_audit_log_reset_and_rollback_entries_present(
+        self, tmp_path: Path, monkeypatch: Any
+    ) -> None:
         call_count = 0
 
         def _mock_strftime(fmt: str, *args: Any) -> str:
@@ -1372,7 +1382,9 @@ class TestPersonaManagerFieldIsolation:
         copy.boundaries.clear()
         assert len(pm.get_persona().boundaries) > 0
 
-    def test_two_successive_saves_produce_distinct_backup_files(self, tmp_path: Path, monkeypatch: Any) -> None:
+    def test_two_successive_saves_produce_distinct_backup_files(
+        self, tmp_path: Path, monkeypatch: Any
+    ) -> None:
         call_count = 0
 
         def _mock_strftime(fmt: str, *args: Any) -> str:

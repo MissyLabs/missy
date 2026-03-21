@@ -70,9 +70,11 @@ def mock_stt():
     stt.name = "test-stt"
     stt.load = MagicMock()
     stt.unload = MagicMock()
-    stt.transcribe = AsyncMock(return_value=TranscriptionResult(
-        text="hello world", confidence=0.95, processing_ms=100, language="en"
-    ))
+    stt.transcribe = AsyncMock(
+        return_value=TranscriptionResult(
+            text="hello world", confidence=0.95, processing_ms=100, language="en"
+        )
+    )
     return stt
 
 
@@ -82,9 +84,9 @@ def mock_tts():
     tts.name = "test-tts"
     tts.load = MagicMock()
     tts.unload = MagicMock()
-    tts.synthesize = AsyncMock(return_value=AudioBuffer(
-        data=b"\x00" * 44100, sample_rate=22050, channels=1, format="wav"
-    ))
+    tts.synthesize = AsyncMock(
+        return_value=AudioBuffer(data=b"\x00" * 44100, sample_rate=22050, channels=1, format="wav")
+    )
     return tts
 
 
@@ -96,6 +98,7 @@ def mock_agent_callback():
 @pytest.fixture
 def server(mock_registry, mock_pairing, mock_presence, mock_stt, mock_tts, mock_agent_callback):
     from missy.channels.voice.server import VoiceServer
+
     return VoiceServer(
         registry=mock_registry,
         pairing_manager=mock_pairing,
@@ -273,9 +276,9 @@ class TestHandleAudio:
 
     @pytest.mark.asyncio
     async def test_audio_empty_transcript(self, server, mock_stt, mock_agent_callback):
-        mock_stt.transcribe = AsyncMock(return_value=TranscriptionResult(
-            text="   ", confidence=0.1, processing_ms=50
-        ))
+        mock_stt.transcribe = AsyncMock(
+            return_value=TranscriptionResult(text="   ", confidence=0.1, processing_ms=50)
+        )
         ws = AsyncMock()
         ws.remote_address = ("192.168.1.100", 12345)
         node = MockEdgeNode()

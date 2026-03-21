@@ -81,6 +81,7 @@ class Vault:
         # Warn if key file is world-readable (permissions wider than owner-only)
         if st.st_mode & 0o077:
             import logging
+
             logging.getLogger(__name__).warning(
                 "Vault key file %s has permissive mode 0o%o — recommend 0o600",
                 self._key_path,
@@ -119,9 +120,7 @@ class Vault:
         import tempfile
 
         self._vault_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        fd, tmp_path = tempfile.mkstemp(
-            dir=str(self._vault_path.parent), suffix=".tmp"
-        )
+        fd, tmp_path = tempfile.mkstemp(dir=str(self._vault_path.parent), suffix=".tmp")
         try:
             os.fchmod(fd, 0o600)
             os.write(fd, encrypted)

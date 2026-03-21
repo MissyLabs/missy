@@ -279,13 +279,15 @@ class TestFreshTailProtection:
         )
         cm = ContextManager(budget=budget)
         history = [
-            {"role": "user", "content": "A" * 400},       # old, ~100 tokens
-            {"role": "assistant", "content": "B" * 400},   # old, ~100 tokens
-            {"role": "user", "content": "C" * 40},         # fresh tail
-            {"role": "assistant", "content": "D" * 40},    # fresh tail
+            {"role": "user", "content": "A" * 400},  # old, ~100 tokens
+            {"role": "assistant", "content": "B" * 400},  # old, ~100 tokens
+            {"role": "user", "content": "C" * 40},  # fresh tail
+            {"role": "assistant", "content": "D" * 40},  # fresh tail
         ]
         _, messages = cm.build_messages(
-            system="S", new_message="new", history=history,
+            system="S",
+            new_message="new",
+            history=history,
         )
         contents = [m["content"] for m in messages]
         # Both fresh tail entries must be present
@@ -308,13 +310,15 @@ class TestFreshTailProtection:
         cm = ContextManager(budget=budget)
         # available = 400 tokens = 1600 chars
         history = [
-            {"role": "user", "content": "old1-" + "x" * 395},     # ~100 tokens
-            {"role": "assistant", "content": "old2-" + "y" * 395}, # ~100 tokens
-            {"role": "user", "content": "old3-" + "z" * 395},     # ~100 tokens
-            {"role": "assistant", "content": "tail"},              # fresh tail, ~2 tokens
+            {"role": "user", "content": "old1-" + "x" * 395},  # ~100 tokens
+            {"role": "assistant", "content": "old2-" + "y" * 395},  # ~100 tokens
+            {"role": "user", "content": "old3-" + "z" * 395},  # ~100 tokens
+            {"role": "assistant", "content": "tail"},  # fresh tail, ~2 tokens
         ]
         _, messages = cm.build_messages(
-            system="S", new_message="new", history=history,
+            system="S",
+            new_message="new",
+            history=history,
         )
         contents = [m["content"] for m in messages]
         # Fresh tail always present
@@ -336,11 +340,13 @@ class TestFreshTailProtection:
         cm = ContextManager(budget=budget)
         history = [
             {"role": "user", "content": "X" * 10000},  # huge, evictable
-            {"role": "user", "content": "recent1"},     # fresh tail
-            {"role": "assistant", "content": "recent2"},# fresh tail
+            {"role": "user", "content": "recent1"},  # fresh tail
+            {"role": "assistant", "content": "recent2"},  # fresh tail
         ]
         _, messages = cm.build_messages(
-            system="S", new_message="new", history=history,
+            system="S",
+            new_message="new",
+            history=history,
         )
         contents = [m["content"] for m in messages]
         assert "recent1" in contents
@@ -366,7 +372,9 @@ class TestFreshTailProtection:
             {"role": "user", "content": "C" * 40},
         ]
         _, messages = cm.build_messages(
-            system="S", new_message="new", history=history,
+            system="S",
+            new_message="new",
+            history=history,
         )
         # With fresh_tail_count=0, everything is evictable and oldest pruned
         assert messages[-1]["content"] == "new"
@@ -388,7 +396,9 @@ class TestFreshTailProtection:
             {"role": "assistant", "content": "resp1"},
         ]
         _, messages = cm.build_messages(
-            system="S", new_message="new", history=history,
+            system="S",
+            new_message="new",
+            history=history,
         )
         # All history preserved as fresh tail
         assert len(messages) == 3
@@ -413,7 +423,9 @@ class TestFreshTailProtection:
             {"role": "user", "content": "C" * 200},
         ]
         _, messages = cm.build_messages(
-            system="S", new_message="new", history=history,
+            system="S",
+            new_message="new",
+            history=history,
         )
         # All 3 fresh tail + new message = 4
         assert len(messages) == 4

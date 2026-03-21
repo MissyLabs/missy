@@ -71,10 +71,13 @@ class TestRegisterBuiltinToolsWithoutRegistry:
 
     def test_get_tool_registry_raises_runtime_error_propagates(self):
         """RuntimeError from get_tool_registry (not yet initialised) propagates to caller."""
-        with patch(
-            "missy.tools.registry.get_tool_registry",
-            side_effect=RuntimeError("registry not initialised"),
-        ), pytest.raises(RuntimeError, match="registry not initialised"):
+        with (
+            patch(
+                "missy.tools.registry.get_tool_registry",
+                side_effect=RuntimeError("registry not initialised"),
+            ),
+            pytest.raises(RuntimeError, match="registry not initialised"),
+        ):
             register_builtin_tools()
 
     def test_none_is_treated_same_as_omitting_registry(self):

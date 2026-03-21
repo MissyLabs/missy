@@ -71,6 +71,7 @@ class TestApprovalGate:
 
         # Wait for the pending approval to show up
         import time
+
         for _ in range(50):
             pending = gate.list_pending()
             if pending:
@@ -100,6 +101,7 @@ class TestApprovalGate:
         t.start()
 
         import time
+
         for _ in range(50):
             pending = gate.list_pending()
             if pending:
@@ -169,6 +171,7 @@ class TestApprovalGate:
         t.start()
 
         import time
+
         for _ in range(50):
             pending = gate.list_pending()
             if pending:

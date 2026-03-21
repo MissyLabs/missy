@@ -18,6 +18,7 @@ from missy.channels.screencast.session_manager import AnalysisResult
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_channel(**kwargs: Any) -> ScreencastChannel:
     """Return a ScreencastChannel that has NOT been started."""
     defaults = {
@@ -32,6 +33,7 @@ def _make_channel(**kwargs: Any) -> ScreencastChannel:
 # ---------------------------------------------------------------------------
 # Basic attribute / interface tests
 # ---------------------------------------------------------------------------
+
 
 class TestChannelName:
     def test_channel_name(self) -> None:
@@ -54,6 +56,7 @@ class TestNotImplementedMethods:
 # ---------------------------------------------------------------------------
 # "Not running" fallback paths (no server started)
 # ---------------------------------------------------------------------------
+
 
 class TestNotRunningFallbacks:
     def test_create_session_when_not_running(self) -> None:
@@ -96,6 +99,7 @@ class TestNotRunningFallbacks:
 # Discord REST attachment
 # ---------------------------------------------------------------------------
 
+
 class TestSetDiscordRest:
     def test_set_discord_rest(self) -> None:
         ch = _make_channel()
@@ -112,6 +116,7 @@ class TestSetDiscordRest:
 # ---------------------------------------------------------------------------
 # _get_lan_ip
 # ---------------------------------------------------------------------------
+
 
 class TestGetLanIp:
     def test_get_lan_ip_returns_string(self) -> None:
@@ -134,6 +139,7 @@ class TestGetLanIp:
 # ---------------------------------------------------------------------------
 # create_session with mocked token registry
 # ---------------------------------------------------------------------------
+
 
 class TestCreateSessionMocked:
     def test_create_session_with_mocked_registry(self) -> None:
@@ -203,6 +209,7 @@ class TestCreateSessionMocked:
 # get_active_sessions with mocked registry
 # ---------------------------------------------------------------------------
 
+
 class TestGetActiveSessionsMocked:
     def test_get_active_sessions_with_mocked_registry(self) -> None:
         ch = _make_channel()
@@ -242,6 +249,7 @@ class TestGetActiveSessionsMocked:
 # Already-running guard on start()
 # ---------------------------------------------------------------------------
 
+
 class TestAlreadyRunning:
     def test_already_running_raises(self) -> None:
         """If _thread is alive, start() must raise RuntimeError."""
@@ -258,6 +266,7 @@ class TestAlreadyRunning:
 # ---------------------------------------------------------------------------
 # start() lifecycle tests
 # ---------------------------------------------------------------------------
+
 
 def _make_mock_server(running_flag_holder: list[bool] | None = None) -> MagicMock:
     """Return a MagicMock for ScreencastServer whose start() sets _running=True."""
@@ -297,13 +306,16 @@ class TestStartLifecycle:
 
         @contextlib.contextmanager
         def _combined():
-            with patch(
-                "missy.channels.screencast.channel.ScreencastServer",
-                return_value=mock_server,
-            ) as ps, patch(
-                "missy.channels.screencast.channel.FrameAnalyzer",
-                return_value=mock_analyzer,
-            ) as pa:
+            with (
+                patch(
+                    "missy.channels.screencast.channel.ScreencastServer",
+                    return_value=mock_server,
+                ) as ps,
+                patch(
+                    "missy.channels.screencast.channel.FrameAnalyzer",
+                    return_value=mock_analyzer,
+                ) as pa,
+            ):
                 yield ps, pa
 
         return _combined()
@@ -370,7 +382,10 @@ class TestStartLifecycle:
         mock_analyzer = _make_mock_analyzer()
 
         ch = _make_channel()
-        with self._patch_constructors(mock_server, mock_analyzer), pytest.raises(RuntimeError, match="failed to start"):
+        with (
+            self._patch_constructors(mock_server, mock_analyzer),
+            pytest.raises(RuntimeError, match="failed to start"),
+        ):
             ch.start()
 
         # After failure, _thread and _server must be cleared.
@@ -384,7 +399,10 @@ class TestStartLifecycle:
         mock_analyzer.start = AsyncMock(side_effect=RuntimeError("analyzer init failed"))
 
         ch = _make_channel()
-        with self._patch_constructors(mock_server, mock_analyzer), pytest.raises(RuntimeError, match="failed to start"):
+        with (
+            self._patch_constructors(mock_server, mock_analyzer),
+            pytest.raises(RuntimeError, match="failed to start"),
+        ):
             ch.start()
 
     def test_start_thread_is_daemon(self) -> None:
@@ -437,18 +455,22 @@ class TestStartLifecycle:
 # stop() tests
 # ---------------------------------------------------------------------------
 
+
 class TestStopLifecycle:
     """Tests for the stop() method."""
 
     def _start_channel_with_mocks(self, mock_server, mock_analyzer):
         """Start a channel with mocked dependencies and return it."""
         ch = _make_channel()
-        with patch(
-            "missy.channels.screencast.channel.ScreencastServer",
-            return_value=mock_server,
-        ), patch(
-            "missy.channels.screencast.channel.FrameAnalyzer",
-            return_value=mock_analyzer,
+        with (
+            patch(
+                "missy.channels.screencast.channel.ScreencastServer",
+                return_value=mock_server,
+            ),
+            patch(
+                "missy.channels.screencast.channel.FrameAnalyzer",
+                return_value=mock_analyzer,
+            ),
         ):
             ch.start()
         return ch
@@ -552,6 +574,7 @@ class TestStopLifecycle:
 # get_latest_analysis() and get_results() delegation tests
 # ---------------------------------------------------------------------------
 
+
 class TestSessionManagerDelegation:
     """Tests for get_latest_analysis() and get_results() when session manager is set."""
 
@@ -615,6 +638,7 @@ class TestSessionManagerDelegation:
 # ---------------------------------------------------------------------------
 # _post_to_discord() async method tests
 # ---------------------------------------------------------------------------
+
 
 class TestPostToDiscord:
     """Tests for the _post_to_discord() async method."""

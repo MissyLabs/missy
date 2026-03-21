@@ -52,9 +52,7 @@ _ZERO_WIDTH_RE: re.Pattern[str] = re.compile(
 
 #: Regex to find plausible base64 segments (at least 20 chars, valid charset,
 #: optional padding).  Kept short to avoid pathological backtracking.
-_BASE64_SEGMENT_RE: re.Pattern[str] = re.compile(
-    r"[A-Za-z0-9+/]{20,}={0,2}"
-)
+_BASE64_SEGMENT_RE: re.Pattern[str] = re.compile(r"[A-Za-z0-9+/]{20,}={0,2}")
 
 
 def _strip_zero_width(text: str) -> str:
@@ -143,9 +141,9 @@ class InputSanitizer:
         r"\[/?INST\]",
         r"<\|im_end\|>",
         # --- Additional delimiter / template injection patterns ---
-        r"<<\s*SYS\s*>>",                       # Llama 2 system prompt delimiters
-        r"<\|endoftext\|>",                      # GPT end-of-text token
-        r"<\|eot_id\|>",                         # Llama 3 end-of-turn token
+        r"<<\s*SYS\s*>>",  # Llama 2 system prompt delimiters
+        r"<\|endoftext\|>",  # GPT end-of-text token
+        r"<\|eot_id\|>",  # Llama 3 end-of-turn token
         # --- Session/context reset attacks ---
         r"(new|start)\s+(a\s+)?(conversation|session|chat)\b",
         r"reset\s+(your\s+)?(context|memory|instructions?)",
@@ -157,29 +155,29 @@ class InputSanitizer:
         r"you\s+have\s+no\s+(restrictions?|rules?|limitations?|guidelines?)",
         r"(enable|activate|enter)\s+(god|admin|root|unrestricted)\s+mode",
         # --- Hidden instruction vectors ---
-        r"<!--(?:(?!-->)[\s\S])*-->",                  # HTML comments hiding instructions (ReDoS-safe)
+        r"<!--(?:(?!-->)[\s\S])*-->",  # HTML comments hiding instructions (ReDoS-safe)
         # --- Multi-language injection keywords (OWASP LLM01) ---
         r"ignorar\s+(todas?\s+)?(las?\s+)?instrucciones?\s+(anteriores?|previas?)",  # Spanish
         r"ignorer\s+(toutes?\s+)?(les?\s+)?instructions?\s+(pr[e\u00e9]c[e\u00e9]dentes?|ant[e\u00e9]rieures?)",  # French
         r"ignoriere\s+(alle\s+)?(vorherigen?\s+)?anweisungen",  # German
-        r"(new|nuove?)\s+istruzioni\s*:",         # Italian "new instructions:"
+        r"(new|nuove?)\s+istruzioni\s*:",  # Italian "new instructions:"
         # --- Unclosed tag / comment injection ---
         r"<!--\s*(system|ignore|override|inject|instruction)",  # Unclosed HTML comment with keywords
         # --- Data URI / protocol injection ---
         r"data:\s*text/(html|javascript|plain)\s*[;,]",  # data: URI with text content
         # --- Invisible instruction hiding ---
         r"<\s*div\s+style\s*=\s*[\"'].*?display\s*:\s*none",  # Hidden div instructions
-        r"\[comment\]:",                           # Markdown-style hidden comment
+        r"\[comment\]:",  # Markdown-style hidden comment
         # --- Additional model-specific delimiters ---
-        r"<\|begin_of_text\|>",                    # Llama 3 begin token
-        r"<\|start_header_id\|>",                  # Llama 3 header token
-        r"<\|end_header_id\|>",                    # Llama 3 header end token
-        r"<\|reserved_special_token",              # Any reserved special token
+        r"<\|begin_of_text\|>",  # Llama 3 begin token
+        r"<\|start_header_id\|>",  # Llama 3 header token
+        r"<\|end_header_id\|>",  # Llama 3 header end token
+        r"<\|reserved_special_token",  # Any reserved special token
         # --- Chained instruction patterns ---
-        r"new\s+instructions?\s*:",                # "new instructions:"
-        r"updated?\s+instructions?\s*:",           # "updated instructions:"
-        r"revised?\s+instructions?\s*:",           # "revised instructions:"
-        r"real\s+instructions?\s*:",               # "real instructions:"
+        r"new\s+instructions?\s*:",  # "new instructions:"
+        r"updated?\s+instructions?\s*:",  # "updated instructions:"
+        r"revised?\s+instructions?\s*:",  # "revised instructions:"
+        r"real\s+instructions?\s*:",  # "real instructions:"
         # --- Portuguese / Russian injection keywords ---
         r"ignore\s+as\s+instru[çc][õo]es\s+anteriores",  # Portuguese
         r"игнорируй\s+(все\s+)?предыдущие\s+инструкции",  # Russian
@@ -189,8 +187,8 @@ class InputSanitizer:
         # --- Anthropic-specific delimiters ---
         r"<\|?claude\|?>",
         r"\[/?SYSTEM\]",
-        r"Human:\s*$",       # Attempting to inject a new Human: turn
-        r"Assistant:\s*$",   # Attempting to inject an Assistant: turn
+        r"Human:\s*$",  # Attempting to inject a new Human: turn
+        r"Assistant:\s*$",  # Attempting to inject an Assistant: turn
         # --- Prompt leaking / exfiltration ---
         r"(show|reveal|print|output|display)\s+(?:\w+\s+){0,10}(system\s+)?(prompt|instructions?)",
         r"what\s+(are|is)\s+your\s+(system\s+)?(prompt|instructions?)",
@@ -230,22 +228,22 @@ class InputSanitizer:
         r"(?:base64|hex|rot13)\s+(?:encode|decode)\s+(?:your|the)\s+(?:system|initial)\s+(?:prompt|instructions?)",  # Encoding extraction
         r"you\s+(?:must|have\s+to|need\s+to)\s+(?:always|now)\s+(?:respond|answer|reply)\s+in",  # Forced behavior change
         # --- Session 24: emerging attack vectors ---
-        r"<\|tool_call\|>",                              # Tool-call token injection
-        r"<\|tool_result\|>",                             # Tool-result token injection
-        r"<function_calls>",                              # XML function call injection
-        r"<\|pad\|>",                                     # Padding token injection
+        r"<\|tool_call\|>",  # Tool-call token injection
+        r"<\|tool_result\|>",  # Tool-result token injection
+        r"<function_calls>",  # XML function call injection
+        r"<\|pad\|>",  # Padding token injection
         r"(?:IMPORTANT|CRITICAL|URGENT)\s*:\s*(?:ignore|disregard|override)\b",  # Urgency-prefixed override
         r"(?:as\s+an?\s+AI|as\s+a\s+language\s+model)\s*,?\s*you\s+(?:should|must|can)\s+(?:not\s+)?(?:ignore|override|bypass)",  # Meta-AI instruction
-        r"<\|diff_marker\|>",                             # Diff marker token injection
-        r"<tool_use>",                                    # Claude-style tool_use XML injection
-        r"<antThinking>",                                 # Claude internal token injection
+        r"<\|diff_marker\|>",  # Diff marker token injection
+        r"<tool_use>",  # Claude-style tool_use XML injection
+        r"<antThinking>",  # Claude internal token injection
         # --- Session 26: multimodal and structural injection ---
-        r"<\|image\|>",                                      # Vision model image token injection
-        r"<\|audio\|>",                                      # Audio model token injection
-        r"<\|video\|>",                                      # Video model token injection
-        r"(?:SYSTEM|USER|ASSISTANT)\s+OVERRIDE\s+MODE",      # Uppercase override pattern
-        r"<\|separator\|>",                                  # Separator token injection
-        r"<\|context\|>",                                    # Context boundary token injection
+        r"<\|image\|>",  # Vision model image token injection
+        r"<\|audio\|>",  # Audio model token injection
+        r"<\|video\|>",  # Video model token injection
+        r"(?:SYSTEM|USER|ASSISTANT)\s+OVERRIDE\s+MODE",  # Uppercase override pattern
+        r"<\|separator\|>",  # Separator token injection
+        r"<\|context\|>",  # Context boundary token injection
         r"(?:real|actual|true)\s+(?:system|user)\s+(?:message|prompt|instruction)",  # Authority claim
     ]
 
@@ -322,9 +320,7 @@ class InputSanitizer:
         for decoded_variant in (url_decoded, html_decoded):
             if decoded_variant != text:
                 decoded_norm = _normalize_unicode(_strip_zero_width(decoded_variant))
-                for pattern, original in zip(
-                    self._patterns, self.INJECTION_PATTERNS, strict=False
-                ):
+                for pattern, original in zip(self._patterns, self.INJECTION_PATTERNS, strict=False):
                     if original not in matched and pattern.search(decoded_norm):
                         matched.append(original)
 
@@ -332,9 +328,7 @@ class InputSanitizer:
         decoded_b64 = _decode_base64_segments(text)
         if decoded_b64:
             b64_normalized = _normalize_unicode(_strip_zero_width(decoded_b64))
-            for pattern, original in zip(
-                self._patterns, self.INJECTION_PATTERNS, strict=False
-            ):
+            for pattern, original in zip(self._patterns, self.INJECTION_PATTERNS, strict=False):
                 if original not in matched and pattern.search(b64_normalized):
                     matched.append(original)
 

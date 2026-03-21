@@ -166,7 +166,8 @@ class NetworkPolicyEngine:
                         logger.warning(
                             "NetworkPolicyEngine: DNS rebinding blocked — %r resolved to "
                             "private address %s which is not in allowed_cidrs",
-                            host, ip_str,
+                            host,
+                            ip_str,
                         )
                         self._emit_event(host, "deny", None, session_id, task_id)
                         raise PolicyViolationError(

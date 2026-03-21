@@ -361,8 +361,7 @@ def test_persona_yaml_multiline_strings(tmp_path: Path) -> None:
         "Line four ends without a newline."
     )
     multiline_boundary = (
-        "Never execute destructive operations\n"
-        "without explicit written confirmation."
+        "Never execute destructive operations\nwithout explicit written confirmation."
     )
 
     persona_path = tmp_path / "persona.yaml"

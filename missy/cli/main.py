@@ -311,7 +311,12 @@ def init(ctx: click.Context) -> None:
     "--provider", "setup_provider", default=None, help="Provider name for non-interactive mode."
 )
 @click.option("--api-key", "setup_api_key", default=None, help="API key (direct value).")
-@click.option("--api-key-env", "setup_api_key_env", default=None, help="Environment variable containing the API key.")
+@click.option(
+    "--api-key-env",
+    "setup_api_key_env",
+    default=None,
+    help="Environment variable containing the API key.",
+)
 @click.option("--model", "setup_model", default=None, help="Model identifier.")
 @click.option("--workspace", "setup_workspace", default=None, help="Workspace directory path.")
 @click.option("--no-prompt", is_flag=True, default=False, help="Non-interactive mode (no prompts).")
@@ -3059,8 +3064,12 @@ def security_group() -> None:
 
 
 @security_group.command("scan")
-@click.option("--verbose", "-v", is_flag=True, default=False, help="Show full description for each finding.")
-@click.option("--json-output", "json_output", is_flag=True, default=False, help="Output results as JSON.")
+@click.option(
+    "--verbose", "-v", is_flag=True, default=False, help="Show full description for each finding."
+)
+@click.option(
+    "--json-output", "json_output", is_flag=True, default=False, help="Output results as JSON."
+)
 @click.option(
     "--severity",
     "min_severity",
@@ -3110,9 +3119,7 @@ def security_scan(
         ]
         # Recompute summary for filtered set
         for sev in Severity:
-            result.summary[sev.value] = sum(
-                1 for f in result.findings if f.severity == sev
-            )
+            result.summary[sev.value] = sum(1 for f in result.findings if f.severity == sev)
 
     if json_output:
         console.print_json(_json.dumps(result.to_json(), indent=2))
@@ -3133,8 +3140,7 @@ def security_scan(
 
     console.print(Rule("[bold]Security Scan Results[/]"))
     console.print(
-        f"  Scanned at: [dim]{result.scanned_at}[/] "
-        f"([dim]{result.scan_duration_ms:.0f}ms[/])\n"
+        f"  Scanned at: [dim]{result.scanned_at}[/] ([dim]{result.scan_duration_ms:.0f}ms[/])\n"
     )
 
     # Severity summary bar
@@ -3240,19 +3246,23 @@ def hatch(ctx: click.Context, non_interactive: bool) -> None:
     mgr = HatchingManager()
 
     if mgr.is_hatched():
-        console.print("[green]Missy is already hatched![/] Use [bold]missy hatch --non-interactive[/] to re-verify.")
+        console.print(
+            "[green]Missy is already hatched![/] Use [bold]missy hatch --non-interactive[/] to re-verify."
+        )
         state = mgr.get_state()
         console.print(f"  Hatched at: [bold]{state.completed_at}[/]")
         console.print(f"  Steps: {', '.join(state.steps_completed)}")
         return
 
-    console.print(Panel(
-        "[bold cyan]Hatching Missy[/]\n\n"
-        "This will set up your environment, initialise configuration,\n"
-        "verify providers, create a persona, and seed memory.",
-        title="[cyan]Hatching[/]",
-        border_style="cyan",
-    ))
+    console.print(
+        Panel(
+            "[bold cyan]Hatching Missy[/]\n\n"
+            "This will set up your environment, initialise configuration,\n"
+            "verify providers, create a persona, and seed memory.",
+            title="[cyan]Hatching[/]",
+            border_style="cyan",
+        )
+    )
 
     interactive = not non_interactive
     state = mgr.run_hatching(interactive=interactive)
@@ -3467,9 +3477,7 @@ def vision_health_cmd() -> None:
     report = monitor.get_health_report()
 
     status = report["overall_status"]
-    status_color = {"healthy": "green", "degraded": "yellow", "unhealthy": "red"}.get(
-        status, "dim"
-    )
+    status_color = {"healthy": "green", "degraded": "yellow", "unhealthy": "red"}.get(status, "dim")
 
     console.print(f"[bold]Vision Health:[/] [{status_color}]{status.upper()}[/]")
     console.print(
@@ -3594,15 +3602,12 @@ def vision_capture(
             result = handle.capture_best(burst_count=burst_count)
             if result.success:
                 ts = time.strftime("%Y%m%d_%H%M%S")
-                out_path = output or str(
-                    Path.home() / f".missy/captures/best_{ts}.jpg"
-                )
+                out_path = output or str(Path.home() / f".missy/captures/best_{ts}.jpg")
                 Path(out_path).parent.mkdir(parents=True, exist_ok=True)
                 import cv2
+
                 cv2.imwrite(out_path, result.image, [cv2.IMWRITE_JPEG_QUALITY, config.quality])
-                console.print(
-                    f"[green]Best frame[/] {result.width}x{result.height} → {out_path}"
-                )
+                console.print(f"[green]Best frame[/] {result.width}x{result.height} → {out_path}")
             else:
                 console.print(f"[red]Failed[/]: {result.error}")
             return
@@ -3617,12 +3622,11 @@ def vision_capture(
                     out_path = str(base.parent / f"{base.stem}_{i:03d}{base.suffix}")
                 else:
                     ts = time.strftime("%Y%m%d_%H%M%S")
-                    out_path = str(
-                        Path.home() / f".missy/captures/burst_{ts}_{i:03d}.jpg"
-                    )
+                    out_path = str(Path.home() / f".missy/captures/burst_{ts}_{i:03d}.jpg")
                 Path(out_path).parent.mkdir(parents=True, exist_ok=True)
                 if result.success:
                     import cv2
+
                     cv2.imwrite(out_path, result.image, [cv2.IMWRITE_JPEG_QUALITY, config.quality])
                     console.print(
                         f"[green]Frame {i}[/] {result.width}x{result.height} → {out_path}"
@@ -3648,9 +3652,7 @@ def vision_capture(
             result = handle.capture_to_file(out_path)
 
             if result.success:
-                console.print(
-                    f"[green]Captured[/] {result.width}x{result.height} → {out_path}"
-                )
+                console.print(f"[green]Captured[/] {result.width}x{result.height} → {out_path}")
             else:
                 console.print(f"[red]Failed[/] frame {i}: {result.error}")
 
@@ -3687,6 +3689,7 @@ def vision_inspect(
         else:
             if device is None:
                 from missy.vision.discovery import find_preferred_camera
+
                 cam = find_preferred_camera()
                 if cam is None:
                     _print_error("No camera found", hint="Use --file or --screenshot")
@@ -3697,12 +3700,12 @@ def vision_inspect(
 
         frame = source.acquire()
         console.print(
-            f"[green]Acquired[/] {frame.width}x{frame.height} image "
-            f"from {frame.source_type.value}"
+            f"[green]Acquired[/] {frame.width}x{frame.height} image from {frame.source_type.value}"
         )
 
         # Run quality assessment
         from missy.vision.pipeline import ImagePipeline
+
         pipeline = ImagePipeline()
         quality = pipeline.assess_quality(frame.image)
 
@@ -3723,9 +3726,7 @@ def vision_inspect(
             table.add_row("Issues", ", ".join(quality["issues"]))
 
         console.print(table)
-        console.print(
-            "\n[dim]For LLM-powered analysis, use missy vision review --mode general[/]"
-        )
+        console.print("\n[dim]For LLM-powered analysis, use missy vision review --mode general[/]")
 
     except Exception as exc:
         _print_error(f"Inspection failed: {exc}")
@@ -3736,7 +3737,8 @@ def vision_inspect(
 @click.option("--device", "-d", default=None, help="Camera device path.")
 @click.option("--file", "-f", "file_path", default=None, help="Image file to review.")
 @click.option(
-    "--mode", "-m",
+    "--mode",
+    "-m",
     type=click.Choice(["general", "puzzle", "painting", "inspection"]),
     default="general",
     help="Analysis mode.",
@@ -3764,6 +3766,7 @@ def vision_review(
         else:
             if device is None:
                 from missy.vision.discovery import find_preferred_camera
+
                 cam = find_preferred_camera()
                 if cam is None:
                     _print_error("No camera found", hint="Use --file to provide an image")
@@ -3777,6 +3780,7 @@ def vision_review(
 
         # Preprocess
         from missy.vision.pipeline import ImagePipeline
+
         pipeline = ImagePipeline()
         processed = pipeline.process(frame.image)
 
@@ -3794,19 +3798,23 @@ def vision_review(
         import base64
 
         import cv2
+
         _, buf = cv2.imencode(".jpg", processed, [cv2.IMWRITE_JPEG_QUALITY, 85])
         b64_image = base64.b64encode(buf.tobytes()).decode("ascii")
 
         # Send to provider with provider-specific formatting
         from missy.providers.registry import get_registry
+
         registry = get_registry()
         provider = registry.get_provider()
         provider_name = getattr(provider, "name", "anthropic")
 
         from missy.vision.provider_format import build_vision_message
+
         msg_dict = build_vision_message(provider_name, b64_image, prompt)
 
         from missy.providers.base import Message
+
         messages = [Message(role=msg_dict["role"], content=msg_dict["content"])]
 
         console.print("[dim]Analyzing...[/]\n")
@@ -3815,6 +3823,7 @@ def vision_review(
         # Log audit event
         try:
             from missy.vision.audit import audit_vision_analysis
+
             audit_vision_analysis(
                 mode=mode,
                 source_type=frame.source_type.value,
@@ -3824,12 +3833,14 @@ def vision_review(
         except Exception:
             pass
 
-        console.print(Panel(
-            response.text,
-            title=f"[bold]{mode.title()} Analysis[/]",
-            border_style="cyan",
-            padding=(1, 2),
-        ))
+        console.print(
+            Panel(
+                response.text,
+                title=f"[bold]{mode.title()} Analysis[/]",
+                border_style="cyan",
+                padding=(1, 2),
+            )
+        )
 
     except Exception as exc:
         _print_error(f"Review failed: {exc}")
@@ -3983,7 +3994,9 @@ def vision_memory_cmd() -> None:
     console.print("[bold]Vision Scene Memory Usage[/]\n")
 
     d = report.to_dict()
-    console.print(f"  Total: {d['total_mb']:.2f} MB / {d['limit_mb']:.2f} MB ({d['usage_fraction']:.1%})")
+    console.print(
+        f"  Total: {d['total_mb']:.2f} MB / {d['limit_mb']:.2f} MB ({d['usage_fraction']:.1%})"
+    )
     console.print(f"  Frames: {d['total_frames']}")
     console.print(f"  Sessions: {d['session_count']} ({d['active_sessions']} active)")
 

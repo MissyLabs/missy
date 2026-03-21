@@ -80,10 +80,26 @@ class IntentResult:
 
 # Explicit vision request patterns (high confidence)
 _EXPLICIT_LOOK_PATTERNS: list[tuple[re.Pattern[str], VisionIntent, float]] = [
-    (re.compile(r"\b(look\s+at|show\s+me|let\s+me\s+see|take\s+a\s+look)\b", re.I), VisionIntent.LOOK, 0.95),
-    (re.compile(r"\b(can\s+you\s+see|do\s+you\s+see|what\s+do\s+you\s+see)\b", re.I), VisionIntent.LOOK, 0.90),
-    (re.compile(r"\bcheck\s+(what('s|\s+is)\s+(on|at)|this|that)\b", re.I), VisionIntent.CHECK, 0.85),
-    (re.compile(r"\b(take\s+a\s+(photo|picture|snapshot)|capture|snap)\b", re.I), VisionIntent.LOOK, 0.90),
+    (
+        re.compile(r"\b(look\s+at|show\s+me|let\s+me\s+see|take\s+a\s+look)\b", re.I),
+        VisionIntent.LOOK,
+        0.95,
+    ),
+    (
+        re.compile(r"\b(can\s+you\s+see|do\s+you\s+see|what\s+do\s+you\s+see)\b", re.I),
+        VisionIntent.LOOK,
+        0.90,
+    ),
+    (
+        re.compile(r"\bcheck\s+(what('s|\s+is)\s+(on|at)|this|that)\b", re.I),
+        VisionIntent.CHECK,
+        0.85,
+    ),
+    (
+        re.compile(r"\b(take\s+a\s+(photo|picture|snapshot)|capture|snap)\b", re.I),
+        VisionIntent.LOOK,
+        0.90,
+    ),
     (re.compile(r"\bscreenshot\b", re.I), VisionIntent.SCREENSHOT, 0.95),
 ]
 
@@ -99,7 +115,12 @@ _PUZZLE_PATTERNS: list[tuple[re.Pattern[str], float]] = [
     (re.compile(r"\bboard\s+state\b", re.I), 0.85),
     (re.compile(r"\b(puzzle|piece)\b.*\b(help|assist|guide)\b", re.I), 0.80),
     (re.compile(r"\bmissing\s+piece\b", re.I), 0.85),
-    (re.compile(r"\b(top|bottom|left|right|middle|center)\s+(of\s+the\s+)?(puzzle|board)\b", re.I), 0.75),
+    (
+        re.compile(
+            r"\b(top|bottom|left|right|middle|center)\s+(of\s+the\s+)?(puzzle|board)\b", re.I
+        ),
+        0.75,
+    ),
     (re.compile(r"\bfit\s+(this|that|it)\s+in\s+the\s+\w+\s+(area|region|part)\b", re.I), 0.85),
     (re.compile(r"\b(which|what)\s+pieces?\s+(go|match|connect|fit)\b", re.I), 0.85),
 ]
@@ -108,7 +129,12 @@ _PUZZLE_PATTERNS: list[tuple[re.Pattern[str], float]] = [
 _PAINTING_PATTERNS: list[tuple[re.Pattern[str], float]] = [
     (re.compile(r"\b(painting|canvas|artwork|art\s+piece)\b", re.I), 0.85),
     (re.compile(r"\bwhat\s+do\s+you\s+think\s+of\s+(this|my)\b", re.I), 0.75),
-    (re.compile(r"\b(how\s+(can|do)\s+I\s+improve|feedback|critique)\b.*\b(paint|draw|art)\b", re.I), 0.90),
+    (
+        re.compile(
+            r"\b(how\s+(can|do)\s+I\s+improve|feedback|critique)\b.*\b(paint|draw|art)\b", re.I
+        ),
+        0.90,
+    ),
     (re.compile(r"\b(color|composition|brushwork|technique|palette)\b", re.I), 0.60),
     (re.compile(r"\b(sketch|drawing|watercolor|oil|acrylic)\b", re.I), 0.70),
     (re.compile(r"\bhow\s+(does\s+)?this\s+look\b", re.I), 0.65),

@@ -13,8 +13,15 @@ from missy.tools.base import BaseTool, ToolPermissions, ToolResult
 def _display_env() -> dict:
     """Return a minimal environment dict with DISPLAY set."""
     _SAFE_VARS = (
-        "PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM",
-        "XDG_RUNTIME_DIR", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS",
+        "PATH",
+        "HOME",
+        "USER",
+        "LANG",
+        "LC_ALL",
+        "TERM",
+        "XDG_RUNTIME_DIR",
+        "XAUTHORITY",
+        "DBUS_SESSION_BUS_ADDRESS",
     )
     env = {k: os.environ[k] for k in _SAFE_VARS if k in os.environ}
     env["DISPLAY"] = os.environ.get("DISPLAY", ":0")

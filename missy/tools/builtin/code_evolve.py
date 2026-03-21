@@ -455,7 +455,9 @@ class CodeEvolveTool(BaseTool):
                 try:
                     restart_process()
                 except SystemExit:
-                    logger.warning("code_evolve: restart_process raised SystemExit — process may not have restarted")
+                    logger.warning(
+                        "code_evolve: restart_process raised SystemExit — process may not have restarted"
+                    )
                 return ToolResult(success=True, output=msg)
             return ToolResult(
                 success=False,

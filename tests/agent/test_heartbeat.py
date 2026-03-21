@@ -83,7 +83,9 @@ class TestHeartbeatFire:
         assert runner._skips == 0
 
     def test_fire_reads_unicode(self, tmp_path):
-        (tmp_path / "HEARTBEAT.md").write_text("# Check \U0001f60a\n- \u2714 Done", encoding="utf-8")
+        (tmp_path / "HEARTBEAT.md").write_text(
+            "# Check \U0001f60a\n- \u2714 Done", encoding="utf-8"
+        )
         run_fn = MagicMock(return_value="ok")
         runner = HeartbeatRunner(agent_run_fn=run_fn, workspace=str(tmp_path))
         runner._fire()
@@ -119,6 +121,7 @@ class TestActiveHours:
 
         def patched():
             import re as _re
+
             m = _re.match(r"(\d{2}):(\d{2})-(\d{2}):(\d{2})", runner._active_hours)
             if not m:
                 return True

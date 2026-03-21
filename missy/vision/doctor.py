@@ -84,12 +84,8 @@ class VisionDoctor:
         report.add(self.check_captures_directory())
 
         # Only attempt capture if we found devices and opencv is available
-        has_opencv = any(
-            r.name == "opencv" and r.passed for r in report.results
-        )
-        has_devices = any(
-            r.name == "video_devices" and r.passed for r in report.results
-        )
+        has_opencv = any(r.name == "opencv" and r.passed for r in report.results)
+        has_devices = any(r.name == "video_devices" and r.passed for r in report.results)
         if has_opencv and has_devices:
             report.add(self.check_capture())
 
@@ -139,6 +135,7 @@ class VisionDoctor:
         """Check numpy availability."""
         try:
             import numpy as np
+
             return DiagnosticResult(
                 name="numpy",
                 passed=True,
@@ -219,11 +216,13 @@ class VisionDoctor:
                 d.stat()
                 readable = os.access(str(d), os.R_OK)
                 writable = os.access(str(d), os.W_OK)
-                device_info.append({
-                    "path": str(d),
-                    "readable": readable,
-                    "writable": writable,
-                })
+                device_info.append(
+                    {
+                        "path": str(d),
+                        "readable": readable,
+                        "writable": writable,
+                    }
+                )
             except OSError:
                 device_info.append({"path": str(d), "error": "stat failed"})
 

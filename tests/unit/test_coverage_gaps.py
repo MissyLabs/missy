@@ -266,7 +266,10 @@ class TestLoadConfigOSError:
         from missy.config.settings import load_config
         from missy.core.exceptions import ConfigurationError
 
-        with patch("pathlib.Path.read_text", side_effect=OSError("Permission denied")), pytest.raises(ConfigurationError, match="Cannot read configuration file"):
+        with (
+            patch("pathlib.Path.read_text", side_effect=OSError("Permission denied")),
+            pytest.raises(ConfigurationError, match="Cannot read configuration file"),
+        ):
             load_config(str(cfg_file))
 
 
@@ -398,7 +401,10 @@ class TestSkillRegistryEmitEventPublishRaises:
         caught and logged via logger.exception — it must NOT propagate."""
         registry = self._make_registry_with_skill()
 
-        with patch("missy.skills.registry.event_bus.publish", side_effect=RuntimeError("bus down")), patch("missy.skills.registry.logger") as mock_logger:
+        with (
+            patch("missy.skills.registry.event_bus.publish", side_effect=RuntimeError("bus down")),
+            patch("missy.skills.registry.logger") as mock_logger,
+        ):
             result = registry.execute("ok_skill")
 
         # The skill result is still returned correctly.
@@ -414,7 +420,10 @@ class TestSkillRegistryEmitEventPublishRaises:
 
         registry = SkillRegistry()
 
-        with patch("missy.skills.registry.event_bus.publish", side_effect=RuntimeError("bus down")), patch("missy.skills.registry.logger") as mock_logger:
+        with (
+            patch("missy.skills.registry.event_bus.publish", side_effect=RuntimeError("bus down")),
+            patch("missy.skills.registry.logger") as mock_logger,
+        ):
             result = registry.execute("nonexistent")
 
         assert result.success is False

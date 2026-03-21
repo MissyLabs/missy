@@ -165,9 +165,7 @@ class TestInferCategory:
         assert ToolAnnotation._infer_category({}) == "general"
 
     def test_destructive_wins_over_non_readonly(self):
-        result = ToolAnnotation._infer_category(
-            {"destructiveHint": True, "readOnlyHint": False}
-        )
+        result = ToolAnnotation._infer_category({"destructiveHint": True, "readOnlyHint": False})
         assert result == "dangerous"
 
 
@@ -365,9 +363,20 @@ TOOLS = [
 @pytest.fixture
 def populated_registry():
     reg = AnnotationRegistry()
-    reg.register("search_web", ToolAnnotation(read_only=True, network_access=True, category="search", cost_hint="low"))
-    reg.register("delete_file", ToolAnnotation(read_only=False, mutating=True, category="dangerous", cost_hint="none"))
-    reg.register("list_dir", ToolAnnotation(read_only=True, filesystem_access=True, category="general", cost_hint="none"))
+    reg.register(
+        "search_web",
+        ToolAnnotation(read_only=True, network_access=True, category="search", cost_hint="low"),
+    )
+    reg.register(
+        "delete_file",
+        ToolAnnotation(read_only=False, mutating=True, category="dangerous", cost_hint="none"),
+    )
+    reg.register(
+        "list_dir",
+        ToolAnnotation(
+            read_only=True, filesystem_access=True, category="general", cost_hint="none"
+        ),
+    )
     # unknown_tool has no registration → falls back to default
     return reg
 

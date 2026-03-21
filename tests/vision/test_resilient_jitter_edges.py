@@ -548,7 +548,10 @@ def test_disconnect_during_reconnect_loop_is_safe(
     t = threading.Thread(target=disconnector, daemon=True)
     t.start()
 
-    with patch("missy.vision.resilient_capture.time.sleep", side_effect=slow_sleep), contextlib.suppress(Exception):
+    with (
+        patch("missy.vision.resilient_capture.time.sleep", side_effect=slow_sleep),
+        contextlib.suppress(Exception),
+    ):
         cam.capture()
 
     t.join(timeout=5)
@@ -575,9 +578,11 @@ def test_cumulative_failures_do_not_reset_after_success() -> None:
     disc = _mock_disc(device)
     handle = _mock_handle(result=_success_result())
 
-    with patch("missy.vision.resilient_capture.get_discovery", return_value=disc), \
-         patch("missy.vision.resilient_capture.get_health_monitor"), \
-         patch("missy.vision.resilient_capture.CameraHandle", return_value=handle):
+    with (
+        patch("missy.vision.resilient_capture.get_discovery", return_value=disc),
+        patch("missy.vision.resilient_capture.get_health_monitor"),
+        patch("missy.vision.resilient_capture.CameraHandle", return_value=handle),
+    ):
         cam._connected = True
         cam._handle = handle
         cam._current_device = device
@@ -934,7 +939,8 @@ def test_no_path_change_warning_when_same_path(
         cam.capture()
 
     path_change_warnings = [
-        r for r in caplog.records
+        r
+        for r in caplog.records
         if r.levelno == logging.WARNING and "path changed" in r.message.lower()
     ]
     assert not path_change_warnings
@@ -981,7 +987,8 @@ def test_path_change_warning_contains_both_old_and_new_paths(
         cam.capture()
 
     matching = [
-        r.message for r in caplog.records
+        r.message
+        for r in caplog.records
         if r.levelno == logging.WARNING
         and "/dev/video1" in r.message
         and "/dev/video4" in r.message
@@ -1118,10 +1125,13 @@ def test_fallback_camera_logs_warning(
 
     assert result.success
     fallback_warnings = [
-        r.message for r in caplog.records
+        r.message
+        for r in caplog.records
         if r.levelno == logging.WARNING and "fallback" in r.message.lower()
     ]
-    assert fallback_warnings, f"Expected fallback warning, records: {[r.message for r in caplog.records]}"
+    assert fallback_warnings, (
+        f"Expected fallback warning, records: {[r.message for r in caplog.records]}"
+    )
 
 
 @patch("missy.vision.resilient_capture.get_health_monitor")
@@ -1205,7 +1215,8 @@ def test_fallback_camera_no_warning_when_ids_match(
         cam.capture()
 
     fallback_warnings = [
-        r for r in caplog.records
+        r
+        for r in caplog.records
         if r.levelno == logging.WARNING and "fallback" in r.message.lower()
     ]
     assert not fallback_warnings
@@ -1256,10 +1267,7 @@ def test_fallback_camera_name_in_warning_message(
     with caplog.at_level(logging.WARNING, logger="missy.vision.resilient_capture"):
         cam.capture()
 
-    matching = [
-        r.message for r in caplog.records
-        if "NoName BudgetCam 3000" in r.message
-    ]
+    matching = [r.message for r in caplog.records if "NoName BudgetCam 3000" in r.message]
     assert matching, "Fallback warning must include the fallback camera name"
 
 

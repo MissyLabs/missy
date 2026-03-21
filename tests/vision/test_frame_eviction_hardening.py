@@ -266,16 +266,16 @@ class TestCaptureDeadlineAwareSleep:
             # attempt 4: check t=8 ok, read fails, remaining=10-8.5=1.5 → sleep min(2, 1.5)=1.5
             # attempt 5: check t=9.5 ok, read fails → last attempt, no sleep
             mock_mono.side_effect = [
-                0.0,   # deadline set
-                0.0,   # attempt 1 check
-                1.0,   # sleep remaining calc
-                3.0,   # attempt 2 check
-                4.0,   # sleep remaining calc
-                6.0,   # attempt 3 check
-                7.0,   # sleep remaining calc
-                8.0,   # attempt 4 check
-                8.5,   # sleep remaining calc
-                9.5,   # attempt 5 check
+                0.0,  # deadline set
+                0.0,  # attempt 1 check
+                1.0,  # sleep remaining calc
+                3.0,  # attempt 2 check
+                4.0,  # sleep remaining calc
+                6.0,  # attempt 3 check
+                7.0,  # sleep remaining calc
+                8.0,  # attempt 4 check
+                8.5,  # sleep remaining calc
+                9.5,  # attempt 5 check
             ]
             result = cam.capture()
 
@@ -300,10 +300,10 @@ class TestCaptureDeadlineAwareSleep:
         ):
             # deadline=10; attempt 1 ok; remaining calc shows 0
             mock_mono.side_effect = [
-                0.0,    # deadline
-                0.0,    # attempt 1 check
-                11.0,   # remaining calc → negative → clamp to 0
-                11.0,   # attempt 2 check → exceeds deadline
+                0.0,  # deadline
+                0.0,  # attempt 1 check
+                11.0,  # remaining calc → negative → clamp to 0
+                11.0,  # attempt 2 check → exceeds deadline
             ]
             result = cam.capture()
 

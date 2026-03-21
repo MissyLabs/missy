@@ -23,6 +23,7 @@ from missy.agent.context import ContextManager, TokenBudget, _approx_tokens
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def make_budget(
     total: int = 400,
     system_reserve: int = 0,
@@ -51,6 +52,7 @@ def char_tokens(n_tokens: int) -> str:
 # 1. Token budget exhaustion
 # ---------------------------------------------------------------------------
 
+
 class TestTokenBudgetExhaustion:
     """History is pruned when combined tokens exceed the available budget."""
 
@@ -62,9 +64,7 @@ class TestTokenBudgetExhaustion:
             {"role": "user", "content": "msg1"},
             {"role": "assistant", "content": "msg2"},
         ]
-        _, messages = cm.build_messages(
-            system="S", new_message="new", history=history
-        )
+        _, messages = cm.build_messages(system="S", new_message="new", history=history)
         # Only the new message survives; zero budget means all history is evicted.
         assert messages == [{"role": "user", "content": "new"}]
 
@@ -75,13 +75,11 @@ class TestTokenBudgetExhaustion:
         cm = ContextManager(budget)
         # 3 messages each costing 100 tokens (400 chars); only 1 can fit after new msg
         history = [
-            {"role": "user",      "content": char_tokens(100)},  # oldest
+            {"role": "user", "content": char_tokens(100)},  # oldest
             {"role": "assistant", "content": char_tokens(100)},
-            {"role": "user",      "content": char_tokens(100)},  # newest
+            {"role": "user", "content": char_tokens(100)},  # newest
         ]
-        _, messages = cm.build_messages(
-            system="S", new_message="X", history=history
-        )
+        _, messages = cm.build_messages(system="S", new_message="X", history=history)
         # Newest evictable (history[2]) should be kept; oldest two pruned.
         contents = [m["content"] for m in messages]
         assert char_tokens(100) in contents  # newest kept
@@ -94,9 +92,7 @@ class TestTokenBudgetExhaustion:
         cm = ContextManager(budget)
         ninety_nine_token_content = char_tokens(99)
         history = [{"role": "user", "content": ninety_nine_token_content}]
-        _, messages = cm.build_messages(
-            system="S", new_message="x", history=history
-        )
+        _, messages = cm.build_messages(system="S", new_message="x", history=history)
         # The history message fits exactly; it should be present.
         assert any(m["content"] == ninety_nine_token_content for m in messages)
 
@@ -107,9 +103,7 @@ class TestTokenBudgetExhaustion:
         cm = ContextManager(budget)
         hundred_token_content = char_tokens(100)
         history = [{"role": "user", "content": hundred_token_content}]
-        _, messages = cm.build_messages(
-            system="S", new_message="x", history=history
-        )
+        _, messages = cm.build_messages(system="S", new_message="x", history=history)
         # Pruned; only new message remains.
         assert all(m["content"] != hundred_token_content for m in messages)
         assert messages[-1]["content"] == "x"
@@ -118,6 +112,7 @@ class TestTokenBudgetExhaustion:
 # ---------------------------------------------------------------------------
 # 2. Memory fraction hard cap
 # ---------------------------------------------------------------------------
+
 
 class TestMemoryFractionCap:
     """Memory text is truncated to exactly memory_budget * 4 characters."""
@@ -195,6 +190,7 @@ class TestMemoryFractionCap:
 # ---------------------------------------------------------------------------
 # 3. Learnings fraction boundary
 # ---------------------------------------------------------------------------
+
 
 class TestLearningsFractionBoundary:
     """Learnings are included only when their token count is within budget."""
@@ -276,6 +272,7 @@ class TestLearningsFractionBoundary:
 # 4. Empty history
 # ---------------------------------------------------------------------------
 
+
 class TestEmptyHistory:
     """build_messages with an empty history list must behave correctly."""
 
@@ -310,22 +307,19 @@ class TestEmptyHistory:
 
     def test_empty_history_empty_string_new_message(self):
         cm = ContextManager()
-        _, messages = cm.build_messages(
-            system="S", new_message="", history=[]
-        )
+        _, messages = cm.build_messages(system="S", new_message="", history=[])
         assert messages[-1] == {"role": "user", "content": ""}
 
     def test_empty_history_with_summaries_none(self):
         cm = ContextManager()
-        _, messages = cm.build_messages(
-            system="S", new_message="X", history=[], summaries=None
-        )
+        _, messages = cm.build_messages(system="S", new_message="X", history=[], summaries=None)
         assert len(messages) == 1
 
 
 # ---------------------------------------------------------------------------
 # 5. System prompt preserved under pressure
 # ---------------------------------------------------------------------------
+
 
 class TestSystemPromptPreserved:
     """The system prompt string is never modified or truncated by budget logic."""
@@ -381,9 +375,7 @@ class TestSystemPromptPreserved:
         )
         cm = ContextManager(budget)
         history = [{"role": "user", "content": "old message"}]
-        _, messages = cm.build_messages(
-            system="S", new_message="new", history=history
-        )
+        _, messages = cm.build_messages(system="S", new_message="new", history=history)
         assert all(m["content"] != "old message" for m in messages)
         assert messages[-1]["content"] == "new"
 
@@ -391,6 +383,7 @@ class TestSystemPromptPreserved:
 # ---------------------------------------------------------------------------
 # 6. Single huge message
 # ---------------------------------------------------------------------------
+
 
 class TestSingleHugeMessage:
     """A single message larger than the entire history budget is simply dropped."""
@@ -402,9 +395,7 @@ class TestSingleHugeMessage:
         cm = ContextManager(budget)
         huge_content = char_tokens(1000)
         history = [{"role": "user", "content": huge_content}]
-        _, messages = cm.build_messages(
-            system="S", new_message="new", history=history
-        )
+        _, messages = cm.build_messages(system="S", new_message="new", history=history)
         assert all(m["content"] != huge_content for m in messages)
         assert messages[-1]["content"] == "new"
 
@@ -417,9 +408,7 @@ class TestSingleHugeMessage:
         cm = ContextManager(budget)
         huge_content = char_tokens(1000)
         history = [{"role": "user", "content": huge_content}]  # becomes fresh tail
-        _, messages = cm.build_messages(
-            system="S", new_message="new", history=history
-        )
+        _, messages = cm.build_messages(system="S", new_message="new", history=history)
         contents = [m["content"] for m in messages]
         assert huge_content in contents
 
@@ -428,16 +417,14 @@ class TestSingleHugeMessage:
         budget = make_budget(total=200, fresh_tail_count=0)
         cm = ContextManager(budget)
         huge = char_tokens(5000)
-        small1 = "a" * 4   # 1 token
-        small2 = "b" * 4   # 1 token
+        small1 = "a" * 4  # 1 token
+        small2 = "b" * 4  # 1 token
         history = [
-            {"role": "user",      "content": huge},    # oldest, too big
+            {"role": "user", "content": huge},  # oldest, too big
             {"role": "assistant", "content": small1},
-            {"role": "user",      "content": small2},
+            {"role": "user", "content": small2},
         ]
-        _, messages = cm.build_messages(
-            system="S", new_message="new", history=history
-        )
+        _, messages = cm.build_messages(system="S", new_message="new", history=history)
         contents = [m["content"] for m in messages]
         assert huge not in contents
         # Small messages should fit in the budget
@@ -448,15 +435,14 @@ class TestSingleHugeMessage:
         budget = make_budget(total=10)
         cm = ContextManager(budget)
         giant_new = char_tokens(10000)
-        _, messages = cm.build_messages(
-            system="S", new_message=giant_new, history=[]
-        )
+        _, messages = cm.build_messages(system="S", new_message=giant_new, history=[])
         assert messages[-1]["content"] == giant_new
 
 
 # ---------------------------------------------------------------------------
 # 7. Pruning order
 # ---------------------------------------------------------------------------
+
 
 class TestPruningOrder:
     """Oldest evictable messages are pruned first; newest are retained."""
@@ -476,16 +462,16 @@ class TestPruningOrder:
         # available = 100 tokens; new_message = 1 token; remaining = 99 for history
         # Each history message = 50 tokens; only the newest fits.
         history = [
-            {"role": "user",      "content": char_tokens(50), "id": "old1"},
+            {"role": "user", "content": char_tokens(50), "id": "old1"},
             {"role": "assistant", "content": char_tokens(50), "id": "old2"},
-            {"role": "user",      "content": char_tokens(50), "id": "new3"},
+            {"role": "user", "content": char_tokens(50), "id": "new3"},
         ]
-        _, messages = cm.build_messages(
-            system="S", new_message="x", history=history
-        )
+        _, messages = cm.build_messages(system="S", new_message="x", history=history)
         contents = [m["content"] for m in messages]
         # Newest evictable (new3) kept; old1 and old2 pruned.
-        assert char_tokens(50) in contents   # new3 content (same as old1/old2 chars but only one kept)
+        assert (
+            char_tokens(50) in contents
+        )  # new3 content (same as old1/old2 chars but only one kept)
         assert len([c for c in contents if c == char_tokens(50)]) == 1
 
     def test_multi_prune_retains_newest(self):
@@ -502,12 +488,9 @@ class TestPruningOrder:
         # available = 250 tokens; new_message = 1 token; history budget = 249 tokens
         # Each message costs 60 tokens => 4 would cost 240, 5 would cost 300 => 4 fit max
         messages_in = [
-            {"role": "user",      "content": char_tokens(60), "label": f"msg{i}"}
-            for i in range(5)
+            {"role": "user", "content": char_tokens(60), "label": f"msg{i}"} for i in range(5)
         ]
-        _, result = cm.build_messages(
-            system="S", new_message="x", history=messages_in
-        )
+        _, result = cm.build_messages(system="S", new_message="x", history=messages_in)
         # 4 history messages fit (4*60=240 <= 249); the oldest (msg0) should be pruned.
         history_in_result = [m for m in result if m["content"] == char_tokens(60)]
         # 4 messages of identical content fit; 5th (oldest) is dropped
@@ -518,18 +501,16 @@ class TestPruningOrder:
         budget = make_budget(total=500, fresh_tail_count=0)
         cm = ContextManager(budget)
         history = [
-            {"role": "user",      "content": "first"},
+            {"role": "user", "content": "first"},
             {"role": "assistant", "content": "second"},
-            {"role": "user",      "content": "third"},
+            {"role": "user", "content": "third"},
         ]
-        _, messages = cm.build_messages(
-            system="S", new_message="fourth", history=history
-        )
+        _, messages = cm.build_messages(system="S", new_message="fourth", history=history)
         contents = [m["content"] for m in messages]
         # All fit; verify relative order.
-        idx_first  = contents.index("first")
+        idx_first = contents.index("first")
         idx_second = contents.index("second")
-        idx_third  = contents.index("third")
+        idx_third = contents.index("third")
         idx_fourth = contents.index("fourth")
         assert idx_first < idx_second < idx_third < idx_fourth
 
@@ -537,6 +518,7 @@ class TestPruningOrder:
 # ---------------------------------------------------------------------------
 # 8. Memory injection structure
 # ---------------------------------------------------------------------------
+
 
 class TestMemoryInjectionStructure:
     """Verify the exact formatting of injected memory in the system prompt."""
@@ -603,6 +585,7 @@ class TestMemoryInjectionStructure:
 # 9. Learnings injection structure
 # ---------------------------------------------------------------------------
 
+
 class TestLearningsInjectionStructure:
     """Verify exact formatting of injected learnings in the system prompt."""
 
@@ -636,7 +619,7 @@ class TestLearningsInjectionStructure:
             memory_results=["mem"],
             learnings=["learn"],
         )
-        mem_pos   = system.index("## Relevant Memory")
+        mem_pos = system.index("## Relevant Memory")
         learn_pos = system.index("## Past Learnings")
         assert mem_pos < learn_pos
 
@@ -680,6 +663,7 @@ class TestLearningsInjectionStructure:
 # 10. Token counting edge cases
 # ---------------------------------------------------------------------------
 
+
 class TestTokenCounting:
     """Edge cases for the _approx_tokens helper."""
 
@@ -713,7 +697,7 @@ class TestTokenCounting:
     def test_unicode_multibyte_chars_counted_by_len(self):
         # Python len() counts code points, not bytes; emoji = 1 code point = 0.25 tokens
         # Four emojis => 4 code points => 1 token
-        four_emoji = "\U0001F600\U0001F600\U0001F600\U0001F600"
+        four_emoji = "\U0001f600\U0001f600\U0001f600\U0001f600"
         assert _approx_tokens(four_emoji) == 1
 
     def test_newlines_counted_as_chars(self):
@@ -730,19 +714,17 @@ class TestTokenCounting:
         fitting_content = "a" * 796
         assert _approx_tokens(fitting_content) == 199
         history = [{"role": "user", "content": fitting_content}]
-        _, messages = cm.build_messages(
-            system="S", new_message="x", history=history
-        )
+        _, messages = cm.build_messages(system="S", new_message="x", history=history)
         assert any(m["content"] == fitting_content for m in messages)
 
     def test_available_budget_formula(self):
         # available = total - system_reserve - tool_definitions_reserve
         b = TokenBudget(total=30_000, system_reserve=2_000, tool_definitions_reserve=2_000)
         expected_available = 26_000
-        memory_budget   = int(expected_available * b.memory_fraction)
+        memory_budget = int(expected_available * b.memory_fraction)
         learnings_budget = int(expected_available * b.learnings_fraction)
-        history_budget  = expected_available - memory_budget - learnings_budget
+        history_budget = expected_available - memory_budget - learnings_budget
         # Sanity check the arithmetic the ContextManager uses internally.
-        assert memory_budget   == int(26_000 * 0.15)   # 3_900
+        assert memory_budget == int(26_000 * 0.15)  # 3_900
         assert learnings_budget == int(26_000 * 0.05)  # 1_300
-        assert history_budget  == 26_000 - 3_900 - 1_300  # 20_800
+        assert history_budget == 26_000 - 3_900 - 1_300  # 20_800

@@ -138,7 +138,9 @@ class TestSummaryStore:
 
     def test_summary_record_serialization(self):
         s = SummaryRecord.new(
-            "sess1", depth=1, content="test",
+            "sess1",
+            depth=1,
+            content="test",
             source_turn_ids=["t1", "t2"],
             source_summary_ids=["s1"],
             time_range_start="2026-01-01",

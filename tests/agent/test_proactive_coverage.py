@@ -32,9 +32,7 @@ def _cb() -> MagicMock:
     return MagicMock(return_value=None)
 
 
-def _schedule_trigger(
-    name: str = "t1", interval: int = 1, cooldown: int = 0
-) -> ProactiveTrigger:
+def _schedule_trigger(name: str = "t1", interval: int = 1, cooldown: int = 0) -> ProactiveTrigger:
     return ProactiveTrigger(
         name=name,
         trigger_type="schedule",
@@ -381,9 +379,7 @@ class TestThresholdLoopPolling:
 
         # Control wait() so the while body executes once, then the loop exits.
         with (
-            patch.object(
-                mgr._stop_event, "wait", side_effect=[False, True]
-            ),
+            patch.object(mgr._stop_event, "wait", side_effect=[False, True]),
             patch("shutil.disk_usage", return_value=mock_usage),
         ):
             mgr._threshold_loop([t])
@@ -402,9 +398,7 @@ class TestThresholdLoopPolling:
         mgr._fire_trigger = _fire
 
         with (
-            patch.object(
-                mgr._stop_event, "wait", side_effect=[False, True]
-            ),
+            patch.object(mgr._stop_event, "wait", side_effect=[False, True]),
             patch("os.getloadavg", return_value=(8.0, 4.0, 2.0)),
             patch("os.cpu_count", return_value=4),
         ):
@@ -462,9 +456,7 @@ class TestThresholdLoopPolling:
 
         # Run one iteration directly by controlling wait.
         with (
-            patch.object(
-                mgr._stop_event, "wait", side_effect=[False, True]
-            ),
+            patch.object(mgr._stop_event, "wait", side_effect=[False, True]),
             patch("shutil.disk_usage", return_value=mock_usage),
         ):
             mgr._threshold_loop([t])

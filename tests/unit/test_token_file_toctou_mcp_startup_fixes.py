@@ -55,9 +55,9 @@ class TestAnthropicAuthTokenTOCTOU:
             patch("missy.cli.anthropic_auth.TOKEN_FILE", token_file),
             patch("os.open", side_effect=tracking_open),
         ):
-                from missy.cli.anthropic_auth import store_token
+            from missy.cli.anthropic_auth import store_token
 
-                store_token("x", token_type="t")
+            store_token("x", token_type="t")
 
         # Temp file should have been created with 0o600
         assert len(created_modes) >= 1
@@ -132,7 +132,16 @@ class TestAtspiLogging:
 
     def test_atspi_no_silent_pass(self) -> None:
         """No bare 'pass' after exception handlers in atspi_tools."""
-        src = Path("/home/bmerriam/git/missy/missy/tools/builtin/atspi_tools.py").read_text()
+        atspi_path = (
+            Path(__file__).resolve().parent.parent.parent
+            / "missy"
+            / "tools"
+            / "builtin"
+            / "atspi_tools.py"
+        )
+        if not atspi_path.exists():
+            pytest.skip("atspi_tools.py not found")
+        src = atspi_path.read_text()
         lines = src.split("\n")
         for i, line in enumerate(lines):
             stripped = line.strip()

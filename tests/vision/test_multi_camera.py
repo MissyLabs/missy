@@ -56,7 +56,9 @@ def _make_failure_result(
     return CaptureResult(success=False, device_path=path, error=error)
 
 
-def _make_mock_handle(is_open: bool = True, capture_result: CaptureResult | None = None) -> MagicMock:
+def _make_mock_handle(
+    is_open: bool = True, capture_result: CaptureResult | None = None
+) -> MagicMock:
     handle = MagicMock()
     handle.is_open = is_open
     handle.capture.return_value = capture_result or _make_success_result()
@@ -145,18 +147,14 @@ class TestMultiCaptureResult:
         r_small = _make_success_result("/dev/video0", width=640, height=480)
         # 1920x1080 = 2,073,600 pixels
         r_large = _make_success_result("/dev/video1", width=1920, height=1080)
-        mcr = MultiCaptureResult(
-            results={"/dev/video0": r_small, "/dev/video1": r_large}
-        )
+        mcr = MultiCaptureResult(results={"/dev/video0": r_small, "/dev/video1": r_large})
         best = mcr.best_result
         assert best is r_large
 
     def test_best_result_ignores_failures(self):
         r_fail = _make_failure_result("/dev/video0")
         r_success = _make_success_result("/dev/video1", width=640, height=480)
-        mcr = MultiCaptureResult(
-            results={"/dev/video0": r_fail, "/dev/video1": r_success}
-        )
+        mcr = MultiCaptureResult(results={"/dev/video0": r_fail, "/dev/video1": r_success})
         best = mcr.best_result
         assert best is r_success
 
@@ -935,9 +933,7 @@ class TestThreadSafety:
 class TestErrorHandling:
     @patch("missy.vision.multi_camera.get_health_monitor")
     @patch("missy.vision.multi_camera.CameraHandle")
-    def test_capture_all_health_monitor_failure_does_not_propagate(
-        self, MockHandle, mock_get_hm
-    ):
+    def test_capture_all_health_monitor_failure_does_not_propagate(self, MockHandle, mock_get_hm):
         """If health monitor.record_capture raises, capture_all should still succeed."""
         capture_result = _make_success_result("/dev/video0")
         MockHandle.return_value = _make_mock_handle(capture_result=capture_result)
@@ -1006,9 +1002,7 @@ class TestErrorHandling:
 
     @patch("missy.vision.multi_camera.get_discovery")
     @patch("missy.vision.multi_camera.CameraHandle")
-    def test_discover_and_connect_all_open_fail_returns_empty(
-        self, MockHandle, mock_get_discovery
-    ):
+    def test_discover_and_connect_all_open_fail_returns_empty(self, MockHandle, mock_get_discovery):
         handle = MagicMock()
         handle.open.side_effect = RuntimeError("cannot open any camera")
         MockHandle.return_value = handle

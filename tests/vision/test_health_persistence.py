@@ -306,6 +306,7 @@ class TestHealthMonitorAutoSave:
         monitor = VisionHealthMonitor(persist_path=db / "health.db", auto_save_interval=1)
         # Remove parent dir to cause save failure
         import shutil
+
         shutil.rmtree(db)
         db.mkdir()  # recreate as directory so path doesn't exist properly
         # Should not raise even though save fails

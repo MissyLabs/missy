@@ -292,7 +292,9 @@ class TestSyncPolicyEnforcement:
         allowed_domains: list[str] | None = None,
     ) -> None:
         engine_module._engine = None
-        init_policy_engine(_restrictive_config(allowed_hosts=allowed_hosts, allowed_domains=allowed_domains))
+        init_policy_engine(
+            _restrictive_config(allowed_hosts=allowed_hosts, allowed_domains=allowed_domains)
+        )
 
     def test_get_blocked_by_default_deny(self) -> None:
         self._use_restrictive()
@@ -433,7 +435,9 @@ class TestAsyncPolicyEnforcement:
         self._use_restrictive(allowed_hosts=["api.example.com"])
         client = PolicyHTTPClient()
         mock_resp = _mock_response(201)
-        with patch.object(httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=mock_resp):
+        with patch.object(
+            httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=mock_resp
+        ):
             resp = await client.apost("https://api.example.com/items")
         assert resp.status_code == 201
 
@@ -465,7 +469,9 @@ class TestAsyncPolicyEnforcement:
         self._use_restrictive(allowed_hosts=["api.example.com"])
         client = PolicyHTTPClient()
         mock_resp = _mock_response(204)
-        with patch.object(httpx.AsyncClient, "delete", new_callable=AsyncMock, return_value=mock_resp):
+        with patch.object(
+            httpx.AsyncClient, "delete", new_callable=AsyncMock, return_value=mock_resp
+        ):
             resp = await client.adelete("https://api.example.com/resource")
         assert resp.status_code == 204
 
@@ -481,7 +487,9 @@ class TestAsyncPolicyEnforcement:
         self._use_restrictive(allowed_hosts=["api.example.com"])
         client = PolicyHTTPClient()
         mock_resp = _mock_response(200)
-        with patch.object(httpx.AsyncClient, "patch", new_callable=AsyncMock, return_value=mock_resp):
+        with patch.object(
+            httpx.AsyncClient, "patch", new_callable=AsyncMock, return_value=mock_resp
+        ):
             resp = await client.apatch("https://api.example.com/resource")
         assert resp.status_code == 200
 
@@ -497,7 +505,9 @@ class TestAsyncPolicyEnforcement:
         self._use_restrictive(allowed_hosts=["api.example.com"])
         client = PolicyHTTPClient()
         mock_resp = _mock_response(200)
-        with patch.object(httpx.AsyncClient, "head", new_callable=AsyncMock, return_value=mock_resp):
+        with patch.object(
+            httpx.AsyncClient, "head", new_callable=AsyncMock, return_value=mock_resp
+        ):
             resp = await client.ahead("https://api.example.com/resource")
         assert resp.status_code == 200
 
@@ -610,8 +620,8 @@ class TestKwargsSanitisation:
 
     def test_dangerous_kwargs_are_stripped(self) -> None:
         dangerous = {
-            "verify": False,          # would bypass TLS
-            "transport": MagicMock(), # would bypass policy layer
+            "verify": False,  # would bypass TLS
+            "transport": MagicMock(),  # would bypass policy layer
             "base_url": "http://evil.com",
             "auth": ("user", "pass"),
             "follow_redirects": True,
@@ -640,8 +650,8 @@ class TestKwargsSanitisation:
                 "https://api.example.com/resource",
                 headers={"X-Custom": "val"},
                 params={"limit": 10},
-                verify=False,      # should be stripped
-                transport=None,    # should be stripped
+                verify=False,  # should be stripped
+                transport=None,  # should be stripped
             )
         _, call_kwargs = mock_get.call_args
         assert "headers" in call_kwargs
@@ -701,7 +711,10 @@ class TestResponseSizeLimits:
     def test_get_blocks_oversized_response_via_content_length(self) -> None:
         client = PolicyHTTPClient(max_response_bytes=100)
         resp = _mock_response(200, headers={"content-length": "200"})
-        with patch.object(httpx.Client, "get", return_value=resp), pytest.raises(ValueError, match="too large"):
+        with (
+            patch.object(httpx.Client, "get", return_value=resp),
+            pytest.raises(ValueError, match="too large"),
+        ):
             client.get("https://api.example.com/big-resource")
 
 
@@ -821,34 +834,50 @@ class TestConnectionErrorHandling:
 
     def test_connect_error_propagates_from_get(self) -> None:
         client = PolicyHTTPClient()
-        with patch.object(httpx.Client, "get", side_effect=httpx.ConnectError("refused")), pytest.raises(httpx.ConnectError):
+        with (
+            patch.object(httpx.Client, "get", side_effect=httpx.ConnectError("refused")),
+            pytest.raises(httpx.ConnectError),
+        ):
             client.get("https://api.example.com/")
 
     def test_timeout_error_propagates_from_post(self) -> None:
         client = PolicyHTTPClient()
-        with patch.object(httpx.Client, "post", side_effect=httpx.TimeoutException("timed out")), pytest.raises(httpx.TimeoutException):
+        with (
+            patch.object(httpx.Client, "post", side_effect=httpx.TimeoutException("timed out")),
+            pytest.raises(httpx.TimeoutException),
+        ):
             client.post("https://api.example.com/items")
 
     def test_http_status_error_propagates_from_delete(self) -> None:
         client = PolicyHTTPClient()
         exc = httpx.HTTPStatusError("500 error", request=MagicMock(), response=MagicMock())
-        with patch.object(httpx.Client, "delete", side_effect=exc), pytest.raises(httpx.HTTPStatusError):
+        with (
+            patch.object(httpx.Client, "delete", side_effect=exc),
+            pytest.raises(httpx.HTTPStatusError),
+        ):
             client.delete("https://api.example.com/resource/1")
 
     def test_connection_error_does_not_emit_audit_event(self) -> None:
         """No network_request event should be emitted when the request never completes."""
         client = PolicyHTTPClient()
-        with patch.object(httpx.Client, "get", side_effect=httpx.ConnectError("refused")), pytest.raises(httpx.ConnectError):
+        with (
+            patch.object(httpx.Client, "get", side_effect=httpx.ConnectError("refused")),
+            pytest.raises(httpx.ConnectError),
+        ):
             client.get("https://api.example.com/")
         assert event_bus.get_events(event_type="network_request") == []
 
     async def test_async_connect_error_propagates(self) -> None:
         client = PolicyHTTPClient()
-        with patch.object(
-            httpx.AsyncClient, "get",
-            new_callable=AsyncMock,
-            side_effect=httpx.ConnectError("async refused"),
-        ), pytest.raises(httpx.ConnectError):
+        with (
+            patch.object(
+                httpx.AsyncClient,
+                "get",
+                new_callable=AsyncMock,
+                side_effect=httpx.ConnectError("async refused"),
+            ),
+            pytest.raises(httpx.ConnectError),
+        ):
             await client.aget("https://api.example.com/")
 
 
@@ -887,7 +916,10 @@ class TestSyncContextManager:
 
     def test_full_request_inside_sync_context_manager(self) -> None:
         mock_resp = _mock_response(200)
-        with patch.object(httpx.Client, "get", return_value=mock_resp), PolicyHTTPClient() as client:
+        with (
+            patch.object(httpx.Client, "get", return_value=mock_resp),
+            PolicyHTTPClient() as client,
+        ):
             resp = client.get("https://api.example.com/ping")
         assert resp.status_code == 200
         assert client._sync_client is None
@@ -1035,11 +1067,11 @@ class TestCategoryForwarding:
             mock_engine = MagicMock()
             mock_get_engine.return_value = mock_engine
             mock_resp = _mock_response(200)
-            with patch.object(httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=mock_resp):
+            with patch.object(
+                httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=mock_resp
+            ):
                 await client.apost("https://discord.com/api/webhooks/x")
-        mock_engine.check_network.assert_called_once_with(
-            "discord.com", "", "", category="discord"
-        )
+        mock_engine.check_network.assert_called_once_with("discord.com", "", "", category="discord")
 
     def test_session_and_task_forwarded_to_policy_engine(self) -> None:
         client = PolicyHTTPClient(session_id="sess-xyz", task_id="task-abc")

@@ -30,7 +30,10 @@ class TestVaultCryptoFallback:
         """Vault should raise VaultError when crypto package is missing."""
         from missy.security.vault import Vault, VaultError
 
-        with patch("missy.security.vault._CRYPTO_AVAILABLE", False), pytest.raises(VaultError, match="cryptography"):
+        with (
+            patch("missy.security.vault._CRYPTO_AVAILABLE", False),
+            pytest.raises(VaultError, match="cryptography"),
+        ):
             Vault(vault_dir=str(tmp_path))
 
     def test_crypto_available_flag_is_true(self):
@@ -142,9 +145,10 @@ class TestSkillDiscoveryNonDictFrontmatter:
 
         discovery = SkillDiscovery()
         # Force _parse_yaml to return a scalar to hit the isinstance check
-        with patch.object(
-            SkillDiscovery, "_parse_yaml", staticmethod(lambda text: "just a string")
-        ), pytest.raises(ValueError, match="not a YAML mapping"):
+        with (
+            patch.object(SkillDiscovery, "_parse_yaml", staticmethod(lambda text: "just a string")),
+            pytest.raises(ValueError, match="not a YAML mapping"),
+        ):
             discovery.parse_skill_md(str(skill_file))
 
     def test_list_frontmatter_raises(self, tmp_path):
@@ -162,9 +166,12 @@ class TestSkillDiscoveryNonDictFrontmatter:
         )
 
         discovery = SkillDiscovery()
-        with patch.object(
-            SkillDiscovery, "_parse_yaml", staticmethod(lambda text: ["item1", "item2"])
-        ), pytest.raises(ValueError, match="not a YAML mapping"):
+        with (
+            patch.object(
+                SkillDiscovery, "_parse_yaml", staticmethod(lambda text: ["item1", "item2"])
+            ),
+            pytest.raises(ValueError, match="not a YAML mapping"),
+        ):
             discovery.parse_skill_md(str(skill_file))
 
 
@@ -202,7 +209,10 @@ class TestSelfCreateToolDeletePaths:
         tool = SelfCreateTool()
         with patch("missy.tools.builtin.self_create_tool.CUSTOM_TOOLS_DIR", tools_dir):
             result = tool.execute(action="delete", tool_name="nonexistent")
-            assert result.success is False or "not found" in (result.output + (result.error or "")).lower()
+            assert (
+                result.success is False
+                or "not found" in (result.output + (result.error or "")).lower()
+            )
 
     def test_delete_invalid_name_rejected(self, tmp_path):
         """Tool names with special chars should be rejected."""
@@ -294,7 +304,9 @@ class TestAtSpiToolsGracefulDegradation:
             side_effect=Exception("AT-SPI not available"),
         ):
             result = tool.execute()
-            assert result.success is False or "error" in (result.output + (result.error or "")).lower()
+            assert (
+                result.success is False or "error" in (result.output + (result.error or "")).lower()
+            )
 
     def test_click_handles_missing_element(self):
         """AtSpiClickTool should handle missing elements gracefully."""
@@ -306,7 +318,9 @@ class TestAtSpiToolsGracefulDegradation:
             side_effect=Exception("AT-SPI not available"),
         ):
             result = tool.execute(role="push button", name="OK")
-            assert result.success is False or "error" in (result.output + (result.error or "")).lower()
+            assert (
+                result.success is False or "error" in (result.output + (result.error or "")).lower()
+            )
 
 
 # ---------------------------------------------------------------------------

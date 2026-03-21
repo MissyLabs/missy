@@ -263,8 +263,12 @@ class TestScoreRelevance:
     def test_relevant_scores_higher_than_irrelevant(self):
         synth = MemorySynthesizer()
         query = "how to configure docker networking"
-        relevant = MemoryFragment(source="s", content="docker networking configuration tips", relevance=0.5)
-        irrelevant = MemoryFragment(source="s", content="baking bread recipes flour water", relevance=0.5)
+        relevant = MemoryFragment(
+            source="s", content="docker networking configuration tips", relevance=0.5
+        )
+        irrelevant = MemoryFragment(
+            source="s", content="baking bread recipes flour water", relevance=0.5
+        )
         assert synth.score_relevance(relevant, query) > synth.score_relevance(irrelevant, query)
 
     def test_score_bounded_between_zero_and_one(self):

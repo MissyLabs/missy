@@ -857,14 +857,10 @@ class SQLiteMemoryStore:
     def get_summary_by_id(self, summary_id: str) -> SummaryRecord | None:
         """Return a single summary by ID, or None."""
         conn = self._conn()
-        row = conn.execute(
-            "SELECT * FROM summaries WHERE id = ?", (summary_id,)
-        ).fetchone()
+        row = conn.execute("SELECT * FROM summaries WHERE id = ?", (summary_id,)).fetchone()
         return SummaryRecord.from_row(row) if row else None
 
-    def get_uncompacted_summaries(
-        self, session_id: str, depth: int
-    ) -> list[SummaryRecord]:
+    def get_uncompacted_summaries(self, session_id: str, depth: int) -> list[SummaryRecord]:
         """Return summaries at *depth* with no parent (eligible for condensation)."""
         conn = self._conn()
         rows = conn.execute(
@@ -875,9 +871,7 @@ class SQLiteMemoryStore:
         ).fetchall()
         return [SummaryRecord.from_row(r) for r in rows]
 
-    def mark_summary_compacted(
-        self, summary_ids: list[str], parent_id: str
-    ) -> None:
+    def mark_summary_compacted(self, summary_ids: list[str], parent_id: str) -> None:
         """Set parent_id on consumed summaries after condensation."""
         if not summary_ids:
             return
@@ -985,9 +979,7 @@ class SQLiteMemoryStore:
     def get_large_content(self, content_id: str) -> LargeContentRecord | None:
         """Return a large content record by ID, or None."""
         conn = self._conn()
-        row = conn.execute(
-            "SELECT * FROM large_content WHERE id = ?", (content_id,)
-        ).fetchone()
+        row = conn.execute("SELECT * FROM large_content WHERE id = ?", (content_id,)).fetchone()
         return LargeContentRecord.from_row(row) if row else None
 
     def search_large_content(

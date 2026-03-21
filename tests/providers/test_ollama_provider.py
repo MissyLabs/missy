@@ -147,9 +147,7 @@ class TestOllamaToolSchema:
         tool = MagicMock()
         tool.name = "t"
         tool.description = "d"
-        tool.get_schema.return_value = {
-            "parameters": {"q": {"type": "string"}}
-        }
+        tool.get_schema.return_value = {"parameters": {"q": {"type": "string"}}}
         schemas = p.get_tool_schema([tool])
         assert schemas[0]["function"]["parameters"]["type"] == "object"
 
@@ -213,9 +211,7 @@ class TestOllamaCompleteWithTools:
             "message": {
                 "role": "assistant",
                 "content": "",
-                "tool_calls": [
-                    {"function": {"name": "t", "arguments": "not a dict"}}
-                ],
+                "tool_calls": [{"function": {"name": "t", "arguments": "not a dict"}}],
             },
             "prompt_eval_count": 5,
             "eval_count": 5,

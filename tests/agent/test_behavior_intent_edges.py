@@ -73,27 +73,33 @@ class TestAnalyzeUserToneCasual:
     def test_hey_is_casual(self) -> None:
         layer = BehaviorLayer()
         # 9 words with casual signals — above the 8-word brief threshold
-        assert layer.analyze_user_tone(
-            _user_msg("hey thanks so much for helping me out with that")
-        ) == "casual"
+        assert (
+            layer.analyze_user_tone(_user_msg("hey thanks so much for helping me out with that"))
+            == "casual"
+        )
 
     def test_yo_is_casual(self) -> None:
         layer = BehaviorLayer()
-        assert layer.analyze_user_tone(
-            _user_msg("yo sup that was awesome cool stuff thanks a bunch")
-        ) == "casual"
+        assert (
+            layer.analyze_user_tone(_user_msg("yo sup that was awesome cool stuff thanks a bunch"))
+            == "casual"
+        )
 
     def test_tbh_ngl_are_casual(self) -> None:
         layer = BehaviorLayer()
-        assert layer.analyze_user_tone(
-            _user_msg("tbh ngl this is kinda awesome really good work thanks")
-        ) == "casual"
+        assert (
+            layer.analyze_user_tone(
+                _user_msg("tbh ngl this is kinda awesome really good work thanks")
+            )
+            == "casual"
+        )
 
     def test_thx_is_casual(self) -> None:
         layer = BehaviorLayer()
-        assert layer.analyze_user_tone(
-            _user_msg("thx ty np btw cool awesome hey ya yep dunno")
-        ) == "casual"
+        assert (
+            layer.analyze_user_tone(_user_msg("thx ty np btw cool awesome hey ya yep dunno"))
+            == "casual"
+        )
 
     def test_casual_beats_zero_scores(self) -> None:
         """When no signals present but message is not short or long, default is casual."""
@@ -148,9 +154,7 @@ class TestAnalyzeUserToneFrustrated:
 
     def test_frustration_overrides_formal(self) -> None:
         layer = BehaviorLayer()
-        msgs = _user_msg(
-            "I would appreciate however this doesn't work and is still broken again"
-        )
+        msgs = _user_msg("I would appreciate however this doesn't work and is still broken again")
         assert layer.analyze_user_tone(msgs) == "frustrated"
 
     def test_useless_and_failed_signals(self) -> None:
@@ -338,7 +342,9 @@ class TestClassifyIntentQuestion:
 
     def test_why_question(self) -> None:
         # Avoid words that trigger frustration (why+is, again, not working, etc.)
-        assert IntentInterpreter().classify_intent("Why do containers need namespaces?") == "question"
+        assert (
+            IntentInterpreter().classify_intent("Why do containers need namespaces?") == "question"
+        )
 
     def test_trailing_question_mark(self) -> None:
         assert IntentInterpreter().classify_intent("This works, right?") == "question"
@@ -375,19 +381,28 @@ class TestClassifyIntentClarification:
         assert IntentInterpreter().classify_intent("What do you mean by that?") == "clarification"
 
     def test_can_you_clarify(self) -> None:
-        assert IntentInterpreter().classify_intent("Can you clarify the second step?") == "clarification"
+        assert (
+            IntentInterpreter().classify_intent("Can you clarify the second step?")
+            == "clarification"
+        )
 
     def test_could_you_elaborate(self) -> None:
-        assert IntentInterpreter().classify_intent("Could you elaborate on that?") == "clarification"
+        assert (
+            IntentInterpreter().classify_intent("Could you elaborate on that?") == "clarification"
+        )
 
     def test_i_dont_understand(self) -> None:
         assert IntentInterpreter().classify_intent("I don't understand") == "clarification"
 
     def test_please_explain(self) -> None:
-        assert IntentInterpreter().classify_intent("Please explain what you mean") == "clarification"
+        assert (
+            IntentInterpreter().classify_intent("Please explain what you mean") == "clarification"
+        )
 
     def test_more_detail(self) -> None:
-        assert IntentInterpreter().classify_intent("Can I get more detail on that?") == "clarification"
+        assert (
+            IntentInterpreter().classify_intent("Can I get more detail on that?") == "clarification"
+        )
 
 
 class TestClassifyIntentFeedback:
@@ -399,24 +414,34 @@ class TestClassifyIntentFeedback:
 
     def test_not_quite(self) -> None:
         # "again" alone triggers frustration, so use a form without it
-        assert IntentInterpreter().classify_intent("Not quite, the value should be 10") == "feedback"
+        assert (
+            IntentInterpreter().classify_intent("Not quite, the value should be 10") == "feedback"
+        )
 
     def test_thats_perfect(self) -> None:
         assert IntentInterpreter().classify_intent("That's perfect, thank you") == "feedback"
 
     def test_correction(self) -> None:
-        assert IntentInterpreter().classify_intent("Correction: it should be port 8080") == "feedback"
+        assert (
+            IntentInterpreter().classify_intent("Correction: it should be port 8080") == "feedback"
+        )
 
     def test_almost(self) -> None:
-        assert IntentInterpreter().classify_intent("Almost, but the path is different") == "feedback"
+        assert (
+            IntentInterpreter().classify_intent("Almost, but the path is different") == "feedback"
+        )
 
 
 class TestClassifyIntentExploration:
     def test_tell_me_more(self) -> None:
-        assert IntentInterpreter().classify_intent("Tell me more about this approach") == "exploration"
+        assert (
+            IntentInterpreter().classify_intent("Tell me more about this approach") == "exploration"
+        )
 
     def test_im_curious(self) -> None:
-        assert IntentInterpreter().classify_intent("I'm curious about alternatives") == "exploration"
+        assert (
+            IntentInterpreter().classify_intent("I'm curious about alternatives") == "exploration"
+        )
 
     def test_suggest(self) -> None:
         assert IntentInterpreter().classify_intent("suggest some options for me") == "exploration"
@@ -425,10 +450,16 @@ class TestClassifyIntentExploration:
         assert IntentInterpreter().classify_intent("What else can you do?") == "exploration"
 
     def test_recommend(self) -> None:
-        assert IntentInterpreter().classify_intent("recommend a good library for this") == "exploration"
+        assert (
+            IntentInterpreter().classify_intent("recommend a good library for this")
+            == "exploration"
+        )
 
     def test_ideas_for(self) -> None:
-        assert IntentInterpreter().classify_intent("ideas for improving the performance") == "exploration"
+        assert (
+            IntentInterpreter().classify_intent("ideas for improving the performance")
+            == "exploration"
+        )
 
 
 class TestClassifyIntentTroubleshoot:
@@ -436,23 +467,37 @@ class TestClassifyIntentTroubleshoot:
         assert IntentInterpreter().classify_intent("I'm getting an error here") == "troubleshooting"
 
     def test_exception_traceback(self) -> None:
-        assert IntentInterpreter().classify_intent("There's a traceback in the exception") == "troubleshooting"
+        assert (
+            IntentInterpreter().classify_intent("There's a traceback in the exception")
+            == "troubleshooting"
+        )
 
     def test_permission_denied(self) -> None:
-        assert IntentInterpreter().classify_intent("permission denied when running the script") == "troubleshooting"
+        assert (
+            IntentInterpreter().classify_intent("permission denied when running the script")
+            == "troubleshooting"
+        )
 
     def test_connection_refused(self) -> None:
-        assert IntentInterpreter().classify_intent("connection refused on port 5432") == "troubleshooting"
+        assert (
+            IntentInterpreter().classify_intent("connection refused on port 5432")
+            == "troubleshooting"
+        )
 
     def test_debug_keyword(self) -> None:
-        assert IntentInterpreter().classify_intent("help me debug this function") == "troubleshooting"
+        assert (
+            IntentInterpreter().classify_intent("help me debug this function") == "troubleshooting"
+        )
 
     def test_timeout_keyword(self) -> None:
         # Pattern matches exact word "timeout" not "timing out"
         assert IntentInterpreter().classify_intent("the request hit a timeout") == "troubleshooting"
 
     def test_failed_with(self) -> None:
-        assert IntentInterpreter().classify_intent("the job failed with exit code 1") == "troubleshooting"
+        assert (
+            IntentInterpreter().classify_intent("the job failed with exit code 1")
+            == "troubleshooting"
+        )
 
 
 class TestClassifyIntentConfirmation:
@@ -486,7 +531,10 @@ class TestClassifyIntentFrustration:
         assert IntentInterpreter().classify_intent("it doesn't work") == "frustration"
 
     def test_tried_that_again(self) -> None:
-        assert IntentInterpreter().classify_intent("I tried that again and same error") == "frustration"
+        assert (
+            IntentInterpreter().classify_intent("I tried that again and same error")
+            == "frustration"
+        )
 
     def test_nothing_works(self) -> None:
         assert IntentInterpreter().classify_intent("nothing works at all") == "frustration"
@@ -764,7 +812,9 @@ class TestGetResponseGuidelinesContext:
         layer = BehaviorLayer()
         guidelines = layer.get_response_guidelines(_base_ctx(topic="cooking recipes"))
         # Should not append code suggestion for non-technical topic
-        assert "code snippets" not in guidelines.lower() or "technical topic" not in guidelines.lower()
+        assert (
+            "code snippets" not in guidelines.lower() or "technical topic" not in guidelines.lower()
+        )
 
 
 class TestGetResponseGuidelinesIntentSpecific:
@@ -801,12 +851,20 @@ class TestGetResponseGuidelinesIntentSpecific:
     def test_clarification_intent(self) -> None:
         layer = BehaviorLayer()
         guidelines = layer.get_response_guidelines(_base_ctx(intent="clarification"))
-        assert "re-explain" in guidelines.lower() or "analogy" in guidelines.lower() or "detail" in guidelines.lower()
+        assert (
+            "re-explain" in guidelines.lower()
+            or "analogy" in guidelines.lower()
+            or "detail" in guidelines.lower()
+        )
 
     def test_command_intent(self) -> None:
         layer = BehaviorLayer()
         guidelines = layer.get_response_guidelines(_base_ctx(intent="command"))
-        assert "direct" in guidelines.lower() or "action" in guidelines.lower() or "execute" in guidelines.lower()
+        assert (
+            "direct" in guidelines.lower()
+            or "action" in guidelines.lower()
+            or "execute" in guidelines.lower()
+        )
 
 
 class TestGetResponseGuidelinesVisionModes:
@@ -880,9 +938,7 @@ class TestGetResponseGuidelinesPersonaTendencies:
         assert "Keep answers under 100 words." in guidelines
 
     def test_multiple_tendencies_all_present(self) -> None:
-        persona = _make_persona(
-            behavioral_tendencies=["Cite sources.", "Prefer bullet points."]
-        )
+        persona = _make_persona(behavioral_tendencies=["Cite sources.", "Prefer bullet points."])
         layer = BehaviorLayer(persona)
         guidelines = layer.get_response_guidelines(_base_ctx())
         assert "Cite sources." in guidelines
@@ -959,7 +1015,9 @@ class TestResponseShaperStripRoboticPhrases:
 
     def test_strips_im_an_ai_assistant(self) -> None:
         shaper = ResponseShaper()
-        result = shaper.shape_response("I'm an AI assistant here to help. The answer is X.", None, {})
+        result = shaper.shape_response(
+            "I'm an AI assistant here to help. The answer is X.", None, {}
+        )
         assert "I'm an AI" not in result
 
     def test_strips_as_your_assistant(self) -> None:
@@ -983,9 +1041,7 @@ class TestResponseShaperStripRoboticPhrases:
 
     def test_strips_i_dont_have_feelings(self) -> None:
         shaper = ResponseShaper()
-        result = shaper.shape_response(
-            "I don't have feelings, but here is my answer.", None, {}
-        )
+        result = shaper.shape_response("I don't have feelings, but here is my answer.", None, {})
         assert "feelings" not in result or "answer" in result
 
     def test_multiple_robotic_phrases_stripped(self) -> None:
@@ -1005,9 +1061,7 @@ class TestResponseShaperStripRoboticPhrases:
 
     def test_result_is_not_empty_when_only_content_remains(self) -> None:
         shaper = ResponseShaper()
-        result = shaper.shape_response(
-            "As an AI, I can confirm the file exists.", None, {}
-        )
+        result = shaper.shape_response("As an AI, I can confirm the file exists.", None, {})
         assert len(result) > 0
 
 

@@ -143,45 +143,37 @@ class TestUpdate:
         cid = cm.create("s", "t", "p")
         messages = [{"role": "user", "content": "hello"}]
         cm.update(cid, messages, ["tool_a"], iteration=1)
-        raw = _query_one(
-            tmp_db, "SELECT loop_messages FROM checkpoints WHERE id=?", (cid,)
-        )[0]
+        raw = _query_one(tmp_db, "SELECT loop_messages FROM checkpoints WHERE id=?", (cid,))[0]
         assert json.loads(raw) == messages
 
     def test_update_persists_tool_names(self, cm, tmp_db):
         cid = cm.create("s", "t", "p")
         cm.update(cid, [], ["tool_x", "tool_y"], iteration=0)
-        raw = _query_one(
-            tmp_db, "SELECT tool_names_used FROM checkpoints WHERE id=?", (cid,)
-        )[0]
+        raw = _query_one(tmp_db, "SELECT tool_names_used FROM checkpoints WHERE id=?", (cid,))[0]
         assert json.loads(raw) == ["tool_x", "tool_y"]
 
     def test_update_persists_iteration(self, cm, tmp_db):
         cid = cm.create("s", "t", "p")
         cm.update(cid, [], [], iteration=7)
-        row = _query_one(
-            tmp_db, "SELECT iteration FROM checkpoints WHERE id=?", (cid,)
-        )
+        row = _query_one(tmp_db, "SELECT iteration FROM checkpoints WHERE id=?", (cid,))
         assert row[0] == 7
 
     def test_update_advances_updated_at(self, cm, tmp_db):
         cid = cm.create("s", "t", "p")
-        before_update = _query_one(
-            tmp_db, "SELECT updated_at FROM checkpoints WHERE id=?", (cid,)
-        )[0]
+        before_update = _query_one(tmp_db, "SELECT updated_at FROM checkpoints WHERE id=?", (cid,))[
+            0
+        ]
         time.sleep(0.01)
         cm.update(cid, [], [], iteration=0)
-        after_update = _query_one(
-            tmp_db, "SELECT updated_at FROM checkpoints WHERE id=?", (cid,)
-        )[0]
+        after_update = _query_one(tmp_db, "SELECT updated_at FROM checkpoints WHERE id=?", (cid,))[
+            0
+        ]
         assert after_update >= before_update
 
     def test_update_does_not_change_state(self, cm, tmp_db):
         cid = cm.create("s", "t", "p")
         cm.update(cid, [], [], iteration=2)
-        state = _query_one(
-            tmp_db, "SELECT state FROM checkpoints WHERE id=?", (cid,)
-        )[0]
+        state = _query_one(tmp_db, "SELECT state FROM checkpoints WHERE id=?", (cid,))[0]
         assert state == "RUNNING"
 
 
@@ -194,9 +186,7 @@ class TestComplete:
     def test_sets_state_to_complete(self, cm, tmp_db):
         cid = cm.create("s", "t", "p")
         cm.complete(cid)
-        state = _query_one(
-            tmp_db, "SELECT state FROM checkpoints WHERE id=?", (cid,)
-        )[0]
+        state = _query_one(tmp_db, "SELECT state FROM checkpoints WHERE id=?", (cid,))[0]
         assert state == "COMPLETE"
 
     def test_complete_not_in_get_incomplete(self, cm):
@@ -210,25 +200,19 @@ class TestFail:
     def test_sets_state_to_failed(self, cm, tmp_db):
         cid = cm.create("s", "t", "p")
         cm.fail(cid)
-        state = _query_one(
-            tmp_db, "SELECT state FROM checkpoints WHERE id=?", (cid,)
-        )[0]
+        state = _query_one(tmp_db, "SELECT state FROM checkpoints WHERE id=?", (cid,))[0]
         assert state == "FAILED"
 
     def test_fail_with_error_appends_to_prompt(self, cm, tmp_db):
         cid = cm.create("s", "t", "original prompt")
         cm.fail(cid, error="something went wrong")
-        prompt = _query_one(
-            tmp_db, "SELECT prompt FROM checkpoints WHERE id=?", (cid,)
-        )[0]
+        prompt = _query_one(tmp_db, "SELECT prompt FROM checkpoints WHERE id=?", (cid,))[0]
         assert "something went wrong" in prompt
 
     def test_fail_without_error_does_not_change_prompt(self, cm, tmp_db):
         cid = cm.create("s", "t", "original prompt")
         cm.fail(cid)
-        prompt = _query_one(
-            tmp_db, "SELECT prompt FROM checkpoints WHERE id=?", (cid,)
-        )[0]
+        prompt = _query_one(tmp_db, "SELECT prompt FROM checkpoints WHERE id=?", (cid,))[0]
         assert prompt == "original prompt"
 
 
@@ -322,9 +306,7 @@ class TestAbandonOld:
         )
         count = cm.abandon_old(max_age_seconds=86400)
         assert count == 1
-        state = _query_one(
-            tmp_db, "SELECT state FROM checkpoints WHERE id=?", (cid,)
-        )[0]
+        state = _query_one(tmp_db, "SELECT state FROM checkpoints WHERE id=?", (cid,))[0]
         assert state == "ABANDONED"
 
     def test_recent_running_not_abandoned(self, cm):
@@ -356,9 +338,7 @@ class TestDelete:
     def test_delete_removes_record(self, cm, tmp_db):
         cid = cm.create("s", "t", "p")
         cm.delete(cid)
-        row = _query_one(
-            tmp_db, "SELECT id FROM checkpoints WHERE id=?", (cid,)
-        )
+        row = _query_one(tmp_db, "SELECT id FROM checkpoints WHERE id=?", (cid,))
         assert row is None
 
     def test_delete_nonexistent_is_noop(self, cm):
@@ -384,9 +364,7 @@ class TestCleanup:
         self._backdate(tmp_db, cid, days=10)
         count = cm.cleanup(older_than_days=7)
         assert count == 1
-        row = _query_one(
-            tmp_db, "SELECT id FROM checkpoints WHERE id=?", (cid,)
-        )
+        row = _query_one(tmp_db, "SELECT id FROM checkpoints WHERE id=?", (cid,))
         assert row is None
 
     def test_cleanup_preserves_recent_terminal_records(self, cm, tmp_db):

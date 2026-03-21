@@ -207,7 +207,7 @@ class TestEncryptionInternals:
     def test_decrypt_round_trip(self, tmp_path):
         """encrypt followed by decrypt recovers the original bytes exactly."""
         v = make_vault(tmp_path)
-        original = b"super secret data \x00\xFF"
+        original = b"super secret data \x00\xff"
         assert v._decrypt(v._encrypt(original)) == original
 
     def test_decrypt_uses_first_12_bytes_as_nonce(self, tmp_path):
@@ -581,7 +581,7 @@ class TestUnicodeHandling:
         compare unequal; the vault stores them under separate keys.
         """
         v = make_vault(tmp_path)
-        nfc_key = "\u00e9"   # é (precomposed)
+        nfc_key = "\u00e9"  # é (precomposed)
         nfd_key = "e\u0301"  # e + combining acute (decomposed)
         # Confirm the strings differ at Python level
         if nfc_key == nfd_key:

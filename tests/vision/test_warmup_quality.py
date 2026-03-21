@@ -119,7 +119,7 @@ class TestWarmupIntensityTracking:
         handle._cap.read.side_effect = [
             (False, None),
             (True, _make_frame(90)),
-            (True, None),         # ret=True but frame=None
+            (True, None),  # ret=True but frame=None
             (True, _make_frame(95)),
         ]
         handle._warmup()

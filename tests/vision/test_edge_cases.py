@@ -272,7 +272,7 @@ class TestIntentEdgeCases:
 
     def test_special_characters(self):
         cls = VisionIntentClassifier()
-        result = cls.classify("!@#$%^&*(){}[]|\\:\";<>?,./~`")
+        result = cls.classify('!@#$%^&*(){}[]|\\:";<>?,./~`')
         assert result.intent == VisionIntent.NONE
 
     def test_unicode_input(self):
@@ -301,9 +301,9 @@ class TestIntentEdgeCases:
 class TestPipelineEdgeCases:
     def test_single_pixel_image(self):
         """Single pixel image should not crash."""
-        pipeline = ImagePipeline(PipelineConfig(
-            normalize_exposure=False, denoise=False, sharpen=False
-        ))
+        pipeline = ImagePipeline(
+            PipelineConfig(normalize_exposure=False, denoise=False, sharpen=False)
+        )
         img = np.zeros((1, 1, 3), dtype=np.uint8)
         result = pipeline.resize(img, 1280)
         assert result.shape == (1, 1, 3)
@@ -340,6 +340,7 @@ class TestPipelineEdgeCases:
 class TestVisionConfig:
     def test_default_vision_config(self):
         from missy.config.settings import VisionConfig
+
         cfg = VisionConfig()
         assert cfg.enabled is True
         assert cfg.capture_width == 1920
@@ -347,6 +348,7 @@ class TestVisionConfig:
 
     def test_parse_vision_config(self):
         from missy.config.settings import _parse_vision
+
         data = {
             "enabled": False,
             "preferred_device": "/dev/video2",
@@ -361,6 +363,7 @@ class TestVisionConfig:
 
     def test_parse_vision_empty(self):
         from missy.config.settings import _parse_vision
+
         cfg = _parse_vision({})
         assert cfg.enabled is True
         assert cfg.preferred_device == ""

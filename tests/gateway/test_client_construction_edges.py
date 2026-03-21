@@ -333,9 +333,7 @@ class TestRESTPolicyMethodForwarding:
             ("HEAD", "/repos/owner/repo"),
         ],
     )
-    def test_method_and_path_forwarded_to_rest_policy(
-        self, method: str, path: str
-    ) -> None:
+    def test_method_and_path_forwarded_to_rest_policy(self, method: str, path: str) -> None:
         client = PolicyHTTPClient()
         with patch("missy.gateway.client.get_policy_engine") as mock_get_engine:
             mock_engine = MagicMock()
@@ -373,9 +371,7 @@ class TestRESTPolicyMethodForwarding:
             mock_engine.rest_policy.check.return_value = "deny"
             mock_get_engine.return_value = mock_engine
             with pytest.raises(PolicyViolationError) as exc_info:
-                client._check_url(
-                    "https://api.github.com/admin/users", method="DELETE"
-                )
+                client._check_url("https://api.github.com/admin/users", method="DELETE")
         err = exc_info.value
         assert "DELETE" in str(err) or "DELETE" in err.detail
         assert "api.github.com" in str(err) or "api.github.com" in err.detail
@@ -572,9 +568,7 @@ class TestAuditEventFields:
             client.delete("https://api.example.com/c")
         # Filter to only network_request events — the policy engine also emits
         # network_check events on the same session_id.
-        events = event_bus.get_events(
-            event_type="network_request", session_id="acc-session"
-        )
+        events = event_bus.get_events(event_type="network_request", session_id="acc-session")
         assert len(events) == 3
         methods = {e.detail["method"] for e in events}
         assert methods == {"GET", "POST", "DELETE"}
@@ -608,9 +602,7 @@ class TestSyncMethodAuditEmission:
             getattr(client, method_name)("https://api.example.com/resource")
         # Filter to network_request events only; the policy engine also emits
         # network_check events on the same session_id.
-        events = event_bus.get_events(
-            event_type="network_request", session_id="sync-audit"
-        )
+        events = event_bus.get_events(event_type="network_request", session_id="sync-audit")
         assert len(events) == 1
         assert events[0].detail["method"] == http_method
 
@@ -645,9 +637,7 @@ class TestAsyncMethodAuditEmission:
             await getattr(client, method_name)("https://api.example.com/resource")
         # Filter to network_request events only; the policy engine also emits
         # network_check events on the same session_id.
-        events = event_bus.get_events(
-            event_type="network_request", session_id="async-audit"
-        )
+        events = event_bus.get_events(event_type="network_request", session_id="async-audit")
         assert len(events) == 1
         assert events[0].detail["method"] == http_method
 
@@ -769,9 +759,7 @@ class TestInteractiveApprovalDetail:
         approval = self._make_approval(prompt_returns=False)
         set_interactive_approval(approval)
         client = PolicyHTTPClient()
-        with patch.object(httpx.Client, "get") as mock_httpx, pytest.raises(
-            PolicyViolationError
-        ):
+        with patch.object(httpx.Client, "get") as mock_httpx, pytest.raises(PolicyViolationError):
             client.get("https://blocked.example.com/")
         mock_httpx.assert_not_called()
 
@@ -816,9 +804,7 @@ class TestCategoryAndSessionForwarding:
 
     @pytest.mark.parametrize("category", ["provider", "tool", "discord", ""])
     def test_category_forwarded_for_all_sync_methods(self, category: str) -> None:
-        client = PolicyHTTPClient(
-            session_id="s", task_id="t", category=category
-        )
+        client = PolicyHTTPClient(session_id="s", task_id="t", category=category)
         mock_resp = _mock_response(200)
         with patch("missy.gateway.client.get_policy_engine") as mock_get_engine:
             mock_engine = MagicMock()
@@ -855,9 +841,7 @@ class TestCategoryAndSessionForwarding:
         assert args[2] == "my-task"
 
     async def test_category_forwarded_for_async_get(self) -> None:
-        client = PolicyHTTPClient(
-            session_id="as", task_id="at", category="provider"
-        )
+        client = PolicyHTTPClient(session_id="as", task_id="at", category="provider")
         mock_resp = _mock_response(200)
         with patch("missy.gateway.client.get_policy_engine") as mock_get_engine:
             mock_engine = MagicMock()
@@ -976,56 +960,64 @@ class TestAllHTTPErrorTypes:
 
     def test_request_error_propagates_from_put(self) -> None:
         client = PolicyHTTPClient()
-        with patch.object(
-            httpx.Client, "put", side_effect=httpx.RequestError("network error")
-        ), pytest.raises(httpx.RequestError):
+        with (
+            patch.object(httpx.Client, "put", side_effect=httpx.RequestError("network error")),
+            pytest.raises(httpx.RequestError),
+        ):
             client.put("https://api.example.com/resource")
 
     def test_read_timeout_propagates_from_get(self) -> None:
         client = PolicyHTTPClient()
-        with patch.object(
-            httpx.Client, "get", side_effect=httpx.ReadTimeout("read timed out")
-        ), pytest.raises(httpx.ReadTimeout):
+        with (
+            patch.object(httpx.Client, "get", side_effect=httpx.ReadTimeout("read timed out")),
+            pytest.raises(httpx.ReadTimeout),
+        ):
             client.get("https://api.example.com/slow-endpoint")
 
     def test_write_error_propagates_from_post(self) -> None:
         client = PolicyHTTPClient()
-        with patch.object(
-            httpx.Client, "post", side_effect=httpx.WriteError("write failed")
-        ), pytest.raises(httpx.WriteError):
+        with (
+            patch.object(httpx.Client, "post", side_effect=httpx.WriteError("write failed")),
+            pytest.raises(httpx.WriteError),
+        ):
             client.post("https://api.example.com/submit")
 
     async def test_async_timeout_propagates_from_aput(self) -> None:
         client = PolicyHTTPClient()
-        with patch.object(
-            httpx.AsyncClient,
-            "put",
-            new_callable=AsyncMock,
-            side_effect=httpx.TimeoutException("timeout"),
-        ), pytest.raises(httpx.TimeoutException):
+        with (
+            patch.object(
+                httpx.AsyncClient,
+                "put",
+                new_callable=AsyncMock,
+                side_effect=httpx.TimeoutException("timeout"),
+            ),
+            pytest.raises(httpx.TimeoutException),
+        ):
             await client.aput("https://api.example.com/resource")
 
     async def test_async_connect_error_propagates_from_adelete(self) -> None:
         client = PolicyHTTPClient()
-        with patch.object(
-            httpx.AsyncClient,
-            "delete",
-            new_callable=AsyncMock,
-            side_effect=httpx.ConnectError("refused"),
-        ), pytest.raises(httpx.ConnectError):
+        with (
+            patch.object(
+                httpx.AsyncClient,
+                "delete",
+                new_callable=AsyncMock,
+                side_effect=httpx.ConnectError("refused"),
+            ),
+            pytest.raises(httpx.ConnectError),
+        ):
             await client.adelete("https://api.example.com/resource")
 
     def test_network_error_does_not_emit_network_request_audit_event(self) -> None:
         """A network failure must not emit a network_request event (only network_check
         from the policy engine may be present, but no completed-request event)."""
         client = PolicyHTTPClient(session_id="err-test")
-        with patch.object(
-            httpx.Client, "post", side_effect=httpx.ConnectError("refused")
-        ), pytest.raises(httpx.ConnectError):
+        with (
+            patch.object(httpx.Client, "post", side_effect=httpx.ConnectError("refused")),
+            pytest.raises(httpx.ConnectError),
+        ):
             client.post("https://api.example.com/submit")
-        events = event_bus.get_events(
-            event_type="network_request", session_id="err-test"
-        )
+        events = event_bus.get_events(event_type="network_request", session_id="err-test")
         assert events == []
 
 

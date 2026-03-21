@@ -70,7 +70,10 @@ class TestSyncDeleteMethod:
         client = create_client(session_id="s1", task_id="t1")
         resp = httpx.Response(200)
         events: list = []
-        def cb(e): events.append(e)  # noqa: E704
+
+        def cb(e):
+            events.append(e)  # noqa: E704
+
         event_bus.subscribe("network_request", cb)
         try:
             with patch.object(client, "_get_sync_client") as mock_client:
@@ -117,7 +120,10 @@ class TestSyncPatchMethod:
         client = create_client(session_id="s1", task_id="t1")
         resp = httpx.Response(200)
         events: list = []
-        def cb(e): events.append(e)  # noqa: E704
+
+        def cb(e):
+            events.append(e)  # noqa: E704
+
         event_bus.subscribe("network_request", cb)
         try:
             with patch.object(client, "_get_sync_client") as mock_client:

@@ -258,6 +258,7 @@ class TestPermissionChecking:
             name = "multi_path"
             description = "test"
             permissions = ToolPermissions(filesystem_read=True)
+
             def execute(self, **kwargs) -> ToolResult:
                 return ToolResult(success=True, output="ok")
 

@@ -109,15 +109,18 @@ class TestHandleAnalyzeExceptionPath:
             }
         ]
 
-        with patch(
-            "missy.channels.discord.image_analyze.analyze_discord_attachment",
-            side_effect=RuntimeError("Ollama unreachable"),
-        ), patch(
-            "missy.channels.discord.image_analyze.find_latest_image",
-            return_value={
-                "url": "https://cdn.discordapp.com/a.png",
-                "filename": "error.png",
-            },
+        with (
+            patch(
+                "missy.channels.discord.image_analyze.analyze_discord_attachment",
+                side_effect=RuntimeError("Ollama unreachable"),
+            ),
+            patch(
+                "missy.channels.discord.image_analyze.find_latest_image",
+                return_value={
+                    "url": "https://cdn.discordapp.com/a.png",
+                    "filename": "error.png",
+                },
+            ),
         ):
             result = await _handle_analyze("123456789012345678", rest, "")
 
@@ -143,19 +146,20 @@ class TestHandleAnalyzeExceptionPath:
             }
         ]
 
-        with patch(
-            "missy.channels.discord.image_analyze.analyze_discord_attachment",
-            side_effect=ConnectionError("timeout"),
-        ), patch(
-            "missy.channels.discord.image_analyze.find_latest_image",
-            return_value={
-                "url": "https://cdn.discordapp.com/b.jpg",
-                "filename": "b.jpg",
-            },
+        with (
+            patch(
+                "missy.channels.discord.image_analyze.analyze_discord_attachment",
+                side_effect=ConnectionError("timeout"),
+            ),
+            patch(
+                "missy.channels.discord.image_analyze.find_latest_image",
+                return_value={
+                    "url": "https://cdn.discordapp.com/b.jpg",
+                    "filename": "b.jpg",
+                },
+            ),
         ):
-            result = await _handle_analyze(
-                "123456789012345678", rest, "Is there an error?"
-            )
+            result = await _handle_analyze("123456789012345678", rest, "Is there an error?")
 
         assert result.handled is True
         assert "Analysis failed" in result.reply
@@ -182,15 +186,18 @@ class TestHandleAnalyzeEmptyAnalysis:
             }
         ]
 
-        with patch(
-            "missy.channels.discord.image_analyze.analyze_discord_attachment",
-            return_value={"analysis": "", "filename": "x.png"},
-        ), patch(
-            "missy.channels.discord.image_analyze.find_latest_image",
-            return_value={
-                "url": "https://cdn.discordapp.com/x.png",
-                "filename": "x.png",
-            },
+        with (
+            patch(
+                "missy.channels.discord.image_analyze.analyze_discord_attachment",
+                return_value={"analysis": "", "filename": "x.png"},
+            ),
+            patch(
+                "missy.channels.discord.image_analyze.find_latest_image",
+                return_value={
+                    "url": "https://cdn.discordapp.com/x.png",
+                    "filename": "x.png",
+                },
+            ),
         ):
             result = await _handle_analyze("123456789012345678", rest, "")
 
@@ -205,15 +212,18 @@ class TestHandleAnalyzeEmptyAnalysis:
         rest = MagicMock()
         rest.get_channel_messages.return_value = []
 
-        with patch(
-            "missy.channels.discord.image_analyze.analyze_discord_attachment",
-            return_value={"analysis": "   ", "filename": "ws.png"},
-        ), patch(
-            "missy.channels.discord.image_analyze.find_latest_image",
-            return_value={
-                "url": "https://cdn.discordapp.com/ws.png",
-                "filename": "ws.png",
-            },
+        with (
+            patch(
+                "missy.channels.discord.image_analyze.analyze_discord_attachment",
+                return_value={"analysis": "   ", "filename": "ws.png"},
+            ),
+            patch(
+                "missy.channels.discord.image_analyze.find_latest_image",
+                return_value={
+                    "url": "https://cdn.discordapp.com/ws.png",
+                    "filename": "ws.png",
+                },
+            ),
         ):
             result = await _handle_analyze("123456789012345678", rest, "")
 
@@ -234,15 +244,18 @@ class TestHandleAnalysisTruncation:
         rest = MagicMock()
         rest.get_channel_messages.return_value = []
 
-        with patch(
-            "missy.channels.discord.image_analyze.analyze_discord_attachment",
-            return_value={"analysis": long_text, "filename": "big.png"},
-        ), patch(
-            "missy.channels.discord.image_analyze.find_latest_image",
-            return_value={
-                "url": "https://cdn.discordapp.com/big.png",
-                "filename": "big.png",
-            },
+        with (
+            patch(
+                "missy.channels.discord.image_analyze.analyze_discord_attachment",
+                return_value={"analysis": long_text, "filename": "big.png"},
+            ),
+            patch(
+                "missy.channels.discord.image_analyze.find_latest_image",
+                return_value={
+                    "url": "https://cdn.discordapp.com/big.png",
+                    "filename": "big.png",
+                },
+            ),
         ):
             result = await _handle_analyze("123456789012345678", rest, "")
 
@@ -259,15 +272,18 @@ class TestHandleAnalysisTruncation:
         rest = MagicMock()
         rest.get_channel_messages.return_value = []
 
-        with patch(
-            "missy.channels.discord.image_analyze.analyze_discord_attachment",
-            return_value={"analysis": short_text, "filename": "small.png"},
-        ), patch(
-            "missy.channels.discord.image_analyze.find_latest_image",
-            return_value={
-                "url": "https://cdn.discordapp.com/small.png",
-                "filename": "small.png",
-            },
+        with (
+            patch(
+                "missy.channels.discord.image_analyze.analyze_discord_attachment",
+                return_value={"analysis": short_text, "filename": "small.png"},
+            ),
+            patch(
+                "missy.channels.discord.image_analyze.find_latest_image",
+                return_value={
+                    "url": "https://cdn.discordapp.com/small.png",
+                    "filename": "small.png",
+                },
+            ),
         ):
             result = await _handle_analyze("123456789012345678", rest, "")
 
@@ -288,15 +304,18 @@ class TestHandleAnalysisTruncation:
         rest = MagicMock()
         rest.get_channel_messages.return_value = []
 
-        with patch(
-            "missy.channels.discord.image_analyze.analyze_discord_attachment",
-            return_value={"analysis": exact_text, "filename": filename},
-        ), patch(
-            "missy.channels.discord.image_analyze.find_latest_image",
-            return_value={
-                "url": "https://cdn.discordapp.com/boundary.png",
-                "filename": filename,
-            },
+        with (
+            patch(
+                "missy.channels.discord.image_analyze.analyze_discord_attachment",
+                return_value={"analysis": exact_text, "filename": filename},
+            ),
+            patch(
+                "missy.channels.discord.image_analyze.find_latest_image",
+                return_value={
+                    "url": "https://cdn.discordapp.com/boundary.png",
+                    "filename": filename,
+                },
+            ),
         ):
             result = await _handle_analyze("123456789012345678", rest, "")
 
@@ -325,19 +344,20 @@ class TestHandleScreenshotErrorPath:
             }
         ]
 
-        with patch(
-            "missy.channels.discord.image_analyze.save_discord_attachment",
-            side_effect=OSError("Permission denied"),
-        ), patch(
-            "missy.channels.discord.image_analyze.find_latest_image",
-            return_value={
-                "url": "https://cdn.discordapp.com/shot.png",
-                "filename": "shot.png",
-            },
+        with (
+            patch(
+                "missy.channels.discord.image_analyze.save_discord_attachment",
+                side_effect=OSError("Permission denied"),
+            ),
+            patch(
+                "missy.channels.discord.image_analyze.find_latest_image",
+                return_value={
+                    "url": "https://cdn.discordapp.com/shot.png",
+                    "filename": "shot.png",
+                },
+            ),
         ):
-            result = await _handle_screenshot(
-                "123456789012345678", rest, "save"
-            )
+            result = await _handle_screenshot("123456789012345678", rest, "save")
 
         assert result.handled is True
         assert "Save failed" in result.reply
@@ -361,19 +381,20 @@ class TestHandleScreenshotErrorPath:
             }
         ]
 
-        with patch(
-            "missy.channels.discord.image_analyze.save_discord_attachment",
-            side_effect=ValueError("path traversal"),
-        ), patch(
-            "missy.channels.discord.image_analyze.find_latest_image",
-            return_value={
-                "url": "https://cdn.discordapp.com/img.jpg",
-                "filename": "img.jpg",
-            },
+        with (
+            patch(
+                "missy.channels.discord.image_analyze.save_discord_attachment",
+                side_effect=ValueError("path traversal"),
+            ),
+            patch(
+                "missy.channels.discord.image_analyze.find_latest_image",
+                return_value={
+                    "url": "https://cdn.discordapp.com/img.jpg",
+                    "filename": "img.jpg",
+                },
+            ),
         ):
-            result = await _handle_screenshot(
-                "123456789012345678", rest, "save /tmp/docs"
-            )
+            result = await _handle_screenshot("123456789012345678", rest, "save /tmp/docs")
 
         assert result.handled is True
         assert "Save failed" in result.reply
@@ -617,10 +638,13 @@ class TestAnalyzeImageBytesRaiseForStatusPath:
         mock_client = MagicMock()
         mock_client.post.return_value = mock_resp
 
-        with patch(
-            "missy.gateway.client.PolicyHTTPClient",
-            return_value=mock_client,
-        ), pytest.raises(RuntimeError, match="Vision model request failed"):
+        with (
+            patch(
+                "missy.gateway.client.PolicyHTTPClient",
+                return_value=mock_client,
+            ),
+            pytest.raises(RuntimeError, match="Vision model request failed"),
+        ):
             analyze_image_bytes(b"\x89PNG\r\n", "What is this?")
 
     def test_raise_for_status_message_preserved_in_error(self):
@@ -633,10 +657,13 @@ class TestAnalyzeImageBytesRaiseForStatusPath:
         mock_client = MagicMock()
         mock_client.post.return_value = mock_resp
 
-        with patch(
-            "missy.gateway.client.PolicyHTTPClient",
-            return_value=mock_client,
-        ), pytest.raises(RuntimeError, match="503 Service Unavailable"):
+        with (
+            patch(
+                "missy.gateway.client.PolicyHTTPClient",
+                return_value=mock_client,
+            ),
+            pytest.raises(RuntimeError, match="503 Service Unavailable"),
+        ):
             analyze_image_bytes(b"\xff\xd8\xff", "Describe this")
 
     def test_successful_post_and_raise_for_status_returns_content(self):
@@ -692,7 +719,10 @@ class TestSaveDiscordAttachmentPathTraversal:
                 return outside_resolved
             return original_realpath(p)
 
-        with patch("os.path.realpath", side_effect=fake_realpath), pytest.raises(ValueError, match="resolves outside save directory"):
+        with (
+            patch("os.path.realpath", side_effect=fake_realpath),
+            pytest.raises(ValueError, match="resolves outside save directory"),
+        ):
             save_discord_attachment(
                 mock_rest,
                 {"url": "https://cdn.discordapp.com/a.png", "filename": "escape.png"},

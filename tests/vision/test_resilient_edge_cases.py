@@ -96,9 +96,11 @@ class TestResilientCameraEdgeCases:
         mock_disc.discover.return_value = [device]
         mock_disc.find_by_usb_id.return_value = device
 
-        with patch("missy.vision.resilient_capture.get_discovery", return_value=mock_disc), \
-             patch("missy.vision.capture.CameraHandle") as MockHandle, \
-             patch("time.sleep"):
+        with (
+            patch("missy.vision.resilient_capture.get_discovery", return_value=mock_disc),
+            patch("missy.vision.capture.CameraHandle") as MockHandle,
+            patch("time.sleep"),
+        ):
             MockHandle.return_value = mock_handle
 
             # Force reconnect path
@@ -174,9 +176,11 @@ class TestResilientCameraDevicePathChange:
         mock_disc.validate_device.return_value = True
         mock_disc.rediscover_device.return_value = new_device
 
-        with patch("missy.vision.resilient_capture.get_discovery", return_value=mock_disc), \
-             patch("missy.vision.capture.CameraHandle") as MockHandle, \
-             patch("time.sleep"):
+        with (
+            patch("missy.vision.resilient_capture.get_discovery", return_value=mock_disc),
+            patch("missy.vision.capture.CameraHandle") as MockHandle,
+            patch("time.sleep"),
+        ):
             MockHandle.return_value = mock_handle
 
             cam._connected = False
@@ -201,8 +205,10 @@ class TestResilientCameraConcurrency:
 
         def do_capture():
             try:
-                with patch("missy.vision.resilient_capture.get_discovery", return_value=mock_disc), \
-                     patch("time.sleep"):
+                with (
+                    patch("missy.vision.resilient_capture.get_discovery", return_value=mock_disc),
+                    patch("time.sleep"),
+                ):
                     r = cam.capture()
                     results.append(r)
             except Exception as e:

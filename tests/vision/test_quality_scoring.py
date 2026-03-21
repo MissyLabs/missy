@@ -100,9 +100,15 @@ class TestCaptureBestQualitySelection:
         white = np.full((100, 100, 3), 255, dtype=np.uint8)
 
         results = [
-            CaptureResult(success=True, image=dark, device_path="/dev/video0", width=100, height=100),
-            CaptureResult(success=True, image=good, device_path="/dev/video0", width=100, height=100),
-            CaptureResult(success=True, image=white, device_path="/dev/video0", width=100, height=100),
+            CaptureResult(
+                success=True, image=dark, device_path="/dev/video0", width=100, height=100
+            ),
+            CaptureResult(
+                success=True, image=good, device_path="/dev/video0", width=100, height=100
+            ),
+            CaptureResult(
+                success=True, image=white, device_path="/dev/video0", width=100, height=100
+            ),
         ]
 
         with patch.object(cam, "capture_burst", return_value=results):
@@ -137,4 +143,5 @@ class TestCaptureBestQualitySelection:
 def _make_mock_cv2():
     """Create a mock cv2 module with real numpy-based operations."""
     import cv2
+
     return cv2

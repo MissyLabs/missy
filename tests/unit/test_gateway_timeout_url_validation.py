@@ -276,7 +276,9 @@ class TestCodeEvolutionLogging:
         assert result == []
         assert any("Failed to load evolutions" in msg for msg in caplog.messages)
         # exc_info should attach the exception record
-        assert any(record.exc_info for record in caplog.records if "Failed to load" in record.message)
+        assert any(
+            record.exc_info for record in caplog.records if "Failed to load" in record.message
+        )
 
 
 # ---------------------------------------------------------------------------

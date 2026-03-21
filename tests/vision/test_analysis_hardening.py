@@ -65,7 +65,9 @@ class TestAllModesProduceValidPrompts:
             AnalysisMode.INSPECTION,
         ],
     )
-    def test_prompt_is_non_empty_string(self, builder: AnalysisPromptBuilder, mode: AnalysisMode) -> None:
+    def test_prompt_is_non_empty_string(
+        self, builder: AnalysisPromptBuilder, mode: AnalysisMode
+    ) -> None:
         prompt = builder.build_prompt(make_request(mode=mode))
         assert isinstance(prompt, str)
         assert len(prompt.strip()) > 0
@@ -79,7 +81,9 @@ class TestAllModesProduceValidPrompts:
             AnalysisMode.INSPECTION,
         ],
     )
-    def test_prompt_meets_minimum_length(self, builder: AnalysisPromptBuilder, mode: AnalysisMode) -> None:
+    def test_prompt_meets_minimum_length(
+        self, builder: AnalysisPromptBuilder, mode: AnalysisMode
+    ) -> None:
         """Prompts must be substantial enough for an LLM to act on (>= 100 chars)."""
         prompt = builder.build_prompt(make_request(mode=mode))
         assert len(prompt) >= 100, f"{mode} prompt is suspiciously short: {len(prompt)} chars"
@@ -93,7 +97,9 @@ class TestAllModesProduceValidPrompts:
             AnalysisMode.INSPECTION,
         ],
     )
-    def test_prompt_ends_with_newline_or_content(self, builder: AnalysisPromptBuilder, mode: AnalysisMode) -> None:
+    def test_prompt_ends_with_newline_or_content(
+        self, builder: AnalysisPromptBuilder, mode: AnalysisMode
+    ) -> None:
         """Prompts must not be whitespace-only."""
         prompt = builder.build_prompt(make_request(mode=mode))
         assert prompt.strip(), f"{mode} prompt contains only whitespace"
@@ -107,7 +113,9 @@ class TestAllModesProduceValidPrompts:
             AnalysisMode.INSPECTION,
         ],
     )
-    def test_prompt_returns_str_not_bytes(self, builder: AnalysisPromptBuilder, mode: AnalysisMode) -> None:
+    def test_prompt_returns_str_not_bytes(
+        self, builder: AnalysisPromptBuilder, mode: AnalysisMode
+    ) -> None:
         prompt = builder.build_prompt(make_request(mode=mode))
         assert type(prompt) is str  # noqa: E721 — exact type check
 
@@ -270,7 +278,9 @@ class TestPaintingModeContent:
                 previous_observations=["Sunset colors are vivid"],
             )
         )
-        assert "warm" in prompt.lower() or "encourage" in prompt.lower() or "support" in prompt.lower()
+        assert (
+            "warm" in prompt.lower() or "encourage" in prompt.lower() or "support" in prompt.lower()
+        )
 
     def test_painting_followup_no_harsh_words(self, builder: AnalysisPromptBuilder) -> None:
         prompt = builder.build_prompt(
@@ -318,7 +328,9 @@ class TestContextIncorporation:
         prompt = builder.build_prompt(make_request(mode=AnalysisMode.INSPECTION, context=ctx))
         assert ctx in prompt
 
-    def test_general_context_uses_additional_context_label(self, builder: AnalysisPromptBuilder) -> None:
+    def test_general_context_uses_additional_context_label(
+        self, builder: AnalysisPromptBuilder
+    ) -> None:
         ctx = "unique-ctx-marker"
         prompt = builder.build_prompt(make_request(mode=AnalysisMode.GENERAL, context=ctx))
         assert "User-provided context" in prompt
@@ -360,7 +372,9 @@ class TestEdgeCases:
             assert "Additional context:" not in prompt or mode != AnalysisMode.GENERAL
             assert len(prompt.strip()) > 0
 
-    def test_general_mode_empty_context_no_appended_label(self, builder: AnalysisPromptBuilder) -> None:
+    def test_general_mode_empty_context_no_appended_label(
+        self, builder: AnalysisPromptBuilder
+    ) -> None:
         prompt = builder.build_prompt(make_request(mode=AnalysisMode.GENERAL, context=""))
         assert "Additional context:" not in prompt
 
@@ -368,11 +382,15 @@ class TestEdgeCases:
         prompt = builder.build_prompt(make_request(mode=AnalysisMode.PUZZLE, context=""))
         assert "User note:" not in prompt
 
-    def test_painting_mode_empty_context_no_painter_says(self, builder: AnalysisPromptBuilder) -> None:
+    def test_painting_mode_empty_context_no_painter_says(
+        self, builder: AnalysisPromptBuilder
+    ) -> None:
         prompt = builder.build_prompt(make_request(mode=AnalysisMode.PAINTING, context=""))
         assert "painter says" not in prompt.lower()
 
-    def test_inspection_mode_empty_context_no_focus_label(self, builder: AnalysisPromptBuilder) -> None:
+    def test_inspection_mode_empty_context_no_focus_label(
+        self, builder: AnalysisPromptBuilder
+    ) -> None:
         prompt = builder.build_prompt(make_request(mode=AnalysisMode.INSPECTION, context=""))
         assert "Inspection focus:" not in prompt
 
@@ -383,7 +401,9 @@ class TestEdgeCases:
         assert "[truncated]" in prompt
         assert long_ctx not in prompt  # full string should not appear
 
-    def test_very_long_context_does_not_corrupt_base_prompt(self, builder: AnalysisPromptBuilder) -> None:
+    def test_very_long_context_does_not_corrupt_base_prompt(
+        self, builder: AnalysisPromptBuilder
+    ) -> None:
         long_ctx = "B" * 5000
         prompt = builder.build_prompt(make_request(mode=AnalysisMode.GENERAL, context=long_ctx))
         # The base prompt content must still be present
@@ -486,6 +506,7 @@ class TestLLMSuitability:
         """Base (non-followup) prompts must not contain raw {placeholder} tokens."""
         prompt = builder.build_prompt(make_request(mode=mode))
         import re
+
         # Match {word} patterns — these would indicate an unfilled .format() call
         placeholders = re.findall(r"\{[a-zA-Z_][a-zA-Z0-9_]*\}", prompt)
         assert not placeholders, f"{mode} prompt has unfilled placeholders: {placeholders}"
@@ -500,10 +521,13 @@ class TestLLMSuitability:
             )
         )
         import re
+
         placeholders = re.findall(r"\{[a-zA-Z_][a-zA-Z0-9_]*\}", prompt)
         assert not placeholders, f"Puzzle followup has unfilled placeholders: {placeholders}"
 
-    def test_painting_followup_no_unfilled_placeholders(self, builder: AnalysisPromptBuilder) -> None:
+    def test_painting_followup_no_unfilled_placeholders(
+        self, builder: AnalysisPromptBuilder
+    ) -> None:
         prompt = builder.build_prompt(
             make_request(
                 mode=AnalysisMode.PAINTING,
@@ -512,6 +536,7 @@ class TestLLMSuitability:
             )
         )
         import re
+
         placeholders = re.findall(r"\{[a-zA-Z_][a-zA-Z0-9_]*\}", prompt)
         assert not placeholders, f"Painting followup has unfilled placeholders: {placeholders}"
 
@@ -536,9 +561,7 @@ class TestLLMSuitability:
     def test_prompt_does_not_start_with_whitespace(self, builder: AnalysisPromptBuilder) -> None:
         for mode in AnalysisMode:
             prompt = builder.build_prompt(make_request(mode=mode))
-            assert prompt == prompt.lstrip("\n\r"), (
-                f"{mode} prompt starts with leading newlines"
-            )
+            assert prompt == prompt.lstrip("\n\r"), f"{mode} prompt starts with leading newlines"
 
 
 # ---------------------------------------------------------------------------

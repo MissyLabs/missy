@@ -310,9 +310,7 @@ class TestHatchingLogWrite:
     def test_get_entries_ignores_blank_lines(self, tmp_path):
         p = tmp_path / "blanks.jsonl"
         p.write_text(
-            "\n"
-            '{"step":"s","status":"ok","message":"m","details":{},"timestamp":"t"}\n'
-            "\n",
+            '\n{"step":"s","status":"ok","message":"m","details":{},"timestamp":"t"}\n\n',
             encoding="utf-8",
         )
         log = HatchingLog(log_path=p)
@@ -650,7 +648,10 @@ class TestValidateEnvironment:
         _patch_module_paths(monkeypatch, tmp_path)
         mgr = _make_manager(tmp_path)
         state = HatchingState()
-        with patch.object(sys, "version_info", SimpleNamespace(major=3, minor=10, micro=0)), pytest.raises(RuntimeError, match="Python 3.11\\+"):
+        with (
+            patch.object(sys, "version_info", SimpleNamespace(major=3, minor=10, micro=0)),
+            pytest.raises(RuntimeError, match="Python 3.11\\+"),
+        ):
             mgr._validate_environment(state, interactive=False)
 
     def test_warns_on_low_disk_space(self, tmp_path, monkeypatch):
@@ -659,7 +660,10 @@ class TestValidateEnvironment:
         state = HatchingState()
         # Return a stat result that reports less than _MIN_FREE_BYTES free.
         fake_stat = SimpleNamespace(f_bavail=1, f_frsize=1)
-        with patch("missy.agent.hatching.os.statvfs", return_value=fake_stat), pytest.raises(_HatchingStepWarning, match="Low disk space"):
+        with (
+            patch("missy.agent.hatching.os.statvfs", return_value=fake_stat),
+            pytest.raises(_HatchingStepWarning, match="Low disk space"),
+        ):
             mgr._validate_environment(state, interactive=False)
 
     def test_sufficient_disk_space_does_not_warn(self, tmp_path, monkeypatch):
@@ -847,7 +851,10 @@ class TestGeneratePersona:
         mgr = _make_manager(tmp_path)
         state = HatchingState()
         # Simulate ImportError for PersonaManager.
-        with patch("builtins.__import__", side_effect=ImportError("no module")), pytest.raises(_HatchingStepWarning, match="Could not import PersonaManager"):
+        with (
+            patch("builtins.__import__", side_effect=ImportError("no module")),
+            pytest.raises(_HatchingStepWarning, match="Could not import PersonaManager"),
+        ):
             mgr._generate_persona(state, interactive=False)
 
     def test_oserror_on_write_raises_step_warning(self, tmp_path, monkeypatch):
@@ -863,18 +870,25 @@ class TestGeneratePersona:
         # Patch the PersonaManager at the point of local import inside
         # _generate_persona.  We wrap the real __import__ so only the
         # specific import statement is intercepted.
-        _real_import = __builtins__.__import__ if hasattr(__builtins__, "__import__") else __import__
+        _real_import = (
+            __builtins__.__import__ if hasattr(__builtins__, "__import__") else __import__
+        )
+
         def _fake_import(name, *args, **kwargs):
             if name == "missy.agent.persona":
                 import types
+
                 mod = types.ModuleType("missy.agent.persona")
                 mod.PersonaManager = mock_pm_class
                 return mod
             return _real_import(name, *args, **kwargs)
+
         mgr = _make_manager(tmp_path)
         state = HatchingState()
-        with patch("builtins.__import__", side_effect=_fake_import), \
-             pytest.raises(_HatchingStepWarning, match="Could not write persona"):
+        with (
+            patch("builtins.__import__", side_effect=_fake_import),
+            pytest.raises(_HatchingStepWarning, match="Could not write persona"),
+        ):
             mgr._generate_persona(state, interactive=False)
 
 
@@ -886,7 +900,9 @@ class TestSeedMemory:
         mock_turn = MagicMock()
         mock_turn.id = "welcome-id"
         mock_store = MagicMock()
-        monkeypatch.setattr("missy.memory.sqlite_store.SQLiteMemoryStore", MagicMock(return_value=mock_store))
+        monkeypatch.setattr(
+            "missy.memory.sqlite_store.SQLiteMemoryStore", MagicMock(return_value=mock_store)
+        )
         monkeypatch.setattr(
             "missy.memory.sqlite_store.ConversationTurn",
             MagicMock(new=MagicMock(return_value=mock_turn)),
@@ -900,7 +916,10 @@ class TestSeedMemory:
         _patch_module_paths(monkeypatch, tmp_path)
         mgr = _make_manager(tmp_path)
         state = HatchingState()
-        with patch("builtins.__import__", side_effect=ImportError("no sqlite")), pytest.raises(_HatchingStepWarning, match="Could not import SQLiteMemoryStore"):
+        with (
+            patch("builtins.__import__", side_effect=ImportError("no sqlite")),
+            pytest.raises(_HatchingStepWarning, match="Could not import SQLiteMemoryStore"),
+        ):
             mgr._seed_memory(state, interactive=False)
 
     def test_generic_exception_raises_step_warning(self, tmp_path, monkeypatch):

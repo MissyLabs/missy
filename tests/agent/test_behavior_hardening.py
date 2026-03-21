@@ -100,9 +100,7 @@ class TestGetResponseGuidelinesNullSafety:
         # at least one of them should appear in the guidelines.
         assert "asks clarifying questions" in result or "be concise" in result
 
-    def test_empty_dict_no_vision_mode_key_error(
-        self, default_layer: BehaviorLayer
-    ) -> None:
+    def test_empty_dict_no_vision_mode_key_error(self, default_layer: BehaviorLayer) -> None:
         """Missing 'vision_mode' key must not cause a KeyError."""
         # get_response_guidelines uses context.get("vision_mode", "") internally,
         # but after the None guard is applied the local `ctx` dict is used —
@@ -231,10 +229,7 @@ class TestPruneBackupsUnlinkFailure:
             persona_manager._prune_backups()
 
         warning_messages = [r.message for r in caplog.records if r.levelno == logging.WARNING]
-        assert any(
-            "backup" in msg.lower() or oldest.name in msg
-            for msg in warning_messages
-        ), (
+        assert any("backup" in msg.lower() or oldest.name in msg for msg in warning_messages), (
             f"Expected a warning mentioning the failed backup. Got: {warning_messages}"
         )
 

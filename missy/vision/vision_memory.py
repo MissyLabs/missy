@@ -72,12 +72,14 @@ class VisionMemoryBridge:
             if self._memory is None:
                 try:
                     from missy.memory.sqlite_store import SQLiteMemoryStore
+
                     self._memory = SQLiteMemoryStore()
                 except Exception as exc:
                     logger.warning("Cannot init SQLiteMemoryStore: %s", exc)
             if self._vector is None:
                 try:
                     from missy.memory.vector_store import VectorMemoryStore
+
                     self._vector = VectorMemoryStore()
                 except Exception:
                     logger.debug("VectorMemoryStore not available (faiss not installed)")
@@ -123,13 +125,16 @@ class VisionMemoryBridge:
 
         # Filter metadata to prevent override of core fields
         _RESERVED_KEYS = {
-            "observation_id", "session_id", "task_type", "observation",
-            "confidence", "source", "frame_id", "timestamp",
+            "observation_id",
+            "session_id",
+            "task_type",
+            "observation",
+            "confidence",
+            "source",
+            "frame_id",
+            "timestamp",
         }
-        safe_metadata = {
-            k: v for k, v in (metadata or {}).items()
-            if k not in _RESERVED_KEYS
-        }
+        safe_metadata = {k: v for k, v in (metadata or {}).items() if k not in _RESERVED_KEYS}
         entry = {
             "observation_id": obs_id,
             "session_id": session_id,
@@ -236,11 +241,13 @@ class VisionMemoryBridge:
                     meta = getattr(turn, "metadata", {}) or {}
                     if task_type and meta.get("task_type") != task_type:
                         continue
-                    results.append({
-                        "observation": getattr(turn, "content", ""),
-                        "session_id": getattr(turn, "session_id", ""),
-                        **meta,
-                    })
+                    results.append(
+                        {
+                            "observation": getattr(turn, "content", ""),
+                            "session_id": getattr(turn, "session_id", ""),
+                            **meta,
+                        }
+                    )
                     if len(results) >= limit:
                         break
             except Exception as exc:

@@ -340,9 +340,7 @@ class TestCodexProviderIsAvailable:
         from missy.providers.codex_provider import CodexProvider
 
         p = CodexProvider(_make_config(api_key=None))
-        with patch(
-            "missy.providers.codex_provider._load_oauth_token", return_value="oauth-tok"
-        ):
+        with patch("missy.providers.codex_provider._load_oauth_token", return_value="oauth-tok"):
             assert p.is_available() is True
 
     def test_returns_false_when_no_key_and_no_oauth_token(self):
@@ -373,9 +371,7 @@ class TestCodexProviderGetToken:
         from missy.providers.codex_provider import CodexProvider
 
         p = CodexProvider(_make_config(api_key="direct-key"))
-        with patch(
-            "missy.providers.codex_provider._load_oauth_token"
-        ) as mock_load:
+        with patch("missy.providers.codex_provider._load_oauth_token") as mock_load:
             token = p._get_token()
 
         assert token == "direct-key"
@@ -385,9 +381,7 @@ class TestCodexProviderGetToken:
         from missy.providers.codex_provider import CodexProvider
 
         p = CodexProvider(_make_config(api_key=None))
-        with patch(
-            "missy.providers.codex_provider._load_oauth_token", return_value="oauth-token"
-        ):
+        with patch("missy.providers.codex_provider._load_oauth_token", return_value="oauth-token"):
             token = p._get_token()
 
         assert token == "oauth-token"
@@ -396,14 +390,20 @@ class TestCodexProviderGetToken:
         from missy.providers.codex_provider import CodexProvider
 
         p = CodexProvider(_make_config(api_key=None))
-        with patch("missy.providers.codex_provider._load_oauth_token", return_value=None), pytest.raises(ProviderError, match="no OAuth token"):
+        with (
+            patch("missy.providers.codex_provider._load_oauth_token", return_value=None),
+            pytest.raises(ProviderError, match="no OAuth token"),
+        ):
             p._get_token()
 
     def test_error_message_mentions_missy_setup(self):
         from missy.providers.codex_provider import CodexProvider
 
         p = CodexProvider(_make_config(api_key=None))
-        with patch("missy.providers.codex_provider._load_oauth_token", return_value=None), pytest.raises(ProviderError, match="missy setup"):
+        with (
+            patch("missy.providers.codex_provider._load_oauth_token", return_value=None),
+            pytest.raises(ProviderError, match="missy setup"),
+        ):
             p._get_token()
 
 
@@ -682,7 +682,10 @@ class TestCodexProviderStream:
         mock_resp.text = "Unauthorized"
         http_error = httpx.HTTPStatusError("401", request=MagicMock(), response=mock_resp)
 
-        with patch("missy.providers.codex_provider.PolicyHTTPClient") as mock_cls, pytest.raises(ProviderError, match="401"):
+        with (
+            patch("missy.providers.codex_provider.PolicyHTTPClient") as mock_cls,
+            pytest.raises(ProviderError, match="401"),
+        ):
             mock_cls.return_value.post.side_effect = http_error
             list(self.provider.stream(self._messages()))
 
@@ -695,7 +698,10 @@ class TestCodexProviderStream:
 
     def test_stream_calls_get_token(self):
         lines = ["data: [DONE]"]
-        with _mock_sse_stream(lines), patch.object(self.provider, "_get_token", return_value="tok-test") as mock_tok:
+        with (
+            _mock_sse_stream(lines),
+            patch.object(self.provider, "_get_token", return_value="tok-test") as mock_tok,
+        ):
             list(self.provider.stream(self._messages()))
 
         mock_tok.assert_called_once()

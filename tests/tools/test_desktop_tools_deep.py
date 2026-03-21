@@ -128,7 +128,9 @@ class TestX11ScreenshotTool:
         # Create the file to simulate scrot writing it
         Path(out_path).write_bytes(b"\x89PNG fake")
 
-        mock_run.return_value = subprocess.CompletedProcess(args="scrot", returncode=0, stdout="", stderr="")
+        mock_run.return_value = subprocess.CompletedProcess(
+            args="scrot", returncode=0, stdout="", stderr=""
+        )
         tool = X11ScreenshotTool()
         result = tool.execute(path=out_path)
         assert result.success is True
@@ -152,7 +154,9 @@ class TestX11ScreenshotTool:
 
         out_path = str(tmp_path / "region.png")
         Path(out_path).write_bytes(b"\x89PNG")
-        mock_run.return_value = subprocess.CompletedProcess(args="", returncode=0, stdout="", stderr="")
+        mock_run.return_value = subprocess.CompletedProcess(
+            args="", returncode=0, stdout="", stderr=""
+        )
         tool = X11ScreenshotTool()
         result = tool.execute(path=out_path, region="100,100,200,200")
         assert result.success is True
@@ -168,7 +172,9 @@ class TestX11ClickTool:
     def test_left_click(self, mock_run):
         from missy.tools.builtin.x11_tools import X11ClickTool
 
-        mock_run.return_value = subprocess.CompletedProcess(args="", returncode=0, stdout="", stderr="")
+        mock_run.return_value = subprocess.CompletedProcess(
+            args="", returncode=0, stdout="", stderr=""
+        )
         tool = X11ClickTool()
         result = tool.execute(x=100, y=200, button="left")
         assert result.success is True
@@ -179,7 +185,9 @@ class TestX11ClickTool:
     def test_double_click(self, mock_run):
         from missy.tools.builtin.x11_tools import X11ClickTool
 
-        mock_run.return_value = subprocess.CompletedProcess(args="", returncode=0, stdout="", stderr="")
+        mock_run.return_value = subprocess.CompletedProcess(
+            args="", returncode=0, stdout="", stderr=""
+        )
         tool = X11ClickTool()
         result = tool.execute(x=50, y=50, button="double")
         assert result.success is True
@@ -190,7 +198,9 @@ class TestX11ClickTool:
     def test_click_with_window_focus(self, mock_run):
         from missy.tools.builtin.x11_tools import X11ClickTool
 
-        mock_run.return_value = subprocess.CompletedProcess(args="", returncode=0, stdout="", stderr="")
+        mock_run.return_value = subprocess.CompletedProcess(
+            args="", returncode=0, stdout="", stderr=""
+        )
         tool = X11ClickTool()
         result = tool.execute(x=10, y=20, window_name="Firefox")
         assert result.success is True
@@ -214,7 +224,9 @@ class TestX11ClickTool:
         """x/y must be coerced to int to prevent shell injection."""
         from missy.tools.builtin.x11_tools import X11ClickTool
 
-        mock_run.return_value = subprocess.CompletedProcess(args="", returncode=0, stdout="", stderr="")
+        mock_run.return_value = subprocess.CompletedProcess(
+            args="", returncode=0, stdout="", stderr=""
+        )
         tool = X11ClickTool()
         result = tool.execute(x="100", y="200")  # strings should be coerced
         assert result.success is True
@@ -227,7 +239,9 @@ class TestX11TypeTool:
     def test_type_text(self, mock_run):
         from missy.tools.builtin.x11_tools import X11TypeTool
 
-        mock_run.return_value = subprocess.CompletedProcess(args="", returncode=0, stdout="", stderr="")
+        mock_run.return_value = subprocess.CompletedProcess(
+            args="", returncode=0, stdout="", stderr=""
+        )
         tool = X11TypeTool()
         result = tool.execute(text="hello world")
         assert result.success is True
@@ -324,7 +338,9 @@ class TestSynthPiper:
         wav = tmp_path / "out.wav"
         wav.write_bytes(b"RIFF fake wav data")
 
-        mock_subproc.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=b"", stderr=b"")
+        mock_subproc.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=b"", stderr=b""
+        )
 
         from missy.tools.builtin.tts_speak import _synth_piper
 
@@ -372,7 +388,9 @@ class TestSynthEspeak:
 
     @patch("subprocess.run")
     def test_espeak_no_output(self, mock_run):
-        mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=b"", stderr=b"")
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=b"", stderr=b""
+        )
         from missy.tools.builtin.tts_speak import _synth_espeak
 
         result = _synth_espeak("hello", "/tmp/out.wav", 160, 50, "en", {})
@@ -392,7 +410,9 @@ class TestPlayWav:
 
     @patch("subprocess.run")
     def test_play_success(self, mock_run):
-        mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=b"", stderr=b"")
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=b"", stderr=b""
+        )
         from missy.tools.builtin.tts_speak import _play_wav
 
         result = _play_wav("/tmp/test.wav", {"PATH": "/usr/bin"})
@@ -721,7 +741,9 @@ class TestAtSpiFormatTree:
     def test_format_with_text(self):
         from missy.tools.builtin.atspi_tools import _format_tree
 
-        nodes = [{"depth": 0, "role": "text", "name": "field", "states": [], "text": "Some value here"}]
+        nodes = [
+            {"depth": 0, "role": "text", "name": "field", "states": [], "text": "Some value here"}
+        ]
         result = _format_tree(nodes)
         assert "text=" in result
         assert "Some value here" in result

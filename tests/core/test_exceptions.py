@@ -28,24 +28,26 @@ class TestExceptionHierarchy:
         assert issubclass(ApprovalRequiredError, MissyError)
 
     def test_all_are_exceptions(self):
-        for cls in (MissyError, PolicyViolationError, ConfigurationError,
-                    ProviderError, SchedulerError, ApprovalRequiredError):
+        for cls in (
+            MissyError,
+            PolicyViolationError,
+            ConfigurationError,
+            ProviderError,
+            SchedulerError,
+            ApprovalRequiredError,
+        ):
             assert issubclass(cls, Exception)
 
 
 class TestPolicyViolationError:
     def test_attributes(self):
-        exc = PolicyViolationError(
-            "blocked", category="network", detail="host not allowed"
-        )
+        exc = PolicyViolationError("blocked", category="network", detail="host not allowed")
         assert str(exc) == "blocked"
         assert exc.category == "network"
         assert exc.detail == "host not allowed"
 
     def test_repr(self):
-        exc = PolicyViolationError(
-            "blocked", category="filesystem", detail="/etc/passwd"
-        )
+        exc = PolicyViolationError("blocked", category="filesystem", detail="/etc/passwd")
         r = repr(exc)
         assert "PolicyViolationError" in r
         assert "filesystem" in r

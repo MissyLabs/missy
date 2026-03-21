@@ -220,7 +220,9 @@ def registry() -> ToolRegistry:
 class TestMcpManagerLifecycle:
     """add_server → list tools → remove_server round-trip."""
 
-    def test_add_server_populates_client_list(self, manager: McpManager, tmp_mcp_config: str) -> None:
+    def test_add_server_populates_client_list(
+        self, manager: McpManager, tmp_mcp_config: str
+    ) -> None:
         tools = [{"name": "read_file", "description": "Reads a file"}]
         mock_client = _make_mock_client(tools=tools)
 
@@ -489,7 +491,10 @@ class TestMcpDigestPinning:
         )
         mock_client = _make_mock_client(tools=tools)
 
-        with patch("missy.mcp.manager.McpClient", return_value=mock_client), pytest.raises(ValueError):
+        with (
+            patch("missy.mcp.manager.McpClient", return_value=mock_client),
+            pytest.raises(ValueError),
+        ):
             manager.add_server("srv", command="mcp-srv")
 
         events = event_bus.get_events(event_type="mcp.digest_mismatch")
@@ -655,7 +660,9 @@ class TestSkillDiscoveryScan:
         assert len(manifests) == 1
         assert manifests[0].name == "good-skill"
 
-    def test_skills_without_name_are_skipped(self, discovery: SkillDiscovery, tmp_path: Path) -> None:
+    def test_skills_without_name_are_skipped(
+        self, discovery: SkillDiscovery, tmp_path: Path
+    ) -> None:
         nameless = tmp_path / "nameless"
         nameless.mkdir()
         (nameless / "SKILL.md").write_text("---\ndescription: no name here\n---\n\nBody.\n")
@@ -767,9 +774,7 @@ class TestSkillDiscoveryFrontmatter:
     def test_quoted_string_values_are_unquoted(
         self, discovery: SkillDiscovery, tmp_path: Path
     ) -> None:
-        content = (
-            '---\nname: "quoted-skill"\ndescription: \'single quoted\'\nversion: "3.0.0"\n---\n\nBody.\n'
-        )
+        content = '---\nname: "quoted-skill"\ndescription: \'single quoted\'\nversion: "3.0.0"\n---\n\nBody.\n'
         (tmp_path / "SKILL.md").write_text(content)
 
         manifest = discovery.parse_skill_md(str(tmp_path / "SKILL.md"))
@@ -924,9 +929,7 @@ class TestSkillDiscoveryDuplicates:
         assert len(manifests) == 3
         assert len({m.path for m in manifests}) == 3
 
-    def test_search_returns_all_duplicates(
-        self, discovery: SkillDiscovery, tmp_path: Path
-    ) -> None:
+    def test_search_returns_all_duplicates(self, discovery: SkillDiscovery, tmp_path: Path) -> None:
         for idx in range(3):
             d = tmp_path / f"slot{idx}"
             d.mkdir()
@@ -1020,9 +1023,7 @@ class TestToolRegistryWithMcpTools:
 class TestToolRegistryPermissions:
     """Policy checks are enforced before tool execution."""
 
-    def test_tool_without_permissions_executes_without_policy(
-        self, registry: ToolRegistry
-    ) -> None:
+    def test_tool_without_permissions_executes_without_policy(self, registry: ToolRegistry) -> None:
         registry.register(_EchoTool())
         result = registry.execute("echo", text="hello")
         assert result.success is True
@@ -1066,9 +1067,7 @@ class TestToolRegistryPermissions:
 
         assert result.success is True
 
-    def test_filesystem_read_tool_allowed_when_path_permitted(
-        self, registry: ToolRegistry
-    ) -> None:
+    def test_filesystem_read_tool_allowed_when_path_permitted(self, registry: ToolRegistry) -> None:
         config = _make_config(read_paths=["/tmp"], write_paths=["/tmp"])
         init_policy_engine(config)
         registry.register(_FsReadTool())
@@ -1188,7 +1187,10 @@ class TestToolExecutionAuditTrail:
         )
         mock_client = _make_mock_client(tools=tools)
 
-        with patch("missy.mcp.manager.McpClient", return_value=mock_client), pytest.raises(ValueError):
+        with (
+            patch("missy.mcp.manager.McpClient", return_value=mock_client),
+            pytest.raises(ValueError),
+        ):
             manager.add_server("srv", command="c")
 
         events = event_bus.get_events(event_type="mcp.digest_mismatch")

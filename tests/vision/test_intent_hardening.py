@@ -133,17 +133,19 @@ class TestMultipleVisionKeywords:
 class TestStopWordsOnly:
     """Test 4: Input consisting solely of stop words — confidence must be low."""
 
-    @pytest.mark.parametrize("text", [
-        "the a is",
-        "the the the",
-        "a an the is are was",
-        "and or but if so",
-    ])
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "the a is",
+            "the the the",
+            "a an the is are was",
+            "and or but if so",
+        ],
+    )
     def test_low_confidence(self, clf: VisionIntentClassifier, text: str) -> None:
         result = clf.classify(text)
         assert result.confidence < 0.50, (
-            f"Expected low confidence for stop-word input {text!r}, "
-            f"got {result.confidence}"
+            f"Expected low confidence for stop-word input {text!r}, got {result.confidence}"
         )
 
     def test_decision_is_skip(self, clf: VisionIntentClassifier) -> None:
@@ -158,12 +160,15 @@ class TestStopWordsOnly:
 class TestCaseSensitivity:
     """Test 5: Classification must be case-insensitive."""
 
-    @pytest.mark.parametrize("text", [
-        "LOOK AT THIS",
-        "Look At This",
-        "look at this",
-        "lOoK aT tHiS",
-    ])
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "LOOK AT THIS",
+            "Look At This",
+            "look at this",
+            "lOoK aT tHiS",
+        ],
+    )
     def test_same_intent(self, clf: VisionIntentClassifier, text: str) -> None:
         result = clf.classify(text)
         assert result.intent == VisionIntent.LOOK, (
@@ -264,14 +269,17 @@ class TestEmptyInput:
 class TestWhitespaceInput:
     """Test 9: Whitespace-only string must return a valid low-confidence result."""
 
-    @pytest.mark.parametrize("text", [
-        " ",
-        "   ",
-        "\t",
-        "\n",
-        "\r\n",
-        "  \t  \n  ",
-    ])
+    @pytest.mark.parametrize(
+        "text",
+        [
+            " ",
+            "   ",
+            "\t",
+            "\n",
+            "\r\n",
+            "  \t  \n  ",
+        ],
+    )
     def test_whitespace(self, clf: VisionIntentClassifier, text: str) -> None:
         result = clf.classify(text)
         assert result.intent == VisionIntent.NONE

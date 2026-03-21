@@ -116,7 +116,11 @@ class TestCensorResponsePropertyBased:
 class TestSchedulerParserPropertyBased:
     """Property-based tests for schedule parser."""
 
-    @given(text=st.text(min_size=0, max_size=100, alphabet=st.characters(whitelist_categories=("L", "N", "Z"))))
+    @given(
+        text=st.text(
+            min_size=0, max_size=100, alphabet=st.characters(whitelist_categories=("L", "N", "Z"))
+        )
+    )
     @settings(max_examples=30)
     def test_parse_schedule_never_crashes(self, text: str) -> None:
         """parse_schedule should raise ValueError for invalid input, never crash."""

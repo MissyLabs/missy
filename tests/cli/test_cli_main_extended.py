@@ -54,6 +54,7 @@ import pytest
 from click.testing import CliRunner
 
 from missy.cli.main import cli
+from tests.cli.conftest import _make_cli_runner
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -73,7 +74,7 @@ audit_log_path: "/tmp/audit.jsonl"
 
 @pytest.fixture()
 def runner() -> CliRunner:
-    return CliRunner(mix_stderr=False)
+    return _make_cli_runner(mix_stderr=False)
 
 
 def _make_mock_config(**overrides) -> MagicMock:
@@ -211,16 +212,16 @@ class TestInitBranches:
         from pathlib import Path
 
         with runner.isolated_filesystem() as tmpdir, patch.dict(os.environ, {"HOME": str(tmpdir)}):
-                # Allow ~/.missy to be created but fail on ~/workspace
-                original_mkdir = Path.mkdir
+            # Allow ~/.missy to be created but fail on ~/workspace
+            original_mkdir = Path.mkdir
 
-                def selective_mkdir(self, *args, **kwargs):
-                    if str(self).endswith("workspace"):
-                        raise OSError("no space")
-                    original_mkdir(self, *args, **kwargs)
+            def selective_mkdir(self, *args, **kwargs):
+                if str(self).endswith("workspace"):
+                    raise OSError("no space")
+                original_mkdir(self, *args, **kwargs)
 
-                with patch.object(Path, "mkdir", selective_mkdir):
-                    result = runner.invoke(cli, ["init"])
+            with patch.object(Path, "mkdir", selective_mkdir):
+                result = runner.invoke(cli, ["init"])
 
         # Should NOT crash; prints a yellow warning instead.
         assert result.exit_code == 0
@@ -578,14 +579,14 @@ class TestScheduleErrorBranches:
                 patch("missy.cli.main._load_subsystems", return_value=_make_mock_config()),
                 patch("missy.scheduler.manager.SchedulerManager") as mock_mgr_cls,
             ):
-                    mock_mgr = MagicMock()
-                    if error is not None:
-                        getattr(mock_mgr, f"{subcmd}_job").side_effect = error
-                    mock_mgr_cls.return_value = mock_mgr
-                    args = ["schedule", subcmd, job_id]
-                    if subcmd == "remove":
-                        args = ["schedule", subcmd, "--yes", job_id]
-                    result = runner.invoke(cli, ["--config", cfg_path] + args)
+                mock_mgr = MagicMock()
+                if error is not None:
+                    getattr(mock_mgr, f"{subcmd}_job").side_effect = error
+                mock_mgr_cls.return_value = mock_mgr
+                args = ["schedule", subcmd, job_id]
+                if subcmd == "remove":
+                    args = ["schedule", subcmd, "--yes", job_id]
+                result = runner.invoke(cli, ["--config", cfg_path] + args)
         finally:
             import os
 

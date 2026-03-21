@@ -295,9 +295,7 @@ class VoiceServer:
             # First frame: must be auth or pair_request.
             # ----------------------------------------------------------
             try:
-                raw_first = await asyncio.wait_for(
-                    websocket.recv(), timeout=_AUTH_TIMEOUT_SECONDS
-                )
+                raw_first = await asyncio.wait_for(websocket.recv(), timeout=_AUTH_TIMEOUT_SECONDS)
             except TimeoutError:
                 logger.debug(
                     "VoiceServer: auth timeout from %s (%.0fs)",
@@ -830,6 +828,7 @@ class VoiceServer:
                                 pipeline = ImagePipeline()
                                 processed = pipeline.process(capture.image)
                                 import cv2
+
                                 _, buf = cv2.imencode(
                                     ".jpg", processed, [cv2.IMWRITE_JPEG_QUALITY, 85]
                                 )
@@ -849,11 +848,14 @@ class VoiceServer:
                                     metadata["vision_capture_success"] = True
                                     logger.info(
                                         "VoiceServer: captured image for vision intent (%dx%d)",
-                                        capture.width, capture.height,
+                                        capture.width,
+                                        capture.height,
                                     )
                                 else:
                                     metadata["vision_capture_success"] = False
-                                    metadata["vision_capture_error"] = "Image too large after re-encoding"
+                                    metadata["vision_capture_error"] = (
+                                        "Image too large after re-encoding"
+                                    )
                             else:
                                 metadata["vision_capture_success"] = False
                                 metadata["vision_capture_error"] = capture.error

@@ -113,9 +113,15 @@ def _rewrite_heredoc_command(tool_args: dict) -> dict:
 
     # Determine file extension from interpreter name
     ext_map = {
-        "python3": ".py", "python": ".py", "python2": ".py",
-        "ruby": ".rb", "node": ".js", "perl": ".pl",
-        "bash": ".sh", "sh": ".sh", "zsh": ".sh",
+        "python3": ".py",
+        "python": ".py",
+        "python2": ".py",
+        "ruby": ".rb",
+        "node": ".js",
+        "perl": ".pl",
+        "bash": ".sh",
+        "sh": ".sh",
+        "zsh": ".sh",
     }
     base = os.path.basename(interpreter)
     ext = ext_map.get(base, ".tmp")
@@ -137,6 +143,7 @@ def _rewrite_heredoc_command(tool_args: dict) -> dict:
     rewritten = dict(tool_args)
     rewritten["command"] = new_command
     return rewritten
+
 
 # Threshold (chars) above which tool results are stored separately and replaced
 # with a compact reference.  Must be <= _MAX_TOOL_RESULT_CHARS.
@@ -550,7 +557,10 @@ class AgentRuntime:
         if self._response_shaper is not None:
             try:
                 persona = self._persona_manager.get_persona() if self._persona_manager else None
-                shape_ctx = {"turn_count": len(history), "has_tool_results": bool(all_tool_names_used)}
+                shape_ctx = {
+                    "turn_count": len(history),
+                    "has_tool_results": bool(all_tool_names_used),
+                }
                 final_response = self._response_shaper.shape_response(
                     final_response, persona, shape_ctx
                 )

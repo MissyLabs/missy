@@ -146,11 +146,13 @@ class TestRedaction:
         # The key value should not be visible
         assert "sk-ant-" not in redacted
 
-    @given(st.text(
-        alphabet=string.ascii_lowercase + " ",
-        min_size=10,
-        max_size=200,
-    ))
+    @given(
+        st.text(
+            alphabet=string.ascii_lowercase + " ",
+            min_size=10,
+            max_size=200,
+        )
+    )
     @settings(max_examples=50)
     def test_clean_text_not_redacted(self, text):
         """Text with no secrets should be returned unchanged."""
@@ -179,11 +181,13 @@ class TestHasSecretsConsistency:
         d = SecretsDetector()
         assert d.has_secrets(secret) is True
 
-    @given(st.text(
-        alphabet=string.ascii_lowercase + " ",
-        min_size=5,
-        max_size=100,
-    ))
+    @given(
+        st.text(
+            alphabet=string.ascii_lowercase + " ",
+            min_size=5,
+            max_size=100,
+        )
+    )
     @settings(max_examples=50)
     def test_has_secrets_consistent_with_scan(self, text):
         d = SecretsDetector()
@@ -195,12 +199,16 @@ class TestHasSecretsConsistency:
 class TestDbConnectionStrings:
     """Database connection string patterns must be detected."""
 
-    @given(st.sampled_from([
-        "postgres://admin:password123@db.example.com:5432/mydb",
-        "mysql://root:secret@localhost/testdb",
-        "mongodb://user:pass@mongo.host:27017/db",
-        "redis://default:myredispass@cache.internal:6379",
-    ]))
+    @given(
+        st.sampled_from(
+            [
+                "postgres://admin:password123@db.example.com:5432/mydb",
+                "mysql://root:secret@localhost/testdb",
+                "mongodb://user:pass@mongo.host:27017/db",
+                "redis://default:myredispass@cache.internal:6379",
+            ]
+        )
+    )
     def test_db_connection_strings_detected(self, conn_string):
         d = SecretsDetector()
         findings = d.scan(f"DATABASE_URL={conn_string}")
@@ -211,11 +219,13 @@ class TestDbConnectionStrings:
 class TestPasswordPatterns:
     """Password-like values must be detected."""
 
-    @given(st.text(
-        alphabet=string.ascii_letters + string.digits + "!@#$%",
-        min_size=8,
-        max_size=30,
-    ))
+    @given(
+        st.text(
+            alphabet=string.ascii_letters + string.digits + "!@#$%",
+            min_size=8,
+            max_size=30,
+        )
+    )
     @settings(max_examples=30)
     def test_password_pattern(self, pw_value):
         d = SecretsDetector()

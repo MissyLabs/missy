@@ -66,12 +66,17 @@ def _audio_node(
 class TestSaveAtomicWriteFailure:
     """Lines 191-195: when os.replace raises, the temp file is cleaned up and the error re-raised."""
 
-    def test_replace_failure_reraises_exception(self, registry: DeviceRegistry, sample_node: EdgeNode):
+    def test_replace_failure_reraises_exception(
+        self, registry: DeviceRegistry, sample_node: EdgeNode
+    ):
         """An OSError from os.replace propagates to the caller after temp-file cleanup."""
         registry.add_node(sample_node)  # Populates _nodes but save() is called inside.
 
         # We need to force a second save() to hit the failure path.
-        with patch("os.replace", side_effect=OSError("replace failed")), pytest.raises(OSError, match="replace failed"):
+        with (
+            patch("os.replace", side_effect=OSError("replace failed")),
+            pytest.raises(OSError, match="replace failed"),
+        ):
             registry.save()
 
     def test_replace_failure_cleans_up_temp_file(self, tmp_path: Path):
@@ -95,7 +100,8 @@ class TestSaveAtomicWriteFailure:
 
         with (
             patch("tempfile.mkstemp", side_effect=_capturing_mkstemp),
-            patch("os.replace", side_effect=OSError("atomic rename failed")),pytest.raises(OSError)
+            patch("os.replace", side_effect=OSError("atomic rename failed")),
+            pytest.raises(OSError),
         ):
             reg.save()
 
@@ -217,7 +223,9 @@ class TestPurgeAudioLogsNonFileEntry:
         assert deleted == 1
         assert link.exists()
 
-    def test_only_files_not_dirs_are_candidates_for_deletion(self, registry: DeviceRegistry, tmp_path: Path):
+    def test_only_files_not_dirs_are_candidates_for_deletion(
+        self, registry: DeviceRegistry, tmp_path: Path
+    ):
         """With only directories in log_dir, purge deletes nothing."""
         log_dir = tmp_path / "only_dirs"
         log_dir.mkdir()
@@ -239,7 +247,9 @@ class TestPurgeAudioLogsNonFileEntry:
 class TestPurgeAudioLogsStatError:
     """Lines 523-524: when entry.stat() raises OSError the entry is skipped (continue)."""
 
-    def test_stat_oserror_skips_entry_without_raising(self, registry: DeviceRegistry, tmp_path: Path):
+    def test_stat_oserror_skips_entry_without_raising(
+        self, registry: DeviceRegistry, tmp_path: Path
+    ):
         """An OSError from entry.stat() causes that entry to be skipped; purge continues."""
         log_dir = tmp_path / "audio_stat_err"
         log_dir.mkdir()
@@ -276,7 +286,9 @@ class TestPurgeAudioLogsStatError:
         assert deleted == 1
         assert not old_file.exists()
 
-    def test_stat_oserror_on_all_entries_returns_zero(self, registry: DeviceRegistry, tmp_path: Path):
+    def test_stat_oserror_on_all_entries_returns_zero(
+        self, registry: DeviceRegistry, tmp_path: Path
+    ):
         """If every entry's stat raises, purge returns 0 without raising."""
         log_dir = tmp_path / "audio_all_stat_err"
         log_dir.mkdir()
@@ -424,9 +436,7 @@ class TestPurgeAudioLogsIntegration:
         assert not old.exists()
         assert recent.exists()
 
-    def test_purge_returns_zero_for_empty_log_dir(
-        self, registry: DeviceRegistry, tmp_path: Path
-    ):
+    def test_purge_returns_zero_for_empty_log_dir(self, registry: DeviceRegistry, tmp_path: Path):
         """Empty audio_log_dir causes purge to return 0."""
         log_dir = tmp_path / "empty_logs"
         log_dir.mkdir()
@@ -469,9 +479,7 @@ class TestPurgeAudioLogsIntegration:
 
         assert registry.purge_audio_logs() == 0
 
-    def test_purge_multiple_nodes_accumulates_count(
-        self, registry: DeviceRegistry, tmp_path: Path
-    ):
+    def test_purge_multiple_nodes_accumulates_count(self, registry: DeviceRegistry, tmp_path: Path):
         """Deleted file count is summed across all audio-logging nodes."""
         for i in range(3):
             log_dir = tmp_path / f"node{i}"

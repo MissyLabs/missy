@@ -78,6 +78,7 @@ class TestCorrectOrientation:
     @patch("missy.vision.orientation._get_cv2")
     def test_normal_returns_unchanged(self, mock_cv2_fn):
         import cv2
+
         mock_cv2_fn.return_value = cv2
         img = np.zeros((100, 200, 3), dtype=np.uint8)
         result = correct_orientation(img, Orientation.NORMAL)
@@ -86,6 +87,7 @@ class TestCorrectOrientation:
     @patch("missy.vision.orientation._get_cv2")
     def test_90cw_rotates_counterclockwise(self, mock_cv2_fn):
         import cv2
+
         mock_cv2_fn.return_value = cv2
         # Portrait 100x200 → should become landscape 200x100
         img = np.zeros((200, 100, 3), dtype=np.uint8)
@@ -96,6 +98,7 @@ class TestCorrectOrientation:
     @patch("missy.vision.orientation._get_cv2")
     def test_180_rotates_180(self, mock_cv2_fn):
         import cv2
+
         mock_cv2_fn.return_value = cv2
         img = np.array([[1, 2], [3, 4]], dtype=np.uint8)
         result = correct_orientation(img, Orientation.ROTATED_180)
@@ -105,6 +108,7 @@ class TestCorrectOrientation:
     @patch("missy.vision.orientation._get_cv2")
     def test_90ccw_rotates_clockwise(self, mock_cv2_fn):
         import cv2
+
         mock_cv2_fn.return_value = cv2
         img = np.zeros((200, 100, 3), dtype=np.uint8)
         result = correct_orientation(img, Orientation.ROTATED_90_CCW)
@@ -118,6 +122,7 @@ class TestAutoCorrect:
     @patch("missy.vision.orientation._get_cv2")
     def test_corrects_portrait_image(self, mock_cv2_fn):
         import cv2
+
         mock_cv2_fn.return_value = cv2
         # Strongly portrait image (should be corrected — high confidence)
         img = np.zeros((1080, 200, 3), dtype=np.uint8)
@@ -128,6 +133,7 @@ class TestAutoCorrect:
     @patch("missy.vision.orientation._get_cv2")
     def test_does_not_correct_landscape(self, mock_cv2_fn):
         import cv2
+
         mock_cv2_fn.return_value = cv2
         img = np.zeros((480, 640, 3), dtype=np.uint8)
         corrected, result = auto_correct(img)
@@ -138,6 +144,7 @@ class TestAutoCorrect:
     @patch("missy.vision.orientation._get_cv2")
     def test_low_confidence_does_not_correct(self, mock_cv2_fn):
         import cv2
+
         mock_cv2_fn.return_value = cv2
         # Square image — low confidence
         img = np.zeros((500, 500, 3), dtype=np.uint8)

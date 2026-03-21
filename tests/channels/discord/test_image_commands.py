@@ -157,9 +157,9 @@ class TestAnalyzeCommand:
     @pytest.mark.asyncio
     async def test_analyze_no_image_found(self):
         rest = MagicMock()
-        rest.get_channel_messages = MagicMock(return_value=[
-            {"attachments": [{"content_type": "text/plain"}]}
-        ])
+        rest.get_channel_messages = MagicMock(
+            return_value=[{"attachments": [{"content_type": "text/plain"}]}]
+        )
         result = await maybe_handle_image_command(
             content="!analyze", channel_id="123", rest_client=rest
         )
@@ -179,13 +179,25 @@ class TestAnalyzeCommand:
     @pytest.mark.asyncio
     async def test_analyze_success(self):
         rest = MagicMock()
-        rest.get_channel_messages = MagicMock(return_value=[
-            {"attachments": [{"content_type": "image/png", "url": "http://img.png", "filename": "test.png"}]}
-        ])
+        rest.get_channel_messages = MagicMock(
+            return_value=[
+                {
+                    "attachments": [
+                        {
+                            "content_type": "image/png",
+                            "url": "http://img.png",
+                            "filename": "test.png",
+                        }
+                    ]
+                }
+            ]
+        )
         rest.download_attachment = MagicMock(return_value=b"\x89PNG\r\n")
 
         with patch("missy.channels.discord.image_commands._handle_analyze") as mock_analyze:
-            mock_analyze.return_value = ImageCommandResult(True, "**Analysis of `test.png`:**\nA screenshot")
+            mock_analyze.return_value = ImageCommandResult(
+                True, "**Analysis of `test.png`:**\nA screenshot"
+            )
             result = await maybe_handle_image_command(
                 content="!analyze", channel_id="123", rest_client=rest
             )
@@ -194,9 +206,19 @@ class TestAnalyzeCommand:
     @pytest.mark.asyncio
     async def test_analyze_with_question(self):
         rest = MagicMock()
-        rest.get_channel_messages = MagicMock(return_value=[
-            {"attachments": [{"content_type": "image/png", "url": "http://img.png", "filename": "test.png"}]}
-        ])
+        rest.get_channel_messages = MagicMock(
+            return_value=[
+                {
+                    "attachments": [
+                        {
+                            "content_type": "image/png",
+                            "url": "http://img.png",
+                            "filename": "test.png",
+                        }
+                    ]
+                }
+            ]
+        )
 
         with patch("missy.channels.discord.image_commands._handle_analyze") as mock_analyze:
             mock_analyze.return_value = ImageCommandResult(True, "Result")
@@ -261,9 +283,19 @@ class TestScreenshotCommand:
     @pytest.mark.asyncio
     async def test_screenshot_save_success(self):
         rest = MagicMock()
-        rest.get_channel_messages = MagicMock(return_value=[
-            {"attachments": [{"content_type": "image/png", "url": "http://img.png", "filename": "test.png"}]}
-        ])
+        rest.get_channel_messages = MagicMock(
+            return_value=[
+                {
+                    "attachments": [
+                        {
+                            "content_type": "image/png",
+                            "url": "http://img.png",
+                            "filename": "test.png",
+                        }
+                    ]
+                }
+            ]
+        )
 
         with patch("missy.channels.discord.image_commands._handle_screenshot") as mock_ss:
             mock_ss.return_value = ImageCommandResult(True, "Saved to `/tmp/test.png`")

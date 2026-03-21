@@ -45,6 +45,7 @@ class TestWebcamSourceTimeout:
     @patch("missy.vision.capture.CameraHandle")
     def test_timeout_on_frozen_camera(self, MockHandle):
         """Frozen camera should raise CaptureError after timeout."""
+
         def frozen_open():
             time.sleep(10)  # Simulate frozen camera
 
@@ -73,6 +74,7 @@ class TestWebcamSourceTimeout:
     @patch("missy.vision.capture.CameraHandle")
     def test_handle_closed_even_on_timeout(self, MockHandle):
         """Camera handle should be closed even when timeout occurs."""
+
         def slow_open():
             time.sleep(10)
 
@@ -167,12 +169,14 @@ class TestResilientCameraBackoff:
 
     def test_default_backoff_params(self):
         from missy.vision.resilient_capture import ResilientCamera
+
         cam = ResilientCamera()
         assert cam._backoff_factor == 1.5
         assert cam._max_delay == 30.0
 
     def test_custom_backoff_params(self):
         from missy.vision.resilient_capture import ResilientCamera
+
         cam = ResilientCamera(backoff_factor=3.0, max_delay=60.0)
         assert cam._backoff_factor == 3.0
         assert cam._max_delay == 60.0

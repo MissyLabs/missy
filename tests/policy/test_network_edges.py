@@ -355,7 +355,10 @@ class TestBareIPNoDNS:
 
     def test_ip_denied_no_dns_call(self):
         engine = _make_engine(allowed_cidrs=["10.0.0.0/8"])
-        with patch("missy.policy.network.socket.getaddrinfo") as mock_dns, pytest.raises(PolicyViolationError):
+        with (
+            patch("missy.policy.network.socket.getaddrinfo") as mock_dns,
+            pytest.raises(PolicyViolationError),
+        ):
             engine.check_host("1.2.3.4")
         mock_dns.assert_not_called()
 
@@ -736,9 +739,7 @@ class TestMultipleCIDRRanges:
         assert engine.check_host("192.168.1.1") is True
 
     def test_third_cidr_matches(self):
-        engine = _make_engine(
-            allowed_cidrs=["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
-        )
+        engine = _make_engine(allowed_cidrs=["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"])
         assert engine.check_host("192.168.99.99") is True
 
     def test_no_cidr_matches_when_address_outside_all(self):

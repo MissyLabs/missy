@@ -491,68 +491,42 @@ class TestSchedulerAtomicWrite:
 
 
 class TestWebhookResponseCensoring:
-    """WebhookChannel.send() must apply censor_response before writing to the log
-    so that secrets never appear in log output."""
+    """WebhookChannel.send() must not leak secrets to log output."""
 
-    def test_send_applies_censor_response(self):
-        """censor_response is called on the message before logger.info.
-        Because censor_response is imported locally inside send(), we patch
-        it at the source module (missy.security.censor)."""
+    def test_send_does_not_log_message_content(self):
+        """send() logs only message length, not content (avoids leaking secrets)."""
         from missy.channels.webhook import WebhookChannel
 
         ch = WebhookChannel()
 
-        with (
-            patch("missy.security.censor.censor_response", return_value="[REDACTED]") as mock_censor,
-            patch("missy.channels.webhook.logger") as mock_logger,
-        ):
+        with patch("missy.channels.webhook.logger") as mock_logger:
             ch.send("sk-ant-secret123 result text")
 
-        mock_censor.assert_called_once()
-        # The censored value should appear in the log call
-        log_args = mock_logger.info.call_args
-        assert log_args is not None
-        formatted = str(log_args)
-        assert "[REDACTED]" in formatted or "REDACTED" in formatted
+        # Should log at debug level with length only, never the content
+        for method in (mock_logger.debug, mock_logger.info, mock_logger.warning):
+            for call_args in method.call_args_list:
+                assert "sk-ant-secret123" not in str(call_args)
 
     def test_send_does_not_log_raw_secret(self):
-        """The raw secret value must not appear in the logger.info call."""
+        """The raw secret value must not appear in any log call."""
         from missy.channels.webhook import WebhookChannel
 
         ch = WebhookChannel()
         raw_secret = "sk-ant-api03-supersecrettoken12345"
 
-        with (
-            patch("missy.security.censor.censor_response", return_value="***CENSORED***"),
-            patch("missy.channels.webhook.logger") as mock_logger,
-        ):
+        with patch("missy.channels.webhook.logger") as mock_logger:
             ch.send(raw_secret)
 
-        # Inspect all logger.info calls — none should contain the raw secret
-        for call_args in mock_logger.info.call_args_list:
-            assert raw_secret not in str(call_args)
+        for method in (mock_logger.debug, mock_logger.info, mock_logger.warning):
+            for call_args in method.call_args_list:
+                assert raw_secret not in str(call_args)
 
-    def test_send_truncates_to_200_chars_before_censoring(self):
-        """The implementation slices to [:200] before calling censor_response."""
+    def test_send_does_not_raise(self):
+        """send() completes without error."""
         from missy.channels.webhook import WebhookChannel
 
         ch = WebhookChannel()
-        long_message = "A" * 500
-
-        captured_inputs = []
-
-        def capture_censor(text):
-            captured_inputs.append(text)
-            return text
-
-        with (
-            patch("missy.security.censor.censor_response", side_effect=capture_censor),
-            patch("missy.channels.webhook.logger"),
-        ):
-            ch.send(long_message)
-
-        assert len(captured_inputs) == 1
-        assert len(captured_inputs[0]) == 200
+        ch.send("A" * 500)  # Should not raise
 
 
 # ---------------------------------------------------------------------------
@@ -564,7 +538,9 @@ class TestMcpResponseIdValidation:
     """McpClient._rpc must log a warning when the response ID does not match
     the request ID, indicating a possible response-confusion attack."""
 
-    def _make_client_with_response(self, response_id: str | None, req_id_override: str | None = None):
+    def _make_client_with_response(
+        self, response_id: str | None, req_id_override: str | None = None
+    ):
         """Build a McpClient instance wired to return a fake JSON response."""
         import json
 
@@ -606,7 +582,9 @@ class TestMcpResponseIdValidation:
         client._proc = mock_proc
 
         with (
-            patch("missy.mcp.client.uuid.uuid4", return_value=MagicMock(__str__=lambda s: fixed_id)),
+            patch(
+                "missy.mcp.client.uuid.uuid4", return_value=MagicMock(__str__=lambda s: fixed_id)
+            ),
             patch("missy.mcp.client.logger") as mock_logger,
         ):
             client._rpc("tools/list")
@@ -633,7 +611,10 @@ class TestMcpResponseIdValidation:
         client._proc = mock_proc
 
         with (
-            patch("missy.mcp.client.uuid.uuid4", return_value=MagicMock(__str__=lambda s: fixed_req_id)),
+            patch(
+                "missy.mcp.client.uuid.uuid4",
+                return_value=MagicMock(__str__=lambda s: fixed_req_id),
+            ),
             pytest.raises(RuntimeError, match="MCP response ID mismatch"),
         ):
             client._rpc("tools/list")
@@ -683,7 +664,10 @@ class TestDeviceRegistryPermissionChecks:
         from missy.channels.voice.registry import DeviceRegistry
 
         reg_file = tmp_path / "devices.json"
-        self._write_registry_file(reg_file, '[{"node_id": "n1", "friendly_name": "Test", "room": "Lab", "ip_address": "10.0.0.1"}]')
+        self._write_registry_file(
+            reg_file,
+            '[{"node_id": "n1", "friendly_name": "Test", "room": "Lab", "ip_address": "10.0.0.1"}]',
+        )
 
         registry = DeviceRegistry(registry_path=str(reg_file))
 
@@ -889,7 +873,7 @@ class TestAudioLogPermissions:
 
         await server._log_audio_to_disk(
             node=node,
-            audio_buffer=b"\xAB" * 256,
+            audio_buffer=b"\xab" * 256,
             sample_rate=16000,
             channels=1,
         )
@@ -903,9 +887,7 @@ class TestAudioLogPermissions:
         file_stat = pcm_files[0].stat()
         # Mask off the file type bits — we only care about permission bits
         perm_bits = stat.S_IMODE(file_stat.st_mode)
-        assert perm_bits == 0o600, (
-            f"Expected 0o600, got {oct(perm_bits)}"
-        )
+        assert perm_bits == 0o600, f"Expected 0o600, got {oct(perm_bits)}"
 
     @pytest.mark.asyncio
     async def test_audio_log_file_contains_correct_bytes(self, node):

@@ -29,8 +29,10 @@ class TestRediscoverDevice:
     def test_finds_device_immediately(self, tmp_path: Path) -> None:
         disc = CameraDiscovery(sysfs_base=str(tmp_path))
         device = _make_device()
-        with patch.object(disc, "discover", return_value=[device]), \
-             patch.object(disc, "find_by_usb_id", return_value=device):
+        with (
+            patch.object(disc, "discover", return_value=[device]),
+            patch.object(disc, "find_by_usb_id", return_value=device),
+        ):
             result = disc.rediscover_device("046d", "085c")
             assert result is not None
             assert result.device_path == "/dev/video0"
@@ -45,37 +47,43 @@ class TestRediscoverDevice:
             call_count += 1
             return device if call_count >= 3 else None
 
-        with patch.object(disc, "discover", return_value=[]), \
-             patch.object(disc, "find_by_usb_id", side_effect=mock_find), \
-             patch("time.sleep"):
+        with (
+            patch.object(disc, "discover", return_value=[]),
+            patch.object(disc, "find_by_usb_id", side_effect=mock_find),
+            patch("time.sleep"),
+        ):
             result = disc.rediscover_device("046d", "085c", max_attempts=5, delay=0.01)
             assert result is not None
             assert call_count == 3
 
     def test_returns_none_after_max_attempts(self, tmp_path: Path) -> None:
         disc = CameraDiscovery(sysfs_base=str(tmp_path))
-        with patch.object(disc, "discover", return_value=[]), \
-             patch.object(disc, "find_by_usb_id", return_value=None), \
-             patch("time.sleep"):
+        with (
+            patch.object(disc, "discover", return_value=[]),
+            patch.object(disc, "find_by_usb_id", return_value=None),
+            patch("time.sleep"),
+        ):
             result = disc.rediscover_device("046d", "085c", max_attempts=3, delay=0.01)
             assert result is None
 
     def test_logs_path_change(self, tmp_path: Path) -> None:
         disc = CameraDiscovery(sysfs_base=str(tmp_path))
         new_device = _make_device(path="/dev/video2")
-        with patch.object(disc, "discover", return_value=[new_device]), \
-             patch.object(disc, "find_by_usb_id", return_value=new_device):
-            result = disc.rediscover_device(
-                "046d", "085c", old_path="/dev/video0"
-            )
+        with (
+            patch.object(disc, "discover", return_value=[new_device]),
+            patch.object(disc, "find_by_usb_id", return_value=new_device),
+        ):
+            result = disc.rediscover_device("046d", "085c", old_path="/dev/video0")
             assert result is not None
             assert result.device_path == "/dev/video2"
 
     def test_single_attempt_no_sleep(self, tmp_path: Path) -> None:
         disc = CameraDiscovery(sysfs_base=str(tmp_path))
-        with patch.object(disc, "discover", return_value=[]), \
-             patch.object(disc, "find_by_usb_id", return_value=None), \
-             patch("time.sleep") as mock_sleep:
+        with (
+            patch.object(disc, "discover", return_value=[]),
+            patch.object(disc, "find_by_usb_id", return_value=None),
+            patch("time.sleep") as mock_sleep,
+        ):
             disc.rediscover_device("046d", "085c", max_attempts=1, delay=1.0)
             mock_sleep.assert_not_called()
 
@@ -192,8 +200,10 @@ class TestResilientCaptureValidation:
         mock_disc.rediscover_device.return_value = None
         mock_disc.find_preferred.return_value = None
 
-        with patch("missy.vision.resilient_capture.get_discovery", return_value=mock_disc), \
-             patch("time.sleep"):
+        with (
+            patch("missy.vision.resilient_capture.get_discovery", return_value=mock_disc),
+            patch("time.sleep"),
+        ):
             result = cam.capture()
             assert not result.success
             mock_disc.validate_device.assert_called_once_with(mock_device)

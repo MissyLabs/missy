@@ -161,9 +161,7 @@ class TestFallbackSandboxEnv:
             patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test-secret", "PATH": "/usr/bin"}),
             patch("missy.security.sandbox.subprocess.run") as mock_run,
         ):
-            mock_run.return_value = MagicMock(
-                returncode=0, stdout=b"ok", stderr=b""
-            )
+            mock_run.return_value = MagicMock(returncode=0, stdout=b"ok", stderr=b"")
             sandbox.execute("echo hello")
 
             # Check that env was passed and doesn't contain API key
@@ -178,13 +176,14 @@ class TestFallbackSandboxEnv:
         config = SandboxConfig()
         sandbox = FallbackSandbox(config)
 
-        with patch.dict(
-            os.environ,
-            {"HOME": "/home/test", "LANG": "en_US.UTF-8", "OPENAI_API_KEY": "sk-xxx"},
-        ), patch("missy.security.sandbox.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(
-                returncode=0, stdout=b"ok", stderr=b""
-            )
+        with (
+            patch.dict(
+                os.environ,
+                {"HOME": "/home/test", "LANG": "en_US.UTF-8", "OPENAI_API_KEY": "sk-xxx"},
+            ),
+            patch("missy.security.sandbox.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout=b"ok", stderr=b"")
             sandbox.execute("echo test")
 
             call_kwargs = mock_run.call_args[1]
@@ -300,7 +299,9 @@ class TestCodeEvolutionPathTraversal:
             result = engine.apply("test-2")
 
         # Should succeed (not blocked by path traversal)
-        assert result.get("success") is not False or "Path traversal" not in result.get("message", "")
+        assert result.get("success") is not False or "Path traversal" not in result.get(
+            "message", ""
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -357,10 +358,10 @@ class TestCodeEvolutionEnvSanitization:
             patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-secret", "PATH": "/usr/bin"}),
             patch("missy.agent.code_evolution.subprocess.run") as mock_run,
         ):
-                mock_run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
-                engine.apply("test-env")
+            mock_run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
+            engine.apply("test-env")
 
-                call_kwargs = mock_run.call_args[1]
-                env = call_kwargs.get("env", {})
-                assert "ANTHROPIC_API_KEY" not in env
-                assert "PATH" in env
+            call_kwargs = mock_run.call_args[1]
+            env = call_kwargs.get("env", {})
+            assert "ANTHROPIC_API_KEY" not in env
+            assert "PATH" in env

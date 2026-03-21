@@ -231,7 +231,9 @@ class TestMcpToolNamespacing:
 
     def test_all_tools_preserve_extra_keys(self, mcp_mgr: McpManager) -> None:
         """Tool dicts should carry all original keys plus the injected metadata."""
-        c = _make_mock_client(tools=[{"name": "go", "description": "does stuff", "inputSchema": {}}])
+        c = _make_mock_client(
+            tools=[{"name": "go", "description": "does stuff", "inputSchema": {}}]
+        )
         mcp_mgr._clients = {"srv": c}
         tools = mcp_mgr.all_tools()
         assert len(tools) == 1
@@ -278,9 +280,7 @@ class TestMcpDigestPinning:
 
         assert digest == "abc123"
 
-    def test_pin_server_digest_unknown_server_raises_key_error(
-        self, mcp_mgr: McpManager
-    ) -> None:
+    def test_pin_server_digest_unknown_server_raises_key_error(self, mcp_mgr: McpManager) -> None:
         with pytest.raises(KeyError, match="not connected"):
             mcp_mgr.pin_server_digest("ghost")
 
@@ -315,9 +315,7 @@ class TestMcpDigestPinning:
         tmp_mcp_config.write_text(json.dumps([{"name": "other", "command": "echo"}]))
         assert mcp_mgr._get_server_digest("srv") is None
 
-    def test_get_server_digest_returns_none_when_no_config(
-        self, mcp_mgr: McpManager
-    ) -> None:
+    def test_get_server_digest_returns_none_when_no_config(self, mcp_mgr: McpManager) -> None:
         assert mcp_mgr._get_server_digest("srv") is None
 
     def test_get_server_digest_returns_value_from_config(
@@ -451,7 +449,9 @@ def discovery() -> SkillDiscovery:
 
 
 class TestSkillMdFrontmatterParsing:
-    def test_tools_as_comma_separated_string(self, discovery: SkillDiscovery, tmp_path: Path) -> None:
+    def test_tools_as_comma_separated_string(
+        self, discovery: SkillDiscovery, tmp_path: Path
+    ) -> None:
         """The parser should accept a comma-separated string value for tools."""
         content = (
             "---\n"
@@ -533,9 +533,7 @@ class TestSkillMdFrontmatterParsing:
         manifest = discovery.parse_skill_md(str(f))
         assert manifest.instructions == ""
 
-    def test_unicode_name_and_description(
-        self, discovery: SkillDiscovery, tmp_path: Path
-    ) -> None:
+    def test_unicode_name_and_description(self, discovery: SkillDiscovery, tmp_path: Path) -> None:
         content = "---\nname: météo\ndescription: Fetch la météo\n---\n\nCorps.\n"
         f = tmp_path / "SKILL.md"
         f.write_text(content, encoding="utf-8")
@@ -555,9 +553,7 @@ class TestSkillMdFrontmatterParsing:
 
 
 class TestSkillMdMalformedEdgeCases:
-    def test_only_opening_delimiter_raises(
-        self, discovery: SkillDiscovery, tmp_path: Path
-    ) -> None:
+    def test_only_opening_delimiter_raises(self, discovery: SkillDiscovery, tmp_path: Path) -> None:
         """A file with only '---' and no closing delimiter raises ValueError."""
         content = "---\nname: bad\nno closing"
         f = tmp_path / "SKILL.md"
@@ -565,9 +561,7 @@ class TestSkillMdMalformedEdgeCases:
         with pytest.raises(ValueError, match="No YAML frontmatter"):
             discovery.parse_skill_md(str(f))
 
-    def test_empty_file_raises_value_error(
-        self, discovery: SkillDiscovery, tmp_path: Path
-    ) -> None:
+    def test_empty_file_raises_value_error(self, discovery: SkillDiscovery, tmp_path: Path) -> None:
         f = tmp_path / "SKILL.md"
         f.write_text("")
         with pytest.raises(ValueError, match="No YAML frontmatter"):
@@ -613,10 +607,18 @@ class TestSkillDiscoverySearch:
     @pytest.fixture
     def skills(self) -> list[SkillManifest]:
         return [
-            SkillManifest(name="web-search", description="Search the web", version="1.0", author="A"),
-            SkillManifest(name="web-scraper", description="Extract web data", version="1.0", author="B"),
-            SkillManifest(name="calculator", description="Math on the web", version="1.0", author="C"),
-            SkillManifest(name="file-ops", description="File operations", version="1.0", author="D"),
+            SkillManifest(
+                name="web-search", description="Search the web", version="1.0", author="A"
+            ),
+            SkillManifest(
+                name="web-scraper", description="Extract web data", version="1.0", author="B"
+            ),
+            SkillManifest(
+                name="calculator", description="Math on the web", version="1.0", author="C"
+            ),
+            SkillManifest(
+                name="file-ops", description="File operations", version="1.0", author="D"
+            ),
         ]
 
     def test_name_match_ranked_before_description_match(

@@ -140,9 +140,9 @@ class TestWizardOllamaVerifyPath:
         # workspace, selection="3", ollama_url, model, then wizard hits verify.
         prompt_side_effects = [
             str(tmp_path / "ws"),  # workspace
-            "3",                   # provider selection: ollama
+            "3",  # provider selection: ollama
             "http://localhost:11434",  # ollama base URL
-            "llama3",              # ollama model
+            "llama3",  # ollama model
         ]
         # confirm: no overwrite check (file doesn't exist); then confirm verify=True
         confirm_side_effects = [True]  # "Verify Ollama connectivity?"
@@ -182,9 +182,9 @@ class TestWizardOpenAIVerifySuccess:
         # Prompt sequence: workspace, selection="2" (OpenAI), auth_choice="1" (API key),
         # then _prompt_api_key is patched so no further prompts needed there.
         prompt_side_effects = [
-            str(tmp_path / "ws"),   # workspace
-            "2",                    # provider selection: openai
-            "1",                    # auth method: API key
+            str(tmp_path / "ws"),  # workspace
+            "2",  # provider selection: openai
+            "1",  # auth method: API key
         ]
         # confirm: "Verify API key with a test call?" → True
         confirm_side_effects = [True]
@@ -252,7 +252,9 @@ class TestWizardSummaryTableOAuthDisplay:
             key_display = key
         elif p["name"] == "openai" and any(r[0] == "openai-oauth" for r in verify_results):
             key_display = "(OAuth token)"
-        elif p["name"] == "anthropic" and any(r[0] == "anthropic-setup-token" for r in verify_results):
+        elif p["name"] == "anthropic" and any(
+            r[0] == "anthropic-setup-token" for r in verify_results
+        ):
             key_display = "(setup-token)"
         else:
             key_display = wizard._mask_key(key)
@@ -370,7 +372,9 @@ class TestMemoryStoreLoadMalformedRecord:
 
         # Patch from_dict BEFORE constructing MemoryStore so it is active during
         # the __init__ → _load() call.
-        with patch("missy.memory.store.ConversationTurn.from_dict", side_effect=ValueError("bad record")):
+        with patch(
+            "missy.memory.store.ConversationTurn.from_dict", side_effect=ValueError("bad record")
+        ):
             store = MemoryStore(store_path=str(store_file))
 
         # All records were skipped because from_dict always raised.

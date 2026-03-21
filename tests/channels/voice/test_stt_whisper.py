@@ -38,6 +38,7 @@ class TestFasterWhisperSTTLifecycle:
     def test_load_raises_without_faster_whisper(self):
         with patch.dict("sys.modules", {"faster_whisper": None}):
             from missy.channels.voice.stt.whisper import FasterWhisperSTT
+
             engine = FasterWhisperSTT()
             with pytest.raises(ImportError, match="faster-whisper"):
                 engine.load()
@@ -49,6 +50,7 @@ class TestFasterWhisperSTTLifecycle:
 
         with patch.dict("sys.modules", {"faster_whisper": mock_whisper_module}):
             from missy.channels.voice.stt.whisper import FasterWhisperSTT
+
             engine = FasterWhisperSTT(model_size="tiny", device="cpu", compute_type="int8")
             engine.load()
             assert engine.is_loaded()
@@ -60,6 +62,7 @@ class TestFasterWhisperSTTLifecycle:
         mock_whisper_module = MagicMock()
         with patch.dict("sys.modules", {"faster_whisper": mock_whisper_module}):
             from missy.channels.voice.stt.whisper import FasterWhisperSTT
+
             engine = FasterWhisperSTT(device="cpu", compute_type="int8")
             engine.load()
             engine.load()  # Should not raise or load twice
@@ -69,6 +72,7 @@ class TestFasterWhisperSTTLifecycle:
         mock_whisper_module = MagicMock()
         with patch.dict("sys.modules", {"faster_whisper": mock_whisper_module}):
             from missy.channels.voice.stt.whisper import FasterWhisperSTT
+
             engine = FasterWhisperSTT(device="cpu", compute_type="int8")
             engine.load()
             engine.unload()
@@ -78,6 +82,7 @@ class TestFasterWhisperSTTLifecycle:
 class TestFasterWhisperSTTDeviceResolution:
     def test_auto_cpu_fallback(self):
         from missy.channels.voice.stt.whisper import FasterWhisperSTT
+
         with patch.dict("sys.modules", {"torch": None, "ctranslate2": None}):
             engine = FasterWhisperSTT(device="auto")
             device = engine._detect_device()
@@ -85,6 +90,7 @@ class TestFasterWhisperSTTDeviceResolution:
 
     def test_auto_compute_type_cpu(self):
         from missy.channels.voice.stt.whisper import FasterWhisperSTT
+
         engine = FasterWhisperSTT(device="cpu", compute_type="auto")
         device, ct = engine._resolve_device_and_compute()
         assert device == "cpu"
@@ -92,6 +98,7 @@ class TestFasterWhisperSTTDeviceResolution:
 
     def test_auto_compute_type_cuda(self):
         from missy.channels.voice.stt.whisper import FasterWhisperSTT
+
         engine = FasterWhisperSTT(device="cuda", compute_type="auto")
         device, ct = engine._resolve_device_and_compute()
         assert device == "cuda"
@@ -99,6 +106,7 @@ class TestFasterWhisperSTTDeviceResolution:
 
     def test_explicit_device_and_compute(self):
         from missy.channels.voice.stt.whisper import FasterWhisperSTT
+
         engine = FasterWhisperSTT(device="cpu", compute_type="float32")
         device, ct = engine._resolve_device_and_compute()
         assert device == "cpu"
@@ -109,6 +117,7 @@ class TestFasterWhisperSTTTranscribe:
     @pytest.mark.asyncio
     async def test_transcribe_raises_if_not_loaded(self):
         from missy.channels.voice.stt.whisper import FasterWhisperSTT
+
         engine = FasterWhisperSTT()
         with pytest.raises(RuntimeError, match="load"):
             await engine.transcribe(b"\x00" * 100)
@@ -125,11 +134,13 @@ class TestFasterWhisperSTTTranscribe:
 
         with patch.dict("sys.modules", {"faster_whisper": mock_whisper_module}):
             from missy.channels.voice.stt.whisper import FasterWhisperSTT
+
             engine = FasterWhisperSTT(device="cpu", compute_type="int8")
             engine.load()
 
             # Create valid PCM data (16-bit samples)
             import struct
+
             pcm = struct.pack("<100h", *([0] * 100))
 
             result = await engine.transcribe(pcm, sample_rate=16000)
@@ -150,10 +161,12 @@ class TestFasterWhisperSTTTranscribe:
 
         with patch.dict("sys.modules", {"faster_whisper": mock_whisper_module}):
             from missy.channels.voice.stt.whisper import FasterWhisperSTT
+
             engine = FasterWhisperSTT(device="cpu", compute_type="int8")
             engine.load()
 
             import struct
+
             pcm = struct.pack("<100h", *([0] * 100))
             result = await engine.transcribe(pcm)
             assert result.confidence == pytest.approx(0.1, abs=0.01)
@@ -170,10 +183,12 @@ class TestFasterWhisperSTTTranscribe:
 
         with patch.dict("sys.modules", {"faster_whisper": mock_whisper_module}):
             from missy.channels.voice.stt.whisper import FasterWhisperSTT
+
             engine = FasterWhisperSTT(device="cpu", compute_type="int8")
             engine.load()
 
             import struct
+
             pcm = struct.pack("<200h", *([0] * 200))
             result = await engine.transcribe(pcm, channels=2)
             assert result.text == "stereo"
@@ -186,4 +201,5 @@ class TestSTTEngineIsAbstract:
 
     def test_name_attribute(self):
         from missy.channels.voice.stt.whisper import FasterWhisperSTT
+
         assert FasterWhisperSTT.name == "faster-whisper"

@@ -87,7 +87,9 @@ def _make_breaker(
     max_timeout: float = 300.0,
     name: str = "test",
 ) -> CircuitBreaker:
-    return CircuitBreaker(name, threshold=threshold, base_timeout=base_timeout, max_timeout=max_timeout)
+    return CircuitBreaker(
+        name, threshold=threshold, base_timeout=base_timeout, max_timeout=max_timeout
+    )
 
 
 def _raise(*args, **kwargs):
@@ -451,9 +453,7 @@ class TestOrientingTopicExtraction:
         topics = orienting.extract_topics("Server is down. Nginx failed")
         # "Nginx" should NOT be in topics via capitalisation path (previous
         # word ends with ".")
-        capitalised_via_rule = [
-            t for t in topics if t == "Nginx"
-        ]
+        capitalised_via_rule = [t for t in topics if t == "Nginx"]
         # It can only appear if a preposition also precedes it; "." is not a
         # preposition — so it should not appear at all.
         assert "Nginx" not in capitalised_via_rule or len(capitalised_via_rule) == 0

@@ -45,8 +45,7 @@ def _validate_snowflake(value: str, name: str = "id") -> str:
     """
     if not _SNOWFLAKE_RE.match(value):
         raise ValueError(
-            f"Invalid Discord {name}: {value!r}. "
-            "Expected a numeric snowflake ID (1-20 digits)."
+            f"Invalid Discord {name}: {value!r}. Expected a numeric snowflake ID (1-20 digits)."
         )
     return value
 

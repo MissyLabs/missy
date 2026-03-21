@@ -81,9 +81,7 @@ class TestDeviceStats:
         assert stats.success_rate == 1.0
 
     def test_success_rate_mixed(self):
-        stats = DeviceStats(
-            device="d", total_captures=10, successful_captures=7, failed_captures=3
-        )
+        stats = DeviceStats(device="d", total_captures=10, successful_captures=7, failed_captures=3)
         assert stats.success_rate == pytest.approx(0.7)
 
     def test_average_quality_no_success(self):
@@ -91,9 +89,7 @@ class TestDeviceStats:
         assert stats.average_quality == 0.0
 
     def test_average_quality_computed(self):
-        stats = DeviceStats(
-            device="d", successful_captures=4, total_quality=3.2
-        )
+        stats = DeviceStats(device="d", successful_captures=4, total_quality=3.2)
         assert stats.average_quality == pytest.approx(0.8)
 
     def test_average_latency_no_captures(self):

@@ -254,7 +254,9 @@ class TestCostTrackerEdgeCases:
         from missy.agent.cost_tracker import CostTracker
 
         tracker = CostTracker()
-        rec = tracker.record(model="totally-unknown-model-xyz", prompt_tokens=1000, completion_tokens=500)
+        rec = tracker.record(
+            model="totally-unknown-model-xyz", prompt_tokens=1000, completion_tokens=500
+        )
         assert rec.cost_usd == 0.0
 
 

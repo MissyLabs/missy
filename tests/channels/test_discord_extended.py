@@ -1003,7 +1003,9 @@ class TestRestSendMessageRetry:
         resp.raise_for_status.return_value = None
         mock_http.post.return_value = resp
 
-        result = client.send_message("100000000000000001", "hello <@user-42>", mention_user_ids=["user-42"])
+        result = client.send_message(
+            "100000000000000001", "hello <@user-42>", mention_user_ids=["user-42"]
+        )
 
         call_kwargs = mock_http.post.call_args[1]
         assert "user-42" in call_kwargs["json"]["allowed_mentions"]["users"]

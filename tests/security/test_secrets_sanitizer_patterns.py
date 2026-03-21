@@ -162,6 +162,7 @@ class TestSecretsDetectorConstruction:
 
     def test_all_patterns_are_compiled_regex(self):
         import re
+
         detector = SecretsDetector()
         for name, pattern in detector._patterns.items():
             assert isinstance(pattern, re.Pattern), f"Pattern {name} not compiled"

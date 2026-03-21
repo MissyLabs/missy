@@ -26,8 +26,9 @@ from missy.vision.discovery import CameraDevice
 # ---------------------------------------------------------------------------
 
 
-def _make_device(path: str = "/dev/video0", name: str = "Test Cam",
-                 vendor: str = "046d", product: str = "085c") -> CameraDevice:
+def _make_device(
+    path: str = "/dev/video0", name: str = "Test Cam", vendor: str = "046d", product: str = "085c"
+) -> CameraDevice:
     return CameraDevice(path, name, vendor, product, "usb-1")
 
 
@@ -69,7 +70,9 @@ class TestResilientCameraReconnection:
 
         mock_disc = _mock_discovery(new_device)
         mock_handle = MagicMock()
-        mock_handle.capture.return_value = CaptureResult(success=True, image=np.zeros((10, 10, 3), dtype=np.uint8))
+        mock_handle.capture.return_value = CaptureResult(
+            success=True, image=np.zeros((10, 10, 3), dtype=np.uint8)
+        )
         mock_handle._blank_detector = None
 
         with (
@@ -101,7 +104,9 @@ class TestResilientCameraReconnection:
         mock_disc = _mock_discovery(different_device)
 
         mock_handle = MagicMock()
-        mock_handle.capture.return_value = CaptureResult(success=True, image=np.zeros((10, 10, 3), dtype=np.uint8))
+        mock_handle.capture.return_value = CaptureResult(
+            success=True, image=np.zeros((10, 10, 3), dtype=np.uint8)
+        )
         mock_handle._blank_detector = None
 
         with (
@@ -196,7 +201,8 @@ class TestResilientCameraReconnection:
         mock_handle = MagicMock()
         mock_handle.is_open = True
         mock_handle.capture.return_value = CaptureResult(
-            success=True, image=np.zeros((10, 10, 3), dtype=np.uint8),
+            success=True,
+            image=np.zeros((10, 10, 3), dtype=np.uint8),
             device_path="/dev/video0",
         )
         cam._handle = mock_handle
@@ -239,7 +245,8 @@ class TestResilientCameraReconnection:
 
         new_handle = MagicMock()
         new_handle.capture.return_value = CaptureResult(
-            success=True, image=np.zeros((10, 10, 3), dtype=np.uint8),
+            success=True,
+            image=np.zeros((10, 10, 3), dtype=np.uint8),
             device_path="/dev/video0",
         )
         new_handle._blank_detector = None

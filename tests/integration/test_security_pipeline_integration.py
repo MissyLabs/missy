@@ -529,17 +529,13 @@ class TestShellPolicyCompoundCommandBlocking:
         # Both ls and echo are allowed — the compound command should pass
         assert engine.check_command("ls; echo done") is True
 
-    def test_shell_check_emits_audit_event_on_block(
-        self, shell_engine: ShellPolicyEngine
-    ) -> None:
+    def test_shell_check_emits_audit_event_on_block(self, shell_engine: ShellPolicyEngine) -> None:
         """Blocked shell command emits a deny audit event with the command detail."""
         collected: list[AuditEvent] = []
         event_bus.subscribe("shell_check", collected.append)
 
         with pytest.raises(PolicyViolationError):
-            shell_engine.check_command(
-                "ls | rm -rf /", session_id="s1", task_id="t1"
-            )
+            shell_engine.check_command("ls | rm -rf /", session_id="s1", task_id="t1")
 
         deny_events = [e for e in collected if e.result == "deny"]
         assert len(deny_events) >= 1
@@ -648,17 +644,13 @@ class TestMemoryStoreSearchCleanupLifecycle:
         """clear_session() removes all turns for the given session_id."""
         session_id = str(uuid.uuid4())
         for i in range(5):
-            memory_store.add_turn(
-                ConversationTurn.new(session_id, "user", f"Message {i}")
-            )
+            memory_store.add_turn(ConversationTurn.new(session_id, "user", f"Message {i}"))
 
         memory_store.clear_session(session_id)
         turns = memory_store.get_session_turns(session_id)
         assert turns == []
 
-    def test_fts5_search_after_clear_returns_empty(
-        self, memory_store: SQLiteMemoryStore
-    ) -> None:
+    def test_fts5_search_after_clear_returns_empty(self, memory_store: SQLiteMemoryStore) -> None:
         """After clearing a session, FTS5 search no longer returns its turns."""
         session_id = str(uuid.uuid4())
         memory_store.add_turn(ConversationTurn.new(session_id, "user", "unique_search_term_xyz"))
@@ -707,18 +699,14 @@ class TestMemoryStoreSearchCleanupLifecycle:
         """Multiple turns in one session are returned in timestamp order."""
         session_id = str(uuid.uuid4())
         for i in range(3):
-            memory_store.add_turn(
-                ConversationTurn.new(session_id, "user", f"Turn {i}")
-            )
+            memory_store.add_turn(ConversationTurn.new(session_id, "user", f"Turn {i}"))
 
         turns = memory_store.get_session_turns(session_id)
         assert len(turns) == 3
         contents = [t.content for t in turns]
         assert contents == ["Turn 0", "Turn 1", "Turn 2"]
 
-    def test_fts5_returns_most_relevant_first(
-        self, memory_store: SQLiteMemoryStore
-    ) -> None:
+    def test_fts5_returns_most_relevant_first(self, memory_store: SQLiteMemoryStore) -> None:
         """FTS5 search results are ordered by relevance (rank)."""
         session_id = str(uuid.uuid4())
         memory_store.add_turn(

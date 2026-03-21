@@ -304,7 +304,7 @@ class TestUnicodePathConfusion:
         in most terminals.  Python will attempt to open the literal bytes, so the
         file almost certainly does not exist.
         """
-        zwsp_path = str(tmp_path / "file\u200B.txt")
+        zwsp_path = str(tmp_path / "file\u200b.txt")
         result = FileReadTool().execute(path=zwsp_path)
         assert result.success is False
         assert result.error is not None
@@ -313,7 +313,7 @@ class TestUnicodePathConfusion:
         """RTL override (U+202E) reverses text rendering; the actual OS path
         bytes are unchanged so the file won't exist under the raw name.
         """
-        rtl_path = str(tmp_path / "gpj.\u202Etxt")
+        rtl_path = str(tmp_path / "gpj.\u202etxt")
         result = FileReadTool().execute(path=rtl_path)
         # File does not exist with that raw name.
         assert result.success is False
@@ -321,7 +321,7 @@ class TestUnicodePathConfusion:
 
     def test_unicode_filename_created_and_read_back(self, tmp_path: Path):
         """A legitimate unicode filename (CJK, emoji) must round-trip correctly."""
-        name = "\u4e2d\u6587\U0001F4C4.txt"  # Chinese + document emoji
+        name = "\u4e2d\u6587\U0001f4c4.txt"  # Chinese + document emoji
         target = tmp_path / name
         target.write_text("unicode content", encoding="utf-8")
 
@@ -846,9 +846,7 @@ class TestFileWriteModeInjection:
         ],
     )
     def test_invalid_mode_rejected(self, tmp_path: Path, mode: str):
-        result = FileWriteTool().execute(
-            path=str(tmp_path / "f.txt"), content="test", mode=mode
-        )
+        result = FileWriteTool().execute(path=str(tmp_path / "f.txt"), content="test", mode=mode)
         assert result.success is False
         assert "invalid mode" in result.error.lower()
         assert not (tmp_path / "f.txt").exists()

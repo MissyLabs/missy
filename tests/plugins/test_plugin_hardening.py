@@ -128,7 +128,9 @@ class TestPluginLoaderPolicyEnforcement:
         assert result == {"result": "ok", "key": "val"}
 
     def test_execute_exception_propagates(self) -> None:
-        config = _MockConfig(plugins=_PluginsConfig(enabled=True, allowed_plugins=["exploding_exec"]))
+        config = _MockConfig(
+            plugins=_PluginsConfig(enabled=True, allowed_plugins=["exploding_exec"])
+        )
         loader = PluginLoader(config)
         loader.load_plugin(_ExplodingExecutePlugin())
         with pytest.raises(ValueError, match="exec error"):
@@ -173,6 +175,7 @@ class TestPluginSingleton:
 
     def test_get_before_init_raises(self) -> None:
         import missy.plugins.loader as mod
+
         old = mod._loader
         try:
             mod._loader = None

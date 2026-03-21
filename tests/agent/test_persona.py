@@ -241,9 +241,9 @@ class TestPersonaManagerReset:
 
     def test_reset_preserves_and_increments_version(self, tmp_path):
         pm = PersonaManager(persona_path=tmp_path / "persona.yaml")
-        pm.save()           # version becomes 2
+        pm.save()  # version becomes 2
         pre_reset = pm.version
-        pm.reset()          # reset saves, so version becomes pre_reset + 1
+        pm.reset()  # reset saves, so version becomes pre_reset + 1
         assert pm.version == pre_reset + 1
 
     def test_reset_persists_to_disk(self, tmp_path):

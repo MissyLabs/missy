@@ -126,7 +126,8 @@ class ResilientCamera:
                 latency = (time.monotonic() - t0) * 1000
                 get_health_monitor().record_capture(
                     success=True,
-                    device=result.device_path or (self._current_device.device_path if self._current_device else ""),
+                    device=result.device_path
+                    or (self._current_device.device_path if self._current_device else ""),
                     latency_ms=latency,
                 )
                 return result
@@ -134,7 +135,9 @@ class ResilientCamera:
             self._record_failure()
             device_path = self._current_device.device_path if self._current_device else ""
             get_health_monitor().record_capture(
-                success=False, device=device_path, error=result.error or "capture failed",
+                success=False,
+                device=device_path,
+                error=result.error or "capture failed",
             )
             if result.failure_type in (FailureType.PERMISSION, FailureType.UNSUPPORTED):
                 logger.error(
@@ -148,7 +151,9 @@ class ResilientCamera:
             self._record_failure()
             device_path = self._current_device.device_path if self._current_device else ""
             get_health_monitor().record_capture(
-                success=False, device=device_path, error=str(exc),
+                success=False,
+                device=device_path,
+                error=str(exc),
             )
 
         # Capture failed — attempt reconnection

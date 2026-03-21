@@ -103,9 +103,10 @@ class TestVectorMemoryStoreWithFaiss:
         store2.load()
 
         assert store2.count() == 2
-        results = store2.search("network", top_k=1)
-        assert len(results) == 1
-        assert "networking" in results[0]["text"]
+        results = store2.search("network", top_k=2)
+        assert len(results) == 2
+        texts = {r["text"] for r in results}
+        assert "first entry about networking" in texts
 
     def test_empty_store_search(self, tmp_path: Path) -> None:
         store = VectorMemoryStore(

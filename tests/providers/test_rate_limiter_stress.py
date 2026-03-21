@@ -278,6 +278,7 @@ class TestBurstHandling:
 
     def test_burst_succeeded_count_is_reproducible(self) -> None:
         """Two identical limiters burst-fired identically should yield same count."""
+
         def burst(rpm: int) -> int:
             rl = RateLimiter(requests_per_minute=rpm, max_wait_seconds=0.0)
             ok = 0
@@ -493,10 +494,9 @@ class TestThreadSafetyInterleaved:
                     with lock:
                         errors.append(exc)
 
-        threads = (
-            [threading.Thread(target=acquirer, daemon=True) for _ in range(5)]
-            + [threading.Thread(target=recorder, daemon=True) for _ in range(5)]
-        )
+        threads = [threading.Thread(target=acquirer, daemon=True) for _ in range(5)] + [
+            threading.Thread(target=recorder, daemon=True) for _ in range(5)
+        ]
         for t in threads:
             t.start()
         for t in threads:

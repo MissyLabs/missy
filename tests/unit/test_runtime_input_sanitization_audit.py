@@ -107,18 +107,14 @@ class TestWebhookSenderValidation:
         # Test the sanitization logic directly
         raw_sender = "a" * 200
         safe_sender = str(raw_sender)[:64]
-        safe_sender = "".join(
-            c for c in safe_sender if c.isalnum() or c in "-_. @"
-        ) or "webhook"
+        safe_sender = "".join(c for c in safe_sender if c.isalnum() or c in "-_. @") or "webhook"
         assert len(safe_sender) <= 64
 
     def test_sender_control_chars_stripped(self):
         """Control characters in sender are stripped."""
         raw_sender = "user\n\r\x00name"
         safe_sender = str(raw_sender)[:64]
-        safe_sender = "".join(
-            c for c in safe_sender if c.isalnum() or c in "-_. @"
-        ) or "webhook"
+        safe_sender = "".join(c for c in safe_sender if c.isalnum() or c in "-_. @") or "webhook"
         assert "\n" not in safe_sender
         assert "\r" not in safe_sender
         assert "\x00" not in safe_sender
@@ -128,54 +124,42 @@ class TestWebhookSenderValidation:
         """Empty sender falls back to 'webhook'."""
         raw_sender = ""
         safe_sender = str(raw_sender)[:64]
-        safe_sender = "".join(
-            c for c in safe_sender if c.isalnum() or c in "-_. @"
-        ) or "webhook"
+        safe_sender = "".join(c for c in safe_sender if c.isalnum() or c in "-_. @") or "webhook"
         assert safe_sender == "webhook"
 
     def test_sender_special_chars_only_defaults(self):
         """Sender with only disallowed chars falls back to 'webhook'."""
         raw_sender = "<<<>>>"
         safe_sender = str(raw_sender)[:64]
-        safe_sender = "".join(
-            c for c in safe_sender if c.isalnum() or c in "-_. @"
-        ) or "webhook"
+        safe_sender = "".join(c for c in safe_sender if c.isalnum() or c in "-_. @") or "webhook"
         assert safe_sender == "webhook"
 
     def test_sender_normal_preserved(self):
         """Normal sender name is preserved."""
         raw_sender = "alice@example.com"
         safe_sender = str(raw_sender)[:64]
-        safe_sender = "".join(
-            c for c in safe_sender if c.isalnum() or c in "-_. @"
-        ) or "webhook"
+        safe_sender = "".join(c for c in safe_sender if c.isalnum() or c in "-_. @") or "webhook"
         assert safe_sender == "alice@example.com"
 
     def test_sender_with_spaces_preserved(self):
         """Spaces in sender are preserved."""
         raw_sender = "John Doe"
         safe_sender = str(raw_sender)[:64]
-        safe_sender = "".join(
-            c for c in safe_sender if c.isalnum() or c in "-_. @"
-        ) or "webhook"
+        safe_sender = "".join(c for c in safe_sender if c.isalnum() or c in "-_. @") or "webhook"
         assert safe_sender == "John Doe"
 
     def test_sender_with_hyphens_underscores(self):
         """Hyphens and underscores in sender are preserved."""
         raw_sender = "my-bot_v2"
         safe_sender = str(raw_sender)[:64]
-        safe_sender = "".join(
-            c for c in safe_sender if c.isalnum() or c in "-_. @"
-        ) or "webhook"
+        safe_sender = "".join(c for c in safe_sender if c.isalnum() or c in "-_. @") or "webhook"
         assert safe_sender == "my-bot_v2"
 
     def test_sender_log_injection_blocked(self):
         """Newline injection in sender is blocked."""
         raw_sender = 'user\n{"injected": true}'
         safe_sender = str(raw_sender)[:64]
-        safe_sender = "".join(
-            c for c in safe_sender if c.isalnum() or c in "-_. @"
-        ) or "webhook"
+        safe_sender = "".join(c for c in safe_sender if c.isalnum() or c in "-_. @") or "webhook"
         assert "\n" not in safe_sender
         assert "{" not in safe_sender
 
@@ -215,4 +199,6 @@ class TestSanitizerIntegration:
         assert not self._check("What is the weather in London?")
 
     def test_clean_code_passes(self):
-        assert not self._check("def fibonacci(n): return n if n < 2 else fibonacci(n-1) + fibonacci(n-2)")
+        assert not self._check(
+            "def fibonacci(n): return n if n < 2 else fibonacci(n-1) + fibonacci(n-2)"
+        )

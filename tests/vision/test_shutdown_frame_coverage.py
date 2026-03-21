@@ -28,10 +28,12 @@ class TestShutdownMultiFailure:
 
     def setup_method(self) -> None:
         from missy.vision.shutdown import reset_shutdown_state
+
         reset_shutdown_state()
 
     def teardown_method(self) -> None:
         from missy.vision.shutdown import reset_shutdown_state
+
         reset_shutdown_state()
 
     def test_shutdown_all_steps_fail(self) -> None:
@@ -39,9 +41,17 @@ class TestShutdownMultiFailure:
         from missy.vision.shutdown import vision_shutdown
 
         with (
-            patch("missy.vision.scene_memory.get_scene_manager", side_effect=RuntimeError("scene fail")),
-            patch("missy.vision.health_monitor.get_health_monitor", side_effect=RuntimeError("health fail")),
-            patch("missy.vision.audit.audit_vision_session", side_effect=RuntimeError("audit fail")),
+            patch(
+                "missy.vision.scene_memory.get_scene_manager",
+                side_effect=RuntimeError("scene fail"),
+            ),
+            patch(
+                "missy.vision.health_monitor.get_health_monitor",
+                side_effect=RuntimeError("health fail"),
+            ),
+            patch(
+                "missy.vision.audit.audit_vision_session", side_effect=RuntimeError("audit fail")
+            ),
         ):
             summary = vision_shutdown()
 
@@ -217,7 +227,13 @@ class TestVisionMemoryBridgeRecall:
 
         # Check that the add_turn call got the right metadata
         call_args = bridge._memory.add_turn.call_args
-        meta = call_args[1]["metadata"] if "metadata" in call_args[1] else call_args[0][3] if len(call_args[0]) > 3 else None
+        meta = (
+            call_args[1]["metadata"]
+            if "metadata" in call_args[1]
+            else call_args[0][3]
+            if len(call_args[0]) > 3
+            else None
+        )
         if meta is None:
             meta = call_args.kwargs.get("metadata", {})
         assert meta["observation_id"] != "INJECTED"
@@ -287,10 +303,14 @@ class TestMultiCaptureResultProperties:
         from missy.vision.capture import CaptureResult
         from missy.vision.multi_camera import MultiCaptureResult
 
-        r = MultiCaptureResult(results={
-            "/dev/video0": CaptureResult(success=True, device_path="/dev/video0"),
-            "/dev/video2": CaptureResult(success=False, device_path="/dev/video2", error="fail"),
-        })
+        r = MultiCaptureResult(
+            results={
+                "/dev/video0": CaptureResult(success=True, device_path="/dev/video0"),
+                "/dev/video2": CaptureResult(
+                    success=False, device_path="/dev/video2", error="fail"
+                ),
+            }
+        )
 
         assert r.successful_devices == ["/dev/video0"]
         assert r.failed_devices == ["/dev/video2"]
@@ -301,10 +321,12 @@ class TestMultiCaptureResultProperties:
         from missy.vision.capture import CaptureResult
         from missy.vision.multi_camera import MultiCaptureResult
 
-        r = MultiCaptureResult(results={
-            "/dev/video0": CaptureResult(success=True, device_path="/dev/video0"),
-            "/dev/video2": CaptureResult(success=True, device_path="/dev/video2"),
-        })
+        r = MultiCaptureResult(
+            results={
+                "/dev/video0": CaptureResult(success=True, device_path="/dev/video0"),
+                "/dev/video2": CaptureResult(success=True, device_path="/dev/video2"),
+            }
+        )
 
         assert r.all_succeeded
 
@@ -318,20 +340,24 @@ class TestMultiCaptureResultProperties:
         from missy.vision.capture import CaptureResult
         from missy.vision.multi_camera import MultiCaptureResult
 
-        r = MultiCaptureResult(results={
-            "/dev/video0": CaptureResult(
-                success=True,
-                device_path="/dev/video0",
-                width=640, height=480,
-                image=np.zeros((480, 640, 3), dtype=np.uint8),
-            ),
-            "/dev/video2": CaptureResult(
-                success=True,
-                device_path="/dev/video2",
-                width=1920, height=1080,
-                image=np.zeros((1080, 1920, 3), dtype=np.uint8),
-            ),
-        })
+        r = MultiCaptureResult(
+            results={
+                "/dev/video0": CaptureResult(
+                    success=True,
+                    device_path="/dev/video0",
+                    width=640,
+                    height=480,
+                    image=np.zeros((480, 640, 3), dtype=np.uint8),
+                ),
+                "/dev/video2": CaptureResult(
+                    success=True,
+                    device_path="/dev/video2",
+                    width=1920,
+                    height=1080,
+                    image=np.zeros((1080, 1920, 3), dtype=np.uint8),
+                ),
+            }
+        )
 
         best = r.best_result
         assert best is not None
@@ -341,9 +367,13 @@ class TestMultiCaptureResultProperties:
         from missy.vision.capture import CaptureResult
         from missy.vision.multi_camera import MultiCaptureResult
 
-        r = MultiCaptureResult(results={
-            "/dev/video0": CaptureResult(success=False, device_path="/dev/video0", error="fail"),
-        })
+        r = MultiCaptureResult(
+            results={
+                "/dev/video0": CaptureResult(
+                    success=False, device_path="/dev/video0", error="fail"
+                ),
+            }
+        )
 
         assert r.best_result is None
 

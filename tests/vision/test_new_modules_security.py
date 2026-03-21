@@ -342,18 +342,14 @@ class TestConfigValidatorSecurity:
 
     def test_extremely_large_width_rejected(self) -> None:
         """capture_width larger than 3840 must produce an error."""
-        result = validate_vision_config(
-            {"capture_width": 999_999_999, "capture_height": 1080}
-        )
+        result = validate_vision_config({"capture_width": 999_999_999, "capture_height": 1080})
         error_fields = [i.field for i in result.errors]
         assert "capture_width" in error_fields
         assert result.valid is False
 
     def test_extremely_large_height_rejected(self) -> None:
         """capture_height larger than 2160 must produce an error."""
-        result = validate_vision_config(
-            {"capture_width": 1920, "capture_height": 999_999_999}
-        )
+        result = validate_vision_config({"capture_width": 1920, "capture_height": 999_999_999})
         error_fields = [i.field for i in result.errors]
         assert "capture_height" in error_fields
 
@@ -523,9 +519,7 @@ class TestMultiCapturExceptionIsolation:
         """If every worker raises, capture_all still returns a MultiCaptureResult."""
         manager = MultiCameraManager()
 
-        handles = {
-            f"/dev/video{i}": MagicMock(is_open=True) for i in range(3)
-        }
+        handles = {f"/dev/video{i}": MagicMock(is_open=True) for i in range(3)}
         for h in handles.values():
             h.capture.side_effect = OSError("device gone")
 
@@ -782,14 +776,10 @@ class TestVisionMemoryBridgeLazyInit:
                 "sys.modules",
                 {
                     "missy.memory.sqlite_store": MagicMock(
-                        SQLiteMemoryStore=MagicMock(
-                            side_effect=Exception("sqlite not available")
-                        )
+                        SQLiteMemoryStore=MagicMock(side_effect=Exception("sqlite not available"))
                     ),
                     "missy.memory.vector_store": MagicMock(
-                        VectorMemoryStore=MagicMock(
-                            side_effect=ImportError("faiss not installed")
-                        )
+                        VectorMemoryStore=MagicMock(side_effect=ImportError("faiss not installed"))
                     ),
                 },
             ),

@@ -96,7 +96,9 @@ class TestSuite:
         failed = sum(1 for r in self.results if r.status == "FAIL")
         warned = sum(1 for r in self.results if r.status == "WARN")
         skipped = sum(1 for r in self.results if r.status == "SKIP")
-        lines.append(f"\n  TOTAL: {total} | PASS: {passed} | FAIL: {failed} | WARN: {warned} | SKIP: {skipped}")
+        lines.append(
+            f"\n  TOTAL: {total} | PASS: {passed} | FAIL: {failed} | WARN: {warned} | SKIP: {skipped}"
+        )
         lines.append("=" * 70)
         return "\n".join(lines)
 
@@ -217,7 +219,12 @@ def run_test(
             result = TestResult(name, category, "PASS", "Correctly ignored", "", elapsed)
         else:
             result = TestResult(
-                name, category, "FAIL", f"Got unexpected reply: {reply['content'][:80]}", reply["content"], elapsed
+                name,
+                category,
+                "FAIL",
+                f"Got unexpected reply: {reply['content'][:80]}",
+                reply["content"],
+                elapsed,
             )
         suite.record(result)
         return result
@@ -246,7 +253,12 @@ def run_test(
             result = TestResult(name, category, "PASS", bot_text[:80], bot_text, elapsed)
         else:
             result = TestResult(
-                name, category, "FAIL", f"Missing: {missing}; got: {bot_text[:80]}", bot_text, elapsed
+                name,
+                category,
+                "FAIL",
+                f"Missing: {missing}; got: {bot_text[:80]}",
+                bot_text,
+                elapsed,
             )
     else:
         # Just check we got any reply
@@ -389,7 +401,10 @@ def test_file_operations(suite: TestSuite) -> None:
         "file_ops",
         "Use file_write to create /tmp/missy_live_test.txt with the content 'Hello from live test 12345'. Confirm when done.",
         check_fn=lambda text, _: (
-            any(w in text.lower() for w in ["wrote", "written", "created", "saved", "done", "success"]),
+            any(
+                w in text.lower()
+                for w in ["wrote", "written", "created", "saved", "done", "success"]
+            ),
             f"Write response: {text[:80]}",
         ),
     )
@@ -433,7 +448,20 @@ def test_file_operations(suite: TestSuite) -> None:
         "file_ops",
         "Use file_read to try reading /tmp/missy_delete_me.txt. Does it exist?",
         check_fn=lambda text, _: (
-            any(w in text.lower() for w in ["not found", "no such", "doesn't exist", "does not exist", "not exist", "error", "missing", "failed", "deleted"]),
+            any(
+                w in text.lower()
+                for w in [
+                    "not found",
+                    "no such",
+                    "doesn't exist",
+                    "does not exist",
+                    "not exist",
+                    "error",
+                    "missing",
+                    "failed",
+                    "deleted",
+                ]
+            ),
             f"Verify response: {text[:80]}",
         ),
     )
@@ -492,7 +520,17 @@ def test_shell_exec(suite: TestSuite) -> None:
         "shell",
         "Use shell_exec to run 'ls /nonexistent_path_xyz' and tell me what happened.",
         check_fn=lambda text, _: (
-            any(w in text.lower() for w in ["no such", "not found", "error", "cannot", "doesn't exist", "does not exist"]),
+            any(
+                w in text.lower()
+                for w in [
+                    "no such",
+                    "not found",
+                    "error",
+                    "cannot",
+                    "doesn't exist",
+                    "does not exist",
+                ]
+            ),
             f"Error handling: {text[:80]}",
         ),
     )
@@ -696,7 +734,17 @@ def test_error_handling(suite: TestSuite) -> None:
         "error_handling",
         "Use file_read to read /tmp/this_file_absolutely_does_not_exist_xyz123.txt. What happened?",
         check_fn=lambda text, _: (
-            any(w in text.lower() for w in ["not found", "error", "doesn't exist", "does not exist", "no such", "failed"]),
+            any(
+                w in text.lower()
+                for w in [
+                    "not found",
+                    "error",
+                    "doesn't exist",
+                    "does not exist",
+                    "no such",
+                    "failed",
+                ]
+            ),
             f"Error response: {text[:80]}",
         ),
     )
@@ -708,7 +756,10 @@ def test_error_handling(suite: TestSuite) -> None:
         "error_handling",
         "Use the calculator tool to evaluate 'hello world'. Tell me what happens.",
         check_fn=lambda text, _: (
-            any(w in text.lower() for w in ["error", "invalid", "cannot", "can't", "failed", "not valid", "unable"]),
+            any(
+                w in text.lower()
+                for w in ["error", "invalid", "cannot", "can't", "failed", "not valid", "unable"]
+            ),
             f"Calc error: {text[:80]}",
         ),
     )
@@ -720,7 +771,19 @@ def test_error_handling(suite: TestSuite) -> None:
         "error_handling",
         "Use shell_exec to run 'cat /nonexistent_dir/nonexistent_file.txt' and tell me what error occurred.",
         check_fn=lambda text, _: (
-            any(w in text.lower() for w in ["no such", "not found", "error", "cannot", "can't", "failed", "does not exist", "doesn't exist"]),
+            any(
+                w in text.lower()
+                for w in [
+                    "no such",
+                    "not found",
+                    "error",
+                    "cannot",
+                    "can't",
+                    "failed",
+                    "does not exist",
+                    "doesn't exist",
+                ]
+            ),
             f"Shell error: {text[:80]}",
         ),
     )
@@ -736,7 +799,19 @@ def test_incus_containers(suite: TestSuite) -> None:
         "incus",
         "Use incus_list to show me all containers and VMs. What instances exist?",
         check_fn=lambda text, _: (
-            any(w in text.lower() for w in ["no ", "instance", "container", "none", "empty", "running", "stopped", "incus"]),
+            any(
+                w in text.lower()
+                for w in [
+                    "no ",
+                    "instance",
+                    "container",
+                    "none",
+                    "empty",
+                    "running",
+                    "stopped",
+                    "incus",
+                ]
+            ),
             f"Incus list: {text[:100]}",
         ),
         timeout=60,
@@ -748,7 +823,10 @@ def test_incus_containers(suite: TestSuite) -> None:
         "incus",
         "Use incus_image with action='list' to show available images.",
         check_fn=lambda text, _: (
-            any(w in text.lower() for w in ["image", "ubuntu", "alpine", "alma", "no image", "none", "empty"]),
+            any(
+                w in text.lower()
+                for w in ["image", "ubuntu", "alpine", "alma", "no image", "none", "empty"]
+            ),
             f"Incus images: {text[:100]}",
         ),
         timeout=60,
@@ -815,7 +893,9 @@ def test_incus_lifecycle(suite: TestSuite) -> None:
         "Use incus_launch to launch a container from the image 'images:alpine/3.20' with name 'missy-test-container'. "
         "Tell me when it's running.",
         check_fn=lambda text, _: (
-            any(w in text.lower() for w in ["launch", "created", "running", "started", "missy-test"]),
+            any(
+                w in text.lower() for w in ["launch", "created", "running", "started", "missy-test"]
+            ),
             f"Launch: {text[:100]}",
         ),
         timeout=120,
@@ -828,7 +908,10 @@ def test_incus_lifecycle(suite: TestSuite) -> None:
         "incus_lifecycle",
         "Use incus_info to get detailed info about 'missy-test-container'. What is its status and architecture?",
         check_fn=lambda text, _: (
-            any(w in text.lower() for w in ["running", "status", "architecture", "x86", "amd64", "missy-test"]),
+            any(
+                w in text.lower()
+                for w in ["running", "status", "architecture", "x86", "amd64", "missy-test"]
+            ),
             f"Info: {text[:100]}",
         ),
         timeout=60,
@@ -869,7 +952,10 @@ def test_incus_lifecycle(suite: TestSuite) -> None:
         "Then use incus_file with action='push', instance='missy-test-container', "
         "host_path='/tmp/incus_push_test.txt', instance_path='/tmp/test.txt'. Confirm it was pushed.",
         check_fn=lambda text, _: (
-            any(w in text.lower() for w in ["push", "success", "done", "wrote", "written", "transfer", "copied"]),
+            any(
+                w in text.lower()
+                for w in ["push", "success", "done", "wrote", "written", "transfer", "copied"]
+            ),
             f"File push: {text[:100]}",
         ),
         timeout=60,
@@ -904,7 +990,10 @@ def test_incus_lifecycle(suite: TestSuite) -> None:
         "incus_lifecycle",
         "Use incus_config with instance='missy-test-container' and action='show'. Show me the image source or architecture.",
         check_fn=lambda text, _: (
-            any(w in text.lower() for w in ["config", "image", "alpine", "x86", "amd64", "volatile", "architecture"]),
+            any(
+                w in text.lower()
+                for w in ["config", "image", "alpine", "x86", "amd64", "volatile", "architecture"]
+            ),
             f"Config: {text[:100]}",
         ),
         timeout=60,
@@ -994,7 +1083,20 @@ def test_incus_lifecycle(suite: TestSuite) -> None:
         "incus_lifecycle",
         "Use incus_list to verify 'missy-test-container' no longer exists.",
         check_fn=lambda text, _: (
-            any(w in text.lower() for w in ["no ", "none", "empty", "not found", "doesn't", "does not", "gone", "deleted", "0 instance"]),
+            any(
+                w in text.lower()
+                for w in [
+                    "no ",
+                    "none",
+                    "empty",
+                    "not found",
+                    "doesn't",
+                    "does not",
+                    "gone",
+                    "deleted",
+                    "0 instance",
+                ]
+            ),
             f"Verify: {text[:100]}",
         ),
         timeout=60,
@@ -1017,7 +1119,11 @@ def test_message_splitting(suite: TestSuite) -> None:
     elapsed = time.time() - start
 
     if not replies:
-        suite.record(TestResult("Long response handling", "message_splitting", "FAIL", "No reply", "", elapsed))
+        suite.record(
+            TestResult(
+                "Long response handling", "message_splitting", "FAIL", "No reply", "", elapsed
+            )
+        )
     elif len(replies) >= 2:
         total_len = sum(len(r["content"]) for r in replies)
         suite.record(
@@ -1070,7 +1176,10 @@ def test_screencast(suite: TestSuite) -> None:
         "screencast",
         "!screen status",
         check_fn=lambda text, _: (
-            "screencast" in text.lower() or "screen" in text.lower() or "not enabled" in text.lower() or "running" in text.lower(),
+            "screencast" in text.lower()
+            or "screen" in text.lower()
+            or "not enabled" in text.lower()
+            or "running" in text.lower(),
             f"Got: {text[:120]}",
         ),
     )
@@ -1082,7 +1191,15 @@ def test_screencast(suite: TestSuite) -> None:
         "screencast",
         "!screen share live-test",
         check_fn=lambda text, _: (
-            ("session" in text.lower() and ("share" in text.lower() or "http" in text.lower() or "url" in text.lower() or "link" in text.lower()))
+            (
+                "session" in text.lower()
+                and (
+                    "share" in text.lower()
+                    or "http" in text.lower()
+                    or "url" in text.lower()
+                    or "link" in text.lower()
+                )
+            )
             or "not enabled" in text.lower(),
             f"Got: {text[:120]}",
         ),
@@ -1095,7 +1212,9 @@ def test_screencast(suite: TestSuite) -> None:
         "screencast",
         "!screen list",
         check_fn=lambda text, _: (
-            "session" in text.lower() or "no active" in text.lower() or "not enabled" in text.lower(),
+            "session" in text.lower()
+            or "no active" in text.lower()
+            or "not enabled" in text.lower(),
             f"Got: {text[:120]}",
         ),
     )
@@ -1107,7 +1226,10 @@ def test_screencast(suite: TestSuite) -> None:
         "screencast",
         "!screen analyze",
         check_fn=lambda text, _: (
-            "analysis" in text.lower() or "no " in text.lower() or "session" in text.lower() or "not enabled" in text.lower(),
+            "analysis" in text.lower()
+            or "no " in text.lower()
+            or "session" in text.lower()
+            or "not enabled" in text.lower(),
             f"Got: {text[:120]}",
         ),
     )
@@ -1119,7 +1241,10 @@ def test_screencast(suite: TestSuite) -> None:
         "screencast",
         "!screen stop",
         check_fn=lambda text, _: (
-            "stop" in text.lower() or "no active" in text.lower() or "not found" in text.lower() or "not enabled" in text.lower(),
+            "stop" in text.lower()
+            or "no active" in text.lower()
+            or "not found" in text.lower()
+            or "not enabled" in text.lower(),
             f"Got: {text[:120]}",
         ),
     )

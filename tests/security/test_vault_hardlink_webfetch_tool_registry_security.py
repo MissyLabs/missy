@@ -312,29 +312,35 @@ class TestGatewayKwargsEdgeCases:
     def test_only_blocked_kwargs_returns_empty(self):
         from missy.gateway.client import PolicyHTTPClient
 
-        result = PolicyHTTPClient._sanitize_kwargs({
-            "verify": False,
-            "base_url": "http://evil",
-            "transport": "bypass",
-            "auth": ("u", "p"),
-            "follow_redirects": True,
-        })
+        result = PolicyHTTPClient._sanitize_kwargs(
+            {
+                "verify": False,
+                "base_url": "http://evil",
+                "transport": "bypass",
+                "auth": ("u", "p"),
+                "follow_redirects": True,
+            }
+        )
         assert result == {}
 
     def test_extensions_passes_through(self):
         """The 'extensions' kwarg should pass through."""
         from missy.gateway.client import PolicyHTTPClient
 
-        result = PolicyHTTPClient._sanitize_kwargs({
-            "extensions": {"trace": lambda x: x},
-        })
+        result = PolicyHTTPClient._sanitize_kwargs(
+            {
+                "extensions": {"trace": lambda x: x},
+            }
+        )
         assert "extensions" in result
 
     def test_files_passes_through(self):
         """The 'files' kwarg should pass through for multipart uploads."""
         from missy.gateway.client import PolicyHTTPClient
 
-        result = PolicyHTTPClient._sanitize_kwargs({
-            "files": {"upload": ("file.txt", b"data")},
-        })
+        result = PolicyHTTPClient._sanitize_kwargs(
+            {
+                "files": {"upload": ("file.txt", b"data")},
+            }
+        )
         assert "files" in result

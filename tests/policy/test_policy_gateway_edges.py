@@ -1094,13 +1094,9 @@ class TestPresetConstantsIntegrity:
     def test_all_preset_values_are_lists(self) -> None:
         for name, preset in PRESETS.items():
             for key in ("hosts", "domains", "cidrs"):
-                assert isinstance(preset[key], list), (
-                    f"Preset '{name}' key '{key}' is not a list"
-                )
+                assert isinstance(preset[key], list), f"Preset '{name}' key '{key}' is not a list"
 
     def test_no_preset_entry_is_none(self) -> None:
         for name, preset in PRESETS.items():
             for key in ("hosts", "domains", "cidrs"):
-                assert None not in preset[key], (
-                    f"Preset '{name}' has None in '{key}'"
-                )
+                assert None not in preset[key], f"Preset '{name}' has None in '{key}'"

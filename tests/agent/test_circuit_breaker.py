@@ -17,9 +17,13 @@ from missy.core.exceptions import MissyError
 # ---------------------------------------------------------------------------
 
 
-def _make_breaker(threshold: int = 3, base_timeout: float = 60.0, max_timeout: float = 300.0) -> CircuitBreaker:
+def _make_breaker(
+    threshold: int = 3, base_timeout: float = 60.0, max_timeout: float = 300.0
+) -> CircuitBreaker:
     """Return a breaker with test-friendly defaults."""
-    return CircuitBreaker("test", threshold=threshold, base_timeout=base_timeout, max_timeout=max_timeout)
+    return CircuitBreaker(
+        "test", threshold=threshold, base_timeout=base_timeout, max_timeout=max_timeout
+    )
 
 
 def _trip(breaker: CircuitBreaker, n: int | None = None) -> None:
@@ -628,8 +632,8 @@ class TestEdgeCases:
     def test_alternating_success_failure_never_opens(self):
         breaker = _make_breaker(threshold=3)
         for _ in range(20):
-            _trip(breaker, n=1)            # one failure
-            breaker.call(lambda: None)     # one success (resets count)
+            _trip(breaker, n=1)  # one failure
+            breaker.call(lambda: None)  # one success (resets count)
         assert breaker.state == CircuitState.CLOSED
 
     def test_breaker_with_threshold_zero_still_functions(self):

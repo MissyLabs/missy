@@ -616,6 +616,7 @@ class TestErrorIsolationDeep:
         def make_bad(label: str):
             def bad(msg: BusMessage) -> None:
                 raise RuntimeError(f"bad handler {label}")
+
             return bad
 
         bus.subscribe("test.topic", make_bad("A"))

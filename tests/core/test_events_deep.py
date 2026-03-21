@@ -602,8 +602,7 @@ class TestEventBusThreadSafety:
                 )
 
         threads = [
-            threading.Thread(target=publish_batch, args=(f"s{n}",))
-            for n in range(num_threads)
+            threading.Thread(target=publish_batch, args=(f"s{n}",)) for n in range(num_threads)
         ]
         for t in threads:
             t.start()

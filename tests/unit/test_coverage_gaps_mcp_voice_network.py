@@ -9,6 +9,7 @@ Targets uncovered paths in:
 - missy/channels/voice/server.py    (line 360 — ConnectionClosed before auth logs remote_addr)
 - missy/channels/voice/edge_client.py (lines 48-50 — missing websockets exits; main() no creds)
 """
+
 from __future__ import annotations
 
 import importlib
@@ -90,9 +91,7 @@ class TestMcpManagerSaveConfigWriteError:
         # tmp file must have been unlinked
         assert len(unlinked_paths) == 1
 
-    def test_tmp_unlinked_but_fd_not_reclosed_after_successful_close(
-        self, tmp_path: Path
-    ) -> None:
+    def test_tmp_unlinked_but_fd_not_reclosed_after_successful_close(self, tmp_path: Path) -> None:
         """When os.close succeeds but os.replace then fails, closed=True prevents
         a double-close, and the tmp file is still unlinked."""
         mgr = self._make_manager(tmp_path)
@@ -404,9 +403,7 @@ class TestNetworkPolicyInvalidIPSkipped:
         ]
 
         with patch("missy.policy.network.socket.getaddrinfo", return_value=fake_infos):
-            result = engine.check_host(
-                "trusted.example.com", session_id="s", task_id="t"
-            )
+            result = engine.check_host("trusted.example.com", session_id="s", task_id="t")
 
         assert result is True
 
@@ -435,9 +432,7 @@ class TestVoiceServerConnectionClosedBeforeAuth:
     the debug message includes the remote address."""
 
     @pytest.mark.asyncio
-    async def test_connection_closed_before_auth_logs_remote_addr(
-        self, caplog
-    ) -> None:
+    async def test_connection_closed_before_auth_logs_remote_addr(self, caplog) -> None:
         """ConnectionClosed raised from websocket.recv() before auth: node is None
         so the line-360 branch logs the remote_addr."""
         import logging
@@ -449,9 +444,7 @@ class TestVoiceServerConnectionClosedBeforeAuth:
         mock_ws = AsyncMock()
         mock_ws.remote_address = ("192.0.2.1", 54321)
         # recv() raises ConnectionClosed immediately — before any auth frame.
-        mock_ws.recv.side_effect = websockets.exceptions.ConnectionClosed(
-            rcvd=None, sent=None
-        )
+        mock_ws.recv.side_effect = websockets.exceptions.ConnectionClosed(rcvd=None, sent=None)
 
         with caplog.at_level(logging.DEBUG, logger="missy.channels.voice.server"):
             await server._handle_connection(mock_ws)
@@ -479,10 +472,7 @@ class TestVoiceServerConnectionClosedBeforeAuth:
         with caplog.at_level(logging.ERROR, logger="missy.channels.voice.server"):
             await server._handle_connection(mock_ws)
 
-        assert any(
-            "unexpected error" in record.message.lower()
-            for record in caplog.records
-        )
+        assert any("unexpected error" in record.message.lower() for record in caplog.records)
 
 
 # ===========================================================================

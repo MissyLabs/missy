@@ -319,8 +319,8 @@ class TestMessageLoopUnknownMessageType:
         ws = _make_websocket()
 
         async def fake_aiter():
-            yield json.dumps({"type": "ping"})   # unknown type
-            yield json.dumps({"type": "pong"})   # another unknown type
+            yield json.dumps({"type": "ping"})  # unknown type
+            yield json.dumps({"type": "pong"})  # another unknown type
 
         ws.__aiter__ = lambda _self: fake_aiter()
 

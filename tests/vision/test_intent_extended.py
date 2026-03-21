@@ -351,5 +351,12 @@ class TestActivationLog:
         clf.classify("I found a missing piece")
         entry = clf.activation_log[0]
         d = entry.to_audit_dict()
-        assert set(d.keys()) >= {"intent", "decision", "confidence", "trigger_phrase", "suggested_mode", "timestamp"}
+        assert set(d.keys()) >= {
+            "intent",
+            "decision",
+            "confidence",
+            "trigger_phrase",
+            "suggested_mode",
+            "timestamp",
+        }
         assert d["intent"] == "puzzle"

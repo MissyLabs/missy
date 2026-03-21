@@ -420,11 +420,22 @@ class TestIncompatibleSchema:
         )
         conn.execute(
             "INSERT INTO device_stats VALUES (?, ?, ?)",
-            ("/dev/video0", json.dumps({"total_captures": 3, "successful_captures": 3,
-                                        "failed_captures": 0, "total_quality": 2.7,
-                                        "total_latency_ms": 150.0, "last_seen": time.time(),
-                                        "last_error": "", "consecutive_failures": 0}),
-             time.time()),
+            (
+                "/dev/video0",
+                json.dumps(
+                    {
+                        "total_captures": 3,
+                        "successful_captures": 3,
+                        "failed_captures": 0,
+                        "total_quality": 2.7,
+                        "total_latency_ms": 150.0,
+                        "last_seen": time.time(),
+                        "last_error": "",
+                        "consecutive_failures": 0,
+                    }
+                ),
+                time.time(),
+            ),
         )
         conn.commit()
         conn.close()
@@ -481,16 +492,18 @@ class TestLargeDeviceLoad:
         now = time.time()
         for i in range(n):
             device = f"/dev/video{i}"
-            data = json.dumps({
-                "total_captures": 10,
-                "successful_captures": 10,
-                "failed_captures": 0,
-                "total_quality": 8.5,
-                "total_latency_ms": 500.0,
-                "last_seen": now,
-                "last_error": "",
-                "consecutive_failures": 0,
-            })
+            data = json.dumps(
+                {
+                    "total_captures": 10,
+                    "successful_captures": 10,
+                    "failed_captures": 0,
+                    "total_quality": 8.5,
+                    "total_latency_ms": 500.0,
+                    "last_seen": now,
+                    "last_error": "",
+                    "consecutive_failures": 0,
+                }
+            )
             conn.execute(
                 "INSERT INTO device_stats VALUES (?, ?, ?)",
                 (device, data, now),
@@ -552,13 +565,20 @@ class TestLargeDeviceLoad:
 class TestRecommendationScenarios:
     """Specific recommendation strings for each failure category."""
 
-    def _fill_failures(self, monitor: VisionHealthMonitor, device: str, error: str,
-                       n: int = _CONSECUTIVE_FAILURE_LIMIT) -> None:
+    def _fill_failures(
+        self,
+        monitor: VisionHealthMonitor,
+        device: str,
+        error: str,
+        n: int = _CONSECUTIVE_FAILURE_LIMIT,
+    ) -> None:
         # Pad with enough prior captures so `total_captures >= 3` is satisfied.
         for _ in range(n):
             monitor.record_capture(success=False, device=device, error=error)
 
-    def test_permission_error_video_group_recommendation(self, monitor: VisionHealthMonitor) -> None:
+    def test_permission_error_video_group_recommendation(
+        self, monitor: VisionHealthMonitor
+    ) -> None:
         self._fill_failures(monitor, "/dev/video0", "permission denied")
         recs = monitor.get_recommendations()
         assert any("video" in r and "usermod" in r for r in recs)
@@ -590,7 +610,9 @@ class TestRecommendationScenarios:
         recs = monitor.get_recommendations()
         assert any("resolution" in r for r in recs)
 
-    def test_high_latency_not_triggered_below_5_captures(self, monitor: VisionHealthMonitor) -> None:
+    def test_high_latency_not_triggered_below_5_captures(
+        self, monitor: VisionHealthMonitor
+    ) -> None:
         for _ in range(4):
             monitor.record_capture(success=True, device="d", latency_ms=5000)
         recs = monitor.get_recommendations()
@@ -603,7 +625,9 @@ class TestRecommendationScenarios:
         recs = monitor.get_recommendations()
         assert any("lighting" in r for r in recs)
 
-    def test_low_quality_not_triggered_below_5_successes(self, monitor: VisionHealthMonitor) -> None:
+    def test_low_quality_not_triggered_below_5_successes(
+        self, monitor: VisionHealthMonitor
+    ) -> None:
         for _ in range(4):
             monitor.record_capture(success=True, device="d", quality_score=0.1)
         recs = monitor.get_recommendations()
@@ -612,8 +636,7 @@ class TestRecommendationScenarios:
     def test_low_quality_not_triggered_at_threshold(self, monitor: VisionHealthMonitor) -> None:
         """Quality exactly at _LOW_QUALITY_THRESHOLD (0.4) does not trigger."""
         for _ in range(5):
-            monitor.record_capture(success=True, device="d",
-                                   quality_score=_LOW_QUALITY_THRESHOLD)
+            monitor.record_capture(success=True, device="d", quality_score=_LOW_QUALITY_THRESHOLD)
         recs = monitor.get_recommendations()
         # average_quality == 0.4 is not strictly < threshold so no rec.
         assert not any("lighting" in r for r in recs)
@@ -628,7 +651,9 @@ class TestRecommendationScenarios:
         assert any("usermod" in r for r in recs)
         assert any("resolution" in r for r in recs)
 
-    def test_no_recommendations_when_insufficient_captures(self, monitor: VisionHealthMonitor) -> None:
+    def test_no_recommendations_when_insufficient_captures(
+        self, monitor: VisionHealthMonitor
+    ) -> None:
         """With only 2 captures per device no recommendations are generated."""
         for _ in range(2):
             monitor.record_capture(success=False, device="d", error="permission denied")
@@ -740,8 +765,7 @@ class TestConcurrentCaptureAndSave:
                 errors.append(exc)
 
         threads = [
-            threading.Thread(target=capture_worker, args=(f"d{i}",))
-            for i in range(n_threads)
+            threading.Thread(target=capture_worker, args=(f"d{i}",)) for i in range(n_threads)
         ]
         threads.append(threading.Thread(target=save_worker))
         for t in threads:
@@ -756,8 +780,7 @@ class TestConcurrentCaptureAndSave:
     def test_concurrent_auto_save_and_manual_save(self, tmp_path: Path) -> None:
         """Auto-saves triggered from multiple threads don't corrupt the database."""
         db = tmp_path / "health.db"
-        monitor = VisionHealthMonitor(persist_path=db, auto_save_interval=10,
-                                      max_events=500)
+        monitor = VisionHealthMonitor(persist_path=db, auto_save_interval=10, max_events=500)
         errors: list[Exception] = []
 
         def worker(device: str) -> None:
@@ -906,9 +929,7 @@ class TestConsecutiveFailureThresholdBoundary:
         for _ in range(below):
             monitor.record_capture(success=False, device="d", error="x")
         report = monitor.get_health_report()
-        consecutive_warnings = [
-            w for w in report["warnings"] if "consecutive" in w.lower()
-        ]
+        consecutive_warnings = [w for w in report["warnings"] if "consecutive" in w.lower()]
         assert len(consecutive_warnings) == 0
 
     def test_five_consecutive_triggers_warning(self, monitor: VisionHealthMonitor) -> None:
@@ -916,9 +937,7 @@ class TestConsecutiveFailureThresholdBoundary:
         for _ in range(_CONSECUTIVE_FAILURE_LIMIT):
             monitor.record_capture(success=False, device="d", error="timeout")
         report = monitor.get_health_report()
-        consecutive_warnings = [
-            w for w in report["warnings"] if "consecutive" in w.lower()
-        ]
+        consecutive_warnings = [w for w in report["warnings"] if "consecutive" in w.lower()]
         assert len(consecutive_warnings) == 1
         assert "5" in consecutive_warnings[0]
 
@@ -949,6 +968,7 @@ class TestConsecutiveFailureThresholdBoundary:
     ) -> None:
         """The logger.warning call fires on the 5th consecutive failure."""
         import logging
+
         with caplog.at_level(logging.WARNING, logger="missy.vision.health_monitor"):
             for _ in range(_CONSECUTIVE_FAILURE_LIMIT):
                 monitor.record_capture(success=False, device="/dev/video0", error="timeout")

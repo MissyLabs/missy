@@ -11,6 +11,7 @@ import pytest
 from click.testing import CliRunner
 
 from missy.cli.main import cli
+from tests.cli.conftest import _make_cli_runner
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -20,7 +21,7 @@ from missy.cli.main import cli
 @pytest.fixture()
 def runner() -> CliRunner:
     """Return a Click CliRunner that mixes stdout/stderr."""
-    return CliRunner(mix_stderr=False)
+    return _make_cli_runner(mix_stderr=False)
 
 
 def _make_mock_config(
@@ -113,16 +114,16 @@ class TestInit:
         with runner.isolated_filesystem() as tmpdir:
             fake_home = Path(tmpdir)
             with patch("pathlib.Path.home", return_value=fake_home), patch("missy.cli.main.Path"):
-                    # Let the real Path handle everything but control expanduser
-                    fake_home / ".missy"
+                # Let the real Path handle everything but control expanduser
+                fake_home / ".missy"
 
-                    real_path = Path
+                real_path = Path
 
-                    def patched_path(*args, **kwargs):
-                        p = real_path(*args, **kwargs)
-                        return p
+                def patched_path(*args, **kwargs):
+                    p = real_path(*args, **kwargs)
+                    return p
 
-                    # Restore real Path; just control expanduser via env
+                # Restore real Path; just control expanduser via env
 
             # Simplest approach: patch HOME env var and let real Path work
             with patch.dict(os.environ, {"HOME": str(tmpdir)}):

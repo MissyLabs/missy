@@ -210,8 +210,13 @@ class TestValidateKeyFormat:
 class TestBuildConfigYaml:
     """Tests for _build_config_yaml(workspace, providers_cfg, allowed_hosts, discord_cfg)."""
 
-    def _call(self, workspace="/home/user/workspace", providers_cfg=None, allowed_hosts=None,
-              discord_cfg=None):
+    def _call(
+        self,
+        workspace="/home/user/workspace",
+        providers_cfg=None,
+        allowed_hosts=None,
+        discord_cfg=None,
+    ):
         from missy.cli.wizard import _build_config_yaml
 
         if providers_cfg is None:
@@ -404,10 +409,22 @@ class TestBuildConfigYaml:
 
     def test_multiple_providers_emitted(self):
         providers_cfg = [
-            {"name": "anthropic", "model": "claude-sonnet-4-6", "fast_model": "",
-             "premium_model": "", "api_key": "sk-ant-xxx", "base_url": None},
-            {"name": "openai", "model": "gpt-4o", "fast_model": "gpt-4o-mini",
-             "premium_model": "gpt-4-turbo", "api_key": "sk-yyy", "base_url": None},
+            {
+                "name": "anthropic",
+                "model": "claude-sonnet-4-6",
+                "fast_model": "",
+                "premium_model": "",
+                "api_key": "sk-ant-xxx",
+                "base_url": None,
+            },
+            {
+                "name": "openai",
+                "model": "gpt-4o",
+                "fast_model": "gpt-4o-mini",
+                "premium_model": "gpt-4-turbo",
+                "api_key": "sk-yyy",
+                "base_url": None,
+            },
         ]
         content = self._call(providers_cfg=providers_cfg)
         parsed = yaml.safe_load(content)
@@ -496,7 +513,10 @@ class TestWriteConfigAtomic:
         def failing_replace(src, dst):
             raise OSError("simulated replace failure")
 
-        with patch("os.replace", side_effect=failing_replace), pytest.raises(OSError, match="simulated replace failure"):
+        with (
+            patch("os.replace", side_effect=failing_replace),
+            pytest.raises(OSError, match="simulated replace failure"),
+        ):
             _write_config_atomic(target, "content")
 
         # No orphan temp files should remain

@@ -417,10 +417,7 @@ class TestTrustScorerEdgeCases:
             except Exception as e:
                 errors.append(e)
 
-        threads = [
-            threading.Thread(target=worker, args=(f"e{i}", i % 2 == 0))
-            for i in range(10)
-        ]
+        threads = [threading.Thread(target=worker, args=(f"e{i}", i % 2 == 0)) for i in range(10)]
         for t in threads:
             t.start()
         for t in threads:

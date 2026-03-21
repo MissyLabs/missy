@@ -215,9 +215,9 @@ class WebhookChannel(BaseChannel):
 
                 # Validate sender: cap length, strip control characters
                 raw_sender = str(data.get("sender", "webhook"))[:64]
-                safe_sender = "".join(
-                    c for c in raw_sender if c.isalnum() or c in "-_. @"
-                ) or "webhook"
+                safe_sender = (
+                    "".join(c for c in raw_sender if c.isalnum() or c in "-_. @") or "webhook"
+                )
 
                 msg = ChannelMessage(
                     content=prompt,
@@ -267,6 +267,4 @@ class WebhookChannel(BaseChannel):
             return self._queue.pop(0) if self._queue else None
 
     def send(self, message: str) -> None:
-        from missy.security.censor import censor_response
-
-        logger.info("Webhook response: %s", censor_response(message[:200]))
+        logger.debug("Webhook response: %d chars", len(message))

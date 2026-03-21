@@ -31,6 +31,7 @@ import pytest
 # CLI Discord _process_channel logic
 # ---------------------------------------------------------------------------
 
+
 class TestCliDiscordProcessChannel:
     """Test the _process_channel-equivalent logic from cli/main.py."""
 
@@ -141,6 +142,7 @@ class TestCliDiscordProcessChannel:
 # CLI Discord _run_discord lifecycle
 # ---------------------------------------------------------------------------
 
+
 class TestCliDiscordRunLifecycle:
     """Test _run_discord task management logic."""
 
@@ -150,8 +152,10 @@ class TestCliDiscordRunLifecycle:
         # Simulate the cleanup phase of _run_discord
         tasks = []
         for _ in range(3):
+
             async def noop():
                 await asyncio.sleep(999)
+
             t = asyncio.create_task(noop())
             tasks.append(t)
 
@@ -175,6 +179,7 @@ class TestCliDiscordRunLifecycle:
 # ---------------------------------------------------------------------------
 # AuditLogger tail-read coverage
 # ---------------------------------------------------------------------------
+
 
 class TestAuditLoggerTailRead:
     """Cover audit_logger.py lines 150, 207."""
@@ -206,10 +211,16 @@ class TestAuditLoggerTailRead:
         from missy.observability.audit_logger import AuditLogger
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
-            f.write(json.dumps({"event": "network_access", "result": "deny", "detail": "blocked"}) + "\n")
+            f.write(
+                json.dumps({"event": "network_access", "result": "deny", "detail": "blocked"})
+                + "\n"
+            )
             f.write("\n")  # blank line (line 207 branch)
             f.write("   \n")  # whitespace-only line
-            f.write(json.dumps({"event": "network_access", "result": "deny", "detail": "blocked2"}) + "\n")
+            f.write(
+                json.dumps({"event": "network_access", "result": "deny", "detail": "blocked2"})
+                + "\n"
+            )
             path = f.name
 
         try:
@@ -223,6 +234,7 @@ class TestAuditLoggerTailRead:
 # ---------------------------------------------------------------------------
 # Voice registry load failure
 # ---------------------------------------------------------------------------
+
 
 class TestVoiceRegistryLoadFailure:
     """Cover registry.py lines 184-188."""
@@ -261,6 +273,7 @@ class TestVoiceRegistryLoadFailure:
 # Voice channel event loop error
 # ---------------------------------------------------------------------------
 
+
 class TestVoiceChannelLoopError:
     """Cover voice/channel.py lines 249-250."""
 
@@ -280,14 +293,17 @@ class TestVoiceChannelLoopError:
             # The real start() creates a thread — we test the _run_loop logic directly
             # by verifying the channel can handle start/stop without crashing
             # even when VoiceServer setup fails
-            with patch.object(VoiceChannel, "start", side_effect=RuntimeError("test")), \
-                 pytest.raises(RuntimeError):
+            with (
+                patch.object(VoiceChannel, "start", side_effect=RuntimeError("test")),
+                pytest.raises(RuntimeError),
+            ):
                 vc.start(MagicMock())
 
 
 # ---------------------------------------------------------------------------
 # Discord voice resample break
 # ---------------------------------------------------------------------------
+
 
 class TestDiscordVoiceResampleBreak:
     """Cover discord/voice.py line 794 (idx >= len(samples) break)."""
@@ -319,6 +335,7 @@ class TestDiscordVoiceResampleBreak:
 # Discord voice commands fallthrough
 # ---------------------------------------------------------------------------
 
+
 class TestVoiceCommandsFallthrough:
     """Cover discord/voice_commands.py line 130."""
 
@@ -340,6 +357,7 @@ class TestVoiceCommandsFallthrough:
 # ---------------------------------------------------------------------------
 # Vault crypto import coverage
 # ---------------------------------------------------------------------------
+
 
 class TestVaultCryptoImport:
     """Cover security/vault.py lines 25-26."""
@@ -367,6 +385,7 @@ class TestVaultCryptoImport:
 # Webhook _get_client_ip proxy
 # ---------------------------------------------------------------------------
 
+
 class TestWebhookClientIp:
     """Cover webhook.py line 127."""
 
@@ -387,6 +406,7 @@ class TestWebhookClientIp:
 # Voice server unexpected error in handler
 # ---------------------------------------------------------------------------
 
+
 class TestVoiceServerHandlerError:
     """Cover voice/server.py line 362."""
 
@@ -399,12 +419,13 @@ class TestVoiceServerHandlerError:
         server._running = False
 
         # Verify the server class exists and has the handler
-        assert hasattr(server, '_handle_connection') or hasattr(server, 'handler')
+        assert hasattr(server, "_handle_connection") or hasattr(server, "handler")
 
 
 # ---------------------------------------------------------------------------
 # Code evolution parse_traceback edge case
 # ---------------------------------------------------------------------------
+
 
 class TestCodeEvolutionTraceback:
     """Cover code_evolution.py lines 709-710."""
@@ -443,6 +464,7 @@ class TestCodeEvolutionTraceback:
 # Runtime tool result truncation
 # ---------------------------------------------------------------------------
 
+
 class TestRuntimeToolTruncation:
     """Cover runtime.py line 545."""
 
@@ -479,6 +501,7 @@ class TestRuntimeToolTruncation:
 # Discord channel voice agent callback
 # ---------------------------------------------------------------------------
 
+
 class TestDiscordChannelVoiceCallback:
     """Cover discord/channel.py lines 639-640."""
 
@@ -490,9 +513,7 @@ class TestDiscordChannelVoiceCallback:
 
         # Simulate what _voice_agent_cb does
         loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            None, runtime.run, "test prompt", "session1"
-        )
+        result = await loop.run_in_executor(None, runtime.run, "test prompt", "session1")
         assert result == "agent response"
         runtime.run.assert_called_once_with("test prompt", "session1")
 
@@ -500,6 +521,7 @@ class TestDiscordChannelVoiceCallback:
 # ---------------------------------------------------------------------------
 # Network policy unparseable IP
 # ---------------------------------------------------------------------------
+
 
 class TestNetworkPolicyUnparseableIp:
     """Cover policy/network.py lines 157-158."""
@@ -522,6 +544,7 @@ class TestNetworkPolicyUnparseableIp:
 # OAuth callback edge case
 # ---------------------------------------------------------------------------
 
+
 class TestOAuthEdgeCases:
     """Cover cli/oauth.py line 411."""
 
@@ -535,6 +558,7 @@ class TestOAuthEdgeCases:
 # ---------------------------------------------------------------------------
 # Agent runtime provider error handling
 # ---------------------------------------------------------------------------
+
 
 class TestAgentRuntimeProviderError:
     """Test provider error handling in Discord agent integration."""
@@ -559,12 +583,14 @@ class TestAgentRuntimeProviderError:
 # Anthropic auth kind check
 # ---------------------------------------------------------------------------
 
+
 class TestAnthropicAuthKind:
     """Cover cli/anthropic_auth.py line 232 area."""
 
     def test_api_key_pattern_validation(self) -> None:
         """API key pattern should match valid Anthropic keys."""
         import re
+
         pattern = re.compile(r"^sk-ant-api\d{2}-[A-Za-z0-9\-_]{80,}$")
         # Valid-looking key (fake)
         valid = "sk-ant-api03-" + "A" * 80
@@ -575,6 +601,7 @@ class TestAnthropicAuthKind:
     def test_setup_token_pattern_validation(self) -> None:
         """Setup token pattern should match valid tokens."""
         import re
+
         pattern = re.compile(r"^sk-ant-oat\d{2}-[A-Za-z0-9\-_]{60,}$")
         valid = "sk-ant-oat01-" + "B" * 60
         assert pattern.match(valid) is not None

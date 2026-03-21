@@ -138,7 +138,6 @@ class TestToolRegistryPolicyChecks:
         engine.check_read.assert_called_once_with("/tmp/test", session_id="", task_id="")
         engine.check_write.assert_called_once_with("/tmp/test", session_id="", task_id="")
 
-
     def test_fail_closed_all_tool_types(self):
         """All tool types with permissions are denied when policy engine is absent."""
         import missy.policy.engine as pe
@@ -179,9 +178,7 @@ class TestToolRegistryPolicyChecks:
         class MultiHostTool(BaseTool):
             name = "multi_host"
             description = "Multiple hosts"
-            permissions = ToolPermissions(
-                network=True, allowed_hosts=["api.a.com", "api.b.com"]
-            )
+            permissions = ToolPermissions(network=True, allowed_hosts=["api.a.com", "api.b.com"])
 
             def execute(self, **kwargs):
                 return ToolResult(success=True, output="ok")

@@ -248,12 +248,8 @@ class EntityExtractor:
 
     # -- compiled patterns ---------------------------------------------------
 
-    _TOOL_RE = re.compile(
-        r"\b(shell_exec|file_read|file_write|web_fetch|vision_\w+)\b"
-    )
-    _FILE_RE = re.compile(
-        r"(?:^|(?<=\s))(?:~\/[\w./\-]+|\/[\w./\-]{2,}(?:\.[\w]{1,10})?)"
-    )
+    _TOOL_RE = re.compile(r"\b(shell_exec|file_read|file_write|web_fetch|vision_\w+)\b")
+    _FILE_RE = re.compile(r"(?:^|(?<=\s))(?:~\/[\w./\-]+|\/[\w./\-]{2,}(?:\.[\w]{1,10})?)")
     _URL_RE = re.compile(r"https?://[\w./\-?&=%#@+]+")
     # Person heuristic: two or more capitalised words not at sentence start
     _PERSON_RE = re.compile(r"(?<!\.\s)(?<!\n)(?<!\A)\b([A-Z][a-z]+(?:\s[A-Z][a-z]+)+)\b")
@@ -303,9 +299,17 @@ class EntityExtractor:
             candidate = m.group(1)
             # Filter out common non-person capitalised phrases
             if candidate.lower() not in {
-                "true", "false", "none", "null",
-                "monday", "tuesday", "wednesday", "thursday",
-                "friday", "saturday", "sunday",
+                "true",
+                "false",
+                "none",
+                "null",
+                "monday",
+                "tuesday",
+                "wednesday",
+                "thursday",
+                "friday",
+                "saturday",
+                "sunday",
             }:
                 _add(candidate, "person")
 
@@ -360,9 +364,7 @@ class EntityExtractor:
         for sentence in sentences:
             sentence_lower = sentence.lower()
             # Find which entities appear in this sentence
-            present: list[Entity] = [
-                e for e in entities if e.name in sentence_lower
-            ]
+            present: list[Entity] = [e for e in entities if e.name in sentence_lower]
             if len(present) < 2:
                 continue
 
@@ -640,9 +642,7 @@ class GraphMemoryStore:
             A two-tuple of ``(entities, relationships)`` that were found.
             The objects carry the canonical ``id`` values after upsert.
         """
-        raw_entities, raw_rels = self._extractor.extract_from_turn(
-            turn_content, role
-        )
+        raw_entities, raw_rels = self._extractor.extract_from_turn(turn_content, role)
         if not raw_entities:
             return [], []
 
@@ -689,9 +689,7 @@ class GraphMemoryStore:
             entity_id: The ``Entity.id`` to look up.
         """
         conn = self._conn()
-        row = conn.execute(
-            "SELECT * FROM entities WHERE id = ?", (entity_id,)
-        ).fetchone()
+        row = conn.execute("SELECT * FROM entities WHERE id = ?", (entity_id,)).fetchone()
         return Entity.from_row(row) if row else None
 
     def find_entities(
@@ -796,9 +794,7 @@ class GraphMemoryStore:
 
             for rel in self.get_relationships(current_id, direction="both"):
                 visited_rels[rel.id] = rel
-                neighbour_id = (
-                    rel.target_id if rel.source_id == current_id else rel.source_id
-                )
+                neighbour_id = rel.target_id if rel.source_id == current_id else rel.source_id
                 if neighbour_id not in visited_entities:
                     neighbour = self.get_entity(neighbour_id)
                     if neighbour:
@@ -873,8 +869,7 @@ class GraphMemoryStore:
         )[:limit]
         kept_ids = {e.id for e in sorted_entities}
         filtered_rels = [
-            r for r in all_rels.values()
-            if r.source_id in kept_ids and r.target_id in kept_ids
+            r for r in all_rels.values() if r.source_id in kept_ids and r.target_id in kept_ids
         ]
 
         return GraphQuery(
@@ -960,10 +955,7 @@ class GraphMemoryStore:
         ]
 
         # Build entity-id to name mapping for readable output
-        neighbour_ids = {
-            r.target_id if r.source_id == entity.id else r.source_id
-            for r in rels
-        }
+        neighbour_ids = {r.target_id if r.source_id == entity.id else r.source_id for r in rels}
         neighbours: dict[str, Entity] = {}
         for nid in neighbour_ids:
             n = self.get_entity(nid)
@@ -1031,9 +1023,7 @@ class GraphMemoryStore:
             f" OR target_id IN ({placeholders})",
             stale_ids + stale_ids,
         )
-        cur = conn.execute(
-            f"DELETE FROM entities WHERE id IN ({placeholders})", stale_ids
-        )
+        cur = conn.execute(f"DELETE FROM entities WHERE id IN ({placeholders})", stale_ids)
         conn.commit()
         return cur.rowcount
 
@@ -1095,12 +1085,8 @@ class GraphMemoryStore:
             * ``relation_types`` — dict mapping relation type to count
         """
         conn = self._conn()
-        entity_count = conn.execute(
-            "SELECT COUNT(*) FROM entities"
-        ).fetchone()[0]
-        rel_count = conn.execute(
-            "SELECT COUNT(*) FROM relationships"
-        ).fetchone()[0]
+        entity_count = conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0]
+        rel_count = conn.execute("SELECT COUNT(*) FROM relationships").fetchone()[0]
         type_rows = conn.execute(
             "SELECT entity_type, COUNT(*) as n FROM entities GROUP BY entity_type"
         ).fetchall()
@@ -1121,7 +1107,5 @@ class GraphMemoryStore:
     def _get_relationship_by_id(self, rel_id: str) -> Relationship | None:
         """Return a relationship by id, or None."""
         conn = self._conn()
-        row = conn.execute(
-            "SELECT * FROM relationships WHERE id = ?", (rel_id,)
-        ).fetchone()
+        row = conn.execute("SELECT * FROM relationships WHERE id = ?", (rel_id,)).fetchone()
         return Relationship.from_row(row) if row else None

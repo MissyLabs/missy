@@ -160,10 +160,7 @@ class TestResolutionVerification:
         with caplog.at_level(logging.WARNING, logger="missy.vision.capture"):
             handle.open()
 
-        resolution_warnings = [
-            r for r in caplog.records
-            if "Requested resolution" in r.message
-        ]
+        resolution_warnings = [r for r in caplog.records if "Requested resolution" in r.message]
         assert resolution_warnings == []
         handle.close()
 
@@ -380,9 +377,7 @@ class TestResilientCameraPermanentFailureSkip:
 
     @patch("missy.vision.resilient_capture.CameraHandle")
     @patch("missy.vision.resilient_capture.get_discovery")
-    def test_transient_failure_does_attempt_reconnect(
-        self, mock_disc_fn, mock_handle_cls
-    ):
+    def test_transient_failure_does_attempt_reconnect(self, mock_disc_fn, mock_handle_cls):
         """TRANSIENT failures should proceed to reconnection, not short-circuit."""
         mock_disc = MagicMock()
         mock_disc.find_preferred.return_value = _make_camera()
@@ -416,9 +411,7 @@ class TestResilientCameraPermanentFailureSkip:
 class TestResilientCameraDeviceChangeDetection:
     @patch("missy.vision.resilient_capture.CameraHandle")
     @patch("missy.vision.resilient_capture.get_discovery")
-    def test_warning_logged_when_device_path_changes(
-        self, mock_disc_fn, mock_handle_cls, caplog
-    ):
+    def test_warning_logged_when_device_path_changes(self, mock_disc_fn, mock_handle_cls, caplog):
         """A warning should be logged when the reconnected camera has a different path."""
         old_device = _make_camera(path="/dev/video0")
         new_device = _make_camera(path="/dev/video2", name="Test Cam (re-enumerated)")
@@ -449,7 +442,8 @@ class TestResilientCameraDeviceChangeDetection:
             cam.capture()
 
         path_change_warnings = [
-            r for r in caplog.records
+            r
+            for r in caplog.records
             if "path changed" in r.message.lower() or "/dev/video0" in r.message
         ]
         assert path_change_warnings, (
@@ -458,9 +452,7 @@ class TestResilientCameraDeviceChangeDetection:
 
     @patch("missy.vision.resilient_capture.CameraHandle")
     @patch("missy.vision.resilient_capture.get_discovery")
-    def test_no_path_change_warning_when_same_device(
-        self, mock_disc_fn, mock_handle_cls, caplog
-    ):
+    def test_no_path_change_warning_when_same_device(self, mock_disc_fn, mock_handle_cls, caplog):
         """No path-change warning when the same device path is used after reconnect."""
         device = _make_camera(path="/dev/video0")
 
@@ -488,10 +480,7 @@ class TestResilientCameraDeviceChangeDetection:
         with caplog.at_level(logging.WARNING, logger="missy.vision.resilient_capture"):
             cam.capture()
 
-        path_change_warnings = [
-            r for r in caplog.records
-            if "path changed" in r.message.lower()
-        ]
+        path_change_warnings = [r for r in caplog.records if "path changed" in r.message.lower()]
         assert path_change_warnings == []
 
 
@@ -531,8 +520,8 @@ class TestPipelineSaturationAndNoise:
 
         # HSV: shape (50, 50, 3) — saturation channel (index 1) all zeros
         hsv_image = np.zeros((50, 50, 3), dtype=np.uint8)
-        hsv_image[:, :, 0] = 0    # hue
-        hsv_image[:, :, 1] = 0    # saturation = 0
+        hsv_image[:, :, 0] = 0  # hue
+        hsv_image[:, :, 1] = 0  # saturation = 0
         hsv_image[:, :, 2] = 128  # value
 
         def cvt_side_effect(img, code):
@@ -664,8 +653,15 @@ class TestPipelineAssessQualityNewFields:
         result = pipeline.assess_quality(np.full((80, 80, 3), 150, dtype=np.uint8))
 
         required_keys = {
-            "width", "height", "brightness", "contrast",
-            "sharpness", "saturation", "noise_level", "quality", "issues",
+            "width",
+            "height",
+            "brightness",
+            "contrast",
+            "sharpness",
+            "saturation",
+            "noise_level",
+            "quality",
+            "issues",
         }
         assert required_keys.issubset(result.keys()), (
             f"Missing keys: {required_keys - result.keys()}"

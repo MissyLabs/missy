@@ -321,7 +321,7 @@ def _make_handler(
             # Session item routes — extract {id} segment
             prefix = f"{_API_PREFIX}/sessions/"
             if path.startswith(prefix):
-                rest = path[len(prefix):]
+                rest = path[len(prefix) :]
                 segments = rest.split("/", 1)
                 session_id = segments[0]
                 sub = segments[1] if len(segments) > 1 else ""
@@ -504,10 +504,10 @@ def _make_handler(
             # Create a session record in the registry when none is provided.
             if session_id is None:
                 default_provider = (
-                    provider_registry.get_default_name()
-                    if provider_registry is not None
-                    else ""
-                ) or provider_override or runtime.config.provider
+                    (provider_registry.get_default_name() if provider_registry is not None else "")
+                    or provider_override
+                    or runtime.config.provider
+                )
                 api_sess = session_registry.create(provider=default_provider)
                 session_id = api_sess.session_id
             else:
@@ -605,9 +605,7 @@ def _make_handler(
                 return ApiResponse.error(f"Session '{session_id}' not found", 404)
             return ApiResponse.ok(sess.to_dict())
 
-        def _handle_session_history(
-            self, session_id: str, params: dict
-        ) -> tuple[int, dict]:
+        def _handle_session_history(self, session_id: str, params: dict) -> tuple[int, dict]:
             """GET /api/v1/sessions/{id}/history — retrieve conversation turns.
 
             Query parameters:

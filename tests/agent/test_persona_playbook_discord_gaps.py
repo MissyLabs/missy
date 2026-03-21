@@ -90,7 +90,10 @@ class TestPersonaSaveExceptionCleanup:
             real_mkstemp(fd, *args, **kwargs)
             raise OSError("simulated disk full")
 
-        with patch("missy.agent.persona.os.fdopen", side_effect=fake_fdopen), pytest.raises(OSError, match="simulated disk full"):
+        with (
+            patch("missy.agent.persona.os.fdopen", side_effect=fake_fdopen),
+            pytest.raises(OSError, match="simulated disk full"),
+        ):
             pm.save()
 
     def test_save_exception_propagates_original_error(self, tmp_path):
@@ -98,7 +101,10 @@ class TestPersonaSaveExceptionCleanup:
         persona_file = tmp_path / "persona.yaml"
         pm = PersonaManager(persona_path=persona_file)
 
-        with patch("missy.agent.persona.yaml.dump", side_effect=RuntimeError("yaml boom")), pytest.raises(RuntimeError, match="yaml boom"):
+        with (
+            patch("missy.agent.persona.yaml.dump", side_effect=RuntimeError("yaml boom")),
+            pytest.raises(RuntimeError, match="yaml boom"),
+        ):
             pm.save()
 
     def test_save_cleanup_suppresses_unlink_oserror(self, tmp_path):
@@ -345,9 +351,7 @@ class TestDiscordImageCommandLongReply:
         channel = _make_channel()
         channel._rest = MagicMock()
 
-        result = await channel._maybe_handle_image_command(
-            channel_id="ch-1", content="hello world"
-        )
+        result = await channel._maybe_handle_image_command(channel_id="ch-1", content="hello world")
         assert result is False
 
 

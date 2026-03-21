@@ -130,24 +130,26 @@ class TestEnsureInit:
                 {"missy.memory.sqlite_store": MagicMock(SQLiteMemoryStore=mock_cls)},
             ),
         ):
-                bridge = VisionMemoryBridge()
-                bridge._memory = None  # ensure None
-                bridge._initialized = False
-                # Directly inject the patched class so the import succeeds
-                import missy.vision.vision_memory as vm_mod
+            bridge = VisionMemoryBridge()
+            bridge._memory = None  # ensure None
+            bridge._initialized = False
+            # Directly inject the patched class so the import succeeds
+            import missy.vision.vision_memory as vm_mod
 
-                original = vm_mod.__dict__.get("SQLiteMemoryStore")
-                try:
-                    vm_mod.SQLiteMemoryStore = mock_cls  # type: ignore[attr-defined]
-                    bridge._ensure_init()
-                    mock_cls.assert_called_once()
-                finally:
-                    if original is None:
-                        vm_mod.__dict__.pop("SQLiteMemoryStore", None)
-                    else:
-                        vm_mod.SQLiteMemoryStore = original  # type: ignore[attr-defined]
+            original = vm_mod.__dict__.get("SQLiteMemoryStore")
+            try:
+                vm_mod.SQLiteMemoryStore = mock_cls  # type: ignore[attr-defined]
+                bridge._ensure_init()
+                mock_cls.assert_called_once()
+            finally:
+                if original is None:
+                    vm_mod.__dict__.pop("SQLiteMemoryStore", None)
+                else:
+                    vm_mod.SQLiteMemoryStore = original  # type: ignore[attr-defined]
 
-    def test_lazy_sqlite_import_failure_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+    def test_lazy_sqlite_import_failure_logs_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """When SQLiteMemoryStore import raises, a warning is logged and _memory stays None."""
         bridge = VisionMemoryBridge()
         bridge._memory = None
@@ -422,7 +424,10 @@ class TestRecallObservationsVectorPath:
         assert results[0]["session_id"] == "s1"
 
     def test_vector_results_capped_at_limit(self) -> None:
-        metas = [{"task_type": "general", "session_id": "s1", "observation": f"obs{i}"} for i in range(20)]
+        metas = [
+            {"task_type": "general", "session_id": "s1", "observation": f"obs{i}"}
+            for i in range(20)
+        ]
         vstore = _make_vector_mock(results=[(0.9 - i * 0.01, m) for i, m in enumerate(metas)])
         mstore = _make_sqlite_mock()
         bridge = VisionMemoryBridge(memory_store=mstore, vector_store=vstore)
@@ -641,7 +646,11 @@ class TestGetSessionContext:
         turn = _make_turn(
             role="vision",
             content="a piece",
-            metadata={"task_type": "puzzle", "confidence": 0.8, "timestamp": "2026-01-01T00:00:00+00:00"},
+            metadata={
+                "task_type": "puzzle",
+                "confidence": 0.8,
+                "timestamp": "2026-01-01T00:00:00+00:00",
+            },
         )
         mstore = _make_sqlite_mock(turns=[turn])
         bridge = VisionMemoryBridge(memory_store=mstore, vector_store=None)
@@ -655,7 +664,11 @@ class TestGetSessionContext:
         turn = _make_turn(
             role="vision",
             content="sky region identified",
-            metadata={"task_type": "puzzle", "confidence": 0.9, "timestamp": "2026-01-01T00:00:00+00:00"},
+            metadata={
+                "task_type": "puzzle",
+                "confidence": 0.9,
+                "timestamp": "2026-01-01T00:00:00+00:00",
+            },
         )
         mstore = _make_sqlite_mock(turns=[turn])
         bridge = VisionMemoryBridge(memory_store=mstore, vector_store=None)
@@ -669,7 +682,11 @@ class TestGetSessionContext:
         turn = _make_turn(
             role="vision",
             content="brushwork",
-            metadata={"task_type": "painting", "confidence": 0.7, "timestamp": "2026-01-01T00:00:00+00:00"},
+            metadata={
+                "task_type": "painting",
+                "confidence": 0.7,
+                "timestamp": "2026-01-01T00:00:00+00:00",
+            },
         )
         mstore = _make_sqlite_mock(turns=[turn])
         bridge = VisionMemoryBridge(memory_store=mstore, vector_store=None)
@@ -683,7 +700,11 @@ class TestGetSessionContext:
         turn = _make_turn(
             role="vision",
             content="obs",
-            metadata={"task_type": "general", "confidence": 0.75, "timestamp": "2026-01-01T00:00:00+00:00"},
+            metadata={
+                "task_type": "general",
+                "confidence": 0.75,
+                "timestamp": "2026-01-01T00:00:00+00:00",
+            },
         )
         mstore = _make_sqlite_mock(turns=[turn])
         bridge = VisionMemoryBridge(memory_store=mstore, vector_store=None)
@@ -846,7 +867,9 @@ class TestStoreRecallRoundTrip:
         """Stored observations should be retrievable via SQLite fallback."""
         stored_meta: dict[str, Any] = {}
 
-        def fake_add_turn(session_id: str, role: str, content: str, provider: str, metadata: dict) -> None:
+        def fake_add_turn(
+            session_id: str, role: str, content: str, provider: str, metadata: dict
+        ) -> None:
             stored_meta.update(metadata)
             stored_meta["_content"] = content
             stored_meta["_session_id"] = session_id

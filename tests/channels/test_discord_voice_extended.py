@@ -114,10 +114,13 @@ def _make_sink_cls():
 
 class TestDiscordVoiceManagerInit:
     def test_raises_on_missing_ffmpeg(self) -> None:
-        with patch(
-            "missy.channels.discord.voice.ensure_ffmpeg_available",
-            side_effect=RuntimeError("ffmpeg not found"),
-        ), pytest.raises(DiscordVoiceError, match="ffmpeg not found"):
+        with (
+            patch(
+                "missy.channels.discord.voice.ensure_ffmpeg_available",
+                side_effect=RuntimeError("ffmpeg not found"),
+            ),
+            pytest.raises(DiscordVoiceError, match="ffmpeg not found"),
+        ):
             DiscordVoiceManager()
 
     def test_ok_with_ffmpeg_present(self) -> None:
@@ -1025,14 +1028,17 @@ class TestStart:
                         with contextlib.suppress(asyncio.CancelledError, Exception):
                             await mgr._client_task
 
-            with patch.dict(
-                _sys.modules,
-                {
-                    "discord": mock_discord,
-                    "discord.ext": MagicMock(),
-                    "discord.ext.voice_recv": mock_voice_recv,
-                },
-            ), pytest.raises(DiscordVoiceError, match="30 seconds"):
+            with (
+                patch.dict(
+                    _sys.modules,
+                    {
+                        "discord": mock_discord,
+                        "discord.ext": MagicMock(),
+                        "discord.ext.voice_recv": mock_voice_recv,
+                    },
+                ),
+                pytest.raises(DiscordVoiceError, match="30 seconds"),
+            ):
                 loop.run_until_complete(run())
         finally:
             loop.close()
@@ -1317,8 +1323,9 @@ class TestListenWatchdog:
 
             mock_sink_cls = MagicMock()
             mock_sink_cls.return_value = MagicMock()
-            with patch("asyncio.sleep", side_effect=fast_sleep), patch(
-                "missy.channels.discord.voice._make_sink_class", return_value=mock_sink_cls
+            with (
+                patch("asyncio.sleep", side_effect=fast_sleep),
+                patch("missy.channels.discord.voice._make_sink_class", return_value=mock_sink_cls),
             ):
                 loop.run_until_complete(mgr._listen_watchdog(999))
 
@@ -1359,8 +1366,9 @@ class TestListenWatchdog:
 
             mock_sink_cls = MagicMock()
             mock_sink_cls.return_value = MagicMock()
-            with patch("asyncio.sleep", side_effect=fast_sleep), patch(
-                "missy.channels.discord.voice._make_sink_class", return_value=mock_sink_cls
+            with (
+                patch("asyncio.sleep", side_effect=fast_sleep),
+                patch("missy.channels.discord.voice._make_sink_class", return_value=mock_sink_cls),
             ):
                 loop.run_until_complete(mgr._listen_watchdog(999))
         finally:
@@ -1399,8 +1407,9 @@ class TestListenWatchdog:
 
             mock_sink_cls = MagicMock()
             mock_sink_cls.return_value = MagicMock()
-            with patch("asyncio.sleep", side_effect=fast_sleep), patch(
-                "missy.channels.discord.voice._make_sink_class", return_value=mock_sink_cls
+            with (
+                patch("asyncio.sleep", side_effect=fast_sleep),
+                patch("missy.channels.discord.voice._make_sink_class", return_value=mock_sink_cls),
             ):
                 loop.run_until_complete(mgr._listen_watchdog(999))
             # No assertion needed — just verifying it doesn't raise.

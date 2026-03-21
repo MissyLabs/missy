@@ -16,6 +16,7 @@ from missy.vision.pipeline import ImagePipeline, PipelineConfig
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _bgr(h: int, w: int, value: int = 128) -> np.ndarray:
     """Return an (h, w, 3) uint8 BGR image filled with *value*."""
     return np.full((h, w, 3), value, dtype=np.uint8)
@@ -34,6 +35,7 @@ def _pipeline(**kwargs: object) -> ImagePipeline:
 # ---------------------------------------------------------------------------
 # 1. process() with a 1-pixel image (1x1x3)
 # ---------------------------------------------------------------------------
+
 
 class TestOnePixelImage:
     """A 1-pixel image is the smallest valid BGR image."""
@@ -62,6 +64,7 @@ class TestOnePixelImage:
 # ---------------------------------------------------------------------------
 # 2. process() with a 2D grayscale image (100x100)
 # ---------------------------------------------------------------------------
+
 
 class TestGrayscale2DProcess:
     """process() should handle 2D grayscale arrays without crashing.
@@ -96,6 +99,7 @@ class TestGrayscale2DProcess:
 # 3. process() with BGRA 4-channel image (100x100x4)
 # ---------------------------------------------------------------------------
 
+
 class TestBGRA4Channel:
     """Alpha channel must be preserved through the pipeline."""
 
@@ -127,6 +131,7 @@ class TestBGRA4Channel:
 # ---------------------------------------------------------------------------
 # 4. process() with single-channel 3D image (100x100x1)
 # ---------------------------------------------------------------------------
+
 
 class TestSingleChannel3D:
     """(H, W, 1) images are a non-obvious edge case in CLAHE handling."""
@@ -162,6 +167,7 @@ class TestSingleChannel3D:
 # 5. resize() with image already smaller than max_dim
 # ---------------------------------------------------------------------------
 
+
 class TestResizeAlreadySmall:
     """When the image fits within max_dim, resize() must return it unchanged."""
 
@@ -190,6 +196,7 @@ class TestResizeAlreadySmall:
 # 6. resize() with max_dim=0
 # ---------------------------------------------------------------------------
 
+
 class TestResizeZeroMaxDim:
     """max_dim=0 is explicitly invalid and must raise ValueError."""
 
@@ -212,6 +219,7 @@ class TestResizeZeroMaxDim:
 # ---------------------------------------------------------------------------
 # 7. assess_quality() on a very dark image
 # ---------------------------------------------------------------------------
+
 
 class TestAssessQualityDark:
     """Brightness < 40 should produce the 'very dark' issue label."""
@@ -240,6 +248,7 @@ class TestAssessQualityDark:
 # 8. assess_quality() on a very bright (overexposed) image
 # ---------------------------------------------------------------------------
 
+
 class TestAssessQualityOverexposed:
     """Brightness > 220 should produce the 'overexposed' issue label."""
 
@@ -267,6 +276,7 @@ class TestAssessQualityOverexposed:
 # ---------------------------------------------------------------------------
 # 9. assess_quality() on uniform image — low contrast + blurry
 # ---------------------------------------------------------------------------
+
 
 class TestAssessQualityUniform:
     """A flat uniform image has zero std-dev (low contrast) and zero
@@ -302,6 +312,7 @@ class TestAssessQualityUniform:
 # 10. assess_quality() on 2D grayscale image
 # ---------------------------------------------------------------------------
 
+
 class TestAssessQualityGrayscale:
     """Grayscale images skip cvtColor; saturation must report 0.0."""
 
@@ -329,14 +340,22 @@ class TestAssessQualityGrayscale:
         rng = np.random.default_rng(42)
         img = rng.integers(0, 256, (100, 100), dtype=np.uint8)
         result = pipe.assess_quality(img)
-        for key in ("brightness", "contrast", "sharpness", "saturation",
-                    "noise_level", "quality", "issues"):
+        for key in (
+            "brightness",
+            "contrast",
+            "sharpness",
+            "saturation",
+            "noise_level",
+            "quality",
+            "issues",
+        ):
             assert key in result
 
 
 # ---------------------------------------------------------------------------
 # 11. process() with all options disabled — only resize applied
 # ---------------------------------------------------------------------------
+
 
 class TestProcessAllOptionsDisabled:
     """normalize_exposure=False, denoise=False, sharpen=False.
@@ -346,23 +365,26 @@ class TestProcessAllOptionsDisabled:
     """
 
     def test_does_not_raise(self) -> None:
-        pipe = _pipeline(normalize_exposure=False, denoise=False, sharpen=False,
-                         target_dimension=50)
+        pipe = _pipeline(
+            normalize_exposure=False, denoise=False, sharpen=False, target_dimension=50
+        )
         img = _bgr(200, 200)
         result = pipe.process(img)
         assert isinstance(result, np.ndarray)
 
     def test_resize_still_occurs(self) -> None:
-        pipe = _pipeline(normalize_exposure=False, denoise=False, sharpen=False,
-                         target_dimension=50)
+        pipe = _pipeline(
+            normalize_exposure=False, denoise=False, sharpen=False, target_dimension=50
+        )
         img = _bgr(200, 200)
         result = pipe.process(img)
         assert max(result.shape[:2]) <= 50
 
     def test_small_image_returned_as_copy(self) -> None:
         """A small image below target_dimension is not resized; process returns a copy."""
-        pipe = _pipeline(normalize_exposure=False, denoise=False, sharpen=False,
-                         target_dimension=1280)
+        pipe = _pipeline(
+            normalize_exposure=False, denoise=False, sharpen=False, target_dimension=1280
+        )
         img = _bgr(100, 100)
         result = pipe.process(img)
         # process() always copies; result should not be the same object
@@ -370,8 +392,9 @@ class TestProcessAllOptionsDisabled:
         assert result.shape == img.shape
 
     def test_output_channel_count_unchanged(self) -> None:
-        pipe = _pipeline(normalize_exposure=False, denoise=False, sharpen=False,
-                         target_dimension=50)
+        pipe = _pipeline(
+            normalize_exposure=False, denoise=False, sharpen=False, target_dimension=50
+        )
         img = _bgr(200, 200)
         result = pipe.process(img)
         assert result.shape[2] == 3
@@ -381,6 +404,7 @@ class TestProcessAllOptionsDisabled:
 # 12. process() with all options enabled — denoise + sharpen + exposure
 # ---------------------------------------------------------------------------
 
+
 class TestProcessAllOptionsEnabled:
     """All pipeline steps active with real OpenCV.
 
@@ -388,16 +412,14 @@ class TestProcessAllOptionsEnabled:
     """
 
     def test_does_not_raise(self) -> None:
-        pipe = _pipeline(normalize_exposure=True, denoise=True, sharpen=True,
-                         target_dimension=50)
+        pipe = _pipeline(normalize_exposure=True, denoise=True, sharpen=True, target_dimension=50)
         rng = np.random.default_rng(7)
         img = rng.integers(30, 220, (60, 60, 3), dtype=np.uint8)
         result = pipe.process(img)
         assert isinstance(result, np.ndarray)
 
     def test_output_is_uint8(self) -> None:
-        pipe = _pipeline(normalize_exposure=True, denoise=True, sharpen=True,
-                         target_dimension=50)
+        pipe = _pipeline(normalize_exposure=True, denoise=True, sharpen=True, target_dimension=50)
         rng = np.random.default_rng(8)
         img = rng.integers(30, 220, (60, 60, 3), dtype=np.uint8)
         result = pipe.process(img)
@@ -405,8 +427,7 @@ class TestProcessAllOptionsEnabled:
 
     def test_output_shape_matches_resize(self) -> None:
         """With target_dimension=50, a 60x60 image should be downsized to <=50."""
-        pipe = _pipeline(normalize_exposure=True, denoise=True, sharpen=True,
-                         target_dimension=50)
+        pipe = _pipeline(normalize_exposure=True, denoise=True, sharpen=True, target_dimension=50)
         img = np.full((60, 60, 3), 100, dtype=np.uint8)
         img[20:40, 20:40] = [200, 100, 50]  # add variation for denoiser
         result = pipe.process(img)
@@ -414,8 +435,7 @@ class TestProcessAllOptionsEnabled:
 
     def test_pixel_values_in_valid_range(self) -> None:
         """All pixel values must remain in [0, 255] after all transformations."""
-        pipe = _pipeline(normalize_exposure=True, denoise=True, sharpen=True,
-                         target_dimension=50)
+        pipe = _pipeline(normalize_exposure=True, denoise=True, sharpen=True, target_dimension=50)
         rng = np.random.default_rng(99)
         img = rng.integers(10, 240, (60, 60, 3), dtype=np.uint8)
         result = pipe.process(img)

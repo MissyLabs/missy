@@ -186,50 +186,62 @@ class TestDescribeColor:
 
     def test_black(self):
         from missy.vision.analysis import _describe_color
+
         assert _describe_color([10, 10, 10]) == "black"
 
     def test_white(self):
         from missy.vision.analysis import _describe_color
+
         assert _describe_color([220, 220, 220]) == "white"
 
     def test_red(self):
         from missy.vision.analysis import _describe_color
+
         assert _describe_color([200, 30, 30]) == "red"
 
     def test_green(self):
         from missy.vision.analysis import _describe_color
+
         assert _describe_color([20, 180, 20]) == "green"
 
     def test_blue(self):
         from missy.vision.analysis import _describe_color
+
         assert _describe_color([20, 20, 180]) == "blue"
 
     def test_yellow(self):
         from missy.vision.analysis import _describe_color
+
         assert _describe_color([200, 200, 30]) == "yellow"
 
     def test_orange(self):
         from missy.vision.analysis import _describe_color
+
         assert _describe_color([200, 120, 30]) == "orange"
 
     def test_purple(self):
         from missy.vision.analysis import _describe_color
+
         assert _describe_color([160, 30, 160]) == "purple"
 
     def test_gray(self):
         from missy.vision.analysis import _describe_color
+
         assert _describe_color([100, 100, 100]) == "gray"
 
     def test_light_gray(self):
         from missy.vision.analysis import _describe_color
+
         assert _describe_color([180, 180, 180]) == "light gray"
 
     def test_tan_brown(self):
         from missy.vision.analysis import _describe_color
+
         assert _describe_color([160, 120, 90]) == "tan/brown"
 
     def test_unnamed_color(self):
         from missy.vision.analysis import _describe_color
+
         result = _describe_color([100, 200, 150])
         assert "rgb(" in result
 
@@ -239,16 +251,19 @@ class TestFormatState:
 
     def test_empty_state(self):
         from missy.vision.analysis import _format_state
+
         assert "No previous state" in _format_state({})
 
     def test_state_with_entries(self):
         from missy.vision.analysis import _format_state
+
         result = _format_state({"completion": "40%", "pieces_placed": 50})
         assert "completion" in result
         assert "40%" in result
 
     def test_state_single_entry(self):
         from missy.vision.analysis import _format_state
+
         result = _format_state({"key": "value"})
         assert "- key: value" in result
 
@@ -258,6 +273,7 @@ class TestAnalysisMode:
 
     def test_all_modes(self):
         from missy.vision.analysis import AnalysisMode
+
         assert AnalysisMode.GENERAL == "general"
         assert AnalysisMode.PUZZLE == "puzzle"
         assert AnalysisMode.PAINTING == "painting"
@@ -473,8 +489,11 @@ class TestVisionAudit:
         mock_logger = MagicMock()
         mock_get_logger.return_value = mock_logger
         audit_vision_capture(
-            device="/dev/video0", source_type="webcam",
-            success=True, width=1920, height=1080,
+            device="/dev/video0",
+            source_type="webcam",
+            success=True,
+            width=1920,
+            height=1080,
         )
         mock_logger.log.assert_called_once()
         event = mock_logger.log.call_args[0][0]
@@ -499,8 +518,10 @@ class TestVisionAudit:
         mock_logger = MagicMock()
         mock_get_logger.return_value = mock_logger
         audit_vision_intent(
-            text="look at this", intent="look",
-            confidence=0.95, decision="activate",
+            text="look at this",
+            intent="look",
+            confidence=0.95,
+            decision="activate",
         )
         event = mock_logger.log.call_args[0][0]
         assert event["action"] == "intent"
@@ -551,11 +572,13 @@ class TestVisionAudit:
     def test_audit_no_logger(self, _):
         """Audit should be a no-op when logger is None."""
         from missy.vision.audit import audit_vision_capture
+
         audit_vision_capture()  # Should not raise
 
     def test_audit_import_failure(self):
         """Audit should handle import failures gracefully."""
         from missy.vision.audit import audit_vision_capture
+
         # _emit_audit_event catches all exceptions — even if get_audit_logger
         # can't be imported, it logs debug and returns silently.
         # Simply calling without a configured logger exercises the fallback path.
