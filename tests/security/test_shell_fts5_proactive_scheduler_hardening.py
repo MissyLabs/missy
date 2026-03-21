@@ -491,70 +491,42 @@ class TestSchedulerAtomicWrite:
 
 
 class TestWebhookResponseCensoring:
-    """WebhookChannel.send() must apply censor_response before writing to the log
-    so that secrets never appear in log output."""
+    """WebhookChannel.send() must not leak secrets to log output."""
 
-    def test_send_applies_censor_response(self):
-        """censor_response is called on the message before logger.info.
-        Because censor_response is imported locally inside send(), we patch
-        it at the source module (missy.security.censor)."""
+    def test_send_does_not_log_message_content(self):
+        """send() logs only message length, not content (avoids leaking secrets)."""
         from missy.channels.webhook import WebhookChannel
 
         ch = WebhookChannel()
 
-        with (
-            patch(
-                "missy.security.censor.censor_response", return_value="[REDACTED]"
-            ) as mock_censor,
-            patch("missy.channels.webhook.logger") as mock_logger,
-        ):
+        with patch("missy.channels.webhook.logger") as mock_logger:
             ch.send("sk-ant-secret123 result text")
 
-        mock_censor.assert_called_once()
-        # The censored value should appear in the log call
-        log_args = mock_logger.info.call_args
-        assert log_args is not None
-        formatted = str(log_args)
-        assert "[REDACTED]" in formatted or "REDACTED" in formatted
+        # Should log at debug level with length only, never the content
+        for method in (mock_logger.debug, mock_logger.info, mock_logger.warning):
+            for call_args in method.call_args_list:
+                assert "sk-ant-secret123" not in str(call_args)
 
     def test_send_does_not_log_raw_secret(self):
-        """The raw secret value must not appear in the logger.info call."""
+        """The raw secret value must not appear in any log call."""
         from missy.channels.webhook import WebhookChannel
 
         ch = WebhookChannel()
         raw_secret = "sk-ant-api03-supersecrettoken12345"
 
-        with (
-            patch("missy.security.censor.censor_response", return_value="***CENSORED***"),
-            patch("missy.channels.webhook.logger") as mock_logger,
-        ):
+        with patch("missy.channels.webhook.logger") as mock_logger:
             ch.send(raw_secret)
 
-        # Inspect all logger.info calls — none should contain the raw secret
-        for call_args in mock_logger.info.call_args_list:
-            assert raw_secret not in str(call_args)
+        for method in (mock_logger.debug, mock_logger.info, mock_logger.warning):
+            for call_args in method.call_args_list:
+                assert raw_secret not in str(call_args)
 
-    def test_send_truncates_to_200_chars_before_censoring(self):
-        """The implementation slices to [:200] before calling censor_response."""
+    def test_send_does_not_raise(self):
+        """send() completes without error."""
         from missy.channels.webhook import WebhookChannel
 
         ch = WebhookChannel()
-        long_message = "A" * 500
-
-        captured_inputs = []
-
-        def capture_censor(text):
-            captured_inputs.append(text)
-            return text
-
-        with (
-            patch("missy.security.censor.censor_response", side_effect=capture_censor),
-            patch("missy.channels.webhook.logger"),
-        ):
-            ch.send(long_message)
-
-        assert len(captured_inputs) == 1
-        assert len(captured_inputs[0]) == 200
+        ch.send("A" * 500)  # Should not raise
 
 
 # ---------------------------------------------------------------------------
