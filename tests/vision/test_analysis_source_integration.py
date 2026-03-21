@@ -27,6 +27,7 @@ class TestAnalysisPrompts:
 
     def _make_request(self, mode: str, context: str = ""):  # -> AnalysisRequest
         from missy.vision.analysis import AnalysisMode, AnalysisRequest
+
         try:
             m = AnalysisMode(mode)
         except ValueError:
@@ -89,9 +90,7 @@ class TestAnalysisPrompts:
         from missy.vision.analysis import AnalysisPromptBuilder
 
         builder = AnalysisPromptBuilder()
-        prompt = builder.build_prompt(
-            self._make_request("general", context="Some user context")
-        )
+        prompt = builder.build_prompt(self._make_request("general", context="Some user context"))
         assert "[User-provided context]" in prompt
 
 

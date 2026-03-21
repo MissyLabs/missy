@@ -55,9 +55,9 @@ class TestAnthropicAuthTokenTOCTOU:
             patch("missy.cli.anthropic_auth.TOKEN_FILE", token_file),
             patch("os.open", side_effect=tracking_open),
         ):
-                from missy.cli.anthropic_auth import store_token
+            from missy.cli.anthropic_auth import store_token
 
-                store_token("x", token_type="t")
+            store_token("x", token_type="t")
 
         # Temp file should have been created with 0o600
         assert len(created_modes) >= 1

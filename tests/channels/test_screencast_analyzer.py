@@ -30,7 +30,9 @@ class TestFrameAnalyzer:
     """Tests for FrameAnalyzer."""
 
     @pytest.mark.asyncio
-    async def test_start_stop(self, session_manager: SessionManager, registry: ScreencastTokenRegistry) -> None:
+    async def test_start_stop(
+        self, session_manager: SessionManager, registry: ScreencastTokenRegistry
+    ) -> None:
         queue: asyncio.Queue = asyncio.Queue(maxsize=50)
         session_manager.set_queue(queue)
 
@@ -158,6 +160,7 @@ class TestFrameAnalyzer:
 # _emit exception handling (lines 53-54)
 # ---------------------------------------------------------------------------
 
+
 class TestAnalyzerEmitException:
     """Test that analyzer _emit swallows exceptions from event_bus.publish."""
 
@@ -172,6 +175,7 @@ class TestAnalyzerEmitException:
 # ---------------------------------------------------------------------------
 # Dequeue timeout loop (line 116) and error in dequeue (lines 119-122)
 # ---------------------------------------------------------------------------
+
 
 class TestAnalyzerDequeueEdgeCases:
     """Test the _run loop's dequeue error and timeout handling."""
@@ -246,6 +250,7 @@ class TestAnalyzerDequeueEdgeCases:
 # Frame save when frame_save_dir is set (line 148)
 # ---------------------------------------------------------------------------
 
+
 class TestAnalyzerFrameSave:
     """Test that frames are saved to disk when frame_save_dir is configured."""
 
@@ -317,6 +322,7 @@ class TestAnalyzerFrameSave:
 # Discord callback failure (lines 204-205)
 # ---------------------------------------------------------------------------
 
+
 class TestAnalyzerDiscordCallbackFailure:
     """Test that a failing discord_callback is caught and does not crash the analyzer."""
 
@@ -355,6 +361,7 @@ class TestAnalyzerDiscordCallbackFailure:
 # _save_frame_sync failure cleanup (lines 237-241)
 # ---------------------------------------------------------------------------
 
+
 class TestSaveFrameSyncFailure:
     """Test that _save_frame_sync cleans up tmp file on write failure."""
 
@@ -380,7 +387,10 @@ class TestSaveFrameSyncFailure:
             original_write(fd, b"")  # write nothing, then raise
             raise OSError("disk full")
 
-        with patch("os.write", side_effect=_failing_write), pytest.raises(OSError, match="disk full"):
+        with (
+            patch("os.write", side_effect=_failing_write),
+            pytest.raises(OSError, match="disk full"),
+        ):
             analyzer._save_frame_sync(meta, data)
 
         # No .tmp file should remain.
@@ -403,5 +413,8 @@ class TestSaveFrameSyncFailure:
         meta = FrameMetadata(session_id=session_id, frame_number=1, format="jpeg")
         data = b"\xff\xd8\xff" + b"\x00" * 50
 
-        with patch("os.open", side_effect=PermissionError("no permission")), pytest.raises(PermissionError):
+        with (
+            patch("os.open", side_effect=PermissionError("no permission")),
+            pytest.raises(PermissionError),
+        ):
             analyzer._save_frame_sync(meta, data)

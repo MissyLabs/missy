@@ -116,7 +116,9 @@ class TestLoadSubsystemsMigrationException:
 
             os.unlink(cfg_path)
 
-    def test_migrate_config_exception_is_swallowed_directly(self, runner: CliRunner, tmp_path) -> None:
+    def test_migrate_config_exception_is_swallowed_directly(
+        self, runner: CliRunner, tmp_path
+    ) -> None:
         """Call a command that exercises _load_subsystems with migrate_config raising."""
         from missy.cli.main import _load_subsystems
 
@@ -160,9 +162,7 @@ class TestSetupNoPrompt:
             "missy.cli.wizard.run_wizard_noninteractive",
             side_effect=click.ClickException("invalid provider configuration"),
         ):
-            result = runner.invoke(
-                cli, ["setup", "--no-prompt", "--provider", "anthropic"]
-            )
+            result = runner.invoke(cli, ["setup", "--no-prompt", "--provider", "anthropic"])
 
         assert result.exit_code == 1
         all_output = result.output + result.stderr
@@ -512,7 +512,9 @@ class TestGatewayStartScreencast:
                 result = runner.invoke(cli, ["--config", cfg_path, "gateway", "start"])
 
             assert result.exit_code == 0
-            assert "failed to start" in result.output.lower() or "screencast" in result.output.lower()
+            assert (
+                "failed to start" in result.output.lower() or "screencast" in result.output.lower()
+            )
         finally:
             import os as _os
 
@@ -825,7 +827,9 @@ class TestConfigPlan:
         backup_path = tmp_path / "config.yaml.backup"
         backup_path.write_text(_MINIMAL_CONFIG_YAML)
 
-        diff_text = "--- backup\n+++ current\n@@ -1 +1 @@\n-old_setting: true\n+new_setting: false\n"
+        diff_text = (
+            "--- backup\n+++ current\n@@ -1 +1 @@\n-old_setting: true\n+new_setting: false\n"
+        )
 
         with (
             patch("missy.config.plan.list_backups", return_value=[backup_path]),

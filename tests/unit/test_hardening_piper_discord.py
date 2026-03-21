@@ -149,9 +149,7 @@ class TestAgentToolLoopEdgeCases:
             model="test-model",
             provider="anthropic",
             finish_reason="tool_calls",
-            tool_calls=[
-                ToolCall(id="tc1", name="calculator", arguments={"expression": "1+1"})
-            ],
+            tool_calls=[ToolCall(id="tc1", name="calculator", arguments={"expression": "1+1"})],
             usage={"input_tokens": 10, "output_tokens": 10},
             raw={},
         )
@@ -203,9 +201,7 @@ class TestAgentToolLoopEdgeCases:
             model="test-model",
             provider="anthropic",
             finish_reason="tool_calls",
-            tool_calls=[
-                ToolCall(id="tc1", name="calculator", arguments={"expression": "1+1"})
-            ],
+            tool_calls=[ToolCall(id="tc1", name="calculator", arguments={"expression": "1+1"})],
             usage={"input_tokens": 10, "output_tokens": 10},
             raw={},
         )

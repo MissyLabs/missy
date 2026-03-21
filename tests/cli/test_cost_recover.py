@@ -40,8 +40,18 @@ class TestCostCommand:
         mock_store = MagicMock()
         mock_store.get_session_turns.return_value = [MagicMock(), MagicMock()]
         mock_store.get_session_costs.return_value = [
-            {"model": "claude-sonnet-4", "cost_usd": 0.0045, "prompt_tokens": 500, "completion_tokens": 200},
-            {"model": "claude-haiku-4", "cost_usd": 0.0003, "prompt_tokens": 100, "completion_tokens": 50},
+            {
+                "model": "claude-sonnet-4",
+                "cost_usd": 0.0045,
+                "prompt_tokens": 500,
+                "completion_tokens": 200,
+            },
+            {
+                "model": "claude-haiku-4",
+                "cost_usd": 0.0003,
+                "prompt_tokens": 100,
+                "completion_tokens": 50,
+            },
         ]
 
         with (

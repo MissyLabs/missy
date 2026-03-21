@@ -84,6 +84,7 @@ class _FakeWebSocket:
     def sent_binary(self) -> list[bytes]:
         return [m for m in self._sent if isinstance(m, bytes)]
 
+
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
@@ -548,16 +549,18 @@ class TestVoiceServerProtocol:
 
         stt = _stub_stt(text="set a timer")
         agent_cb = AsyncMock(return_value="Timer set.")
-        tts = _stub_tts(wav_data=b"\xAB\xCD" * 256)
+        tts = _stub_tts(wav_data=b"\xab\xcd" * 256)
         server = _make_server(reg, stt=stt, tts=tts, agent_cb=agent_cb)
 
         pcm_frames = b"\x01\x02" * 64
 
-        ws = _FakeWebSocket([
-            json.dumps({"type": "audio_start", "sample_rate": 16000, "channels": 1}),
-            pcm_frames,
-            json.dumps({"type": "audio_end"}),
-        ])
+        ws = _FakeWebSocket(
+            [
+                json.dumps({"type": "audio_start", "sample_rate": 16000, "channels": 1}),
+                pcm_frames,
+                json.dumps({"type": "audio_end"}),
+            ]
+        )
 
         await server._message_loop(ws, node)
 
@@ -578,7 +581,7 @@ class TestVoiceServerProtocol:
         stt = _stub_stt()
         server = _make_server(reg, stt=stt)
 
-        ws = _FakeWebSocket([b"\x00\xFF\x00"])  # binary before audio_start
+        ws = _FakeWebSocket([b"\x00\xff\x00"])  # binary before audio_start
 
         await server._message_loop(ws, node)
         stt.transcribe.assert_not_awaited()
@@ -594,10 +597,12 @@ class TestVoiceServerProtocol:
         # 11 MB binary payload in a single chunk.
         oversized = b"\x00" * (11 * 1024 * 1024)
 
-        ws = _FakeWebSocket([
-            json.dumps({"type": "audio_start", "sample_rate": 16000, "channels": 1}),
-            oversized,
-        ])
+        ws = _FakeWebSocket(
+            [
+                json.dumps({"type": "audio_start", "sample_rate": 16000, "channels": 1}),
+                oversized,
+            ]
+        )
 
         await server._message_loop(ws, node)
 
@@ -640,11 +645,13 @@ class TestVoiceServerProtocol:
         agent_cb = AsyncMock(return_value="reply")
         server = _make_server(reg, stt=stt, agent_cb=agent_cb)
 
-        ws = _FakeWebSocket([
-            json.dumps({"type": "audio_start", "sample_rate": 16000, "channels": 1}),
-            b"\x00" * 100,
-            json.dumps({"type": "audio_end"}),
-        ])
+        ws = _FakeWebSocket(
+            [
+                json.dumps({"type": "audio_start", "sample_rate": 16000, "channels": 1}),
+                b"\x00" * 100,
+                json.dumps({"type": "audio_end"}),
+            ]
+        )
 
         await server._message_loop(ws, node)
         agent_cb.assert_not_awaited()
@@ -670,11 +677,13 @@ class TestVoiceServerProtocol:
             debug_transcripts=True,
         )
 
-        ws = _FakeWebSocket([
-            json.dumps({"type": "audio_start", "sample_rate": 16000, "channels": 1}),
-            b"\x01\x02" * 50,
-            json.dumps({"type": "audio_end"}),
-        ])
+        ws = _FakeWebSocket(
+            [
+                json.dumps({"type": "audio_start", "sample_rate": 16000, "channels": 1}),
+                b"\x01\x02" * 50,
+                json.dumps({"type": "audio_end"}),
+            ]
+        )
 
         await server._message_loop(ws, node)
 
@@ -714,17 +723,19 @@ class TestVoiceServerBinaryFrames:
         tts = _stub_tts()
         server = _make_server(reg, stt=stt, tts=tts, agent_cb=agent_cb)
 
-        chunk1 = b"\xAA" * 100
-        chunk2 = b"\xBB" * 200
-        chunk3 = b"\xCC" * 50
+        chunk1 = b"\xaa" * 100
+        chunk2 = b"\xbb" * 200
+        chunk3 = b"\xcc" * 50
 
-        ws = _FakeWebSocket([
-            json.dumps({"type": "audio_start", "sample_rate": 16000, "channels": 1}),
-            chunk1,
-            chunk2,
-            chunk3,
-            json.dumps({"type": "audio_end"}),
-        ])
+        ws = _FakeWebSocket(
+            [
+                json.dumps({"type": "audio_start", "sample_rate": 16000, "channels": 1}),
+                chunk1,
+                chunk2,
+                chunk3,
+                json.dumps({"type": "audio_end"}),
+            ]
+        )
 
         await server._message_loop(ws, node)
         assert len(received_audio) == 1
@@ -751,11 +762,13 @@ class TestVoiceServerBinaryFrames:
         server = _make_server(reg, stt=stt)
 
         # Attempt to send an out-of-bounds sample rate (100 Hz is below minimum).
-        ws = _FakeWebSocket([
-            json.dumps({"type": "audio_start", "sample_rate": 100, "channels": 1}),
-            b"\x00" * 32,
-            json.dumps({"type": "audio_end"}),
-        ])
+        ws = _FakeWebSocket(
+            [
+                json.dumps({"type": "audio_start", "sample_rate": 100, "channels": 1}),
+                b"\x00" * 32,
+                json.dumps({"type": "audio_end"}),
+            ]
+        )
 
         await server._message_loop(ws, node)
         assert captured_rates == [8000]  # clipped to minimum
@@ -784,14 +797,16 @@ class TestVoiceServerBinaryFrames:
         session1_data = b"\x11" * 64
         session2_data = b"\x22" * 32
 
-        ws = _FakeWebSocket([
-            json.dumps({"type": "audio_start", "sample_rate": 16000, "channels": 1}),
-            session1_data,
-            json.dumps({"type": "audio_end"}),
-            json.dumps({"type": "audio_start", "sample_rate": 16000, "channels": 1}),
-            session2_data,
-            json.dumps({"type": "audio_end"}),
-        ])
+        ws = _FakeWebSocket(
+            [
+                json.dumps({"type": "audio_start", "sample_rate": 16000, "channels": 1}),
+                session1_data,
+                json.dumps({"type": "audio_end"}),
+                json.dumps({"type": "audio_start", "sample_rate": 16000, "channels": 1}),
+                session2_data,
+                json.dumps({"type": "audio_end"}),
+            ]
+        )
 
         await server._message_loop(ws, node)
         assert len(received_audio) == 2

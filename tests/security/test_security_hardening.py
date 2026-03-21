@@ -112,12 +112,14 @@ class TestToolOutputInjectionScanning:
         from missy.agent.runtime import AgentConfig, AgentRuntime
 
         config = AgentConfig(provider="anthropic")
-        with patch.object(AgentRuntime, "_make_circuit_breaker", return_value=None), \
-             patch.object(AgentRuntime, "_make_rate_limiter", return_value=None), \
-             patch.object(AgentRuntime, "_make_context_manager", return_value=None), \
-             patch.object(AgentRuntime, "_make_memory_store", return_value=None), \
-             patch.object(AgentRuntime, "_make_cost_tracker", return_value=None), \
-             patch.object(AgentRuntime, "_scan_checkpoints", return_value=[]):
+        with (
+            patch.object(AgentRuntime, "_make_circuit_breaker", return_value=None),
+            patch.object(AgentRuntime, "_make_rate_limiter", return_value=None),
+            patch.object(AgentRuntime, "_make_context_manager", return_value=None),
+            patch.object(AgentRuntime, "_make_memory_store", return_value=None),
+            patch.object(AgentRuntime, "_make_cost_tracker", return_value=None),
+            patch.object(AgentRuntime, "_scan_checkpoints", return_value=[]),
+        ):
             runtime = AgentRuntime(config)
             assert runtime._sanitizer is not None
 
@@ -144,6 +146,7 @@ class TestResponseCensoring:
     def test_censor_response_import(self):
         """censor_response should be importable from runtime module."""
         from missy.agent import runtime
+
         assert hasattr(runtime, "censor_response")
 
     def test_censor_response_redacts_api_key(self):

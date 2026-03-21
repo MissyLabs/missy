@@ -523,7 +523,10 @@ class TestAuditEventContents:
         )
         reg = ToolRegistry()
         reg.register(NetworkTool())
-        with patch("missy.tools.registry.get_policy_engine", return_value=mock_engine), patch("missy.tools.registry.event_bus") as mock_bus:
+        with (
+            patch("missy.tools.registry.get_policy_engine", return_value=mock_engine),
+            patch("missy.tools.registry.event_bus") as mock_bus,
+        ):
             reg.execute("net")
             event = mock_bus.publish.call_args[0][0]
         assert event.result == "deny"

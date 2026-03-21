@@ -474,7 +474,8 @@ class TestStartLifecycle:
             await server.start()
 
         warning_calls = [
-            c for c in mock_emit.call_args_list
+            c
+            for c in mock_emit.call_args_list
             if c.kwargs.get("event_type") == "voice.bind.warning"
         ]
         assert len(warning_calls) == 1
@@ -755,9 +756,9 @@ def _make_full_server_for_clamping() -> VoiceServer:
 
     stt = _make_stt()
     # Empty transcript prevents agent callback → TTS path entirely.
-    stt.transcribe = AsyncMock(return_value=TranscriptionResult(
-        text="   ", confidence=0.0, processing_ms=5
-    ))
+    stt.transcribe = AsyncMock(
+        return_value=TranscriptionResult(text="   ", confidence=0.0, processing_ms=5)
+    )
     return _make_server(stt_engine=stt)
 
 
@@ -1060,21 +1061,21 @@ class TestAudioChunkSize:
 
         node = _make_edge_node()
         tts = _make_tts()
-        tts.synthesize = AsyncMock(return_value=AudioBuffer(
-            data=b"\xab" * audio_size, sample_rate=22050, channels=1, format="wav"
-        ))
+        tts.synthesize = AsyncMock(
+            return_value=AudioBuffer(
+                data=b"\xab" * audio_size, sample_rate=22050, channels=1, format="wav"
+            )
+        )
         stt = _make_stt()
-        stt.transcribe = AsyncMock(return_value=TranscriptionResult(
-            text="test", confidence=0.9, processing_ms=10
-        ))
+        stt.transcribe = AsyncMock(
+            return_value=TranscriptionResult(text="test", confidence=0.9, processing_ms=10)
+        )
 
         server = _make_server(stt_engine=stt, tts_engine=tts, audio_chunk_size=chunk_size)
         ws = _make_ws()
 
         with patch("missy.channels.voice.server._emit"):
-            await server._handle_audio(
-                ws, node=node, audio_buffer=b"\x00" * 100, sample_rate=16000
-            )
+            await server._handle_audio(ws, node=node, audio_buffer=b"\x00" * 100, sample_rate=16000)
 
         binary_sends = [c for c in ws.send.call_args_list if isinstance(c[0][0], bytes)]
         # 4096 bytes / 1024 chunk = 4 binary sends
@@ -1132,13 +1133,15 @@ class TestDebugTranscripts:
 
         node = _make_edge_node()
         stt = _make_stt()
-        stt.transcribe = AsyncMock(return_value=TranscriptionResult(
-            text="hello there", confidence=0.87, processing_ms=50
-        ))
+        stt.transcribe = AsyncMock(
+            return_value=TranscriptionResult(text="hello there", confidence=0.87, processing_ms=50)
+        )
         tts = _make_tts()
-        tts.synthesize = AsyncMock(return_value=AudioBuffer(
-            data=b"\x00" * 256, sample_rate=22050, channels=1, format="wav"
-        ))
+        tts.synthesize = AsyncMock(
+            return_value=AudioBuffer(
+                data=b"\x00" * 256, sample_rate=22050, channels=1, format="wav"
+            )
+        )
 
         server = _make_server(stt_engine=stt, tts_engine=tts, debug_transcripts=True)
         ws = _make_ws()
@@ -1163,13 +1166,15 @@ class TestDebugTranscripts:
 
         node = _make_edge_node()
         stt = _make_stt()
-        stt.transcribe = AsyncMock(return_value=TranscriptionResult(
-            text="hello", confidence=0.9, processing_ms=30
-        ))
+        stt.transcribe = AsyncMock(
+            return_value=TranscriptionResult(text="hello", confidence=0.9, processing_ms=30)
+        )
         tts = _make_tts()
-        tts.synthesize = AsyncMock(return_value=AudioBuffer(
-            data=b"\x00" * 256, sample_rate=22050, channels=1, format="wav"
-        ))
+        tts.synthesize = AsyncMock(
+            return_value=AudioBuffer(
+                data=b"\x00" * 256, sample_rate=22050, channels=1, format="wav"
+            )
+        )
 
         server = _make_server(stt_engine=stt, tts_engine=tts, debug_transcripts=False)
         ws = _make_ws()

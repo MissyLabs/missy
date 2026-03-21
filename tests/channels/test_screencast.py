@@ -126,7 +126,10 @@ class TestScreencastTokenRegistryCreate:
         reg = ScreencastTokenRegistry()
         session_id, _ = reg.create_session()
         # URL-safe base64 chars only (letters, digits, -, _)
-        assert all(c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_=" for c in session_id)
+        assert all(
+            c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_="
+            for c in session_id
+        )
 
     def test_token_length_sufficient(self) -> None:
         reg = ScreencastTokenRegistry()
@@ -1545,7 +1548,9 @@ class TestScreencastServerProtocol:
 
         try:
             async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
-                await ws.send(json.dumps({"type": "auth", "session_id": session_id, "token": token}))
+                await ws.send(
+                    json.dumps({"type": "auth", "session_id": session_id, "token": token})
+                )
                 resp = json.loads(await ws.recv())
                 assert resp["type"] == "auth_ok"
                 assert resp["session_id"] == session_id
@@ -1572,7 +1577,9 @@ class TestScreencastServerProtocol:
 
         try:
             async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
-                await ws.send(json.dumps({"type": "auth", "session_id": session_id, "token": "bad"}))
+                await ws.send(
+                    json.dumps({"type": "auth", "session_id": session_id, "token": "bad"})
+                )
                 resp = json.loads(await ws.recv())
                 assert resp["type"] == "auth_fail"
         except websockets.exceptions.ConnectionClosed:
@@ -1627,10 +1634,16 @@ class TestScreencastServerProtocol:
 
         try:
             async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
-                await ws.send(json.dumps({"type": "auth", "session_id": session_id, "token": token}))
+                await ws.send(
+                    json.dumps({"type": "auth", "session_id": session_id, "token": token})
+                )
                 await ws.recv()  # auth_ok
 
-                await ws.send(json.dumps({"type": "frame", "format": "jpeg", "width": 640, "height": 480, "seq": 1}))
+                await ws.send(
+                    json.dumps(
+                        {"type": "frame", "format": "jpeg", "width": 640, "height": 480, "seq": 1}
+                    )
+                )
                 await ws.send(_JPEG_MAGIC + b"\x00" * 500)
                 await asyncio.sleep(0.2)
 
@@ -1659,10 +1672,16 @@ class TestScreencastServerProtocol:
 
         try:
             async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
-                await ws.send(json.dumps({"type": "auth", "session_id": session_id, "token": token}))
+                await ws.send(
+                    json.dumps({"type": "auth", "session_id": session_id, "token": token})
+                )
                 await ws.recv()  # auth_ok
 
-                await ws.send(json.dumps({"type": "frame", "format": "jpeg", "width": 640, "height": 480, "seq": 1}))
+                await ws.send(
+                    json.dumps(
+                        {"type": "frame", "format": "jpeg", "width": 640, "height": 480, "seq": 1}
+                    )
+                )
                 # Garbage binary — no valid magic bytes.
                 await ws.send(b"GIF89a" + b"\x00" * 100)
                 await asyncio.sleep(0.1)

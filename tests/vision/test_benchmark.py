@@ -332,8 +332,14 @@ class TestGetStats:
         bench.record("capture", 1.0)
         stats = bench.get_stats("capture")
         expected_keys = {
-            "count", "min_ms", "max_ms", "mean_ms",
-            "median_ms", "p95_ms", "p99_ms", "stddev_ms",
+            "count",
+            "min_ms",
+            "max_ms",
+            "mean_ms",
+            "median_ms",
+            "p95_ms",
+            "p99_ms",
+            "stddev_ms",
         }
         assert set(stats.keys()) == expected_keys
 
@@ -446,6 +452,7 @@ class TestThroughput:
         s2 = BenchmarkSample(timestamp=now, category="capture", duration_ms=10.0)
         with bench._lock:
             from collections import deque
+
             bench._samples["capture"] = deque([s1, s2], maxlen=bench._max_samples)
         tput = bench.throughput("capture", window_seconds=60.0)
         # 2 samples / 1 second = 2.0 ops/sec
@@ -458,6 +465,7 @@ class TestThroughput:
         recent = BenchmarkSample(timestamp=now, category="x", duration_ms=1.0)
         with bench._lock:
             from collections import deque
+
             bench._samples["x"] = deque([old, recent], maxlen=bench._max_samples)
         # Only 1 recent sample — not enough for throughput.
         assert bench.throughput("x", window_seconds=60.0) == 0.0
@@ -466,22 +474,29 @@ class TestThroughput:
         bench = _make_bench()
         now = time.time()
         from collections import deque
+
         # 10 samples over 1 second → ~10 ops/sec
         fast = deque(
-            [BenchmarkSample(timestamp=now - 1.0 + i * 0.1, category="fast", duration_ms=1.0)
-             for i in range(11)],
+            [
+                BenchmarkSample(timestamp=now - 1.0 + i * 0.1, category="fast", duration_ms=1.0)
+                for i in range(11)
+            ],
             maxlen=500,
         )
         # 10 samples over 9 seconds → ~1.1 ops/sec
         slow = deque(
-            [BenchmarkSample(timestamp=now - 9.0 + i * 1.0, category="slow", duration_ms=1.0)
-             for i in range(10)],
+            [
+                BenchmarkSample(timestamp=now - 9.0 + i * 1.0, category="slow", duration_ms=1.0)
+                for i in range(10)
+            ],
             maxlen=500,
         )
         with bench._lock:
             bench._samples["fast"] = fast
             bench._samples["slow"] = slow
-        assert bench.throughput("fast", window_seconds=60.0) > bench.throughput("slow", window_seconds=60.0)
+        assert bench.throughput("fast", window_seconds=60.0) > bench.throughput(
+            "slow", window_seconds=60.0
+        )
 
     def test_zero_time_span_returns_zero(self):
         bench = _make_bench()
@@ -491,6 +506,7 @@ class TestThroughput:
         s2 = BenchmarkSample(timestamp=now, category="c", duration_ms=2.0)
         with bench._lock:
             from collections import deque
+
             bench._samples["c"] = deque([s1, s2], maxlen=bench._max_samples)
         assert bench.throughput("c") == 0.0
 
@@ -502,6 +518,7 @@ class TestThroughput:
         s2 = BenchmarkSample(timestamp=now, category="w", duration_ms=1.0)
         with bench._lock:
             from collections import deque
+
             bench._samples["w"] = deque([s1, s2], maxlen=bench._max_samples)
         assert bench.throughput("w", window_seconds=60.0) == 0.0
         assert bench.throughput("w", window_seconds=120.0) > 0.0
@@ -725,6 +742,7 @@ class TestGetBenchmark:
     def setup_method(self):
         """Reset module-level singleton before each test."""
         import missy.vision.benchmark as _mod
+
         _mod._benchmark = None
 
     def test_returns_capture_benchmark_instance(self):
@@ -749,6 +767,7 @@ class TestGetBenchmark:
 
     def test_singleton_created_fresh_after_none_reset(self):
         import missy.vision.benchmark as _mod
+
         _mod._benchmark = None
         b1 = get_benchmark()
         _mod._benchmark = None

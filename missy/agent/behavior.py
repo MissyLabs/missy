@@ -63,36 +63,123 @@ if TYPE_CHECKING:
 # Tone detection keyword sets
 _CASUAL_SIGNALS: frozenset[str] = frozenset(
     {
-        "hey", "hi", "yo", "sup", "lol", "haha", "cool", "awesome", "thanks",
-        "thx", "ty", "np", "btw", "fyi", "gonna", "wanna", "kinda", "sorta",
-        "ngl", "tbh", "imo", "imho", "asap", "dunno", "ya", "yep", "nope",
+        "hey",
+        "hi",
+        "yo",
+        "sup",
+        "lol",
+        "haha",
+        "cool",
+        "awesome",
+        "thanks",
+        "thx",
+        "ty",
+        "np",
+        "btw",
+        "fyi",
+        "gonna",
+        "wanna",
+        "kinda",
+        "sorta",
+        "ngl",
+        "tbh",
+        "imo",
+        "imho",
+        "asap",
+        "dunno",
+        "ya",
+        "yep",
+        "nope",
     }
 )
 
 _FORMAL_SIGNALS: frozenset[str] = frozenset(
     {
-        "please", "kindly", "would", "could", "appreciate", "regarding",
-        "furthermore", "however", "therefore", "nevertheless", "accordingly",
-        "sincerely", "respectfully", "pursuant", "henceforth",
+        "please",
+        "kindly",
+        "would",
+        "could",
+        "appreciate",
+        "regarding",
+        "furthermore",
+        "however",
+        "therefore",
+        "nevertheless",
+        "accordingly",
+        "sincerely",
+        "respectfully",
+        "pursuant",
+        "henceforth",
     }
 )
 
 _FRUSTRATED_SIGNALS: frozenset[str] = frozenset(
     {
-        "wrong", "broken", "doesn't work", "not working", "still", "again",
-        "useless", "failed", "why", "terrible", "ridiculous", "ugh", "argh",
-        "wtf", "seriously", "frustrated", "annoying", "waste",
+        "wrong",
+        "broken",
+        "doesn't work",
+        "not working",
+        "still",
+        "again",
+        "useless",
+        "failed",
+        "why",
+        "terrible",
+        "ridiculous",
+        "ugh",
+        "argh",
+        "wtf",
+        "seriously",
+        "frustrated",
+        "annoying",
+        "waste",
     }
 )
 
 _TECHNICAL_SIGNALS: frozenset[str] = frozenset(
     {
-        "function", "class", "method", "api", "endpoint", "request", "response",
-        "query", "schema", "config", "yaml", "json", "xml", "bash", "shell",
-        "script", "module", "import", "package", "library", "framework",
-        "database", "sql", "index", "cache", "token", "auth", "oauth",
-        "async", "await", "thread", "process", "port", "socket", "ssl", "tls",
-        "docker", "kubernetes", "container", "deployment", "pipeline", "ci",
+        "function",
+        "class",
+        "method",
+        "api",
+        "endpoint",
+        "request",
+        "response",
+        "query",
+        "schema",
+        "config",
+        "yaml",
+        "json",
+        "xml",
+        "bash",
+        "shell",
+        "script",
+        "module",
+        "import",
+        "package",
+        "library",
+        "framework",
+        "database",
+        "sql",
+        "index",
+        "cache",
+        "token",
+        "auth",
+        "oauth",
+        "async",
+        "await",
+        "thread",
+        "process",
+        "port",
+        "socket",
+        "ssl",
+        "tls",
+        "docker",
+        "kubernetes",
+        "container",
+        "deployment",
+        "pipeline",
+        "ci",
     }
 )
 
@@ -209,8 +296,7 @@ _TONE_ADAPTATION_MAP: dict[str, str] = {
         "skip unnecessary formality. Short sentences work well."
     ),
     "formal": (
-        "Maintain a professional, precise tone. Use complete sentences and "
-        "avoid colloquialisms."
+        "Maintain a professional, precise tone. Use complete sentences and avoid colloquialisms."
     ),
     "frustrated": (
         "Acknowledge the difficulty directly before diving into solutions. "
@@ -225,8 +311,7 @@ _TONE_ADAPTATION_MAP: dict[str, str] = {
         "are preferred over long paragraphs."
     ),
     "verbose": (
-        "The user communicates in detail; thorough explanations with examples "
-        "are appropriate."
+        "The user communicates in detail; thorough explanations with examples are appropriate."
     ),
 }
 
@@ -408,9 +493,7 @@ class BehaviorLayer:
                 "and proactively surface useful context."
             )
         elif intent == "greeting":
-            lines.append(
-                "Respond warmly and briefly. Match the energy of the greeting."
-            )
+            lines.append("Respond warmly and briefly. Match the energy of the greeting.")
         elif intent == "farewell":
             lines.append("Offer a friendly, brief farewell. No need to recap the session.")
         elif intent == "troubleshooting":
@@ -467,12 +550,12 @@ class BehaviorLayer:
 
         # Persona-specific behavioral tendencies
         if self._persona is not None:
-            for tendency in (self._persona.behavioral_tendencies or []):
+            for tendency in self._persona.behavioral_tendencies or []:
                 lines.append(tendency)
 
         # Persona-specific response style rules
         if self._persona is not None:
-            for rule in (self._persona.response_style_rules or []):
+            for rule in self._persona.response_style_rules or []:
                 lines.append(rule)
 
         return "\n".join(f"- {line}" for line in lines if line.strip())
@@ -491,11 +574,7 @@ class BehaviorLayer:
         user_tone: str = ctx.get("user_tone", "")
         urgency: str = ctx.get("urgency", "low")
 
-        return (
-            turn_count >= 10
-            or user_tone == "brief"
-            or urgency == "high"
-        )
+        return turn_count >= 10 or user_tone == "brief" or urgency == "high"
 
     def get_tone_adaptation(self, user_tone: str) -> str:
         """Map a user tone label to a recommended response tone directive.

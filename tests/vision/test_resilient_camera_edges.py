@@ -226,9 +226,7 @@ class TestMultiCameraEdgeCases:
         with patch("missy.vision.multi_camera.CameraHandle") as MockHandle:
             mock_instance = MockHandle.return_value
             mock_instance.is_open = True
-            mock_instance.capture.return_value = CaptureResult(
-                success=False, error="test failure"
-            )
+            mock_instance.capture.return_value = CaptureResult(success=False, error="test failure")
             mgr.add_camera(device)
             result = mgr.capture_best()
             assert not result.success

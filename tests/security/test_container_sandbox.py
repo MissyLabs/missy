@@ -289,9 +289,7 @@ class TestStartDockerUnavailable:
 
     @patch("missy.security.container.subprocess.run")
     @patch.object(ContainerSandbox, "is_available", return_value=False)
-    def test_docker_run_never_called(
-        self, _avail: MagicMock, mock_run: MagicMock
-    ) -> None:
+    def test_docker_run_never_called(self, _avail: MagicMock, mock_run: MagicMock) -> None:
         _make_sandbox().start()
         mock_run.assert_not_called()
 
@@ -304,9 +302,7 @@ class TestStartDockerUnavailable:
 class TestStartSuccess:
     @patch("missy.security.container.subprocess.run")
     @patch.object(ContainerSandbox, "is_available", return_value=True)
-    def test_returns_container_id(
-        self, _avail: MagicMock, mock_run: MagicMock
-    ) -> None:
+    def test_returns_container_id(self, _avail: MagicMock, mock_run: MagicMock) -> None:
         """Requirement 8: start() returns the container ID string."""
         mock_run.return_value = _make_proc(returncode=0, stdout=b"sha256abc\n")
         sb = _make_sandbox()
@@ -315,9 +311,7 @@ class TestStartSuccess:
 
     @patch("missy.security.container.subprocess.run")
     @patch.object(ContainerSandbox, "is_available", return_value=True)
-    def test_sets_container_id_property(
-        self, _avail: MagicMock, mock_run: MagicMock
-    ) -> None:
+    def test_sets_container_id_property(self, _avail: MagicMock, mock_run: MagicMock) -> None:
         mock_run.return_value = _make_proc(returncode=0, stdout=b"cid12345\n")
         sb = _make_sandbox()
         sb.start()
@@ -325,9 +319,7 @@ class TestStartSuccess:
 
     @patch("missy.security.container.subprocess.run")
     @patch.object(ContainerSandbox, "is_available", return_value=True)
-    def test_docker_run_called(
-        self, _avail: MagicMock, mock_run: MagicMock
-    ) -> None:
+    def test_docker_run_called(self, _avail: MagicMock, mock_run: MagicMock) -> None:
         mock_run.return_value = _make_proc(returncode=0, stdout=b"cid\n")
         _make_sandbox().start()
         args = mock_run.call_args[0][0]
@@ -353,13 +345,9 @@ class TestStartSuccess:
 class TestStartFailure:
     @patch("missy.security.container.subprocess.run")
     @patch.object(ContainerSandbox, "is_available", return_value=True)
-    def test_nonzero_returncode_returns_none(
-        self, _avail: MagicMock, mock_run: MagicMock
-    ) -> None:
+    def test_nonzero_returncode_returns_none(self, _avail: MagicMock, mock_run: MagicMock) -> None:
         """Requirement 9: docker run exit code != 0 → start() returns None."""
-        mock_run.return_value = _make_proc(
-            returncode=125, stderr=b"docker: Error"
-        )
+        mock_run.return_value = _make_proc(returncode=125, stderr=b"docker: Error")
         sb = _make_sandbox()
         assert sb.start() is None
 
@@ -392,9 +380,7 @@ class TestStartFailure:
 class TestStartTimeout:
     @patch("missy.security.container.subprocess.run")
     @patch.object(ContainerSandbox, "is_available", return_value=True)
-    def test_timeout_returns_none(
-        self, _avail: MagicMock, mock_run: MagicMock
-    ) -> None:
+    def test_timeout_returns_none(self, _avail: MagicMock, mock_run: MagicMock) -> None:
         """Requirement 10: TimeoutExpired during docker run → start() returns None."""
         mock_run.side_effect = subprocess.TimeoutExpired(cmd="docker run", timeout=30)
         sb = _make_sandbox()
@@ -412,9 +398,7 @@ class TestStartTimeout:
 
     @patch("missy.security.container.subprocess.run")
     @patch.object(ContainerSandbox, "is_available", return_value=True)
-    def test_timeout_does_not_raise(
-        self, _avail: MagicMock, mock_run: MagicMock
-    ) -> None:
+    def test_timeout_does_not_raise(self, _avail: MagicMock, mock_run: MagicMock) -> None:
         mock_run.side_effect = subprocess.TimeoutExpired(cmd="docker run", timeout=30)
         _make_sandbox().start()  # must not raise
 
@@ -456,9 +440,7 @@ class TestExecuteSuccess:
     @patch("missy.security.container.subprocess.run")
     def test_returns_stdout_and_zero_exit(self, mock_run: MagicMock) -> None:
         """Requirement 12: execute() returns combined output and exit code."""
-        mock_run.return_value = _make_proc(
-            returncode=0, stdout=b"hello\n", stderr=b""
-        )
+        mock_run.return_value = _make_proc(returncode=0, stdout=b"hello\n", stderr=b"")
         sb = _started_sandbox()
         output, rc = sb.execute("echo hello")
         assert rc == 0
@@ -571,9 +553,7 @@ class TestCopyIn:
         """Requirement 15: copy_in() with no container is a silent no-op."""
         _make_sandbox().copy_in("/tmp/src.txt", "/work/dst.txt")
 
-    def test_no_container_emits_warning(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_no_container_emits_warning(self, caplog: pytest.LogCaptureFixture) -> None:
         with caplog.at_level(logging.WARNING, logger="missy.security.container"):
             _make_sandbox().copy_in("/tmp/src.txt", "/work/dst.txt")
         assert any("copy_in" in r.message for r in caplog.records)
@@ -590,9 +570,7 @@ class TestCopyIn:
     @patch("missy.security.container.subprocess.run")
     def test_called_process_error_does_not_raise(self, mock_run: MagicMock) -> None:
         """Requirement 17: CalledProcessError during copy_in is swallowed."""
-        mock_run.side_effect = subprocess.CalledProcessError(
-            returncode=1, cmd="docker cp"
-        )
+        mock_run.side_effect = subprocess.CalledProcessError(returncode=1, cmd="docker cp")
         _started_sandbox().copy_in("/a", "/b")  # must not raise
 
     @patch("missy.security.container.subprocess.run")
@@ -616,9 +594,7 @@ class TestCopyOut:
         """Requirement 18: copy_out() with no container is a silent no-op."""
         _make_sandbox().copy_out("/work/dst.txt", "/tmp/local.txt")
 
-    def test_no_container_emits_warning(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_no_container_emits_warning(self, caplog: pytest.LogCaptureFixture) -> None:
         with caplog.at_level(logging.WARNING, logger="missy.security.container"):
             _make_sandbox().copy_out("/work/dst.txt", "/tmp/local.txt")
         assert any("copy_out" in r.message for r in caplog.records)
@@ -630,16 +606,12 @@ class TestCopyOut:
         sb = _started_sandbox("cid002")
         sb.copy_out("/app/result.txt", "/tmp/result.txt")
         args = mock_run.call_args[0][0]
-        assert args == [
-            "docker", "cp", "cid002:/app/result.txt", "/tmp/result.txt"
-        ]
+        assert args == ["docker", "cp", "cid002:/app/result.txt", "/tmp/result.txt"]
 
     @patch("missy.security.container.subprocess.run")
     def test_called_process_error_does_not_raise(self, mock_run: MagicMock) -> None:
         """Requirement 20: CalledProcessError during copy_out is swallowed."""
-        mock_run.side_effect = subprocess.CalledProcessError(
-            returncode=1, cmd="docker cp"
-        )
+        mock_run.side_effect = subprocess.CalledProcessError(returncode=1, cmd="docker cp")
         _started_sandbox().copy_out("/a", "/b")  # must not raise
 
     @patch("missy.security.container.subprocess.run")
@@ -713,9 +685,7 @@ class TestStop:
         assert sb.container_id is None
 
     @patch("missy.security.container.subprocess.run")
-    def test_container_id_cleared_before_docker_call(
-        self, mock_run: MagicMock
-    ) -> None:
+    def test_container_id_cleared_before_docker_call(self, mock_run: MagicMock) -> None:
         """container_id is None during the docker rm call so a second stop() is a no-op."""
         id_during_call: list[str | None] = []
 
@@ -737,22 +707,18 @@ class TestStop:
 class TestContextManager:
     @patch("missy.security.container.subprocess.run")
     @patch.object(ContainerSandbox, "is_available", return_value=True)
-    def test_enter_starts_container(
-        self, _avail: MagicMock, mock_run: MagicMock
-    ) -> None:
+    def test_enter_starts_container(self, _avail: MagicMock, mock_run: MagicMock) -> None:
         """Requirement 25: __enter__ calls start(), __exit__ calls stop()."""
         mock_run.side_effect = [
             _make_proc(returncode=0, stdout=b"ctx001\n"),  # docker run
-            _make_proc(returncode=0),                       # docker rm
+            _make_proc(returncode=0),  # docker rm
         ]
         with ContainerSandbox(workspace=_WORKSPACE) as sb:
             assert sb.container_id == "ctx001"
 
     @patch("missy.security.container.subprocess.run")
     @patch.object(ContainerSandbox, "is_available", return_value=True)
-    def test_exit_stops_container(
-        self, _avail: MagicMock, mock_run: MagicMock
-    ) -> None:
+    def test_exit_stops_container(self, _avail: MagicMock, mock_run: MagicMock) -> None:
         mock_run.side_effect = [
             _make_proc(returncode=0, stdout=b"ctx002\n"),
             _make_proc(returncode=0),
@@ -763,9 +729,7 @@ class TestContextManager:
 
     @patch("missy.security.container.subprocess.run")
     @patch.object(ContainerSandbox, "is_available", return_value=True)
-    def test_stop_called_on_exception(
-        self, _avail: MagicMock, mock_run: MagicMock
-    ) -> None:
+    def test_stop_called_on_exception(self, _avail: MagicMock, mock_run: MagicMock) -> None:
         """stop() is guaranteed even when the body raises."""
         mock_run.side_effect = [
             _make_proc(returncode=0, stdout=b"ctx003\n"),
@@ -778,9 +742,7 @@ class TestContextManager:
         assert mock_run.call_count == 2
 
     @patch.object(ContainerSandbox, "is_available", return_value=False)
-    def test_docker_unavailable_context_manager_ok(
-        self, _avail: MagicMock
-    ) -> None:
+    def test_docker_unavailable_context_manager_ok(self, _avail: MagicMock) -> None:
         """Context manager works cleanly when Docker is not available."""
         with ContainerSandbox(workspace=_WORKSPACE) as sb:
             assert sb.container_id is None
@@ -788,9 +750,7 @@ class TestContextManager:
 
     @patch("missy.security.container.subprocess.run")
     @patch.object(ContainerSandbox, "is_available", return_value=True)
-    def test_enter_returns_sandbox_instance(
-        self, _avail: MagicMock, mock_run: MagicMock
-    ) -> None:
+    def test_enter_returns_sandbox_instance(self, _avail: MagicMock, mock_run: MagicMock) -> None:
         mock_run.side_effect = [
             _make_proc(returncode=0, stdout=b"ctx004\n"),
             _make_proc(returncode=0),
@@ -813,9 +773,7 @@ class TestContainerIdProperty:
 
     @patch("missy.security.container.subprocess.run")
     @patch.object(ContainerSandbox, "is_available", return_value=True)
-    def test_property_set_after_start(
-        self, _avail: MagicMock, mock_run: MagicMock
-    ) -> None:
+    def test_property_set_after_start(self, _avail: MagicMock, mock_run: MagicMock) -> None:
         mock_run.return_value = _make_proc(returncode=0, stdout=b"prop_cid\n")
         sb = _make_sandbox()
         sb.start()
@@ -843,9 +801,7 @@ class TestContainerIdProperty:
 class TestSecurityFlags:
     @patch("missy.security.container.subprocess.run")
     @patch.object(ContainerSandbox, "is_available", return_value=True)
-    def test_cap_drop_all_present(
-        self, _avail: MagicMock, mock_run: MagicMock
-    ) -> None:
+    def test_cap_drop_all_present(self, _avail: MagicMock, mock_run: MagicMock) -> None:
         """Requirement 27: --cap-drop=ALL is in the docker run command."""
         mock_run.return_value = _make_proc(returncode=0, stdout=b"sectest\n")
         _make_sandbox().start()
@@ -854,9 +810,7 @@ class TestSecurityFlags:
 
     @patch("missy.security.container.subprocess.run")
     @patch.object(ContainerSandbox, "is_available", return_value=True)
-    def test_no_new_privileges_present(
-        self, _avail: MagicMock, mock_run: MagicMock
-    ) -> None:
+    def test_no_new_privileges_present(self, _avail: MagicMock, mock_run: MagicMock) -> None:
         """Requirement 27: --security-opt=no-new-privileges is in the docker run command."""
         mock_run.return_value = _make_proc(returncode=0, stdout=b"sectest\n")
         _make_sandbox().start()
@@ -865,9 +819,7 @@ class TestSecurityFlags:
 
     @patch("missy.security.container.subprocess.run")
     @patch.object(ContainerSandbox, "is_available", return_value=True)
-    def test_detach_flag_present(
-        self, _avail: MagicMock, mock_run: MagicMock
-    ) -> None:
+    def test_detach_flag_present(self, _avail: MagicMock, mock_run: MagicMock) -> None:
         """Container runs detached (-d)."""
         mock_run.return_value = _make_proc(returncode=0, stdout=b"detach\n")
         _make_sandbox().start()
@@ -876,9 +828,7 @@ class TestSecurityFlags:
 
     @patch("missy.security.container.subprocess.run")
     @patch.object(ContainerSandbox, "is_available", return_value=True)
-    def test_sleep_infinity_sentinel(
-        self, _avail: MagicMock, mock_run: MagicMock
-    ) -> None:
+    def test_sleep_infinity_sentinel(self, _avail: MagicMock, mock_run: MagicMock) -> None:
         """Container uses 'sleep infinity' as its entrypoint."""
         mock_run.return_value = _make_proc(returncode=0, stdout=b"s\n")
         _make_sandbox().start()
@@ -895,9 +845,7 @@ class TestSecurityFlags:
 class TestWorkspaceBindMount:
     @patch("missy.security.container.subprocess.run")
     @patch.object(ContainerSandbox, "is_available", return_value=True)
-    def test_workspace_mounted_readonly(
-        self, _avail: MagicMock, mock_run: MagicMock
-    ) -> None:
+    def test_workspace_mounted_readonly(self, _avail: MagicMock, mock_run: MagicMock) -> None:
         """Requirement 28: workspace bind mount ends with ':ro'."""
         mock_run.return_value = _make_proc(returncode=0, stdout=b"romount\n")
         sb = _make_sandbox(workspace="/srv/mywork")
@@ -906,15 +854,11 @@ class TestWorkspaceBindMount:
         # Find the -v flag and its value
         v_idx = args.index("-v")
         mount_spec = args[v_idx + 1]
-        assert mount_spec.endswith(":ro"), (
-            f"Expected mount spec ending ':ro', got: {mount_spec!r}"
-        )
+        assert mount_spec.endswith(":ro"), f"Expected mount spec ending ':ro', got: {mount_spec!r}"
 
     @patch("missy.security.container.subprocess.run")
     @patch.object(ContainerSandbox, "is_available", return_value=True)
-    def test_workspace_host_path_in_mount(
-        self, _avail: MagicMock, mock_run: MagicMock
-    ) -> None:
+    def test_workspace_host_path_in_mount(self, _avail: MagicMock, mock_run: MagicMock) -> None:
         """The host-side path in the -v spec matches the workspace parameter."""
         mock_run.return_value = _make_proc(returncode=0, stdout=b"ptest\n")
         sb = _make_sandbox(workspace="/data/project")
@@ -941,9 +885,7 @@ class TestWorkspaceBindMount:
 
     @patch("missy.security.container.subprocess.run")
     @patch.object(ContainerSandbox, "is_available", return_value=True)
-    def test_workdir_set_to_workspace(
-        self, _avail: MagicMock, mock_run: MagicMock
-    ) -> None:
+    def test_workdir_set_to_workspace(self, _avail: MagicMock, mock_run: MagicMock) -> None:
         """--workdir is set to /workspace."""
         mock_run.return_value = _make_proc(returncode=0, stdout=b"wd\n")
         _make_sandbox().start()

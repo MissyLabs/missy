@@ -376,9 +376,7 @@ class TestAllowBotAuthorAlternateMentionFormat:
         ch._bot_user_id = "bot-777"
 
         author = {"id": "other-bot", "bot": True}
-        result = ch._allow_bot_author(
-            author=author, content="hello without mention", guild_id=None
-        )
+        result = ch._allow_bot_author(author=author, content="hello without mention", guild_id=None)
         assert result is False
 
 

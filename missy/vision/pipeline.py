@@ -31,6 +31,7 @@ def _get_cv2() -> Any:
         with _cv2_lock:
             if _cv2 is None:
                 import cv2
+
                 _cv2 = cv2
     return _cv2
 

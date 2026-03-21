@@ -76,7 +76,9 @@ class TestTaskLearningFieldContracts:
 
     def test_explicit_timestamp_not_overwritten(self):
         ts = "2000-06-15T12:00:00+00:00"
-        tl = TaskLearning(task_type="chat", approach=[], outcome="partial", lesson="x", timestamp=ts)
+        tl = TaskLearning(
+            task_type="chat", approach=[], outcome="partial", lesson="x", timestamp=ts
+        )
         assert tl.timestamp == ts
 
     def test_empty_approach_list_allowed(self):
@@ -116,7 +118,9 @@ class TestExtractTaskTypePriority:
         assert extract_task_type(["shell_exec", "web_fetch"]) == "shell+web"
 
     def test_shell_web_with_additional_tools_still_shell_web(self):
-        assert extract_task_type(["shell_exec", "web_fetch", "file_read", "calculator"]) == "shell+web"
+        assert (
+            extract_task_type(["shell_exec", "web_fetch", "file_read", "calculator"]) == "shell+web"
+        )
 
     def test_shell_file_requires_both_and_no_web(self):
         assert extract_task_type(["shell_exec", "file_write"]) == "shell+file"

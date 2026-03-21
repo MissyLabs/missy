@@ -172,16 +172,16 @@ class TestObservationMaskingCondenser:
 class TestAmortizedForgettingCondenser:
     def test_always_preserves_first_message(self):
         messages = [{"role": "user", "content": "first"}] + _msgs(*["old"] * 30)
-        result = AmortizedForgettingCondenser(
-            forget_threshold=0.9, decay_rate=0.05
-        ).condense(messages)
+        result = AmortizedForgettingCondenser(forget_threshold=0.9, decay_rate=0.05).condense(
+            messages
+        )
         assert result.messages[0]["content"] == "first"
 
     def test_always_preserves_last_four(self):
         messages = _msgs(*[str(i) for i in range(20)])
-        result = AmortizedForgettingCondenser(
-            forget_threshold=0.99, always_keep=4
-        ).condense(messages)
+        result = AmortizedForgettingCondenser(forget_threshold=0.99, always_keep=4).condense(
+            messages
+        )
         tail = [m["content"] for m in result.messages[-4:]]
         assert tail == ["16", "17", "18", "19"]
 
@@ -289,9 +289,9 @@ class TestSummarizingCondenserWithoutProvider:
         messages = [{"role": "user", "content": f"old {i}"} for i in range(25)] + [
             {"role": "user", "content": f"recent {i}"} for i in range(6)
         ]
-        result = SummarizingCondenser(
-            provider=None, preserve_recent=6, chunk_size=10
-        ).condense(messages)
+        result = SummarizingCondenser(provider=None, preserve_recent=6, chunk_size=10).condense(
+            messages
+        )
         # 25 old messages in chunks of 10 -> 3 chunks + 6 recent.
         assert result.metadata["chunks_summarised"] == 3
         assert len(result.messages) == 9  # 3 summaries + 6 recent
@@ -424,7 +424,9 @@ class TestLLMAttentionCondenserWithProvider:
 
     def test_parse_indices_finds_array_in_prose(self):
         condenser = LLMAttentionCondenser()
-        indices = condenser._parse_indices("Keep these: [1, 3, 5] because they matter.", max_index=10)
+        indices = condenser._parse_indices(
+            "Keep these: [1, 3, 5] because they matter.", max_index=10
+        )
         assert indices == [1, 3, 5]
 
 
@@ -531,10 +533,9 @@ class TestCreateDefaultPipeline:
         assert summarizer.provider is provider
 
     def test_runs_without_error_on_typical_input(self):
-        messages = (
-            [_tool_msg("x" * 5000)]
-            + [{"role": "user", "content": f"msg {i}"} for i in range(30)]
-        )
+        messages = [_tool_msg("x" * 5000)] + [
+            {"role": "user", "content": f"msg {i}"} for i in range(30)
+        ]
         pipeline = create_default_pipeline()
         result = pipeline.condense(messages)
         assert isinstance(result.messages, list)

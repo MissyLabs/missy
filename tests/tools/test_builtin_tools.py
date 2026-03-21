@@ -265,9 +265,7 @@ class TestFileWriteTool:
         target = tmp_path / "existing.txt"
         target.write_text("old content", encoding="utf-8")
 
-        result = FileWriteTool().execute(
-            path=str(target), content="new content", mode="overwrite"
-        )
+        result = FileWriteTool().execute(path=str(target), content="new content", mode="overwrite")
 
         assert result.success is True
         assert target.read_text() == "new content"
@@ -313,9 +311,7 @@ class TestFileWriteTool:
     def test_write_respects_encoding(self, tmp_path: Path) -> None:
         target = tmp_path / "encoded.txt"
 
-        result = FileWriteTool().execute(
-            path=str(target), content="caf\u00e9", encoding="utf-8"
-        )
+        result = FileWriteTool().execute(path=str(target), content="caf\u00e9", encoding="utf-8")
 
         assert result.success is True
         assert target.read_bytes() == "caf\u00e9".encode()
@@ -335,9 +331,7 @@ class TestFileWriteTool:
     # ------------------------------------------------------------------
 
     def test_invalid_mode_handling(self, tmp_path: Path) -> None:
-        result = FileWriteTool().execute(
-            path=str(tmp_path / "f.txt"), content="x", mode="truncate"
-        )
+        result = FileWriteTool().execute(path=str(tmp_path / "f.txt"), content="x", mode="truncate")
 
         assert result.success is False
         assert result.output is None
@@ -349,9 +343,7 @@ class TestFileWriteTool:
         readonly_dir.mkdir()
         readonly_dir.chmod(0o555)
         try:
-            result = FileWriteTool().execute(
-                path=str(readonly_dir / "blocked.txt"), content="nope"
-            )
+            result = FileWriteTool().execute(path=str(readonly_dir / "blocked.txt"), content="nope")
             assert result.success is False
             assert "permission denied" in result.error.lower()
         finally:
@@ -725,7 +717,9 @@ class TestListFilesTool:
         assert "max_entries" in props
 
     def test_get_schema_max_entries_default_documented(self) -> None:
-        desc = ListFilesTool().get_schema()["parameters"]["properties"]["max_entries"]["description"]
+        desc = ListFilesTool().get_schema()["parameters"]["properties"]["max_entries"][
+            "description"
+        ]
         assert str(_DEFAULT_MAX_ENTRIES) in desc
 
 
@@ -878,7 +872,13 @@ class TestWebFetchTool:
         assert result.success is True
         call_kwargs = mock_client.get.call_args.kwargs
         passed_headers = call_kwargs.get("headers", {})
-        for blocked in ("Authorization", "Host", "Cookie", "x-forwarded-for", "proxy-authorization"):
+        for blocked in (
+            "Authorization",
+            "Host",
+            "Cookie",
+            "x-forwarded-for",
+            "proxy-authorization",
+        ):
             assert blocked not in passed_headers
         assert passed_headers.get("X-Custom") == "safe"
 
@@ -914,9 +914,7 @@ class TestWebFetchTool:
         with patch("missy.gateway.client.create_client", return_value=mock_client) as mock_cc:
             WebFetchTool().execute(url="https://example.com", timeout=60)
 
-        mock_cc.assert_called_once_with(
-            session_id="web_fetch_tool", task_id="fetch", timeout=60
-        )
+        mock_cc.assert_called_once_with(session_id="web_fetch_tool", task_id="fetch", timeout=60)
 
     def test_default_timeout_is_used_when_not_specified(self) -> None:
         mock_resp = self._make_response(text="ok")
@@ -1147,9 +1145,7 @@ class TestSelfCreateTool:
         (tmp_path / "tool_a.json").write_text(
             json.dumps({"name": "tool_a", "description": "Alpha"})
         )
-        (tmp_path / "tool_b.json").write_text(
-            json.dumps({"name": "tool_b", "description": "Beta"})
-        )
+        (tmp_path / "tool_b.json").write_text(json.dumps({"name": "tool_b", "description": "Beta"}))
 
         with patch.object(mod, "CUSTOM_TOOLS_DIR", tmp_path):
             result = mod.SelfCreateTool().execute(action="list")
@@ -1204,9 +1200,7 @@ class TestSelfCreateTool:
         import missy.tools.builtin.self_create_tool as mod
 
         with patch.object(mod, "CUSTOM_TOOLS_DIR", tmp_path):
-            result = mod.SelfCreateTool().execute(
-                action="delete", tool_name="does_not_exist"
-            )
+            result = mod.SelfCreateTool().execute(action="delete", tool_name="does_not_exist")
 
         assert result.success is False
         assert "not found" in result.error.lower()
@@ -1273,24 +1267,18 @@ class TestEnsureRuntimeDir:
         result = _ensure_runtime_dir()
         assert isinstance(result, dict)
 
-    def test_preserves_existing_xdg_runtime_dir(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_preserves_existing_xdg_runtime_dir(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/already/set")
         env = _ensure_runtime_dir()
         assert env["XDG_RUNTIME_DIR"] == "/run/user/already/set"
 
-    def test_sets_xdg_runtime_dir_when_absent(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_sets_xdg_runtime_dir_when_absent(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
         uid = os.getuid()
         env = _ensure_runtime_dir()
         assert env["XDG_RUNTIME_DIR"] == f"/run/user/{uid}"
 
-    def test_returned_env_contains_only_safe_vars(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_returned_env_contains_only_safe_vars(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("MY_SECRET_KEY", "super-secret")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-xxx")
         monkeypatch.setenv("HOME", "/home/test")
@@ -1302,9 +1290,7 @@ class TestEnsureRuntimeDir:
         assert "MY_SECRET_KEY" not in env
         assert "ANTHROPIC_API_KEY" not in env
 
-    def test_works_with_env_containing_no_safe_vars(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_works_with_env_containing_no_safe_vars(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Even with a completely stripped environment the function returns a dict."""
         from missy.tools.builtin.tts_speak import _SAFE_TTS_ENV_VARS
 
@@ -1639,7 +1625,9 @@ class TestAudioSetVolumeTool:
     def test_mute_command(self) -> None:
         with (
             patch("missy.tools.builtin.tts_speak._ensure_runtime_dir", return_value={}),
-            patch("subprocess.run", side_effect=self._ok_run_pair("Volume: 0.50 [MUTED]")) as mock_run,
+            patch(
+                "subprocess.run", side_effect=self._ok_run_pair("Volume: 0.50 [MUTED]")
+            ) as mock_run,
         ):
             result = AudioSetVolumeTool().execute(volume="mute")
 
@@ -1825,9 +1813,7 @@ class TestDiscordUploadTool:
         mock_rest.upload_file.side_effect = RuntimeError("Discord API exploded")
 
         with patch("missy.channels.discord.rest.DiscordRestClient", return_value=mock_rest):
-            result = DiscordUploadTool().execute(
-                file_path="/some/file.txt", channel_id="321"
-            )
+            result = DiscordUploadTool().execute(file_path="/some/file.txt", channel_id="321")
 
         assert result.success is False
         assert "Upload failed" in result.error

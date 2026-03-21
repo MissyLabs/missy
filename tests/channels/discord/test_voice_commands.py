@@ -162,6 +162,7 @@ class TestJoinCommand:
     @pytest.mark.asyncio
     async def test_join_error_returns_message(self, base_kwargs, mock_voice):
         from missy.channels.discord.voice import DiscordVoiceError
+
         base_kwargs["content"] = "!join"
         mock_voice.join = AsyncMock(side_effect=DiscordVoiceError("Not in a voice channel"))
         result = await maybe_handle_voice_command(**base_kwargs)
@@ -194,6 +195,7 @@ class TestLeaveCommand:
     @pytest.mark.asyncio
     async def test_leave_error(self, base_kwargs, mock_voice):
         from missy.channels.discord.voice import DiscordVoiceError
+
         base_kwargs["content"] = "!leave"
         mock_voice.leave = AsyncMock(side_effect=DiscordVoiceError("Connection lost"))
         result = await maybe_handle_voice_command(**base_kwargs)
@@ -232,6 +234,7 @@ class TestSayCommand:
     @pytest.mark.asyncio
     async def test_say_error(self, base_kwargs, mock_voice):
         from missy.channels.discord.voice import DiscordVoiceError
+
         base_kwargs["content"] = "!say test"
         mock_voice.say = AsyncMock(side_effect=DiscordVoiceError("TTS not configured"))
         result = await maybe_handle_voice_command(**base_kwargs)

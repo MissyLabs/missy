@@ -141,7 +141,9 @@ def _start_callback_server() -> HTTPServer | None:
 
 
 def _wait_for_callback(
-    server: HTTPServer, timeout: int = 120, expected_state: str = "",
+    server: HTTPServer,
+    timeout: int = 120,
+    expected_state: str = "",
 ) -> str | None:
     """Block until the callback arrives or timeout expires.
 

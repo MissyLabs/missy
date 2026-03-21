@@ -290,9 +290,7 @@ class TestWebhookContentTypeValidation:
 
     def test_missing_content_type_returns_415(self):
         body = b'{"prompt": "test"}'
-        handler, responses = self._make_handler(
-            {"Content-Length": str(len(body))}, body
-        )
+        handler, responses = self._make_handler({"Content-Length": str(len(body))}, body)
         handler.do_POST()
         assert responses == [415]
 
@@ -443,31 +441,37 @@ class TestWebhookHeaderFiltering:
         return msg
 
     def test_authorization_header_stripped_from_metadata(self):
-        msg = self._make_handler_and_post({
-            "Authorization": "Bearer secret-token",
-            "Content-Type": "application/json",
-        })
+        msg = self._make_handler_and_post(
+            {
+                "Authorization": "Bearer secret-token",
+                "Content-Type": "application/json",
+            }
+        )
         assert msg is not None
         stored_headers = msg.metadata.get("webhook_headers", {})
         assert "authorization" not in stored_headers
         assert "Authorization" not in stored_headers
 
     def test_cookie_header_stripped_from_metadata(self):
-        msg = self._make_handler_and_post({
-            "Cookie": "session=abc123",
-            "Content-Type": "application/json",
-        })
+        msg = self._make_handler_and_post(
+            {
+                "Cookie": "session=abc123",
+                "Content-Type": "application/json",
+            }
+        )
         assert msg is not None
         stored_headers = msg.metadata.get("webhook_headers", {})
         assert "cookie" not in stored_headers
         assert "Cookie" not in stored_headers
 
     def test_safe_headers_preserved_in_metadata(self):
-        msg = self._make_handler_and_post({
-            "Content-Type": "application/json",
-            "User-Agent": "TestBot/1.0",
-            "X-Request-Id": "req-123",
-        })
+        msg = self._make_handler_and_post(
+            {
+                "Content-Type": "application/json",
+                "User-Agent": "TestBot/1.0",
+                "X-Request-Id": "req-123",
+            }
+        )
         assert msg is not None
         stored_headers = msg.metadata.get("webhook_headers", {})
         assert stored_headers.get("content-type") == "application/json"
@@ -475,10 +479,12 @@ class TestWebhookHeaderFiltering:
         assert stored_headers.get("x-request-id") == "req-123"
 
     def test_x_forwarded_for_stripped_from_metadata(self):
-        msg = self._make_handler_and_post({
-            "X-Forwarded-For": "10.0.0.1",
-            "Content-Type": "application/json",
-        })
+        msg = self._make_handler_and_post(
+            {
+                "X-Forwarded-For": "10.0.0.1",
+                "Content-Type": "application/json",
+            }
+        )
         assert msg is not None
         stored_headers = msg.metadata.get("webhook_headers", {})
         assert "x-forwarded-for" not in stored_headers

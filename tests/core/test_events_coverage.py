@@ -71,8 +71,10 @@ class TestEventBusUnsubscribe:
     def test_unsubscribe_registered_callback_removes_it(self):
         bus = EventBus()
         received = []
+
         def cb(e):
             return received.append(e)
+
         bus.subscribe("test.event", cb)
         bus.unsubscribe("test.event", cb)
 
@@ -82,16 +84,20 @@ class TestEventBusUnsubscribe:
     def test_unsubscribe_unregistered_callback_is_noop(self):
         """Lines 153-156: ValueError inside unsubscribe is caught and ignored."""
         bus = EventBus()
+
         def cb(e):
             return None
+
         # Never registered — should not raise
         bus.unsubscribe("test.event", cb)
 
     def test_unsubscribe_wrong_event_type_is_noop(self):
         """Callback registered for a different event type — also a noop."""
         bus = EventBus()
+
         def cb(e):
             return None
+
         bus.subscribe("other.event", cb)
         # Unsubscribe from a type where cb was never added
         bus.unsubscribe("test.event", cb)
@@ -99,8 +105,10 @@ class TestEventBusUnsubscribe:
     def test_unsubscribe_for_unknown_event_type_is_noop(self):
         """Event type never subscribed to at all — no KeyError or ValueError."""
         bus = EventBus()
+
         def cb(e):
             return None
+
         bus.unsubscribe("completely.unknown", cb)
 
 
@@ -115,6 +123,7 @@ class TestEventBusPublishCallbackException:
         bus = EventBus()
         bad_cb = MagicMock(side_effect=RuntimeError("boom"))
         good_results = []
+
         def good_cb(e):
             return good_results.append(e)
 

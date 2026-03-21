@@ -491,9 +491,7 @@ class TestManagerRunJobFailureTracking:
         assert "down" in mgr._jobs[job.id].last_error
 
     @patch("missy.scheduler.manager.uuid")
-    def test_success_resets_consecutive_failures(
-        self, mock_uuid, mgr: SchedulerManager
-    ) -> None:
+    def test_success_resets_consecutive_failures(self, mock_uuid, mgr: SchedulerManager) -> None:
         mock_uuid.uuid4.return_value = "sess"
         job = mgr.add_job("recover", "every 5 minutes", "t")
         job.consecutive_failures = 2  # simulate prior failures
@@ -535,9 +533,7 @@ class TestManagerRunJobRetryScheduling:
         assert retry_job is not None, "A retry job must be registered after the first failure"
 
     @patch("missy.scheduler.manager.uuid")
-    def test_no_retry_after_max_attempts_exhausted(
-        self, mock_uuid, mgr: SchedulerManager
-    ) -> None:
+    def test_no_retry_after_max_attempts_exhausted(self, mock_uuid, mgr: SchedulerManager) -> None:
         mock_uuid.uuid4.return_value = "sess"
         job = mgr.add_job("no-retry", "every 5 minutes", "t", max_attempts=1)
         job.consecutive_failures = 1  # already at max
@@ -565,9 +561,7 @@ class TestManagerRunJobDeleteAfterRun:
         assert job.id not in mgr._jobs
 
     @patch("missy.scheduler.manager.uuid")
-    def test_non_oneshot_not_removed_after_success(
-        self, mock_uuid, mgr: SchedulerManager
-    ) -> None:
+    def test_non_oneshot_not_removed_after_success(self, mock_uuid, mgr: SchedulerManager) -> None:
         mock_uuid.uuid4.return_value = "sess"
         job = mgr.add_job("recurring", "every 5 minutes", "t", delete_after_run=False)
 
@@ -600,9 +594,10 @@ class TestManagerErrorHandling:
             m.start()
 
     def test_add_job_rollback_on_schedule_job_error(self, mgr: SchedulerManager) -> None:
-        with patch.object(
-            mgr, "_schedule_job", side_effect=SchedulerError("APScheduler full")
-        ), pytest.raises(SchedulerError):
+        with (
+            patch.object(mgr, "_schedule_job", side_effect=SchedulerError("APScheduler full")),
+            pytest.raises(SchedulerError),
+        ):
             mgr.add_job("will-fail", "every 5 minutes", "t")
         assert len(mgr.list_jobs()) == 0
 

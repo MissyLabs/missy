@@ -312,8 +312,7 @@ class TestIntentHardening:
                 errors.append(e)
 
         threads = [
-            threading.Thread(target=classify, args=(f"look at this {i}",))
-            for i in range(20)
+            threading.Thread(target=classify, args=(f"look at this {i}",)) for i in range(20)
         ]
         for t in threads:
             t.start()
@@ -365,7 +364,10 @@ class TestSourcesHardening:
         d = tmp_path / "photos"
         d.mkdir()
         source = PhotoSource(d)
-        with patch.object(Path, "glob", side_effect=OSError("Permission denied")), pytest.raises(OSError, match="Cannot scan"):
+        with (
+            patch.object(Path, "glob", side_effect=OSError("Permission denied")),
+            pytest.raises(OSError, match="Cannot scan"),
+        ):
             source.scan()
 
     @patch("missy.vision.sources._get_cv2")

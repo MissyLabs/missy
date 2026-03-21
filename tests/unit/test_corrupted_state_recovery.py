@@ -59,12 +59,16 @@ class TestSchedulerResilience:
         from missy.scheduler.manager import SchedulerManager
 
         jobs_file = tmp_path / "jobs.json"
-        jobs_file.write_text(json.dumps([
-            {"invalid": "record"},
-            42,
-            None,
-            [],
-        ]))
+        jobs_file.write_text(
+            json.dumps(
+                [
+                    {"invalid": "record"},
+                    42,
+                    None,
+                    [],
+                ]
+            )
+        )
         mgr = SchedulerManager(jobs_file=str(jobs_file))
         mgr.start()
         # Should not crash, malformed records skipped
@@ -217,7 +221,7 @@ class TestMemoryStoreResilience:
         store.add_turn(turn)
 
         # FTS5 special chars like *, ", ( should not crash
-        for query in ['test*', '"test"', 'test OR data', 'test AND data']:
+        for query in ["test*", '"test"', "test OR data", "test AND data"]:
             results = store.search(query)
             assert isinstance(results, list)
 
@@ -273,9 +277,7 @@ class TestConfigResilience:
         from missy.config.settings import load_config
 
         config_file = tmp_path / "config.yaml"
-        config_file.write_text(
-            "network:\n  default_deny: true\n"
-        )
+        config_file.write_text("network:\n  default_deny: true\n")
         config = load_config(str(config_file))
         assert config is not None
         assert config.network.default_deny is True
@@ -415,7 +417,9 @@ class TestCostTrackerResilience:
         from missy.agent.cost_tracker import CostTracker
 
         tracker = CostTracker(max_spend_usd=0.0)  # unlimited
-        tracker.record(model="claude-sonnet-4", prompt_tokens=10_000_000, completion_tokens=5_000_000)
+        tracker.record(
+            model="claude-sonnet-4", prompt_tokens=10_000_000, completion_tokens=5_000_000
+        )
         assert tracker.total_cost_usd > 0
 
     def test_budget_zero_means_unlimited(self):

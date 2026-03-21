@@ -90,18 +90,20 @@ class TestRowToDictMalformedJSON:
         class FakeRow(dict):
             pass
 
-        fake_row = FakeRow({
-            "id": "fake-id",
-            "session_id": "s",
-            "task_id": "t",
-            "prompt": "p",
-            "state": "RUNNING",
-            "loop_messages": "[]",  # Valid string so isinstance check passes
-            "tool_names_used": "[]",
-            "iteration": 0,
-            "created_at": 0.0,
-            "updated_at": 0.0,
-        })
+        fake_row = FakeRow(
+            {
+                "id": "fake-id",
+                "session_id": "s",
+                "task_id": "t",
+                "prompt": "p",
+                "state": "RUNNING",
+                "loop_messages": "[]",  # Valid string so isinstance check passes
+                "tool_names_used": "[]",
+                "iteration": 0,
+                "created_at": 0.0,
+                "updated_at": 0.0,
+            }
+        )
 
         with patch("missy.agent.checkpoint.json.loads", side_effect=TypeError("unexpected type")):
             result = CheckpointManager._row_to_dict(fake_row)

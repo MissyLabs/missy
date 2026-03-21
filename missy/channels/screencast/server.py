@@ -130,9 +130,7 @@ class ScreencastServer:
         self._sessions = session_manager
         self._host = host
         self._port = port
-        self._tls_cert_dir = tls_cert_dir or str(
-            Path("~/.missy/secrets").expanduser()
-        )
+        self._tls_cert_dir = tls_cert_dir or str(Path("~/.missy/secrets").expanduser())
         self._running = False
         self._ws_server: Any | None = None
         self._active_connections: int = 0
@@ -260,10 +258,12 @@ class ScreencastServer:
         # Generate EC key (fast, small).
         key = ec.generate_private_key(ec.SECP256R1())
 
-        subject = issuer = x509.Name([
-            x509.NameAttribute(NameOID.COMMON_NAME, "Missy Screencast"),
-            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Missy"),
-        ])
+        subject = issuer = x509.Name(
+            [
+                x509.NameAttribute(NameOID.COMMON_NAME, "Missy Screencast"),
+                x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Missy"),
+            ]
+        )
 
         # SANs: localhost + common LAN ranges.
         san_entries: list[x509.GeneralName] = [
@@ -288,10 +288,7 @@ class ScreencastServer:
             .public_key(key.public_key())
             .serial_number(x509.random_serial_number())
             .not_valid_before(datetime.datetime.now(datetime.UTC))
-            .not_valid_after(
-                datetime.datetime.now(datetime.UTC)
-                + datetime.timedelta(days=3650)
-            )
+            .not_valid_after(datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=3650))
             .add_extension(
                 x509.SubjectAlternativeName(san_entries),
                 critical=False,
@@ -427,7 +424,12 @@ class ScreencastServer:
                     websocket,
                     {"type": "auth_fail", "reason": "Missing session_id or token"},
                 )
-                _emit("system", "screencast.connection.auth_fail", "deny", {"reason": "missing_fields"})
+                _emit(
+                    "system",
+                    "screencast.connection.auth_fail",
+                    "deny",
+                    {"reason": "missing_fields"},
+                )
                 await websocket.close(1008, "Missing credentials")
                 return
 
@@ -456,7 +458,11 @@ class ScreencastServer:
                 return
 
             # Auth OK — register connection.
-            remote_str = f"{remote_addr[0]}:{remote_addr[1]}" if isinstance(remote_addr, tuple) else str(remote_addr)
+            remote_str = (
+                f"{remote_addr[0]}:{remote_addr[1]}"
+                if isinstance(remote_addr, tuple)
+                else str(remote_addr)
+            )
             state = self._sessions.register_connection(session_id, remote_str)
             await self._send_json(websocket, {"type": "auth_ok", "session_id": session_id})
 
@@ -466,7 +472,9 @@ class ScreencastServer:
                 "allow",
                 {"remote": remote_str},
             )
-            logger.info("ScreencastServer: authenticated session %s from %s", session_id, remote_str)
+            logger.info(
+                "ScreencastServer: authenticated session %s from %s", session_id, remote_str
+            )
 
             try:
                 await self._message_loop(websocket, session_id, state)
@@ -603,7 +611,10 @@ class ScreencastServer:
                     continue
 
                 # Validate dimensions (reject if either is set but out of range).
-                if (width or height) and not (_MIN_DIMENSION <= width <= _MAX_DIMENSION and _MIN_DIMENSION <= height <= _MAX_DIMENSION):
+                if (width or height) and not (
+                    _MIN_DIMENSION <= width <= _MAX_DIMENSION
+                    and _MIN_DIMENSION <= height <= _MAX_DIMENSION
+                ):
                     await self._send_json(
                         websocket,
                         {"type": "error", "message": f"Invalid dimensions: {width}x{height}"},

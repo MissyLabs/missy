@@ -294,11 +294,7 @@ class VisionHealthMonitor:
             total = len(self._events)
             failures = sum(1 for e in self._events if not e.success)
             recent = self._get_recent_events()
-            recent_success = (
-                sum(1 for e in recent if e.success) / len(recent)
-                if recent
-                else 0.0
-            )
+            recent_success = sum(1 for e in recent if e.success) / len(recent) if recent else 0.0
 
             warnings = self._collect_warnings()
             device_reports = {}
@@ -452,16 +448,18 @@ class VisionHealthMonitor:
                     # Upsert device stats
                     now = time.time()
                     for device, stats in self._devices.items():
-                        data = json.dumps({
-                            "total_captures": stats.total_captures,
-                            "successful_captures": stats.successful_captures,
-                            "failed_captures": stats.failed_captures,
-                            "total_quality": stats.total_quality,
-                            "total_latency_ms": stats.total_latency_ms,
-                            "last_seen": stats.last_seen,
-                            "last_error": stats.last_error,
-                            "consecutive_failures": stats.consecutive_failures,
-                        })
+                        data = json.dumps(
+                            {
+                                "total_captures": stats.total_captures,
+                                "successful_captures": stats.successful_captures,
+                                "failed_captures": stats.failed_captures,
+                                "total_quality": stats.total_quality,
+                                "total_latency_ms": stats.total_latency_ms,
+                                "last_seen": stats.last_seen,
+                                "last_error": stats.last_error,
+                                "consecutive_failures": stats.consecutive_failures,
+                            }
+                        )
                         conn.execute(
                             "INSERT OR REPLACE INTO device_stats (device, data, updated_at) "
                             "VALUES (?, ?, ?)",
@@ -638,8 +636,7 @@ class VisionHealthMonitor:
                 and stats.successful_captures >= 3
             ):
                 warnings.append(
-                    f"Device {device}: low average quality "
-                    f"({stats.average_quality:.2f})"
+                    f"Device {device}: low average quality ({stats.average_quality:.2f})"
                 )
 
         return warnings

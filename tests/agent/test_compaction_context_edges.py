@@ -97,10 +97,12 @@ class TestChunkTurns:
 
     def test_empty_turns(self):
         from missy.agent.compaction import _chunk_turns
+
         assert _chunk_turns([], 1000) == []
 
     def test_single_small_turn(self):
         from missy.agent.compaction import _chunk_turns
+
         turns = [FakeTurn(content="hi")]
         chunks = _chunk_turns(turns, 1000)
         assert len(chunks) == 1
@@ -109,12 +111,14 @@ class TestChunkTurns:
     def test_single_large_turn(self):
         """A single turn larger than max_tokens should still be in one chunk."""
         from missy.agent.compaction import _chunk_turns
+
         turns = [FakeTurn(content="x" * 10000)]  # ~2500 tokens
         chunks = _chunk_turns(turns, 100)
         assert len(chunks) == 1  # Can't split a single turn
 
     def test_multiple_turns_split(self):
         from missy.agent.compaction import _chunk_turns
+
         turns = [FakeTurn(id=f"t{i}", content="word " * 100) for i in range(10)]
         chunks = _chunk_turns(turns, 200)
         assert len(chunks) > 1
@@ -125,6 +129,7 @@ class TestChunkTurns:
     def test_exact_boundary(self):
         """Turns exactly at the token limit should not split."""
         from missy.agent.compaction import _chunk_turns
+
         # Each turn is ~25 tokens (100 chars / 4)
         turns = [FakeTurn(id=f"t{i}", content="x" * 100) for i in range(4)]
         chunks = _chunk_turns(turns, 100)  # 100 tokens = 4 turns
@@ -132,6 +137,7 @@ class TestChunkTurns:
 
     def test_turns_with_empty_content(self):
         from missy.agent.compaction import _chunk_turns
+
         turns = [FakeTurn(id=f"t{i}", content="") for i in range(5)]
         chunks = _chunk_turns(turns, 10)
         # Empty content → ~1 token each, 5 total fits in chunk
@@ -193,7 +199,8 @@ class TestCompactSession:
         turns = [FakeTurn(id=f"t{i}", content="word " * 100) for i in range(20)]
         # Mark first 8 turns as already summarized
         existing_summary = FakeSummaryRecord(
-            id="s1", depth=0,
+            id="s1",
+            depth=0,
             source_turn_ids=[f"t{i}" for i in range(8)],
         )
         store = FakeMemoryStore(turns=turns, summaries=[existing_summary])

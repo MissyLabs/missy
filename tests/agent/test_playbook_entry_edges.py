@@ -88,7 +88,9 @@ def _make_pb(tmp_path, name: str = "playbook.json") -> Playbook:
     return Playbook(store_path=str(tmp_path / name))
 
 
-def _record_n(pb: Playbook, n: int, task_type: str = "shell", tools: list[str] | None = None) -> PlaybookEntry:
+def _record_n(
+    pb: Playbook, n: int, task_type: str = "shell", tools: list[str] | None = None
+) -> PlaybookEntry:
     """Record the same pattern n times; return final entry."""
     tools = tools or ["shell_exec"]
     entry = None

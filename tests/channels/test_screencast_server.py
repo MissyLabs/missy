@@ -110,8 +110,7 @@ class TestScreencastServer:
             await srv.stop()
 
         assert any(
-            hasattr(e, "event_type") and e.event_type == "screencast.bind.warning"
-            for e in events
+            hasattr(e, "event_type") and e.event_type == "screencast.bind.warning" for e in events
         )
 
 
@@ -181,11 +180,15 @@ class TestScreencastServerProtocol:
         try:
             async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
                 # Send auth.
-                await ws.send(json.dumps({
-                    "type": "auth",
-                    "session_id": session_id,
-                    "token": token,
-                }))
+                await ws.send(
+                    json.dumps(
+                        {
+                            "type": "auth",
+                            "session_id": session_id,
+                            "token": token,
+                        }
+                    )
+                )
                 resp = json.loads(await ws.recv())
                 assert resp["type"] == "auth_ok"
                 assert resp["session_id"] == session_id
@@ -212,11 +215,15 @@ class TestScreencastServerProtocol:
 
         try:
             async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
-                await ws.send(json.dumps({
-                    "type": "auth",
-                    "session_id": session_id,
-                    "token": "wrong-token",
-                }))
+                await ws.send(
+                    json.dumps(
+                        {
+                            "type": "auth",
+                            "session_id": session_id,
+                            "token": "wrong-token",
+                        }
+                    )
+                )
                 resp = json.loads(await ws.recv())
                 assert resp["type"] == "auth_fail"
         except websockets.exceptions.ConnectionClosed:
@@ -245,22 +252,30 @@ class TestScreencastServerProtocol:
         try:
             async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
                 # Auth.
-                await ws.send(json.dumps({
-                    "type": "auth",
-                    "session_id": session_id,
-                    "token": token,
-                }))
+                await ws.send(
+                    json.dumps(
+                        {
+                            "type": "auth",
+                            "session_id": session_id,
+                            "token": token,
+                        }
+                    )
+                )
                 resp = json.loads(await ws.recv())
                 assert resp["type"] == "auth_ok"
 
                 # Send frame metadata.
-                await ws.send(json.dumps({
-                    "type": "frame",
-                    "format": "jpeg",
-                    "width": 1920,
-                    "height": 1080,
-                    "seq": 1,
-                }))
+                await ws.send(
+                    json.dumps(
+                        {
+                            "type": "frame",
+                            "format": "jpeg",
+                            "width": 1920,
+                            "height": 1080,
+                            "seq": 1,
+                        }
+                    )
+                )
 
                 # Send binary JPEG data.
                 fake_jpeg = _JPEG_MAGIC + b"\x00" * 1000
@@ -281,6 +296,7 @@ class TestScreencastServerProtocol:
 # and records send()/close() calls.
 # ---------------------------------------------------------------------------
 
+
 def _make_ws(*recv_values):
     """Return an AsyncMock websocket whose recv() returns the given values in order."""
     ws = MagicMock()
@@ -299,16 +315,20 @@ def _make_auth_msg(session_id, token):
 # Import fallback (lines 23-25)
 # ---------------------------------------------------------------------------
 
+
 class TestImportFallback:
     """Test that the module handles older websockets (< 13) gracefully."""
 
     def test_import_fallback_branch(self) -> None:
         """Simulate ImportError on websockets.asyncio.server to exercise the fallback."""
         cached = sys.modules.pop("missy.channels.screencast.server", None)
-        with patch.dict(
-            sys.modules,
-            {"websockets.asyncio.server": None},
-        ), contextlib.suppress(Exception):
+        with (
+            patch.dict(
+                sys.modules,
+                {"websockets.asyncio.server": None},
+            ),
+            contextlib.suppress(Exception),
+        ):
             import missy.channels.screencast.server as srv_mod  # noqa: F401
         if cached is not None:
             sys.modules["missy.channels.screencast.server"] = cached
@@ -317,6 +337,7 @@ class TestImportFallback:
 # ---------------------------------------------------------------------------
 # _emit exception handling (lines 99-100)
 # ---------------------------------------------------------------------------
+
 
 class TestEmitExceptionHandling:
     """Test that _emit swallows exceptions from event_bus.publish."""
@@ -333,6 +354,7 @@ class TestEmitExceptionHandling:
 # _load_capture_html fallback (lines 206-208)
 # ---------------------------------------------------------------------------
 
+
 class TestLoadCaptureHtmlFallback:
     """Test the fallback HTML when capture.html cannot be read."""
 
@@ -348,6 +370,7 @@ class TestLoadCaptureHtmlFallback:
 # ---------------------------------------------------------------------------
 # SSL context creation (lines 226-246)
 # ---------------------------------------------------------------------------
+
 
 class TestSslContext:
     """Test _get_or_create_ssl_context branches."""
@@ -400,6 +423,7 @@ class TestSslContext:
 # Self-signed cert generation (lines 251-315)
 # ---------------------------------------------------------------------------
 
+
 class TestGenerateSelfSignedCert:
     """Test _generate_self_signed_cert using the cryptography library."""
 
@@ -430,12 +454,16 @@ class TestGenerateSelfSignedCert:
         class _FailingSocket:
             def __init__(self, *a, **kw):
                 pass
+
             def connect(self, *a):
                 raise OSError("network unreachable")
+
             def getsockname(self):
                 return ("", 0)
+
             def __enter__(self):
                 return self
+
             def __exit__(self, *a):
                 pass
 
@@ -448,6 +476,7 @@ class TestGenerateSelfSignedCert:
 # ---------------------------------------------------------------------------
 # _handle_connection unit tests (direct call, no real WS server)
 # ---------------------------------------------------------------------------
+
 
 class TestHandleConnectionDirect:
     """Call _handle_connection() with mocked websockets — no network."""
@@ -502,9 +531,7 @@ class TestHandleConnectionDirect:
         ws.close.assert_awaited_once_with(1008, "Malformed JSON")
 
     @pytest.mark.asyncio
-    async def test_missing_credentials_empty_session_id(
-        self, srv: ScreencastServer
-    ) -> None:
+    async def test_missing_credentials_empty_session_id(self, srv: ScreencastServer) -> None:
         """Missing session_id sends auth_fail and closes."""
         ws = _make_ws(json.dumps({"type": "auth", "session_id": "", "token": "tok"}))
         await srv._handle_connection(ws)
@@ -543,25 +570,19 @@ class TestHandleConnectionDirect:
         ws.close.assert_awaited_once_with(1013, "Session limit reached")
 
     @pytest.mark.asyncio
-    async def test_connection_closed_exception_is_swallowed(
-        self, srv: ScreencastServer
-    ) -> None:
+    async def test_connection_closed_exception_is_swallowed(self, srv: ScreencastServer) -> None:
         """ConnectionClosed during recv() must not propagate."""
         import websockets.exceptions
 
         ws = MagicMock()
         ws.remote_address = ("127.0.0.1", 1)
-        ws.recv = AsyncMock(
-            side_effect=websockets.exceptions.ConnectionClosed(None, None)
-        )
+        ws.recv = AsyncMock(side_effect=websockets.exceptions.ConnectionClosed(None, None))
         ws.send = AsyncMock()
         ws.close = AsyncMock()
         await srv._handle_connection(ws)
 
     @pytest.mark.asyncio
-    async def test_unexpected_exception_is_logged(
-        self, srv: ScreencastServer
-    ) -> None:
+    async def test_unexpected_exception_is_logged(self, srv: ScreencastServer) -> None:
         """Unexpected exception during handle_connection is caught and logged."""
         ws = MagicMock()
         ws.remote_address = ("127.0.0.1", 1)
@@ -574,6 +595,7 @@ class TestHandleConnectionDirect:
 # ---------------------------------------------------------------------------
 # _message_loop unit tests
 # ---------------------------------------------------------------------------
+
 
 class TestMessageLoopDirect:
     """Test _message_loop() by passing a controlled async-iterable websocket."""
@@ -665,8 +687,10 @@ class TestMessageLoopDirect:
         # First frame: monotonic returns 5.0 (5.0 - 0.0 >= 2.0, accepted).
         # Second frame: monotonic returns 5.5 (5.5 - 5.0 < 2.0, rate-limited/dropped).
         ws = self._make_iter_ws(
-            frame_meta, jpeg_data,
-            frame_meta, jpeg_data,
+            frame_meta,
+            jpeg_data,
+            frame_meta,
+            jpeg_data,
         )
         with patch("missy.channels.screencast.server.time") as mock_time:
             mock_time.monotonic.side_effect = [5.0, 5.5]
@@ -793,13 +817,12 @@ class TestMessageLoopDirect:
 # send_analysis (lines 652-654)
 # ---------------------------------------------------------------------------
 
+
 class TestSendAnalysis:
     """Test send_analysis no-op when session is not connected."""
 
     @pytest.mark.asyncio
-    async def test_send_analysis_noop_when_not_connected(
-        self, server: ScreencastServer
-    ) -> None:
+    async def test_send_analysis_noop_when_not_connected(self, server: ScreencastServer) -> None:
         """send_analysis returns without error when session has no connection."""
         await server.send_analysis("nonexistent-session", seq=1, text="hello")
 
@@ -818,6 +841,7 @@ class TestSendAnalysis:
 # ---------------------------------------------------------------------------
 # Security hardening tests
 # ---------------------------------------------------------------------------
+
 
 class TestSecurityHardening:
     """Tests for security fixes: Referrer-Policy, int() validation, dimension checks."""

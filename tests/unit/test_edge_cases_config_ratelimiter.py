@@ -413,7 +413,9 @@ class TestContextManagerZeroBudget:
         from missy.agent.context import ContextManager, TokenBudget
 
         # fresh_tail_count=0 disables fresh-tail protection so all history is evictable.
-        budget = TokenBudget(total=0, system_reserve=0, tool_definitions_reserve=0, fresh_tail_count=0)
+        budget = TokenBudget(
+            total=0, system_reserve=0, tool_definitions_reserve=0, fresh_tail_count=0
+        )
         mgr = ContextManager(budget)
 
         history = [{"role": "user", "content": f"msg {i}"} for i in range(10)]

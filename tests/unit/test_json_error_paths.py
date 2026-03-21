@@ -566,14 +566,18 @@ class TestHatchingLogUnicodeEdgeCases:
 
     def test_cjk_characters_in_message(self, tmp_path: Path) -> None:
         hl = _make_hatching_log(tmp_path)
-        entry = json.dumps({"step": "persona", "status": "ok", "message": "\u4e2d\u6587\u6d4b\u8bd5"})
+        entry = json.dumps(
+            {"step": "persona", "status": "ok", "message": "\u4e2d\u6587\u6d4b\u8bd5"}
+        )
         _write_hatching_log(tmp_path, entry + "\n")
         result = hl.get_entries()
         assert len(result) == 1
 
     def test_rtl_text_in_message(self, tmp_path: Path) -> None:
         hl = _make_hatching_log(tmp_path)
-        entry = json.dumps({"step": "boot", "status": "ok", "message": "\u0645\u0631\u062d\u0628\u0627"})
+        entry = json.dumps(
+            {"step": "boot", "status": "ok", "message": "\u0645\u0631\u062d\u0628\u0627"}
+        )
         _write_hatching_log(tmp_path, entry + "\n")
         result = hl.get_entries()
         assert len(result) == 1
@@ -666,7 +670,7 @@ class TestSchedulerManagerLoadJobsCorruptedFile:
 
     def test_unicode_in_corrupt_json_loads_empty(self, tmp_path: Path) -> None:
         mgr = _make_scheduler(tmp_path)
-        _write_jobs_file_safe(tmp_path, '[\u4e2d\u6587{broken}]')
+        _write_jobs_file_safe(tmp_path, "[\u4e2d\u6587{broken}]")
         mgr._load_jobs()
         assert mgr._jobs == {}
 
@@ -823,8 +827,16 @@ class TestDeviceRegistryLoadNullBytesInContent:
             room="Garage",
             ip_address="192.168.1.50",
         )
-        valid_json = json.dumps([{"node_id": "node-002", "friendly_name": "Null Test",
-                                   "room": "Garage", "ip_address": "192.168.1.50"}])
+        valid_json = json.dumps(
+            [
+                {
+                    "node_id": "node-002",
+                    "friendly_name": "Null Test",
+                    "room": "Garage",
+                    "ip_address": "192.168.1.50",
+                }
+            ]
+        )
         # Inject a null byte mid-file — will fail UTF-8 decode or JSON parse
         content = valid_json[:10].encode("utf-8") + b"\x00" + valid_json[10:].encode("utf-8")
         _write_registry_bytes_safe(tmp_path, content)

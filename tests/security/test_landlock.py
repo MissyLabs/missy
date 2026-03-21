@@ -294,12 +294,7 @@ class TestRuleBuilders:
         assert len(policy.rules) == 1  # original unaffected
 
     def test_multiple_paths_same_access_type(self) -> None:
-        policy = (
-            LandlockPolicy()
-            .add_read_path("/usr")
-            .add_read_path("/lib")
-            .add_read_path("/etc")
-        )
+        policy = LandlockPolicy().add_read_path("/usr").add_read_path("/lib").add_read_path("/etc")
         accesses = [r["access"] for r in policy.rules]
         assert all(a == "read" for a in accesses)
         paths = [r["path"] for r in policy.rules]

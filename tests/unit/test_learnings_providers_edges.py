@@ -244,7 +244,9 @@ class TestTimestampValidity:
 
     def test_explicit_timestamp_preserved(self):
         ts = "2025-06-01T12:00:00+00:00"
-        tl = TaskLearning(task_type="file", approach=[], outcome="failure", lesson="z", timestamp=ts)
+        tl = TaskLearning(
+            task_type="file", approach=[], outcome="failure", lesson="z", timestamp=ts
+        )
         assert tl.timestamp == ts
 
 
@@ -296,13 +298,14 @@ class TestLearningsPersistence:
         store = SQLiteMemoryStore(db_path=db)
         # Insert three learnings with distinct timestamps to guarantee order
         for i in range(3):
+
             @dataclass
             class FakeLearning:
                 task_type: str = "shell"
                 outcome: str = "success"
                 lesson: str = f"lesson-{i}"
                 approach: list = None
-                timestamp: str = f"2025-01-0{i+1}T00:00:00+00:00"
+                timestamp: str = f"2025-01-0{i + 1}T00:00:00+00:00"
 
                 def __post_init__(self):
                     if self.approach is None:
@@ -573,9 +576,7 @@ class TestApiKeyRotation:
         # Remove api_key from spec; give only _api_key
         del p.api_key
         p._api_key = "k0"
-        cfg = ProviderConfig(
-            name="anthropic", model="m", api_keys=["k0", "k1"]
-        )
+        cfg = ProviderConfig(name="anthropic", model="m", api_keys=["k0", "k1"])
         registry.register("private", p, config=cfg)
         registry.rotate_key("private")
         assert p._api_key == "k1"
@@ -658,7 +659,9 @@ class TestFromConfig:
 
 
 class TestModelRouterTiers:
-    def _cfg(self, fast: str = "", premium: str = "", model: str = "primary-model") -> ProviderConfig:
+    def _cfg(
+        self, fast: str = "", premium: str = "", model: str = "primary-model"
+    ) -> ProviderConfig:
         return ProviderConfig(
             name="anthropic",
             model=model,
@@ -902,10 +905,9 @@ class TestRateLimiterConcurrency:
                 except Exception as exc:
                     errors.append(exc)
 
-        threads = (
-            [threading.Thread(target=acquirer, daemon=True) for _ in range(3)]
-            + [threading.Thread(target=reader, daemon=True) for _ in range(2)]
-        )
+        threads = [threading.Thread(target=acquirer, daemon=True) for _ in range(3)] + [
+            threading.Thread(target=reader, daemon=True) for _ in range(2)
+        ]
         for t in threads:
             t.start()
         time.sleep(0.1)

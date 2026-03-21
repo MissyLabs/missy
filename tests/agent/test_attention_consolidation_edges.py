@@ -107,7 +107,9 @@ class TestAlertingAttentionEdges:
     def test_all_urgency_keywords_score_exactly_one(self):
         """Input consisting entirely of urgency keywords caps at 1.0."""
         alerting = AlertingAttention()
-        score = alerting.score("error critical urgent broken down failed security immediately asap emergency")
+        score = alerting.score(
+            "error critical urgent broken down failed security immediately asap emergency"
+        )
         assert score == pytest.approx(1.0)
 
     def test_case_insensitive_matching(self):

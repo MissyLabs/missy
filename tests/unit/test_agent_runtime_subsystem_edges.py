@@ -98,9 +98,7 @@ class TestContextManagerEdgeCases:
         from missy.agent.context import ContextManager
 
         cm = ContextManager()
-        history = [
-            {"role": "user", "content": f"Message {i}"} for i in range(5)
-        ]
+        history = [{"role": "user", "content": f"Message {i}"} for i in range(5)]
         system, messages = cm.build_messages(
             system="System",
             new_message="Latest",
@@ -134,8 +132,7 @@ class TestContextManagerEdgeCases:
         )
         # Memory should be incorporated somewhere in system or messages
         all_text = system + " ".join(
-            m.get("content", "") if isinstance(m, dict) else str(m)
-            for m in messages
+            m.get("content", "") if isinstance(m, dict) else str(m) for m in messages
         )
         assert "concise" in all_text or len(messages) >= 1
 

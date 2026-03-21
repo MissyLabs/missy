@@ -263,7 +263,10 @@ class TestRESTLPolicyEnforcementConfigDriven:
             [{"host": "api.github.com", "method": "DELETE", "path": "/**", "action": "deny"}]
         )
         client = PolicyHTTPClient()
-        with patch.object(httpx.Client, "delete") as mock_del, pytest.raises(PolicyViolationError, match="REST policy denied"):
+        with (
+            patch.object(httpx.Client, "delete") as mock_del,
+            pytest.raises(PolicyViolationError, match="REST policy denied"),
+        ):
             client.delete("https://api.github.com/repos/org/repo")
         mock_del.assert_not_called()
 
@@ -312,7 +315,10 @@ class TestRESTLPolicyEnforcementConfigDriven:
         )
         client = PolicyHTTPClient()
         for method_name in ("get", "post", "put", "patch", "delete"):
-            with patch.object(httpx.Client, method_name) as mock_method, pytest.raises(PolicyViolationError):
+            with (
+                patch.object(httpx.Client, method_name) as mock_method,
+                pytest.raises(PolicyViolationError),
+            ):
                 getattr(client, method_name)("https://api.github.com/admin/keys")
             mock_method.assert_not_called()
 
@@ -377,9 +383,7 @@ class TestNetworkPolicyChecks:
 
     def test_provider_category_host_is_checked(self) -> None:
         """provider_allowed_hosts is consulted when category='provider'."""
-        init_policy_engine(
-            _restrictive_config(provider_allowed_hosts=["api.anthropic.com"])
-        )
+        init_policy_engine(_restrictive_config(provider_allowed_hosts=["api.anthropic.com"]))
         client = PolicyHTTPClient(category="provider")
         mock_resp = _mock_response(200)
         with patch.object(httpx.Client, "post", return_value=mock_resp):
@@ -388,9 +392,7 @@ class TestNetworkPolicyChecks:
 
     def test_provider_category_host_does_not_allow_other_category(self) -> None:
         """A host in provider_allowed_hosts must not be accessible with category='tool'."""
-        init_policy_engine(
-            _restrictive_config(provider_allowed_hosts=["api.anthropic.com"])
-        )
+        init_policy_engine(_restrictive_config(provider_allowed_hosts=["api.anthropic.com"]))
         client = PolicyHTTPClient(category="tool")
         with patch.object(httpx.Client, "get") as mock_get, pytest.raises(PolicyViolationError):
             client.get("https://api.anthropic.com/v1/models")
@@ -468,7 +470,9 @@ class TestInteractiveApprovalEdgeCases:
         mock_resp = _mock_response(200)
         with patch.object(httpx.Client, "get", return_value=mock_resp):
             client.get("https://anything.example.com/path")
-        approval.prompt_user.assert_called_once_with("network_request", "https://anything.example.com/path")
+        approval.prompt_user.assert_called_once_with(
+            "network_request", "https://anything.example.com/path"
+        )
 
     def test_approval_called_with_full_url(self) -> None:
         """The full URL (with query string) is passed to prompt_user."""
@@ -555,52 +559,78 @@ class TestNetworkFailureErrorHandling:
 
     def test_connect_timeout_propagates(self) -> None:
         client = PolicyHTTPClient()
-        with patch.object(httpx.Client, "get", side_effect=httpx.ConnectTimeout("timeout")), pytest.raises(httpx.ConnectTimeout):
+        with (
+            patch.object(httpx.Client, "get", side_effect=httpx.ConnectTimeout("timeout")),
+            pytest.raises(httpx.ConnectTimeout),
+        ):
             client.get("https://api.example.com/slow")
 
     def test_read_timeout_propagates(self) -> None:
         client = PolicyHTTPClient()
-        with patch.object(httpx.Client, "post", side_effect=httpx.ReadTimeout("read timeout")), pytest.raises(httpx.ReadTimeout):
+        with (
+            patch.object(httpx.Client, "post", side_effect=httpx.ReadTimeout("read timeout")),
+            pytest.raises(httpx.ReadTimeout),
+        ):
             client.post("https://api.example.com/upload")
 
     def test_write_timeout_propagates(self) -> None:
         client = PolicyHTTPClient()
-        with patch.object(httpx.Client, "put", side_effect=httpx.WriteTimeout("write timeout")), pytest.raises(httpx.WriteTimeout):
+        with (
+            patch.object(httpx.Client, "put", side_effect=httpx.WriteTimeout("write timeout")),
+            pytest.raises(httpx.WriteTimeout),
+        ):
             client.put("https://api.example.com/resource")
 
     def test_pool_timeout_propagates(self) -> None:
         client = PolicyHTTPClient()
-        with patch.object(httpx.Client, "get", side_effect=httpx.PoolTimeout("pool exhausted")), pytest.raises(httpx.PoolTimeout):
+        with (
+            patch.object(httpx.Client, "get", side_effect=httpx.PoolTimeout("pool exhausted")),
+            pytest.raises(httpx.PoolTimeout),
+        ):
             client.get("https://api.example.com/resource")
 
     def test_remote_protocol_error_propagates(self) -> None:
         client = PolicyHTTPClient()
         exc = httpx.RemoteProtocolError("bad protocol")
-        with patch.object(httpx.Client, "get", side_effect=exc), pytest.raises(httpx.RemoteProtocolError):
+        with (
+            patch.object(httpx.Client, "get", side_effect=exc),
+            pytest.raises(httpx.RemoteProtocolError),
+        ):
             client.get("https://api.example.com/resource")
 
     def test_network_error_does_not_emit_event(self) -> None:
         client = PolicyHTTPClient()
-        with patch.object(httpx.Client, "delete", side_effect=httpx.ConnectError("refused")), pytest.raises(httpx.ConnectError):
+        with (
+            patch.object(httpx.Client, "delete", side_effect=httpx.ConnectError("refused")),
+            pytest.raises(httpx.ConnectError),
+        ):
             client.delete("https://api.example.com/res/1")
         assert event_bus.get_events(event_type="network_request") == []
 
     async def test_async_read_timeout_propagates(self) -> None:
         client = PolicyHTTPClient()
-        with patch.object(
-            httpx.AsyncClient, "get",
-            new_callable=AsyncMock,
-            side_effect=httpx.ReadTimeout("async read timeout"),
-        ), pytest.raises(httpx.ReadTimeout):
+        with (
+            patch.object(
+                httpx.AsyncClient,
+                "get",
+                new_callable=AsyncMock,
+                side_effect=httpx.ReadTimeout("async read timeout"),
+            ),
+            pytest.raises(httpx.ReadTimeout),
+        ):
             await client.aget("https://api.example.com/slow")
 
     async def test_async_connect_error_does_not_emit_event(self) -> None:
         client = PolicyHTTPClient()
-        with patch.object(
-            httpx.AsyncClient, "post",
-            new_callable=AsyncMock,
-            side_effect=httpx.ConnectError("async refused"),
-        ), pytest.raises(httpx.ConnectError):
+        with (
+            patch.object(
+                httpx.AsyncClient,
+                "post",
+                new_callable=AsyncMock,
+                side_effect=httpx.ConnectError("async refused"),
+            ),
+            pytest.raises(httpx.ConnectError),
+        ):
             await client.apost("https://api.example.com/submit")
         assert event_bus.get_events(event_type="network_request") == []
 
@@ -696,7 +726,8 @@ class TestTLSSSLHandling:
         client = PolicyHTTPClient()
         mock_resp = _mock_response(302)
         with patch.object(
-            httpx.AsyncClient, "get",
+            httpx.AsyncClient,
+            "get",
             new_callable=AsyncMock,
             return_value=mock_resp,
         ):
@@ -789,7 +820,8 @@ class TestRequestResponseLogging:
             event_bus.clear()
             mock_resp = _mock_response(status)
             with patch.object(
-                httpx.AsyncClient, httpx_method,
+                httpx.AsyncClient,
+                httpx_method,
                 new_callable=AsyncMock,
                 return_value=mock_resp,
             ):
@@ -910,7 +942,10 @@ class TestRateLimitingIntegration:
             mock_get_engine.return_value = mock_engine
 
             client = PolicyHTTPClient()
-            with patch.object(httpx.Client, "get") as mock_get, pytest.raises(PolicyViolationError, match="Rate limit exceeded"):
+            with (
+                patch.object(httpx.Client, "get") as mock_get,
+                pytest.raises(PolicyViolationError, match="Rate limit exceeded"),
+            ):
                 client.get("https://api.example.com/resource")
             mock_get.assert_not_called()
 
@@ -977,7 +1012,8 @@ class TestEdgeCases:
         client = PolicyHTTPClient()
         mock_resp = _mock_response(302, headers={"location": "https://api.example.com/new"})
         with patch.object(
-            httpx.AsyncClient, "get",
+            httpx.AsyncClient,
+            "get",
             new_callable=AsyncMock,
             return_value=mock_resp,
         ):
@@ -1018,9 +1054,7 @@ class TestEdgeCases:
         assert slow_sync is not fast_sync
 
     def test_create_client_factory_forwards_all_params(self) -> None:
-        client = create_client(
-            session_id="s99", task_id="t99", timeout=45, category="tool"
-        )
+        client = create_client(session_id="s99", task_id="t99", timeout=45, category="tool")
         assert client.session_id == "s99"
         assert client.task_id == "t99"
         assert client.timeout == 45

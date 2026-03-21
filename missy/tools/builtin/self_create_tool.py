@@ -128,30 +128,55 @@ class SelfCreateTool(BaseTool):
 
             # Scan script content for dangerous patterns
             _DANGEROUS_PATTERNS = [
-                "curl ", "wget ", "nc ", "ncat ", "socat ",
-                "/dev/tcp/", "/dev/udp/",
-                "eval(", "exec(", "os.system(",
-                "subprocess.call(", "subprocess.Popen(", "subprocess.run(",
-                "import socket", "import http",
-                "reverse_shell", "bind_shell",
-                "chmod +s", "chmod u+s", "setuid",
+                "curl ",
+                "wget ",
+                "nc ",
+                "ncat ",
+                "socat ",
+                "/dev/tcp/",
+                "/dev/udp/",
+                "eval(",
+                "exec(",
+                "os.system(",
+                "subprocess.call(",
+                "subprocess.Popen(",
+                "subprocess.run(",
+                "import socket",
+                "import http",
+                "reverse_shell",
+                "bind_shell",
+                "chmod +s",
+                "chmod u+s",
+                "setuid",
                 # Indirect execution patterns
-                "__import__(", "getattr(", "importlib.",
-                "compile(", "code.interact(",
+                "__import__(",
+                "getattr(",
+                "importlib.",
+                "compile(",
+                "code.interact(",
                 # Builtins access for sandbox escape
                 "__builtins__",
                 # File I/O for arbitrary reads/writes
                 "open(",
                 # Process execution functions
-                "os.exec", "os.fork", "os.spawn",
-                "os.popen(", "os.startfile(",
+                "os.exec",
+                "os.fork",
+                "os.spawn",
+                "os.popen(",
+                "os.startfile(",
                 # Destructive file operations
-                "shutil.rmtree", "shutil.move",
-                "os.remove(", "os.unlink(", "os.rmdir(",
+                "shutil.rmtree",
+                "shutil.move",
+                "os.remove(",
+                "os.unlink(",
+                "os.rmdir(",
                 # Node.js patterns
-                "child_process", "require('fs')", 'require("fs")',
+                "child_process",
+                "require('fs')",
+                'require("fs")',
                 # Shell expansion patterns
-                "$(", "`",
+                "$(",
+                "`",
             ]
             script_lower = script.lower()
             for pattern in _DANGEROUS_PATTERNS:

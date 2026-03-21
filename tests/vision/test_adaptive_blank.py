@@ -31,9 +31,7 @@ class TestAdaptiveBlankDetector:
         assert det.threshold == pytest.approx(3.0)
 
     def test_threshold_respects_minimum(self) -> None:
-        det = AdaptiveBlankDetector(
-            base_threshold=10.0, min_threshold=2.0, adaptation_factor=0.1
-        )
+        det = AdaptiveBlankDetector(base_threshold=10.0, min_threshold=2.0, adaptation_factor=0.1)
         for _ in range(5):
             det.record_intensity(5.0)
         # Adaptive = 5.0 * 0.1 = 0.5, but min is 2.0
@@ -68,9 +66,7 @@ class TestAdaptiveBlankDetector:
         assert det.threshold == 5.0  # still base
 
     def test_window_size_limit(self) -> None:
-        det = AdaptiveBlankDetector(
-            base_threshold=10.0, window_size=3, adaptation_factor=0.5
-        )
+        det = AdaptiveBlankDetector(base_threshold=10.0, window_size=3, adaptation_factor=0.5)
         det.record_intensity(100.0)
         det.record_intensity(100.0)
         det.record_intensity(100.0)

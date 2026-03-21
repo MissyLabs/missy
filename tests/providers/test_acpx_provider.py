@@ -137,9 +137,7 @@ class TestAcpxComplete:
             {"type": "text_delta", "delta": "Hello "},
             {"type": "text_delta", "delta": "world!"},
         )
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout=stdout, stderr=""
-        )
+        mock_run.return_value = MagicMock(returncode=0, stdout=stdout, stderr="")
         p = AcpxProvider(_make_config())
         resp = p.complete([Message(role="user", content="Hi")])
 
@@ -150,18 +148,14 @@ class TestAcpxComplete:
 
     @patch("missy.providers.acpx_provider.subprocess.run")
     def test_plain_text_fallback(self, mock_run):
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout="Just plain text\n", stderr=""
-        )
+        mock_run.return_value = MagicMock(returncode=0, stdout="Just plain text\n", stderr="")
         p = AcpxProvider(_make_config())
         resp = p.complete([Message(role="user", content="Hi")])
         assert resp.content == "Just plain text"
 
     @patch("missy.providers.acpx_provider.subprocess.run")
     def test_nonzero_exit_raises(self, mock_run):
-        mock_run.return_value = MagicMock(
-            returncode=1, stdout="", stderr="error: auth failed"
-        )
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="error: auth failed")
         p = AcpxProvider(_make_config())
         with pytest.raises(ProviderError, match="exit.*1"):
             p.complete([Message(role="user", content="Hi")])
@@ -183,9 +177,7 @@ class TestAcpxComplete:
     @patch("missy.providers.acpx_provider.subprocess.run")
     def test_message_event_type(self, mock_run):
         stdout = self._ndjson({"type": "message", "content": "Done!"})
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout=stdout, stderr=""
-        )
+        mock_run.return_value = MagicMock(returncode=0, stdout=stdout, stderr="")
         p = AcpxProvider(_make_config())
         resp = p.complete([Message(role="user", content="Hi")])
         assert resp.content == "Done!"
@@ -193,18 +185,14 @@ class TestAcpxComplete:
     @patch("missy.providers.acpx_provider.subprocess.run")
     def test_result_event_type(self, mock_run):
         stdout = self._ndjson({"type": "result", "text": "Final answer"})
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout=stdout, stderr=""
-        )
+        mock_run.return_value = MagicMock(returncode=0, stdout=stdout, stderr="")
         p = AcpxProvider(_make_config())
         resp = p.complete([Message(role="user", content="Hi")])
         assert resp.content == "Final answer"
 
     @patch("missy.providers.acpx_provider.subprocess.run")
     def test_extra_flags_appended(self, mock_run):
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout="ok\n", stderr=""
-        )
+        mock_run.return_value = MagicMock(returncode=0, stdout="ok\n", stderr="")
         p = AcpxProvider(_make_config(base_url="--approve-all"))
         p.complete([Message(role="user", content="Hi")])
 
@@ -215,9 +203,7 @@ class TestAcpxComplete:
 
     @patch("missy.providers.acpx_provider.subprocess.run")
     def test_exec_subcommand_used(self, mock_run):
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout="ok\n", stderr=""
-        )
+        mock_run.return_value = MagicMock(returncode=0, stdout="ok\n", stderr="")
         p = AcpxProvider(_make_config())
         p.complete([Message(role="user", content="Hello")])
 
@@ -232,16 +218,16 @@ class TestAcpxComplete:
 
     @patch("missy.providers.acpx_provider.subprocess.run")
     def test_multi_message_prompt_flattening(self, mock_run):
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout="ok\n", stderr=""
-        )
+        mock_run.return_value = MagicMock(returncode=0, stdout="ok\n", stderr="")
         p = AcpxProvider(_make_config())
-        p.complete([
-            Message(role="system", content="Be helpful"),
-            Message(role="user", content="Hi"),
-            Message(role="assistant", content="Hello!"),
-            Message(role="user", content="More"),
-        ])
+        p.complete(
+            [
+                Message(role="system", content="Be helpful"),
+                Message(role="user", content="Hi"),
+                Message(role="assistant", content="Hello!"),
+                Message(role="user", content="More"),
+            ]
+        )
 
         cmd = mock_run.call_args[0][0]
         # Prompt is the last element: [binary, "--format", "json", agent, "exec", prompt]
@@ -253,9 +239,7 @@ class TestAcpxComplete:
 
     @patch("missy.providers.acpx_provider.subprocess.run")
     def test_single_user_message_no_prefix(self, mock_run):
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout="ok\n", stderr=""
-        )
+        mock_run.return_value = MagicMock(returncode=0, stdout="ok\n", stderr="")
         p = AcpxProvider(_make_config())
         p.complete([Message(role="user", content="just this")])
 
@@ -276,10 +260,12 @@ class TestBuildPrompt:
 
     def test_multi_turn(self):
         p = AcpxProvider(_make_config())
-        result = p._build_prompt([
-            Message(role="system", content="sys"),
-            Message(role="user", content="q"),
-        ])
+        result = p._build_prompt(
+            [
+                Message(role="system", content="sys"),
+                Message(role="user", content="q"),
+            ]
+        )
         assert "[System]: sys" in result
         assert "[User]: q" in result
 
@@ -292,10 +278,12 @@ class TestBuildPrompt:
 class TestNdjsonParsing:
     def test_text_delta_events(self):
         p = AcpxProvider(_make_config())
-        stdout = "\n".join([
-            json.dumps({"type": "text_delta", "delta": "A"}),
-            json.dumps({"type": "text_delta", "delta": "B"}),
-        ])
+        stdout = "\n".join(
+            [
+                json.dumps({"type": "text_delta", "delta": "A"}),
+                json.dumps({"type": "text_delta", "delta": "B"}),
+            ]
+        )
         assert p._parse_ndjson_output(stdout) == "AB"
 
     def test_response_output_text_delta(self):
@@ -305,11 +293,13 @@ class TestNdjsonParsing:
 
     def test_mixed_event_types(self):
         p = AcpxProvider(_make_config())
-        stdout = "\n".join([
-            json.dumps({"type": "text_delta", "delta": "A"}),
-            json.dumps({"type": "tool_call", "name": "foo"}),
-            json.dumps({"type": "text_delta", "delta": "B"}),
-        ])
+        stdout = "\n".join(
+            [
+                json.dumps({"type": "text_delta", "delta": "A"}),
+                json.dumps({"type": "tool_call", "name": "foo"}),
+                json.dumps({"type": "text_delta", "delta": "B"}),
+            ]
+        )
         assert p._parse_ndjson_output(stdout) == "AB"
 
     def test_plain_text_fallback(self):
@@ -333,34 +323,27 @@ class TestNdjsonParsing:
 
 class TestExtractTextFromEvent:
     def test_text_delta(self):
-        assert AcpxProvider._extract_text_from_event(
-            {"type": "text_delta", "delta": "hi"}
-        ) == "hi"
+        assert AcpxProvider._extract_text_from_event({"type": "text_delta", "delta": "hi"}) == "hi"
 
     def test_response_output_text_delta(self):
-        assert AcpxProvider._extract_text_from_event(
-            {"type": "response.output_text.delta", "delta": "yo"}
-        ) == "yo"
+        assert (
+            AcpxProvider._extract_text_from_event(
+                {"type": "response.output_text.delta", "delta": "yo"}
+            )
+            == "yo"
+        )
 
     def test_message_type(self):
-        assert AcpxProvider._extract_text_from_event(
-            {"type": "message", "content": "msg"}
-        ) == "msg"
+        assert AcpxProvider._extract_text_from_event({"type": "message", "content": "msg"}) == "msg"
 
     def test_result_type(self):
-        assert AcpxProvider._extract_text_from_event(
-            {"type": "result", "text": "done"}
-        ) == "done"
+        assert AcpxProvider._extract_text_from_event({"type": "result", "text": "done"}) == "done"
 
     def test_generic_content(self):
-        assert AcpxProvider._extract_text_from_event(
-            {"content": "fallback"}
-        ) == "fallback"
+        assert AcpxProvider._extract_text_from_event({"content": "fallback"}) == "fallback"
 
     def test_unknown_type_returns_empty(self):
-        assert AcpxProvider._extract_text_from_event(
-            {"type": "tool_call", "name": "foo"}
-        ) == ""
+        assert AcpxProvider._extract_text_from_event({"type": "tool_call", "name": "foo"}) == ""
 
     def test_empty_event(self):
         assert AcpxProvider._extract_text_from_event({}) == ""
@@ -546,10 +529,10 @@ class TestParseToolCallsFromText:
 
     def test_single_tool_call(self):
         response = (
-            'I need to calculate something.\n\n'
-            '<tool_call>\n'
+            "I need to calculate something.\n\n"
+            "<tool_call>\n"
             '{"name": "calculator", "arguments": {"expression": "2+2"}}\n'
-            '</tool_call>'
+            "</tool_call>"
         )
         calls, text = _parse_tool_calls_from_text(response)
         assert len(calls) == 1
@@ -560,12 +543,12 @@ class TestParseToolCallsFromText:
 
     def test_multiple_tool_calls(self):
         response = (
-            '<tool_call>\n'
+            "<tool_call>\n"
             '{"name": "file_read", "arguments": {"path": "/etc/hostname"}}\n'
-            '</tool_call>\n'
-            '<tool_call>\n'
+            "</tool_call>\n"
+            "<tool_call>\n"
             '{"name": "shell_exec", "arguments": {"command": "whoami"}}\n'
-            '</tool_call>'
+            "</tool_call>"
         )
         calls, text = _parse_tool_calls_from_text(response)
         assert len(calls) == 2
@@ -575,9 +558,9 @@ class TestParseToolCallsFromText:
     def test_tool_call_with_surrounding_text(self):
         response = (
             "Let me check that file.\n\n"
-            '<tool_call>\n'
+            "<tool_call>\n"
             '{"name": "file_read", "arguments": {"path": "/tmp/test"}}\n'
-            '</tool_call>\n\n'
+            "</tool_call>\n\n"
             "I'll wait for the result."
         )
         calls, text = _parse_tool_calls_from_text(response)
@@ -587,23 +570,19 @@ class TestParseToolCallsFromText:
 
     def test_malformed_json_skipped(self):
         response = (
-            '<tool_call>\n'
-            '{not valid json}\n'
-            '</tool_call>\n'
-            '<tool_call>\n'
+            "<tool_call>\n"
+            "{not valid json}\n"
+            "</tool_call>\n"
+            "<tool_call>\n"
             '{"name": "calculator", "arguments": {"expression": "1+1"}}\n'
-            '</tool_call>'
+            "</tool_call>"
         )
         calls, text = _parse_tool_calls_from_text(response)
         assert len(calls) == 1
         assert calls[0].name == "calculator"
 
     def test_missing_name_skipped(self):
-        response = (
-            '<tool_call>\n'
-            '{"arguments": {"x": 1}}\n'
-            '</tool_call>'
-        )
+        response = '<tool_call>\n{"arguments": {"x": 1}}\n</tool_call>'
         calls, _ = _parse_tool_calls_from_text(response)
         assert calls == []
 
@@ -613,21 +592,13 @@ class TestParseToolCallsFromText:
         assert calls == []
 
     def test_arguments_as_json_string(self):
-        response = (
-            '<tool_call>\n'
-            '{"name": "calc", "arguments": "{\\"x\\": 1}"}\n'
-            '</tool_call>'
-        )
+        response = '<tool_call>\n{"name": "calc", "arguments": "{\\"x\\": 1}"}\n</tool_call>'
         calls, _ = _parse_tool_calls_from_text(response)
         assert len(calls) == 1
         assert calls[0].arguments == {"x": 1}
 
     def test_arguments_non_dict_non_string_becomes_empty(self):
-        response = (
-            '<tool_call>\n'
-            '{"name": "calc", "arguments": [1, 2, 3]}\n'
-            '</tool_call>'
-        )
+        response = '<tool_call>\n{"name": "calc", "arguments": [1, 2, 3]}\n</tool_call>'
         calls, _ = _parse_tool_calls_from_text(response)
         assert len(calls) == 1
         assert calls[0].arguments == {}
@@ -659,7 +630,7 @@ class TestParseToolCallsFromText:
         assert calls[0].name == "calc"
 
     def test_whitespace_cleanup(self):
-        response = "\n\n\n<tool_call>\n{\"name\": \"x\", \"arguments\": {}}\n</tool_call>\n\n\n\n\n"
+        response = '\n\n\n<tool_call>\n{"name": "x", "arguments": {}}\n</tool_call>\n\n\n\n\n'
         _, text = _parse_tool_calls_from_text(response)
         assert "\n\n\n" not in text
 
@@ -748,9 +719,7 @@ class TestCompleteWithTools:
         )
         p = AcpxProvider(_make_config())
         tools = [_make_mock_tool()]
-        resp = p.complete_with_tools(
-            [Message(role="user", content="hello")], tools
-        )
+        resp = p.complete_with_tools([Message(role="user", content="hello")], tools)
         assert resp.finish_reason == "stop"
         assert resp.tool_calls == []
         assert "Just text, no tools." in resp.content
@@ -758,19 +727,17 @@ class TestCompleteWithTools:
     @patch("missy.providers.acpx_provider.subprocess.run")
     def test_tool_call_parsed_and_returned(self, mock_run):
         response_text = (
-            'Let me calculate that.\n\n'
-            '<tool_call>\n'
+            "Let me calculate that.\n\n"
+            "<tool_call>\n"
             '{"name": "calculator", "arguments": {"expression": "2+2"}}\n'
-            '</tool_call>'
+            "</tool_call>"
         )
         mock_run.return_value = MagicMock(
             returncode=0, stdout=self._ndjson(response_text), stderr=""
         )
         p = AcpxProvider(_make_config())
         tools = [_make_mock_tool()]
-        resp = p.complete_with_tools(
-            [Message(role="user", content="what is 2+2?")], tools
-        )
+        resp = p.complete_with_tools([Message(role="user", content="what is 2+2?")], tools)
         assert resp.finish_reason == "tool_calls"
         assert len(resp.tool_calls) == 1
         assert resp.tool_calls[0].name == "calculator"
@@ -781,52 +748,40 @@ class TestCompleteWithTools:
     @patch("missy.providers.acpx_provider.subprocess.run")
     def test_multiple_tool_calls(self, mock_run):
         response_text = (
-            '<tool_call>\n'
+            "<tool_call>\n"
             '{"name": "calculator", "arguments": {"expression": "1+1"}}\n'
-            '</tool_call>\n'
-            '<tool_call>\n'
+            "</tool_call>\n"
+            "<tool_call>\n"
             '{"name": "calculator", "arguments": {"expression": "2+2"}}\n'
-            '</tool_call>'
+            "</tool_call>"
         )
         mock_run.return_value = MagicMock(
             returncode=0, stdout=self._ndjson(response_text), stderr=""
         )
         p = AcpxProvider(_make_config())
         tools = [_make_mock_tool()]
-        resp = p.complete_with_tools(
-            [Message(role="user", content="calc both")], tools
-        )
+        resp = p.complete_with_tools([Message(role="user", content="calc both")], tools)
         assert resp.finish_reason == "tool_calls"
         assert len(resp.tool_calls) == 2
 
     @patch("missy.providers.acpx_provider.subprocess.run")
     def test_invalid_tool_name_filtered_out(self, mock_run):
-        response_text = (
-            '<tool_call>\n'
-            '{"name": "nonexistent_tool", "arguments": {}}\n'
-            '</tool_call>'
-        )
+        response_text = '<tool_call>\n{"name": "nonexistent_tool", "arguments": {}}\n</tool_call>'
         mock_run.return_value = MagicMock(
             returncode=0, stdout=self._ndjson(response_text), stderr=""
         )
         p = AcpxProvider(_make_config())
         tools = [_make_mock_tool()]
-        resp = p.complete_with_tools(
-            [Message(role="user", content="use tool")], tools
-        )
+        resp = p.complete_with_tools([Message(role="user", content="use tool")], tools)
         # Invalid tool filtered → falls through to stop
         assert resp.finish_reason == "stop"
 
     @patch("missy.providers.acpx_provider.subprocess.run")
     def test_tool_instructions_injected_into_prompt(self, mock_run):
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout=self._ndjson("ok"), stderr=""
-        )
+        mock_run.return_value = MagicMock(returncode=0, stdout=self._ndjson("ok"), stderr="")
         p = AcpxProvider(_make_config())
         tools = [_make_mock_tool()]
-        p.complete_with_tools(
-            [Message(role="user", content="hi")], tools, system="Be helpful"
-        )
+        p.complete_with_tools([Message(role="user", content="hi")], tools, system="Be helpful")
         cmd = mock_run.call_args[0][0]
         prompt = cmd[-1]  # prompt is always last element
         assert "Available Tools" in prompt
@@ -836,14 +791,11 @@ class TestCompleteWithTools:
 
     @patch("missy.providers.acpx_provider.subprocess.run")
     def test_system_prompt_augmented_not_replaced(self, mock_run):
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout=self._ndjson("ok"), stderr=""
-        )
+        mock_run.return_value = MagicMock(returncode=0, stdout=self._ndjson("ok"), stderr="")
         p = AcpxProvider(_make_config())
         tools = [_make_mock_tool()]
         p.complete_with_tools(
-            [Message(role="system", content="Original system"),
-             Message(role="user", content="hi")],
+            [Message(role="system", content="Original system"), Message(role="user", content="hi")],
             tools,
         )
         cmd = mock_run.call_args[0][0]

@@ -112,9 +112,7 @@ class TestClosedHandleGuardInCaptureOne:
 
     @patch("missy.vision.multi_camera.get_health_monitor")
     @patch("missy.vision.multi_camera.CameraHandle")
-    def test_closed_handle_before_capture_produces_failed_result(
-        self, MockHandle, mock_get_hm
-    ):
+    def test_closed_handle_before_capture_produces_failed_result(self, MockHandle, mock_get_hm):
         """A handle with is_open=False at capture time gives success=False."""
         handle = _mock_handle(is_open=False)
         MockHandle.return_value = handle
@@ -131,9 +129,7 @@ class TestClosedHandleGuardInCaptureOne:
 
     @patch("missy.vision.multi_camera.get_health_monitor")
     @patch("missy.vision.multi_camera.CameraHandle")
-    def test_closed_handle_error_message_mentions_closed(
-        self, MockHandle, mock_get_hm
-    ):
+    def test_closed_handle_error_message_mentions_closed(self, MockHandle, mock_get_hm):
         """The failure message for a pre-capture-closed handle mentions 'closed'."""
         handle = _mock_handle(is_open=False)
         MockHandle.return_value = handle
@@ -149,9 +145,7 @@ class TestClosedHandleGuardInCaptureOne:
 
     @patch("missy.vision.multi_camera.get_health_monitor")
     @patch("missy.vision.multi_camera.CameraHandle")
-    def test_closed_handle_device_path_preserved_in_result(
-        self, MockHandle, mock_get_hm
-    ):
+    def test_closed_handle_device_path_preserved_in_result(self, MockHandle, mock_get_hm):
         handle = _mock_handle(is_open=False)
         MockHandle.return_value = handle
         mock_get_hm.return_value = MagicMock()
@@ -172,9 +166,7 @@ class TestClosedHandleGuardInCaptureOne:
 class TestErrorsDictStructure:
     @patch("missy.vision.multi_camera.get_health_monitor")
     @patch("missy.vision.multi_camera.CameraHandle")
-    def test_global_error_absent_when_cameras_present_but_fail(
-        self, MockHandle, mock_get_hm
-    ):
+    def test_global_error_absent_when_cameras_present_but_fail(self, MockHandle, mock_get_hm):
         """_global error only appears when there are zero cameras at all."""
         handle = _mock_handle(capture_result=_failure("/dev/video0", error="boom"))
         MockHandle.return_value = handle
@@ -196,9 +188,7 @@ class TestErrorsDictStructure:
 
     @patch("missy.vision.multi_camera.get_health_monitor")
     @patch("missy.vision.multi_camera.CameraHandle")
-    def test_errors_dict_excludes_successful_device_keys(
-        self, MockHandle, mock_get_hm
-    ):
+    def test_errors_dict_excludes_successful_device_keys(self, MockHandle, mock_get_hm):
         """Successful captures must not appear as keys in result.errors."""
         handle = _mock_handle(capture_result=_success("/dev/video0"))
         MockHandle.return_value = handle
@@ -213,9 +203,7 @@ class TestErrorsDictStructure:
 
     @patch("missy.vision.multi_camera.get_health_monitor")
     @patch("missy.vision.multi_camera.CameraHandle")
-    def test_errors_value_matches_capture_result_error_verbatim(
-        self, MockHandle, mock_get_hm
-    ):
+    def test_errors_value_matches_capture_result_error_verbatim(self, MockHandle, mock_get_hm):
         """result.errors[device] contains the exact text from CaptureResult.error."""
         specific_error = "ENODEV: device disconnected during capture"
         handle = _mock_handle(capture_result=_failure("/dev/video0", error=specific_error))
@@ -238,9 +226,7 @@ class TestErrorsDictStructure:
 class TestHealthMonitorArguments:
     @patch("missy.vision.multi_camera.get_health_monitor")
     @patch("missy.vision.multi_camera.CameraHandle")
-    def test_health_monitor_error_is_empty_string_on_success(
-        self, MockHandle, mock_get_hm
-    ):
+    def test_health_monitor_error_is_empty_string_on_success(self, MockHandle, mock_get_hm):
         """On a successful capture the error kwarg to record_capture must be ''."""
         handle = _mock_handle(capture_result=_success("/dev/video0"))
         MockHandle.return_value = handle
@@ -256,9 +242,7 @@ class TestHealthMonitorArguments:
 
     @patch("missy.vision.multi_camera.get_health_monitor")
     @patch("missy.vision.multi_camera.CameraHandle")
-    def test_health_monitor_success_kwarg_is_true_for_success(
-        self, MockHandle, mock_get_hm
-    ):
+    def test_health_monitor_success_kwarg_is_true_for_success(self, MockHandle, mock_get_hm):
         handle = _mock_handle(capture_result=_success("/dev/video0"))
         MockHandle.return_value = handle
         mock_health = MagicMock()
@@ -273,9 +257,7 @@ class TestHealthMonitorArguments:
 
     @patch("missy.vision.multi_camera.get_health_monitor")
     @patch("missy.vision.multi_camera.CameraHandle")
-    def test_health_monitor_success_kwarg_is_false_for_failure(
-        self, MockHandle, mock_get_hm
-    ):
+    def test_health_monitor_success_kwarg_is_false_for_failure(self, MockHandle, mock_get_hm):
         handle = _mock_handle(capture_result=_failure("/dev/video0", error="timeout"))
         MockHandle.return_value = handle
         mock_health = MagicMock()
@@ -290,9 +272,7 @@ class TestHealthMonitorArguments:
 
     @patch("missy.vision.multi_camera.get_health_monitor")
     @patch("missy.vision.multi_camera.CameraHandle")
-    def test_health_monitor_not_called_for_closed_handle_guard_path(
-        self, MockHandle, mock_get_hm
-    ):
+    def test_health_monitor_not_called_for_closed_handle_guard_path(self, MockHandle, mock_get_hm):
         """When the closed-handle guard fires, health monitor is NOT called
         because the code returns before reaching the record_capture call."""
         handle = _mock_handle(is_open=False)
@@ -330,9 +310,7 @@ class TestCaptureBestDelegation:
 
     @patch("missy.vision.multi_camera.get_health_monitor")
     @patch("missy.vision.multi_camera.CameraHandle")
-    def test_capture_best_returns_capture_result_not_multi(
-        self, MockHandle, mock_get_hm
-    ):
+    def test_capture_best_returns_capture_result_not_multi(self, MockHandle, mock_get_hm):
         handle = _mock_handle(capture_result=_success("/dev/video0"))
         MockHandle.return_value = handle
         mock_get_hm.return_value = MagicMock()
@@ -417,9 +395,7 @@ class TestDiscoverAndConnectMaxCamerasZero:
 class TestDiscoverAndConnectUsesManagerConfig:
     @patch("missy.vision.multi_camera.get_discovery")
     @patch("missy.vision.multi_camera.CameraHandle")
-    def test_handle_created_with_manager_default_config(
-        self, MockHandle, mock_get_discovery
-    ):
+    def test_handle_created_with_manager_default_config(self, MockHandle, mock_get_discovery):
         """CameraHandle must be created with the manager's _config, not None."""
         handle = _mock_handle()
         MockHandle.return_value = handle
@@ -526,7 +502,9 @@ class TestMultiCaptureResultProperties:
 
     def test_best_result_none_when_all_success_have_none_image(self):
         """success=True with image=None must not appear in best_result."""
-        r = CaptureResult(success=True, image=None, device_path="/dev/video0", width=1920, height=1080)
+        r = CaptureResult(
+            success=True, image=None, device_path="/dev/video0", width=1920, height=1080
+        )
         mcr = MultiCaptureResult(results={"/dev/video0": r})
         assert mcr.best_result is None
 
@@ -573,9 +551,7 @@ class TestMaxWorkersOne:
     @patch("missy.vision.multi_camera.get_health_monitor")
     @patch("missy.vision.multi_camera.ThreadPoolExecutor", wraps=ThreadPoolExecutor)
     @patch("missy.vision.multi_camera.CameraHandle")
-    def test_max_workers_one_creates_pool_with_one_worker(
-        self, MockHandle, MockPool, mock_get_hm
-    ):
+    def test_max_workers_one_creates_pool_with_one_worker(self, MockHandle, MockPool, mock_get_hm):
         """max_workers=1 passes max_workers=1 to the ThreadPoolExecutor."""
         handle = _mock_handle(capture_result=_success("/dev/video0"))
         MockHandle.return_value = handle
@@ -652,9 +628,7 @@ class TestContextManagerExceptionPropagation:
 class TestDiscoverAndConnectMaxCamerasOne:
     @patch("missy.vision.multi_camera.get_discovery")
     @patch("missy.vision.multi_camera.CameraHandle")
-    def test_max_cameras_one_opens_only_first_discovered(
-        self, MockHandle, mock_get_discovery
-    ):
+    def test_max_cameras_one_opens_only_first_discovered(self, MockHandle, mock_get_discovery):
         MockHandle.return_value = _mock_handle()
         mock_discovery = MagicMock()
         mock_discovery.discover.return_value = [
@@ -681,9 +655,7 @@ class TestDiscoverAndConnectAllFailWarning:
     @patch("missy.vision.multi_camera.logger")
     @patch("missy.vision.multi_camera.get_discovery")
     @patch("missy.vision.multi_camera.CameraHandle")
-    def test_warning_logged_for_each_failed_open(
-        self, MockHandle, mock_get_discovery, mock_logger
-    ):
+    def test_warning_logged_for_each_failed_open(self, MockHandle, mock_get_discovery, mock_logger):
         bad_handle = MagicMock()
         bad_handle.open.side_effect = RuntimeError("permission denied")
         MockHandle.return_value = bad_handle
@@ -710,9 +682,7 @@ class TestDiscoverAndConnectAllFailWarning:
 class TestMixedOpenClosedHandlesInCaptureAll:
     @patch("missy.vision.multi_camera.get_health_monitor")
     @patch("missy.vision.multi_camera.CameraHandle")
-    def test_open_handle_succeeds_closed_handle_fails(
-        self, MockHandle, mock_get_hm
-    ):
+    def test_open_handle_succeeds_closed_handle_fails(self, MockHandle, mock_get_hm):
         open_handle = _mock_handle(is_open=True, capture_result=_success("/dev/video0"))
         closed_handle = _mock_handle(is_open=False)
         MockHandle.side_effect = [open_handle, closed_handle]
@@ -731,9 +701,7 @@ class TestMixedOpenClosedHandlesInCaptureAll:
 
     @patch("missy.vision.multi_camera.get_health_monitor")
     @patch("missy.vision.multi_camera.CameraHandle")
-    def test_all_closed_handles_produces_empty_successes(
-        self, MockHandle, mock_get_hm
-    ):
+    def test_all_closed_handles_produces_empty_successes(self, MockHandle, mock_get_hm):
         closed_h0 = _mock_handle(is_open=False)
         closed_h1 = _mock_handle(is_open=False)
         MockHandle.side_effect = [closed_h0, closed_h1]

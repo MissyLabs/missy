@@ -29,14 +29,17 @@ class TestIntentClassifierSingleton:
 
     def setup_method(self) -> None:
         import missy.vision.intent as mod
+
         mod._default_classifier = None
 
     def teardown_method(self) -> None:
         import missy.vision.intent as mod
+
         mod._default_classifier = None
 
     def test_singleton_identity(self) -> None:
         from missy.vision.intent import get_intent_classifier
+
         a = get_intent_classifier()
         b = get_intent_classifier()
         assert a is b
@@ -44,6 +47,7 @@ class TestIntentClassifierSingleton:
     def test_concurrent_singleton_access(self) -> None:
         """Multiple threads should all get the same instance."""
         from missy.vision.intent import get_intent_classifier
+
         results: list[Any] = []
         barrier = threading.Barrier(8)
 
@@ -131,7 +135,13 @@ class TestMultiCameraErrorPaths:
         from missy.vision.multi_camera import MultiCameraManager
 
         mgr = MultiCameraManager()
-        dev = CameraDevice(device_path="/dev/video0", name="Cam", vendor_id="046d", product_id="085c", bus_info="usb-0000:00:14.0-1")
+        dev = CameraDevice(
+            device_path="/dev/video0",
+            name="Cam",
+            vendor_id="046d",
+            product_id="085c",
+            bus_info="usb-0000:00:14.0-1",
+        )
 
         with patch("missy.vision.multi_camera.get_discovery") as gd:
             gd.return_value.discover.return_value = [dev, dev]  # duplicate
@@ -145,6 +155,7 @@ class TestMultiCameraErrorPaths:
 
     def test_capture_all_empty_manager(self) -> None:
         from missy.vision.multi_camera import MultiCameraManager
+
         mgr = MultiCameraManager()
         result = mgr.capture_all()
         assert "_global" in result.errors
@@ -171,8 +182,12 @@ class TestMultiCameraErrorPaths:
         from missy.vision.capture import CaptureResult
         from missy.vision.multi_camera import MultiCaptureResult
 
-        r1 = CaptureResult(success=True, width=640, height=480, image=np.zeros((480, 640, 3), dtype=np.uint8))
-        r2 = CaptureResult(success=True, width=1920, height=1080, image=np.zeros((1080, 1920, 3), dtype=np.uint8))
+        r1 = CaptureResult(
+            success=True, width=640, height=480, image=np.zeros((480, 640, 3), dtype=np.uint8)
+        )
+        r2 = CaptureResult(
+            success=True, width=1920, height=1080, image=np.zeros((1080, 1920, 3), dtype=np.uint8)
+        )
         mcr = MultiCaptureResult(results={"/dev/video0": r1, "/dev/video1": r2})
         assert mcr.best_result is r2
 
@@ -187,6 +202,7 @@ class TestResilientCaptureEdgeCases:
 
     def _make_camera(self, **kwargs: Any) -> Any:
         from missy.vision.resilient_capture import ResilientCamera
+
         defaults = {
             "preferred_vendor_id": "046d",
             "preferred_product_id": "085c",
@@ -233,13 +249,22 @@ class TestResilientCaptureEdgeCases:
     def test_reconnect_device_path_change_logged(self) -> None:
         """When device path changes during reconnect, it's noted."""
         from missy.vision.discovery import CameraDevice
+
         cam = self._make_camera()
         cam._current_device = CameraDevice(
-            device_path="/dev/video0", name="Old", vendor_id="046d", product_id="085c", bus_info="usb-0000:00:14.0-1"
+            device_path="/dev/video0",
+            name="Old",
+            vendor_id="046d",
+            product_id="085c",
+            bus_info="usb-0000:00:14.0-1",
         )
 
         new_dev = CameraDevice(
-            device_path="/dev/video2", name="New", vendor_id="046d", product_id="085c", bus_info="usb-0000:00:14.0-2"
+            device_path="/dev/video2",
+            name="New",
+            vendor_id="046d",
+            product_id="085c",
+            bus_info="usb-0000:00:14.0-2",
         )
 
         with patch("missy.vision.resilient_capture.get_discovery") as gd:
@@ -251,7 +276,9 @@ class TestResilientCaptureEdgeCases:
                 mock_handle.capture.return_value = mock_result
                 cam._handle = mock_handle
 
-                od.side_effect = lambda d: setattr(cam, '_handle', mock_handle) or setattr(cam, '_connected', True)
+                od.side_effect = lambda d: (
+                    setattr(cam, "_handle", mock_handle) or setattr(cam, "_connected", True)
+                )
 
                 result = cam._reconnect_and_capture()
 
@@ -260,6 +287,7 @@ class TestResilientCaptureEdgeCases:
     def test_unrecoverable_failure_skips_reconnect(self) -> None:
         """PERMISSION/UNSUPPORTED failure types don't trigger reconnection."""
         from missy.vision.capture import CaptureResult, FailureType
+
         cam = self._make_camera()
         cam._connected = True
         cam._current_device = MagicMock()
@@ -308,9 +336,7 @@ class TestVisionMemoryErrorPaths:
         mock_vec = MagicMock()
 
         bridge = VisionMemoryBridge(memory_store=mock_mem, vector_store=mock_vec)
-        obs_id = bridge.store_observation(
-            session_id="s1", task_type="puzzle", observation="test"
-        )
+        obs_id = bridge.store_observation(session_id="s1", task_type="puzzle", observation="test")
         assert obs_id  # UUID returned despite SQLite failure
         mock_vec.add.assert_called_once()
 
@@ -324,9 +350,7 @@ class TestVisionMemoryErrorPaths:
         mock_vec.add.side_effect = RuntimeError("fail2")
 
         bridge = VisionMemoryBridge(memory_store=mock_mem, vector_store=mock_vec)
-        obs_id = bridge.store_observation(
-            session_id="s1", task_type="general", observation="test"
-        )
+        obs_id = bridge.store_observation(session_id="s1", task_type="general", observation="test")
         assert obs_id
 
     def test_recall_vector_fails_falls_back_to_sqlite(self) -> None:
@@ -337,8 +361,10 @@ class TestVisionMemoryErrorPaths:
         mock_vec.search.side_effect = RuntimeError("FAISS error")
         mock_mem = MagicMock()
         mock_turn = SimpleNamespace(
-            role="vision", content="sky pieces", session_id="s1",
-            metadata={"task_type": "puzzle", "observation": "sky pieces"}
+            role="vision",
+            content="sky pieces",
+            session_id="s1",
+            metadata={"task_type": "puzzle", "observation": "sky pieces"},
         )
         mock_mem.search.return_value = [mock_turn]
 
@@ -437,11 +463,15 @@ class TestVisionMemoryErrorPaths:
 
         mock_mem = MagicMock()
         turn = SimpleNamespace(
-            role="vision", content="Found 3 edge pieces", session_id="s1",
+            role="vision",
+            content="Found 3 edge pieces",
+            session_id="s1",
             metadata={
-                "task_type": "puzzle", "observation": "Found 3 edge pieces",
-                "confidence": 0.85, "timestamp": "2026-03-19T10:00:00",
-            }
+                "task_type": "puzzle",
+                "observation": "Found 3 edge pieces",
+                "confidence": 0.85,
+                "timestamp": "2026-03-19T10:00:00",
+            },
         )
         mock_mem.get_session_turns.return_value = [turn]
         bridge = VisionMemoryBridge(memory_store=mock_mem)
@@ -465,6 +495,7 @@ class TestAnalysisConstants:
             _CANNY_EDGE_HIGH,
             _CANNY_EDGE_LOW,
         )
+
         assert 0 < _CANNY_EDGE_LOW < _CANNY_EDGE_HIGH <= 255
         assert 0 < _CANNY_CONTOUR_LOW < _CANNY_CONTOUR_HIGH <= 255
 
@@ -476,6 +507,7 @@ class TestAnalysisConstants:
             _KMEANS_MAX_ITER,
             _KMEANS_MIN_COLOR_PCT,
         )
+
         assert _KMEANS_CLUSTERS >= 2
         assert _KMEANS_MAX_ITER > 0
         assert _KMEANS_EPSILON > 0
@@ -484,10 +516,12 @@ class TestAnalysisConstants:
 
     def test_color_thresholds_valid(self) -> None:
         from missy.vision.analysis import _COLOR_BLACK_MAX, _COLOR_WHITE_MIN
+
         assert 0 < _COLOR_BLACK_MAX < _COLOR_WHITE_MIN < 256
 
     def test_overlay_weights_sum_to_one(self) -> None:
         from missy.vision.analysis import _EDGE_OVERLAY_EDGE, _EDGE_OVERLAY_ORIGINAL
+
         assert abs((_EDGE_OVERLAY_ORIGINAL + _EDGE_OVERLAY_EDGE) - 1.0) < 0.01
 
 
@@ -501,6 +535,7 @@ class TestSceneMemoryConstants:
 
     def test_change_weights_sum_to_one(self) -> None:
         from missy.vision.scene_memory import _CHANGE_PHASH_WEIGHT, _CHANGE_PIXEL_WEIGHT
+
         assert abs((_CHANGE_PIXEL_WEIGHT + _CHANGE_PHASH_WEIGHT) - 1.0) < 0.01
 
     def test_thresholds_ascending(self) -> None:
@@ -509,14 +544,17 @@ class TestSceneMemoryConstants:
             _CHANGE_THRESHOLD_MINOR,
             _CHANGE_THRESHOLD_MODERATE,
         )
+
         assert 0 < _CHANGE_THRESHOLD_MINOR < _CHANGE_THRESHOLD_MODERATE < _CHANGE_THRESHOLD_MAJOR
 
     def test_compare_size_positive(self) -> None:
         from missy.vision.scene_memory import _CHANGE_COMPARE_SIZE
+
         assert _CHANGE_COMPARE_SIZE[0] > 0 and _CHANGE_COMPARE_SIZE[1] > 0
 
     def test_phash_bits_matches_hash_size(self) -> None:
         from missy.vision.scene_memory import _PHASH_BITS
+
         assert _PHASH_BITS == 64  # 8x8 perceptual hash
 
 
@@ -530,50 +568,62 @@ class TestColorDescription:
 
     def test_black(self) -> None:
         from missy.vision.analysis import _describe_color
+
         assert _describe_color([10, 10, 10]) == "black"
 
     def test_white(self) -> None:
         from missy.vision.analysis import _describe_color
+
         assert _describe_color([220, 230, 240]) == "white"
 
     def test_red(self) -> None:
         from missy.vision.analysis import _describe_color
+
         assert _describe_color([200, 30, 30]) == "red"
 
     def test_green(self) -> None:
         from missy.vision.analysis import _describe_color
+
         assert _describe_color([20, 180, 20]) == "green"
 
     def test_blue(self) -> None:
         from missy.vision.analysis import _describe_color
+
         assert _describe_color([20, 20, 180]) == "blue"
 
     def test_yellow(self) -> None:
         from missy.vision.analysis import _describe_color
+
         assert _describe_color([200, 200, 30]) == "yellow"
 
     def test_orange(self) -> None:
         from missy.vision.analysis import _describe_color
+
         assert _describe_color([200, 130, 30]) == "orange"
 
     def test_purple(self) -> None:
         from missy.vision.analysis import _describe_color
+
         assert _describe_color([160, 30, 160]) == "purple"
 
     def test_tan_brown(self) -> None:
         from missy.vision.analysis import _describe_color
+
         assert _describe_color([180, 140, 100]) == "tan/brown"
 
     def test_light_gray(self) -> None:
         from missy.vision.analysis import _describe_color
+
         assert _describe_color([180, 180, 180]) == "light gray"
 
     def test_gray(self) -> None:
         from missy.vision.analysis import _describe_color
+
         assert _describe_color([100, 100, 100]) == "gray"
 
     def test_unnamed_rgb(self) -> None:
         from missy.vision.analysis import _describe_color
+
         result = _describe_color([77, 133, 200])
         assert result.startswith("rgb(")
 
@@ -588,23 +638,27 @@ class TestMultiCaptureResultProperties:
 
     def test_successful_devices_empty(self) -> None:
         from missy.vision.multi_camera import MultiCaptureResult
+
         mcr = MultiCaptureResult()
         assert mcr.successful_devices == []
         assert mcr.failed_devices == []
 
     def test_all_succeeded_empty_is_false(self) -> None:
         from missy.vision.multi_camera import MultiCaptureResult
+
         mcr = MultiCaptureResult()
         assert not mcr.all_succeeded
 
     def test_any_succeeded_empty_is_false(self) -> None:
         from missy.vision.multi_camera import MultiCaptureResult
+
         mcr = MultiCaptureResult()
         assert not mcr.any_succeeded
 
     def test_best_result_none_when_all_failed(self) -> None:
         from missy.vision.capture import CaptureResult
         from missy.vision.multi_camera import MultiCaptureResult
+
         r = CaptureResult(success=False, error="failed")
         mcr = MultiCaptureResult(results={"/dev/video0": r})
         assert mcr.best_result is None
@@ -613,6 +667,7 @@ class TestMultiCaptureResultProperties:
         """Successful result but no image → not considered."""
         from missy.vision.capture import CaptureResult
         from missy.vision.multi_camera import MultiCaptureResult
+
         r = CaptureResult(success=True, image=None)
         mcr = MultiCaptureResult(results={"/dev/video0": r})
         assert mcr.best_result is None

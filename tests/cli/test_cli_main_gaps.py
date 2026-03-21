@@ -99,7 +99,9 @@ class TestProvidersIsAvailableException:
             mock_registry.get.return_value = mock_provider
 
             mock_config = _make_mock_config()
-            mock_config.providers = {"anthropic": MagicMock(model="claude", base_url=None, timeout=30)}
+            mock_config.providers = {
+                "anthropic": MagicMock(model="claude", base_url=None, timeout=30)
+            }
 
             with (
                 patch("missy.cli.main._load_subsystems", return_value=mock_config),
@@ -111,6 +113,7 @@ class TestProvidersIsAvailableException:
             assert "no" in result.output.lower() or "anthropic" in result.output
         finally:
             import os
+
             os.unlink(cfg_path)
 
 
@@ -159,6 +162,7 @@ class TestGatewayStartSignalHandler:
             assert "Shutting down" in result.output or "stopped" in result.output.lower()
         finally:
             import os as _os
+
             _os.unlink(cfg_path)
 
 
@@ -206,9 +210,12 @@ class TestGatewayStartProactiveException:
                 result = runner.invoke(cli, ["--config", cfg_path, "gateway", "start"])
 
             assert result.exit_code == 0
-            assert "failed to start" in result.output.lower() or "proactive" in result.output.lower()
+            assert (
+                "failed to start" in result.output.lower() or "proactive" in result.output.lower()
+            )
         finally:
             import os as _os
+
             _os.unlink(cfg_path)
 
 
@@ -255,6 +262,7 @@ class TestGatewayStartVoiceChannelStarted:
             assert "Voice channel started" in result.output
         finally:
             import os as _os
+
             _os.unlink(cfg_path)
 
 
@@ -301,6 +309,7 @@ class TestGatewayStartVoiceStopException:
             assert result.exit_code == 0
         finally:
             import os as _os
+
             _os.unlink(cfg_path)
 
 
@@ -350,6 +359,7 @@ class TestGatewayStartProactiveStopException:
             assert result.exit_code == 0
         finally:
             import os as _os
+
             _os.unlink(cfg_path)
 
 
@@ -385,6 +395,7 @@ class TestDoctorSecretsDirMissing:
             assert "missing" in result.output.lower() or "secrets" in result.output.lower()
         finally:
             import os
+
             os.unlink(cfg_path)
 
 
@@ -502,6 +513,7 @@ class TestDoctorWatchdog:
             assert "watchdog" in result.output.lower()
         finally:
             import os
+
             os.unlink(cfg_path)
 
     def test_doctor_watchdog_not_installed(self, runner: CliRunner):
@@ -529,6 +541,7 @@ class TestDoctorWatchdog:
             assert "watchdog" in result.output.lower()
         finally:
             import os
+
             os.unlink(cfg_path)
 
 
@@ -704,6 +717,7 @@ class TestEvolveShowWithDiffs:
             assert "PASSED" in result.output
         finally:
             import os
+
             os.unlink(cfg_path)
 
     def test_evolve_show_with_diffs_no_description(self, runner: CliRunner):
@@ -745,6 +759,7 @@ class TestEvolveShowWithDiffs:
             assert "registry.py" in result.output
         finally:
             import os
+
             os.unlink(cfg_path)
 
 

@@ -132,9 +132,7 @@ class TestStartEdgeCases:
 
     @patch("missy.security.container.subprocess.run")
     @patch.object(ContainerSandbox, "is_available", return_value=True)
-    def test_start_timeout_returns_none(
-        self, _avail: MagicMock, mock_run: MagicMock
-    ) -> None:
+    def test_start_timeout_returns_none(self, _avail: MagicMock, mock_run: MagicMock) -> None:
         """subprocess.TimeoutExpired during docker run → start() returns None."""
         mock_run.side_effect = subprocess.TimeoutExpired(cmd="docker run", timeout=30)
         sb = _make_sb()
@@ -144,9 +142,7 @@ class TestStartEdgeCases:
 
     @patch("missy.security.container.subprocess.run")
     @patch.object(ContainerSandbox, "is_available", return_value=True)
-    def test_start_oserror_returns_none(
-        self, _avail: MagicMock, mock_run: MagicMock
-    ) -> None:
+    def test_start_oserror_returns_none(self, _avail: MagicMock, mock_run: MagicMock) -> None:
         """OSError (permission denied) during docker run → start() returns None."""
         mock_run.side_effect = OSError("permission denied")
         sb = _make_sb()
@@ -156,13 +152,9 @@ class TestStartEdgeCases:
 
     @patch("missy.security.container.subprocess.run")
     @patch.object(ContainerSandbox, "is_available", return_value=True)
-    def test_network_mode_propagated(
-        self, _avail: MagicMock, mock_run: MagicMock
-    ) -> None:
+    def test_network_mode_propagated(self, _avail: MagicMock, mock_run: MagicMock) -> None:
         """Custom network_mode is forwarded as --network=<mode>."""
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout=b"cid999\n", stderr=b""
-        )
+        mock_run.return_value = MagicMock(returncode=0, stdout=b"cid999\n", stderr=b"")
         sb = _make_sb(network_mode="bridge")
         sb.start()
         args: list[str] = mock_run.call_args[0][0]
@@ -170,13 +162,9 @@ class TestStartEdgeCases:
 
     @patch("missy.security.container.subprocess.run")
     @patch.object(ContainerSandbox, "is_available", return_value=True)
-    def test_network_none_in_args(
-        self, _avail: MagicMock, mock_run: MagicMock
-    ) -> None:
+    def test_network_none_in_args(self, _avail: MagicMock, mock_run: MagicMock) -> None:
         """network_mode='none' (default) appears literally in the command."""
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout=b"cid000\n", stderr=b""
-        )
+        mock_run.return_value = MagicMock(returncode=0, stdout=b"cid000\n", stderr=b"")
         sb = _make_sb(network_mode="none")
         sb.start()
         args: list[str] = mock_run.call_args[0][0]
@@ -184,13 +172,9 @@ class TestStartEdgeCases:
 
     @patch("missy.security.container.subprocess.run")
     @patch.object(ContainerSandbox, "is_available", return_value=True)
-    def test_memory_limit_forwarded(
-        self, _avail: MagicMock, mock_run: MagicMock
-    ) -> None:
+    def test_memory_limit_forwarded(self, _avail: MagicMock, mock_run: MagicMock) -> None:
         """Non-default memory_limit appears in the command after --memory."""
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout=b"cidmem\n", stderr=b""
-        )
+        mock_run.return_value = MagicMock(returncode=0, stdout=b"cidmem\n", stderr=b"")
         sb = _make_sb(memory_limit="1g")
         sb.start()
         args: list[str] = mock_run.call_args[0][0]
@@ -199,13 +183,9 @@ class TestStartEdgeCases:
 
     @patch("missy.security.container.subprocess.run")
     @patch.object(ContainerSandbox, "is_available", return_value=True)
-    def test_cpu_quota_fractional(
-        self, _avail: MagicMock, mock_run: MagicMock
-    ) -> None:
+    def test_cpu_quota_fractional(self, _avail: MagicMock, mock_run: MagicMock) -> None:
         """Fractional cpu_quota is forwarded as a string to --cpus."""
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout=b"cidcpu\n", stderr=b""
-        )
+        mock_run.return_value = MagicMock(returncode=0, stdout=b"cidcpu\n", stderr=b"")
         sb = _make_sb(cpu_quota=0.25)
         sb.start()
         args: list[str] = mock_run.call_args[0][0]
@@ -214,13 +194,9 @@ class TestStartEdgeCases:
 
     @patch("missy.security.container.subprocess.run")
     @patch.object(ContainerSandbox, "is_available", return_value=True)
-    def test_cpu_quota_integer(
-        self, _avail: MagicMock, mock_run: MagicMock
-    ) -> None:
+    def test_cpu_quota_integer(self, _avail: MagicMock, mock_run: MagicMock) -> None:
         """Integer cpu_quota (e.g. 2.0) is still forwarded as a string."""
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout=b"cidcpu2\n", stderr=b""
-        )
+        mock_run.return_value = MagicMock(returncode=0, stdout=b"cidcpu2\n", stderr=b"")
         sb = _make_sb(cpu_quota=2.0)
         sb.start()
         args: list[str] = mock_run.call_args[0][0]
@@ -229,13 +205,9 @@ class TestStartEdgeCases:
 
     @patch("missy.security.container.subprocess.run")
     @patch.object(ContainerSandbox, "is_available", return_value=True)
-    def test_custom_image_in_args(
-        self, _avail: MagicMock, mock_run: MagicMock
-    ) -> None:
+    def test_custom_image_in_args(self, _avail: MagicMock, mock_run: MagicMock) -> None:
         """Custom image string appears in docker run positional args."""
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout=b"cidimg\n", stderr=b""
-        )
+        mock_run.return_value = MagicMock(returncode=0, stdout=b"cidimg\n", stderr=b"")
         sb = _make_sb(image="ubuntu:22.04")
         sb.start()
         args: list[str] = mock_run.call_args[0][0]
@@ -243,13 +215,9 @@ class TestStartEdgeCases:
 
     @patch("missy.security.container.subprocess.run")
     @patch.object(ContainerSandbox, "is_available", return_value=True)
-    def test_sleep_infinity_sentinel_present(
-        self, _avail: MagicMock, mock_run: MagicMock
-    ) -> None:
+    def test_sleep_infinity_sentinel_present(self, _avail: MagicMock, mock_run: MagicMock) -> None:
         """docker run command always ends with 'sleep infinity'."""
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout=b"cidsleep\n", stderr=b""
-        )
+        mock_run.return_value = MagicMock(returncode=0, stdout=b"cidsleep\n", stderr=b"")
         sb = _make_sb()
         sb.start()
         args: list[str] = mock_run.call_args[0][0]
@@ -258,13 +226,9 @@ class TestStartEdgeCases:
 
     @patch("missy.security.container.subprocess.run")
     @patch.object(ContainerSandbox, "is_available", return_value=True)
-    def test_security_options_present(
-        self, _avail: MagicMock, mock_run: MagicMock
-    ) -> None:
+    def test_security_options_present(self, _avail: MagicMock, mock_run: MagicMock) -> None:
         """Hardening flags --cap-drop=ALL and --security-opt=no-new-privileges are set."""
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout=b"cidsec\n", stderr=b""
-        )
+        mock_run.return_value = MagicMock(returncode=0, stdout=b"cidsec\n", stderr=b"")
         sb = _make_sb()
         sb.start()
         args: list[str] = mock_run.call_args[0][0]
@@ -290,9 +254,7 @@ class TestExecuteEdgeCases:
         assert "err-line" in output
 
     @patch("missy.security.container.subprocess.run")
-    def test_execute_timeout_message_includes_duration(
-        self, mock_run: MagicMock
-    ) -> None:
+    def test_execute_timeout_message_includes_duration(self, mock_run: MagicMock) -> None:
         """TimeoutExpired message includes the configured timeout value."""
         mock_run.side_effect = subprocess.TimeoutExpired(cmd="docker exec", timeout=7)
         sb = _started_sb()
@@ -301,9 +263,7 @@ class TestExecuteEdgeCases:
         assert "7" in output  # timeout value appears in message
 
     @patch("missy.security.container.subprocess.run")
-    def test_execute_oserror_returns_error_tuple(
-        self, mock_run: MagicMock
-    ) -> None:
+    def test_execute_oserror_returns_error_tuple(self, mock_run: MagicMock) -> None:
         """OSError during exec → (-1, error string)."""
         mock_run.side_effect = OSError("broken pipe")
         sb = _started_sb()
@@ -312,9 +272,7 @@ class TestExecuteEdgeCases:
         assert "broken pipe" in output
 
     @patch("missy.security.container.subprocess.run")
-    def test_execute_nonzero_exit_code_forwarded(
-        self, mock_run: MagicMock
-    ) -> None:
+    def test_execute_nonzero_exit_code_forwarded(self, mock_run: MagicMock) -> None:
         """Non-zero exit code from the command is returned unchanged."""
         mock_run.return_value = MagicMock(
             returncode=127,
@@ -338,13 +296,9 @@ class TestExecuteEdgeCases:
         assert "not started" in msg.lower()
 
     @patch("missy.security.container.subprocess.run")
-    def test_execute_passes_timeout_to_subprocess(
-        self, mock_run: MagicMock
-    ) -> None:
+    def test_execute_passes_timeout_to_subprocess(self, mock_run: MagicMock) -> None:
         """The timeout kwarg is forwarded to subprocess.run."""
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout=b"ok\n", stderr=b""
-        )
+        mock_run.return_value = MagicMock(returncode=0, stdout=b"ok\n", stderr=b"")
         sb = _started_sb()
         sb.execute("echo hi", timeout=42)
         _, kwargs = mock_run.call_args
@@ -377,9 +331,7 @@ class TestStopEdgeCases:
         assert sb.container_id is None
 
     @patch("missy.security.container.subprocess.run")
-    def test_stop_clears_container_id_before_docker_call(
-        self, mock_run: MagicMock
-    ) -> None:
+    def test_stop_clears_container_id_before_docker_call(self, mock_run: MagicMock) -> None:
         """_container_id is set to None before the docker rm subprocess call
         so that a second stop() call (e.g. from __exit__) is a no-op."""
         call_log: list[str | None] = []
@@ -401,9 +353,7 @@ class TestContextManagerEdgeCases:
 
     @patch("missy.security.container.subprocess.run")
     @patch.object(ContainerSandbox, "is_available", return_value=True)
-    def test_stop_called_on_exception(
-        self, _avail: MagicMock, mock_run: MagicMock
-    ) -> None:
+    def test_stop_called_on_exception(self, _avail: MagicMock, mock_run: MagicMock) -> None:
         """stop() is invoked by __exit__ even when an exception is raised inside
         the with-block."""
         start_result = MagicMock(returncode=0, stdout=b"exctest\n", stderr=b"")
@@ -420,9 +370,7 @@ class TestContextManagerEdgeCases:
         assert mock_run.call_count == 2
 
     @patch.object(ContainerSandbox, "is_available", return_value=False)
-    def test_context_manager_docker_unavailable(
-        self, _avail: MagicMock
-    ) -> None:
+    def test_context_manager_docker_unavailable(self, _avail: MagicMock) -> None:
         """When Docker is unavailable the context manager still works cleanly."""
         with ContainerSandbox(workspace="/tmp/ws") as sb:
             assert sb.container_id is None
@@ -467,53 +415,37 @@ class TestCopyEdgeCases:
     """copy_in / copy_out error-handling paths."""
 
     @patch("missy.security.container.subprocess.run")
-    def test_copy_in_called_process_error_does_not_raise(
-        self, mock_run: MagicMock
-    ) -> None:
-        mock_run.side_effect = subprocess.CalledProcessError(
-            returncode=1, cmd="docker cp"
-        )
+    def test_copy_in_called_process_error_does_not_raise(self, mock_run: MagicMock) -> None:
+        mock_run.side_effect = subprocess.CalledProcessError(returncode=1, cmd="docker cp")
         sb = _started_sb()
         sb.copy_in("/tmp/a.txt", "/workspace/a.txt")  # must not raise
 
     @patch("missy.security.container.subprocess.run")
-    def test_copy_in_timeout_does_not_raise(
-        self, mock_run: MagicMock
-    ) -> None:
+    def test_copy_in_timeout_does_not_raise(self, mock_run: MagicMock) -> None:
         mock_run.side_effect = subprocess.TimeoutExpired(cmd="docker cp", timeout=30)
         sb = _started_sb()
         sb.copy_in("/tmp/b.txt", "/workspace/b.txt")  # must not raise
 
     @patch("missy.security.container.subprocess.run")
-    def test_copy_in_oserror_does_not_raise(
-        self, mock_run: MagicMock
-    ) -> None:
+    def test_copy_in_oserror_does_not_raise(self, mock_run: MagicMock) -> None:
         mock_run.side_effect = OSError("pipe broken")
         sb = _started_sb()
         sb.copy_in("/tmp/c.txt", "/workspace/c.txt")  # must not raise
 
     @patch("missy.security.container.subprocess.run")
-    def test_copy_out_called_process_error_does_not_raise(
-        self, mock_run: MagicMock
-    ) -> None:
-        mock_run.side_effect = subprocess.CalledProcessError(
-            returncode=1, cmd="docker cp"
-        )
+    def test_copy_out_called_process_error_does_not_raise(self, mock_run: MagicMock) -> None:
+        mock_run.side_effect = subprocess.CalledProcessError(returncode=1, cmd="docker cp")
         sb = _started_sb()
         sb.copy_out("/workspace/a.txt", "/tmp/a.txt")  # must not raise
 
     @patch("missy.security.container.subprocess.run")
-    def test_copy_out_timeout_does_not_raise(
-        self, mock_run: MagicMock
-    ) -> None:
+    def test_copy_out_timeout_does_not_raise(self, mock_run: MagicMock) -> None:
         mock_run.side_effect = subprocess.TimeoutExpired(cmd="docker cp", timeout=30)
         sb = _started_sb()
         sb.copy_out("/workspace/b.txt", "/tmp/b.txt")  # must not raise
 
     @patch("missy.security.container.subprocess.run")
-    def test_copy_out_oserror_does_not_raise(
-        self, mock_run: MagicMock
-    ) -> None:
+    def test_copy_out_oserror_does_not_raise(self, mock_run: MagicMock) -> None:
         mock_run.side_effect = OSError("pipe broken")
         sb = _started_sb()
         sb.copy_out("/workspace/c.txt", "/tmp/c.txt")  # must not raise
@@ -670,9 +602,7 @@ class TestCLIReporterEdgeCases:
         assert "one-third" in captured.err
         assert captured.out == ""
 
-    def test_on_progress_formats_pct_as_integer(
-        self, capsys: pytest.CaptureFixture
-    ) -> None:
+    def test_on_progress_formats_pct_as_integer(self, capsys: pytest.CaptureFixture) -> None:
         """:.0f format: 66.6 → '67', not '66.600000'."""
         CLIReporter().on_progress(66.6, "lbl")
         captured = capsys.readouterr()
@@ -684,40 +614,30 @@ class TestCLIReporterEdgeCases:
         captured = capsys.readouterr()
         assert "0%" in captured.err
 
-    def test_on_tool_start_writes_to_stderr(
-        self, capsys: pytest.CaptureFixture
-    ) -> None:
+    def test_on_tool_start_writes_to_stderr(self, capsys: pytest.CaptureFixture) -> None:
         CLIReporter().on_tool_start("web_search")
         captured = capsys.readouterr()
         assert "web_search" in captured.err
         assert captured.out == ""
 
-    def test_on_tool_done_includes_name_and_summary(
-        self, capsys: pytest.CaptureFixture
-    ) -> None:
+    def test_on_tool_done_includes_name_and_summary(self, capsys: pytest.CaptureFixture) -> None:
         CLIReporter().on_tool_done("web_search", "found 5 results")
         captured = capsys.readouterr()
         assert "web_search" in captured.err
         assert "found 5 results" in captured.err
 
-    def test_on_iteration_is_one_based(
-        self, capsys: pytest.CaptureFixture
-    ) -> None:
+    def test_on_iteration_is_one_based(self, capsys: pytest.CaptureFixture) -> None:
         """on_iteration(0, 5) should display '1/5', not '0/5'."""
         CLIReporter().on_iteration(0, 5)
         captured = capsys.readouterr()
         assert "1/5" in captured.err
 
-    def test_on_iteration_last_iteration(
-        self, capsys: pytest.CaptureFixture
-    ) -> None:
+    def test_on_iteration_last_iteration(self, capsys: pytest.CaptureFixture) -> None:
         CLIReporter().on_iteration(4, 5)
         captured = capsys.readouterr()
         assert "5/5" in captured.err
 
-    def test_on_complete_writes_to_stderr(
-        self, capsys: pytest.CaptureFixture
-    ) -> None:
+    def test_on_complete_writes_to_stderr(self, capsys: pytest.CaptureFixture) -> None:
         CLIReporter().on_complete("task finished")
         captured = capsys.readouterr()
         assert "task finished" in captured.err
@@ -746,9 +666,7 @@ class TestProgressReporterProtocol:
         "on_error",
     }
 
-    @pytest.mark.parametrize(
-        "cls", [NullReporter, AuditReporter, CLIReporter]
-    )
+    @pytest.mark.parametrize("cls", [NullReporter, AuditReporter, CLIReporter])
     def test_all_protocol_methods_present(self, cls: type) -> None:
         """Each concrete reporter exposes every method required by the protocol."""
         instance = cls()
@@ -757,9 +675,7 @@ class TestProgressReporterProtocol:
                 f"{cls.__name__} missing method '{method}'"
             )
 
-    @pytest.mark.parametrize(
-        "cls", [NullReporter, AuditReporter, CLIReporter]
-    )
+    @pytest.mark.parametrize("cls", [NullReporter, AuditReporter, CLIReporter])
     def test_isinstance_check_against_protocol(self, cls: type) -> None:
         """All three implementations satisfy the runtime-checkable protocol."""
         assert isinstance(cls(), ProgressReporter)

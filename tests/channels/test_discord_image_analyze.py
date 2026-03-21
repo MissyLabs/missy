@@ -71,7 +71,11 @@ class TestFindLatestImage:
         from missy.channels.discord.image_analyze import find_latest_image
 
         messages = [
-            {"attachments": [{"content_type": "image/png", "filename": "a.png", "url": "http://x"}]},
+            {
+                "attachments": [
+                    {"content_type": "image/png", "filename": "a.png", "url": "http://x"}
+                ]
+            },
             {"attachments": []},
         ]
         att = find_latest_image(messages)
@@ -84,7 +88,11 @@ class TestFindLatestImage:
         messages = [
             {"attachments": []},
             {"attachments": [{"content_type": "text/plain", "filename": "x.txt"}]},
-            {"attachments": [{"content_type": "image/jpeg", "filename": "b.jpg", "url": "http://y"}]},
+            {
+                "attachments": [
+                    {"content_type": "image/jpeg", "filename": "b.jpg", "url": "http://y"}
+                ]
+            },
         ]
         att = find_latest_image(messages)
         assert att is not None
@@ -433,7 +441,12 @@ class TestAttachmentPolicy:
             "content": "<@999> what is this?",
             "id": "444",
             "attachments": [
-                {"content_type": "image/png", "filename": "shot.png", "url": "http://x", "size": 1024}
+                {
+                    "content_type": "image/png",
+                    "filename": "shot.png",
+                    "url": "http://x",
+                    "size": 1024,
+                }
             ],
         }
         await ch._handle_message(data)

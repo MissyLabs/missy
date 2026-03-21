@@ -100,32 +100,44 @@ class TestRecordKnownModels:
 
     def test_claude_sonnet_4_input_cost(self):
         # $0.003 per 1 k input tokens
-        rec = CostTracker().record("claude-sonnet-4-20250514", prompt_tokens=1000, completion_tokens=0)
+        rec = CostTracker().record(
+            "claude-sonnet-4-20250514", prompt_tokens=1000, completion_tokens=0
+        )
         assert rec.cost_usd == pytest.approx(0.003)
 
     def test_claude_sonnet_4_output_cost(self):
         # $0.015 per 1 k output tokens
-        rec = CostTracker().record("claude-sonnet-4-20250514", prompt_tokens=0, completion_tokens=1000)
+        rec = CostTracker().record(
+            "claude-sonnet-4-20250514", prompt_tokens=0, completion_tokens=1000
+        )
         assert rec.cost_usd == pytest.approx(0.015)
 
     def test_claude_sonnet_4_combined_cost(self):
-        rec = CostTracker().record("claude-sonnet-4-20250514", prompt_tokens=500, completion_tokens=200)
+        rec = CostTracker().record(
+            "claude-sonnet-4-20250514", prompt_tokens=500, completion_tokens=200
+        )
         expected = (500 / 1000) * 0.003 + (200 / 1000) * 0.015
         assert rec.cost_usd == pytest.approx(expected)
 
     def test_claude_opus_4_input_cost(self):
         # $0.015 per 1 k input tokens
-        rec = CostTracker().record("claude-opus-4-20250514", prompt_tokens=1000, completion_tokens=0)
+        rec = CostTracker().record(
+            "claude-opus-4-20250514", prompt_tokens=1000, completion_tokens=0
+        )
         assert rec.cost_usd == pytest.approx(0.015)
 
     def test_claude_haiku_4_input_cost(self):
         # $0.0008 per 1 k input tokens
-        rec = CostTracker().record("claude-haiku-4-20250514", prompt_tokens=1000, completion_tokens=0)
+        rec = CostTracker().record(
+            "claude-haiku-4-20250514", prompt_tokens=1000, completion_tokens=0
+        )
         assert rec.cost_usd == pytest.approx(0.0008)
 
     def test_claude_3_haiku_input_cost(self):
         # $0.00025 per 1 k input tokens
-        rec = CostTracker().record("claude-3-haiku-20240307", prompt_tokens=1000, completion_tokens=0)
+        rec = CostTracker().record(
+            "claude-3-haiku-20240307", prompt_tokens=1000, completion_tokens=0
+        )
         assert rec.cost_usd == pytest.approx(0.00025)
 
     def test_gpt4o_input_cost(self):
@@ -157,7 +169,9 @@ class TestRecordKnownModels:
         assert rec.cost_usd == 0.0
 
     def test_record_returns_usage_record_instance(self):
-        rec = CostTracker().record("claude-sonnet-4-20250514", prompt_tokens=100, completion_tokens=50)
+        rec = CostTracker().record(
+            "claude-sonnet-4-20250514", prompt_tokens=100, completion_tokens=50
+        )
         assert isinstance(rec, UsageRecord)
 
     def test_usage_record_stores_model_name(self):
@@ -165,15 +179,21 @@ class TestRecordKnownModels:
         assert rec.model == "gpt-4o"
 
     def test_usage_record_stores_prompt_tokens(self):
-        rec = CostTracker().record("claude-haiku-4-20250514", prompt_tokens=300, completion_tokens=150)
+        rec = CostTracker().record(
+            "claude-haiku-4-20250514", prompt_tokens=300, completion_tokens=150
+        )
         assert rec.prompt_tokens == 300
 
     def test_usage_record_stores_completion_tokens(self):
-        rec = CostTracker().record("claude-haiku-4-20250514", prompt_tokens=300, completion_tokens=150)
+        rec = CostTracker().record(
+            "claude-haiku-4-20250514", prompt_tokens=300, completion_tokens=150
+        )
         assert rec.completion_tokens == 150
 
     def test_cost_usd_type_is_float(self):
-        rec = CostTracker().record("claude-sonnet-4-20250514", prompt_tokens=1000, completion_tokens=500)
+        rec = CostTracker().record(
+            "claude-sonnet-4-20250514", prompt_tokens=1000, completion_tokens=500
+        )
         assert isinstance(rec.cost_usd, float)
 
     def test_zero_tokens_returns_zero_cost_float(self):
@@ -209,7 +229,9 @@ class TestRecordKnownModels:
 
 class TestRecordUnknownModel:
     def test_unknown_model_cost_is_zero(self):
-        rec = CostTracker().record("my-custom-local-model-v99", prompt_tokens=5000, completion_tokens=2000)
+        rec = CostTracker().record(
+            "my-custom-local-model-v99", prompt_tokens=5000, completion_tokens=2000
+        )
         assert rec.cost_usd == 0.0
 
     def test_unknown_model_total_cost_stays_zero(self):
@@ -266,19 +288,25 @@ class TestRecordFromResponseValid:
 
     def test_response_increments_call_count(self):
         tracker = CostTracker()
-        tracker.record_from_response(_make_response("gpt-4o", prompt_tokens=100, completion_tokens=50))
+        tracker.record_from_response(
+            _make_response("gpt-4o", prompt_tokens=100, completion_tokens=50)
+        )
         assert tracker.call_count == 1
 
     def test_response_model_stored_in_record(self):
         tracker = CostTracker()
-        rec = tracker.record_from_response(_make_response("claude-opus-4-20250514", prompt_tokens=100, completion_tokens=50))
+        rec = tracker.record_from_response(
+            _make_response("claude-opus-4-20250514", prompt_tokens=100, completion_tokens=50)
+        )
         assert rec is not None
         assert rec.model == "claude-opus-4-20250514"
 
     def test_multiple_responses_accumulate(self):
         tracker = CostTracker()
         for _ in range(3):
-            tracker.record_from_response(_make_response("gpt-4o-mini", prompt_tokens=100, completion_tokens=50))
+            tracker.record_from_response(
+                _make_response("gpt-4o-mini", prompt_tokens=100, completion_tokens=50)
+            )
         assert tracker.call_count == 3
         assert tracker.total_prompt_tokens == 300
         assert tracker.total_completion_tokens == 150
@@ -537,7 +565,9 @@ class TestThreadSafety:
         def _worker():
             try:
                 for _ in range(calls_per):
-                    tracker.record("claude-sonnet-4-20250514", prompt_tokens=10, completion_tokens=5)
+                    tracker.record(
+                        "claude-sonnet-4-20250514", prompt_tokens=10, completion_tokens=5
+                    )
             except Exception as exc:
                 errors.append(exc)
 
@@ -685,7 +715,10 @@ class TestGetSummary:
         tracker = CostTracker()
         tracker.record("gpt-4o", prompt_tokens=300, completion_tokens=200)
         summary = tracker.get_summary()
-        assert summary["total_tokens"] == summary["total_prompt_tokens"] + summary["total_completion_tokens"]
+        assert (
+            summary["total_tokens"]
+            == summary["total_prompt_tokens"] + summary["total_completion_tokens"]
+        )
 
     def test_summary_call_count_matches_records(self):
         tracker = CostTracker()
@@ -861,41 +894,44 @@ class TestRecordEviction:
 class TestPricingTablePrefixMatching:
     """_lookup_pricing matches dated model variants to their base prefix entry."""
 
-    @pytest.mark.parametrize("model,expected_inp,expected_out", [
-        # Anthropic — dated variants → base entry
-        ("claude-sonnet-4-20250514",  0.003,    0.015),
-        ("claude-sonnet-4-20250601",  0.003,    0.015),
-        ("claude-opus-4-20250514",    0.015,    0.075),
-        ("claude-haiku-4-20250514",   0.0008,   0.004),
-        ("claude-3-5-sonnet-20241022",0.003,    0.015),
-        ("claude-3-5-haiku-20241022", 0.0008,   0.004),
-        ("claude-3-opus-20240229",    0.015,    0.075),
-        ("claude-3-sonnet-20240229",  0.003,    0.015),
-        ("claude-3-haiku-20240307",   0.00025,  0.00125),
-        # OpenAI — dated and variant names
-        # Note: the pricing table lists "gpt-4.1" before "gpt-4.1-mini" / "gpt-4.1-nano",
-        # so any model whose name starts with "gpt-4.1" matches the gpt-4.1 entry (0.002).
-        # Models with a more-specific prefix that appear AFTER a shorter prefix in the
-        # table will fall through to that shorter prefix match.
-        ("gpt-4o-2024-08-06",         0.0025,   0.01),
-        ("gpt-4o-mini-2024-07-18",    0.00015,  0.0006),
-        ("gpt-4-turbo-2024-04-09",    0.01,     0.03),
-        # gpt-4.1-preview starts with "gpt-4.1" → matches gpt-4.1 entry ($0.002)
-        ("gpt-4.1-preview",           0.002,    0.008),
-        # gpt-4.1-mini-preview also starts with "gpt-4.1" → matches gpt-4.1 entry
-        ("gpt-4.1-mini-preview",      0.002,    0.008),
-        # gpt-4.1-nano-preview also starts with "gpt-4.1" → matches gpt-4.1 entry
-        ("gpt-4.1-nano-preview",      0.002,    0.008),
-        ("gpt-3.5-turbo-0125",        0.0005,   0.0015),
-        # Ollama local models — zero cost
-        ("llama3.2:3b",               0.0,      0.0),
-        ("mistral:7b-instruct",       0.0,      0.0),
-        ("codellama:13b-code",        0.0,      0.0),
-        ("deepseek-coder:6.7b",       0.0,      0.0),
-        ("phi3:mini",                 0.0,      0.0),
-        ("qwen2:7b",                  0.0,      0.0),
-        ("gemma2:9b",                 0.0,      0.0),
-    ])
+    @pytest.mark.parametrize(
+        "model,expected_inp,expected_out",
+        [
+            # Anthropic — dated variants → base entry
+            ("claude-sonnet-4-20250514", 0.003, 0.015),
+            ("claude-sonnet-4-20250601", 0.003, 0.015),
+            ("claude-opus-4-20250514", 0.015, 0.075),
+            ("claude-haiku-4-20250514", 0.0008, 0.004),
+            ("claude-3-5-sonnet-20241022", 0.003, 0.015),
+            ("claude-3-5-haiku-20241022", 0.0008, 0.004),
+            ("claude-3-opus-20240229", 0.015, 0.075),
+            ("claude-3-sonnet-20240229", 0.003, 0.015),
+            ("claude-3-haiku-20240307", 0.00025, 0.00125),
+            # OpenAI — dated and variant names
+            # Note: the pricing table lists "gpt-4.1" before "gpt-4.1-mini" / "gpt-4.1-nano",
+            # so any model whose name starts with "gpt-4.1" matches the gpt-4.1 entry (0.002).
+            # Models with a more-specific prefix that appear AFTER a shorter prefix in the
+            # table will fall through to that shorter prefix match.
+            ("gpt-4o-2024-08-06", 0.0025, 0.01),
+            ("gpt-4o-mini-2024-07-18", 0.00015, 0.0006),
+            ("gpt-4-turbo-2024-04-09", 0.01, 0.03),
+            # gpt-4.1-preview starts with "gpt-4.1" → matches gpt-4.1 entry ($0.002)
+            ("gpt-4.1-preview", 0.002, 0.008),
+            # gpt-4.1-mini-preview also starts with "gpt-4.1" → matches gpt-4.1 entry
+            ("gpt-4.1-mini-preview", 0.002, 0.008),
+            # gpt-4.1-nano-preview also starts with "gpt-4.1" → matches gpt-4.1 entry
+            ("gpt-4.1-nano-preview", 0.002, 0.008),
+            ("gpt-3.5-turbo-0125", 0.0005, 0.0015),
+            # Ollama local models — zero cost
+            ("llama3.2:3b", 0.0, 0.0),
+            ("mistral:7b-instruct", 0.0, 0.0),
+            ("codellama:13b-code", 0.0, 0.0),
+            ("deepseek-coder:6.7b", 0.0, 0.0),
+            ("phi3:mini", 0.0, 0.0),
+            ("qwen2:7b", 0.0, 0.0),
+            ("gemma2:9b", 0.0, 0.0),
+        ],
+    )
     def test_prefix_lookup(self, model: str, expected_inp: float, expected_out: float):
         inp, out = _lookup_pricing(model)
         assert inp == pytest.approx(expected_inp), f"Input rate mismatch for {model!r}"

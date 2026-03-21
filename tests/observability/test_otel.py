@@ -34,11 +34,13 @@ class TestOtelExporter:
         mock_tracer.start_as_current_span.return_value.__exit__ = MagicMock(return_value=False)
         exp._tracer = mock_tracer
 
-        exp.export_event({
-            "event_type": "test.event",
-            "session_id": "s1",
-            "result": "allow",
-        })
+        exp.export_event(
+            {
+                "event_type": "test.event",
+                "session_id": "s1",
+                "result": "allow",
+            }
+        )
         mock_tracer.start_as_current_span.assert_called_once_with("test.event")
 
     def test_export_event_handles_detail_dict(self) -> None:
@@ -50,10 +52,12 @@ class TestOtelExporter:
         mock_tracer.start_as_current_span.return_value.__exit__ = MagicMock(return_value=False)
         exp._tracer = mock_tracer
 
-        exp.export_event({
-            "event_type": "test.event",
-            "detail": {"key1": "val1", "key2": 42},
-        })
+        exp.export_event(
+            {
+                "event_type": "test.event",
+                "detail": {"key1": "val1", "key2": 42},
+            }
+        )
         mock_span.set_attribute.assert_any_call("missy.key1", "val1")
         mock_span.set_attribute.assert_any_call("missy.key2", "42")
 
@@ -66,10 +70,12 @@ class TestOtelExporter:
         mock_tracer.start_as_current_span.return_value.__exit__ = MagicMock(return_value=False)
         exp._tracer = mock_tracer
 
-        exp.export_event({
-            "event_type": "test",
-            "complex": [1, 2, 3],  # not str/int/float/bool
-        })
+        exp.export_event(
+            {
+                "event_type": "test",
+                "complex": [1, 2, 3],  # not str/int/float/bool
+            }
+        )
         # Only event_type should be set as attribute
         calls = list(mock_span.set_attribute.call_args_list)
         keys = [c[0][0] for c in calls]

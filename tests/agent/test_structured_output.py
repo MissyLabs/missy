@@ -143,8 +143,8 @@ class TestExtractJson:
         assert result == '{"name": "Alice", "value": 1}'
 
     def test_raw_json_array(self):
-        result = self.schema._extract_json('[1, 2, 3]')
-        assert result == '[1, 2, 3]'
+        result = self.schema._extract_json("[1, 2, 3]")
+        assert result == "[1, 2, 3]"
 
     def test_json_code_block(self):
         text = '```json\n{"name": "Bob", "value": 2}\n```'
@@ -176,7 +176,7 @@ class TestExtractJson:
         assert result is None
 
     def test_code_block_without_json_tag(self):
-        text = "```\n{\"x\": 1}\n```"
+        text = '```\n{"x": 1}\n```'
         result = self.schema._extract_json(text)
         assert result == '{"x": 1}'
 
@@ -331,9 +331,7 @@ class TestStructuredOutputRunnerSync:
         provider = _make_provider('{"name": "Alice", "value": 1}')
         runner = StructuredOutputRunner(provider)
         schema = OutputSchema(SimpleModel, max_retries=2)
-        result = runner.complete_structured(
-            [Message(role="user", content="hello")], schema
-        )
+        result = runner.complete_structured([Message(role="user", content="hello")], schema)
         assert result.success is True
         assert result.data.name == "Alice"
         assert result.attempts == 1
@@ -347,9 +345,7 @@ class TestStructuredOutputRunnerSync:
         )
         runner = StructuredOutputRunner(provider)
         schema = OutputSchema(SimpleModel, max_retries=2)
-        result = runner.complete_structured(
-            [Message(role="user", content="hello")], schema
-        )
+        result = runner.complete_structured([Message(role="user", content="hello")], schema)
         assert result.success is True
         assert result.data.name == "Bob"
         assert result.attempts == 2
@@ -359,9 +355,7 @@ class TestStructuredOutputRunnerSync:
         provider = _make_provider("nope", "still nope", "nope again")
         runner = StructuredOutputRunner(provider)
         schema = OutputSchema(SimpleModel, max_retries=2)
-        result = runner.complete_structured(
-            [Message(role="user", content="hello")], schema
-        )
+        result = runner.complete_structured([Message(role="user", content="hello")], schema)
         assert result.success is False
         assert result.attempts == 3
         assert provider.complete.call_count == 3
@@ -402,9 +396,7 @@ class TestStructuredOutputRunnerSync:
         provider = _make_provider("bad")
         runner = StructuredOutputRunner(provider)
         schema = OutputSchema(SimpleModel, max_retries=0)
-        result = runner.complete_structured(
-            [Message(role="user", content="hi")], schema
-        )
+        result = runner.complete_structured([Message(role="user", content="hi")], schema)
         assert result.success is False
         assert provider.complete.call_count == 1
 
@@ -412,9 +404,7 @@ class TestStructuredOutputRunnerSync:
         provider = _make_provider("bad", '{"name": "Y", "value": 9}')
         runner = StructuredOutputRunner(provider)
         schema = OutputSchema(SimpleModel, max_retries=1)
-        result = runner.complete_structured(
-            [Message(role="user", content="hi")], schema
-        )
+        result = runner.complete_structured([Message(role="user", content="hi")], schema)
         assert result.success is True
         assert result.attempts == 2
 
@@ -430,9 +420,7 @@ class TestStructuredOutputRunnerAsync:
         provider = _make_provider('{"name": "Async", "value": 42}')
         runner = StructuredOutputRunner(provider)
         schema = OutputSchema(SimpleModel, max_retries=1)
-        result = await runner.acomplete_structured(
-            [Message(role="user", content="hi")], schema
-        )
+        result = await runner.acomplete_structured([Message(role="user", content="hi")], schema)
         assert result.success is True
         assert result.data.value == 42
 
@@ -441,9 +429,7 @@ class TestStructuredOutputRunnerAsync:
         provider = _make_provider("bad", '{"name": "Async2", "value": 5}')
         runner = StructuredOutputRunner(provider)
         schema = OutputSchema(SimpleModel, max_retries=2)
-        result = await runner.acomplete_structured(
-            [Message(role="user", content="hi")], schema
-        )
+        result = await runner.acomplete_structured([Message(role="user", content="hi")], schema)
         assert result.success is True
         assert result.attempts == 2
 
@@ -459,9 +445,7 @@ class TestStructuredOutputRunnerAsync:
 
         runner = StructuredOutputRunner(provider)
         schema = OutputSchema(SimpleModel, max_retries=0)
-        result = await runner.acomplete_structured(
-            [Message(role="user", content="hi")], schema
-        )
+        result = await runner.acomplete_structured([Message(role="user", content="hi")], schema)
         assert result.success is True
         provider.complete.assert_not_called()
 
@@ -528,9 +512,7 @@ class TestErrorAnalysis:
 
     def test_bool_field_required(self):
         schema = OutputSchema(ErrorAnalysis)
-        result = schema.parse(
-            '{"error_type": "logic", "root_cause": "x", "suggested_fix": "y"}'
-        )
+        result = schema.parse('{"error_type": "logic", "root_cause": "x", "suggested_fix": "y"}')
         assert result.success is False
 
 

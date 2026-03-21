@@ -522,7 +522,10 @@ class TestErrorHandling:
         mock_proc.poll.return_value = 1  # exited immediately
         mock_proc.returncode = 1
         mock_proc.stderr = BytesIO(b"command not found")
-        with patch("subprocess.Popen", return_value=mock_proc), pytest.raises(RuntimeError, match="exited immediately"):
+        with (
+            patch("subprocess.Popen", return_value=mock_proc),
+            pytest.raises(RuntimeError, match="exited immediately"),
+        ):
             c.connect()
 
 

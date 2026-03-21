@@ -128,10 +128,7 @@ class TestShapeSystemPromptWithoutPersona:
 class TestAnalyzeUserToneCasual:
     def test_hey_is_casual(self):
         layer = BehaviorLayer()
-        msgs = _user_messages(
-            "hey can you help me with something cool"
-            " thx btw ya ngl tbh fyi"
-        )
+        msgs = _user_messages("hey can you help me with something cool thx btw ya ngl tbh fyi")
         assert layer.analyze_user_tone(msgs) == "casual"
 
     def test_lol_signals_casual(self):
@@ -243,9 +240,7 @@ class TestAnalyzeUserToneEdgeCases:
     def test_no_matching_tone_signals_returns_casual(self):
         layer = BehaviorLayer()
         # Message long enough to avoid "brief" but no keyword matches
-        msgs = _user_messages(
-            "The rain in spain falls mainly on the plain every single year"
-        )
+        msgs = _user_messages("The rain in spain falls mainly on the plain every single year")
         assert layer.analyze_user_tone(msgs) == "casual"
 
 
@@ -284,7 +279,11 @@ class TestGetResponseGuidelines:
     def test_exploration_intent_guidance(self):
         layer = BehaviorLayer()
         result = layer.get_response_guidelines(_base_ctx(intent="exploration"))
-        assert "ideas" in result.lower() or "suggestions" in result.lower() or "proactive" in result.lower()
+        assert (
+            "ideas" in result.lower()
+            or "suggestions" in result.lower()
+            or "proactive" in result.lower()
+        )
 
     def test_code_topic_includes_snippet_guidance(self):
         layer = BehaviorLayer()
@@ -332,7 +331,10 @@ class TestShouldBeConcise:
 
     def test_normal_context_not_concise(self):
         layer = BehaviorLayer()
-        assert layer.should_be_concise({"user_tone": "casual", "turn_count": 3, "urgency": "low"}) is False
+        assert (
+            layer.should_be_concise({"user_tone": "casual", "turn_count": 3, "urgency": "low"})
+            is False
+        )
 
     def test_empty_context_not_concise(self):
         layer = BehaviorLayer()
@@ -449,7 +451,9 @@ class TestClassifyIntentQuestion:
 class TestClassifyIntentFrustration:
     def test_still_not_working_is_frustration(self):
         interpreter = IntentInterpreter()
-        assert interpreter.classify_intent("still not working, I tried that already") == "frustration"
+        assert (
+            interpreter.classify_intent("still not working, I tried that already") == "frustration"
+        )
 
     def test_useless_is_frustration(self):
         interpreter = IntentInterpreter()
@@ -497,7 +501,9 @@ class TestClassifyIntentExploration:
 class TestClassifyIntentFeedback:
     def test_thats_wrong_is_feedback(self):
         interpreter = IntentInterpreter()
-        assert interpreter.classify_intent("that's wrong, I needed something different") == "feedback"
+        assert (
+            interpreter.classify_intent("that's wrong, I needed something different") == "feedback"
+        )
 
     def test_not_quite_is_feedback(self):
         interpreter = IntentInterpreter()
@@ -739,10 +745,7 @@ class TestDetectRoboticPatterns:
 
     def test_multiple_patterns_all_detected(self):
         shaper = ResponseShaper()
-        text = (
-            "Certainly! As an AI, I'd be happy to help. "
-            "Great question! Of course I can assist."
-        )
+        text = "Certainly! As an AI, I'd be happy to help. Great question! Of course I can assist."
         found = shaper.detect_robotic_patterns(text)
         assert len(found) >= 3
 
@@ -764,10 +767,14 @@ class TestBehaviorLayerEdgeCases:
     def test_analyze_tone_with_mixed_signals(self):
         """Messages with both casual and technical signals."""
         from missy.agent.persona import PersonaConfig
+
         persona = PersonaConfig()
         layer = BehaviorLayer(persona)
         messages = [
-            {"role": "user", "content": "hey, can you check the api endpoint config for the kubernetes deployment?"},
+            {
+                "role": "user",
+                "content": "hey, can you check the api endpoint config for the kubernetes deployment?",
+            },
         ]
         tone = layer.analyze_user_tone(messages)
         # Should detect technical due to api/endpoint/config/kubernetes
@@ -793,6 +800,7 @@ class TestBehaviorLayerEdgeCases:
     def test_guidelines_with_all_context_keys(self):
         """Guidelines should handle a fully populated context dict."""
         from missy.agent.persona import PersonaConfig
+
         persona = PersonaConfig()
         layer = BehaviorLayer(persona)
         ctx = {
@@ -810,6 +818,7 @@ class TestBehaviorLayerEdgeCases:
     def test_guidelines_with_empty_persona_lists(self):
         """Persona with empty lists should not crash."""
         from missy.agent.persona import PersonaConfig
+
         persona = PersonaConfig(
             behavioral_tendencies=[],
             response_style_rules=[],
@@ -884,9 +893,18 @@ class TestIntentInterpreterEdgeCases:
         interp = IntentInterpreter()
         long_text = "word " * 10000
         result = interp.classify_intent(long_text)
-        assert result in ("greeting", "farewell", "confirmation", "frustration",
-                          "troubleshooting", "clarification", "feedback",
-                          "exploration", "command", "question")
+        assert result in (
+            "greeting",
+            "farewell",
+            "confirmation",
+            "frustration",
+            "troubleshooting",
+            "clarification",
+            "feedback",
+            "exploration",
+            "command",
+            "question",
+        )
 
     def test_urgency_default_is_low(self):
         interp = IntentInterpreter()
@@ -912,7 +930,10 @@ class TestTroubleshootingIntent:
 
     def test_error_keyword(self):
         interp = IntentInterpreter()
-        assert interp.classify_intent("I'm getting an error when I run the script") == "troubleshooting"
+        assert (
+            interp.classify_intent("I'm getting an error when I run the script")
+            == "troubleshooting"
+        )
 
     def test_traceback(self):
         interp = IntentInterpreter()
@@ -924,11 +945,17 @@ class TestTroubleshootingIntent:
 
     def test_permission_denied(self):
         interp = IntentInterpreter()
-        assert interp.classify_intent("I'm seeing permission denied on the socket") == "troubleshooting"
+        assert (
+            interp.classify_intent("I'm seeing permission denied on the socket")
+            == "troubleshooting"
+        )
 
     def test_timeout(self):
         interp = IntentInterpreter()
-        assert interp.classify_intent("The request is hitting a timeout after 30s") == "troubleshooting"
+        assert (
+            interp.classify_intent("The request is hitting a timeout after 30s")
+            == "troubleshooting"
+        )
 
     def test_exit_code(self):
         interp = IntentInterpreter()
@@ -936,7 +963,10 @@ class TestTroubleshootingIntent:
 
     def test_exception(self):
         interp = IntentInterpreter()
-        assert interp.classify_intent("Getting a ValueError exception in the parser") == "troubleshooting"
+        assert (
+            interp.classify_intent("Getting a ValueError exception in the parser")
+            == "troubleshooting"
+        )
 
     def test_debug(self):
         interp = IntentInterpreter()
@@ -944,11 +974,15 @@ class TestTroubleshootingIntent:
 
     def test_diagnose(self):
         interp = IntentInterpreter()
-        assert interp.classify_intent("Help me diagnose why the service is slow") == "troubleshooting"
+        assert (
+            interp.classify_intent("Help me diagnose why the service is slow") == "troubleshooting"
+        )
 
     def test_connection_refused(self):
         interp = IntentInterpreter()
-        assert interp.classify_intent("Getting connection refused on port 5432") == "troubleshooting"
+        assert (
+            interp.classify_intent("Getting connection refused on port 5432") == "troubleshooting"
+        )
 
 
 class TestConfirmationIntent:

@@ -118,16 +118,10 @@ def _make_rest(
 ) -> tuple[DiscordRestClient, MagicMock]:
     """Return a (DiscordRestClient, mock_http) pair with configurable responses."""
     mock_http = MagicMock()
-    mock_http.post.return_value = post_response or _make_response(
-        json_data={"id": "msg-1"}
-    )
-    mock_http.get.return_value = get_response or _make_response(
-        json_data={"id": "ch-1"}
-    )
+    mock_http.post.return_value = post_response or _make_response(json_data={"id": "msg-1"})
+    mock_http.get.return_value = get_response or _make_response(json_data={"id": "ch-1"})
     mock_http.put.return_value = put_response or _make_response(status_code=204)
-    mock_http.patch.return_value = patch_response or _make_response(
-        json_data={"id": "msg-1"}
-    )
+    mock_http.patch.return_value = patch_response or _make_response(json_data={"id": "msg-1"})
     mock_http.delete.return_value = delete_response or _make_response(status_code=204)
     client = DiscordRestClient(bot_token="Bot testtoken", http_client=mock_http)
     return client, mock_http
@@ -244,15 +238,11 @@ class TestRestClientConstructor:
     def test_token_without_prefix_gets_prefixed(self):
         client, _ = _make_rest()
         # Already uses "Bot testtoken" in _make_rest but let's test bare token.
-        bare_client = DiscordRestClient(
-            bot_token="baretoken", http_client=MagicMock()
-        )
+        bare_client = DiscordRestClient(bot_token="baretoken", http_client=MagicMock())
         assert bare_client._token == "Bot baretoken"
 
     def test_token_with_prefix_not_doubled(self):
-        client = DiscordRestClient(
-            bot_token="Bot already", http_client=MagicMock()
-        )
+        client = DiscordRestClient(bot_token="Bot already", http_client=MagicMock())
         assert client._token == "Bot already"
 
     def test_http_client_injected(self):
@@ -276,9 +266,7 @@ class TestRestClientConstructor:
 class TestGetGatewayBot:
     def test_calls_correct_endpoint(self):
         expected = {"url": "wss://gateway.discord.gg", "shards": 1}
-        client, mock_http = _make_rest(
-            get_response=_make_response(json_data=expected)
-        )
+        client, mock_http = _make_rest(get_response=_make_response(json_data=expected))
         client.get_gateway_bot()
         url_called = mock_http.get.call_args[0][0]
         assert url_called == f"{BASE}/gateway/bot"
@@ -303,9 +291,7 @@ class TestGetGatewayBot:
 
 class TestSendMessageBody:
     def test_basic_body_shape(self):
-        client, mock_http = _make_rest(
-            post_response=_make_response(json_data={"id": "m1"})
-        )
+        client, mock_http = _make_rest(post_response=_make_response(json_data={"id": "m1"}))
         client.send_message("111222333", "hello")
         call_kwargs = mock_http.post.call_args[1]
         body = call_kwargs["json"]
@@ -313,25 +299,19 @@ class TestSendMessageBody:
         assert "allowed_mentions" in body
 
     def test_allowed_mentions_parse_is_empty_list(self):
-        client, mock_http = _make_rest(
-            post_response=_make_response(json_data={"id": "m1"})
-        )
+        client, mock_http = _make_rest(post_response=_make_response(json_data={"id": "m1"}))
         client.send_message("111222333", "hi")
         body = mock_http.post.call_args[1]["json"]
         assert body["allowed_mentions"]["parse"] == []
 
     def test_mention_user_ids_passed_through(self):
-        client, mock_http = _make_rest(
-            post_response=_make_response(json_data={"id": "m1"})
-        )
+        client, mock_http = _make_rest(post_response=_make_response(json_data={"id": "m1"}))
         client.send_message("111222333", "hi", mention_user_ids=["999"])
         body = mock_http.post.call_args[1]["json"]
         assert body["allowed_mentions"]["users"] == ["999"]
 
     def test_reply_to_message_id_adds_reference(self):
-        client, mock_http = _make_rest(
-            post_response=_make_response(json_data={"id": "m1"})
-        )
+        client, mock_http = _make_rest(post_response=_make_response(json_data={"id": "m1"}))
         client.send_message("111222333", "reply", reply_to_message_id="555666777")
         body = mock_http.post.call_args[1]["json"]
         assert "message_reference" in body
@@ -352,9 +332,7 @@ class TestSendMessageBody:
 
     def test_429_with_non_numeric_retry_after_falls_back_to_backoff(self):
         """Non-numeric Retry-After header should fall through to backoff delay."""
-        retry_resp = _make_response(
-            status_code=429, headers={"Retry-After": "soon"}
-        )
+        retry_resp = _make_response(status_code=429, headers={"Retry-After": "soon"})
         ok_resp = _make_response(json_data={"id": "m1"})
         mock_http = MagicMock()
         mock_http.post.side_effect = [retry_resp, ok_resp]
@@ -400,9 +378,7 @@ class TestUploadFile:
             f.write(b"data")
             path = f.name
         try:
-            client, mock_http = _make_rest(
-                post_response=_make_response(json_data={"id": "m1"})
-            )
+            client, mock_http = _make_rest(post_response=_make_response(json_data={"id": "m1"}))
             client.upload_file("111222333", path, caption="My caption")
             data_arg = mock_http.post.call_args[1].get("data", {})
             assert data_arg.get("content") == "My caption"
@@ -414,9 +390,7 @@ class TestUploadFile:
             f.write(b"data")
             path = f.name
         try:
-            client, mock_http = _make_rest(
-                post_response=_make_response(json_data={"id": "m1"})
-            )
+            client, mock_http = _make_rest(post_response=_make_response(json_data={"id": "m1"}))
             client.upload_file("111222333", path)
             data_arg = mock_http.post.call_args[1].get("data", {})
             assert data_arg == {}
@@ -428,9 +402,7 @@ class TestUploadFile:
             f.write(b"\x89PNG")
             path = f.name
         try:
-            client, mock_http = _make_rest(
-                post_response=_make_response(json_data={"id": "m1"})
-            )
+            client, mock_http = _make_rest(post_response=_make_response(json_data={"id": "m1"}))
             client.upload_file("111222333", path)
             headers_used = mock_http.post.call_args[1]["headers"]
             assert "Content-Type" not in headers_used
@@ -539,58 +511,44 @@ class TestDeleteMessage:
 
 class TestCreateThread:
     def test_with_message_id_uses_message_thread_url(self):
-        client, mock_http = _make_rest(
-            post_response=_make_response(json_data={"id": "thread-1"})
-        )
+        client, mock_http = _make_rest(post_response=_make_response(json_data={"id": "thread-1"}))
         client.create_thread("111222333", "My Thread", message_id="444555666")
         url = mock_http.post.call_args[0][0]
         assert url == f"{BASE}/channels/111222333/messages/444555666/threads"
 
     def test_without_message_id_uses_threads_url(self):
-        client, mock_http = _make_rest(
-            post_response=_make_response(json_data={"id": "thread-1"})
-        )
+        client, mock_http = _make_rest(post_response=_make_response(json_data={"id": "thread-1"}))
         client.create_thread("111222333", "Standalone Thread")
         url = mock_http.post.call_args[0][0]
         assert url == f"{BASE}/channels/111222333/threads"
 
     def test_without_message_id_body_includes_type_11(self):
-        client, mock_http = _make_rest(
-            post_response=_make_response(json_data={"id": "thread-1"})
-        )
+        client, mock_http = _make_rest(post_response=_make_response(json_data={"id": "thread-1"}))
         client.create_thread("111222333", "Thread")
         body = mock_http.post.call_args[1]["json"]
         assert body["type"] == 11
 
     def test_with_message_id_body_excludes_type(self):
-        client, mock_http = _make_rest(
-            post_response=_make_response(json_data={"id": "thread-1"})
-        )
+        client, mock_http = _make_rest(post_response=_make_response(json_data={"id": "thread-1"}))
         client.create_thread("111222333", "Thread", message_id="444555666")
         body = mock_http.post.call_args[1]["json"]
         assert "type" not in body
 
     def test_name_truncated_to_100_chars(self):
         long_name = "A" * 150
-        client, mock_http = _make_rest(
-            post_response=_make_response(json_data={"id": "thread-1"})
-        )
+        client, mock_http = _make_rest(post_response=_make_response(json_data={"id": "thread-1"}))
         client.create_thread("111222333", long_name)
         body = mock_http.post.call_args[1]["json"]
         assert len(body["name"]) == 100
 
     def test_auto_archive_duration_in_body(self):
-        client, mock_http = _make_rest(
-            post_response=_make_response(json_data={"id": "thread-1"})
-        )
+        client, mock_http = _make_rest(post_response=_make_response(json_data={"id": "thread-1"}))
         client.create_thread("111222333", "Thread", auto_archive_duration=60)
         body = mock_http.post.call_args[1]["json"]
         assert body["auto_archive_duration"] == 60
 
     def test_default_auto_archive_duration(self):
-        client, mock_http = _make_rest(
-            post_response=_make_response(json_data={"id": "thread-1"})
-        )
+        client, mock_http = _make_rest(post_response=_make_response(json_data={"id": "thread-1"}))
         client.create_thread("111222333", "Thread")
         body = mock_http.post.call_args[1]["json"]
         assert body["auto_archive_duration"] == 1440
@@ -641,9 +599,7 @@ class TestGetChannel:
 class TestSendInteractionResponse:
     def test_url_includes_interaction_id_and_token(self):
         client, mock_http = _make_rest(post_response=_make_response(status_code=204))
-        client.send_interaction_response(
-            "111222333", "token-abc", response_type=4
-        )
+        client.send_interaction_response("111222333", "token-abc", response_type=4)
         url = mock_http.post.call_args[0][0]
         assert "111222333" in url
         assert "token-abc" in url
@@ -658,9 +614,7 @@ class TestSendInteractionResponse:
     def test_data_included_when_provided(self):
         client, mock_http = _make_rest(post_response=_make_response(status_code=204))
         data = {"content": "Thinking…"}
-        client.send_interaction_response(
-            "111222333", "token-abc", response_type=4, data=data
-        )
+        client.send_interaction_response("111222333", "token-abc", response_type=4, data=data)
         body = mock_http.post.call_args[1]["json"]
         assert body["data"] == data
 
@@ -684,25 +638,19 @@ class TestSendInteractionResponse:
 
 class TestEditInteractionResponse:
     def test_uses_patch_method(self):
-        client, mock_http = _make_rest(
-            patch_response=_make_response(json_data={"id": "m1"})
-        )
+        client, mock_http = _make_rest(patch_response=_make_response(json_data={"id": "m1"}))
         client.edit_interaction_response("111222333", "tok", "Updated content")
         mock_http.patch.assert_called_once()
 
     def test_url_structure(self):
-        client, mock_http = _make_rest(
-            patch_response=_make_response(json_data={"id": "m1"})
-        )
+        client, mock_http = _make_rest(patch_response=_make_response(json_data={"id": "m1"}))
         client.edit_interaction_response("111222333", "tok", "content")
         url = mock_http.patch.call_args[0][0]
         assert "webhooks/111222333/tok/messages/@original" in url
 
     def test_content_truncated_to_2000(self):
         long_content = "X" * 2500
-        client, mock_http = _make_rest(
-            patch_response=_make_response(json_data={"id": "m1"})
-        )
+        client, mock_http = _make_rest(patch_response=_make_response(json_data={"id": "m1"}))
         client.edit_interaction_response("111222333", "tok", long_content)
         body = mock_http.patch.call_args[1]["json"]
         assert len(body["content"]) == 2000
@@ -726,49 +674,37 @@ class TestEditInteractionResponse:
 
 class TestGetChannelMessages:
     def test_calls_correct_url(self):
-        client, mock_http = _make_rest(
-            get_response=_make_response(json_data=[{"id": "m1"}])
-        )
+        client, mock_http = _make_rest(get_response=_make_response(json_data=[{"id": "m1"}]))
         client.get_channel_messages("111222333")
         url = mock_http.get.call_args[0][0]
         assert url == f"{BASE}/channels/111222333/messages"
 
     def test_limit_sent_as_param(self):
-        client, mock_http = _make_rest(
-            get_response=_make_response(json_data=[])
-        )
+        client, mock_http = _make_rest(get_response=_make_response(json_data=[]))
         client.get_channel_messages("111222333", limit=25)
         params = mock_http.get.call_args[1]["params"]
         assert params["limit"] == 25
 
     def test_limit_clamped_to_minimum_1(self):
-        client, mock_http = _make_rest(
-            get_response=_make_response(json_data=[])
-        )
+        client, mock_http = _make_rest(get_response=_make_response(json_data=[]))
         client.get_channel_messages("111222333", limit=0)
         params = mock_http.get.call_args[1]["params"]
         assert params["limit"] == 1
 
     def test_limit_clamped_to_maximum_100(self):
-        client, mock_http = _make_rest(
-            get_response=_make_response(json_data=[])
-        )
+        client, mock_http = _make_rest(get_response=_make_response(json_data=[]))
         client.get_channel_messages("111222333", limit=999)
         params = mock_http.get.call_args[1]["params"]
         assert params["limit"] == 100
 
     def test_before_param_included_when_provided(self):
-        client, mock_http = _make_rest(
-            get_response=_make_response(json_data=[])
-        )
+        client, mock_http = _make_rest(get_response=_make_response(json_data=[]))
         client.get_channel_messages("111222333", before="999888777")
         params = mock_http.get.call_args[1]["params"]
         assert params["before"] == "999888777"
 
     def test_before_param_omitted_when_none(self):
-        client, mock_http = _make_rest(
-            get_response=_make_response(json_data=[])
-        )
+        client, mock_http = _make_rest(get_response=_make_response(json_data=[]))
         client.get_channel_messages("111222333")
         params = mock_http.get.call_args[1]["params"]
         assert "before" not in params
@@ -793,21 +729,13 @@ class TestGetChannelMessages:
 
 class TestDownloadAttachment:
     def test_cdn_url_succeeds(self):
-        client, mock_http = _make_rest(
-            get_response=_make_response(content=b"\x89PNG")
-        )
-        result = client.download_attachment(
-            "https://cdn.discordapp.com/attachments/1/2/file.png"
-        )
+        client, mock_http = _make_rest(get_response=_make_response(content=b"\x89PNG"))
+        result = client.download_attachment("https://cdn.discordapp.com/attachments/1/2/file.png")
         assert result == b"\x89PNG"
 
     def test_media_url_succeeds(self):
-        client, mock_http = _make_rest(
-            get_response=_make_response(content=b"data")
-        )
-        result = client.download_attachment(
-            "https://media.discordapp.net/attachments/1/2/file.jpg"
-        )
+        client, mock_http = _make_rest(get_response=_make_response(content=b"data"))
+        result = client.download_attachment("https://media.discordapp.net/attachments/1/2/file.jpg")
         assert result == b"data"
 
     def test_unknown_domain_raises_value_error(self):
@@ -821,12 +749,8 @@ class TestDownloadAttachment:
             client.download_attachment("https://evil.com/steal.png")
 
     def test_passes_timeout_to_get(self):
-        client, mock_http = _make_rest(
-            get_response=_make_response(content=b"ok")
-        )
-        client.download_attachment(
-            "https://cdn.discordapp.com/attachments/1/2/f.txt", timeout=15
-        )
+        client, mock_http = _make_rest(get_response=_make_response(content=b"ok"))
+        client.download_attachment("https://cdn.discordapp.com/attachments/1/2/f.txt", timeout=15)
         assert mock_http.get.call_args[1]["timeout"] == 15
 
 
@@ -838,27 +762,21 @@ class TestDownloadAttachment:
 class TestRegisterSlashCommands:
     def test_global_commands_url(self):
         commands = [{"name": "ask", "description": "Ask missy"}]
-        client, mock_http = _make_rest(
-            put_response=_make_response(json_data=commands)
-        )
+        client, mock_http = _make_rest(put_response=_make_response(json_data=commands))
         client.register_slash_commands("app-111222333", commands)
         url = mock_http.put.call_args[0][0]
         assert url == f"{BASE}/applications/app-111222333/commands"
 
     def test_guild_commands_url(self):
         commands = [{"name": "ask", "description": "Ask missy"}]
-        client, mock_http = _make_rest(
-            put_response=_make_response(json_data=commands)
-        )
+        client, mock_http = _make_rest(put_response=_make_response(json_data=commands))
         client.register_slash_commands("app-111222333", commands, guild_id="guild-999")
         url = mock_http.put.call_args[0][0]
         assert "guilds/guild-999/commands" in url
 
     def test_commands_sent_as_body(self):
         commands = [{"name": "ping"}, {"name": "help"}]
-        client, mock_http = _make_rest(
-            put_response=_make_response(json_data=commands)
-        )
+        client, mock_http = _make_rest(put_response=_make_response(json_data=commands))
         client.register_slash_commands("app-111222333", commands)
         sent_body = mock_http.put.call_args[1]["json"]
         assert sent_body == commands
@@ -870,9 +788,7 @@ class TestRegisterSlashCommands:
         assert result == registered
 
     def test_uses_put_not_post(self):
-        client, mock_http = _make_rest(
-            put_response=_make_response(json_data=[])
-        )
+        client, mock_http = _make_rest(put_response=_make_response(json_data=[]))
         client.register_slash_commands("app-111222333", [])
         mock_http.put.assert_called_once()
         mock_http.post.assert_not_called()
@@ -889,9 +805,7 @@ class TestGatewayConstructor:
         assert gw._token == "Bot testtoken"
 
     def test_token_with_prefix_not_doubled(self):
-        gw = DiscordGatewayClient(
-            bot_token="Bot already", on_message=AsyncMock()
-        )
+        gw = DiscordGatewayClient(bot_token="Bot already", on_message=AsyncMock())
         assert gw._token == "Bot already"
 
     def test_on_message_callback_stored(self):
@@ -901,9 +815,7 @@ class TestGatewayConstructor:
 
     def test_custom_gateway_url_stored(self):
         url = "wss://custom.gateway.example.com"
-        gw = DiscordGatewayClient(
-            bot_token="t", on_message=AsyncMock(), gateway_url=url
-        )
+        gw = DiscordGatewayClient(bot_token="t", on_message=AsyncMock(), gateway_url=url)
         assert gw._gateway_url == url
 
     def test_session_and_task_id_stored(self):
@@ -1041,9 +953,7 @@ class TestHandlePayloadInvalidSession:
         gw._sequence = 42
         gw._ws = AsyncMock()
         with patch("asyncio.sleep", new_callable=AsyncMock):
-            await gw._handle_payload(
-                {"op": _OP_INVALID_SESSION, "d": False, "s": None}
-            )
+            await gw._handle_payload({"op": _OP_INVALID_SESSION, "d": False, "s": None})
         assert gw._discord_session_id is None
         assert gw._resume_gateway_url is None
         assert gw._sequence is None
@@ -1056,9 +966,7 @@ class TestHandlePayloadInvalidSession:
         gw._sequence = 55
         gw._ws = AsyncMock()
         with patch("asyncio.sleep", new_callable=AsyncMock):
-            await gw._handle_payload(
-                {"op": _OP_INVALID_SESSION, "d": True, "s": None}
-            )
+            await gw._handle_payload({"op": _OP_INVALID_SESSION, "d": True, "s": None})
         assert gw._discord_session_id == "keep-session"
         assert gw._resume_gateway_url == "wss://keep"
         assert gw._sequence == 55
@@ -1069,9 +977,7 @@ class TestHandlePayloadInvalidSession:
         mock_ws = AsyncMock()
         gw._ws = mock_ws
         with patch("asyncio.sleep", new_callable=AsyncMock):
-            await gw._handle_payload(
-                {"op": _OP_INVALID_SESSION, "d": False, "s": None}
-            )
+            await gw._handle_payload({"op": _OP_INVALID_SESSION, "d": False, "s": None})
         mock_ws.close.assert_awaited_once()
 
 
@@ -1361,9 +1267,7 @@ class TestSendResume:
 
     @pytest.mark.asyncio
     async def test_uses_bot_token_not_raw(self):
-        gw = DiscordGatewayClient(
-            bot_token="rawtoken", on_message=AsyncMock()
-        )
+        gw = DiscordGatewayClient(bot_token="rawtoken", on_message=AsyncMock())
         mock_ws = AsyncMock()
         gw._ws = mock_ws
         gw._discord_session_id = "s"

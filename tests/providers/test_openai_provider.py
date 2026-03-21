@@ -216,7 +216,15 @@ class TestOpenAICompleteWithTools:
         p = OpenAIProvider(_make_config())
         result = p.complete_with_tools(
             [Message(role="user", content="x")],
-            [MagicMock(name="calc", description="c", get_schema=MagicMock(return_value={"parameters": {"properties": {}, "required": []}}))],
+            [
+                MagicMock(
+                    name="calc",
+                    description="c",
+                    get_schema=MagicMock(
+                        return_value={"parameters": {"properties": {}, "required": []}}
+                    ),
+                )
+            ],
         )
         # Malformed args should be empty dict
         assert result.tool_calls[0].arguments == {}
@@ -226,10 +234,12 @@ class TestOpenAICompleteWithTools:
     def test_system_prompt_injection(self, mock_sdk):
         mock_client = MagicMock()
         resp = SimpleNamespace(
-            choices=[SimpleNamespace(
-                message=SimpleNamespace(content="ok", tool_calls=None),
-                finish_reason="stop",
-            )],
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content="ok", tool_calls=None),
+                    finish_reason="stop",
+                )
+            ],
             model="gpt-4o",
             usage=SimpleNamespace(prompt_tokens=5, completion_tokens=5, total_tokens=10),
             model_dump=dict,

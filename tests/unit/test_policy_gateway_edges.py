@@ -355,33 +355,25 @@ class TestRestPolicyEdgeCases:
 
     def test_from_config_missing_host_defaults_to_empty_string(self) -> None:
         """A dict without 'host' key should use empty string as default."""
-        policy = RestPolicy.from_config(
-            [{"method": "GET", "path": "/foo", "action": "allow"}]
-        )
+        policy = RestPolicy.from_config([{"method": "GET", "path": "/foo", "action": "allow"}])
         # The rule's host is "" — will only match host=""
         assert policy.check("", "GET", "/foo") == "allow"
         assert policy.check("api.example.com", "GET", "/foo") is None
 
     def test_from_config_missing_method_defaults_to_star(self) -> None:
         """A dict without 'method' key should default to '*' (match any method)."""
-        policy = RestPolicy.from_config(
-            [{"host": "h.com", "path": "/**", "action": "deny"}]
-        )
+        policy = RestPolicy.from_config([{"host": "h.com", "path": "/**", "action": "deny"}])
         assert policy.check("h.com", "POST", "/anything") == "deny"
         assert policy.check("h.com", "DELETE", "/anything") == "deny"
 
     def test_from_config_missing_path_defaults_to_double_star(self) -> None:
         """A dict without 'path' key should default to '/**' (match all paths)."""
-        policy = RestPolicy.from_config(
-            [{"host": "h.com", "method": "GET", "action": "allow"}]
-        )
+        policy = RestPolicy.from_config([{"host": "h.com", "method": "GET", "action": "allow"}])
         assert policy.check("h.com", "GET", "/any/path/here") == "allow"
 
     def test_from_config_missing_action_defaults_to_deny(self) -> None:
         """A dict without 'action' key should default to 'deny'."""
-        policy = RestPolicy.from_config(
-            [{"host": "h.com", "method": "DELETE", "path": "/**"}]
-        )
+        policy = RestPolicy.from_config([{"host": "h.com", "method": "DELETE", "path": "/**"}])
         assert policy.check("h.com", "DELETE", "/res") == "deny"
 
     def test_path_root_slash_matched_by_double_star_rule(self) -> None:
@@ -409,11 +401,15 @@ class TestRestPolicyEdgeCases:
         assert policy.check("h.com", "GET", "/path with spaces") is None
 
     def test_rule_with_allow_action_propagated_correctly(self) -> None:
-        policy = RestPolicy(rules=[RestRule(host="h.com", method="GET", path="/ok", action="allow")])
+        policy = RestPolicy(
+            rules=[RestRule(host="h.com", method="GET", path="/ok", action="allow")]
+        )
         assert policy.check("h.com", "GET", "/ok") == "allow"
 
     def test_rule_with_deny_action_propagated_correctly(self) -> None:
-        policy = RestPolicy(rules=[RestRule(host="h.com", method="POST", path="/bad", action="deny")])
+        policy = RestPolicy(
+            rules=[RestRule(host="h.com", method="POST", path="/bad", action="deny")]
+        )
         assert policy.check("h.com", "POST", "/bad") == "deny"
 
 
@@ -516,10 +512,12 @@ class TestPolicyHTTPClientEdgeCases:
 
     def test_url_with_unusual_port_host_matched_by_allowed_hosts(self) -> None:
         """Policy engine matches 'host' not 'host:port'; port in URL is stripped by urlparse."""
-        init_policy_engine(_make_config(
-            default_deny=True,
-            allowed_hosts=["internal.corp.com"],
-        ))
+        init_policy_engine(
+            _make_config(
+                default_deny=True,
+                allowed_hosts=["internal.corp.com"],
+            )
+        )
         client = PolicyHTTPClient()
         mock_resp = _mock_response(200)
         with patch.object(httpx.Client, "get", return_value=mock_resp):
@@ -530,10 +528,12 @@ class TestPolicyHTTPClientEdgeCases:
 
     def test_ipv6_bracket_url_allowed_via_cidr_engine(self) -> None:
         """[::1] in a URL is parsed to host '::1' which is checked against CIDR."""
-        init_policy_engine(_make_config(
-            default_deny=True,
-            allowed_cidrs=["::1/128"],
-        ))
+        init_policy_engine(
+            _make_config(
+                default_deny=True,
+                allowed_cidrs=["::1/128"],
+            )
+        )
         client = PolicyHTTPClient()
         mock_resp = _mock_response(200)
         with patch.object(httpx.Client, "get", return_value=mock_resp):
@@ -541,10 +541,12 @@ class TestPolicyHTTPClientEdgeCases:
         assert resp.status_code == 200
 
     def test_ipv6_bracket_url_denied_when_not_in_cidr(self) -> None:
-        init_policy_engine(_make_config(
-            default_deny=True,
-            allowed_cidrs=["2001:db8::/32"],
-        ))
+        init_policy_engine(
+            _make_config(
+                default_deny=True,
+                allowed_cidrs=["2001:db8::/32"],
+            )
+        )
         client = PolicyHTTPClient()
         with pytest.raises(PolicyViolationError):
             client.get("http://[::2]/status")

@@ -58,7 +58,11 @@ class TestFileSourceSizeValidation:
         # Write a single byte then patch stat so size appears enormous
         large.write_bytes(b"x")
 
-        with patch.object(large.stat().__class__, "st_size", new_callable=lambda: property(lambda self: MAX_FILE_SIZE + 1)):
+        with patch.object(
+            large.stat().__class__,
+            "st_size",
+            new_callable=lambda: property(lambda self: MAX_FILE_SIZE + 1),
+        ):
             pass  # property approach is awkward; use os.stat mock instead
 
         # Simpler: patch the Path.stat() return value
@@ -291,7 +295,10 @@ class TestScreenshotSourceToolName:
         output_file = tmp_path / "shot.png"
 
         source = ScreenshotSource()
-        with patch("subprocess.run", side_effect=FileNotFoundError("not found")), pytest.raises(RuntimeError, match="No screenshot tool succeeded"):
+        with (
+            patch("subprocess.run", side_effect=FileNotFoundError("not found")),
+            pytest.raises(RuntimeError, match="No screenshot tool succeeded"),
+        ):
             source._take_screenshot(str(output_file))
 
     def test_take_screenshot_raises_when_all_tools_timeout(self, tmp_path):
@@ -299,8 +306,11 @@ class TestScreenshotSourceToolName:
         output_file = tmp_path / "shot.png"
 
         source = ScreenshotSource()
-        with patch(
-            "subprocess.run",
-            side_effect=subprocess.TimeoutExpired(cmd="scrot", timeout=10),
-        ), pytest.raises(RuntimeError, match="No screenshot tool succeeded"):
+        with (
+            patch(
+                "subprocess.run",
+                side_effect=subprocess.TimeoutExpired(cmd="scrot", timeout=10),
+            ),
+            pytest.raises(RuntimeError, match="No screenshot tool succeeded"),
+        ):
             source._take_screenshot(str(output_file))

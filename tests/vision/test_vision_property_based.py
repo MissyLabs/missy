@@ -29,6 +29,7 @@ class TestOrientationProperties:
     @settings(max_examples=100)
     def test_detect_always_returns_valid_result(self, h: int, w: int) -> None:
         from missy.vision.orientation import Orientation, detect_orientation
+
         img = np.zeros((h, w, 3), dtype=np.uint8)
         result = detect_orientation(img)
         assert isinstance(result.detected, Orientation)
@@ -43,6 +44,7 @@ class TestOrientationProperties:
     def test_auto_correct_preserves_pixel_count(self, h: int, w: int) -> None:
         """auto_correct may transpose dimensions but pixel count stays same."""
         from missy.vision.orientation import auto_correct
+
         img = np.zeros((h, w, 3), dtype=np.uint8)
         corrected, result = auto_correct(img)
         # Total pixels should be preserved (rotation doesn't change count)
@@ -59,6 +61,7 @@ class TestOrientationProperties:
         """Images with aspect ratio > 1.25 should be NORMAL."""
         assume(w / h > 1.25)
         from missy.vision.orientation import Orientation, detect_orientation
+
         img = np.zeros((h, w, 3), dtype=np.uint8)
         result = detect_orientation(img)
         assert result.detected == Orientation.NORMAL
@@ -77,6 +80,7 @@ class TestPipelineQualityProperties:
     @settings(max_examples=50)
     def test_assess_quality_returns_valid_dict(self, h: int, w: int) -> None:
         from missy.vision.pipeline import ImagePipeline
+
         pipeline = ImagePipeline()
         img = np.zeros((h, w, 3), dtype=np.uint8)
         result = pipeline.assess_quality(img)
@@ -100,6 +104,7 @@ class TestIntentClassificationProperties:
     @settings(max_examples=100)
     def test_classify_returns_valid_result(self, text: str) -> None:
         from missy.vision.intent import ActivationDecision, VisionIntent, VisionIntentClassifier
+
         classifier = VisionIntentClassifier()
         result = classifier.classify(text)
         assert 0.0 <= result.confidence <= 1.0
@@ -111,6 +116,7 @@ class TestIntentClassificationProperties:
     def test_empty_or_whitespace_skips_vision(self, text: str) -> None:
         """Pure whitespace or empty strings should not trigger vision."""
         from missy.vision.intent import ActivationDecision, VisionIntentClassifier
+
         classifier = VisionIntentClassifier()
         result = classifier.classify(text)
         assert result.decision == ActivationDecision.SKIP
@@ -130,6 +136,7 @@ class TestColorDescriptionProperties:
     @settings(max_examples=200)
     def test_describe_color_always_returns_string(self, r: int, g: int, b: int) -> None:
         from missy.vision.analysis import _describe_color
+
         result = _describe_color([r, g, b])
         assert isinstance(result, str)
         assert len(result) > 0
@@ -142,6 +149,7 @@ class TestColorDescriptionProperties:
     @settings(max_examples=100)
     def test_describe_color_deterministic(self, r: int, g: int, b: int) -> None:
         from missy.vision.analysis import _describe_color
+
         a = _describe_color([r, g, b])
         b_result = _describe_color([r, g, b])
         assert a == b_result
@@ -161,6 +169,7 @@ class TestSceneMemoryHashProperties:
     @settings(max_examples=30)
     def test_thumbnail_hash_deterministic(self, h: int, w: int, seed: int) -> None:
         from missy.vision.scene_memory import SceneFrame
+
         rng = np.random.default_rng(seed)
         img = rng.integers(0, 256, (h, w, 3), dtype=np.uint8)
         f1 = SceneFrame(frame_id=1, image=img)
@@ -174,6 +183,7 @@ class TestSceneMemoryHashProperties:
     @settings(max_examples=30)
     def test_thumbnail_hash_length(self, h: int, w: int) -> None:
         from missy.vision.scene_memory import SceneFrame
+
         img = np.zeros((h, w, 3), dtype=np.uint8)
         frame = SceneFrame(frame_id=1, image=img)
         assert isinstance(frame.thumbnail_hash, str)
@@ -190,6 +200,7 @@ class TestTokenApproxProperties:
     @settings(max_examples=100, deadline=1000)
     def test_approx_tokens_always_positive(self, text: str) -> None:
         from missy.agent.context import _approx_tokens
+
         result = _approx_tokens(text)
         assert result >= 1
 
@@ -198,6 +209,7 @@ class TestTokenApproxProperties:
     def test_approx_tokens_monotonic(self, text: str) -> None:
         """Longer strings should produce equal or more tokens."""
         from missy.agent.context import _approx_tokens
+
         full = _approx_tokens(text)
         half = _approx_tokens(text[: len(text) // 2])
         assert full >= half

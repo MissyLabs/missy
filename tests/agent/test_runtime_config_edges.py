@@ -645,7 +645,10 @@ class TestSwitchProvider:
     def test_switch_provider_propagates_registry_error(self):
         runtime = _make_runtime()
 
-        with patch("missy.agent.runtime.get_registry", side_effect=ValueError("not found")), pytest.raises(ValueError):
+        with (
+            patch("missy.agent.runtime.get_registry", side_effect=ValueError("not found")),
+            pytest.raises(ValueError),
+        ):
             runtime.switch_provider("nonexistent")
 
 

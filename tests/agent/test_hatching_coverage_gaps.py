@@ -82,7 +82,9 @@ class TestHatchingLogGetEntriesOSError:
         """An OSError while reading the log file must return [] (lines 204-205)."""
         log_path = tmp_path / "hatching_log.jsonl"
         # Create the file so the exists() check passes.
-        log_path.write_text('{"step":"s","status":"ok","message":"m","details":{},"timestamp":"t"}\n')
+        log_path.write_text(
+            '{"step":"s","status":"ok","message":"m","details":{},"timestamp":"t"}\n'
+        )
 
         with patch("missy.agent.hatching.Path.open", side_effect=OSError("permission denied")):
             log = HatchingLog(log_path=log_path)
@@ -145,9 +147,7 @@ class TestRunHatchingInteractivePrintPaths:
 
         with (
             patch("missy.agent.persona.PersonaManager", return_value=MagicMock()),
-            patch(
-                "missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store
-            ),
+            patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store),
             patch(
                 "missy.memory.sqlite_store.ConversationTurn",
                 MagicMock(new=MagicMock(return_value=mock_turn)),
@@ -299,9 +299,7 @@ class TestValidateEnvironment:
             with pytest.raises(RuntimeError, match="Python 3.11\\+ is required"):
                 mgr._validate_environment(state, interactive=False)
 
-    def test_raises_runtime_error_when_missy_dir_cannot_be_created(
-        self, tmp_path, monkeypatch
-    ):
+    def test_raises_runtime_error_when_missy_dir_cannot_be_created(self, tmp_path, monkeypatch):
         """OSError from mkdir must be re-raised as RuntimeError (lines 470-471)."""
         _patch_module_paths(monkeypatch, tmp_path)
 
@@ -312,9 +310,7 @@ class TestValidateEnvironment:
             with pytest.raises(RuntimeError, match="Cannot create Missy data directory"):
                 mgr._validate_environment(state, interactive=False)
 
-    def test_raises_runtime_error_when_missy_dir_not_writable(
-        self, tmp_path, monkeypatch
-    ):
+    def test_raises_runtime_error_when_missy_dir_not_writable(self, tmp_path, monkeypatch):
         """A non-writable _MISSY_DIR must raise RuntimeError (line 477)."""
         _patch_module_paths(monkeypatch, tmp_path)
 
@@ -400,9 +396,7 @@ class TestInitializeConfig:
         assert "config" in captured.out.lower() or str(config_path) in captured.out
         assert config_path.exists()
 
-    def test_raises_runtime_error_on_oserror_writing_config(
-        self, tmp_path, monkeypatch
-    ):
+    def test_raises_runtime_error_on_oserror_writing_config(self, tmp_path, monkeypatch):
         """OSError while writing config must raise RuntimeError (lines 516-517)."""
         _patch_module_paths(monkeypatch, tmp_path)
 
@@ -424,9 +418,7 @@ class TestInitializeConfig:
 
 
 class TestVerifyProviders:
-    def test_raises_step_warning_when_no_provider_key_found(
-        self, tmp_path, monkeypatch
-    ):
+    def test_raises_step_warning_when_no_provider_key_found(self, tmp_path, monkeypatch):
         """No env var and no config key raises _HatchingStepWarning (line 562)."""
         _patch_module_paths(monkeypatch, tmp_path)
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
@@ -478,24 +470,18 @@ class TestCheckConfigForProviderKey:
         result = mgr._check_config_for_provider_key()
         assert result is None
 
-    def test_returns_none_when_provider_cfg_is_not_a_dict(
-        self, tmp_path, monkeypatch
-    ):
+    def test_returns_none_when_provider_cfg_is_not_a_dict(self, tmp_path, monkeypatch):
         """A provider_cfg that is not a dict is skipped (line 575)."""
         _patch_module_paths(monkeypatch, tmp_path)
         config_path = tmp_path / "config.yaml"
         # provider value is a plain string, not a mapping.
-        config_path.write_text(
-            "providers:\n  anthropic: just_a_string\n", encoding="utf-8"
-        )
+        config_path.write_text("providers:\n  anthropic: just_a_string\n", encoding="utf-8")
 
         mgr = _make_manager(tmp_path)
         result = mgr._check_config_for_provider_key()
         assert result is None
 
-    def test_returns_provider_name_when_api_key_is_present(
-        self, tmp_path, monkeypatch
-    ):
+    def test_returns_provider_name_when_api_key_is_present(self, tmp_path, monkeypatch):
         """A non-empty api_key in config must return the provider name (line 579)."""
         _patch_module_paths(monkeypatch, tmp_path)
         config_path = tmp_path / "config.yaml"
@@ -508,9 +494,7 @@ class TestCheckConfigForProviderKey:
         result = mgr._check_config_for_provider_key()
         assert result == "anthropic"
 
-    def test_returns_provider_name_when_api_keys_list_is_present(
-        self, tmp_path, monkeypatch
-    ):
+    def test_returns_provider_name_when_api_keys_list_is_present(self, tmp_path, monkeypatch):
         """A non-empty api_keys list is also accepted (line 578-579)."""
         _patch_module_paths(monkeypatch, tmp_path)
         config_path = tmp_path / "config.yaml"
@@ -530,9 +514,7 @@ class TestCheckConfigForProviderKey:
 
 
 class TestInitializeSecurity:
-    def test_raises_runtime_error_when_secrets_dir_cannot_be_created(
-        self, tmp_path, monkeypatch
-    ):
+    def test_raises_runtime_error_when_secrets_dir_cannot_be_created(self, tmp_path, monkeypatch):
         """OSError from mkdir raises RuntimeError (lines 596-597)."""
         _patch_module_paths(monkeypatch, tmp_path)
 
@@ -543,9 +525,7 @@ class TestInitializeSecurity:
             with pytest.raises(RuntimeError, match="Cannot create secrets directory"):
                 mgr._initialize_security(state, interactive=False)
 
-    def test_prints_note_when_identity_absent_and_interactive(
-        self, tmp_path, monkeypatch, capsys
-    ):
+    def test_prints_note_when_identity_absent_and_interactive(self, tmp_path, monkeypatch, capsys):
         """When identity key is absent and interactive=True, a note is printed (line 617)."""
         _patch_module_paths(monkeypatch, tmp_path)
 
@@ -561,9 +541,7 @@ class TestInitializeSecurity:
         assert "identity" in captured.out.lower() or "key" in captured.out.lower()
         assert state.security_initialized is True
 
-    def test_does_not_print_note_when_identity_present(
-        self, tmp_path, monkeypatch, capsys
-    ):
+    def test_does_not_print_note_when_identity_present(self, tmp_path, monkeypatch, capsys):
         """When identity key exists the note is NOT printed."""
         _patch_module_paths(monkeypatch, tmp_path)
 
@@ -627,18 +605,14 @@ class TestGeneratePersona:
                 else:
                     sys.modules.pop("missy.agent.persona", None)
 
-    def test_raises_step_warning_on_oserror_writing_persona(
-        self, tmp_path, monkeypatch
-    ):
+    def test_raises_step_warning_on_oserror_writing_persona(self, tmp_path, monkeypatch):
         """OSError while writing persona file raises _HatchingStepWarning (lines 662-665)."""
         _patch_module_paths(monkeypatch, tmp_path)
 
         mock_pm = MagicMock()
         mock_pm.save.side_effect = OSError("disk full")
 
-        with patch(
-            "missy.agent.persona.PersonaManager", return_value=mock_pm
-        ):
+        with patch("missy.agent.persona.PersonaManager", return_value=mock_pm):
             mgr = _make_manager(tmp_path)
             state = HatchingState()
 
@@ -678,9 +652,8 @@ class TestSeedMemory:
         # Remove the memory module from sys.modules temporarily so the import fails.
         original_module = sys.modules.pop("missy.memory.sqlite_store", None)
         sys.modules["missy.memory.sqlite_store"] = MagicMock(
-            SQLiteMemoryStore=MagicMock(
-                    side_effect=ImportError("no sqlite_store")
-                ), ConversationTurn=MagicMock()
+            SQLiteMemoryStore=MagicMock(side_effect=ImportError("no sqlite_store")),
+            ConversationTurn=MagicMock(),
         )
         try:
             with pytest.raises(_HatchingStepWarning, match="Could not import SQLiteMemoryStore"):
@@ -691,9 +664,7 @@ class TestSeedMemory:
             else:
                 sys.modules.pop("missy.memory.sqlite_store", None)
 
-    def test_raises_step_warning_on_generic_exception_from_store(
-        self, tmp_path, monkeypatch
-    ):
+    def test_raises_step_warning_on_generic_exception_from_store(self, tmp_path, monkeypatch):
         """A generic exception from store.add_turn raises _HatchingStepWarning (lines 699-702)."""
         _patch_module_paths(monkeypatch, tmp_path)
 
@@ -703,9 +674,7 @@ class TestSeedMemory:
         mock_store.add_turn.side_effect = RuntimeError("database locked")
 
         with (
-            patch(
-                "missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store
-            ),
+            patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store),
             patch(
                 "missy.memory.sqlite_store.ConversationTurn",
                 MagicMock(new=MagicMock(return_value=mock_turn)),

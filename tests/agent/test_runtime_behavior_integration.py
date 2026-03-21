@@ -55,7 +55,9 @@ def _run_with_mocks(rt, user_input, provider):
     registry = _mock_registry(provider)
     with ExitStack() as stack:
         stack.enter_context(patch("missy.agent.runtime.get_registry", return_value=registry))
-        stack.enter_context(patch("missy.agent.runtime.get_tool_registry", side_effect=RuntimeError))
+        stack.enter_context(
+            patch("missy.agent.runtime.get_tool_registry", side_effect=RuntimeError)
+        )
         stack.enter_context(patch("missy.agent.runtime.censor_response", side_effect=lambda x: x))
         return rt.run(user_input)
 

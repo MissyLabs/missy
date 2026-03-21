@@ -158,7 +158,7 @@ class TestEntityExtractorURLs:
 
 class TestEntityExtractorProjects:
     def test_detects_project_keyword(self, extractor: EntityExtractor):
-        entities = extractor.extract_entities('Working on project missy today.')
+        entities = extractor.extract_entities("Working on project missy today.")
         projects = [e for e in entities if e.entity_type == "project"]
         assert any("missy" in p.name for p in projects)
 
@@ -170,16 +170,12 @@ class TestEntityExtractorProjects:
 
 class TestEntityExtractorPersons:
     def test_detects_capitalised_full_name(self, extractor: EntityExtractor):
-        entities = extractor.extract_entities(
-            "I spoke with Alice Smith about the task."
-        )
+        entities = extractor.extract_entities("I spoke with Alice Smith about the task.")
         persons = [e for e in entities if e.entity_type == "person"]
         assert any("alice smith" in p.name for p in persons)
 
     def test_no_duplicate_entities(self, extractor: EntityExtractor):
-        entities = extractor.extract_entities(
-            "file_read file_read file_read ran three times"
-        )
+        entities = extractor.extract_entities("file_read file_read file_read ran three times")
         tool_names = [e.name for e in entities if e.entity_type == "tool"]
         assert tool_names.count("file_read") == 1
 
@@ -271,9 +267,7 @@ class TestGraphMemoryStoreTables:
         conn = store._conn()
         indexes = {
             r["name"]
-            for r in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='index'"
-            ).fetchall()
+            for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index'").fetchall()
         }
         assert "idx_entities_name" in indexes
         assert "idx_rel_source" in indexes
@@ -705,9 +699,7 @@ class TestPrune:
 
         store.prune(min_mentions=1, older_than_days=90)
         # Relationship to pruned entity should be gone
-        rel_row = conn.execute(
-            "SELECT id FROM relationships WHERE id = 'rel_x'"
-        ).fetchone()
+        rel_row = conn.execute("SELECT id FROM relationships WHERE id = 'rel_x'").fetchone()
         assert rel_row is None
 
     def test_prune_returns_zero_when_nothing_to_prune(self, store: GraphMemoryStore):
@@ -741,9 +733,7 @@ class TestMergeEntities:
         merge_id = store.add_entity(Entity.new("beta", "concept"))
         # Manually bump merge entity count
         conn = store._conn()
-        conn.execute(
-            "UPDATE entities SET mention_count = 5 WHERE id = ?", (merge_id,)
-        )
+        conn.execute("UPDATE entities SET mention_count = 5 WHERE id = ?", (merge_id,))
         conn.commit()
 
         store.merge_entities(keep_id, merge_id)

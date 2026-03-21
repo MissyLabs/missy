@@ -62,7 +62,9 @@ def _make_turn(session_id: str, content: str, role: str = "user") -> Conversatio
     return ConversationTurn.new(session_id, role, content)
 
 
-def _add_turns(store: SQLiteMemoryStore, session_id: str, count: int, content_size: int = 100) -> list[ConversationTurn]:
+def _add_turns(
+    store: SQLiteMemoryStore, session_id: str, count: int, content_size: int = 100
+) -> list[ConversationTurn]:
     """Add `count` turns and return them."""
     turns = []
     for i in range(count):
@@ -138,7 +140,7 @@ class TestChunkTurnsVaryingSizes:
         assert len(chunks[1]) == 2
 
     def test_mixed_sizes_split_correctly(self):
-        small = _make_turn("s", "a" * 40)   # 10 tokens
+        small = _make_turn("s", "a" * 40)  # 10 tokens
         large = _make_turn("s", "b" * 400)  # 100 tokens
         small2 = _make_turn("s", "c" * 40)  # 10 tokens
         # max_tokens=50: [small], then large>50 so new chunk, small2 joins large's chunk
@@ -219,7 +221,9 @@ class TestCompactSessionMaxCondenseDepth:
         # Force many leaf summaries; then restrict condensation to depth 0
         _add_turns(memory_store, "s", 80, content_size=2000)
         stats = compact_session(
-            "s", memory_store, summarizer,
+            "s",
+            memory_store,
+            summarizer,
             fresh_tail_count=4,
             leaf_chunk_tokens=400,
             condensed_min_fanout=4,
@@ -238,7 +242,9 @@ class TestCompactSessionMaxCondenseDepth:
     def test_max_condense_depth_one_limits_to_two_levels(self, memory_store, summarizer):
         _add_turns(memory_store, "s", 200, content_size=2000)
         compact_session(
-            "s", memory_store, summarizer,
+            "s",
+            memory_store,
+            summarizer,
             fresh_tail_count=4,
             leaf_chunk_tokens=200,
             condensed_min_fanout=2,
@@ -337,7 +343,9 @@ class TestCompactSessionCondensationDepthProgression:
         # Need >= condensed_min_fanout leaf summaries to trigger condensation
         _add_turns(memory_store, "s", 80, content_size=2000)
         stats = compact_session(
-            "s", memory_store, summarizer,
+            "s",
+            memory_store,
+            summarizer,
             fresh_tail_count=4,
             leaf_chunk_tokens=400,
             condensed_min_fanout=4,
@@ -350,7 +358,9 @@ class TestCompactSessionCondensationDepthProgression:
         """SummaryRecord.depth field on condensed summaries must be 1."""
         _add_turns(memory_store, "s", 80, content_size=2000)
         compact_session(
-            "s", memory_store, summarizer,
+            "s",
+            memory_store,
+            summarizer,
             fresh_tail_count=4,
             leaf_chunk_tokens=400,
             condensed_min_fanout=4,
@@ -364,7 +374,9 @@ class TestCompactSessionCondensationDepthProgression:
         """Condensed summaries must reference source summary IDs (not turn IDs)."""
         _add_turns(memory_store, "s", 80, content_size=2000)
         compact_session(
-            "s", memory_store, summarizer,
+            "s",
+            memory_store,
+            summarizer,
             fresh_tail_count=4,
             leaf_chunk_tokens=400,
             condensed_min_fanout=4,
@@ -446,7 +458,9 @@ class TestCompactIfNeededBudgetForwarding:
         _add_turns(memory_store, "sess", 5, content_size=200)
 
         # Make budget very small so should_compact triggers, and fresh_tail_count=1
-        budget = TokenBudget(total=1, system_reserve=0, tool_definitions_reserve=0, fresh_tail_count=1)
+        budget = TokenBudget(
+            total=1, system_reserve=0, tool_definitions_reserve=0, fresh_tail_count=1
+        )
         result = compact_if_needed("sess", memory_store, s, budget)
         assert result is not None
         assert result["turns_compacted"] == 4
@@ -458,7 +472,9 @@ class TestCompactIfNeededBudgetForwarding:
         s = Summarizer(mock_provider)
         _add_turns(memory_store, "sess", 10, content_size=400)
 
-        budget = TokenBudget(total=1, system_reserve=0, tool_definitions_reserve=0, fresh_tail_count=1)
+        budget = TokenBudget(
+            total=1, system_reserve=0, tool_definitions_reserve=0, fresh_tail_count=1
+        )
         # Inject leaf_chunk_tokens as attribute on the budget object
         budget.leaf_chunk_tokens = 10  # very small → many chunks
         result = compact_if_needed("sess", memory_store, s, budget)
@@ -472,7 +488,9 @@ class TestCompactIfNeededBudgetForwarding:
         s = Summarizer(mock_provider)
         _add_turns(memory_store, "sess", 30, content_size=1000)
 
-        budget = TokenBudget(total=1, system_reserve=0, tool_definitions_reserve=0, fresh_tail_count=2)
+        budget = TokenBudget(
+            total=1, system_reserve=0, tool_definitions_reserve=0, fresh_tail_count=2
+        )
         budget.condensed_min_fanout = 100  # very high → condensation never triggers
         result = compact_if_needed("sess", memory_store, s, budget)
         assert result is not None

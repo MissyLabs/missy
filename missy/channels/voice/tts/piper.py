@@ -60,9 +60,19 @@ def _piper_subprocess_env() -> dict[str, str]:
     other secrets from leaking to the Piper subprocess.
     """
     _SAFE_VARS = (
-        "PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM",
-        "XDG_RUNTIME_DIR", "TMPDIR", "TMP", "TEMP",
-        "LD_LIBRARY_PATH", "PULSE_SERVER", "ALSA_CARD",
+        "PATH",
+        "HOME",
+        "USER",
+        "LANG",
+        "LC_ALL",
+        "TERM",
+        "XDG_RUNTIME_DIR",
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+        "LD_LIBRARY_PATH",
+        "PULSE_SERVER",
+        "ALSA_CARD",
     )
     env = {k: os.environ[k] for k in _SAFE_VARS if k in os.environ}
     piper_lib = str(_LOCAL_PIPER_BIN.parent)
@@ -292,9 +302,7 @@ class PiperTTS(TTSEngine):
         except TimeoutError:
             proc.kill()
             await proc.wait()
-            raise RuntimeError(
-                "Piper TTS process timed out after 60 seconds"
-            ) from None
+            raise RuntimeError("Piper TTS process timed out after 60 seconds") from None
 
         t_end = time.perf_counter()
         processing_ms = int((t_end - t_start) * 1000)

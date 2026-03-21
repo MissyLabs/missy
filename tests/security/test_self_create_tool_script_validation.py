@@ -168,11 +168,7 @@ class TestSelfCreateToolScriptValidation:
                 action="create",
                 tool_name="clean_tool",
                 language="python",
-                script=(
-                    "#!/usr/bin/env python3\n"
-                    "import sys\n"
-                    "print('Hello from clean_tool')\n"
-                ),
+                script=("#!/usr/bin/env python3\nimport sys\nprint('Hello from clean_tool')\n"),
                 tool_description="A perfectly safe tool",
             )
         assert result.success is True
@@ -275,8 +271,7 @@ class TestSelfCreateToolScriptValidation:
         # the pattern name.
         error_lower = result.error.lower()
         assert any(
-            kw in error_lower
-            for kw in ("network", "dangerous", "privilege", "execution")
+            kw in error_lower for kw in ("network", "dangerous", "privilege", "execution")
         ), f"Expected policy explanation in error, got: {result.error!r}"
 
     # ------------------------------------------------------------------
@@ -415,7 +410,9 @@ class TestCodeEvolveSystemExitLogging:
             try:
                 tool.execute(action="apply", proposal_id="prop-001")
             except SystemExit:
-                pytest.fail("SystemExit propagated out of CodeEvolveTool.execute — it must be caught")
+                pytest.fail(
+                    "SystemExit propagated out of CodeEvolveTool.execute — it must be caught"
+                )
 
     def test_apply_output_contains_apply_message_after_system_exit(self):
         """The ToolResult.output must contain the apply message even when
@@ -464,7 +461,11 @@ class TestCodeEvolveSystemExitLogging:
 
         mock_logger.warning.assert_called()
         warning_text = str(mock_logger.warning.call_args_list)
-        assert "SystemExit" in warning_text or "rollback" in warning_text.lower() or "restart" in warning_text.lower()
+        assert (
+            "SystemExit" in warning_text
+            or "rollback" in warning_text.lower()
+            or "restart" in warning_text.lower()
+        )
 
     def test_rollback_returns_success_even_when_restart_raises_system_exit(self):
         """The ToolResult for rollback must indicate success even though

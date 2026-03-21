@@ -311,7 +311,10 @@ class TestChat:
             assert chat_resp.status_code == 200
             assert chat_resp.json()["data"]["session_id"] == session_id
             _, call_kwargs = mock_runtime.run.call_args
-            assert call_kwargs.get("session_id") == session_id or mock_runtime.run.call_args[0][1] == session_id
+            assert (
+                call_kwargs.get("session_id") == session_id
+                or mock_runtime.run.call_args[0][1] == session_id
+            )
         finally:
             srv.stop()
 
@@ -440,9 +443,7 @@ class TestProviders:
         srv.start()
         _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
         try:
-            resp = httpx.get(
-                f"http://127.0.0.1:{port}/api/v1/providers", headers=HEADERS
-            )
+            resp = httpx.get(f"http://127.0.0.1:{port}/api/v1/providers", headers=HEADERS)
             assert resp.status_code == 200
             providers = resp.json()["data"]["providers"]
             names = {p["name"] for p in providers}
@@ -485,9 +486,7 @@ class TestTools:
         srv.start()
         _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
         try:
-            resp = httpx.get(
-                f"http://127.0.0.1:{port}/api/v1/tools", headers=HEADERS
-            )
+            resp = httpx.get(f"http://127.0.0.1:{port}/api/v1/tools", headers=HEADERS)
             assert resp.status_code == 200
             tools = resp.json()["data"]["tools"]
             assert len(tools) == 1
@@ -530,9 +529,7 @@ class TestRequestSizeLimit:
         """POST bodies exceeding max_request_bytes must not be processed."""
         port = _free_port()
         # Set a tiny cap of 10 bytes.
-        cfg = ApiConfig(
-            host="127.0.0.1", port=port, api_key=API_KEY, max_request_bytes=10
-        )
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY, max_request_bytes=10)
         srv = ApiServer(config=cfg)
         srv.start()
         _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")

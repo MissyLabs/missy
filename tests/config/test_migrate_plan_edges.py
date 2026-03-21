@@ -40,8 +40,7 @@ class TestNeedsMigrationEdgeCases:
         """Config stamped with CURRENT_CONFIG_VERSION must not trigger migration."""
         cfg = tmp_path / "config.yaml"
         cfg.write_text(
-            f"config_version: {CURRENT_CONFIG_VERSION}\n"
-            "network:\n  default_deny: true\n"
+            f"config_version: {CURRENT_CONFIG_VERSION}\nnetwork:\n  default_deny: true\n"
         )
         assert needs_migration(str(cfg)) is False
 
@@ -181,8 +180,7 @@ class TestMigrateConfigEdgeCases:
         """A config at CURRENT_CONFIG_VERSION must be returned without modification."""
         cfg = tmp_path / "config.yaml"
         original_text = (
-            f"config_version: {CURRENT_CONFIG_VERSION}\n"
-            "network:\n  default_deny: true\n"
+            f"config_version: {CURRENT_CONFIG_VERSION}\nnetwork:\n  default_deny: true\n"
         )
         cfg.write_text(original_text)
 
@@ -482,7 +480,7 @@ class TestBackupConfigEdgeCases:
         bkp = backup_config(config_file, backup_dir)
 
         assert bkp.name.startswith("config.yaml.")
-        suffix = bkp.name[len("config.yaml."):]
+        suffix = bkp.name[len("config.yaml.") :]
         # Timestamp portion must be non-empty digits/underscores
         assert all(c.isdigit() or c == "_" for c in suffix)
 

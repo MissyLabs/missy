@@ -225,7 +225,9 @@ class TestSummarizerEdgeCases:
         from missy.agent.summarizer import Summarizer
 
         records = [
-            FakeSummaryRecord(depth=1, content="First", time_range_start="10:00", time_range_end="11:00"),
+            FakeSummaryRecord(
+                depth=1, content="First", time_range_start="10:00", time_range_end="11:00"
+            ),
             FakeSummaryRecord(depth=2, content="Second"),
         ]
         provider = FakeProvider(responses=["merged"])
@@ -276,7 +278,9 @@ class TestProactiveEdgeCases:
 
         callback = MagicMock()
         trigger = ProactiveTrigger(
-            name="test", trigger_type="schedule", cooldown_seconds=60,
+            name="test",
+            trigger_type="schedule",
+            cooldown_seconds=60,
             prompt_template="fired",
         )
         mgr = ProactiveManager(triggers=[trigger], agent_callback=callback)
@@ -291,7 +295,9 @@ class TestProactiveEdgeCases:
 
         callback = MagicMock()
         trigger = ProactiveTrigger(
-            name="rapid", trigger_type="schedule", cooldown_seconds=0,
+            name="rapid",
+            trigger_type="schedule",
+            cooldown_seconds=0,
             prompt_template="go",
         )
         mgr = ProactiveManager(triggers=[trigger], agent_callback=callback)
@@ -305,7 +311,9 @@ class TestProactiveEdgeCases:
 
         callback = MagicMock()
         trigger = ProactiveTrigger(
-            name="defaults", trigger_type="schedule", prompt_template="",
+            name="defaults",
+            trigger_type="schedule",
+            prompt_template="",
         )
         mgr = ProactiveManager(triggers=[trigger], agent_callback=callback)
         mgr._fire_trigger(trigger)
@@ -319,7 +327,8 @@ class TestProactiveEdgeCases:
 
         callback = MagicMock()
         trigger = ProactiveTrigger(
-            name="fmt", trigger_type="load_threshold",
+            name="fmt",
+            trigger_type="load_threshold",
             prompt_template="Trigger {trigger_name} of type {trigger_type} at {timestamp}",
         )
         mgr = ProactiveManager(triggers=[trigger], agent_callback=callback)
@@ -335,7 +344,8 @@ class TestProactiveEdgeCases:
 
         callback = MagicMock()
         trigger = ProactiveTrigger(
-            name="tmpl", trigger_type="disk_threshold",
+            name="tmpl",
+            trigger_type="disk_threshold",
             prompt_template="Alert: ${trigger_name} (${trigger_type})",
         )
         mgr = ProactiveManager(triggers=[trigger], agent_callback=callback)
@@ -350,7 +360,8 @@ class TestProactiveEdgeCases:
 
         callback = MagicMock()
         trigger = ProactiveTrigger(
-            name="unknown", trigger_type="schedule",
+            name="unknown",
+            trigger_type="schedule",
             prompt_template="Value: ${unknown_var} and ${trigger_name}",
         )
         mgr = ProactiveManager(triggers=[trigger], agent_callback=callback)
@@ -365,8 +376,10 @@ class TestProactiveEdgeCases:
 
         callback = MagicMock()
         trigger = ProactiveTrigger(
-            name="gated", trigger_type="schedule",
-            requires_confirmation=True, prompt_template="test",
+            name="gated",
+            trigger_type="schedule",
+            requires_confirmation=True,
+            prompt_template="test",
         )
         mgr = ProactiveManager(triggers=[trigger], agent_callback=callback, approval_gate=None)
         mgr._fire_trigger(trigger)
@@ -380,8 +393,10 @@ class TestProactiveEdgeCases:
         gate = MagicMock()
         gate.request.side_effect = RuntimeError("Denied")
         trigger = ProactiveTrigger(
-            name="denied", trigger_type="schedule",
-            requires_confirmation=True, prompt_template="test",
+            name="denied",
+            trigger_type="schedule",
+            requires_confirmation=True,
+            prompt_template="test",
         )
         mgr = ProactiveManager(triggers=[trigger], agent_callback=callback, approval_gate=gate)
         mgr._fire_trigger(trigger)
@@ -394,8 +409,10 @@ class TestProactiveEdgeCases:
         callback = MagicMock()
         gate = MagicMock()
         trigger = ProactiveTrigger(
-            name="approved", trigger_type="schedule",
-            requires_confirmation=True, prompt_template="test",
+            name="approved",
+            trigger_type="schedule",
+            requires_confirmation=True,
+            prompt_template="test",
         )
         mgr = ProactiveManager(triggers=[trigger], agent_callback=callback, approval_gate=gate)
         mgr._fire_trigger(trigger)
@@ -408,7 +425,9 @@ class TestProactiveEdgeCases:
 
         callback = MagicMock(side_effect=RuntimeError("Boom"))
         trigger = ProactiveTrigger(
-            name="boom", trigger_type="schedule", prompt_template="test",
+            name="boom",
+            trigger_type="schedule",
+            prompt_template="test",
         )
         mgr = ProactiveManager(triggers=[trigger], agent_callback=callback)
         # Should not raise
@@ -421,7 +440,9 @@ class TestProactiveEdgeCases:
         callback = MagicMock()
         triggers = [
             ProactiveTrigger(name="on", trigger_type="schedule", enabled=True, interval_seconds=1),
-            ProactiveTrigger(name="off", trigger_type="schedule", enabled=False, interval_seconds=1),
+            ProactiveTrigger(
+                name="off", trigger_type="schedule", enabled=False, interval_seconds=1
+            ),
         ]
         mgr = ProactiveManager(triggers=triggers, agent_callback=callback)
         mgr.start()
@@ -451,7 +472,9 @@ class TestProactiveEdgeCases:
 
         callback = MagicMock()
         trigger = ProactiveTrigger(
-            name="fired", trigger_type="schedule", prompt_template="test",
+            name="fired",
+            trigger_type="schedule",
+            prompt_template="test",
         )
         mgr = ProactiveManager(triggers=[trigger], agent_callback=callback)
         mgr._fire_trigger(trigger)
@@ -474,8 +497,10 @@ class TestProactiveEdgeCases:
 
         callback = MagicMock()
         trigger = ProactiveTrigger(
-            name="disk", trigger_type="disk_threshold",
-            disk_path="/", disk_threshold_pct=90.0,
+            name="disk",
+            trigger_type="disk_threshold",
+            disk_path="/",
+            disk_threshold_pct=90.0,
             interval_seconds=5,
         )
         mgr = ProactiveManager(triggers=[trigger], agent_callback=callback)
@@ -494,15 +519,18 @@ class TestProactiveEdgeCases:
 
         callback = MagicMock()
         trigger = ProactiveTrigger(
-            name="load", trigger_type="load_threshold",
+            name="load",
+            trigger_type="load_threshold",
             load_threshold=0.1,  # Very low to ensure firing
             interval_seconds=5,
         )
         mgr = ProactiveManager(triggers=[trigger], agent_callback=callback)
         mgr._stop_event.set()
 
-        with patch("os.getloadavg", return_value=(5.0, 3.0, 2.0)), \
-             patch("os.cpu_count", return_value=None):
+        with (
+            patch("os.getloadavg", return_value=(5.0, 3.0, 2.0)),
+            patch("os.cpu_count", return_value=None),
+        ):
             mgr._threshold_loop([trigger])
         # Should not crash — cpu_count or 1 = 1
 
@@ -512,7 +540,8 @@ class TestProactiveEdgeCases:
 
         callback = MagicMock()
         trigger = ProactiveTrigger(
-            name="fast", trigger_type="schedule",
+            name="fast",
+            trigger_type="schedule",
             interval_seconds=0,  # Should be clamped to 1
             prompt_template="tick",
         )
@@ -553,8 +582,10 @@ class TestProactiveEdgeCases:
                 call_count["n"] += 1
 
         trigger = ProactiveTrigger(
-            name="concurrent", trigger_type="schedule",
-            cooldown_seconds=0, prompt_template="test",
+            name="concurrent",
+            trigger_type="schedule",
+            cooldown_seconds=0,
+            prompt_template="test",
         )
         mgr = ProactiveManager(triggers=[trigger], agent_callback=counting_callback)
 
@@ -574,7 +605,8 @@ class TestProactiveEdgeCases:
 
         callback = MagicMock()
         trigger = ProactiveTrigger(
-            name="no-path", trigger_type="file_change",
+            name="no-path",
+            trigger_type="file_change",
             watch_path="",
         )
         mgr = ProactiveManager(triggers=[trigger], agent_callback=callback)
@@ -593,21 +625,26 @@ class TestApproxTokensBoundaries:
 
     def test_single_char(self):
         from missy.agent.summarizer import _approx_tokens
+
         assert _approx_tokens("a") == 1
 
     def test_four_chars(self):
         from missy.agent.summarizer import _approx_tokens
+
         assert _approx_tokens("abcd") == 1
 
     def test_five_chars(self):
         from missy.agent.summarizer import _approx_tokens
+
         assert _approx_tokens("abcde") == 1
 
     def test_eight_chars(self):
         from missy.agent.summarizer import _approx_tokens
+
         assert _approx_tokens("abcdefgh") == 2
 
     def test_very_long_string(self):
         from missy.agent.summarizer import _approx_tokens
+
         text = "x" * 10000
         assert _approx_tokens(text) == 2500

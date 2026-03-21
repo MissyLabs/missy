@@ -65,8 +65,10 @@ class TestMcpClientConnect:
         ]
         import os
 
-        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-secret", "PATH": "/usr/bin"}), \
-             patch("subprocess.Popen", return_value=mock_proc) as mock_popen:
+        with (
+            patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-secret", "PATH": "/usr/bin"}),
+            patch("subprocess.Popen", return_value=mock_proc) as mock_popen,
+        ):
             c.connect()
         # Check that env was passed and doesn't contain the API key
         call_kwargs = mock_popen.call_args[1]

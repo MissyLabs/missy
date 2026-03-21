@@ -25,10 +25,7 @@ class TestSummarizeTurns:
         return Summarizer(provider)
 
     def _make_turns(self, n=3):
-        return [
-            ConversationTurn.new("sess", role="user", content=f"Turn {i}")
-            for i in range(n)
-        ]
+        return [ConversationTurn.new("sess", role="user", content=f"Turn {i}") for i in range(n)]
 
     def test_normal_summarization(self):
         s = self._make_summarizer("Short summary")

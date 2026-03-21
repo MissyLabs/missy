@@ -44,9 +44,18 @@ class McpClient:
 
             # Pass only safe environment variables to prevent secret leakage
             _SAFE_VARS = (
-                "PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM",
-                "XDG_RUNTIME_DIR", "TMPDIR", "TMP", "TEMP",
-                "NODE_PATH", "NPM_CONFIG_PREFIX",
+                "PATH",
+                "HOME",
+                "USER",
+                "LANG",
+                "LC_ALL",
+                "TERM",
+                "XDG_RUNTIME_DIR",
+                "TMPDIR",
+                "TMP",
+                "TEMP",
+                "NODE_PATH",
+                "NPM_CONFIG_PREFIX",
             )
             env = {k: os.environ[k] for k in _SAFE_VARS if k in os.environ}
 
@@ -59,7 +68,9 @@ class McpClient:
             )
             # Verify the process is alive before attempting handshake
             if self._proc.poll() is not None:
-                stderr = self._proc.stderr.read().decode(errors="replace") if self._proc.stderr else ""
+                stderr = (
+                    self._proc.stderr.read().decode(errors="replace") if self._proc.stderr else ""
+                )
                 raise RuntimeError(
                     f"MCP server process exited immediately with code {self._proc.returncode}: {stderr[:500]}"
                 )
@@ -114,9 +125,7 @@ class McpClient:
         # Validate response ID matches request to prevent response confusion
         resp_id = resp.get("id")
         if resp_id is not None and resp_id != req_id:
-            raise RuntimeError(
-                f"MCP response ID mismatch: expected {req_id}, got {resp_id}"
-            )
+            raise RuntimeError(f"MCP response ID mismatch: expected {req_id}, got {resp_id}")
         return resp
 
     def _notify(self, method: str, params: Any = None) -> None:
@@ -141,13 +150,15 @@ class McpClient:
             if not name or not self._SAFE_TOOL_NAME_RE.match(name):
                 logger.warning(
                     "MCP server %r: rejecting tool with invalid name %r",
-                    self.name, name,
+                    self.name,
+                    name,
                 )
                 continue
             if "__" in name:
                 logger.warning(
                     "MCP server %r: rejecting tool name %r (contains '__')",
-                    self.name, name,
+                    self.name,
+                    name,
                 )
                 continue
             validated.append(tool)
@@ -156,9 +167,7 @@ class McpClient:
             if isinstance(ann_data, dict):
                 try:
                     self._tool_annotations[name] = ToolAnnotation.from_mcp_dict(ann_data)
-                    logger.debug(
-                        "MCP server %r: parsed annotation for tool %r", self.name, name
-                    )
+                    logger.debug("MCP server %r: parsed annotation for tool %r", self.name, name)
                 except Exception:
                     logger.debug(
                         "MCP server %r: failed to parse annotation for tool %r",

@@ -265,7 +265,7 @@ class TestDedupFrameCounter:
         session.add_frame(img.copy(), deduplicate=True)  # skipped
 
         summary = session.summarize()
-        assert summary["frame_count"] == 3   # all attempted
+        assert summary["frame_count"] == 3  # all attempted
         assert summary["frames_retained"] == 1  # only one stored
 
 
@@ -279,8 +279,13 @@ class TestCaptureTimeoutNormal:
 
     def test_successful_capture_within_timeout(self) -> None:
         frame = np.full((480, 640, 3), 128, dtype=np.uint8)
-        cfg = CaptureConfig(warmup_frames=0, max_retries=3, timeout_seconds=10.0,
-                            blank_threshold=5.0, adaptive_blank=False)
+        cfg = CaptureConfig(
+            warmup_frames=0,
+            max_retries=3,
+            timeout_seconds=10.0,
+            blank_threshold=5.0,
+            adaptive_blank=False,
+        )
         cam, mock_cap = _make_open_camera(cfg, read_return=(True, frame))
 
         with patch("time.monotonic") as mock_mono:
@@ -293,8 +298,13 @@ class TestCaptureTimeoutNormal:
 
     def test_successful_result_has_no_error(self) -> None:
         frame = np.full((480, 640, 3), 128, dtype=np.uint8)
-        cfg = CaptureConfig(warmup_frames=0, max_retries=3, timeout_seconds=10.0,
-                            blank_threshold=5.0, adaptive_blank=False)
+        cfg = CaptureConfig(
+            warmup_frames=0,
+            max_retries=3,
+            timeout_seconds=10.0,
+            blank_threshold=5.0,
+            adaptive_blank=False,
+        )
         cam, _ = _make_open_camera(cfg, read_return=(True, frame))
 
         with patch("time.monotonic") as mock_mono:
@@ -309,8 +319,13 @@ class TestCaptureTimeoutExpired:
     """When the deadline is exceeded before the first read, a TRANSIENT failure is returned."""
 
     def _expired_camera(self, timeout: float = 5.0) -> CameraHandle:
-        cfg = CaptureConfig(warmup_frames=0, max_retries=3, timeout_seconds=timeout,
-                            blank_threshold=5.0, adaptive_blank=False)
+        cfg = CaptureConfig(
+            warmup_frames=0,
+            max_retries=3,
+            timeout_seconds=timeout,
+            blank_threshold=5.0,
+            adaptive_blank=False,
+        )
         cam, _ = _make_open_camera(cfg)
         return cam
 
@@ -354,9 +369,14 @@ class TestCaptureTimeoutExpired:
     def test_timeout_on_second_attempt(self) -> None:
         """Deadline expires between attempt 1 (read fails) and attempt 2."""
         frame = None  # read failure
-        cfg = CaptureConfig(warmup_frames=0, max_retries=3, timeout_seconds=5.0,
-                            blank_threshold=5.0, adaptive_blank=False,
-                            retry_delay=0.0)
+        cfg = CaptureConfig(
+            warmup_frames=0,
+            max_retries=3,
+            timeout_seconds=5.0,
+            blank_threshold=5.0,
+            adaptive_blank=False,
+            retry_delay=0.0,
+        )
         cam, mock_cap = _make_open_camera(cfg, read_return=(False, frame))
 
         with patch("time.monotonic") as mock_mono:
@@ -381,8 +401,13 @@ class TestCaptureTimeoutExpired:
         assert result.image is None
 
     def test_timeout_device_path_preserved(self) -> None:
-        cfg = CaptureConfig(warmup_frames=0, max_retries=3, timeout_seconds=5.0,
-                            blank_threshold=5.0, adaptive_blank=False)
+        cfg = CaptureConfig(
+            warmup_frames=0,
+            max_retries=3,
+            timeout_seconds=5.0,
+            blank_threshold=5.0,
+            adaptive_blank=False,
+        )
         cam, _ = _make_open_camera(cfg)
 
         with patch("time.monotonic") as mock_mono:
@@ -393,8 +418,13 @@ class TestCaptureTimeoutExpired:
 
     def test_zero_timeout_always_fails(self) -> None:
         """timeout_seconds=0 means deadline is immediately in the past."""
-        cfg = CaptureConfig(warmup_frames=0, max_retries=3, timeout_seconds=0.0,
-                            blank_threshold=5.0, adaptive_blank=False)
+        cfg = CaptureConfig(
+            warmup_frames=0,
+            max_retries=3,
+            timeout_seconds=0.0,
+            blank_threshold=5.0,
+            adaptive_blank=False,
+        )
         cam, _ = _make_open_camera(cfg)
 
         with patch("time.monotonic") as mock_mono:

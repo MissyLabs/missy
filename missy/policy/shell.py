@@ -139,12 +139,33 @@ class ShellPolicyEngine:
     _BRACE_GROUP_MARKERS = ("{ ", "{;")
 
     # Commands that can execute arbitrary subcommands — warn when whitelisted.
-    _LAUNCHER_COMMANDS = frozenset({
-        "env", "xargs", "find", "nice", "nohup", "strace", "ltrace",
-        "time", "watch", "sudo", "su", "doas", "bash", "sh", "zsh",
-        "dash", "python", "python3", "perl", "ruby", "node",
-        "eval", "exec",  # bash builtins that execute arbitrary commands
-    })
+    _LAUNCHER_COMMANDS = frozenset(
+        {
+            "env",
+            "xargs",
+            "find",
+            "nice",
+            "nohup",
+            "strace",
+            "ltrace",
+            "time",
+            "watch",
+            "sudo",
+            "su",
+            "doas",
+            "bash",
+            "sh",
+            "zsh",
+            "dash",
+            "python",
+            "python3",
+            "perl",
+            "ruby",
+            "node",
+            "eval",
+            "exec",  # bash builtins that execute arbitrary commands
+        }
+    )
 
     @staticmethod
     def _extract_program(command: str) -> str | None:

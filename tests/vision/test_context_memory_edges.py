@@ -26,18 +26,22 @@ import pytest
 class TestApproxTokens:
     def test_empty_string(self) -> None:
         from missy.agent.context import _approx_tokens
+
         assert _approx_tokens("") == 1  # minimum 1
 
     def test_short_string(self) -> None:
         from missy.agent.context import _approx_tokens
+
         assert _approx_tokens("hi") == 1  # 2 chars // 4 = 0 → max(1, 0) = 1
 
     def test_exact_boundary(self) -> None:
         from missy.agent.context import _approx_tokens
+
         assert _approx_tokens("abcd") == 1  # 4 chars // 4 = 1
 
     def test_long_string(self) -> None:
         from missy.agent.context import _approx_tokens
+
         assert _approx_tokens("a" * 400) == 100
 
 
@@ -49,36 +53,43 @@ class TestApproxTokens:
 class TestTokenBudgetValidation:
     def test_negative_total_raises(self) -> None:
         from missy.agent.context import TokenBudget
+
         with pytest.raises(ValueError, match="total"):
             TokenBudget(total=-1)
 
     def test_memory_fraction_out_of_range(self) -> None:
         from missy.agent.context import TokenBudget
+
         with pytest.raises(ValueError, match="memory_fraction"):
             TokenBudget(memory_fraction=1.5)
 
     def test_learnings_fraction_out_of_range(self) -> None:
         from missy.agent.context import TokenBudget
+
         with pytest.raises(ValueError, match="learnings_fraction"):
             TokenBudget(learnings_fraction=-0.1)
 
     def test_negative_fresh_tail_count(self) -> None:
         from missy.agent.context import TokenBudget
+
         with pytest.raises(ValueError, match="fresh_tail_count"):
             TokenBudget(fresh_tail_count=-1)
 
     def test_reserves_exceed_total(self) -> None:
         from missy.agent.context import TokenBudget
+
         with pytest.raises(ValueError, match="exceeds total"):
             TokenBudget(total=100, system_reserve=60, tool_definitions_reserve=60)
 
     def test_zero_total_with_zero_reserves(self) -> None:
         from missy.agent.context import TokenBudget
+
         budget = TokenBudget(total=0, system_reserve=0, tool_definitions_reserve=0)
         assert budget.total == 0
 
     def test_fractions_near_one(self) -> None:
         from missy.agent.context import TokenBudget
+
         # Both fractions at edge of range should still work
         budget = TokenBudget(memory_fraction=1.0, learnings_fraction=1.0)
         assert budget.memory_fraction == 1.0
@@ -92,6 +103,7 @@ class TestTokenBudgetValidation:
 class TestContextManagerBuildMessages:
     def _mgr(self, **kwargs: Any) -> Any:
         from missy.agent.context import ContextManager, TokenBudget
+
         return ContextManager(TokenBudget(**kwargs))
 
     def test_empty_history(self) -> None:
@@ -122,7 +134,9 @@ class TestContextManagerBuildMessages:
 
     def test_learnings_exceed_budget_are_skipped(self) -> None:
         """Learnings that exceed their budget fraction are omitted."""
-        mgr = self._mgr(total=500, system_reserve=100, tool_definitions_reserve=100, learnings_fraction=0.01)
+        mgr = self._mgr(
+            total=500, system_reserve=100, tool_definitions_reserve=100, learnings_fraction=0.01
+        )
         long_learnings = ["x" * 1000]
         system, msgs = mgr.build_messages("S.", "M.", [], learnings=long_learnings)
         assert "Past Learnings" not in system
@@ -152,7 +166,9 @@ class TestContextManagerBuildMessages:
     def test_history_exceeds_budget_oldest_dropped(self) -> None:
         """When history is too large, oldest entries are dropped.
         Fresh tail is always kept, but evictable entries are pruned."""
-        mgr = self._mgr(total=500, system_reserve=50, tool_definitions_reserve=50, fresh_tail_count=2)
+        mgr = self._mgr(
+            total=500, system_reserve=50, tool_definitions_reserve=50, fresh_tail_count=2
+        )
         history = [{"role": "user", "content": "x" * 200} for _ in range(10)]
         _, msgs = mgr.build_messages("S.", "New", history)
         # Fresh tail (2 entries) + new message should always be present
@@ -177,6 +193,7 @@ class TestContextManagerBuildMessages:
 
     def test_summary_without_time_range(self) -> None:
         from missy.agent.context import _format_summary
+
         summary = SimpleNamespace(depth=2, descendant_count=10, content="Some summary")
         text = _format_summary(summary)
         assert "depth 2" in text
@@ -185,17 +202,25 @@ class TestContextManagerBuildMessages:
 
     def test_summary_with_time_range(self) -> None:
         from missy.agent.context import _format_summary
+
         summary = SimpleNamespace(
-            depth=1, descendant_count=3, content="Chat",
-            time_range_start="09:00", time_range_end="09:30",
+            depth=1,
+            descendant_count=3,
+            content="Chat",
+            time_range_start="09:00",
+            time_range_end="09:30",
         )
         text = _format_summary(summary)
         assert "covers 09:00 to 09:30" in text
 
     def test_summary_exceeding_budget_is_dropped(self) -> None:
-        mgr = self._mgr(total=500, system_reserve=50, tool_definitions_reserve=50, fresh_tail_count=0)
+        mgr = self._mgr(
+            total=500, system_reserve=50, tool_definitions_reserve=50, fresh_tail_count=0
+        )
         summary = SimpleNamespace(
-            depth=1, descendant_count=100, content="x" * 5000,
+            depth=1,
+            descendant_count=100,
+            content="x" * 5000,
         )
         _, msgs = mgr.build_messages("S.", "New", [], summaries=[summary])
         # Summary too large — should be skipped, only new message
@@ -216,8 +241,12 @@ class TestVisionMemoryRecallEdgeCases:
         mock_mem = MagicMock()
         turns = [
             SimpleNamespace(role="user", content="hello", session_id="s1", metadata={}),
-            SimpleNamespace(role="vision", content="sky piece found", session_id="s1",
-                          metadata={"task_type": "puzzle", "observation": "sky piece found"}),
+            SimpleNamespace(
+                role="vision",
+                content="sky piece found",
+                session_id="s1",
+                metadata={"task_type": "puzzle", "observation": "sky piece found"},
+            ),
             SimpleNamespace(role="assistant", content="ok", session_id="s1", metadata={}),
         ]
         mock_mem.get_session_turns.return_value = turns
@@ -233,10 +262,12 @@ class TestVisionMemoryRecallEdgeCases:
 
         mock_mem = MagicMock()
         turns = [
-            SimpleNamespace(role="vision", content="a", session_id="s1",
-                          metadata={"task_type": "puzzle"}),
-            SimpleNamespace(role="vision", content="b", session_id="s1",
-                          metadata={"task_type": "painting"}),
+            SimpleNamespace(
+                role="vision", content="a", session_id="s1", metadata={"task_type": "puzzle"}
+            ),
+            SimpleNamespace(
+                role="vision", content="b", session_id="s1", metadata={"task_type": "painting"}
+            ),
         ]
         mock_mem.get_session_turns.return_value = turns
 
@@ -250,8 +281,12 @@ class TestVisionMemoryRecallEdgeCases:
         from missy.vision.vision_memory import VisionMemoryBridge
 
         mock_mem = MagicMock()
-        turn = SimpleNamespace(role="vision", content="found edge", session_id="s1",
-                              metadata={"task_type": "puzzle", "observation": "found edge"})
+        turn = SimpleNamespace(
+            role="vision",
+            content="found edge",
+            session_id="s1",
+            metadata={"task_type": "puzzle", "observation": "found edge"},
+        )
         mock_mem.search.return_value = [turn]
 
         bridge = VisionMemoryBridge(memory_store=mock_mem, vector_store=None)
@@ -274,8 +309,12 @@ class TestVisionMemoryRecallEdgeCases:
 
         mock_mem = MagicMock()
         turns = [
-            SimpleNamespace(role="vision", content=f"obs{i}", session_id="s1",
-                          metadata={"task_type": "general", "observation": f"obs{i}"})
+            SimpleNamespace(
+                role="vision",
+                content=f"obs{i}",
+                session_id="s1",
+                metadata={"task_type": "general", "observation": f"obs{i}"},
+            )
             for i in range(20)
         ]
         mock_mem.get_session_turns.return_value = turns
@@ -303,8 +342,12 @@ class TestVisionMemoryRecallEdgeCases:
         mock_mem = MagicMock()
         bridge = VisionMemoryBridge(memory_store=mock_mem)
         bridge.store_observation(
-            session_id="s1", task_type="puzzle", observation="test",
-            confidence=0.92, source="webcam:/dev/video0", frame_id=3,
+            session_id="s1",
+            task_type="puzzle",
+            observation="test",
+            confidence=0.92,
+            source="webcam:/dev/video0",
+            frame_id=3,
         )
 
         call_args = mock_mem.add_turn.call_args
@@ -346,9 +389,17 @@ class TestSessionContextFormatting:
 
         mock_mem = MagicMock()
         turns = [
-            SimpleNamespace(role="vision", content=f"obs{i}", session_id="s1",
-                          metadata={"task_type": "puzzle", "observation": f"obs{i}",
-                                   "confidence": 0.8, "timestamp": f"2026-03-19T{10+i}:00:00"})
+            SimpleNamespace(
+                role="vision",
+                content=f"obs{i}",
+                session_id="s1",
+                metadata={
+                    "task_type": "puzzle",
+                    "observation": f"obs{i}",
+                    "confidence": 0.8,
+                    "timestamp": f"2026-03-19T{10 + i}:00:00",
+                },
+            )
             for i in range(3)
         ]
         mock_mem.get_session_turns.return_value = turns
@@ -365,8 +416,10 @@ class TestSessionContextFormatting:
 
         mock_mem = MagicMock()
         turn = SimpleNamespace(
-            role="vision", content="partial", session_id="s1",
-            metadata={}  # no task_type, confidence, timestamp
+            role="vision",
+            content="partial",
+            session_id="s1",
+            metadata={},  # no task_type, confidence, timestamp
         )
         mock_mem.get_session_turns.return_value = [turn]
 

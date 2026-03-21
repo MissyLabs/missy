@@ -21,38 +21,46 @@ class TestConfigValidatorValid:
         assert result.valid
 
     def test_standard_1080p(self):
-        result = validate_vision_config({
-            "capture_width": 1920,
-            "capture_height": 1080,
-        })
+        result = validate_vision_config(
+            {
+                "capture_width": 1920,
+                "capture_height": 1080,
+            }
+        )
         assert result.valid
 
     def test_standard_720p(self):
-        result = validate_vision_config({
-            "capture_width": 1280,
-            "capture_height": 720,
-        })
+        result = validate_vision_config(
+            {
+                "capture_width": 1280,
+                "capture_height": 720,
+            }
+        )
         assert result.valid
 
     def test_4k_valid(self):
-        result = validate_vision_config({
-            "capture_width": 3840,
-            "capture_height": 2160,
-        })
+        result = validate_vision_config(
+            {
+                "capture_width": 3840,
+                "capture_height": 2160,
+            }
+        )
         assert result.valid
 
     def test_all_fields_specified(self):
-        result = validate_vision_config({
-            "enabled": True,
-            "capture_width": 1920,
-            "capture_height": 1080,
-            "warmup_frames": 5,
-            "max_retries": 3,
-            "auto_activate_threshold": 0.80,
-            "scene_memory_max_frames": 20,
-            "scene_memory_max_sessions": 5,
-            "preferred_device": "",
-        })
+        result = validate_vision_config(
+            {
+                "enabled": True,
+                "capture_width": 1920,
+                "capture_height": 1080,
+                "warmup_frames": 5,
+                "max_retries": 3,
+                "auto_activate_threshold": 0.80,
+                "scene_memory_max_frames": 20,
+                "scene_memory_max_sessions": 5,
+                "preferred_device": "",
+            }
+        )
         assert result.valid
 
 
@@ -121,10 +129,12 @@ class TestConfigValidatorWarnings:
     """Test warning-level issues."""
 
     def test_non_standard_resolution_warns(self):
-        result = validate_vision_config({
-            "capture_width": 1024,
-            "capture_height": 768,
-        })
+        result = validate_vision_config(
+            {
+                "capture_width": 1024,
+                "capture_height": 768,
+            }
+        )
         # Non-standard but within range = warning, not error
         assert result.valid
         assert result.warnings

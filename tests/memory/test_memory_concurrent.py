@@ -213,6 +213,7 @@ class TestSQLiteMemoryStoreConcurrent:
     def test_concurrent_add_turns(self, tmp_path):
         from missy.memory.sqlite_store import ConversationTurn as SQLiteTurn
         from missy.memory.sqlite_store import SQLiteMemoryStore
+
         db_path = str(tmp_path / "memory.db")
         store = SQLiteMemoryStore(db_path=db_path)
         errors = []
@@ -249,14 +250,13 @@ class TestSQLiteMemoryStoreConcurrent:
     def test_concurrent_search_and_write(self, tmp_path):
         from missy.memory.sqlite_store import ConversationTurn as SQLiteTurn
         from missy.memory.sqlite_store import SQLiteMemoryStore
+
         db_path = str(tmp_path / "memory.db")
         store = SQLiteMemoryStore(db_path=db_path)
 
         # Pre-seed
         for i in range(50):
-            turn = SQLiteTurn.new(
-                session_id="s1", role="user", content=f"Info about topic {i}"
-            )
+            turn = SQLiteTurn.new(session_id="s1", role="user", content=f"Info about topic {i}")
             store.add_turn(turn)
 
         errors = []
@@ -272,9 +272,7 @@ class TestSQLiteMemoryStoreConcurrent:
         def writer():
             try:
                 for i in range(20):
-                    turn = SQLiteTurn.new(
-                        session_id="s2", role="user", content=f"New data {i}"
-                    )
+                    turn = SQLiteTurn.new(session_id="s2", role="user", content=f"New data {i}")
                     store.add_turn(turn)
             except Exception as e:
                 errors.append(e)
@@ -293,6 +291,7 @@ class TestSQLiteMemoryStoreConcurrent:
 
     def test_concurrent_learnings(self, tmp_path):
         from missy.memory.sqlite_store import SQLiteMemoryStore
+
         db_path = str(tmp_path / "memory.db")
         store = SQLiteMemoryStore(db_path=db_path)
         errors = []

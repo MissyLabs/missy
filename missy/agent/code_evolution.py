@@ -510,15 +510,31 @@ class CodeEvolutionManager:
                 abs_path.write_text(content)
 
             # Run tests — sanitize environment to prevent API key leakage
-            _SAFE_ENV_VARS = frozenset({
-                "PATH", "HOME", "USER", "LOGNAME", "SHELL",
-                "LANG", "LC_ALL", "LC_CTYPE", "LANGUAGE",
-                "TERM", "COLORTERM", "COLUMNS", "LINES",
-                "XDG_RUNTIME_DIR", "TMPDIR", "PWD", "DISPLAY",
-            })
+            _SAFE_ENV_VARS = frozenset(
+                {
+                    "PATH",
+                    "HOME",
+                    "USER",
+                    "LOGNAME",
+                    "SHELL",
+                    "LANG",
+                    "LC_ALL",
+                    "LC_CTYPE",
+                    "LANGUAGE",
+                    "TERM",
+                    "COLORTERM",
+                    "COLUMNS",
+                    "LINES",
+                    "XDG_RUNTIME_DIR",
+                    "TMPDIR",
+                    "PWD",
+                    "DISPLAY",
+                }
+            )
             safe_env = {k: os.environ[k] for k in _SAFE_ENV_VARS if k in os.environ}
             # Use shlex.split to avoid shell=True injection risks.
             import shlex
+
             test_argv = shlex.split(self._test_command)
             test_result = subprocess.run(
                 test_argv,

@@ -469,9 +469,7 @@ class HatchingManager:
         try:
             _MISSY_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
         except OSError as exc:
-            raise RuntimeError(
-                f"Cannot create Missy data directory {_MISSY_DIR}: {exc}"
-            ) from exc
+            raise RuntimeError(f"Cannot create Missy data directory {_MISSY_DIR}: {exc}") from exc
 
         # Basic write permission check.
         if not os.access(_MISSY_DIR, os.W_OK):
@@ -595,9 +593,7 @@ class HatchingManager:
             _SECRETS_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
             _SECRETS_DIR.chmod(0o700)
         except OSError as exc:
-            raise RuntimeError(
-                f"Cannot create secrets directory {_SECRETS_DIR}: {exc}"
-            ) from exc
+            raise RuntimeError(f"Cannot create secrets directory {_SECRETS_DIR}: {exc}") from exc
 
         self._log.log(
             "initialize_security",
@@ -691,11 +687,14 @@ class HatchingManager:
         # Check camera discovery
         try:
             from missy.vision.discovery import discover_cameras
+
             cameras = discover_cameras(force=True)
             if not cameras:
                 issues.append("no cameras detected")
             else:
-                self._log.log("check_vision", "info", f"Found {len(cameras)} camera(s): {cameras[0].name}")
+                self._log.log(
+                    "check_vision", "info", f"Found {len(cameras)} camera(s): {cameras[0].name}"
+                )
         except ImportError:
             issues.append("vision module not importable")
         except Exception as exc:
@@ -704,6 +703,7 @@ class HatchingManager:
         # Check screenshot tools
         try:
             from missy.vision.doctor import VisionDoctor
+
             doc = VisionDoctor()
             ss_result = doc.check_screenshot_tools()
             if not ss_result.passed:

@@ -24,9 +24,7 @@ class MockPersona:
     behavioral_tendencies: list[str] = field(
         default_factory=lambda: ["Avoid jargon when possible."]
     )
-    response_style_rules: list[str] = field(
-        default_factory=lambda: ["Use short paragraphs."]
-    )
+    response_style_rules: list[str] = field(default_factory=lambda: ["Use short paragraphs."])
     boundaries: list[str] = field(
         default_factory=lambda: ["Never execute destructive commands without confirmation."]
     )
@@ -54,7 +52,10 @@ class TestBehaviorLayerToneAnalysis:
 
         layer = BehaviorLayer()
         msgs = [
-            {"role": "user", "content": "I would appreciate it if you could kindly provide an explanation regarding this matter."}
+            {
+                "role": "user",
+                "content": "I would appreciate it if you could kindly provide an explanation regarding this matter.",
+            }
         ]
         assert layer.analyze_user_tone(msgs) == "formal"
 
@@ -63,7 +64,10 @@ class TestBehaviorLayerToneAnalysis:
 
         layer = BehaviorLayer()
         msgs = [
-            {"role": "user", "content": "This is still not working! I've tried everything and it's broken again. Why doesn't it work?"}
+            {
+                "role": "user",
+                "content": "This is still not working! I've tried everything and it's broken again. Why doesn't it work?",
+            }
         ]
         assert layer.analyze_user_tone(msgs) == "frustrated"
 
@@ -72,7 +76,10 @@ class TestBehaviorLayerToneAnalysis:
 
         layer = BehaviorLayer()
         msgs = [
-            {"role": "user", "content": "I need to configure the async function to handle the oauth api endpoint with proper auth and token management in the docker container pipeline."}
+            {
+                "role": "user",
+                "content": "I need to configure the async function to handle the oauth api endpoint with proper auth and token management in the docker container pipeline.",
+            }
         ]
         assert layer.analyze_user_tone(msgs) == "technical"
 
@@ -123,7 +130,10 @@ class TestBehaviorLayerToneAnalysis:
         ]
         # Last 5 are casual (need enough words to avoid "brief" classification)
         casual_msgs = [
-            {"role": "user", "content": "hey cool yo sup awesome that was really neat thanks a lot dude"}
+            {
+                "role": "user",
+                "content": "hey cool yo sup awesome that was really neat thanks a lot dude",
+            }
             for _ in range(5)
         ]
         all_msgs = formal_msgs + casual_msgs
@@ -163,8 +173,14 @@ class TestBehaviorLayerPromptShaping:
         from missy.agent.behavior import BehaviorLayer
 
         layer = BehaviorLayer()
-        ctx = {"user_tone": "frustrated", "turn_count": 1, "has_tool_results": False,
-               "topic": "", "intent": "", "urgency": "low"}
+        ctx = {
+            "user_tone": "frustrated",
+            "turn_count": 1,
+            "has_tool_results": False,
+            "topic": "",
+            "intent": "",
+            "urgency": "low",
+        }
         guidelines = layer.get_response_guidelines(ctx)
         assert "empathetic" in guidelines.lower() or "difficulty" in guidelines.lower()
 
@@ -172,8 +188,14 @@ class TestBehaviorLayerPromptShaping:
         from missy.agent.behavior import BehaviorLayer
 
         layer = BehaviorLayer()
-        ctx = {"user_tone": "casual", "turn_count": 10, "has_tool_results": False,
-               "topic": "", "intent": "", "urgency": "low"}
+        ctx = {
+            "user_tone": "casual",
+            "turn_count": 10,
+            "has_tool_results": False,
+            "topic": "",
+            "intent": "",
+            "urgency": "low",
+        }
         guidelines = layer.get_response_guidelines(ctx)
         assert "concise" in guidelines.lower()
 
@@ -181,8 +203,14 @@ class TestBehaviorLayerPromptShaping:
         from missy.agent.behavior import BehaviorLayer
 
         layer = BehaviorLayer()
-        ctx = {"user_tone": "casual", "turn_count": 1, "has_tool_results": True,
-               "topic": "", "intent": "", "urgency": "low"}
+        ctx = {
+            "user_tone": "casual",
+            "turn_count": 1,
+            "has_tool_results": True,
+            "topic": "",
+            "intent": "",
+            "urgency": "low",
+        }
         guidelines = layer.get_response_guidelines(ctx)
         assert "tool" in guidelines.lower()
 
@@ -190,8 +218,14 @@ class TestBehaviorLayerPromptShaping:
         from missy.agent.behavior import BehaviorLayer
 
         layer = BehaviorLayer()
-        ctx = {"user_tone": "casual", "turn_count": 1, "has_tool_results": False,
-               "topic": "", "intent": "", "urgency": "high"}
+        ctx = {
+            "user_tone": "casual",
+            "turn_count": 1,
+            "has_tool_results": False,
+            "topic": "",
+            "intent": "",
+            "urgency": "high",
+        }
         guidelines = layer.get_response_guidelines(ctx)
         assert "preamble" in guidelines.lower() or "answer" in guidelines.lower()
 
@@ -199,8 +233,15 @@ class TestBehaviorLayerPromptShaping:
         from missy.agent.behavior import BehaviorLayer
 
         layer = BehaviorLayer()
-        ctx = {"user_tone": "casual", "turn_count": 1, "has_tool_results": False,
-               "topic": "", "intent": "", "urgency": "low", "vision_mode": "painting"}
+        ctx = {
+            "user_tone": "casual",
+            "turn_count": 1,
+            "has_tool_results": False,
+            "topic": "",
+            "intent": "",
+            "urgency": "low",
+            "vision_mode": "painting",
+        }
         guidelines = layer.get_response_guidelines(ctx)
         assert "encouraging" in guidelines.lower() or "warm" in guidelines.lower()
 
@@ -208,8 +249,15 @@ class TestBehaviorLayerPromptShaping:
         from missy.agent.behavior import BehaviorLayer
 
         layer = BehaviorLayer()
-        ctx = {"user_tone": "casual", "turn_count": 1, "has_tool_results": False,
-               "topic": "", "intent": "", "urgency": "low", "vision_mode": "puzzle"}
+        ctx = {
+            "user_tone": "casual",
+            "turn_count": 1,
+            "has_tool_results": False,
+            "topic": "",
+            "intent": "",
+            "urgency": "low",
+            "vision_mode": "puzzle",
+        }
         guidelines = layer.get_response_guidelines(ctx)
         assert "puzzle" in guidelines.lower()
 
@@ -217,8 +265,15 @@ class TestBehaviorLayerPromptShaping:
         from missy.agent.behavior import BehaviorLayer
 
         layer = BehaviorLayer()
-        ctx = {"user_tone": "casual", "turn_count": 1, "has_tool_results": False,
-               "topic": "", "intent": "", "urgency": "low", "vision_mode": "general"}
+        ctx = {
+            "user_tone": "casual",
+            "turn_count": 1,
+            "has_tool_results": False,
+            "topic": "",
+            "intent": "",
+            "urgency": "low",
+            "vision_mode": "general",
+        }
         guidelines = layer.get_response_guidelines(ctx)
         assert "visual" in guidelines.lower()
 
@@ -226,8 +281,14 @@ class TestBehaviorLayerPromptShaping:
         from missy.agent.behavior import BehaviorLayer
 
         layer = BehaviorLayer()
-        ctx = {"user_tone": "casual", "turn_count": 1, "has_tool_results": False,
-               "topic": "writing a function", "intent": "", "urgency": "low"}
+        ctx = {
+            "user_tone": "casual",
+            "turn_count": 1,
+            "has_tool_results": False,
+            "topic": "writing a function",
+            "intent": "",
+            "urgency": "low",
+        }
         guidelines = layer.get_response_guidelines(ctx)
         assert "code" in guidelines.lower() or "technical" in guidelines.lower()
 
@@ -297,7 +358,9 @@ class TestIntentInterpreter:
         interp = IntentInterpreter()
         assert interp.classify_intent("I'm getting a traceback error") == "troubleshooting"
         assert interp.classify_intent("connection refused on port 8080") == "troubleshooting"
-        assert interp.classify_intent("permission denied when running the script") == "troubleshooting"
+        assert (
+            interp.classify_intent("permission denied when running the script") == "troubleshooting"
+        )
 
     def test_clarification(self) -> None:
         from missy.agent.behavior import IntentInterpreter
@@ -372,7 +435,8 @@ class TestResponseShaper:
         shaper = ResponseShaper()
         result = shaper.shape_response(
             "As an AI language model, I can help you. Here is the answer.",
-            persona=None, context={},
+            persona=None,
+            context={},
         )
         assert "As an AI" not in result
         assert "Here is the answer." in result
@@ -383,7 +447,8 @@ class TestResponseShaper:
         shaper = ResponseShaper()
         result = shaper.shape_response(
             "Certainly! I'll help you with that. The solution is X.",
-            persona=None, context={},
+            persona=None,
+            context={},
         )
         assert "Certainly" not in result
         assert "The solution is X." in result
@@ -394,7 +459,8 @@ class TestResponseShaper:
         shaper = ResponseShaper()
         result = shaper.shape_response(
             "Great question! The answer is 42.",
-            persona=None, context={},
+            persona=None,
+            context={},
         )
         assert "Great question" not in result
         assert "42" in result
@@ -406,7 +472,8 @@ class TestResponseShaper:
         code = '```python\nAs an AI, print("hello")\n```'
         result = shaper.shape_response(
             f"Here is the code:\n{code}",
-            persona=None, context={},
+            persona=None,
+            context={},
         )
         assert 'As an AI, print("hello")' in result
 
@@ -416,7 +483,8 @@ class TestResponseShaper:
         shaper = ResponseShaper()
         result = shaper.shape_response(
             "Use `As an AI` as a string constant.",
-            persona=None, context={},
+            persona=None,
+            context={},
         )
         assert "`As an AI`" in result
 
@@ -432,7 +500,8 @@ class TestResponseShaper:
         shaper = ResponseShaper()
         result = shaper.shape_response(
             "Line 1\n\n\n\n\nLine 2",
-            persona=None, context={},
+            persona=None,
+            context={},
         )
         assert "\n\n\n" not in result
         assert "Line 1" in result
@@ -459,7 +528,8 @@ class TestResponseShaper:
         shaper = ResponseShaper()
         result = shaper.shape_response(
             "Of course! I'd be happy to help you. As an AI assistant, I can explain that the answer is 42.",
-            persona=None, context={},
+            persona=None,
+            context={},
         )
         assert "Of course" not in result
         assert "happy to help" not in result
@@ -484,7 +554,10 @@ class TestBehaviorIntegration:
         shaper = ResponseShaper()
 
         messages = [
-            {"role": "user", "content": "hey, I'm getting an error when I try to deploy. It's still broken."}
+            {
+                "role": "user",
+                "content": "hey, I'm getting an error when I try to deploy. It's still broken.",
+            }
         ]
 
         tone = layer.analyze_user_tone(messages)
@@ -519,16 +592,26 @@ class TestBehaviorIntegration:
 
         layer = BehaviorLayer()
         intents = [
-            "greeting", "farewell", "confirmation", "frustration",
-            "troubleshooting", "clarification", "feedback",
-            "exploration", "command", "question",
+            "greeting",
+            "farewell",
+            "confirmation",
+            "frustration",
+            "troubleshooting",
+            "clarification",
+            "feedback",
+            "exploration",
+            "command",
+            "question",
         ]
 
         for intent in intents:
             ctx = {
-                "user_tone": "casual", "turn_count": 1,
-                "has_tool_results": False, "topic": "",
-                "intent": intent, "urgency": "low",
+                "user_tone": "casual",
+                "turn_count": 1,
+                "has_tool_results": False,
+                "topic": "",
+                "intent": intent,
+                "urgency": "low",
             }
             guidelines = layer.get_response_guidelines(ctx)
             # At minimum, tone adaptation should be present

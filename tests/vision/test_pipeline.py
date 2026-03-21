@@ -27,9 +27,7 @@ class TestImagePipeline:
         mock_cv2 = MagicMock()
         mock_cv2_fn.return_value = mock_cv2
 
-        pipeline = self._make_pipeline(
-            normalize_exposure=False, denoise=False, sharpen=False
-        )
+        pipeline = self._make_pipeline(normalize_exposure=False, denoise=False, sharpen=False)
         img = np.zeros((100, 100, 3), dtype=np.uint8)
 
         # For small image, resize should return as-is

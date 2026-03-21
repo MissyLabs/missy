@@ -832,21 +832,24 @@ class TestMainFunction:
         cfg_path = tmp_path / "edge.json"
         from missy.channels.voice.edge_client import main
 
-        with patch(
-            "sys.argv",
-            [
-                "edge_client",
-                "--pair",
-                "--name",
-                "My Node",
-                "--room",
-                "Living Room",
-                "--config",
-                str(cfg_path),
-                "--server",
-                "ws://localhost:8765",
-            ],
-        ), patch.object(ec, "_pair_device", new=AsyncMock(return_value="node-xyz")):
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "edge_client",
+                    "--pair",
+                    "--name",
+                    "My Node",
+                    "--room",
+                    "Living Room",
+                    "--config",
+                    str(cfg_path),
+                    "--server",
+                    "ws://localhost:8765",
+                ],
+            ),
+            patch.object(ec, "_pair_device", new=AsyncMock(return_value="node-xyz")),
+        ):
             main()
 
         # Config file should be created with node_id.
@@ -858,15 +861,18 @@ class TestMainFunction:
         cfg_path = tmp_path / "edge.json"
         from missy.channels.voice.edge_client import main
 
-        with patch(
-            "sys.argv",
-            [
-                "edge_client",
-                "--pair",
-                "--config",
-                str(cfg_path),
-            ],
-        ), patch.object(ec, "_pair_device", new=AsyncMock(return_value=None)):
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "edge_client",
+                    "--pair",
+                    "--config",
+                    str(cfg_path),
+                ],
+            ),
+            patch.object(ec, "_pair_device", new=AsyncMock(return_value=None)),
+        ):
             main()
 
         assert not cfg_path.exists()
@@ -876,18 +882,21 @@ class TestMainFunction:
         cfg_path = tmp_path / "edge.json"
         from missy.channels.voice.edge_client import main
 
-        with patch(
-            "sys.argv",
-            [
-                "edge_client",
-                "--node-id",
-                "node-abc",
-                "--token",
-                "secret-token",
-                "--config",
-                str(cfg_path),
-            ],
-        ), patch.object(ec, "_voice_loop", new=AsyncMock()) as mock_loop:
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "edge_client",
+                    "--node-id",
+                    "node-abc",
+                    "--token",
+                    "secret-token",
+                    "--config",
+                    str(cfg_path),
+                ],
+            ),
+            patch.object(ec, "_voice_loop", new=AsyncMock()) as mock_loop,
+        ):
             main()
 
         mock_loop.assert_awaited_once()
@@ -924,20 +933,23 @@ class TestMainFunction:
         cfg_path = tmp_path / "edge.json"
         from missy.channels.voice.edge_client import main
 
-        with patch(
-            "sys.argv",
-            [
-                "edge_client",
-                "--node-id",
-                "node-save",
-                "--token",
-                "save-token",
-                "--server",
-                "ws://save-host:8765",
-                "--config",
-                str(cfg_path),
-            ],
-        ), patch.object(ec, "_voice_loop", new=AsyncMock()):
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "edge_client",
+                    "--node-id",
+                    "node-save",
+                    "--token",
+                    "save-token",
+                    "--server",
+                    "ws://save-host:8765",
+                    "--config",
+                    str(cfg_path),
+                ],
+            ),
+            patch.object(ec, "_voice_loop", new=AsyncMock()),
+        ):
             main()
 
         data = json.loads(cfg_path.read_text())
@@ -978,19 +990,22 @@ class TestMainFunction:
         cfg_path = tmp_path / "edge.json"
         from missy.channels.voice.edge_client import main
 
-        with patch(
-            "sys.argv",
-            [
-                "edge_client",
-                "--node-id",
-                "n1",
-                "--token",
-                "t1",
-                "--config",
-                str(cfg_path),
-                "--continuous",
-            ],
-        ), patch.object(ec, "_voice_loop", new=AsyncMock()) as mock_loop:
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "edge_client",
+                    "--node-id",
+                    "n1",
+                    "--token",
+                    "t1",
+                    "--config",
+                    str(cfg_path),
+                    "--continuous",
+                ],
+            ),
+            patch.object(ec, "_voice_loop", new=AsyncMock()) as mock_loop,
+        ):
             main()
 
         kwargs = mock_loop.call_args[1]

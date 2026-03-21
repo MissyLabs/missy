@@ -1,4 +1,5 @@
 """Tests for missy hatch and missy persona CLI commands."""
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
@@ -73,9 +74,7 @@ class TestHatchCommand:
 
     def test_hatch_already_hatched_shows_completed_at(self, runner: CliRunner) -> None:
         """Already-hatched output includes the completion timestamp."""
-        mock_mgr = _make_hatching_manager(
-            is_hatched=True, completed_at="2026-03-18T12:00:00+00:00"
-        )
+        mock_mgr = _make_hatching_manager(is_hatched=True, completed_at="2026-03-18T12:00:00+00:00")
 
         with patch("missy.agent.hatching.HatchingManager", return_value=mock_mgr):
             result = runner.invoke(cli, ["hatch"])
@@ -433,7 +432,9 @@ class TestPersonaDiffCommand:
     def test_persona_diff_with_changes(self, runner: CliRunner) -> None:
         """persona diff prints the diff text when changes exist."""
         mock_mgr = _make_persona_manager()
-        mock_mgr.diff = MagicMock(return_value="--- backup\n+++ current\n@@ -1 +1 @@\n-name: Old\n+name: New\n")
+        mock_mgr.diff = MagicMock(
+            return_value="--- backup\n+++ current\n@@ -1 +1 @@\n-name: Old\n+name: New\n"
+        )
 
         with patch("missy.agent.persona.PersonaManager", return_value=mock_mgr):
             result = runner.invoke(cli, ["persona", "diff"])
@@ -495,9 +496,17 @@ class TestPersonaLogCommand:
     def test_persona_log_with_entries(self, runner: CliRunner) -> None:
         """persona log shows table when entries exist."""
         mock_mgr = _make_persona_manager()
-        mock_mgr.get_audit_log = MagicMock(return_value=[
-            {"timestamp": "2026-03-18T12:00:00+00:00", "action": "save", "version": 2, "name": "Missy", "details": {}},
-        ])
+        mock_mgr.get_audit_log = MagicMock(
+            return_value=[
+                {
+                    "timestamp": "2026-03-18T12:00:00+00:00",
+                    "action": "save",
+                    "version": 2,
+                    "name": "Missy",
+                    "details": {},
+                },
+            ]
+        )
 
         with patch("missy.agent.persona.PersonaManager", return_value=mock_mgr):
             result = runner.invoke(cli, ["persona", "log"])

@@ -248,9 +248,7 @@ class TestConnectionFloodProtection:
 
         server._active_connections = _MAX_CONCURRENT_CONNECTIONS - 1
 
-        auth_frame = json.dumps(
-            {"type": "auth", "node_id": "proto-node", "token": "good-token"}
-        )
+        auth_frame = json.dumps({"type": "auth", "node_id": "proto-node", "token": "good-token"})
         ws = _make_ws([auth_frame])
 
         await server._handle_connection(ws)
@@ -262,9 +260,7 @@ class TestConnectionFloodProtection:
 
     async def test_active_connections_decremented_on_exit(self, server: Any) -> None:
         """_active_connections must be decremented even when the connection ends cleanly."""
-        auth_frame = json.dumps(
-            {"type": "auth", "node_id": "proto-node", "token": "good-token"}
-        )
+        auth_frame = json.dumps({"type": "auth", "node_id": "proto-node", "token": "good-token"})
         ws = _make_ws([auth_frame])  # recv will raise ConnectionClosed after auth
 
         before = server._active_connections
@@ -308,9 +304,7 @@ class TestBinaryFirstFrame:
 
         await server._handle_connection(ws)
 
-        ws.close.assert_awaited_once_with(
-            1008, "First frame must be JSON auth or pair_request"
-        )
+        ws.close.assert_awaited_once_with(1008, "First frame must be JSON auth or pair_request")
 
     async def test_binary_first_frame_no_auth_ok(self, server: Any) -> None:
         """auth_ok must never be sent when the first frame is binary."""
@@ -367,9 +361,7 @@ class TestUnexpectedFirstFrameType:
 
     async def test_audio_start_as_first_frame_rejected(self, server: Any) -> None:
         """audio_start before auth must be treated as protocol violation."""
-        ws = _make_ws(
-            [json.dumps({"type": "audio_start", "sample_rate": 16000, "channels": 1})]
-        )
+        ws = _make_ws([json.dumps({"type": "audio_start", "sample_rate": 16000, "channels": 1})])
 
         await server._handle_connection(ws)
 
@@ -533,9 +525,7 @@ class TestAudioEndOutsideSession:
 
 
 class TestSampleRateClamping:
-    async def _run_audio_start(
-        self, server: Any, sample_rate: Any
-    ) -> tuple[int, int]:
+    async def _run_audio_start(self, server: Any, sample_rate: Any) -> tuple[int, int]:
         """Drive _message_loop with a single audio_start and return captured
         (audio_sample_rate, audio_channels) via a spy on _handle_audio."""
         node = _Node()
@@ -548,9 +538,7 @@ class TestSampleRateClamping:
         server._handle_audio = _spy_handle_audio
 
         frames: list[Any] = [
-            json.dumps(
-                {"type": "audio_start", "sample_rate": sample_rate, "channels": 1}
-            ),
+            json.dumps({"type": "audio_start", "sample_rate": sample_rate, "channels": 1}),
             b"\x00" * 16,
             json.dumps({"type": "audio_end"}),
         ]
@@ -601,9 +589,7 @@ class TestChannelClamping:
         server._handle_audio = _spy
 
         frames: list[Any] = [
-            json.dumps(
-                {"type": "audio_start", "sample_rate": 16000, "channels": channels}
-            ),
+            json.dumps({"type": "audio_start", "sample_rate": 16000, "channels": channels}),
             b"\x00" * 16,
             json.dumps({"type": "audio_end"}),
         ]
@@ -699,9 +685,7 @@ class TestSpuriousAuthFrame:
         node = _Node()
 
         frames: list[Any] = [
-            json.dumps(
-                {"type": "auth", "node_id": "proto-node", "token": "whatever"}
-            ),
+            json.dumps({"type": "auth", "node_id": "proto-node", "token": "whatever"}),
         ]
         ws = _make_ws(frames)
 

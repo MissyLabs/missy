@@ -89,14 +89,10 @@ class ScreencastChannel(BaseChannel):
     # ------------------------------------------------------------------
 
     def receive(self) -> ChannelMessage | None:
-        raise NotImplementedError(
-            "ScreencastChannel is event-driven; use start() instead"
-        )
+        raise NotImplementedError("ScreencastChannel is event-driven; use start() instead")
 
     def send(self, message: str) -> None:
-        raise NotImplementedError(
-            "ScreencastChannel is event-driven; use start() instead"
-        )
+        raise NotImplementedError("ScreencastChannel is event-driven; use start() instead")
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -226,9 +222,7 @@ class ScreencastChannel(BaseChannel):
 
         thread.join(timeout=10)
         if thread.is_alive():
-            logger.warning(
-                "ScreencastChannel.stop(): background thread did not exit cleanly."
-            )
+            logger.warning("ScreencastChannel.stop(): background thread did not exit cleanly.")
 
         self._thread = None
         self._server = None

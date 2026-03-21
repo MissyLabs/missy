@@ -282,7 +282,7 @@ class TestMultiCameraStatusCleanup:
             path = f"/dev/video{i}"
             device = CameraDevice(path, f"Cam {i}", "046d", f"085{i}", f"usb-{i}")
             handle = MagicMock()
-            handle.is_open = (i % 2 == 0)  # alternate open/closed
+            handle.is_open = i % 2 == 0  # alternate open/closed
             mgr._handles[path] = handle
             mgr._devices[path] = device
 
@@ -321,10 +321,7 @@ class TestHealthMonitorEdgeCases:
             except Exception as e:
                 errors.append(e)
 
-        threads = [
-            threading.Thread(target=worker, args=(i % 2 == 0,))
-            for i in range(10)
-        ]
+        threads = [threading.Thread(target=worker, args=(i % 2 == 0,)) for i in range(10)]
         for t in threads:
             t.start()
         for t in threads:
@@ -510,10 +507,7 @@ class TestSceneSessionEdgeCases:
             for i in range(50):
                 session.add_observation(f"{label}-{i}")
 
-        threads = [
-            threading.Thread(target=worker, args=(f"t{i}",))
-            for i in range(5)
-        ]
+        threads = [threading.Thread(target=worker, args=(f"t{i}",)) for i in range(5)]
         for t in threads:
             t.start()
         for t in threads:

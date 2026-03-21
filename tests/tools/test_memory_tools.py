@@ -34,7 +34,9 @@ def populated_store(memory_store):
         memory_store.add_turn(t)
 
     s = SummaryRecord.new(
-        "sess1", depth=0, content="Discussion about kubernetes deployment issues",
+        "sess1",
+        depth=0,
+        content="Discussion about kubernetes deployment issues",
         source_turn_ids=["t1", "t2"],
         time_range_start="2026-01-01T00:00:00",
         time_range_end="2026-01-01T01:00:00",
@@ -43,7 +45,9 @@ def populated_store(memory_store):
     memory_store.add_summary(s)
 
     lc = LargeContentRecord.new(
-        "sess1", "shell_exec", "x" * 100000,
+        "sess1",
+        "shell_exec",
+        "x" * 100000,
         summary="Large kubectl output",
     )
     memory_store.store_large_content(lc)
@@ -61,8 +65,10 @@ class TestMemorySearchTool:
         store, _, _ = populated_store
         tool = MemorySearchTool()
         result = tool.execute(
-            query="kubernetes", scope="messages",
-            _memory_store=store, _session_id="sess1",
+            query="kubernetes",
+            scope="messages",
+            _memory_store=store,
+            _session_id="sess1",
         )
         assert result.success
         assert "Messages" in result.output
@@ -72,7 +78,9 @@ class TestMemorySearchTool:
         store, _, _ = populated_store
         tool = MemorySearchTool()
         result = tool.execute(
-            query="kubernetes", scope="summaries", _memory_store=store,
+            query="kubernetes",
+            scope="summaries",
+            _memory_store=store,
         )
         assert result.success
         assert "Summaries" in result.output
@@ -105,7 +113,9 @@ class TestMemorySearchTool:
         store, _, _ = populated_store
         tool = MemorySearchTool()
         result = tool.execute(
-            query="kubernetes", session_id="nonexistent_session", _memory_store=store,
+            query="kubernetes",
+            session_id="nonexistent_session",
+            _memory_store=store,
         )
         assert "No results" in result.output
 

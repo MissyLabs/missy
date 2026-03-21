@@ -62,9 +62,7 @@ def _run_hatching(tmp_path: Path) -> HatchingState:
 # ---------------------------------------------------------------------------
 
 
-def test_full_hatching_creates_persona(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_full_hatching_creates_persona(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """HatchingManager.run_hatching() must create persona.yaml via PersonaManager.
 
     After a successful non-interactive hatch the persona file must exist at the
@@ -120,9 +118,7 @@ def test_hatching_persona_feeds_behavior_layer(
 # ---------------------------------------------------------------------------
 
 
-def test_hatched_persona_editable(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_hatched_persona_editable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """After hatching, editing the persona and rebuilding BehaviorLayer reflects changes.
 
     Editing the name and tone must be visible in the shaped system prompt
@@ -154,9 +150,7 @@ def test_hatched_persona_editable(
 # ---------------------------------------------------------------------------
 
 
-def test_hatching_resume_after_partial(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_hatching_resume_after_partial(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """A partially completed hatching can be resumed and still produce a persona.
 
     We simulate a partial run by pre-writing a state file that marks two steps
@@ -202,9 +196,7 @@ def test_hatching_resume_after_partial(
 # ---------------------------------------------------------------------------
 
 
-def test_persona_reset_after_hatching(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_persona_reset_after_hatching(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Calling PersonaManager.reset() after hatching restores factory defaults.
 
     The BehaviorLayer must still be constructable and usable after the reset
@@ -234,9 +226,7 @@ def test_persona_reset_after_hatching(
 # ---------------------------------------------------------------------------
 
 
-def test_behavior_tone_matches_persona(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_behavior_tone_matches_persona(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """A persona with tone=['formal'] must produce guidelines mentioning formal style.
 
     get_response_guidelines() is called with user_tone='formal' in the context;
@@ -267,9 +257,7 @@ def test_behavior_tone_matches_persona(
 # ---------------------------------------------------------------------------
 
 
-def test_persona_backup_survives_hatching(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_persona_backup_survives_hatching(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Modifying the persona after hatching creates a backup; rollback restores state.
 
     After hatching + save, at least one backup must exist in the backup directory.
@@ -304,9 +292,7 @@ def test_persona_backup_survives_hatching(
 # ---------------------------------------------------------------------------
 
 
-def test_hatching_memory_seed_exists(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_hatching_memory_seed_exists(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """After hatching, the SQLite memory DB must exist and contain the welcome turn.
 
     We connect directly with sqlite3 to avoid importing SQLiteMemoryStore in a
@@ -328,9 +314,7 @@ def test_hatching_memory_seed_exists(
 
     conn = sqlite3.connect(str(db_path))
     try:
-        cursor = conn.execute(
-            "SELECT content FROM turns WHERE session_id = 'hatching' LIMIT 1"
-        )
+        cursor = conn.execute("SELECT content FROM turns WHERE session_id = 'hatching' LIMIT 1")
         row = cursor.fetchone()
         assert row is not None, "Welcome turn must be present in turns table"
         assert "hatching" in row[0].lower() or "ready" in row[0].lower(), (

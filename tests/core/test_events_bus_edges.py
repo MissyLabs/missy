@@ -27,8 +27,10 @@ class TestAuditEventEdgeCases:
 
     def test_now_factory(self):
         event = AuditEvent.now(
-            session_id="s1", task_id="t1",
-            event_type="test.event", category="network",
+            session_id="s1",
+            task_id="t1",
+            event_type="test.event",
+            category="network",
             result="allow",
         )
         assert event.session_id == "s1"
@@ -38,9 +40,12 @@ class TestAuditEventEdgeCases:
 
     def test_now_with_detail(self):
         event = AuditEvent.now(
-            session_id="s1", task_id="t1",
-            event_type="test.event", category="network",
-            result="deny", detail={"host": "evil.com"},
+            session_id="s1",
+            task_id="t1",
+            event_type="test.event",
+            category="network",
+            result="deny",
+            detail={"host": "evil.com"},
             policy_rule="block-evil",
         )
         assert event.detail["host"] == "evil.com"
@@ -51,27 +56,35 @@ class TestAuditEventEdgeCases:
         with pytest.raises(ValueError, match="timezone-aware"):
             AuditEvent(
                 timestamp=datetime(2026, 3, 19, 12, 0, 0),  # no tzinfo
-                session_id="s1", task_id="t1",
-                event_type="test", category="network",
+                session_id="s1",
+                task_id="t1",
+                event_type="test",
+                category="network",
                 result="allow",
             )
 
     def test_utc_timestamp_ok(self):
         event = AuditEvent(
             timestamp=datetime.now(tz=UTC),
-            session_id="s1", task_id="t1",
-            event_type="test", category="network",
+            session_id="s1",
+            task_id="t1",
+            event_type="test",
+            category="network",
             result="allow",
         )
         assert event.timestamp.tzinfo is not None
 
     def test_non_utc_timezone_ok(self):
         """Any timezone-aware datetime should be accepted."""
-        eastern = timezone(offset=datetime.now(tz=UTC).utcoffset() or __import__("datetime").timedelta(hours=-5))
+        eastern = timezone(
+            offset=datetime.now(tz=UTC).utcoffset() or __import__("datetime").timedelta(hours=-5)
+        )
         event = AuditEvent(
             timestamp=datetime.now(tz=eastern),
-            session_id="s1", task_id="t1",
-            event_type="test", category="network",
+            session_id="s1",
+            task_id="t1",
+            event_type="test",
+            category="network",
             result="allow",
         )
         assert event.timestamp.tzinfo is not None
@@ -89,8 +102,10 @@ class TestEventBusEdgeCases:
         """Publishing with no subscribers should not raise."""
         bus = EventBus()
         event = AuditEvent.now(
-            session_id="s1", task_id="t1",
-            event_type="orphan.event", category="network",
+            session_id="s1",
+            task_id="t1",
+            event_type="orphan.event",
+            category="network",
             result="allow",
         )
         bus.publish(event)
@@ -101,8 +116,10 @@ class TestEventBusEdgeCases:
         received = []
         bus.subscribe("test.event", lambda e: received.append(e))
         event = AuditEvent.now(
-            session_id="s1", task_id="t1",
-            event_type="test.event", category="network",
+            session_id="s1",
+            task_id="t1",
+            event_type="test.event",
+            category="network",
             result="allow",
         )
         bus.publish(event)
@@ -118,11 +135,15 @@ class TestEventBusEdgeCases:
 
         bus.subscribe("test.event", callback)
         bus.unsubscribe("test.event", callback)
-        bus.publish(AuditEvent.now(
-            session_id="s1", task_id="t1",
-            event_type="test.event", category="network",
-            result="allow",
-        ))
+        bus.publish(
+            AuditEvent.now(
+                session_id="s1",
+                task_id="t1",
+                event_type="test.event",
+                category="network",
+                result="allow",
+            )
+        )
         assert len(received) == 0
 
     def test_unsubscribe_nonexistent(self):
@@ -146,11 +167,15 @@ class TestEventBusEdgeCases:
         received = []
         bus.subscribe("test", lambda e: (_ for _ in ()).throw(RuntimeError("boom")))
         bus.subscribe("test", lambda e: received.append(e))
-        bus.publish(AuditEvent.now(
-            session_id="s1", task_id="t1",
-            event_type="test", category="network",
-            result="allow",
-        ))
+        bus.publish(
+            AuditEvent.now(
+                session_id="s1",
+                task_id="t1",
+                event_type="test",
+                category="network",
+                result="allow",
+            )
+        )
         # Second callback should still fire despite first one failing
         # Note: generator throw is not called until iterated, so this won't fail
         # Let's use a proper failing callback instead
@@ -162,73 +187,121 @@ class TestEventBusEdgeCases:
 
         bus2.subscribe("test", bad_callback)
         bus2.subscribe("test", lambda e: received2.append(e))
-        bus2.publish(AuditEvent.now(
-            session_id="s1", task_id="t1",
-            event_type="test", category="network",
-            result="allow",
-        ))
+        bus2.publish(
+            AuditEvent.now(
+                session_id="s1",
+                task_id="t1",
+                event_type="test",
+                category="network",
+                result="allow",
+            )
+        )
         assert len(received2) == 1
 
     def test_get_events_no_filter(self):
         bus = EventBus()
         for i in range(5):
-            bus.publish(AuditEvent.now(
-                session_id="s1", task_id=f"t{i}",
-                event_type="test", category="network",
-                result="allow",
-            ))
+            bus.publish(
+                AuditEvent.now(
+                    session_id="s1",
+                    task_id=f"t{i}",
+                    event_type="test",
+                    category="network",
+                    result="allow",
+                )
+            )
         assert len(bus.get_events()) == 5
 
     def test_get_events_filter_by_category(self):
         bus = EventBus()
-        bus.publish(AuditEvent.now(
-            session_id="s1", task_id="t1",
-            event_type="a", category="network", result="allow",
-        ))
-        bus.publish(AuditEvent.now(
-            session_id="s1", task_id="t2",
-            event_type="b", category="filesystem", result="allow",
-        ))
+        bus.publish(
+            AuditEvent.now(
+                session_id="s1",
+                task_id="t1",
+                event_type="a",
+                category="network",
+                result="allow",
+            )
+        )
+        bus.publish(
+            AuditEvent.now(
+                session_id="s1",
+                task_id="t2",
+                event_type="b",
+                category="filesystem",
+                result="allow",
+            )
+        )
         network_events = bus.get_events(category="network")
         assert len(network_events) == 1
         assert network_events[0].task_id == "t1"
 
     def test_get_events_filter_by_result(self):
         bus = EventBus()
-        bus.publish(AuditEvent.now(
-            session_id="s1", task_id="t1",
-            event_type="a", category="network", result="allow",
-        ))
-        bus.publish(AuditEvent.now(
-            session_id="s1", task_id="t2",
-            event_type="b", category="network", result="deny",
-        ))
+        bus.publish(
+            AuditEvent.now(
+                session_id="s1",
+                task_id="t1",
+                event_type="a",
+                category="network",
+                result="allow",
+            )
+        )
+        bus.publish(
+            AuditEvent.now(
+                session_id="s1",
+                task_id="t2",
+                event_type="b",
+                category="network",
+                result="deny",
+            )
+        )
         denied = bus.get_events(result="deny")
         assert len(denied) == 1
 
     def test_get_events_filter_by_session(self):
         bus = EventBus()
-        bus.publish(AuditEvent.now(
-            session_id="s1", task_id="t1",
-            event_type="a", category="network", result="allow",
-        ))
-        bus.publish(AuditEvent.now(
-            session_id="s2", task_id="t2",
-            event_type="b", category="network", result="allow",
-        ))
+        bus.publish(
+            AuditEvent.now(
+                session_id="s1",
+                task_id="t1",
+                event_type="a",
+                category="network",
+                result="allow",
+            )
+        )
+        bus.publish(
+            AuditEvent.now(
+                session_id="s2",
+                task_id="t2",
+                event_type="b",
+                category="network",
+                result="allow",
+            )
+        )
         s1_events = bus.get_events(session_id="s1")
         assert len(s1_events) == 1
 
     def test_get_events_combined_filters(self):
         bus = EventBus()
-        bus.publish(AuditEvent.now(
-            session_id="s1", task_id="t1",
-            event_type="net.req", category="network", result="deny",
-        ))
-        bus.publish(AuditEvent.now(
-            session_id="s1", task_id="t2",
-            event_type="net.req", category="network", result="allow",
-        ))
+        bus.publish(
+            AuditEvent.now(
+                session_id="s1",
+                task_id="t1",
+                event_type="net.req",
+                category="network",
+                result="deny",
+            )
+        )
+        bus.publish(
+            AuditEvent.now(
+                session_id="s1",
+                task_id="t2",
+                event_type="net.req",
+                category="network",
+                result="allow",
+            )
+        )
         events = bus.get_events(session_id="s1", result="deny")
         assert len(events) == 1
         assert events[0].task_id == "t1"
@@ -236,10 +309,15 @@ class TestEventBusEdgeCases:
     def test_clear(self):
         bus = EventBus()
         bus.subscribe("test", lambda e: None)
-        bus.publish(AuditEvent.now(
-            session_id="s1", task_id="t1",
-            event_type="test", category="network", result="allow",
-        ))
+        bus.publish(
+            AuditEvent.now(
+                session_id="s1",
+                task_id="t1",
+                event_type="test",
+                category="network",
+                result="allow",
+            )
+        )
         bus.clear()
         assert bus.get_events() == []
 
@@ -257,11 +335,15 @@ class TestEventBusEdgeCases:
 
         def publish_many():
             for _ in range(50):
-                bus.publish(AuditEvent.now(
-                    session_id="s1", task_id="t1",
-                    event_type="concurrent", category="network",
-                    result="allow",
-                ))
+                bus.publish(
+                    AuditEvent.now(
+                        session_id="s1",
+                        task_id="t1",
+                        event_type="concurrent",
+                        category="network",
+                        result="allow",
+                    )
+                )
 
         threads = [threading.Thread(target=publish_many) for _ in range(5)]
         for t in threads:
@@ -277,10 +359,15 @@ class TestEventBusEdgeCases:
         r1, r2 = [], []
         bus.subscribe("multi", lambda e: r1.append(e))
         bus.subscribe("multi", lambda e: r2.append(e))
-        bus.publish(AuditEvent.now(
-            session_id="s1", task_id="t1",
-            event_type="multi", category="network", result="allow",
-        ))
+        bus.publish(
+            AuditEvent.now(
+                session_id="s1",
+                task_id="t1",
+                event_type="multi",
+                category="network",
+                result="allow",
+            )
+        )
         assert len(r1) == 1
         assert len(r2) == 1
 
@@ -298,7 +385,8 @@ class TestPolicyViolationError:
 
         err = PolicyViolationError(
             "Network access denied to evil.com",
-            category="network", detail="host blocked",
+            category="network",
+            detail="host blocked",
         )
         assert "evil.com" in str(err)
 
@@ -330,8 +418,10 @@ class TestModuleSingleton:
     def test_event_bus_is_usable(self):
         # Publish to module-level bus
         event = AuditEvent.now(
-            session_id="test", task_id="test",
-            event_type="test.singleton", category="network",
+            session_id="test",
+            task_id="test",
+            event_type="test.singleton",
+            category="network",
             result="allow",
         )
         event_bus.publish(event)

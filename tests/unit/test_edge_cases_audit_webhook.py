@@ -22,6 +22,7 @@ from unittest.mock import patch
 # AuditLogger empty line in violations
 # ---------------------------------------------------------------------------
 
+
 class TestAuditLoggerViolationEmptyLines:
     """Cover audit_logger.py line 207."""
 
@@ -72,6 +73,7 @@ class TestAuditLoggerViolationEmptyLines:
 # Network policy unparseable IP
 # ---------------------------------------------------------------------------
 
+
 class TestNetworkPolicyUnparseableIP:
     """Cover network.py lines 157-158."""
 
@@ -93,14 +95,17 @@ class TestNetworkPolicyUnparseableIP:
         ]
         import contextlib
 
-        with patch("missy.policy.network.socket.getaddrinfo", return_value=fake_results), \
-             contextlib.suppress(Exception):
+        with (
+            patch("missy.policy.network.socket.getaddrinfo", return_value=fake_results),
+            contextlib.suppress(Exception),
+        ):
             engine.check_host("example.com", 80)
 
 
 # ---------------------------------------------------------------------------
 # Voice registry permission error on load
 # ---------------------------------------------------------------------------
+
 
 class TestVoiceRegistryPermissionError:
     """Cover voice/registry.py lines 184-188 via different error types."""
@@ -143,6 +148,7 @@ class TestVoiceRegistryPermissionError:
 # Webhook XFF edge cases
 # ---------------------------------------------------------------------------
 
+
 class TestWebhookXFFEdgeCases:
     """Cover webhook.py line 127 XFF parsing."""
 
@@ -170,6 +176,7 @@ class TestWebhookXFFEdgeCases:
 # Tool result truncation edge cases
 # ---------------------------------------------------------------------------
 
+
 class TestToolResultTruncationEdge:
     """Edge cases for tool result truncation."""
 
@@ -189,8 +196,7 @@ class TestToolResultTruncationEdge:
         original_len = len(content)
         if content and len(content) > _MAX:
             content = (
-                content[:_MAX]
-                + f"\n[TRUNCATED: output was {original_len} chars, limit is {_MAX}]"
+                content[:_MAX] + f"\n[TRUNCATED: output was {original_len} chars, limit is {_MAX}]"
             )
         assert "[TRUNCATED:" in content
 
@@ -214,6 +220,7 @@ class TestToolResultTruncationEdge:
 # ---------------------------------------------------------------------------
 # Calculator additional edge cases
 # ---------------------------------------------------------------------------
+
 
 class TestCalculatorEdgeCases:
     """Additional edge cases for calculator."""
@@ -273,6 +280,7 @@ class TestCalculatorEdgeCases:
 # Provider registry edge cases
 # ---------------------------------------------------------------------------
 
+
 class TestProviderConfigEdgeCases:
     """Provider configuration edge cases."""
 
@@ -297,6 +305,7 @@ class TestProviderConfigEdgeCases:
 # ---------------------------------------------------------------------------
 # Input sanitizer MAX_INPUT_LENGTH
 # ---------------------------------------------------------------------------
+
 
 class TestSanitizerMaxLength:
     """Test sanitizer input length truncation."""

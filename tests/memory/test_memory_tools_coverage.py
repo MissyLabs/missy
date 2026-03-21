@@ -143,9 +143,7 @@ class TestMemorySearchTool:
 
     def test_limit_capped_at_50(self):
         store = make_mock_store(turns=[FakeTurn()])
-        self.tool.execute(
-            query="test", scope="messages", limit=100, _memory_store=store
-        )
+        self.tool.execute(query="test", scope="messages", limit=100, _memory_store=store)
         store.search.assert_called_once_with("test", limit=50, session_id=None)
 
     def test_message_search_error(self):

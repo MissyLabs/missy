@@ -44,8 +44,15 @@ def _display_env() -> dict[str, str]:
     (API keys, tokens, etc.) to subprocess environments.
     """
     _SAFE_VARS = (
-        "PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM",
-        "XDG_RUNTIME_DIR", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS",
+        "PATH",
+        "HOME",
+        "USER",
+        "LANG",
+        "LC_ALL",
+        "TERM",
+        "XDG_RUNTIME_DIR",
+        "XAUTHORITY",
+        "DBUS_SESSION_BUS_ADDRESS",
     )
     env = {k: os.environ[k] for k in _SAFE_VARS if k in os.environ}
     env["DISPLAY"] = os.environ.get("DISPLAY", ":0")
@@ -155,7 +162,11 @@ class X11ScreenshotTool(BaseTool):
     def execute(
         self, *, path: str = "/tmp/screenshot.png", region: str = "", **_: Any
     ) -> ToolResult:
-        cmd = f"scrot -a {shlex.quote(region)} {shlex.quote(path)}" if region else f"scrot {shlex.quote(path)}"
+        cmd = (
+            f"scrot -a {shlex.quote(region)} {shlex.quote(path)}"
+            if region
+            else f"scrot {shlex.quote(path)}"
+        )
 
         result = _run(cmd)
 
@@ -487,7 +498,11 @@ class X11ReadScreenTool(BaseTool):
             except Exception:
                 logger.debug("Browser screenshot fallback failed", exc_info=True)
 
-        cmd = f"scrot -a {shlex.quote(region)} {shlex.quote(path)}" if region else f"scrot {shlex.quote(path)}"
+        cmd = (
+            f"scrot -a {shlex.quote(region)} {shlex.quote(path)}"
+            if region
+            else f"scrot {shlex.quote(path)}"
+        )
         result = _run(cmd)
         if result.returncode != 0:
             err = result.stderr.strip() or result.stdout.strip()

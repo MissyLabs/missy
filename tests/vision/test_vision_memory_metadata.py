@@ -202,9 +202,7 @@ class TestVisionMemoryMetadataFiltering:
 class TestHealthMonitorLoadCorruptJson:
     """load() must not raise when rows contain invalid JSON."""
 
-    def _make_db_with_rows(
-        self, tmp_path: Path, rows: list[tuple[str, str]]
-    ) -> Path:
+    def _make_db_with_rows(self, tmp_path: Path, rows: list[tuple[str, str]]) -> Path:
         """Create a real SQLite DB with the given (device, data) rows."""
         db = tmp_path / "health.db"
         conn = sqlite3.connect(str(db))
@@ -254,16 +252,18 @@ class TestHealthMonitorLoadCorruptJson:
 
     def test_corrupt_row_does_not_prevent_valid_rows(self, tmp_path: Path) -> None:
         """A mix of corrupt and valid rows: only valid rows contribute stats."""
-        valid_data = json.dumps({
-            "total_captures": 10,
-            "successful_captures": 8,
-            "failed_captures": 2,
-            "total_quality": 7.2,
-            "total_latency_ms": 1500.0,
-            "last_seen": time.time(),
-            "last_error": "",
-            "consecutive_failures": 0,
-        })
+        valid_data = json.dumps(
+            {
+                "total_captures": 10,
+                "successful_captures": 8,
+                "failed_captures": 2,
+                "total_quality": 7.2,
+                "total_latency_ms": 1500.0,
+                "last_seen": time.time(),
+                "last_error": "",
+                "consecutive_failures": 0,
+            }
+        )
         db = self._make_db_with_rows(
             tmp_path,
             [
@@ -385,9 +385,7 @@ class TestHealthMonitorAutoSaveCounterReset:
 
             mock_save.assert_not_called()
 
-    def test_concurrent_captures_save_exactly_once_per_interval(
-        self, tmp_path: Path
-    ) -> None:
+    def test_concurrent_captures_save_exactly_once_per_interval(self, tmp_path: Path) -> None:
         """Concurrent threads hitting the boundary call save() exactly once.
 
         This is the core race-condition test.  The counter reset inside the

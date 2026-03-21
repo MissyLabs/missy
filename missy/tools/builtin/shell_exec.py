@@ -35,15 +35,37 @@ _MAX_COMMAND_LENGTH = 8192  # 8 KB — prevents resource exhaustion in shlex/pol
 #: Environment variables safe to inherit into shell subprocesses.
 #: Everything else (API keys, tokens, secrets) is stripped to prevent
 #: accidental leakage via commands like ``env`` or ``printenv``.
-_SAFE_ENV_VARS = frozenset({
-    "PATH", "HOME", "USER", "LOGNAME", "SHELL",
-    "LANG", "LC_ALL", "LC_CTYPE", "LANGUAGE",
-    "TERM", "COLORTERM", "COLUMNS", "LINES",
-    "XDG_RUNTIME_DIR", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME",
-    "TMPDIR", "TMP", "TEMP",
-    "PWD", "OLDPWD", "HOSTNAME", "DISPLAY", "WAYLAND_DISPLAY",
-    "DBUS_SESSION_BUS_ADDRESS", "SSH_AUTH_SOCK",
-})
+_SAFE_ENV_VARS = frozenset(
+    {
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "LANGUAGE",
+        "TERM",
+        "COLORTERM",
+        "COLUMNS",
+        "LINES",
+        "XDG_RUNTIME_DIR",
+        "XDG_DATA_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_CACHE_HOME",
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+        "PWD",
+        "OLDPWD",
+        "HOSTNAME",
+        "DISPLAY",
+        "WAYLAND_DISPLAY",
+        "DBUS_SESSION_BUS_ADDRESS",
+        "SSH_AUTH_SOCK",
+    }
+)
 
 
 class ShellExecTool(BaseTool):
@@ -82,6 +104,7 @@ class ShellExecTool(BaseTool):
                 self._sandbox = get_sandbox(sandbox_config)
             except Exception:
                 import logging
+
                 logging.getLogger(__name__).debug(
                     "Sandbox init failed; shell commands will run unsandboxed",
                     exc_info=True,

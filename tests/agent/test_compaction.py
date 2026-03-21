@@ -31,6 +31,7 @@ def summarizer():
     resp.content = "Summary of the conversation."
     provider.chat.return_value = resp
     from missy.agent.summarizer import Summarizer
+
     return Summarizer(provider)
 
 
@@ -85,9 +86,11 @@ class TestCompactSession:
         # Add enough turns to create >= 4 leaf summaries
         _add_turns(memory_store, "sess1", 100, content_size=2000)
         stats = compact_session(
-            "sess1", memory_store, summarizer,
+            "sess1",
+            memory_store,
+            summarizer,
             fresh_tail_count=16,
-            leaf_chunk_tokens=500,     # small chunks to force many leaves
+            leaf_chunk_tokens=500,  # small chunks to force many leaves
             condensed_min_fanout=4,
         )
         assert stats["leaf_summaries_created"] >= 4
@@ -113,7 +116,9 @@ class TestCompactIfNeeded:
 
     def test_compacts_when_large(self, memory_store, summarizer):
         _add_turns(memory_store, "sess1", 50, content_size=1000)
-        budget = TokenBudget(total=100, system_reserve=0, tool_definitions_reserve=0)  # very small budget forces compaction
+        budget = TokenBudget(
+            total=100, system_reserve=0, tool_definitions_reserve=0
+        )  # very small budget forces compaction
         result = compact_if_needed("sess1", memory_store, summarizer, budget)
         assert result is not None
         assert result["leaf_summaries_created"] > 0

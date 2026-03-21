@@ -229,13 +229,9 @@ class TestEightCameras:
 
     @patch("missy.vision.multi_camera.get_health_monitor")
     @patch("missy.vision.multi_camera.CameraHandle")
-    def test_eight_cameras_health_monitor_called_eight_times(
-        self, MockHandle, mock_get_hm
-    ):
+    def test_eight_cameras_health_monitor_called_eight_times(self, MockHandle, mock_get_hm):
         paths = [f"/dev/video{i}" for i in range(8)]
-        MockHandle.side_effect = [
-            _mock_handle(capture_result=_success(p)) for p in paths
-        ]
+        MockHandle.side_effect = [_mock_handle(capture_result=_success(p)) for p in paths]
         mock_health = MagicMock()
         mock_get_hm.return_value = mock_health
 
@@ -254,13 +250,9 @@ class TestEightCameras:
 
     @patch("missy.vision.multi_camera.get_health_monitor")
     @patch("missy.vision.multi_camera.CameraHandle")
-    def test_eight_cameras_all_devices_appear_in_results(
-        self, MockHandle, mock_get_hm
-    ):
+    def test_eight_cameras_all_devices_appear_in_results(self, MockHandle, mock_get_hm):
         paths = [f"/dev/video{i}" for i in range(8)]
-        MockHandle.side_effect = [
-            _mock_handle(capture_result=_success(p)) for p in paths
-        ]
+        MockHandle.side_effect = [_mock_handle(capture_result=_success(p)) for p in paths]
         mock_get_hm.return_value = MagicMock()
 
         mgr = MultiCameraManager(max_workers=8)
@@ -281,8 +273,8 @@ class TestBestResultResolutionRanking:
     """best_result must return the capture with the largest pixel count."""
 
     def test_three_cameras_different_resolutions_picks_largest(self):
-        r_vga = _success("/dev/video0", width=640, height=480)    # 307,200 px
-        r_hd = _success("/dev/video1", width=1280, height=720)    # 921,600 px
+        r_vga = _success("/dev/video0", width=640, height=480)  # 307,200 px
+        r_hd = _success("/dev/video1", width=1280, height=720)  # 921,600 px
         r_fhd = _success("/dev/video2", width=1920, height=1080)  # 2,073,600 px
 
         mcr = MultiCaptureResult(
@@ -340,9 +332,7 @@ class TestBestResultResolutionRanking:
         )
         r_real = _success("/dev/video1", width=640, height=480)
 
-        mcr = MultiCaptureResult(
-            results={"/dev/video0": r_zero, "/dev/video1": r_real}
-        )
+        mcr = MultiCaptureResult(results={"/dev/video0": r_zero, "/dev/video1": r_real})
 
         best = mcr.best_result
         assert best is r_real
@@ -432,13 +422,9 @@ class TestRapidAddRemoveCycles:
 
     @patch("missy.vision.multi_camera.get_health_monitor")
     @patch("missy.vision.multi_camera.CameraHandle")
-    def test_add_remove_interleaved_with_capture_all(
-        self, MockHandle, mock_get_hm
-    ):
+    def test_add_remove_interleaved_with_capture_all(self, MockHandle, mock_get_hm):
         """Adding and removing cameras while capture_all runs must not raise."""
-        MockHandle.side_effect = lambda path, cfg: _mock_handle(
-            capture_result=_success(path)
-        )
+        MockHandle.side_effect = lambda path, cfg: _mock_handle(capture_result=_success(path))
         mock_get_hm.return_value = MagicMock()
 
         mgr = MultiCameraManager()
@@ -609,9 +595,7 @@ class TestDoubleCloseAll:
 
 class TestCaptureAfterCloseAll:
     @patch("missy.vision.multi_camera.CameraHandle")
-    def test_capture_all_after_close_all_returns_no_camera_error(
-        self, MockHandle
-    ):
+    def test_capture_all_after_close_all_returns_no_camera_error(self, MockHandle):
         MockHandle.return_value = _mock_handle()
         mgr = MultiCameraManager()
         mgr.add_camera(_device("/dev/video0"))
@@ -636,9 +620,7 @@ class TestCaptureAfterCloseAll:
         assert best.success is False
 
     @patch("missy.vision.multi_camera.CameraHandle")
-    def test_capture_all_after_double_close_all_still_fails_cleanly(
-        self, MockHandle
-    ):
+    def test_capture_all_after_double_close_all_still_fails_cleanly(self, MockHandle):
         MockHandle.return_value = _mock_handle()
         mgr = MultiCameraManager()
         mgr.add_camera(_device("/dev/video0"))
@@ -653,11 +635,12 @@ class TestCaptureAfterCloseAll:
 
     @patch("missy.vision.multi_camera.get_health_monitor")
     @patch("missy.vision.multi_camera.CameraHandle")
-    def test_re_add_after_close_all_capture_succeeds(
-        self, MockHandle, mock_get_hm
-    ):
+    def test_re_add_after_close_all_capture_succeeds(self, MockHandle, mock_get_hm):
         """After close_all, adding a camera again and capturing should work."""
-        MockHandle.side_effect = [_mock_handle(), _mock_handle(capture_result=_success("/dev/video0"))]
+        MockHandle.side_effect = [
+            _mock_handle(),
+            _mock_handle(capture_result=_success("/dev/video0")),
+        ]
         mock_get_hm.return_value = MagicMock()
 
         mgr = MultiCameraManager()
@@ -678,9 +661,7 @@ class TestCaptureAfterCloseAll:
 
 class TestDiscoverWithVendorFilterEmpty:
     @patch("missy.vision.multi_camera.get_discovery")
-    def test_vendor_filter_on_empty_discover_returns_empty(
-        self, mock_get_discovery
-    ):
+    def test_vendor_filter_on_empty_discover_returns_empty(self, mock_get_discovery):
         mock_discovery = MagicMock()
         mock_discovery.discover.return_value = []
         mock_get_discovery.return_value = mock_discovery
@@ -692,9 +673,7 @@ class TestDiscoverWithVendorFilterEmpty:
         assert mgr.device_count == 0
 
     @patch("missy.vision.multi_camera.get_discovery")
-    def test_vendor_filter_none_match_in_populated_list(
-        self, mock_get_discovery
-    ):
+    def test_vendor_filter_none_match_in_populated_list(self, mock_get_discovery):
         mock_discovery = MagicMock()
         mock_discovery.discover.return_value = [
             _device("/dev/video0", vendor_id="1234"),
@@ -731,9 +710,7 @@ class TestDiscoverWithVendorFilterEmpty:
         assert mgr.device_count == 2
 
     @patch("missy.vision.multi_camera.get_discovery")
-    def test_vendor_filter_empty_string_means_no_filter(
-        self, mock_get_discovery
-    ):
+    def test_vendor_filter_empty_string_means_no_filter(self, mock_get_discovery):
         """An empty vendor_filter string must not filter anything out."""
         mock_discovery = MagicMock()
         mock_discovery.discover.return_value = []
@@ -755,13 +732,9 @@ class TestDiscoverWithVendorFilterEmpty:
 class TestHealthMonitorIntegration:
     @patch("missy.vision.multi_camera.get_health_monitor")
     @patch("missy.vision.multi_camera.CameraHandle")
-    def test_record_capture_called_once_per_camera(
-        self, MockHandle, mock_get_hm
-    ):
+    def test_record_capture_called_once_per_camera(self, MockHandle, mock_get_hm):
         paths = ["/dev/video0", "/dev/video1", "/dev/video2"]
-        MockHandle.side_effect = [
-            _mock_handle(capture_result=_success(p)) for p in paths
-        ]
+        MockHandle.side_effect = [_mock_handle(capture_result=_success(p)) for p in paths]
         mock_health = MagicMock()
         mock_get_hm.return_value = mock_health
 
@@ -775,9 +748,7 @@ class TestHealthMonitorIntegration:
 
     @patch("missy.vision.multi_camera.get_health_monitor")
     @patch("missy.vision.multi_camera.CameraHandle")
-    def test_record_capture_called_with_correct_success_flag(
-        self, MockHandle, mock_get_hm
-    ):
+    def test_record_capture_called_with_correct_success_flag(self, MockHandle, mock_get_hm):
         r_ok = _success("/dev/video0")
         r_fail = _failure("/dev/video1", error="timeout")
         MockHandle.side_effect = [
@@ -803,9 +774,7 @@ class TestHealthMonitorIntegration:
 
     @patch("missy.vision.multi_camera.get_health_monitor")
     @patch("missy.vision.multi_camera.CameraHandle")
-    def test_record_capture_called_with_device_path(
-        self, MockHandle, mock_get_hm
-    ):
+    def test_record_capture_called_with_device_path(self, MockHandle, mock_get_hm):
         MockHandle.return_value = _mock_handle(capture_result=_success("/dev/video0"))
         mock_health = MagicMock()
         mock_get_hm.return_value = mock_health
@@ -835,9 +804,7 @@ class TestHealthMonitorIntegration:
 
     @patch("missy.vision.multi_camera.get_health_monitor")
     @patch("missy.vision.multi_camera.CameraHandle")
-    def test_record_capture_receives_error_string_on_failure(
-        self, MockHandle, mock_get_hm
-    ):
+    def test_record_capture_receives_error_string_on_failure(self, MockHandle, mock_get_hm):
         r_fail = _failure("/dev/video0", error="USB disconnect")
         MockHandle.return_value = _mock_handle(capture_result=r_fail)
         mock_health = MagicMock()
@@ -871,9 +838,7 @@ class TestHealthMonitorIntegration:
 class TestContextManagerWithCaptureAll:
     @patch("missy.vision.multi_camera.get_health_monitor")
     @patch("missy.vision.multi_camera.CameraHandle")
-    def test_capture_all_inside_context_manager_succeeds(
-        self, MockHandle, mock_get_hm
-    ):
+    def test_capture_all_inside_context_manager_succeeds(self, MockHandle, mock_get_hm):
         r = _success("/dev/video0")
         MockHandle.return_value = _mock_handle(capture_result=r)
         mock_get_hm.return_value = MagicMock()
@@ -888,9 +853,7 @@ class TestContextManagerWithCaptureAll:
 
     @patch("missy.vision.multi_camera.get_health_monitor")
     @patch("missy.vision.multi_camera.CameraHandle")
-    def test_multiple_capture_all_calls_inside_context(
-        self, MockHandle, mock_get_hm
-    ):
+    def test_multiple_capture_all_calls_inside_context(self, MockHandle, mock_get_hm):
         r = _success("/dev/video0")
         MockHandle.return_value = _mock_handle(capture_result=r)
         mock_get_hm.return_value = MagicMock()
@@ -905,18 +868,19 @@ class TestContextManagerWithCaptureAll:
 
     @patch("missy.vision.multi_camera.get_health_monitor")
     @patch("missy.vision.multi_camera.CameraHandle")
-    def test_context_manager_closes_all_on_exception_during_capture(
-        self, MockHandle, mock_get_hm
-    ):
+    def test_context_manager_closes_all_on_exception_during_capture(self, MockHandle, mock_get_hm):
         """Exception raised after capture_all must still trigger close_all."""
         handle = _mock_handle(capture_result=_success("/dev/video0"))
         MockHandle.return_value = handle
         mock_get_hm.return_value = MagicMock()
 
-        with pytest.raises(RuntimeError, match="simulated processing error"), MultiCameraManager() as mgr:
-                mgr.add_camera(_device("/dev/video0"))
-                mgr.capture_all()
-                raise RuntimeError("simulated processing error")
+        with (
+            pytest.raises(RuntimeError, match="simulated processing error"),
+            MultiCameraManager() as mgr,
+        ):
+            mgr.add_camera(_device("/dev/video0"))
+            mgr.capture_all()
+            raise RuntimeError("simulated processing error")
 
         handle.close.assert_called_once()
         assert mgr.device_count == 0

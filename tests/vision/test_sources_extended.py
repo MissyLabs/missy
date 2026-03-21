@@ -217,5 +217,6 @@ class TestImageFrame:
         assert isinstance(result, str)
         # Should be valid base64
         import base64
+
         decoded = base64.b64decode(result)
         assert decoded == b"jpeg"

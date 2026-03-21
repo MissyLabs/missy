@@ -198,8 +198,14 @@ class TestConsolidateFivePlusMessages:
         mc = MemoryConsolidator()
         # All old messages are long prose with no keywords and long user text.
         old = [
-            {"role": "assistant", "content": "Certainly, allow me to elaborate at great length about this topic."},
-            {"role": "assistant", "content": "There are many perspectives to consider here as well."},
+            {
+                "role": "assistant",
+                "content": "Certainly, allow me to elaborate at great length about this topic.",
+            },
+            {
+                "role": "assistant",
+                "content": "There are many perspectives to consider here as well.",
+            },
         ]
         recent = [{"role": "user", "content": f"r{i}"} for i in range(4)]
         _, summary = mc.consolidate(old + recent, "sys")
@@ -705,6 +711,7 @@ class TestApprovalGateSendFn:
 
     def test_send_fn_failure_does_not_abort_approval_flow(self):
         """A crashing send_fn must be swallowed; the approval flow must continue."""
+
         def _bad_send(msg: str) -> None:
             raise OSError("network error")
 
@@ -743,9 +750,7 @@ class TestApprovalGateConcurrency:
 
     def test_three_concurrent_requests_all_resolved(self):
         gate = ApprovalGate(default_timeout=3.0)
-        threads_outcomes = [
-            _request_in_thread(gate, action=f"task-{i}") for i in range(3)
-        ]
+        threads_outcomes = [_request_in_thread(gate, action=f"task-{i}") for i in range(3)]
         pending = _wait_for_pending(gate, count=3, retries=200)
         assert len(pending) == 3
 

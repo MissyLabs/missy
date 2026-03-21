@@ -84,9 +84,7 @@ LANDLOCK_ACCESS_FS_MAKE_SYM: int = 1 << 12
 # --- Composite masks ---
 
 #: All read access rights (files and directories).
-LANDLOCK_ACCESS_FS_READ: int = (
-    LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_READ_DIR
-)
+LANDLOCK_ACCESS_FS_READ: int = LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_READ_DIR
 
 #: All write / mutation access rights.
 LANDLOCK_ACCESS_FS_WRITE: int = (
@@ -317,9 +315,7 @@ class LandlockPolicy:
             self._restrict_self(libc, ruleset_fd)
 
         except OSError as exc:
-            raise RuntimeError(
-                f"Failed to apply Landlock ruleset: {exc}"
-            ) from exc
+            raise RuntimeError(f"Failed to apply Landlock ruleset: {exc}") from exc
         finally:
             for fd in path_fds:
                 with contextlib.suppress(OSError):
@@ -415,11 +411,7 @@ class LandlockPolicy:
         Raises:
             OSError: If the syscall fails.
         """
-        handled = (
-            LANDLOCK_ACCESS_FS_READ
-            | LANDLOCK_ACCESS_FS_WRITE
-            | LANDLOCK_ACCESS_FS_EXECUTE
-        )
+        handled = LANDLOCK_ACCESS_FS_READ | LANDLOCK_ACCESS_FS_WRITE | LANDLOCK_ACCESS_FS_EXECUTE
         attr = _RulesetAttr(handled_access_fs=handled)
         return self._syscall(
             libc,
@@ -547,10 +539,7 @@ class LandlockPolicy:
         if access_type == "read_write":
             return LANDLOCK_ACCESS_FS_READ | LANDLOCK_ACCESS_FS_WRITE
         if access_type == "execute":
-            return (
-                LANDLOCK_ACCESS_FS_READ
-                | LANDLOCK_ACCESS_FS_EXECUTE
-            )
+            return LANDLOCK_ACCESS_FS_READ | LANDLOCK_ACCESS_FS_EXECUTE
         raise ValueError(f"Unknown Landlock access type: {access_type!r}")
 
 

@@ -120,9 +120,7 @@ class TestFirstRunDetection:
         """IN_PROGRESS is treated as incomplete; needs_hatching should be False
         (only UNHATCHED / FAILED require re-entry), but agent is not done."""
         state_path = tmp_path / "hatching.yaml"
-        state_path.write_text(
-            yaml.safe_dump({"status": "in_progress"}), encoding="utf-8"
-        )
+        state_path.write_text(yaml.safe_dump({"status": "in_progress"}), encoding="utf-8")
         mgr = _make_manager(tmp_path)
         # IN_PROGRESS is not UNHATCHED/FAILED so needs_hatching returns False
         assert mgr.needs_hatching() is False
@@ -176,16 +174,12 @@ class TestStepCompletionTracking:
         p1, p2, p3 = _mock_persona_and_memory()
         with p1, p2, p3:
             monkeypatch.setenv("ANTHROPIC_API_KEY", "key-x")
-            mgr = HatchingManager(
-                state_path=state_path, log_path=tmp_path / "log.jsonl"
-            )
+            mgr = HatchingManager(state_path=state_path, log_path=tmp_path / "log.jsonl")
             state = mgr.run_hatching(interactive=False)
 
         assert state.steps_completed.count("validate_environment") == 1
 
-    def test_all_eight_canonical_steps_appear_in_completed(
-        self, tmp_path, monkeypatch
-    ):
+    def test_all_eight_canonical_steps_appear_in_completed(self, tmp_path, monkeypatch):
         _patch_module_paths(monkeypatch, tmp_path)
         p1, p2, p3 = _mock_persona_and_memory()
         with p1, p2, p3:
@@ -261,9 +255,7 @@ class TestStepCompletionTracking:
         p1, p2, p3 = _mock_persona_and_memory()
         with p1, p2, p3, patch.object(HatchingManager, "_save_state", _spy_save):
             monkeypatch.setenv("ANTHROPIC_API_KEY", "key-persist")
-            mgr = HatchingManager(
-                state_path=state_path, log_path=tmp_path / "log.jsonl"
-            )
+            mgr = HatchingManager(state_path=state_path, log_path=tmp_path / "log.jsonl")
             mgr.run_hatching(interactive=False)
 
         # Must have been saved multiple times (at least once per step + initial)
@@ -293,9 +285,7 @@ class TestVisionReadinessCheck:
         assert state.status is HatchingStatus.HATCHED
         assert "check_vision" in state.steps_completed
 
-    def test_vision_opencv_missing_produces_warning_entry_in_log(
-        self, tmp_path, monkeypatch
-    ):
+    def test_vision_opencv_missing_produces_warning_entry_in_log(self, tmp_path, monkeypatch):
         """When cv2 is not importable, the log must record a 'warn' entry for check_vision."""
         _patch_module_paths(monkeypatch, tmp_path)
         log_path = tmp_path / "log.jsonl"
@@ -321,9 +311,7 @@ class TestVisionReadinessCheck:
                 ),
             ):
                 monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
-                mgr = HatchingManager(
-                    state_path=tmp_path / "hatching.yaml", log_path=log_path
-                )
+                mgr = HatchingManager(state_path=tmp_path / "hatching.yaml", log_path=log_path)
                 mgr.run_hatching(interactive=False)
         finally:
             if saved is None:
@@ -344,9 +332,7 @@ class TestVisionReadinessCheck:
 
 
 class TestProviderVerification:
-    def test_anthropic_env_var_satisfies_provider_check(
-        self, tmp_path, monkeypatch
-    ):
+    def test_anthropic_env_var_satisfies_provider_check(self, tmp_path, monkeypatch):
         _patch_module_paths(monkeypatch, tmp_path)
         p1, p2, p3 = _mock_persona_and_memory()
         with p1, p2, p3:
@@ -368,9 +354,7 @@ class TestProviderVerification:
 
         assert state.provider_verified is True
 
-    def test_no_api_key_produces_warn_step_and_provider_not_verified(
-        self, tmp_path, monkeypatch
-    ):
+    def test_no_api_key_produces_warn_step_and_provider_not_verified(self, tmp_path, monkeypatch):
         _patch_module_paths(monkeypatch, tmp_path)
         p1, p2, p3 = _mock_persona_and_memory()
         with p1, p2, p3:
@@ -384,9 +368,7 @@ class TestProviderVerification:
         assert state.provider_verified is False
         assert "verify_providers" in state.steps_completed
 
-    def test_config_file_api_key_satisfies_provider_check(
-        self, tmp_path, monkeypatch
-    ):
+    def test_config_file_api_key_satisfies_provider_check(self, tmp_path, monkeypatch):
         _patch_module_paths(monkeypatch, tmp_path)
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -397,9 +379,7 @@ class TestProviderVerification:
                 "anthropic": {"api_key": "from-config-file", "model": "claude-sonnet-4-6"}
             }
         }
-        (tmp_path / "config.yaml").write_text(
-            yaml.safe_dump(config_data), encoding="utf-8"
-        )
+        (tmp_path / "config.yaml").write_text(yaml.safe_dump(config_data), encoding="utf-8")
 
         p1, p2, p3 = _mock_persona_and_memory()
         with p1, p2, p3:
@@ -408,9 +388,7 @@ class TestProviderVerification:
 
         assert state.provider_verified is True
 
-    def test_config_api_keys_list_satisfies_provider_check(
-        self, tmp_path, monkeypatch
-    ):
+    def test_config_api_keys_list_satisfies_provider_check(self, tmp_path, monkeypatch):
         _patch_module_paths(monkeypatch, tmp_path)
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -423,9 +401,7 @@ class TestProviderVerification:
                 }
             }
         }
-        (tmp_path / "config.yaml").write_text(
-            yaml.safe_dump(config_data), encoding="utf-8"
-        )
+        (tmp_path / "config.yaml").write_text(yaml.safe_dump(config_data), encoding="utf-8")
 
         p1, p2, p3 = _mock_persona_and_memory()
         with p1, p2, p3:
@@ -439,12 +415,8 @@ class TestProviderVerification:
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
-        config_data = {
-            "providers": {"anthropic": {"api_key": None, "model": "claude-sonnet-4-6"}}
-        }
-        (tmp_path / "config.yaml").write_text(
-            yaml.safe_dump(config_data), encoding="utf-8"
-        )
+        config_data = {"providers": {"anthropic": {"api_key": None, "model": "claude-sonnet-4-6"}}}
+        (tmp_path / "config.yaml").write_text(yaml.safe_dump(config_data), encoding="utf-8")
 
         p1, p2, p3 = _mock_persona_and_memory()
         with p1, p2, p3:
@@ -460,9 +432,7 @@ class TestProviderVerification:
 
 
 class TestSecurityBaselineInit:
-    def test_secrets_directory_created_with_restricted_mode(
-        self, tmp_path, monkeypatch
-    ):
+    def test_secrets_directory_created_with_restricted_mode(self, tmp_path, monkeypatch):
         _patch_module_paths(monkeypatch, tmp_path)
         p1, p2, p3 = _mock_persona_and_memory()
         with p1, p2, p3:
@@ -491,15 +461,11 @@ class TestSecurityBaselineInit:
         p1, p2, p3 = _mock_persona_and_memory()
         with p1, p2, p3:
             monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
-            mgr = HatchingManager(
-                state_path=tmp_path / "hatching.yaml", log_path=log_path
-            )
+            mgr = HatchingManager(state_path=tmp_path / "hatching.yaml", log_path=log_path)
             mgr.run_hatching(interactive=False)
 
         entries = HatchingLog(log_path=log_path).get_entries()
-        security_entries = [
-            e for e in entries if e["step"] == "initialize_security"
-        ]
+        security_entries = [e for e in entries if e["step"] == "initialize_security"]
         assert any(e["status"] == "ok" for e in security_entries)
 
 
@@ -509,9 +475,7 @@ class TestSecurityBaselineInit:
 
 
 class TestNonInteractiveMode:
-    def test_non_interactive_run_does_not_print(
-        self, tmp_path, monkeypatch, capsys
-    ):
+    def test_non_interactive_run_does_not_print(self, tmp_path, monkeypatch, capsys):
         _patch_module_paths(monkeypatch, tmp_path)
         p1, p2, p3 = _mock_persona_and_memory()
         with p1, p2, p3:
@@ -522,9 +486,7 @@ class TestNonInteractiveMode:
         out, _ = capsys.readouterr()
         assert out == ""
 
-    def test_interactive_run_prints_step_labels(
-        self, tmp_path, monkeypatch, capsys
-    ):
+    def test_interactive_run_prints_step_labels(self, tmp_path, monkeypatch, capsys):
         _patch_module_paths(monkeypatch, tmp_path)
         p1, p2, p3 = _mock_persona_and_memory()
         with p1, p2, p3:
@@ -535,9 +497,7 @@ class TestNonInteractiveMode:
         out, _ = capsys.readouterr()
         assert "validate_environment" in out
 
-    def test_skipped_steps_print_in_interactive_mode(
-        self, tmp_path, monkeypatch, capsys
-    ):
+    def test_skipped_steps_print_in_interactive_mode(self, tmp_path, monkeypatch, capsys):
         _patch_module_paths(monkeypatch, tmp_path)
         state_path = tmp_path / "hatching.yaml"
         partial = HatchingState(
@@ -551,9 +511,7 @@ class TestNonInteractiveMode:
         p1, p2, p3 = _mock_persona_and_memory()
         with p1, p2, p3:
             monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
-            mgr = HatchingManager(
-                state_path=state_path, log_path=tmp_path / "log.jsonl"
-            )
+            mgr = HatchingManager(state_path=state_path, log_path=tmp_path / "log.jsonl")
             mgr.run_hatching(interactive=True)
 
         out, _ = capsys.readouterr()
@@ -581,17 +539,13 @@ class TestStatePersistenceAndResume:
         p1, p2, p3 = _mock_persona_and_memory()
         with p1, p2, p3, patch.object(Path, "replace", _spy_replace):
             monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
-            mgr = HatchingManager(
-                state_path=state_path, log_path=tmp_path / "log.jsonl"
-            )
+            mgr = HatchingManager(state_path=state_path, log_path=tmp_path / "log.jsonl")
             mgr.run_hatching(interactive=False)
 
         # Every write should have come from the .yaml.tmp temp file
         assert all(".yaml.tmp" in w for w in writes), writes
 
-    def test_resume_from_partial_preserves_already_done_flags(
-        self, tmp_path, monkeypatch
-    ):
+    def test_resume_from_partial_preserves_already_done_flags(self, tmp_path, monkeypatch):
         _patch_module_paths(monkeypatch, tmp_path)
         state_path = tmp_path / "hatching.yaml"
         partial = HatchingState(
@@ -612,9 +566,7 @@ class TestStatePersistenceAndResume:
         p1, p2, p3 = _mock_persona_and_memory()
         with p1, p2, p3:
             monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
-            mgr = HatchingManager(
-                state_path=state_path, log_path=tmp_path / "log.jsonl"
-            )
+            mgr = HatchingManager(state_path=state_path, log_path=tmp_path / "log.jsonl")
             state = mgr.run_hatching(interactive=False)
 
         assert state.status is HatchingStatus.HATCHED
@@ -643,17 +595,13 @@ class TestStatePersistenceAndResume:
         p1, p2, p3 = _mock_persona_and_memory()
         with p1, p2, p3:
             monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
-            mgr = HatchingManager(
-                state_path=state_path, log_path=tmp_path / "log.jsonl"
-            )
+            mgr = HatchingManager(state_path=state_path, log_path=tmp_path / "log.jsonl")
             state = mgr.run_hatching(interactive=False)
 
         assert state.error is None
         assert state.status is HatchingStatus.HATCHED
 
-    def test_corrupt_state_file_triggers_fresh_hatching(
-        self, tmp_path, monkeypatch
-    ):
+    def test_corrupt_state_file_triggers_fresh_hatching(self, tmp_path, monkeypatch):
         """A state file with invalid YAML (but valid UTF-8) must fall back to
         a fresh UNHATCHED state, allowing hatching to run from scratch."""
         _patch_module_paths(monkeypatch, tmp_path)
@@ -668,17 +616,13 @@ class TestStatePersistenceAndResume:
         p1, p2, p3 = _mock_persona_and_memory()
         with p1, p2, p3:
             monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
-            mgr = HatchingManager(
-                state_path=state_path, log_path=tmp_path / "log.jsonl"
-            )
+            mgr = HatchingManager(state_path=state_path, log_path=tmp_path / "log.jsonl")
             state = mgr.run_hatching(interactive=False)
 
         # Fresh hatching from corrupt state should succeed
         assert state.status is HatchingStatus.HATCHED
 
-    def test_missing_config_creates_default_config_file(
-        self, tmp_path, monkeypatch
-    ):
+    def test_missing_config_creates_default_config_file(self, tmp_path, monkeypatch):
         _patch_module_paths(monkeypatch, tmp_path)
         config_path = tmp_path / "config.yaml"
         assert not config_path.exists()
@@ -712,9 +656,7 @@ class TestHatchingStateFromDictEdgeCases:
             assert state.status is status
 
     def test_error_field_preserved_round_trip(self):
-        original = HatchingState(
-            status=HatchingStatus.FAILED, error="some detailed error"
-        )
+        original = HatchingState(status=HatchingStatus.FAILED, error="some detailed error")
         restored = HatchingState.from_dict(original.to_dict())
         assert restored.error == "some detailed error"
 
@@ -742,29 +684,19 @@ class TestHatchingStateFromDictEdgeCases:
 
 
 class TestCheckpointCreationAndSerialisation:
-    def test_initial_loop_messages_defaults_to_empty_json_array(
-        self, cm, tmp_db
-    ):
+    def test_initial_loop_messages_defaults_to_empty_json_array(self, cm, tmp_db):
         cid = cm.create("s", "t", "p")
-        raw = _raw_query(
-            tmp_db, "SELECT loop_messages FROM checkpoints WHERE id=?", (cid,)
-        )[0]
+        raw = _raw_query(tmp_db, "SELECT loop_messages FROM checkpoints WHERE id=?", (cid,))[0]
         assert json.loads(raw) == []
 
-    def test_initial_tool_names_defaults_to_empty_json_array(
-        self, cm, tmp_db
-    ):
+    def test_initial_tool_names_defaults_to_empty_json_array(self, cm, tmp_db):
         cid = cm.create("s", "t", "p")
-        raw = _raw_query(
-            tmp_db, "SELECT tool_names_used FROM checkpoints WHERE id=?", (cid,)
-        )[0]
+        raw = _raw_query(tmp_db, "SELECT tool_names_used FROM checkpoints WHERE id=?", (cid,))[0]
         assert json.loads(raw) == []
 
     def test_initial_iteration_defaults_to_zero(self, cm, tmp_db):
         cid = cm.create("s", "t", "p")
-        row = _raw_query(
-            tmp_db, "SELECT iteration FROM checkpoints WHERE id=?", (cid,)
-        )
+        row = _raw_query(tmp_db, "SELECT iteration FROM checkpoints WHERE id=?", (cid,))
         assert row[0] == 0
 
     def test_update_then_get_incomplete_round_trips_messages(self, cm):
@@ -795,9 +727,7 @@ class TestCheckpointCreationAndSerialisation:
 
 
 class TestMultipleCheckpointsOrdering:
-    def test_get_incomplete_ordered_by_created_at_ascending(
-        self, cm, tmp_db
-    ):
+    def test_get_incomplete_ordered_by_created_at_ascending(self, cm, tmp_db):
         ids = []
         for i in range(5):
             cid = cm.create(f"session-{i}", f"task-{i}", f"prompt {i}")
@@ -813,7 +743,10 @@ class TestMultipleCheckpointsOrdering:
         returned_ids = [r["id"] for r in incomplete]
         # The checkpoint created earliest (smallest created_at) should come first
         assert returned_ids == sorted(
-            ids, key=lambda c: _raw_query(tmp_db, "SELECT created_at FROM checkpoints WHERE id=?", (c,))[0]
+            ids,
+            key=lambda c: _raw_query(tmp_db, "SELECT created_at FROM checkpoints WHERE id=?", (c,))[
+                0
+            ],
         )
 
     def test_mixed_states_only_running_returned(self, cm):
@@ -859,9 +792,7 @@ class TestCheckpointExpirationAndCleanup:
         )
         count = cm.abandon_old()
         assert count == 0
-        state = _raw_query(
-            tmp_db, "SELECT state FROM checkpoints WHERE id=?", (cid,)
-        )[0]
+        state = _raw_query(tmp_db, "SELECT state FROM checkpoints WHERE id=?", (cid,))[0]
         assert state == "COMPLETE"
 
     def test_cleanup_with_zero_days_removes_all_terminal(self, cm, tmp_db):
@@ -897,9 +828,7 @@ class TestCheckpointExpirationAndCleanup:
 
 
 class TestCorruptDataResilience:
-    def test_corrupt_loop_messages_json_returns_empty_list(
-        self, cm, tmp_db
-    ):
+    def test_corrupt_loop_messages_json_returns_empty_list(self, cm, tmp_db):
         """Mangled JSON in loop_messages must degrade gracefully to []."""
         cid = cm.create("s", "t", "p")
         _raw_exec(
@@ -926,9 +855,7 @@ class TestCorruptDataResilience:
         long_error = "E" * 2000
         cid = cm.create("s", "t", "original")
         cm.fail(cid, error=long_error)
-        prompt = _raw_query(
-            tmp_db, "SELECT prompt FROM checkpoints WHERE id=?", (cid,)
-        )[0]
+        prompt = _raw_query(tmp_db, "SELECT prompt FROM checkpoints WHERE id=?", (cid,))[0]
         assert long_error in prompt
         assert "original" in prompt
 
@@ -939,9 +866,7 @@ class TestCorruptDataResilience:
 
 
 class TestConcurrentCheckpointAccess:
-    def test_multiple_threads_can_create_checkpoints_without_deadlock(
-        self, tmp_db
-    ):
+    def test_multiple_threads_can_create_checkpoints_without_deadlock(self, tmp_db):
         """Each thread creates 5 checkpoints; total must be all 25."""
         cm = CheckpointManager(db_path=tmp_db)
         created: list[str] = []

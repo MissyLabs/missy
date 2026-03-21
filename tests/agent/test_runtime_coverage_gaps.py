@@ -332,9 +332,7 @@ class TestLargeContentIntercept:
         tool_reg = MagicMock()
         tool_reg.list_tools.return_value = ["mytool"]
         tool_reg.get.return_value = tool
-        tool_reg.execute.return_value = MagicMock(
-            success=True, output=large_content, error=None
-        )
+        tool_reg.execute.return_value = MagicMock(success=True, output=large_content, error=None)
 
         reg = _make_registry(provider)
         cfg = AgentConfig(provider="fake", max_iterations=5, capability_mode="full")
@@ -400,8 +398,7 @@ class TestGetToolsDiscordMode:
 
         # Pick a tool that is in _SAFE_CHAT_TOOLS but NOT in _DISCORD_TOOLS
         desktop_only_name = next(
-            n for n in AgentRuntime._SAFE_CHAT_TOOLS
-            if n not in AgentRuntime._DISCORD_TOOLS
+            n for n in AgentRuntime._SAFE_CHAT_TOOLS if n not in AgentRuntime._DISCORD_TOOLS
         )
         extra_tool = MagicMock()
         extra_tool.name = desktop_only_name
@@ -413,7 +410,9 @@ class TestGetToolsDiscordMode:
         )
 
         with (
-            patch("missy.agent.runtime.get_registry", return_value=_make_registry(_make_provider())),
+            patch(
+                "missy.agent.runtime.get_registry", return_value=_make_registry(_make_provider())
+            ),
             patch("missy.agent.runtime.get_tool_registry", side_effect=RuntimeError),
         ):
             rt = AgentRuntime(cfg)
@@ -421,9 +420,7 @@ class TestGetToolsDiscordMode:
         with patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg):
             tools = rt._get_tools()
 
-        assert all(
-            getattr(t, "name", "") in AgentRuntime._DISCORD_TOOLS for t in tools
-        )
+        assert all(getattr(t, "name", "") in AgentRuntime._DISCORD_TOOLS for t in tools)
         assert discord_tool in tools
         assert extra_tool not in tools
 
@@ -831,9 +828,7 @@ class TestMakeIdentity:
         ):
             result = AgentRuntime._make_identity()
 
-        mock_module.AgentIdentity.from_key_file.assert_called_once_with(
-            "/fake/.missy/identity.pem"
-        )
+        mock_module.AgentIdentity.from_key_file.assert_called_once_with("/fake/.missy/identity.pem")
         assert result is loaded_identity
 
     def test_exception_returns_none(self):

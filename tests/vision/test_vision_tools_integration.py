@@ -232,6 +232,7 @@ class TestColorDescriptionBoundaries:
 
     def test_black_boundary(self):
         from missy.vision.analysis import _describe_color
+
         # max(49, 49, 49) = 49 < 50 → black
         assert _describe_color([49, 49, 49]) == "black"
         # max(50, 50, 50) = 50 → NOT black, check others
@@ -240,6 +241,7 @@ class TestColorDescriptionBoundaries:
 
     def test_white_boundary(self):
         from missy.vision.analysis import _describe_color
+
         # min(201, 201, 201) = 201 > 200 → white
         assert _describe_color([201, 201, 201]) == "white"
         # min(200, 200, 200) = 200 → NOT white
@@ -248,6 +250,7 @@ class TestColorDescriptionBoundaries:
 
     def test_pure_colors(self):
         from missy.vision.analysis import _describe_color
+
         assert _describe_color([255, 0, 0]) == "red"
         assert _describe_color([0, 255, 0]) == "green"
         assert _describe_color([0, 0, 255]) == "blue"
@@ -255,14 +258,17 @@ class TestColorDescriptionBoundaries:
 
     def test_zero_zero_zero(self):
         from missy.vision.analysis import _describe_color
+
         assert _describe_color([0, 0, 0]) == "black"
 
     def test_255_255_255(self):
         from missy.vision.analysis import _describe_color
+
         assert _describe_color([255, 255, 255]) == "white"
 
     def test_mid_gray(self):
         from missy.vision.analysis import _describe_color
+
         assert _describe_color([128, 128, 128]) == "gray"
 
 

@@ -147,9 +147,7 @@ class TestCaptureWarmupTimeout:
     """Warmup must exit early when the deadline is reached."""
 
     @patch("missy.vision.capture._get_cv2")
-    def test_warmup_exits_before_all_frames_on_slow_camera(
-        self, mock_get_cv2: MagicMock
-    ) -> None:
+    def test_warmup_exits_before_all_frames_on_slow_camera(self, mock_get_cv2: MagicMock) -> None:
         """Warmup exits early (via deadline check) when time advances past the deadline.
 
         The warmup deadline is ``max(timeout_seconds / 2, 3.0)``.  To get a
@@ -368,8 +366,10 @@ class TestMultiCameraDeadlineTimeout:
                 remaining_times.append(timeout)
             return original_result(self, timeout=timeout)
 
-        with patch("missy.vision.multi_camera.get_health_monitor") as mock_hm, \
-             patch.object(Future, "result", patched_result):
+        with (
+            patch("missy.vision.multi_camera.get_health_monitor") as mock_hm,
+            patch.object(Future, "result", patched_result),
+        ):
             mock_hm.return_value = MagicMock()
             mgr.capture_all(timeout=30.0)
 
@@ -428,9 +428,11 @@ class TestMultiCameraDeadlineTimeout:
                 return base_time
             return base_time + 1000.0  # deadline expired
 
-        with patch("missy.vision.multi_camera.get_health_monitor") as mock_hm, \
-             patch.object(Future, "result", patched_result), \
-             patch("missy.vision.multi_camera.time.monotonic", side_effect=fake_monotonic):
+        with (
+            patch("missy.vision.multi_camera.get_health_monitor") as mock_hm,
+            patch.object(Future, "result", patched_result),
+            patch("missy.vision.multi_camera.time.monotonic", side_effect=fake_monotonic),
+        ):
             mock_hm.return_value = MagicMock()
             mgr.capture_all(timeout=1.0)
 
@@ -447,9 +449,7 @@ class TestResilientCaptureBlankDetectorReset:
     """Blank detector history must be cleared when _open_device switches devices."""
 
     @patch("missy.vision.resilient_capture.CameraHandle")
-    def test_blank_detector_reset_on_device_switch(
-        self, mock_handle_cls: MagicMock
-    ) -> None:
+    def test_blank_detector_reset_on_device_switch(self, mock_handle_cls: MagicMock) -> None:
         """After _open_device, reset_blank_detector() is called on the new handle."""
         mock_handle = MagicMock()
         mock_handle.is_open = True
@@ -463,9 +463,7 @@ class TestResilientCaptureBlankDetectorReset:
         mock_handle.reset_blank_detector.assert_called_once()
 
     @patch("missy.vision.resilient_capture.CameraHandle")
-    def test_blank_detector_reset_called_on_none_detector(
-        self, mock_handle_cls: MagicMock
-    ) -> None:
+    def test_blank_detector_reset_called_on_none_detector(self, mock_handle_cls: MagicMock) -> None:
         """_open_device must not crash when blank detector is disabled (adaptive=False)."""
         mock_handle = MagicMock()
         mock_handle.is_open = True
@@ -529,9 +527,11 @@ class TestFileSourceRejectsNonRegularFiles:
 
         source = FileSource(str(fake_file))
 
-        with patch.object(Path, "stat", return_value=fake_stat), \
-             patch.object(Path, "exists", return_value=True), \
-             pytest.raises(ValueError, match="Not a regular file"):
+        with (
+            patch.object(Path, "stat", return_value=fake_stat),
+            patch.object(Path, "exists", return_value=True),
+            pytest.raises(ValueError, match="Not a regular file"),
+        ):
             source.acquire()
 
     def test_rejects_block_device(self, tmp_path: Path) -> None:
@@ -545,9 +545,11 @@ class TestFileSourceRejectsNonRegularFiles:
 
         source = FileSource(str(fake_file))
 
-        with patch.object(Path, "stat", return_value=fake_stat), \
-             patch.object(Path, "exists", return_value=True), \
-             pytest.raises(ValueError, match="Not a regular file"):
+        with (
+            patch.object(Path, "stat", return_value=fake_stat),
+            patch.object(Path, "exists", return_value=True),
+            pytest.raises(ValueError, match="Not a regular file"),
+        ):
             source.acquire()
 
     def test_rejects_named_pipe(self, tmp_path: Path) -> None:
@@ -561,9 +563,11 @@ class TestFileSourceRejectsNonRegularFiles:
 
         source = FileSource(str(fake_file))
 
-        with patch.object(Path, "stat", return_value=fake_stat), \
-             patch.object(Path, "exists", return_value=True), \
-             pytest.raises(ValueError):
+        with (
+            patch.object(Path, "stat", return_value=fake_stat),
+            patch.object(Path, "exists", return_value=True),
+            pytest.raises(ValueError),
+        ):
             source.acquire()
 
     def test_accepts_regular_file(self, tmp_path: Path) -> None:
@@ -580,9 +584,11 @@ class TestFileSourceRejectsNonRegularFiles:
 
         source = FileSource(str(fake_file))
 
-        with patch.object(Path, "stat", return_value=fake_stat), \
-             patch.object(Path, "exists", return_value=True), \
-             patch("missy.vision.sources._get_cv2") as mock_get_cv2:
+        with (
+            patch.object(Path, "stat", return_value=fake_stat),
+            patch.object(Path, "exists", return_value=True),
+            patch("missy.vision.sources._get_cv2") as mock_get_cv2,
+        ):
             mock_cv2 = MagicMock()
             mock_cv2.imread.return_value = mock_img
             mock_get_cv2.return_value = mock_cv2
@@ -604,8 +610,11 @@ class TestFileSourceRejectsNonRegularFiles:
 
         source = FileSource(str(fake_file))
 
-        with patch.object(Path, "stat", return_value=fake_stat), \
-             patch.object(Path, "exists", return_value=True), pytest.raises(ValueError) as exc_info:
+        with (
+            patch.object(Path, "stat", return_value=fake_stat),
+            patch.object(Path, "exists", return_value=True),
+            pytest.raises(ValueError) as exc_info,
+        ):
             source.acquire()
 
         assert oct(chr_mode) in str(exc_info.value) or "regular file" in str(exc_info.value).lower()
@@ -692,9 +701,7 @@ class TestDiscoverySymlinkCycleDetection:
         assert vid == "046d"
         assert pid == "085c"
 
-    def test_read_usb_ids_oserror_on_resolve_returns_defaults(
-        self, tmp_path: Path
-    ) -> None:
+    def test_read_usb_ids_oserror_on_resolve_returns_defaults(self, tmp_path: Path) -> None:
         """OSError during symlink resolution must return default IDs, not crash."""
         disc = CameraDiscovery(sysfs_base=str(tmp_path))
         sysfs_entry = tmp_path / "video0"

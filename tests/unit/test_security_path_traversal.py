@@ -313,10 +313,7 @@ class TestSecretCensorPipeline:
         from missy.security.censor import censor_response
 
         # Use a long enough sk-proj- token to match the pattern
-        text = (
-            "Here is the key: sk-proj-"
-            + "A" * 120
-        )
+        text = "Here is the key: sk-proj-" + "A" * 120
         result = censor_response(text)
         assert "[REDACTED" in result or "sk-proj-" not in result
 
@@ -406,9 +403,7 @@ class TestProviderConfigEdgeCases:
     def test_multiple_api_keys(self) -> None:
         from missy.config.settings import ProviderConfig
 
-        config = ProviderConfig(
-            name="test", model="test-model", api_keys=["key1", "key2", "key3"]
-        )
+        config = ProviderConfig(name="test", model="test-model", api_keys=["key1", "key2", "key3"])
         assert len(config.api_keys) == 3
 
     def test_tiering_fields(self) -> None:

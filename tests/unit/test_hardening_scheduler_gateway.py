@@ -30,6 +30,7 @@ from missy.policy.shell import ShellPolicyEngine
 # Scheduler input validation
 # ---------------------------------------------------------------------------
 
+
 class TestSchedulerInputValidation:
     """Edge cases for scheduler schedule parsing."""
 
@@ -90,6 +91,7 @@ class TestSchedulerInputValidation:
 # Memory store concurrent access
 # ---------------------------------------------------------------------------
 
+
 class TestMemoryStoreConcurrency:
     """Concurrent access patterns for SQLite memory store."""
 
@@ -144,9 +146,7 @@ class TestMemoryStoreConcurrency:
         try:
             store = SQLiteMemoryStore(db_path=db_path)
             for i in range(10):
-                turn = ConversationTurn.new(
-                    session_id="s1", role="user", content=f"msg {i}"
-                )
+                turn = ConversationTurn.new(session_id="s1", role="user", content=f"msg {i}")
                 store.add_turn(turn)
 
             store.cleanup(older_than_days=0)
@@ -157,6 +157,7 @@ class TestMemoryStoreConcurrency:
 # ---------------------------------------------------------------------------
 # Config hot-reload edge cases
 # ---------------------------------------------------------------------------
+
 
 class TestConfigHotReload:
     """Edge cases for configuration hot-reload."""
@@ -193,6 +194,7 @@ class TestConfigHotReload:
 # Shell policy edge cases
 # ---------------------------------------------------------------------------
 
+
 class TestShellPolicyEdgeCases:
     """Edge cases for shell policy enforcement."""
 
@@ -203,6 +205,7 @@ class TestShellPolicyEdgeCases:
         # Null bytes could be used to truncate command strings
         # Should either deny or handle safely (not crash)
         import contextlib
+
         with contextlib.suppress(Exception):
             engine.check_command("ls\x00; rm -rf /")
 
@@ -243,6 +246,7 @@ class TestShellPolicyEdgeCases:
 # ---------------------------------------------------------------------------
 # Circuit breaker state transitions
 # ---------------------------------------------------------------------------
+
 
 class TestCircuitBreakerEdgeCases:
     """Edge cases for circuit breaker."""
@@ -293,6 +297,7 @@ class TestCircuitBreakerEdgeCases:
 # Gateway client lifecycle
 # ---------------------------------------------------------------------------
 
+
 class TestGatewayClientLifecycle:
     """Gateway client creation and cleanup."""
 
@@ -300,9 +305,7 @@ class TestGatewayClientLifecycle:
         """Client should accept category parameter."""
         from missy.gateway.client import PolicyHTTPClient
 
-        client = PolicyHTTPClient(
-            session_id="s1", task_id="t1", category="provider"
-        )
+        client = PolicyHTTPClient(session_id="s1", task_id="t1", category="provider")
         assert client.category == "provider"
 
     def test_client_max_response_bytes_custom(self) -> None:
@@ -323,6 +326,7 @@ class TestGatewayClientLifecycle:
 # ---------------------------------------------------------------------------
 # Cost tracker edge cases
 # ---------------------------------------------------------------------------
+
 
 class TestCostTrackerEdgeCases:
     """Edge cases for cost tracking."""
@@ -394,6 +398,7 @@ class TestCostTrackerEdgeCases:
 # Approval gate edge cases
 # ---------------------------------------------------------------------------
 
+
 class TestApprovalGateEdgeCases:
     """Edge cases for the approval gate."""
 
@@ -416,6 +421,7 @@ class TestApprovalGateEdgeCases:
 # ---------------------------------------------------------------------------
 # Provider registry edge cases
 # ---------------------------------------------------------------------------
+
 
 class TestProviderRegistryEdgeCases:
     """Edge cases for provider registry."""
@@ -440,6 +446,7 @@ class TestProviderRegistryEdgeCases:
 # ---------------------------------------------------------------------------
 # Input sanitizer with combined attacks
 # ---------------------------------------------------------------------------
+
 
 class TestSanitizerCombinedAttacks:
     """Test sanitizer against combined/layered attack vectors."""

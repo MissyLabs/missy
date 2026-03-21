@@ -147,7 +147,12 @@ class TestGatewayKwargsSanitization:
 
     def test_sanitize_returns_only_allowed_keys(self):
         """_sanitize_kwargs uses an allowlist — unknown keys are stripped."""
-        kwargs = {"follow_redirects": True, "timeout": 5, "verify": False, "base_url": "http://evil"}
+        kwargs = {
+            "follow_redirects": True,
+            "timeout": 5,
+            "verify": False,
+            "base_url": "http://evil",
+        }
         result = PolicyHTTPClient._sanitize_kwargs(kwargs)
         assert "follow_redirects" not in result
         assert "verify" not in result
@@ -282,10 +287,7 @@ class TestShellPolicyLauncherWarning:
         engine = _make_shell_engine(["git"])
         with caplog.at_level(logging.WARNING, logger="missy.policy.shell"):
             engine.check_command("git status")
-        launcher_warnings = [
-            r for r in caplog.records
-            if "launcher" in r.message.lower()
-        ]
+        launcher_warnings = [r for r in caplog.records if "launcher" in r.message.lower()]
         assert launcher_warnings == []
 
     def test_launcher_via_path_triggers_warning(self, caplog):
@@ -330,8 +332,10 @@ class TestMcpConfigPermissions:
         fake_stat.st_uid = 9999
         fake_stat.st_mode = 0o100600  # -rw------- (not group/world writable)
 
-        with patch.object(Path, "stat", return_value=fake_stat), \
-             patch("os.getuid", return_value=1000):
+        with (
+            patch.object(Path, "stat", return_value=fake_stat),
+            patch("os.getuid", return_value=1000),
+        ):
             mgr.connect_all()
 
         # No clients should be connected — the config was refused.
@@ -371,9 +375,11 @@ class TestMcpConfigPermissions:
         # exists() internally calls stat() on Python 3.12+, so we must mock
         # exists() separately to return True before the explicit stat() call
         # inside connect_all's permission block raises OSError.
-        with patch.object(Path, "exists", return_value=True), \
-             patch.object(Path, "stat", side_effect=OSError("permission denied")), \
-             caplog.at_level(logging.WARNING, logger="missy.mcp.manager"):
+        with (
+            patch.object(Path, "exists", return_value=True),
+            patch.object(Path, "stat", side_effect=OSError("permission denied")),
+            caplog.at_level(logging.WARNING, logger="missy.mcp.manager"),
+        ):
             mgr.connect_all()
 
         # Stat failure → silently skip with a warning, no clients connected.
@@ -391,13 +397,16 @@ class TestMcpConfigPermissions:
 
         mgr = McpManager(config_path=str(config))
 
-        with patch.object(Path, "stat", return_value=fake_stat), \
-             patch("os.getuid", return_value=1000), \
-             caplog.at_level(logging.WARNING, logger="missy.mcp.manager"):
+        with (
+            patch.object(Path, "stat", return_value=fake_stat),
+            patch("os.getuid", return_value=1000),
+            caplog.at_level(logging.WARNING, logger="missy.mcp.manager"),
+        ):
             mgr.connect_all()
 
-        assert any("uid" in r.message.lower() or "owned" in r.message.lower()
-                   for r in caplog.records)
+        assert any(
+            "uid" in r.message.lower() or "owned" in r.message.lower() for r in caplog.records
+        )
 
     def test_skips_loading_group_writable_logs_warning(self, tmp_path, caplog):
         """A warning must be emitted when the file is group/world-writable."""
@@ -411,8 +420,7 @@ class TestMcpConfigPermissions:
             mgr.connect_all()
 
         assert any(
-            "writable" in r.message.lower() or "group" in r.message.lower()
-            for r in caplog.records
+            "writable" in r.message.lower() or "group" in r.message.lower() for r in caplog.records
         )
 
     def test_no_config_file_skips_silently(self, tmp_path):
@@ -492,7 +500,7 @@ class TestNpmTokenDetection:
         assert findings == []
 
     def test_npm_token_in_config_context(self, detector):
-        text = '//registry.npmjs.org/:_authToken=npm_aBcDeFgHiJkLmNoPqRsTuVwXyZ012345'
+        text = "//registry.npmjs.org/:_authToken=npm_aBcDeFgHiJkLmNoPqRsTuVwXyZ012345"
         assert detector.has_secrets(text) is True
 
     def test_npm_token_redacted(self, detector):

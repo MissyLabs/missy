@@ -35,6 +35,7 @@ from missy.channels.voice.server import (
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_registry():
     """Create a mock DeviceRegistry."""
     reg = MagicMock()

@@ -101,18 +101,13 @@ _label = st.from_regex(r"[a-z][a-z0-9\-]{0,61}[a-z0-9]|[a-z]", fullmatch=True)
 # The filter rejects any string that Python's ipaddress module accepts as a
 # valid IP address, preventing generated hostnames from being treated as IPs
 # by the network policy engine.
-_hostname = (
-    st.builds(
-        lambda parts: ".".join(parts),
-        st.lists(_label, min_size=2, max_size=4),
-    )
-    .filter(lambda h: not _is_valid_ip(h))
-)
+_hostname = st.builds(
+    lambda parts: ".".join(parts),
+    st.lists(_label, min_size=2, max_size=4),
+).filter(lambda h: not _is_valid_ip(h))
 
 # Valid IPv4 addresses as strings (drawn from the full /0 space).
-_ipv4 = st.integers(min_value=0, max_value=2**32 - 1).map(
-    lambda n: str(ipaddress.IPv4Address(n))
-)
+_ipv4 = st.integers(min_value=0, max_value=2**32 - 1).map(lambda n: str(ipaddress.IPv4Address(n)))
 
 # Valid IPv4 CIDR blocks expressed as strings.
 _ipv4_cidr = st.builds(
@@ -261,9 +256,7 @@ class TestNetworkCIDRAllowList:
         offset=st.integers(min_value=1, max_value=254),
     )
     @settings(max_examples=40)
-    def test_ip_in_second_cidr_is_still_allowed(
-        self, cidr1: str, cidr2: str, offset: int
-    ) -> None:
+    def test_ip_in_second_cidr_is_still_allowed(self, cidr1: str, cidr2: str, offset: int) -> None:
         """An IP matching any CIDR in the list (not just the first) must be allowed."""
         network2 = ipaddress.IPv4Network(cidr2, strict=False)
         num_addresses = network2.num_addresses
@@ -366,9 +359,7 @@ class TestNetworkAllowedHosts:
         assert engine.check_host(host, category=category) is True
 
     @given(host=_hostname, category=st.sampled_from(["provider", "tool", "discord"]))
-    def test_per_category_host_requires_matching_category(
-        self, host: str, category: str
-    ) -> None:
+    def test_per_category_host_requires_matching_category(self, host: str, category: str) -> None:
         """A host only in one category's list must be denied when a different category is
         used (assuming no global host/domain/CIDR match)."""
         # Determine a different category to query under.
@@ -421,9 +412,7 @@ class TestFilesystemWritePolicy:
         base=_abs_path,
         subpath=st.lists(_safe_path_component, min_size=0, max_size=3),
     )
-    def test_path_within_allowed_write_is_permitted(
-        self, base: str, subpath: list[str]
-    ) -> None:
+    def test_path_within_allowed_write_is_permitted(self, base: str, subpath: list[str]) -> None:
         target = base if not subpath else base + "/" + "/".join(subpath)
         engine = _make_fs_engine(allowed_write_paths=[base])
         # The engine resolves symlinks; for non-existent paths it uses the
@@ -434,9 +423,7 @@ class TestFilesystemWritePolicy:
         allowed=_abs_path,
         denied=_abs_path,
     )
-    def test_path_outside_allowed_write_is_denied(
-        self, allowed: str, denied: str
-    ) -> None:
+    def test_path_outside_allowed_write_is_denied(self, allowed: str, denied: str) -> None:
         assume(allowed != denied)
         # Make sure 'denied' is not a sub-path of 'allowed'.
         assume(not denied.startswith(allowed.rstrip("/") + "/"))
@@ -480,9 +467,7 @@ class TestFilesystemReadPolicy:
         base=_abs_path,
         subpath=st.lists(_safe_path_component, min_size=0, max_size=3),
     )
-    def test_path_within_allowed_read_is_permitted(
-        self, base: str, subpath: list[str]
-    ) -> None:
+    def test_path_within_allowed_read_is_permitted(self, base: str, subpath: list[str]) -> None:
         target = base if not subpath else base + "/" + "/".join(subpath)
         engine = _make_fs_engine(allowed_read_paths=[base])
         assert engine.check_read(target) is True
@@ -491,9 +476,7 @@ class TestFilesystemReadPolicy:
         allowed=_abs_path,
         denied=_abs_path,
     )
-    def test_path_outside_allowed_read_is_denied(
-        self, allowed: str, denied: str
-    ) -> None:
+    def test_path_outside_allowed_read_is_denied(self, allowed: str, denied: str) -> None:
         assume(allowed != denied)
         assume(not denied.startswith(allowed.rstrip("/") + "/"))
         assume(denied != allowed)
@@ -536,9 +519,7 @@ class TestFilesystemTraversalResistance:
     """Path traversal sequences must not escape the allowed directory."""
 
     @given(base=_abs_path, component=_safe_path_component)
-    def test_traversal_above_allowed_path_is_denied(
-        self, base: str, component: str
-    ) -> None:
+    def test_traversal_above_allowed_path_is_denied(self, base: str, component: str) -> None:
         """A path like /allowed/subdir/../../etc/passwd must be denied.
 
         Path.resolve(strict=False) collapses '..' components, so the resolved
@@ -656,9 +637,7 @@ class TestShellAllowedCommands:
     """When enabled, only commands in the allow-list are permitted."""
 
     @given(cmd=_safe_word, args=st.lists(_safe_word, min_size=0, max_size=5))
-    def test_allowed_command_with_args_is_permitted(
-        self, cmd: str, args: list[str]
-    ) -> None:
+    def test_allowed_command_with_args_is_permitted(self, cmd: str, args: list[str]) -> None:
         full_command = " ".join([cmd] + args)
         engine = _make_shell_engine(enabled=True, allowed_commands=[cmd])
         assert engine.check_command(full_command) is True
@@ -753,9 +732,7 @@ class TestShellInjectionResistance:
                 engine.check_command(command)
             return
         allowed_basename = os.path.basename(allowed)
-        all_allowed = all(
-            os.path.basename(p) == allowed_basename for p in programs
-        )
+        all_allowed = all(os.path.basename(p) == allowed_basename for p in programs)
         if all_allowed:
             assert engine.check_command(command) is True
         else:
@@ -786,18 +763,14 @@ class TestShellPathQualifiedCommands:
     """Path-qualified command names must match against the basename in the allow-list."""
 
     @given(cmd=_safe_word, prefix=st.sampled_from(["/usr/bin/", "/bin/", "/usr/local/bin/"]))
-    def test_path_qualified_command_matches_basename_entry(
-        self, cmd: str, prefix: str
-    ) -> None:
+    def test_path_qualified_command_matches_basename_entry(self, cmd: str, prefix: str) -> None:
         """'/usr/bin/git status' must be allowed when 'git' is in allowed_commands."""
         qualified = prefix + cmd
         engine = _make_shell_engine(enabled=True, allowed_commands=[cmd])
         assert engine.check_command(qualified + " --version") is True
 
     @given(cmd=_safe_word, prefix=st.sampled_from(["/usr/bin/", "/bin/", "/usr/local/bin/"]))
-    def test_path_qualified_entry_matches_bare_command(
-        self, cmd: str, prefix: str
-    ) -> None:
+    def test_path_qualified_entry_matches_bare_command(self, cmd: str, prefix: str) -> None:
         """'git' must be allowed when '/usr/bin/git' is in allowed_commands."""
         qualified_entry = prefix + cmd
         engine = _make_shell_engine(enabled=True, allowed_commands=[qualified_entry])

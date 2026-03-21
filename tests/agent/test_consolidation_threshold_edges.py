@@ -266,8 +266,14 @@ class TestConsolidateAboveThreshold:
         mc = MemoryConsolidator()
         # Old messages: all are long assistant prose with no keywords.
         old = [
-            {"role": "assistant", "content": "Here is a long explanation that contains no actionable keywords. " * 3},
-            {"role": "assistant", "content": "Another verbose paragraph with no specific decisions mentioned. " * 3},
+            {
+                "role": "assistant",
+                "content": "Here is a long explanation that contains no actionable keywords. " * 3,
+            },
+            {
+                "role": "assistant",
+                "content": "Another verbose paragraph with no specific decisions mentioned. " * 3,
+            },
         ]
         recent = [{"role": "user", "content": f"r{i}"} for i in range(_RECENT_KEEP)]
         _, summary = mc.consolidate(old + recent, "sys")

@@ -16,6 +16,7 @@ from missy.channels.screencast.session_manager import AnalysisResult
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _fake_session(
     session_id: str = "s-001",
     label: str = "test",
@@ -53,6 +54,7 @@ async def _invoke(
 # Routing / dispatch
 # ---------------------------------------------------------------------------
 
+
 class TestRouting:
     async def test_non_screen_command(self) -> None:
         result = await _invoke("hello world")
@@ -79,6 +81,7 @@ class TestRouting:
 # ---------------------------------------------------------------------------
 # !screen share
 # ---------------------------------------------------------------------------
+
 
 class TestShare:
     async def test_share_success(self) -> None:
@@ -111,6 +114,7 @@ class TestShare:
 # !screen list
 # ---------------------------------------------------------------------------
 
+
 class TestList:
     async def test_list_no_sessions(self) -> None:
         sc = MagicMock()
@@ -141,6 +145,7 @@ class TestList:
 # ---------------------------------------------------------------------------
 # !screen stop
 # ---------------------------------------------------------------------------
+
 
 class TestStop:
     async def test_stop_no_sessions(self) -> None:
@@ -194,6 +199,7 @@ class TestStop:
 # !screen analyze
 # ---------------------------------------------------------------------------
 
+
 class TestAnalyze:
     async def test_analyze_no_sessions(self) -> None:
         sc = MagicMock()
@@ -241,6 +247,7 @@ class TestAnalyze:
 # !screen status
 # ---------------------------------------------------------------------------
 
+
 class TestStatus:
     async def test_status_not_running(self) -> None:
         sc = MagicMock()
@@ -278,6 +285,7 @@ class TestStatus:
 # ---------------------------------------------------------------------------
 # _format_duration
 # ---------------------------------------------------------------------------
+
 
 class TestFormatDuration:
     def test_format_duration_seconds(self) -> None:

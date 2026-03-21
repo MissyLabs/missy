@@ -63,9 +63,9 @@ def mock_tts():
     tts.name = "test-tts"
     tts.load = MagicMock()
     tts.unload = MagicMock()
-    tts.synthesize = AsyncMock(return_value=AudioBuffer(
-        data=b"\x00" * 44100, sample_rate=22050, channels=1, format="wav"
-    ))
+    tts.synthesize = AsyncMock(
+        return_value=AudioBuffer(data=b"\x00" * 44100, sample_rate=22050, channels=1, format="wav")
+    )
     return tts
 
 
@@ -77,6 +77,7 @@ def mock_agent_callback():
 @pytest.fixture
 def server(mock_registry, mock_stt, mock_tts, mock_agent_callback):
     from missy.channels.voice.server import VoiceServer
+
     mock_pairing = MagicMock()
     mock_presence = MagicMock()
     return VoiceServer(
@@ -102,15 +103,20 @@ class TestVoiceVisionIntentDetection:
     @pytest.mark.asyncio
     async def test_puzzle_intent_detected(self, server, mock_stt, mock_agent_callback):
         """Puzzle-related transcript should populate vision metadata."""
-        mock_stt.transcribe = AsyncMock(return_value=TranscriptionResult(
-            text="Where does this puzzle piece go?",
-            confidence=0.95, processing_ms=100, language="en",
-        ))
+        mock_stt.transcribe = AsyncMock(
+            return_value=TranscriptionResult(
+                text="Where does this puzzle piece go?",
+                confidence=0.95,
+                processing_ms=100,
+                language="en",
+            )
+        )
         ws = AsyncMock()
         node = MockEdgeNode()
 
         with patch("missy.vision.intent.classify_vision_intent") as mock_classify:
             from missy.vision.intent import ActivationDecision, IntentResult, VisionIntent
+
             mock_classify.return_value = IntentResult(
                 intent=VisionIntent.PUZZLE,
                 decision=ActivationDecision.ACTIVATE,
@@ -120,7 +126,9 @@ class TestVoiceVisionIntentDetection:
             )
 
             with patch("missy.vision.discovery.find_preferred_camera", return_value=None):
-                await server._handle_audio(ws, node=node, audio_buffer=b"\x00" * 16000, sample_rate=16000)
+                await server._handle_audio(
+                    ws, node=node, audio_buffer=b"\x00" * 16000, sample_rate=16000
+                )
 
         # Agent should have been called with vision metadata
         mock_agent_callback.assert_awaited_once()
@@ -132,15 +140,20 @@ class TestVoiceVisionIntentDetection:
     @pytest.mark.asyncio
     async def test_painting_intent_detected(self, server, mock_stt, mock_agent_callback):
         """Painting transcript triggers painting mode metadata."""
-        mock_stt.transcribe = AsyncMock(return_value=TranscriptionResult(
-            text="What do you think of my painting?",
-            confidence=0.90, processing_ms=100, language="en",
-        ))
+        mock_stt.transcribe = AsyncMock(
+            return_value=TranscriptionResult(
+                text="What do you think of my painting?",
+                confidence=0.90,
+                processing_ms=100,
+                language="en",
+            )
+        )
         ws = AsyncMock()
         node = MockEdgeNode()
 
         with patch("missy.vision.intent.classify_vision_intent") as mock_classify:
             from missy.vision.intent import ActivationDecision, IntentResult, VisionIntent
+
             mock_classify.return_value = IntentResult(
                 intent=VisionIntent.PAINTING,
                 decision=ActivationDecision.ACTIVATE,
@@ -150,7 +163,9 @@ class TestVoiceVisionIntentDetection:
             )
 
             with patch("missy.vision.discovery.find_preferred_camera", return_value=None):
-                await server._handle_audio(ws, node=node, audio_buffer=b"\x00" * 16000, sample_rate=16000)
+                await server._handle_audio(
+                    ws, node=node, audio_buffer=b"\x00" * 16000, sample_rate=16000
+                )
 
         _, _, metadata = mock_agent_callback.call_args[0]
         assert metadata.get("vision_intent") == "painting"
@@ -159,10 +174,14 @@ class TestVoiceVisionIntentDetection:
     @pytest.mark.asyncio
     async def test_no_vision_intent(self, server, mock_stt, mock_agent_callback):
         """Normal transcript should not populate vision metadata."""
-        mock_stt.transcribe = AsyncMock(return_value=TranscriptionResult(
-            text="What is the weather today?",
-            confidence=0.95, processing_ms=100, language="en",
-        ))
+        mock_stt.transcribe = AsyncMock(
+            return_value=TranscriptionResult(
+                text="What is the weather today?",
+                confidence=0.95,
+                processing_ms=100,
+                language="en",
+            )
+        )
         ws = AsyncMock()
         node = MockEdgeNode()
 
@@ -176,15 +195,20 @@ class TestVoiceVisionIntentDetection:
     @pytest.mark.asyncio
     async def test_look_at_this_intent(self, server, mock_stt, mock_agent_callback):
         """Explicit look request should trigger vision activation."""
-        mock_stt.transcribe = AsyncMock(return_value=TranscriptionResult(
-            text="Missy, look at this",
-            confidence=0.95, processing_ms=100, language="en",
-        ))
+        mock_stt.transcribe = AsyncMock(
+            return_value=TranscriptionResult(
+                text="Missy, look at this",
+                confidence=0.95,
+                processing_ms=100,
+                language="en",
+            )
+        )
         ws = AsyncMock()
         node = MockEdgeNode()
 
         with patch("missy.vision.intent.classify_vision_intent") as mock_classify:
             from missy.vision.intent import ActivationDecision, IntentResult, VisionIntent
+
             mock_classify.return_value = IntentResult(
                 intent=VisionIntent.LOOK,
                 decision=ActivationDecision.ACTIVATE,
@@ -194,7 +218,9 @@ class TestVoiceVisionIntentDetection:
             )
 
             with patch("missy.vision.discovery.find_preferred_camera", return_value=None):
-                await server._handle_audio(ws, node=node, audio_buffer=b"\x00" * 16000, sample_rate=16000)
+                await server._handle_audio(
+                    ws, node=node, audio_buffer=b"\x00" * 16000, sample_rate=16000
+                )
 
         _, _, metadata = mock_agent_callback.call_args[0]
         assert metadata.get("vision_intent") == "look"
@@ -211,10 +237,14 @@ class TestVoiceVisionCapture:
     @pytest.mark.asyncio
     async def test_successful_capture_populates_base64(self, server, mock_stt, mock_agent_callback):
         """When camera is available and capture succeeds, base64 image is in metadata."""
-        mock_stt.transcribe = AsyncMock(return_value=TranscriptionResult(
-            text="Look at this puzzle piece",
-            confidence=0.95, processing_ms=100, language="en",
-        ))
+        mock_stt.transcribe = AsyncMock(
+            return_value=TranscriptionResult(
+                text="Look at this puzzle piece",
+                confidence=0.95,
+                processing_ms=100,
+                language="en",
+            )
+        )
         ws = AsyncMock()
         node = MockEdgeNode()
 
@@ -229,6 +259,7 @@ class TestVoiceVisionCapture:
 
         with patch("missy.vision.intent.classify_vision_intent") as mock_classify:
             from missy.vision.intent import ActivationDecision, IntentResult, VisionIntent
+
             mock_classify.return_value = IntentResult(
                 intent=VisionIntent.PUZZLE,
                 decision=ActivationDecision.ACTIVATE,
@@ -237,23 +268,31 @@ class TestVoiceVisionCapture:
                 suggested_mode="puzzle",
             )
 
-            with patch("missy.vision.discovery.find_preferred_camera", return_value=mock_camera), \
-                 patch("missy.vision.capture.CameraHandle") as MockHandle, \
-                 patch("missy.vision.pipeline.ImagePipeline") as MockPipeline, \
-                 patch("cv2.imencode") as mock_encode, \
-                 patch("cv2.IMWRITE_JPEG_QUALITY", 1):
-
+            with (
+                patch("missy.vision.discovery.find_preferred_camera", return_value=mock_camera),
+                patch("missy.vision.capture.CameraHandle") as MockHandle,
+                patch("missy.vision.pipeline.ImagePipeline") as MockPipeline,
+                patch("cv2.imencode") as mock_encode,
+                patch("cv2.IMWRITE_JPEG_QUALITY", 1),
+            ):
                 mock_handle_inst = MagicMock()
                 mock_handle_inst.capture.return_value = mock_capture_result
                 MockHandle.return_value = mock_handle_inst
 
                 mock_pipeline_inst = MagicMock()
-                mock_pipeline_inst.process.return_value = np.full((480, 640, 3), 128, dtype=np.uint8)
+                mock_pipeline_inst.process.return_value = np.full(
+                    (480, 640, 3), 128, dtype=np.uint8
+                )
                 MockPipeline.return_value = mock_pipeline_inst
 
-                mock_encode.return_value = (True, MagicMock(tobytes=MagicMock(return_value=b"jpegdata")))
+                mock_encode.return_value = (
+                    True,
+                    MagicMock(tobytes=MagicMock(return_value=b"jpegdata")),
+                )
 
-                await server._handle_audio(ws, node=node, audio_buffer=b"\x00" * 16000, sample_rate=16000)
+                await server._handle_audio(
+                    ws, node=node, audio_buffer=b"\x00" * 16000, sample_rate=16000
+                )
 
         _, _, metadata = mock_agent_callback.call_args[0]
         assert metadata.get("vision_capture_success") is True
@@ -262,15 +301,20 @@ class TestVoiceVisionCapture:
     @pytest.mark.asyncio
     async def test_no_camera_sets_error(self, server, mock_stt, mock_agent_callback):
         """When no camera is found, metadata should indicate failure."""
-        mock_stt.transcribe = AsyncMock(return_value=TranscriptionResult(
-            text="Look at this puzzle piece",
-            confidence=0.95, processing_ms=100, language="en",
-        ))
+        mock_stt.transcribe = AsyncMock(
+            return_value=TranscriptionResult(
+                text="Look at this puzzle piece",
+                confidence=0.95,
+                processing_ms=100,
+                language="en",
+            )
+        )
         ws = AsyncMock()
         node = MockEdgeNode()
 
         with patch("missy.vision.intent.classify_vision_intent") as mock_classify:
             from missy.vision.intent import ActivationDecision, IntentResult, VisionIntent
+
             mock_classify.return_value = IntentResult(
                 intent=VisionIntent.LOOK,
                 decision=ActivationDecision.ACTIVATE,
@@ -280,7 +324,9 @@ class TestVoiceVisionCapture:
             )
 
             with patch("missy.vision.discovery.find_preferred_camera", return_value=None):
-                await server._handle_audio(ws, node=node, audio_buffer=b"\x00" * 16000, sample_rate=16000)
+                await server._handle_audio(
+                    ws, node=node, audio_buffer=b"\x00" * 16000, sample_rate=16000
+                )
 
         _, _, metadata = mock_agent_callback.call_args[0]
         assert metadata.get("vision_capture_success") is False
@@ -289,10 +335,14 @@ class TestVoiceVisionCapture:
     @pytest.mark.asyncio
     async def test_capture_failure_sets_error(self, server, mock_stt, mock_agent_callback):
         """When capture fails, metadata should indicate the error."""
-        mock_stt.transcribe = AsyncMock(return_value=TranscriptionResult(
-            text="Look at this",
-            confidence=0.95, processing_ms=100, language="en",
-        ))
+        mock_stt.transcribe = AsyncMock(
+            return_value=TranscriptionResult(
+                text="Look at this",
+                confidence=0.95,
+                processing_ms=100,
+                language="en",
+            )
+        )
         ws = AsyncMock()
         node = MockEdgeNode()
 
@@ -305,6 +355,7 @@ class TestVoiceVisionCapture:
 
         with patch("missy.vision.intent.classify_vision_intent") as mock_classify:
             from missy.vision.intent import ActivationDecision, IntentResult, VisionIntent
+
             mock_classify.return_value = IntentResult(
                 intent=VisionIntent.LOOK,
                 decision=ActivationDecision.ACTIVATE,
@@ -313,14 +364,17 @@ class TestVoiceVisionCapture:
                 suggested_mode="general",
             )
 
-            with patch("missy.vision.discovery.find_preferred_camera", return_value=mock_camera), \
-                 patch("missy.vision.capture.CameraHandle") as MockHandle:
-
+            with (
+                patch("missy.vision.discovery.find_preferred_camera", return_value=mock_camera),
+                patch("missy.vision.capture.CameraHandle") as MockHandle,
+            ):
                 mock_handle_inst = MagicMock()
                 mock_handle_inst.capture.return_value = mock_capture_result
                 MockHandle.return_value = mock_handle_inst
 
-                await server._handle_audio(ws, node=node, audio_buffer=b"\x00" * 16000, sample_rate=16000)
+                await server._handle_audio(
+                    ws, node=node, audio_buffer=b"\x00" * 16000, sample_rate=16000
+                )
 
         _, _, metadata = mock_agent_callback.call_args[0]
         assert metadata.get("vision_capture_success") is False
@@ -328,10 +382,14 @@ class TestVoiceVisionCapture:
     @pytest.mark.asyncio
     async def test_capture_exception_graceful(self, server, mock_stt, mock_agent_callback):
         """Exceptions during capture should not crash the audio handler."""
-        mock_stt.transcribe = AsyncMock(return_value=TranscriptionResult(
-            text="Look at this",
-            confidence=0.95, processing_ms=100, language="en",
-        ))
+        mock_stt.transcribe = AsyncMock(
+            return_value=TranscriptionResult(
+                text="Look at this",
+                confidence=0.95,
+                processing_ms=100,
+                language="en",
+            )
+        )
         ws = AsyncMock()
         node = MockEdgeNode()
 
@@ -340,6 +398,7 @@ class TestVoiceVisionCapture:
 
         with patch("missy.vision.intent.classify_vision_intent") as mock_classify:
             from missy.vision.intent import ActivationDecision, IntentResult, VisionIntent
+
             mock_classify.return_value = IntentResult(
                 intent=VisionIntent.LOOK,
                 decision=ActivationDecision.ACTIVATE,
@@ -348,10 +407,15 @@ class TestVoiceVisionCapture:
                 suggested_mode="general",
             )
 
-            with patch("missy.vision.discovery.find_preferred_camera", return_value=mock_camera), \
-                 patch("missy.vision.capture.CameraHandle", side_effect=RuntimeError("device broken")):
-
-                await server._handle_audio(ws, node=node, audio_buffer=b"\x00" * 16000, sample_rate=16000)
+            with (
+                patch("missy.vision.discovery.find_preferred_camera", return_value=mock_camera),
+                patch(
+                    "missy.vision.capture.CameraHandle", side_effect=RuntimeError("device broken")
+                ),
+            ):
+                await server._handle_audio(
+                    ws, node=node, audio_buffer=b"\x00" * 16000, sample_rate=16000
+                )
 
         # Agent should still be called despite vision failure
         mock_agent_callback.assert_awaited_once()
@@ -361,16 +425,25 @@ class TestVoiceVisionCapture:
     @pytest.mark.asyncio
     async def test_vision_import_error_graceful(self, server, mock_stt, mock_agent_callback):
         """If vision module not installed, audio processing continues normally."""
-        mock_stt.transcribe = AsyncMock(return_value=TranscriptionResult(
-            text="Look at this puzzle piece",
-            confidence=0.95, processing_ms=100, language="en",
-        ))
+        mock_stt.transcribe = AsyncMock(
+            return_value=TranscriptionResult(
+                text="Look at this puzzle piece",
+                confidence=0.95,
+                processing_ms=100,
+                language="en",
+            )
+        )
         ws = AsyncMock()
         node = MockEdgeNode()
 
         # Should not crash — the import failure is caught
-        with patch("builtins.__import__", side_effect=ImportError("no vision")), contextlib.suppress(ImportError):
-            await server._handle_audio(ws, node=node, audio_buffer=b"\x00" * 16000, sample_rate=16000)
+        with (
+            patch("builtins.__import__", side_effect=ImportError("no vision")),
+            contextlib.suppress(ImportError),
+        ):
+            await server._handle_audio(
+                ws, node=node, audio_buffer=b"\x00" * 16000, sample_rate=16000
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -384,10 +457,14 @@ class TestVoiceVisionMetadata:
     @pytest.mark.asyncio
     async def test_base_metadata_always_present(self, server, mock_stt, mock_agent_callback):
         """Room, node_id, etc. should always be in metadata."""
-        mock_stt.transcribe = AsyncMock(return_value=TranscriptionResult(
-            text="Hello world",
-            confidence=0.95, processing_ms=100, language="en",
-        ))
+        mock_stt.transcribe = AsyncMock(
+            return_value=TranscriptionResult(
+                text="Hello world",
+                confidence=0.95,
+                processing_ms=100,
+                language="en",
+            )
+        )
         ws = AsyncMock()
         node = MockEdgeNode(room="kitchen", node_id="node-42")
 
@@ -402,15 +479,20 @@ class TestVoiceVisionMetadata:
     @pytest.mark.asyncio
     async def test_ask_decision_skips_capture(self, server, mock_stt, mock_agent_callback):
         """ASK decision should not auto-capture."""
-        mock_stt.transcribe = AsyncMock(return_value=TranscriptionResult(
-            text="How does this look?",
-            confidence=0.95, processing_ms=100, language="en",
-        ))
+        mock_stt.transcribe = AsyncMock(
+            return_value=TranscriptionResult(
+                text="How does this look?",
+                confidence=0.95,
+                processing_ms=100,
+                language="en",
+            )
+        )
         ws = AsyncMock()
         node = MockEdgeNode()
 
         with patch("missy.vision.intent.classify_vision_intent") as mock_classify:
             from missy.vision.intent import ActivationDecision, IntentResult, VisionIntent
+
             mock_classify.return_value = IntentResult(
                 intent=VisionIntent.PAINTING,
                 decision=ActivationDecision.ASK,
@@ -419,7 +501,9 @@ class TestVoiceVisionMetadata:
                 suggested_mode="painting",
             )
 
-            await server._handle_audio(ws, node=node, audio_buffer=b"\x00" * 16000, sample_rate=16000)
+            await server._handle_audio(
+                ws, node=node, audio_buffer=b"\x00" * 16000, sample_rate=16000
+            )
 
         _, _, metadata = mock_agent_callback.call_args[0]
         # ASK decision means no auto-capture

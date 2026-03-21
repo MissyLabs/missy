@@ -157,6 +157,7 @@ class MemoryTracker:
         """
         if manager is None:
             from missy.vision.scene_memory import get_scene_manager
+
             manager = get_scene_manager()
 
         sessions_info: list[SessionMemoryInfo] = []

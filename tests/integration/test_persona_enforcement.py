@@ -66,16 +66,12 @@ def _run_with_mocks(
     """Run the agent with mocked registry and censor, capturing provider calls."""
     registry = _make_mock_registry(provider)
     with ExitStack() as stack:
-        stack.enter_context(
-            patch("missy.agent.runtime.get_registry", return_value=registry)
-        )
+        stack.enter_context(patch("missy.agent.runtime.get_registry", return_value=registry))
         # Disable tool registry so we stay in single-turn mode
         stack.enter_context(
             patch("missy.agent.runtime.get_tool_registry", side_effect=RuntimeError)
         )
-        stack.enter_context(
-            patch("missy.agent.runtime.censor_response", side_effect=lambda x: x)
-        )
+        stack.enter_context(patch("missy.agent.runtime.censor_response", side_effect=lambda x: x))
         return runtime.run(user_input)
 
 
@@ -93,7 +89,9 @@ def _capture_system_prompt(provider: MagicMock) -> str:
     for msg in messages_arg:
         role = getattr(msg, "role", None) or (msg.get("role") if isinstance(msg, dict) else None)
         if role == "system":
-            content = getattr(msg, "content", None) or (msg.get("content") if isinstance(msg, dict) else "")
+            content = getattr(msg, "content", None) or (
+                msg.get("content") if isinstance(msg, dict) else ""
+            )
             return content or ""
     return ""
 
@@ -196,12 +194,7 @@ class TestPersonaToneInResponseShaping:
         """ResponseShaper must not alter content inside fenced code blocks."""
         persona = PersonaConfig(name="Missy", tone=["technical"])
         shaper = ResponseShaper()
-        response = (
-            "As an AI, I can show you:\n"
-            "```bash\n"
-            "sudo systemctl restart nginx\n"
-            "```"
-        )
+        response = "As an AI, I can show you:\n```bash\nsudo systemctl restart nginx\n```"
         cleaned = shaper.shape_response(response, persona=persona, context={})
         assert "sudo systemctl restart nginx" in cleaned
         assert "```bash" in cleaned
@@ -236,7 +229,10 @@ class TestPersonaBoundariesInSystemPrompt:
         custom_boundary = "Never disclose internal architecture details"
         persona = PersonaConfig(
             name="Vault",
-            boundaries=[custom_boundary, "Never execute destructive operations without confirmation"],
+            boundaries=[
+                custom_boundary,
+                "Never execute destructive operations without confirmation",
+            ],
         )
         runtime = _make_runtime_with_persona(persona, tmp_path=tmp_path)
         provider = _make_mock_provider()
@@ -507,9 +503,11 @@ class TestIntentClassificationInfluencesGuidelines:
 
         system_prompt = _capture_system_prompt(provider)
         # BehaviorLayer should have injected the troubleshooting guideline
-        assert "likely cause" in system_prompt or "diagnostic" in system_prompt or "fix" in system_prompt, (
-            f"Troubleshooting guideline not found in system prompt:\n{system_prompt}"
-        )
+        assert (
+            "likely cause" in system_prompt
+            or "diagnostic" in system_prompt
+            or "fix" in system_prompt
+        ), f"Troubleshooting guideline not found in system prompt:\n{system_prompt}"
 
     def test_command_intent_in_runtime_system_prompt(self, tmp_path: Path) -> None:
         """A command-type message routes the 'Direct instruction' guideline into the system prompt."""
@@ -609,15 +607,30 @@ class TestToneAdaptation:
                 "casual",
             ),
             (
-                [{"role": "user", "content": "Please kindly assist me. Regarding the configuration, could you elaborate?"}],
+                [
+                    {
+                        "role": "user",
+                        "content": "Please kindly assist me. Regarding the configuration, could you elaborate?",
+                    }
+                ],
                 "formal",
             ),
             (
-                [{"role": "user", "content": "This still doesn't work, same error again and again, why won't it fix?"}],
+                [
+                    {
+                        "role": "user",
+                        "content": "This still doesn't work, same error again and again, why won't it fix?",
+                    }
+                ],
                 "frustrated",
             ),
             (
-                [{"role": "user", "content": "The async function uses a docker container with ssl tls and oauth tokens"}],
+                [
+                    {
+                        "role": "user",
+                        "content": "The async function uses a docker container with ssl tls and oauth tokens",
+                    }
+                ],
                 "technical",
             ),
             (
@@ -842,9 +855,7 @@ class TestContextCarryover:
 
         # get_system_prompt_prefix uses identity_description and boundaries (not name directly)
         prefix = pm2.get_system_prompt_prefix()
-        assert boundary_text in prefix, (
-            f"Expected boundary text in prefix. Got:\n{prefix}"
-        )
+        assert boundary_text in prefix, f"Expected boundary text in prefix. Got:\n{prefix}"
         assert "Consistent" in prefix, (
             f"Expected 'Consistent' from identity_description in prefix. Got:\n{prefix}"
         )
@@ -852,12 +863,8 @@ class TestContextCarryover:
         # BehaviorLayer._build_persona_block uses name and boundaries
         layer = BehaviorLayer(persona=persona)
         block = layer._build_persona_block()
-        assert boundary_text in block, (
-            f"Expected boundary text in persona block. Got:\n{block}"
-        )
-        assert "Consistent" in block, (
-            f"Expected persona name in block. Got:\n{block}"
-        )
+        assert boundary_text in block, f"Expected boundary text in persona block. Got:\n{block}"
+        assert "Consistent" in block, f"Expected persona name in block. Got:\n{block}"
 
 
 # ---------------------------------------------------------------------------
@@ -909,7 +916,9 @@ class TestPersonalityTraitsInSystemPrompt:
 
         assert "# Personality" in prefix, f"Expected '# Personality' header. Got:\n{prefix}"
         assert "inquisitive" in prefix, f"Expected 'inquisitive' trait. Got:\n{prefix}"
-        assert "security-conscious" in prefix, f"Expected 'security-conscious' trait. Got:\n{prefix}"
+        assert "security-conscious" in prefix, (
+            f"Expected 'security-conscious' trait. Got:\n{prefix}"
+        )
 
     def test_empty_personality_traits_omits_personality_section(self, tmp_path: Path) -> None:
         """An empty personality_traits list produces no # Personality section in the prefix."""
@@ -997,9 +1006,7 @@ class TestPersonaWithEmptyFields:
             identity_description="",
         )
         shaper = ResponseShaper()
-        result = shaper.shape_response(
-            "As an AI, here is the answer.", persona=persona, context={}
-        )
+        result = shaper.shape_response("As an AI, here is the answer.", persona=persona, context={})
         assert isinstance(result, str)
         assert "As an AI" not in result
 
@@ -1187,7 +1194,9 @@ class TestFullPersonaPipelineEndToEnd:
         -> system prompt injected -> provider sees structured diagnosis directive."""
         persona_path = tmp_path / "persona.yaml"
         pm = PersonaManager(persona_path=persona_path)
-        pm.update(name="Debugger", identity_description="Debugger specialises in root-cause analysis.")
+        pm.update(
+            name="Debugger", identity_description="Debugger specialises in root-cause analysis."
+        )
         pm.save()
 
         pm2 = PersonaManager(persona_path=persona_path)
@@ -1210,9 +1219,7 @@ class TestFullPersonaPipelineEndToEnd:
             or "fix" in system_prompt
         ), f"Troubleshooting directive missing from system prompt:\n{system_prompt}"
 
-    def test_full_pipeline_persona_persistence_across_save_load_cycle(
-        self, tmp_path: Path
-    ) -> None:
+    def test_full_pipeline_persona_persistence_across_save_load_cycle(self, tmp_path: Path) -> None:
         """A persona saved and reloaded produces the same shaped system prompt in two independent runtimes."""
         persona_path = tmp_path / "persona.yaml"
 
@@ -1242,9 +1249,7 @@ class TestFullPersonaPipelineEndToEnd:
         assert "Always verify before deleting" in first_prompt
         assert "Always verify before deleting" in second_prompt
 
-    def test_full_pipeline_changing_persona_changes_behavior_output(
-        self, tmp_path: Path
-    ) -> None:
+    def test_full_pipeline_changing_persona_changes_behavior_output(self, tmp_path: Path) -> None:
         """Swapping the persona between runs causes measurably different system prompts."""
         strict_persona = PersonaConfig(
             name="Strict",
@@ -1290,7 +1295,9 @@ class TestFullPersonaPipelineEndToEnd:
 
         # The two system prompts must differ in persona-specific content
         assert "Strict" in strict_prompt, f"Expected 'Strict' in strict prompt:\n{strict_prompt}"
-        assert "Relaxed" in relaxed_prompt, f"Expected 'Relaxed' in relaxed prompt:\n{relaxed_prompt}"
+        assert "Relaxed" in relaxed_prompt, (
+            f"Expected 'Relaxed' in relaxed prompt:\n{relaxed_prompt}"
+        )
         assert "Validate every input before acting" in strict_prompt, (
             f"Expected strict boundary in strict prompt:\n{strict_prompt}"
         )

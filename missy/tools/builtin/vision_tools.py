@@ -40,9 +40,7 @@ class VisionCaptureTool(BaseTool):
     parameters = {
         "source": {
             "type": "string",
-            "description": (
-                "Image source: 'webcam' (default), 'screenshot', or a file path."
-            ),
+            "description": ("Image source: 'webcam' (default), 'screenshot', or a file path."),
             "required": False,
         },
         "device": {
@@ -77,6 +75,7 @@ class VisionCaptureTool(BaseTool):
             if source in ("webcam", "camera"):
                 if not device:
                     from missy.vision.discovery import find_preferred_camera
+
                     cam = find_preferred_camera()
                     if cam is None:
                         return ToolResult(
@@ -117,9 +116,7 @@ class VisionCaptureTool(BaseTool):
                 save_path = str(captures_dir / f"capture_{ts}.jpg")
 
             Path(save_path).parent.mkdir(parents=True, exist_ok=True)
-            cv2.imwrite(
-                save_path, processed, [cv2.IMWRITE_JPEG_QUALITY, 85]
-            )
+            cv2.imwrite(save_path, processed, [cv2.IMWRITE_JPEG_QUALITY, 85])
 
             result = {
                 "source_type": frame.source_type.value,
@@ -203,7 +200,8 @@ class VisionBurstCaptureTool(BaseTool):
                 cam = find_preferred_camera()
                 if cam is None:
                     return ToolResult(
-                        success=False, output=None,
+                        success=False,
+                        output=None,
                         error="No camera found. Connect a USB webcam.",
                     )
                 device = cam.device_path
@@ -218,7 +216,8 @@ class VisionBurstCaptureTool(BaseTool):
                     result = handle.capture_best(burst_count=count)
                     if not result.success:
                         return ToolResult(
-                            success=False, output=None,
+                            success=False,
+                            output=None,
                             error=result.error or "No frames captured",
                         )
 
@@ -229,24 +228,25 @@ class VisionBurstCaptureTool(BaseTool):
 
                     captures_dir = Path.home() / ".missy" / "captures"
                     captures_dir.mkdir(parents=True, exist_ok=True)
-                    save_path = str(
-                        captures_dir / f"burst_best_{int(time.time())}.jpg"
-                    )
+                    save_path = str(captures_dir / f"burst_best_{int(time.time())}.jpg")
                     cv2.imwrite(
-                        save_path, processed,
+                        save_path,
+                        processed,
                         [cv2.IMWRITE_JPEG_QUALITY, 85],
                     )
 
                     return ToolResult(
                         success=True,
-                        output=json.dumps({
-                            "mode": "best",
-                            "burst_count": count,
-                            "width": result.width,
-                            "height": result.height,
-                            "quality": quality,
-                            "saved_to": save_path,
-                        }),
+                        output=json.dumps(
+                            {
+                                "mode": "best",
+                                "burst_count": count,
+                                "width": result.width,
+                                "height": result.height,
+                                "quality": quality,
+                                "saved_to": save_path,
+                            }
+                        ),
                     )
 
                 # Full burst
@@ -255,25 +255,29 @@ class VisionBurstCaptureTool(BaseTool):
                 for i, r in enumerate(results):
                     if r.success:
                         quality = pipeline.assess_quality(r.image)
-                        frames.append({
-                            "index": i,
-                            "width": r.width,
-                            "height": r.height,
-                            "quality": quality,
-                            "success": True,
-                        })
+                        frames.append(
+                            {
+                                "index": i,
+                                "width": r.width,
+                                "height": r.height,
+                                "quality": quality,
+                                "success": True,
+                            }
+                        )
                     else:
                         frames.append({"index": i, "success": False, "error": r.error})
 
                 return ToolResult(
                     success=True,
-                    output=json.dumps({
-                        "mode": "burst",
-                        "count": count,
-                        "interval": interval,
-                        "frames": frames,
-                        "successful": sum(1 for f in frames if f.get("success")),
-                    }),
+                    output=json.dumps(
+                        {
+                            "mode": "burst",
+                            "count": count,
+                            "interval": interval,
+                            "frames": frames,
+                            "successful": sum(1 for f in frames if f.get("success")),
+                        }
+                    ),
                 )
 
             finally:
@@ -281,7 +285,8 @@ class VisionBurstCaptureTool(BaseTool):
 
         except ImportError as exc:
             return ToolResult(
-                success=False, output=None,
+                success=False,
+                output=None,
                 error=f"Vision dependencies not installed: {exc}",
             )
         except Exception as exc:
@@ -371,12 +376,14 @@ class VisionAnalyzeTool(BaseTool):
 
             return ToolResult(
                 success=True,
-                output=json.dumps({
-                    "mode": mode,
-                    "prompt": prompt,
-                    "is_followup": is_followup,
-                    "has_scene_memory": bool(previous_observations),
-                }),
+                output=json.dumps(
+                    {
+                        "mode": mode,
+                        "prompt": prompt,
+                        "is_followup": is_followup,
+                        "has_scene_memory": bool(previous_observations),
+                    }
+                ),
             )
 
         except Exception as exc:
@@ -406,13 +413,15 @@ class VisionDevicesTool(BaseTool):
 
             devices = []
             for cam in cameras:
-                devices.append({
-                    "device_path": cam.device_path,
-                    "name": cam.name,
-                    "usb_id": cam.usb_id,
-                    "bus_info": cam.bus_info,
-                    "known_model": KNOWN_CAMERAS.get(cam.usb_id, ""),
-                })
+                devices.append(
+                    {
+                        "device_path": cam.device_path,
+                        "name": cam.name,
+                        "usb_id": cam.usb_id,
+                        "bus_info": cam.bus_info,
+                        "known_model": KNOWN_CAMERAS.get(cam.usb_id, ""),
+                    }
+                )
 
             preferred = disc.find_preferred()
             result = {
@@ -491,44 +500,46 @@ class VisionSceneMemoryTool(BaseTool):
                 session = mgr.create_session(task_id, tt)
                 return ToolResult(
                     success=True,
-                    output=json.dumps({
-                        "action": "created",
-                        "task_id": task_id,
-                        "task_type": task_type,
-                    }),
+                    output=json.dumps(
+                        {
+                            "action": "created",
+                            "task_id": task_id,
+                            "task_type": task_type,
+                        }
+                    ),
                 )
 
             elif action == "add_observation":
                 session = mgr.get_session(task_id) or mgr.get_active_session()
                 if not session:
-                    return ToolResult(
-                        success=False, output=None, error="No active scene session"
-                    )
+                    return ToolResult(success=False, output=None, error="No active scene session")
                 session.add_observation(observation)
                 return ToolResult(
                     success=True,
-                    output=json.dumps({
-                        "action": "observation_added",
-                        "task_id": session.task_id,
-                        "total_observations": len(session.observations),
-                    }),
+                    output=json.dumps(
+                        {
+                            "action": "observation_added",
+                            "task_id": session.task_id,
+                            "total_observations": len(session.observations),
+                        }
+                    ),
                 )
 
             elif action == "update_state":
                 session = mgr.get_session(task_id) or mgr.get_active_session()
                 if not session:
-                    return ToolResult(
-                        success=False, output=None, error="No active scene session"
-                    )
+                    return ToolResult(success=False, output=None, error="No active scene session")
                 updates = json.loads(state_updates) if state_updates else {}
                 session.update_state(**updates)
                 return ToolResult(
                     success=True,
-                    output=json.dumps({
-                        "action": "state_updated",
-                        "task_id": session.task_id,
-                        "state": session.state,
-                    }),
+                    output=json.dumps(
+                        {
+                            "action": "state_updated",
+                            "task_id": session.task_id,
+                            "state": session.state,
+                        }
+                    ),
                 )
 
             elif action == "summarize":

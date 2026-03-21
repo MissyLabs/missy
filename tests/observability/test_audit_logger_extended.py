@@ -101,9 +101,7 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 class TestInitialisationAndFileHandling:
-    def test_parent_directory_created_with_restrictive_mode(
-        self, tmp_path: Path, bus: EventBus
-    ):
+    def test_parent_directory_created_with_restrictive_mode(self, tmp_path: Path, bus: EventBus):
         """mkdir uses mode=0o700 so the audit directory is private."""
         nested = tmp_path / "deep" / "nested" / "audit.jsonl"
         AuditLogger(log_path=str(nested), bus=bus)
@@ -123,9 +121,7 @@ class TestInitialisationAndFileHandling:
         al = AuditLogger(log_path=str(log_path), bus=bus)
         assert isinstance(al.log_path, Path)
 
-    def test_no_file_created_on_init_before_first_event(
-        self, log_path: Path, bus: EventBus
-    ):
+    def test_no_file_created_on_init_before_first_event(self, log_path: Path, bus: EventBus):
         """AuditLogger must not create the log file until the first event fires."""
         AuditLogger(log_path=str(log_path), bus=bus)
         assert not log_path.exists()
@@ -137,7 +133,9 @@ class TestInitialisationAndFileHandling:
 
 
 class TestJsonlOutputFormat:
-    def test_each_line_is_valid_json(self, audit_logger: AuditLogger, bus: EventBus, log_path: Path):
+    def test_each_line_is_valid_json(
+        self, audit_logger: AuditLogger, bus: EventBus, log_path: Path
+    ):
         _publish(bus, "net.req", "network", "allow")
         _publish(bus, "shell.exec", "shell", "deny")
         for line in log_path.read_text().splitlines():
@@ -163,16 +161,12 @@ class TestJsonlOutputFormat:
         dt = datetime.fromisoformat(ts)
         assert dt.tzinfo is not None, "Timestamp must be timezone-aware"
 
-    def test_session_id_round_trips(
-        self, audit_logger: AuditLogger, bus: EventBus, log_path: Path
-    ):
+    def test_session_id_round_trips(self, audit_logger: AuditLogger, bus: EventBus, log_path: Path):
         _publish(bus, "ev", "network", "allow", session_id="session-xyz-42")
         record = _read_jsonl(log_path)[0]
         assert record["session_id"] == "session-xyz-42"
 
-    def test_task_id_round_trips(
-        self, audit_logger: AuditLogger, bus: EventBus, log_path: Path
-    ):
+    def test_task_id_round_trips(self, audit_logger: AuditLogger, bus: EventBus, log_path: Path):
         _publish(bus, "ev", "network", "allow", task_id="task-abc-007")
         record = _read_jsonl(log_path)[0]
         assert record["task_id"] == "task-abc-007"
@@ -293,17 +287,13 @@ class TestSecurityAuditEvents:
 
 
 class TestEventFiltering:
-    def test_get_recent_events_empty_file_returns_empty_list(
-        self, bus: EventBus, tmp_path: Path
-    ):
+    def test_get_recent_events_empty_file_returns_empty_list(self, bus: EventBus, tmp_path: Path):
         log = tmp_path / "empty.jsonl"
         log.write_text("")
         al = AuditLogger(log_path=str(log), bus=bus)
         assert al.get_recent_events() == []
 
-    def test_get_recent_events_default_limit_is_100(
-        self, audit_logger: AuditLogger, bus: EventBus
-    ):
+    def test_get_recent_events_default_limit_is_100(self, audit_logger: AuditLogger, bus: EventBus):
         """Default limit parameter returns at most 100 events."""
         for i in range(150):
             _publish(bus, f"ev.{i}", "network", "allow")
@@ -325,9 +315,7 @@ class TestEventFiltering:
         assert violations[0]["event_type"] == "d.1"
         assert violations[1]["event_type"] == "d.2"
 
-    def test_get_policy_violations_limit_boundary(
-        self, audit_logger: AuditLogger, bus: EventBus
-    ):
+    def test_get_policy_violations_limit_boundary(self, audit_logger: AuditLogger, bus: EventBus):
         """Exactly *limit* denies are returned when more exist."""
         for i in range(7):
             _publish(bus, f"deny.{i}", "shell", "deny")
@@ -438,9 +426,7 @@ class TestFileNotWritable:
                 )
             )
 
-    def test_write_failure_logs_error_message(
-        self, audit_logger: AuditLogger, log_path: Path
-    ):
+    def test_write_failure_logs_error_message(self, audit_logger: AuditLogger, log_path: Path):
         with (
             patch.object(Path, "open", side_effect=PermissionError("denied")),
             patch("missy.observability.audit_logger._module_logger") as mock_log,
@@ -456,9 +442,7 @@ class TestFileNotWritable:
             )
         mock_log.error.assert_called_once()
 
-    def test_publish_continues_after_write_failure(
-        self, bus: EventBus, tmp_path: Path
-    ):
+    def test_publish_continues_after_write_failure(self, bus: EventBus, tmp_path: Path):
         """Even if file writes keep failing, subsequent publishes still deliver to
         in-memory subscribers."""
         received = []
@@ -488,9 +472,7 @@ class TestSingletonBehaviour:
         al = init_audit_logger(str(tmp_path / "c.jsonl"))
         assert get_audit_logger() is al
 
-    def test_get_audit_logger_raises_runtime_error_when_not_initialised(
-        self, monkeypatch
-    ):
+    def test_get_audit_logger_raises_runtime_error_when_not_initialised(self, monkeypatch):
         monkeypatch.setattr(audit_mod, "_audit_logger", None)
         with pytest.raises(RuntimeError, match="AuditLogger has not been initialised"):
             get_audit_logger()
@@ -542,9 +524,7 @@ class TestOtelExporter:
         mock_tracer = MagicMock()
         mock_span = MagicMock()
         mock_tracer.start_as_current_span.return_value.__enter__ = lambda s, *a: mock_span
-        mock_tracer.start_as_current_span.return_value.__exit__ = MagicMock(
-            return_value=False
-        )
+        mock_tracer.start_as_current_span.return_value.__exit__ = MagicMock(return_value=False)
         exp._tracer = mock_tracer
         # list value inside "detail" — only primitives are set as attributes
         exp.export_event({"event_type": "x", "detail": {"hosts": ["a", "b"]}})
@@ -592,30 +572,26 @@ class TestVisionAuditIntegration:
       - they degrade gracefully when the audit logger is initialised
     """
 
-    def test_audit_vision_capture_does_not_raise_when_logger_uninitialised(
-        self, monkeypatch
-    ):
+    def test_audit_vision_capture_does_not_raise_when_logger_uninitialised(self, monkeypatch):
         monkeypatch.setattr(audit_mod, "_audit_logger", None)
         from missy.vision.audit import audit_vision_capture
 
         # Must not raise
         audit_vision_capture(device="/dev/video0", success=True, width=1920, height=1080)
 
-    def test_audit_vision_analysis_does_not_raise_when_logger_uninitialised(
-        self, monkeypatch
-    ):
+    def test_audit_vision_analysis_does_not_raise_when_logger_uninitialised(self, monkeypatch):
         monkeypatch.setattr(audit_mod, "_audit_logger", None)
         from missy.vision.audit import audit_vision_analysis
 
         audit_vision_analysis(mode="puzzle", success=False, error="timeout")
 
-    def test_audit_vision_intent_does_not_raise_when_logger_uninitialised(
-        self, monkeypatch
-    ):
+    def test_audit_vision_intent_does_not_raise_when_logger_uninitialised(self, monkeypatch):
         monkeypatch.setattr(audit_mod, "_audit_logger", None)
         from missy.vision.audit import audit_vision_intent
 
-        audit_vision_intent(text="show me the board", intent="vision", confidence=0.95, decision="activate")
+        audit_vision_intent(
+            text="show me the board", intent="vision", confidence=0.95, decision="activate"
+        )
 
     def test_audit_vision_device_discovery_does_not_raise_when_logger_uninitialised(
         self, monkeypatch
@@ -625,33 +601,25 @@ class TestVisionAuditIntegration:
 
         audit_vision_device_discovery(camera_count=2, preferred_device="/dev/video0")
 
-    def test_audit_vision_error_does_not_raise_when_logger_uninitialised(
-        self, monkeypatch
-    ):
+    def test_audit_vision_error_does_not_raise_when_logger_uninitialised(self, monkeypatch):
         monkeypatch.setattr(audit_mod, "_audit_logger", None)
         from missy.vision.audit import audit_vision_error
 
         audit_vision_error(operation="capture", error="camera not found", recoverable=False)
 
-    def test_audit_vision_burst_does_not_raise_when_logger_uninitialised(
-        self, monkeypatch
-    ):
+    def test_audit_vision_burst_does_not_raise_when_logger_uninitialised(self, monkeypatch):
         monkeypatch.setattr(audit_mod, "_audit_logger", None)
         from missy.vision.audit import audit_vision_burst
 
         audit_vision_burst(device="/dev/video0", count=5, successful=4, best_only=True)
 
-    def test_audit_vision_session_does_not_raise_when_logger_uninitialised(
-        self, monkeypatch
-    ):
+    def test_audit_vision_session_does_not_raise_when_logger_uninitialised(self, monkeypatch):
         monkeypatch.setattr(audit_mod, "_audit_logger", None)
         from missy.vision.audit import audit_vision_session
 
         audit_vision_session(action="start", task_id="t1", task_type="puzzle", frame_count=0)
 
-    def test_vision_audit_helpers_do_not_raise_when_log_method_absent(
-        self, tmp_path: Path
-    ):
+    def test_vision_audit_helpers_do_not_raise_when_log_method_absent(self, tmp_path: Path):
         """Even though AuditLogger has no .log() method, vision audit helpers
         must not propagate the AttributeError — they catch all exceptions."""
         al = init_audit_logger(str(tmp_path / "vision_audit.jsonl"))

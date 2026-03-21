@@ -57,7 +57,9 @@ def _make(
     name: str = "svc",
 ) -> CircuitBreaker:
     """Return a breaker with test-friendly defaults."""
-    return CircuitBreaker(name, threshold=threshold, base_timeout=base_timeout, max_timeout=max_timeout)
+    return CircuitBreaker(
+        name, threshold=threshold, base_timeout=base_timeout, max_timeout=max_timeout
+    )
 
 
 def _always_raise(exc_factory=None):

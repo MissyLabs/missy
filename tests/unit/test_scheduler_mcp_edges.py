@@ -480,9 +480,7 @@ class TestManagerDefaultRetryConfig:
         assert job.retry_on == ["network", "provider_error"]
 
     def test_custom_backoff_preserved(self, started_manager):
-        job = started_manager.add_job(
-            "custom", "every 5 minutes", "task", backoff_seconds=[5, 10]
-        )
+        job = started_manager.add_job("custom", "every 5 minutes", "task", backoff_seconds=[5, 10])
         assert job.backoff_seconds == [5, 10]
 
 

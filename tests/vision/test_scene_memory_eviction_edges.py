@@ -297,7 +297,7 @@ class TestFrameDeduplication:
         val = int(base_hash, 16)
         # Flip the lowest `threshold` bits
         for bit in range(threshold):
-            val ^= (1 << bit)
+            val ^= 1 << bit
         target_hash = format(val, f"0{len(base_hash)}x")
 
         img2 = np.full((40, 40, 3), 101, dtype=np.uint8)
@@ -364,8 +364,7 @@ class TestComputePhash:
         # Provide a 2-D array so cvtColor is bypassed in the code
         small = img.copy()
 
-        with patch("cv2.resize", return_value=small), \
-             patch("cv2.cvtColor", return_value=small):
+        with patch("cv2.resize", return_value=small), patch("cv2.cvtColor", return_value=small):
             h = compute_phash(img)
 
         # Intensity 200 → "c8" repeated 8 times → 16 hex chars
@@ -465,8 +464,8 @@ class TestSceneSessionCloseIdempotency:
 
         summary = session.summarize()
         assert summary["active"] is False
-        assert summary["frame_count"] == 1        # total counter preserved
-        assert summary["frames_retained"] == 0   # cleared on close
+        assert summary["frame_count"] == 1  # total counter preserved
+        assert summary["frames_retained"] == 0  # cleared on close
         assert summary["task_type"] == "inspection"
 
     def test_summarize_observations_cleared_after_close(self) -> None:

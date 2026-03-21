@@ -39,6 +39,7 @@ def _get_cv2() -> Any:
             if _cv2 is None:
                 try:
                     import cv2
+
                     _cv2 = cv2
                 except ImportError:
                     raise ImportError(
@@ -113,8 +114,7 @@ class ImageSource(ABC):
         ...
 
     @abstractmethod
-    def source_type(self) -> SourceType:
-        ...
+    def source_type(self) -> SourceType: ...
 
     def is_available(self) -> bool:
         """Check if this source is currently available."""
@@ -142,10 +142,7 @@ class WebcamSource(ImageSource):
         import re
 
         if not re.match(r"^/dev/video\d+$", device_path):
-            raise ValueError(
-                f"Invalid device path: {device_path!r} "
-                "(expected /dev/videoN format)"
-            )
+            raise ValueError(f"Invalid device path: {device_path!r} (expected /dev/videoN format)")
         self._device_path = device_path
         self._timeout = timeout
 
@@ -226,9 +223,7 @@ class FileSource(ImageSource):
         # Verify it's a regular file (not a device node, socket, or pipe)
         file_stat = self._path.stat()
         if not stat.S_ISREG(file_stat.st_mode):
-            raise ValueError(
-                f"Not a regular file (mode 0o{file_stat.st_mode:o}): {self._path}"
-            )
+            raise ValueError(f"Not a regular file (mode 0o{file_stat.st_mode:o}): {self._path}")
 
         # Check file size before loading
         file_size = file_stat.st_size  # reuse stat result from above
@@ -254,7 +249,9 @@ class FileSource(ImageSource):
         if h > self.MAX_DIMENSION or w > self.MAX_DIMENSION:
             logger.warning(
                 "Image %s has large dimensions (%dx%d), may be slow to process",
-                self._path, w, h,
+                self._path,
+                w,
+                h,
             )
 
         return ImageFrame(
@@ -286,9 +283,7 @@ class ScreenshotSource(ImageSource):
         # Check if any screenshot tool is available
         for cmd in ("scrot", "gnome-screenshot", "grim"):
             try:
-                result = subprocess.run(
-                    ["which", cmd], capture_output=True, timeout=5
-                )
+                result = subprocess.run(["which", cmd], capture_output=True, timeout=5)
                 if result.returncode == 0:
                     return True
             except Exception:
@@ -335,9 +330,7 @@ class ScreenshotSource(ImageSource):
         errors: list[str] = []
         for cmd, name in tools:
             try:
-                result = subprocess.run(
-                    cmd, capture_output=True, timeout=10, env=env
-                )
+                result = subprocess.run(cmd, capture_output=True, timeout=10, env=env)
                 if result.returncode == 0 and Path(output_path).exists():
                     logger.debug("Screenshot captured with %s", name)
                     return name
@@ -349,9 +342,7 @@ class ScreenshotSource(ImageSource):
             except Exception as exc:
                 errors.append(f"{name}: {exc}")
 
-        raise RuntimeError(
-            "No screenshot tool succeeded. Tried: " + "; ".join(errors)
-        )
+        raise RuntimeError("No screenshot tool succeeded. Tried: " + "; ".join(errors))
 
 
 # ---------------------------------------------------------------------------

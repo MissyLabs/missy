@@ -130,9 +130,7 @@ class MultiCameraManager:
                 self.add_camera(device)
                 connected.append(device.device_path)
             except Exception as exc:
-                logger.warning(
-                    "Failed to open %s: %s", device.device_path, exc
-                )
+                logger.warning("Failed to open %s: %s", device.device_path, exc)
 
         return connected
 
@@ -220,8 +218,7 @@ class MultiCameraManager:
         deadline = time.monotonic() + timeout
         with ThreadPoolExecutor(max_workers=self._max_workers) as pool:
             futures = {
-                pool.submit(_capture_one, path, handle): path
-                for path, handle in cameras.items()
+                pool.submit(_capture_one, path, handle): path for path, handle in cameras.items()
             }
 
             for future in as_completed(futures, timeout=timeout):

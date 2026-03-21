@@ -524,7 +524,10 @@ class TestExchangeCode:
         from missy.cli.oauth import _exchange_code
 
         resp = self._make_response(400, {"error": "invalid_grant"})
-        with patch("httpx.post", return_value=resp), pytest.raises(RuntimeError, match="Token exchange failed"):
+        with (
+            patch("httpx.post", return_value=resp),
+            pytest.raises(RuntimeError, match="Token exchange failed"),
+        ):
             _exchange_code("cid", "bad-code", "verifier")
 
     def test_error_message_includes_status_code(self):
@@ -586,7 +589,10 @@ class TestDoRefresh:
         from missy.cli.oauth import _do_refresh
 
         resp = self._make_response(403, {"error": "forbidden"})
-        with patch("httpx.post", return_value=resp), pytest.raises(RuntimeError, match="Token refresh failed"):
+        with (
+            patch("httpx.post", return_value=resp),
+            pytest.raises(RuntimeError, match="Token refresh failed"),
+        ):
             _do_refresh("cid", "rt")
 
     def test_posts_to_token_url(self):

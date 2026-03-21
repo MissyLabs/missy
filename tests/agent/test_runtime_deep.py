@@ -123,7 +123,9 @@ def _make_tool_registry(tools: list | None = None) -> MagicMock:
     """Build a mock tool registry with a calculator-style tool."""
     tools = tools or []
     tool_reg = MagicMock()
-    tool_reg.list_tools.return_value = [getattr(t, "name", f"tool_{i}") for i, t in enumerate(tools)]
+    tool_reg.list_tools.return_value = [
+        getattr(t, "name", f"tool_{i}") for i, t in enumerate(tools)
+    ]
 
     def _get(name: str):
         for t in tools:
@@ -405,7 +407,10 @@ class TestRuntimeIterationLimit:
         # Ran exactly max_iterations tool rounds, then fell back
         assert provider.complete_with_tools.call_count == 3
         # Result is either the fallback content or the sentinel string
-        assert result in ("fallback after limit", "[Agent reached iteration limit without a final response.]")
+        assert result in (
+            "fallback after limit",
+            "[Agent reached iteration limit without a final response.]",
+        )
 
     def test_iteration_limit_fallback_returns_sentinel_on_exception(self):
         """When fallback single-turn also fails, sentinel string is returned."""
@@ -468,7 +473,10 @@ class TestRuntimeCircuitBreakerIntegration:
         breaker._last_failure_time = time.monotonic()
         rt._circuit_breaker = breaker
 
-        with patch("missy.agent.runtime.get_registry", return_value=registry), pytest.raises((MissyError, ProviderError)):
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            pytest.raises((MissyError, ProviderError)),
+        ):
             rt.run("should be rejected")
 
         # Provider was never actually called
@@ -531,8 +539,7 @@ class TestRuntimeContextManagement:
 
         # Build a long history — each message ~20 tokens (80 chars)
         long_history = [
-            {"role": "user" if i % 2 == 0 else "assistant", "content": "x" * 80}
-            for i in range(20)
+            {"role": "user" if i % 2 == 0 else "assistant", "content": "x" * 80} for i in range(20)
         ]
 
         _, messages = mgr.build_messages(
@@ -615,7 +622,9 @@ class TestRuntimeContextManagement:
             history=[],
             memory_results=huge_memory,
         )
-        memory_section = system.split("## Relevant Memory")[-1] if "## Relevant Memory" in system else ""
+        memory_section = (
+            system.split("## Relevant Memory")[-1] if "## Relevant Memory" in system else ""
+        )
         # The memory section should be present but clipped
         assert len(memory_section) < 5000
 
@@ -981,9 +990,9 @@ class TestContextManagerTokenCounting:
         """_approx_tokens uses 4-chars-per-token heuristic."""
         from missy.agent.context import _approx_tokens
 
-        assert _approx_tokens("abcd") == 1       # 4 chars → 1 token
-        assert _approx_tokens("abcdefgh") == 2   # 8 chars → 2 tokens
-        assert _approx_tokens("") == 1            # minimum 1
+        assert _approx_tokens("abcd") == 1  # 4 chars → 1 token
+        assert _approx_tokens("abcdefgh") == 2  # 8 chars → 2 tokens
+        assert _approx_tokens("") == 1  # minimum 1
 
     def test_new_message_always_included(self):
         """The new user message is always the final element in returned messages."""
@@ -1334,7 +1343,9 @@ class TestProgressReporterLifecycle:
             patch("missy.agent.runtime.get_registry", return_value=registry),
             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
         ):
-            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=5), progress_reporter=mock_reporter)
+            rt = AgentRuntime(
+                AgentConfig(provider="fake", max_iterations=5), progress_reporter=mock_reporter
+            )
             rt.run("run tool")
 
         mock_reporter.on_start.assert_called_once()
@@ -1358,7 +1369,9 @@ class TestProgressReporterLifecycle:
             patch("missy.agent.runtime.get_registry", return_value=registry),
             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
         ):
-            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=5), progress_reporter=mock_reporter)
+            rt = AgentRuntime(
+                AgentConfig(provider="fake", max_iterations=5), progress_reporter=mock_reporter
+            )
             with pytest.raises(ProviderError):
                 rt.run("error run")
 

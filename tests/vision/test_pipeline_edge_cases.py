@@ -100,18 +100,18 @@ class TestPipelineEdgeCases:
             pipe.resize(np.zeros((10, 10, 3), dtype=np.uint8), -1)
 
     def test_denoise(self) -> None:
-        pipe = ImagePipeline(PipelineConfig(
-            denoise=True, normalize_exposure=False, target_dimension=50
-        ))
+        pipe = ImagePipeline(
+            PipelineConfig(denoise=True, normalize_exposure=False, target_dimension=50)
+        )
         rng = np.random.RandomState(7)
         img = rng.randint(50, 200, (50, 50, 3), dtype=np.uint8)
         result = pipe.process(img)
         assert result.shape == img.shape
 
     def test_sharpen(self) -> None:
-        pipe = ImagePipeline(PipelineConfig(
-            sharpen=True, normalize_exposure=False, target_dimension=50
-        ))
+        pipe = ImagePipeline(
+            PipelineConfig(sharpen=True, normalize_exposure=False, target_dimension=50)
+        )
         img = np.full((50, 50, 3), 128, dtype=np.uint8)
         img[20:30, 20:30] = [200, 200, 200]
         result = pipe.process(img)

@@ -535,9 +535,7 @@ class SchedulerManager:
             payload = [job.to_dict() for job in self._jobs.values()]
             data = json.dumps(payload, indent=2, default=str).encode("utf-8")
             # Atomic write with restrictive permissions (0o600)
-            fd, tmp_path = tempfile.mkstemp(
-                dir=str(self.jobs_file.parent), suffix=".tmp"
-            )
+            fd, tmp_path = tempfile.mkstemp(dir=str(self.jobs_file.parent), suffix=".tmp")
             try:
                 os.fchmod(fd, 0o600)
                 os.write(fd, data)

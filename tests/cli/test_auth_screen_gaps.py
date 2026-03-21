@@ -49,7 +49,10 @@ class TestStoreTokenWriteFailure:
         """Tmp file is unlinked when json.dump raises so no partial file is left."""
         tmp_path_expected = self.token_file.with_suffix(".tmp")
 
-        with patch("json.dump", side_effect=OSError("disk full")), pytest.raises(OSError, match="disk full"):
+        with (
+            patch("json.dump", side_effect=OSError("disk full")),
+            pytest.raises(OSError, match="disk full"),
+        ):
             store_token("sk-ant-api03-test", "api_key")
 
         # The tmp file must have been cleaned up on exception.
@@ -57,17 +60,24 @@ class TestStoreTokenWriteFailure:
 
     def test_write_error_does_not_leave_token_file(self, tmp_path):
         """The final token file must not exist after a failed write."""
-        with patch("json.dump", side_effect=ValueError("serialise fail")), pytest.raises(ValueError):
+        with (
+            patch("json.dump", side_effect=ValueError("serialise fail")),
+            pytest.raises(ValueError),
+        ):
             store_token("bad-token", "setup_token")
 
         assert not self.token_file.exists()
 
     def test_write_error_propagates_original_exception_type(self):
         """The exact exception type from the write is re-raised unmodified."""
+
         class _CustomError(Exception):
             pass
 
-        with patch("json.dump", side_effect=_CustomError("custom")), pytest.raises(_CustomError, match="custom"):
+        with (
+            patch("json.dump", side_effect=_CustomError("custom")),
+            pytest.raises(_CustomError, match="custom"),
+        ):
             store_token("tok", "api_key")
 
     def test_successful_write_after_prior_failure_still_works(self):
@@ -243,9 +253,7 @@ class TestListLastFrameAt:
     async def test_last_frame_absent_when_zero(self):
         """When last_frame_at is falsy the suffix is omitted."""
         sc = MagicMock()
-        sc.get_active_sessions.return_value = [
-            _fake_session("s-noframe", last_frame_at=0.0)
-        ]
+        sc.get_active_sessions.return_value = [_fake_session("s-noframe", last_frame_at=0.0)]
 
         result = await _invoke("!screen list", screencast=sc)
 

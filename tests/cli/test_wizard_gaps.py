@@ -151,7 +151,7 @@ class TestRunWizardAllThreeProviders:
             False,  # OpenAI: verify? No
             False,  # Ollama: verify? No
             False,  # Discord? No
-            True,   # Write config? Yes
+            True,  # Write config? Yes
         ]
 
         with (
@@ -184,14 +184,14 @@ class TestRunWizardOllamaVerifyDeclined:
 
         prompts = [
             str(tmp_path / "workspace"),  # Step 1
-            "3",                           # Step 2: ollama only
-            "http://localhost:11434",      # Ollama base URL
-            "llama3",                      # Ollama model
+            "3",  # Step 2: ollama only
+            "http://localhost:11434",  # Ollama base URL
+            "llama3",  # Ollama model
         ]
         confirms = [
             False,  # Ollama verify? No → skips _verify_ollama call
             False,  # Discord? No
-            True,   # Write config? Yes
+            True,  # Write config? Yes
         ]
 
         mock_verify = MagicMock(return_value=True)
@@ -221,17 +221,17 @@ class TestRunWizardOpenAIVerifyFails:
 
         prompts = [
             str(tmp_path / "workspace"),  # Step 1
-            "2",                           # Step 2: openai only
-            "1",                           # OpenAI auth: API key
-            "sk-openai-failkey1234567890", # API key (valid format)
+            "2",  # Step 2: openai only
+            "1",  # OpenAI auth: API key
+            "sk-openai-failkey1234567890",  # API key (valid format)
             "1",  # model primary
             "1",  # model fast
             "1",  # model premium
         ]
         confirms = [
-            True,   # OpenAI verify? Yes
+            True,  # OpenAI verify? Yes
             False,  # Discord? No
-            True,   # Write config? Yes
+            True,  # Write config? Yes
         ]
 
         with (
@@ -263,10 +263,10 @@ class TestRunWizardAnthropicSetupTokenFallback:
         config_file = tmp_path / "config.yaml"
 
         prompts = [
-            str(tmp_path / "workspace"),   # Step 1
-            "1",                            # Step 2: anthropic only
-            "3",                            # Anthropic auth: setup-token
-            "sk-ant-api03-fallback1234567", # Fallback API key
+            str(tmp_path / "workspace"),  # Step 1
+            "1",  # Step 2: anthropic only
+            "3",  # Anthropic auth: setup-token
+            "sk-ant-api03-fallback1234567",  # Fallback API key
             "1",  # model primary
             "2",  # model fast
             "3",  # model premium
@@ -275,7 +275,7 @@ class TestRunWizardAnthropicSetupTokenFallback:
         # so only Discord and Write confirms are needed
         confirms = [
             False,  # Discord? No
-            True,   # Write? Yes
+            True,  # Write? Yes
         ]
 
         with (
@@ -306,18 +306,18 @@ class TestRunWizardAnthropicVerifyFails:
         config_file = tmp_path / "config.yaml"
 
         prompts = [
-            str(tmp_path / "workspace"),   # Step 1
-            "1",                            # Step 2: anthropic only
-            "1",                            # Anthropic auth: API key
-            "sk-ant-api03-testverify12345", # API key
+            str(tmp_path / "workspace"),  # Step 1
+            "1",  # Step 2: anthropic only
+            "1",  # Anthropic auth: API key
+            "sk-ant-api03-testverify12345",  # API key
             "1",  # model primary
             "2",  # model fast
             "3",  # model premium
         ]
         confirms = [
-            True,   # Verify? Yes
+            True,  # Verify? Yes
             False,  # Discord? No
-            True,   # Write? Yes
+            True,  # Write? Yes
         ]
 
         with (
@@ -343,18 +343,18 @@ class TestRunWizardDiscordBotPrefixStripped:
         config_file = tmp_path / "config.yaml"
 
         prompts = [
-            str(tmp_path / "workspace"),         # Step 1
-            "0",                                   # Step 2: skip providers
-            "Bot myactualdiscordtoken",            # Discord bot token with "Bot " prefix
-            "",                                    # Application ID (blank)
-            "1",                                   # DM policy: disabled
-            "",                                    # ACK reaction
+            str(tmp_path / "workspace"),  # Step 1
+            "0",  # Step 2: skip providers
+            "Bot myactualdiscordtoken",  # Discord bot token with "Bot " prefix
+            "",  # Application ID (blank)
+            "1",  # DM policy: disabled
+            "",  # ACK reaction
         ]
         confirms = [
-            True,   # Configure Discord? Yes
+            True,  # Configure Discord? Yes
             False,  # Add guild policy? No
-            True,   # Ignore bots? Yes (default)
-            True,   # Write? Yes
+            True,  # Ignore bots? Yes (default)
+            True,  # Write? Yes
         ]
 
         with (
@@ -384,22 +384,22 @@ class TestRunWizardDiscordGuildPolicy:
 
         prompts = [
             str(tmp_path / "workspace"),  # Step 1
-            "0",                           # Step 2: skip providers
-            "mytokenvalue",               # Discord bot token
-            "88888888",                   # Application ID
-            "1",                          # DM policy: disabled
-            "123456789",                  # Guild ID
-            "general,announcements",      # Allowed channels
-            "1",                          # Mode: full
-            "",                           # ACK reaction
+            "0",  # Step 2: skip providers
+            "mytokenvalue",  # Discord bot token
+            "88888888",  # Application ID
+            "1",  # DM policy: disabled
+            "123456789",  # Guild ID
+            "general,announcements",  # Allowed channels
+            "1",  # Mode: full
+            "",  # ACK reaction
         ]
         confirms = [
-            True,   # Configure Discord? Yes
-            True,   # Add guild policy? Yes
-            True,   # Require @mention? Yes
+            True,  # Configure Discord? Yes
+            True,  # Add guild policy? Yes
+            True,  # Require @mention? Yes
             False,  # Add another guild? No
-            True,   # Ignore bots? Yes
-            True,   # Write? Yes
+            True,  # Ignore bots? Yes
+            True,  # Write? Yes
         ]
 
         with (
@@ -426,17 +426,17 @@ class TestRunWizardDiscordGuildPolicy:
         # ack reaction
         prompts = [
             str(tmp_path / "workspace"),  # Step 1
-            "0",                           # Step 2: skip providers
-            "mytokenvalue",               # Discord bot token
-            "88888888",                   # Application ID
-            "1",                          # DM policy: disabled
-            "111111111",                  # Guild ID 1
-            "",                           # Guild 1 allowed channels (blank = all)
-            "1",                          # Guild 1 mode: full
-            "222222222",                  # Guild ID 2
-            "",                           # Guild 2 allowed channels
-            "2",                          # Guild 2 mode: safe-chat
-            "",                           # ACK reaction
+            "0",  # Step 2: skip providers
+            "mytokenvalue",  # Discord bot token
+            "88888888",  # Application ID
+            "1",  # DM policy: disabled
+            "111111111",  # Guild ID 1
+            "",  # Guild 1 allowed channels (blank = all)
+            "1",  # Guild 1 mode: full
+            "222222222",  # Guild ID 2
+            "",  # Guild 2 allowed channels
+            "2",  # Guild 2 mode: safe-chat
+            "",  # ACK reaction
         ]
         # Confirms consumed in order:
         # Configure Discord?, Add guild policy?,
@@ -444,14 +444,14 @@ class TestRunWizardDiscordGuildPolicy:
         # guild2 require_mention, Add another guild? (→ No, loop ends),
         # Ignore bots?, Write?
         confirms = [
-            True,   # Configure Discord? Yes
-            True,   # Add guild policy? Yes
-            True,   # Require @mention guild 1? Yes
-            True,   # Add another guild? Yes → loop again
+            True,  # Configure Discord? Yes
+            True,  # Add guild policy? Yes
+            True,  # Require @mention guild 1? Yes
+            True,  # Add another guild? Yes → loop again
             False,  # Require @mention guild 2? No
             False,  # Add another guild? No → break
-            True,   # Ignore bots? Yes
-            True,   # Write? Yes
+            True,  # Ignore bots? Yes
+            True,  # Write? Yes
         ]
 
         with (
@@ -481,15 +481,15 @@ class TestRunWizardOAuthTokenSummaryDisplay:
 
         prompts = [
             str(tmp_path / "workspace"),  # Step 1
-            "2",                           # Step 2: openai only
-            "2",                           # OpenAI auth: OAuth
+            "2",  # Step 2: openai only
+            "2",  # OpenAI auth: OAuth
             "1",  # model primary (openai-codex choices)
             "1",  # model fast
             "1",  # model premium
         ]
         confirms = [
             False,  # Discord? No
-            True,   # Write? Yes
+            True,  # Write? Yes
         ]
 
         with (

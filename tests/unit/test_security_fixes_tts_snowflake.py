@@ -18,6 +18,7 @@ import pytest
 # TTS env sanitization
 # ---------------------------------------------------------------------------
 
+
 class TestTTSEnvSanitization:
     """Verify TTS subprocess env does not leak API keys."""
 
@@ -66,6 +67,7 @@ class TestTTSEnvSanitization:
 # ---------------------------------------------------------------------------
 # Discord snowflake ID validation
 # ---------------------------------------------------------------------------
+
 
 class TestDiscordSnowflakeValidation:
     """Verify snowflake ID validation prevents path traversal."""
@@ -132,6 +134,7 @@ class TestDiscordSnowflakeValidation:
 # Calculator LShift guard
 # ---------------------------------------------------------------------------
 
+
 class TestCalculatorLShiftGuard:
     """Verify calculator prevents memory exhaustion via left shift."""
 
@@ -191,13 +194,15 @@ class TestCalculatorLShiftGuard:
 # X11 shell quoting
 # ---------------------------------------------------------------------------
 
+
 class TestX11ShellQuoting:
     """Verify X11 tools use shlex.quote instead of json.dumps."""
 
     def test_shell_metacharacters_escaped(self) -> None:
         """Shell metacharacters in text should be safely quoted."""
         import shlex
-        text = '$(rm -rf /)'
+
+        text = "$(rm -rf /)"
         quoted = shlex.quote(text)
         # shlex.quote wraps in single quotes, which neutralize $() in bash
         assert quoted.startswith("'")
@@ -212,7 +217,7 @@ class TestX11ShellQuoting:
         tool = X11TypeTool()
         with patch("missy.tools.builtin.x11_tools.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
-            tool.execute(text='$(dangerous_command)')
+            tool.execute(text="$(dangerous_command)")
 
         called_cmd = mock_run.call_args[0][0]
         # The command should use single-quote escaping
@@ -225,7 +230,7 @@ class TestX11ShellQuoting:
         tool = X11ClickTool()
         with patch("missy.tools.builtin.x11_tools.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
-            tool.execute(x=100, y=200, window_name='$(whoami)')
+            tool.execute(x=100, y=200, window_name="$(whoami)")
 
         called_cmds = [call[0][0] for call in mock_run.call_args_list]
         # The windowfocus command should have safely quoted the name

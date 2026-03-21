@@ -432,9 +432,7 @@ class TestAddJobValidation:
         assert job.description == "my description"
 
     def test_custom_backoff_seconds_stored(self, mgr: SchedulerManager) -> None:
-        job = mgr.add_job(
-            "j", "every 5 minutes", "t", backoff_seconds=[5, 10, 20]
-        )
+        job = mgr.add_job("j", "every 5 minutes", "t", backoff_seconds=[5, 10, 20])
         assert job.backoff_seconds == [5, 10, 20]
 
     def test_default_backoff_seconds_when_none(self, mgr: SchedulerManager) -> None:
@@ -458,9 +456,7 @@ class TestAddJobValidation:
         assert job.active_hours == "09:00-17:00"
 
     def test_timezone_stored(self, mgr: SchedulerManager) -> None:
-        job = mgr.add_job(
-            "j", "daily at 09:00", "t", timezone="America/New_York"
-        )
+        job = mgr.add_job("j", "daily at 09:00", "t", timezone="America/New_York")
         assert job.timezone == "America/New_York"
 
     def test_add_and_list_preserves_order(self, mgr: SchedulerManager) -> None:
@@ -628,15 +624,11 @@ class TestOvernightWindow:
 
 class TestTimezoneHandling:
     def test_cron_expression_with_utc_timezone(self, mgr: SchedulerManager) -> None:
-        job = mgr.add_job(
-            "tz-cron", "0 9 * * 1-5", "weekday morning", timezone="UTC"
-        )
+        job = mgr.add_job("tz-cron", "0 9 * * 1-5", "weekday morning", timezone="UTC")
         assert job.timezone == "UTC"
 
     def test_daily_with_eastern_timezone(self, mgr: SchedulerManager) -> None:
-        job = mgr.add_job(
-            "tz-daily", "daily at 07:00", "morning", timezone="America/New_York"
-        )
+        job = mgr.add_job("tz-daily", "daily at 07:00", "morning", timezone="America/New_York")
         assert job.timezone == "America/New_York"
         listed = mgr.list_jobs()
         assert listed[0].timezone == "America/New_York"
@@ -703,9 +695,7 @@ class TestJobMetadata:
         ids = [mgr.add_job(f"job{i}", "every 5 minutes", "t").id for i in range(5)]
         assert len(set(ids)) == 5, "each job must receive a unique UUID"
 
-    def test_list_jobs_with_details_returns_same_objects(
-        self, mgr: SchedulerManager
-    ) -> None:
+    def test_list_jobs_with_details_returns_same_objects(self, mgr: SchedulerManager) -> None:
         mgr.add_job("a", "every 5 minutes", "t")
         by_list = mgr.list_jobs()
         by_details = mgr.list_jobs_with_details()
@@ -905,9 +895,7 @@ class TestScheduledJobSerialisation:
 class TestRunJobActiveHoursGate:
     """_run_job must skip execution when outside active_hours."""
 
-    def test_run_job_outside_window_does_not_call_agent(
-        self, mgr: SchedulerManager
-    ) -> None:
+    def test_run_job_outside_window_does_not_call_agent(self, mgr: SchedulerManager) -> None:
         job = mgr.add_job(
             "gated",
             "every 5 minutes",

@@ -43,12 +43,18 @@ class WebFetchTool(BaseTool):
 
     #: Headers that must be stripped from user-supplied request headers
     #: to prevent Host injection, credential forwarding, or proxy manipulation.
-    _BLOCKED_HEADERS = frozenset({
-        "host", "authorization", "cookie",
-        "x-forwarded-for", "x-forwarded-host",
-        "x-forwarded-proto", "x-real-ip",
-        "proxy-authorization",
-    })
+    _BLOCKED_HEADERS = frozenset(
+        {
+            "host",
+            "authorization",
+            "cookie",
+            "x-forwarded-for",
+            "x-forwarded-host",
+            "x-forwarded-proto",
+            "x-real-ip",
+            "proxy-authorization",
+        }
+    )
 
     def execute(
         self,
@@ -81,8 +87,7 @@ class WebFetchTool(BaseTool):
             request_kwargs: dict[str, Any] = {}
             if headers:
                 safe_headers = {
-                    k: v for k, v in headers.items()
-                    if k.lower() not in self._BLOCKED_HEADERS
+                    k: v for k, v in headers.items() if k.lower() not in self._BLOCKED_HEADERS
                 }
                 if safe_headers:
                     request_kwargs["headers"] = safe_headers

@@ -95,9 +95,7 @@ class TestFallbackBehaviour:
 
     def test_get_recent_turns_limit_applied_after_sort(self):
         store = ResilientMemoryStore(_broken())
-        turns = [
-            _turn("s1", ts=datetime(2026, 1, 1, i, 0, tzinfo=UTC)) for i in range(10)
-        ]
+        turns = [_turn("s1", ts=datetime(2026, 1, 1, i, 0, tzinfo=UTC)) for i in range(10)]
         store._cache["s1"] = turns
 
         result = store.get_recent_turns(limit=3)

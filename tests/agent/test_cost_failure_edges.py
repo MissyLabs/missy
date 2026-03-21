@@ -44,7 +44,9 @@ class TestCostTrackerEdgeCases:
         from missy.agent.cost_tracker import CostTracker
 
         tracker = CostTracker()
-        rec = tracker.record(model="claude-sonnet-4-20250514", prompt_tokens=1000, completion_tokens=500)
+        rec = tracker.record(
+            model="claude-sonnet-4-20250514", prompt_tokens=1000, completion_tokens=500
+        )
         # $0.003/1k input + $0.015/1k output
         expected = (1000 / 1000) * 0.003 + (500 / 1000) * 0.015
         assert abs(rec.cost_usd - expected) < 1e-8

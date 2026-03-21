@@ -562,9 +562,7 @@ class TestCidrAllowlist:
 
     def test_multiple_cidrs_second_matches(self) -> None:
         """When the first CIDR misses, the second must still allow the IP."""
-        init_policy_engine(
-            _build_config(allowed_cidrs=["10.0.0.0/8", "172.16.0.0/12"])
-        )
+        init_policy_engine(_build_config(allowed_cidrs=["10.0.0.0/8", "172.16.0.0/12"]))
         client = PolicyHTTPClient()
         mock_resp = _mock_http_response(200)
         with patch.object(httpx.Client, "get", return_value=mock_resp):
@@ -935,22 +933,28 @@ class TestGatewayErrorHandling:
         """httpx.TimeoutException raised by the underlying client must bubble up."""
         init_policy_engine(_build_config(allowed_hosts=["api.example.com"]))
         client = PolicyHTTPClient(timeout=1)
-        with patch.object(
-            httpx.Client,
-            "get",
-            side_effect=httpx.TimeoutException("timed out"),
-        ), pytest.raises(httpx.TimeoutException):
+        with (
+            patch.object(
+                httpx.Client,
+                "get",
+                side_effect=httpx.TimeoutException("timed out"),
+            ),
+            pytest.raises(httpx.TimeoutException),
+        ):
             client.get("https://api.example.com/slow")
 
     def test_connect_error_propagates(self) -> None:
         """httpx.ConnectError must propagate after the policy check passes."""
         init_policy_engine(_build_config(allowed_hosts=["api.example.com"]))
         client = PolicyHTTPClient()
-        with patch.object(
-            httpx.Client,
-            "get",
-            side_effect=httpx.ConnectError("refused"),
-        ), pytest.raises(httpx.ConnectError):
+        with (
+            patch.object(
+                httpx.Client,
+                "get",
+                side_effect=httpx.ConnectError("refused"),
+            ),
+            pytest.raises(httpx.ConnectError),
+        ):
             client.get("https://api.example.com/unreachable")
 
     def test_http_4xx_returned_as_response(self) -> None:
@@ -978,7 +982,10 @@ class TestGatewayErrorHandling:
         mock_resp = _mock_http_response(200)
         # Override headers to report a large size.
         mock_resp.headers = {"content-length": "9999999"}
-        with patch.object(httpx.Client, "get", return_value=mock_resp), pytest.raises(ValueError, match="too large"):
+        with (
+            patch.object(httpx.Client, "get", return_value=mock_resp),
+            pytest.raises(ValueError, match="too large"),
+        ):
             client.get("https://api.example.com/huge")
 
     def test_invalid_timeout_raises_on_construction(self) -> None:
@@ -997,12 +1004,15 @@ class TestGatewayErrorHandling:
         """Async variant: httpx.TimeoutException must bubble up from aget."""
         init_policy_engine(_build_config(allowed_hosts=["api.example.com"]))
         client = PolicyHTTPClient()
-        with patch.object(
-            httpx.AsyncClient,
-            "get",
-            new_callable=AsyncMock,
-            side_effect=httpx.TimeoutException("async timeout"),
-        ), pytest.raises(httpx.TimeoutException):
+        with (
+            patch.object(
+                httpx.AsyncClient,
+                "get",
+                new_callable=AsyncMock,
+                side_effect=httpx.TimeoutException("async timeout"),
+            ),
+            pytest.raises(httpx.TimeoutException),
+        ):
             await client.aget("https://api.example.com/slow")
 
     def test_policy_check_before_httpx_on_denied_host(self) -> None:
@@ -1016,7 +1026,10 @@ class TestGatewayErrorHandling:
             call_log.append("httpx_called")
             return _mock_http_response()
 
-        with patch.object(httpx.Client, "get", side_effect=_httpx_get_called), pytest.raises(PolicyViolationError):
+        with (
+            patch.object(httpx.Client, "get", side_effect=_httpx_get_called),
+            pytest.raises(PolicyViolationError),
+        ):
             client.get("https://blocked.example.com/")
         assert call_log == []
 

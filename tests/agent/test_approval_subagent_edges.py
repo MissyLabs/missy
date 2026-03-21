@@ -32,6 +32,7 @@ from missy.agent.sub_agent import (
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _wait_for_pending(gate: ApprovalGate, count: int = 1, retries: int = 100) -> list[dict]:
     """Poll until *count* pending approvals appear (or retries exhausted)."""
     for _ in range(retries):
@@ -42,7 +43,9 @@ def _wait_for_pending(gate: ApprovalGate, count: int = 1, retries: int = 100) ->
     return gate.list_pending()
 
 
-def _request_in_thread(gate: ApprovalGate, action: str = "action", risk: str = "medium") -> tuple[threading.Thread, dict]:
+def _request_in_thread(
+    gate: ApprovalGate, action: str = "action", risk: str = "medium"
+) -> tuple[threading.Thread, dict]:
     """Spawn a thread that calls gate.request() and records the outcome."""
     outcome: dict = {}
 
@@ -64,8 +67,8 @@ def _request_in_thread(gate: ApprovalGate, action: str = "action", risk: str = "
 # ApprovalGate — edge cases
 # ---------------------------------------------------------------------------
 
-class TestApprovalGateEdges:
 
+class TestApprovalGateEdges:
     # --- list_pending with no pending requests ---
 
     def test_list_pending_empty_at_start(self):
@@ -308,14 +311,16 @@ class TestApprovalGateEdges:
 # SubAgentRunner — edge cases
 # ---------------------------------------------------------------------------
 
-class TestSubAgentRunnerEdges:
 
+class TestSubAgentRunnerEdges:
     def _factory(self, return_value: str = "result") -> Callable:
         """Return a factory that always produces a runtime returning *return_value*."""
+
         def _make():
             rt = MagicMock()
             rt.run.return_value = return_value
             return rt
+
         return _make
 
     # --- spawn a sub-agent with valid config ---
@@ -345,6 +350,7 @@ class TestSubAgentRunnerEdges:
 
     def test_run_subtask_exception_sets_error_field(self):
         """On failure, subtask.error must be set and result must remain None."""
+
         def _boom():
             rt = MagicMock()
             rt.run.side_effect = ValueError("something went wrong")
@@ -361,6 +367,7 @@ class TestSubAgentRunnerEdges:
 
     def test_run_subtask_exception_does_not_propagate(self):
         """Exceptions from runtime.run() must be caught; run_subtask() must not raise."""
+
         def _boom():
             rt = MagicMock()
             rt.run.side_effect = RuntimeError("hard crash")
@@ -397,6 +404,7 @@ class TestSubAgentRunnerEdges:
 
     def test_run_subtask_slow_runtime_still_returns(self):
         """A runtime that takes a moment must still resolve (no deadlock)."""
+
         def _slow_factory():
             rt = MagicMock()
 
@@ -443,8 +451,7 @@ class TestSubAgentRunnerEdges:
         tasks = [SubTask(id=i, description=f"t{i}") for i in range(MAX_CONCURRENT * 2)]
 
         threads = [
-            threading.Thread(target=runner.run_subtask, args=(task,), daemon=True)
-            for task in tasks
+            threading.Thread(target=runner.run_subtask, args=(task,), daemon=True) for task in tasks
         ]
         for th in threads:
             th.start()
@@ -489,9 +496,11 @@ class TestSubAgentRunnerEdges:
             if call_count[0] == 1:
                 rt.run.return_value = "parent result data"
             else:
+
                 def _capture(prompt):
                     call_args_log.append(prompt)
                     return "child done"
+
                 rt.run.side_effect = _capture
             return rt
 
@@ -519,9 +528,11 @@ class TestSubAgentRunnerEdges:
             if call_count[0] == 1:
                 rt.run.return_value = long_result
             else:
+
                 def _cap(prompt):
                     captured_prompts.append(prompt)
                     return "ok"
+
                 rt.run.side_effect = _cap
             return rt
 
@@ -550,9 +561,11 @@ class TestSubAgentRunnerEdges:
             if idx in results_by_id:
                 rt.run.return_value = results_by_id[idx]
             else:
+
                 def _cap(prompt):
                     captured.append(prompt)
                     return "merged"
+
                 rt.run.side_effect = _cap
             return rt
 

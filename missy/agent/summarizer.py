@@ -99,13 +99,9 @@ class Summarizer:
 
         prior_context = ""
         if prior_summary:
-            prior_context = (
-                f"For continuity, here is the previous summary:\n{prior_summary}\n"
-            )
+            prior_context = f"For continuity, here is the previous summary:\n{prior_summary}\n"
 
-        prompt = _LEAF_PROMPT.format(
-            prior_context=prior_context, transcript=transcript
-        )
+        prompt = _LEAF_PROMPT.format(prior_context=prior_context, transcript=transcript)
         return self._escalate(prompt, input_tokens, target_tokens)
 
     def summarize_summaries(
@@ -124,9 +120,7 @@ class Summarizer:
             time_info = ""
             if s.time_range_start and s.time_range_end:
                 time_info = f" ({s.time_range_start} to {s.time_range_end})"
-            parts.append(
-                f"### Summary {i} [depth={s.depth}]{time_info}\n{s.content}"
-            )
+            parts.append(f"### Summary {i} [depth={s.depth}]{time_info}\n{s.content}")
         summaries_text = "\n\n".join(parts)
         input_tokens = _approx_tokens(summaries_text)
 
@@ -137,9 +131,7 @@ class Summarizer:
     # Three-tier escalation
     # ------------------------------------------------------------------
 
-    def _escalate(
-        self, prompt: str, input_tokens: int, target_tokens: int
-    ) -> tuple[str, str]:
+    def _escalate(self, prompt: str, input_tokens: int, target_tokens: int) -> tuple[str, str]:
         """Try normal → aggressive → fallback summarization."""
         # Tier 1: Normal
         try:
@@ -150,7 +142,8 @@ class Summarizer:
                 return result.strip(), "normal"
             logger.debug(
                 "Tier 1 output (%d tokens) >= input (%d tokens), escalating",
-                result_tokens, input_tokens,
+                result_tokens,
+                input_tokens,
             )
         except Exception:
             logger.warning("Tier 1 summarization failed", exc_info=True)
@@ -158,7 +151,8 @@ class Summarizer:
         # Tier 2: Aggressive
         try:
             aggressive_prompt = _AGGRESSIVE_PROMPT.format(
-                target_tokens=target_tokens, text=prompt,
+                target_tokens=target_tokens,
+                text=prompt,
             )
             result = self._call_llm(aggressive_prompt, temperature=0.1)
             if result:
@@ -170,7 +164,7 @@ class Summarizer:
         # Tier 3: Deterministic fallback
         logger.warning("Falling back to deterministic truncation")
         self.tier_counts["fallback"] += 1
-        truncated = prompt[:target_tokens * 4]  # ~target_tokens tokens
+        truncated = prompt[: target_tokens * 4]  # ~target_tokens tokens
         return truncated.rstrip() + "\n[TRUNCATED — summarization failed]", "fallback"
 
     def _call_llm(self, prompt: str, temperature: float = 0.2) -> str:

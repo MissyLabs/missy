@@ -63,6 +63,7 @@ class TestIncusSnapshotToolUnreachable:
         """Bypass the valid-set guard by patching it, then supply an action
         that passes validation but has no matching elif branch."""
         tool = self._tool()
+
         # The valid set currently is {"create", "restore", "delete", "list"}.
         # We extend it so "bogus" passes the guard, but the elif chain has no
         # matching arm, falling through to the else/Unreachable return.
@@ -85,7 +86,12 @@ class TestIncusSnapshotToolUnreachable:
                     )
                 # Now fall through the elif chain with "bogus" — mirrors
                 # the source logic: all elif arms are exhausted → else branch.
-                if action_lower == "list" or action_lower == "create" or action_lower == "restore" or action_lower == "delete":
+                if (
+                    action_lower == "list"
+                    or action_lower == "create"
+                    or action_lower == "restore"
+                    or action_lower == "delete"
+                ):
                     pass
                 else:
                     return ToolResult(success=False, output=None, error="Unreachable")
@@ -107,7 +113,12 @@ class TestIncusConfigToolUnreachable:
         action_lower = "bogus"
         valid = {"show", "get", "set", "unset", "bogus"}
         if action_lower in valid:
-            if action_lower == "show" or action_lower == "get" or action_lower == "set" or action_lower == "unset":
+            if (
+                action_lower == "show"
+                or action_lower == "get"
+                or action_lower == "set"
+                or action_lower == "unset"
+            ):
                 pass
             else:
                 result = ToolResult(success=False, output=None, error="Unreachable")
@@ -127,7 +138,13 @@ class TestIncusImageToolUnreachable:
         action_lower = "bogus"
         valid = {"list", "info", "delete", "copy", "alias", "bogus"}
         if action_lower in valid:
-            if action_lower == "list" or action_lower == "info" or action_lower == "delete" or action_lower == "copy" or action_lower == "alias":
+            if (
+                action_lower == "list"
+                or action_lower == "info"
+                or action_lower == "delete"
+                or action_lower == "copy"
+                or action_lower == "alias"
+            ):
                 pass
             else:
                 result = ToolResult(success=False, output=None, error="Unreachable")
@@ -152,7 +169,15 @@ class TestIncusNetworkTool:
         action_lower = "bogus"
         valid = {"list", "create", "delete", "show", "set", "attach", "detach", "bogus"}
         if action_lower in valid:
-            if action_lower == "list" or action_lower == "create" or action_lower == "delete" or action_lower == "show" or action_lower == "set" or action_lower == "attach" or action_lower == "detach":
+            if (
+                action_lower == "list"
+                or action_lower == "create"
+                or action_lower == "delete"
+                or action_lower == "show"
+                or action_lower == "set"
+                or action_lower == "attach"
+                or action_lower == "detach"
+            ):
                 pass
             else:
                 result = ToolResult(success=False, output=None, error="Unreachable")
@@ -196,9 +221,7 @@ class TestIncusNetworkTool:
             return _SUCCESS
 
         with patch(_PATCH_TARGET, capture):
-            result = tool.execute(
-                action="attach", name="lxdbr0 myinstance", project="myproj"
-            )
+            result = tool.execute(action="attach", name="lxdbr0 myinstance", project="myproj")
         assert result.success is True
         assert "--project" in captured[0]
         assert "myproj" in captured[0]
@@ -805,9 +828,7 @@ class TestIncusCopyMoveTool:
             return _SUCCESS
 
         with patch(_PATCH_TARGET, capture):
-            result = tool.execute(
-                source="c1", destination="c2", action="copy", stateless=True
-            )
+            result = tool.execute(source="c1", destination="c2", action="copy", stateless=True)
         assert result.success is True
         assert "--stateless" in captured[0]
 
@@ -822,9 +843,7 @@ class TestIncusCopyMoveTool:
             return _SUCCESS
 
         with patch(_PATCH_TARGET, capture):
-            result = tool.execute(
-                source="c1", destination="c2", action="move", stateless=True
-            )
+            result = tool.execute(source="c1", destination="c2", action="move", stateless=True)
         assert result.success is True
         assert "--stateless" not in captured[0]
 

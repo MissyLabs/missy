@@ -44,14 +44,32 @@ _PIPER_DEFAULT_VOICE = "en_US-lessac-medium"
 
 #: Environment variables safe to pass to TTS/audio subprocesses.
 #: Prevents API key leakage to espeak-ng, piper, gst-launch, etc.
-_SAFE_TTS_ENV_VARS = frozenset({
-    "PATH", "HOME", "USER", "LOGNAME", "SHELL",
-    "LANG", "LC_ALL", "LC_CTYPE", "LANGUAGE",
-    "TERM", "XDG_RUNTIME_DIR", "XDG_DATA_HOME", "XDG_CONFIG_HOME",
-    "TMPDIR", "TMP", "TEMP", "DISPLAY", "WAYLAND_DISPLAY",
-    "DBUS_SESSION_BUS_ADDRESS", "LD_LIBRARY_PATH",
-    "PULSE_SERVER", "PIPEWIRE_REMOTE",
-})
+_SAFE_TTS_ENV_VARS = frozenset(
+    {
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "LANGUAGE",
+        "TERM",
+        "XDG_RUNTIME_DIR",
+        "XDG_DATA_HOME",
+        "XDG_CONFIG_HOME",
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+        "DISPLAY",
+        "WAYLAND_DISPLAY",
+        "DBUS_SESSION_BUS_ADDRESS",
+        "LD_LIBRARY_PATH",
+        "PULSE_SERVER",
+        "PIPEWIRE_REMOTE",
+    }
+)
 
 
 def _ensure_runtime_dir() -> dict[str, str]:

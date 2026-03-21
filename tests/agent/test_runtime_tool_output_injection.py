@@ -243,7 +243,9 @@ class TestExecuteToolRegistryErrors:
 
         tc = ToolCall(id="tc1", name="nonexistent_tool", arguments={})
 
-        with patch("missy.agent.runtime.get_tool_registry", side_effect=KeyError("nonexistent_tool")):
+        with patch(
+            "missy.agent.runtime.get_tool_registry", side_effect=KeyError("nonexistent_tool")
+        ):
             result = runtime._execute_tool(tc)
 
         assert isinstance(result, ToolResult)
@@ -268,7 +270,10 @@ class TestExecuteToolRegistryErrors:
 
         tc = ToolCall(id="tc1", name="some_tool", arguments={})
 
-        with patch("missy.agent.runtime.get_tool_registry", side_effect=RuntimeError("Tool registry not initialised")):
+        with patch(
+            "missy.agent.runtime.get_tool_registry",
+            side_effect=RuntimeError("Tool registry not initialised"),
+        ):
             result = runtime._execute_tool(tc)
 
         assert isinstance(result, ToolResult)

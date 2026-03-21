@@ -143,9 +143,15 @@ class TestFullPipeline:
     def test_multi_turn_context(self, behavior, interpreter, shaper, persona):
         """Multiple turns should influence tone analysis."""
         messages = [
-            {"role": "user", "content": "I need help with the docker config for the kubernetes deployment pipeline"},
+            {
+                "role": "user",
+                "content": "I need help with the docker config for the kubernetes deployment pipeline",
+            },
             {"role": "assistant", "content": "Here's the Dockerfile..."},
-            {"role": "user", "content": "The container keeps crashing with OOM errors on the async worker thread"},
+            {
+                "role": "user",
+                "content": "The container keeps crashing with OOM errors on the async worker thread",
+            },
         ]
 
         tone = behavior.analyze_user_tone(messages)

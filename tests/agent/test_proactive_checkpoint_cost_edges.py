@@ -734,7 +734,10 @@ class TestGetSummaryEdgeCases:
         tracker = CostTracker()
         tracker.record("claude-sonnet-4-20250514", prompt_tokens=300, completion_tokens=200)
         summary = tracker.get_summary()
-        assert summary["total_tokens"] == summary["total_prompt_tokens"] + summary["total_completion_tokens"]
+        assert (
+            summary["total_tokens"]
+            == summary["total_prompt_tokens"] + summary["total_completion_tokens"]
+        )
 
     def test_summary_call_count_increments_per_record(self):
         tracker = CostTracker()

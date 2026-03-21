@@ -346,8 +346,7 @@ class TestDetectPresetsEdges:
             network = {"allowed_hosts": list(preset_hosts), "allowed_domains": []}
             detected, _, _, _ = detect_presets(network)
             assert name in detected, (
-                f"Preset '{name}' should be detectable from its own hosts "
-                f"{preset_hosts!r}"
+                f"Preset '{name}' should be detectable from its own hosts {preset_hosts!r}"
             )
 
     def test_return_value_is_four_tuple(self):
@@ -420,7 +419,9 @@ class TestMigrateConfigHappyPaths:
     def test_idempotent_second_call_is_noop(self, tmp_path):
         """Running migrate_config twice must not change the file on the second call."""
         cfg = tmp_path / "config.yaml"
-        cfg.write_text("network:\n  default_deny: true\n  allowed_hosts:\n    - api.anthropic.com\n")
+        cfg.write_text(
+            "network:\n  default_deny: true\n  allowed_hosts:\n    - api.anthropic.com\n"
+        )
         backup_dir = str(tmp_path / "backups")
 
         result1 = migrate_config(str(cfg), backup_dir=backup_dir)
@@ -627,10 +628,7 @@ class TestMigrateConfigEdges:
 
     def test_already_migrated_config_file_unchanged(self, tmp_path):
         """A config at CURRENT_CONFIG_VERSION must not be modified at all."""
-        original = (
-            f"config_version: {CURRENT_CONFIG_VERSION}\n"
-            "network:\n  default_deny: true\n"
-        )
+        original = f"config_version: {CURRENT_CONFIG_VERSION}\nnetwork:\n  default_deny: true\n"
         cfg = tmp_path / "config.yaml"
         cfg.write_text(original)
 

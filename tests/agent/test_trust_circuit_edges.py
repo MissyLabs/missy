@@ -27,7 +27,9 @@ def _make_breaker(
     base_timeout: float = 60.0,
     max_timeout: float = 300.0,
 ) -> CircuitBreaker:
-    return CircuitBreaker(name, threshold=threshold, base_timeout=base_timeout, max_timeout=max_timeout)
+    return CircuitBreaker(
+        name, threshold=threshold, base_timeout=base_timeout, max_timeout=max_timeout
+    )
 
 
 def _raise(*args, **kwargs):

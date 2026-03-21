@@ -86,17 +86,20 @@ class TestExtractAccountId:
 class TestLoadOauthToken:
     def test_returns_token_on_success(self):
         """Calls refresh_token_if_needed and returns its result."""
-        with patch(
-            "missy.tools.builtin.x11_tools.refresh_token_if_needed",
-            return_value="tok_abc",
-            create=True,
-        ), patch.dict(
-            "sys.modules",
-            {
-                "missy.cli.oauth": MagicMock(
-                    refresh_token_if_needed=MagicMock(return_value="tok_abc")
-                )
-            },
+        with (
+            patch(
+                "missy.tools.builtin.x11_tools.refresh_token_if_needed",
+                return_value="tok_abc",
+                create=True,
+            ),
+            patch.dict(
+                "sys.modules",
+                {
+                    "missy.cli.oauth": MagicMock(
+                        refresh_token_if_needed=MagicMock(return_value="tok_abc")
+                    )
+                },
+            ),
         ):
             token = _load_oauth_token()
         # May succeed or fall back; just ensure it doesn't raise

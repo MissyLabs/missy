@@ -226,8 +226,10 @@ class TestVaultKeySecurity:
         with caplog.at_level(logging.WARNING, logger="missy.security.vault"):
             v = Vault(vault_dir=str(vault_dir))
         assert v._key is not None
-        assert any("permissive" in r.message.lower() or "recommend" in r.message.lower()
-                   for r in caplog.records)
+        assert any(
+            "permissive" in r.message.lower() or "recommend" in r.message.lower()
+            for r in caplog.records
+        )
 
 
 class TestVaultEdgeCaseValues:
@@ -601,10 +603,9 @@ class TestTrustScorerThreadSafety:
             except Exception as exc:  # noqa: BLE001
                 errors.append(exc)
 
-        threads = (
-            [threading.Thread(target=success_worker) for _ in range(50)]
-            + [threading.Thread(target=failure_worker) for _ in range(50)]
-        )
+        threads = [threading.Thread(target=success_worker) for _ in range(50)] + [
+            threading.Thread(target=failure_worker) for _ in range(50)
+        ]
         for t in threads:
             t.start()
         for t in threads:
@@ -631,10 +632,7 @@ class TestTrustScorerThreadSafety:
             except Exception as exc:  # noqa: BLE001
                 errors.append(exc)
 
-        threads = [
-            threading.Thread(target=mixed, args=(f"e{i}",))
-            for i in range(30)
-        ]
+        threads = [threading.Thread(target=mixed, args=(f"e{i}",)) for i in range(30)]
         for t in threads:
             t.start()
         for t in threads:

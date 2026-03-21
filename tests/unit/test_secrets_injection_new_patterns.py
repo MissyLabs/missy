@@ -1,6 +1,5 @@
 """Security hardening tests for new injection and secret patterns."""
 
-
 from __future__ import annotations
 
 from missy.security.sanitizer import InputSanitizer
@@ -72,7 +71,10 @@ class TestNewSecretPatterns:
             ("anthropic_key", "sk-ant-api03-abcdefghijklmnopqrst"),
             ("gitlab_token", "glpat-abcdefghijklmnopqrstuv"),
             ("npm_token", "npm_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij"),
-            ("sendgrid_key", "SG.abcdefghijklmnopqrstuv.ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrs"),
+            (
+                "sendgrid_key",
+                "SG.abcdefghijklmnopqrstuv.ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrs",
+            ),
             ("twilio_key", "SK" + "a" * 32),
             ("mailgun_key", "key-" + "a" * 32),
         ]

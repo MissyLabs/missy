@@ -181,10 +181,7 @@ class ObservationMaskingCondenser(BaseCondenser):
 
             if role == "tool" and len(content) > self.max_output_chars:
                 preview = content[:_MASK_PREVIEW_CHARS].strip()
-                replacement = (
-                    f"[Tool output masked: {len(content)} chars, "
-                    f"preview: {preview}...]"
-                )
+                replacement = f"[Tool output masked: {len(content)} chars, preview: {preview}...]"
                 # Shallow-copy the message dict, replacing only content.
                 result.append({**msg, "content": replacement})
                 masked_count += 1
@@ -590,7 +587,9 @@ class LLMAttentionCondenser(BaseCondenser):
             keys: ``used_llm``, ``kept``, ``dropped``.
         """
         if not messages:
-            return CondenserResult(messages=[], metadata={"used_llm": False, "kept": 0, "dropped": 0})
+            return CondenserResult(
+                messages=[], metadata={"used_llm": False, "kept": 0, "dropped": 0}
+            )
 
         n = len(messages)
         tail_n = min(self.preserve_recent, n)

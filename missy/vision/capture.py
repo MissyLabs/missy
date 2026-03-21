@@ -178,9 +178,13 @@ class CameraHandle:
         self._opened = False
         self._open_time: float = 0.0
         self._lock = threading.Lock()
-        self._blank_detector = AdaptiveBlankDetector(
-            base_threshold=self._config.blank_threshold,
-        ) if self._config.adaptive_blank else None
+        self._blank_detector = (
+            AdaptiveBlankDetector(
+                base_threshold=self._config.blank_threshold,
+            )
+            if self._config.adaptive_blank
+            else None
+        )
         self._warmup_intensities: list[float] = []
         self._capture_count = 0
         self._success_count = 0
@@ -620,11 +624,11 @@ class CaptureError(Exception):
 class FailureType(StrEnum):
     """Classification of capture failures for retry decision-making."""
 
-    TRANSIENT = "transient"       # Device busy, frame read failed — may recover
-    PERMISSION = "permission"     # Permission denied — won't recover by retry
-    DEVICE_GONE = "device_gone"   # Device removed — needs rediscovery
-    UNSUPPORTED = "unsupported"   # Format/resolution unsupported — won't recover
-    UNKNOWN = "unknown"           # Unclassified failure
+    TRANSIENT = "transient"  # Device busy, frame read failed — may recover
+    PERMISSION = "permission"  # Permission denied — won't recover by retry
+    DEVICE_GONE = "device_gone"  # Device removed — needs rediscovery
+    UNSUPPORTED = "unsupported"  # Format/resolution unsupported — won't recover
+    UNKNOWN = "unknown"  # Unclassified failure
 
 
 # ---------------------------------------------------------------------------

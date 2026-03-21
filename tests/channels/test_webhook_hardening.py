@@ -68,9 +68,7 @@ class TestWebhookQueueBounds:
         from missy.channels.base import ChannelMessage
 
         for i in range(_MAX_QUEUE_SIZE):
-            ch._queue.append(
-                ChannelMessage(content=f"msg-{i}", sender="test", channel="webhook")
-            )
+            ch._queue.append(ChannelMessage(content=f"msg-{i}", sender="test", channel="webhook"))
         assert len(ch._queue) == _MAX_QUEUE_SIZE
 
 

@@ -212,8 +212,9 @@ class TestGetCurrentToken:
             assert result == "vault-key"
 
     def test_vault_failure_returns_none(self):
-        with patch("missy.cli.anthropic_auth.load_token", return_value=None), patch(
-            "missy.security.vault.Vault", side_effect=Exception("vault error")
+        with (
+            patch("missy.cli.anthropic_auth.load_token", return_value=None),
+            patch("missy.security.vault.Vault", side_effect=Exception("vault error")),
         ):
             result = get_current_token()
             assert result is None

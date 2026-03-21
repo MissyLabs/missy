@@ -444,73 +444,49 @@ class TestCheckGuildPolicy:
         assert result is False
 
     def test_disabled_guild_denies(self, channel):
-        channel.account_config.guild_policies = {
-            "guild-1": DiscordGuildPolicy(enabled=False)
-        }
+        channel.account_config.guild_policies = {"guild-1": DiscordGuildPolicy(enabled=False)}
         result = channel._check_guild_policy("guild-1", "ch-1", "user-1", "hi", {})
         assert result is False
 
     def test_enabled_guild_no_restrictions_allows(self, channel):
-        channel.account_config.guild_policies = {
-            "guild-1": DiscordGuildPolicy(enabled=True)
-        }
+        channel.account_config.guild_policies = {"guild-1": DiscordGuildPolicy(enabled=True)}
         result = channel._check_guild_policy("guild-1", "ch-1", "user-1", "hi", {})
         assert result is True
 
     def test_channel_allowlist_allows_listed_channel_id(self, channel):
         channel.account_config.guild_policies = {
-            "guild-1": DiscordGuildPolicy(
-                enabled=True, allowed_channels=["ch-allowed"]
-            )
+            "guild-1": DiscordGuildPolicy(enabled=True, allowed_channels=["ch-allowed"])
         }
-        result = channel._check_guild_policy(
-            "guild-1", "ch-allowed", "user-1", "hi", {}
-        )
+        result = channel._check_guild_policy("guild-1", "ch-allowed", "user-1", "hi", {})
         assert result is True
 
     def test_channel_allowlist_denies_unlisted_channel(self, channel):
         channel.account_config.guild_policies = {
-            "guild-1": DiscordGuildPolicy(
-                enabled=True, allowed_channels=["ch-allowed"]
-            )
+            "guild-1": DiscordGuildPolicy(enabled=True, allowed_channels=["ch-allowed"])
         }
-        result = channel._check_guild_policy(
-            "guild-1", "ch-other", "user-1", "hi", {}
-        )
+        result = channel._check_guild_policy("guild-1", "ch-other", "user-1", "hi", {})
         assert result is False
 
     def test_channel_allowlist_matches_by_name_in_data(self, channel):
         channel.account_config.guild_policies = {
-            "guild-1": DiscordGuildPolicy(
-                enabled=True, allowed_channels=["general"]
-            )
+            "guild-1": DiscordGuildPolicy(enabled=True, allowed_channels=["general"])
         }
         data = {"channel": {"name": "general"}}
-        result = channel._check_guild_policy(
-            "guild-1", "ch-id-99", "user-1", "hi", data
-        )
+        result = channel._check_guild_policy("guild-1", "ch-id-99", "user-1", "hi", data)
         assert result is True
 
     def test_user_allowlist_allows_listed_user(self, channel):
         channel.account_config.guild_policies = {
-            "guild-1": DiscordGuildPolicy(
-                enabled=True, allowed_users=["u-permitted"]
-            )
+            "guild-1": DiscordGuildPolicy(enabled=True, allowed_users=["u-permitted"])
         }
-        result = channel._check_guild_policy(
-            "guild-1", "ch-1", "u-permitted", "hi", {}
-        )
+        result = channel._check_guild_policy("guild-1", "ch-1", "u-permitted", "hi", {})
         assert result is True
 
     def test_user_allowlist_denies_unlisted_user(self, channel):
         channel.account_config.guild_policies = {
-            "guild-1": DiscordGuildPolicy(
-                enabled=True, allowed_users=["u-permitted"]
-            )
+            "guild-1": DiscordGuildPolicy(enabled=True, allowed_users=["u-permitted"])
         }
-        result = channel._check_guild_policy(
-            "guild-1", "ch-1", "u-stranger", "hi", {}
-        )
+        result = channel._check_guild_policy("guild-1", "ch-1", "u-stranger", "hi", {})
         assert result is False
 
     def test_require_mention_allows_when_mentioned(self, channel):
@@ -519,9 +495,7 @@ class TestCheckGuildPolicy:
             "guild-1": DiscordGuildPolicy(enabled=True, require_mention=True)
         }
         content = "Hey <@bot-111> help me"
-        result = channel._check_guild_policy(
-            "guild-1", "ch-1", "user-1", content, {}
-        )
+        result = channel._check_guild_policy("guild-1", "ch-1", "user-1", content, {})
         assert result is True
 
     def test_require_mention_denies_when_not_mentioned(self, channel):
@@ -540,9 +514,7 @@ class TestCheckGuildPolicy:
             "guild-1": DiscordGuildPolicy(enabled=True, require_mention=True)
         }
         content = "Hey <@!bot-111> are you there?"
-        result = channel._check_guild_policy(
-            "guild-1", "ch-1", "user-1", content, {}
-        )
+        result = channel._check_guild_policy("guild-1", "ch-1", "user-1", content, {})
         assert result is True
 
     def test_require_mention_fallback_to_mentions_list_when_no_bot_id(self, channel):
@@ -553,9 +525,7 @@ class TestCheckGuildPolicy:
             "guild-1": DiscordGuildPolicy(enabled=True, require_mention=True)
         }
         # Without own_id the code checks the mentions list; no mentions → deny.
-        result = channel._check_guild_policy(
-            "guild-1", "ch-1", "user-1", "hello", {}
-        )
+        result = channel._check_guild_policy("guild-1", "ch-1", "user-1", "hello", {})
         assert result is False
 
 
@@ -905,9 +875,7 @@ class TestHandleMessageAccessControl:
 
     @pytest.mark.asyncio
     async def test_guild_message_with_open_policy_enqueues(self, channel):
-        channel.account_config.guild_policies = {
-            "guild-1": DiscordGuildPolicy(enabled=True)
-        }
+        channel.account_config.guild_policies = {"guild-1": DiscordGuildPolicy(enabled=True)}
         data = self._make_message_payload(guild_id="guild-1", content="hi")
         await channel._handle_message(data)
         assert not channel._queue.empty()
@@ -916,9 +884,7 @@ class TestHandleMessageAccessControl:
 
     @pytest.mark.asyncio
     async def test_guild_message_sets_current_channel_id(self, channel):
-        channel.account_config.guild_policies = {
-            "guild-1": DiscordGuildPolicy(enabled=True)
-        }
+        channel.account_config.guild_policies = {"guild-1": DiscordGuildPolicy(enabled=True)}
         data = self._make_message_payload(guild_id="guild-1", channel_id="ch-active")
         await channel._handle_message(data)
         assert channel._current_channel_id == "ch-active"
@@ -927,11 +893,7 @@ class TestHandleMessageAccessControl:
     async def test_bot_message_filtered_when_ignore_bots(self, channel):
         channel.account_config.ignore_bots = True
         channel.account_config.allow_bots_if_mention_only = False
-        channel.account_config.guild_policies = {
-            "guild-1": DiscordGuildPolicy(enabled=True)
-        }
-        data = self._make_message_payload(
-            guild_id="guild-1", is_bot=True, author_id="other-bot"
-        )
+        channel.account_config.guild_policies = {"guild-1": DiscordGuildPolicy(enabled=True)}
+        data = self._make_message_payload(guild_id="guild-1", is_bot=True, author_id="other-bot")
         await channel._handle_message(data)
         assert channel._queue.empty()

@@ -214,9 +214,7 @@ class TestAsyncClose:
     async def test_aclose_after_request_closes_client(self) -> None:
         client = PolicyHTTPClient()
         mock_resp = _mock_response(200)
-        with patch.object(
-            httpx.AsyncClient, "get", new_callable=AsyncMock, return_value=mock_resp
-        ):
+        with patch.object(httpx.AsyncClient, "get", new_callable=AsyncMock, return_value=mock_resp):
             await client.aget("https://api.example.com/")
         inner = client._async_client
         assert inner is not None
@@ -225,9 +223,7 @@ class TestAsyncClose:
 
     async def test_async_context_manager_makes_client_available_inside_block(self) -> None:
         mock_resp = _mock_response(200)
-        with patch.object(
-            httpx.AsyncClient, "get", new_callable=AsyncMock, return_value=mock_resp
-        ):
+        with patch.object(httpx.AsyncClient, "get", new_callable=AsyncMock, return_value=mock_resp):
             async with PolicyHTTPClient() as client:
                 resp = await client.aget("https://api.example.com/ping")
         assert resp.status_code == 200
@@ -255,7 +251,10 @@ class TestSyncContextManager:
 
     def test_sync_context_manager_full_request_flow(self) -> None:
         mock_resp = _mock_response(200)
-        with patch.object(httpx.Client, "get", return_value=mock_resp), PolicyHTTPClient() as client:
+        with (
+            patch.object(httpx.Client, "get", return_value=mock_resp),
+            PolicyHTTPClient() as client,
+        ):
             resp = client.get("https://api.example.com/ping")
         assert resp.status_code == 200
         assert client._sync_client is None
@@ -337,9 +336,7 @@ class TestCategoryForwarding:
                 httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=mock_resp
             ):
                 await client.apost("https://discord.com/api/webhooks/x")
-        mock_engine.check_network.assert_called_once_with(
-            "discord.com", "", "", category="discord"
-        )
+        mock_engine.check_network.assert_called_once_with("discord.com", "", "", category="discord")
 
     def test_empty_category_forwarded_by_default(self) -> None:
         client = PolicyHTTPClient()

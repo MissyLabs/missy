@@ -124,9 +124,7 @@ class TestHealthMonitorAutoSave:
         from missy.vision.health_monitor import VisionHealthMonitor
 
         monitor = VisionHealthMonitor()
-        monitor.record_capture(
-            success=False, device="/dev/video0", error="Device busy"
-        )
+        monitor.record_capture(success=False, device="/dev/video0", error="Device busy")
         stats = monitor.get_device_stats("/dev/video0")
         assert stats.failed_captures == 1
         assert stats.last_error == "Device busy"

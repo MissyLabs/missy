@@ -199,7 +199,10 @@ class TestAcquireWithMockedTime:
             sleep_calls.append(t)
             real_sleep(t)
 
-        with patch("missy.providers.rate_limiter.time.sleep", side_effect=capture_sleep), pytest.raises(RateLimitExceeded):
+        with (
+            patch("missy.providers.rate_limiter.time.sleep", side_effect=capture_sleep),
+            pytest.raises(RateLimitExceeded),
+        ):
             rl.acquire()
 
         assert len(sleep_calls) >= 1, "Expected at least one sleep call while waiting"
@@ -571,49 +574,63 @@ class TestRestPolicyConstruction:
         assert policy._rules == []
 
     def test_from_config_lowercases_host(self) -> None:
-        policy = RestPolicy.from_config([
-            {"host": "API.GitHub.COM", "method": "GET", "path": "/", "action": "allow"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"host": "API.GitHub.COM", "method": "GET", "path": "/", "action": "allow"},
+            ]
+        )
         assert policy._rules[0].host == "api.github.com"
 
     def test_from_config_uppercases_method(self) -> None:
-        policy = RestPolicy.from_config([
-            {"host": "h", "method": "delete", "path": "/", "action": "deny"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"host": "h", "method": "delete", "path": "/", "action": "deny"},
+            ]
+        )
         assert policy._rules[0].method == "DELETE"
 
     def test_from_config_lowercases_action(self) -> None:
-        policy = RestPolicy.from_config([
-            {"host": "h", "method": "GET", "path": "/", "action": "ALLOW"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"host": "h", "method": "GET", "path": "/", "action": "ALLOW"},
+            ]
+        )
         assert policy._rules[0].action == "allow"
 
     def test_from_config_default_method_is_star(self) -> None:
         """Missing 'method' key defaults to '*'."""
-        policy = RestPolicy.from_config([
-            {"host": "h", "path": "/", "action": "allow"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"host": "h", "path": "/", "action": "allow"},
+            ]
+        )
         assert policy._rules[0].method == "*"
 
     def test_from_config_default_path_is_glob_all(self) -> None:
         """Missing 'path' key defaults to '/**'."""
-        policy = RestPolicy.from_config([
-            {"host": "h", "method": "GET", "action": "allow"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"host": "h", "method": "GET", "action": "allow"},
+            ]
+        )
         assert policy._rules[0].path == "/**"
 
     def test_from_config_default_action_is_deny(self) -> None:
         """Missing 'action' key defaults to 'deny'."""
-        policy = RestPolicy.from_config([
-            {"host": "h", "method": "GET", "path": "/"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"host": "h", "method": "GET", "path": "/"},
+            ]
+        )
         assert policy._rules[0].action == "deny"
 
     def test_from_config_default_host_is_empty_string(self) -> None:
         """Missing 'host' key defaults to '' (empty string)."""
-        policy = RestPolicy.from_config([
-            {"method": "GET", "path": "/", "action": "allow"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"method": "GET", "path": "/", "action": "allow"},
+            ]
+        )
         assert policy._rules[0].host == ""
 
     def test_from_config_multiple_rules_order_preserved(self) -> None:
@@ -641,61 +658,79 @@ class TestRestPolicyCheck:
         assert policy.check("api.github.com", "GET", "/repos") is None
 
     def test_returns_none_when_host_not_matched(self) -> None:
-        policy = RestPolicy.from_config([
-            {"host": "api.github.com", "method": "GET", "path": "/**", "action": "allow"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"host": "api.github.com", "method": "GET", "path": "/**", "action": "allow"},
+            ]
+        )
         assert policy.check("api.example.com", "GET", "/repos") is None
 
     def test_returns_none_when_method_not_matched(self) -> None:
-        policy = RestPolicy.from_config([
-            {"host": "api.github.com", "method": "GET", "path": "/**", "action": "allow"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"host": "api.github.com", "method": "GET", "path": "/**", "action": "allow"},
+            ]
+        )
         assert policy.check("api.github.com", "POST", "/repos") is None
 
     def test_returns_none_when_path_not_matched(self) -> None:
-        policy = RestPolicy.from_config([
-            {"host": "api.github.com", "method": "GET", "path": "/repos/**", "action": "allow"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"host": "api.github.com", "method": "GET", "path": "/repos/**", "action": "allow"},
+            ]
+        )
         assert policy.check("api.github.com", "GET", "/users/foo") is None
 
     def test_returns_allow_for_matching_rule(self) -> None:
-        policy = RestPolicy.from_config([
-            {"host": "api.github.com", "method": "GET", "path": "/repos/**", "action": "allow"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"host": "api.github.com", "method": "GET", "path": "/repos/**", "action": "allow"},
+            ]
+        )
         assert policy.check("api.github.com", "GET", "/repos/foo/bar") == "allow"
 
     def test_returns_deny_for_matching_rule(self) -> None:
-        policy = RestPolicy.from_config([
-            {"host": "api.github.com", "method": "DELETE", "path": "/**", "action": "deny"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"host": "api.github.com", "method": "DELETE", "path": "/**", "action": "deny"},
+            ]
+        )
         assert policy.check("api.github.com", "DELETE", "/repos/foo") == "deny"
 
     def test_first_match_wins_allow_before_deny(self) -> None:
-        policy = RestPolicy.from_config([
-            {"host": "h", "method": "GET", "path": "/admin/**", "action": "allow"},
-            {"host": "h", "method": "GET", "path": "/admin/**", "action": "deny"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"host": "h", "method": "GET", "path": "/admin/**", "action": "allow"},
+                {"host": "h", "method": "GET", "path": "/admin/**", "action": "deny"},
+            ]
+        )
         assert policy.check("h", "GET", "/admin/secret") == "allow"
 
     def test_first_match_wins_deny_before_allow(self) -> None:
-        policy = RestPolicy.from_config([
-            {"host": "h", "method": "GET", "path": "/**", "action": "deny"},
-            {"host": "h", "method": "GET", "path": "/public/**", "action": "allow"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"host": "h", "method": "GET", "path": "/**", "action": "deny"},
+                {"host": "h", "method": "GET", "path": "/public/**", "action": "allow"},
+            ]
+        )
         assert policy.check("h", "GET", "/public/page") == "deny"
 
     def test_later_rule_reached_when_earlier_rule_host_differs(self) -> None:
-        policy = RestPolicy.from_config([
-            {"host": "other.com", "method": "GET", "path": "/**", "action": "deny"},
-            {"host": "api.com", "method": "GET", "path": "/**", "action": "allow"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"host": "other.com", "method": "GET", "path": "/**", "action": "deny"},
+                {"host": "api.com", "method": "GET", "path": "/**", "action": "allow"},
+            ]
+        )
         assert policy.check("api.com", "GET", "/data") == "allow"
 
     def test_later_rule_reached_when_earlier_rule_method_differs(self) -> None:
-        policy = RestPolicy.from_config([
-            {"host": "api.com", "method": "POST", "path": "/**", "action": "deny"},
-            {"host": "api.com", "method": "GET", "path": "/**", "action": "allow"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"host": "api.com", "method": "POST", "path": "/**", "action": "deny"},
+                {"host": "api.com", "method": "GET", "path": "/**", "action": "allow"},
+            ]
+        )
         assert policy.check("api.com", "GET", "/data") == "allow"
 
 
@@ -708,35 +743,45 @@ class TestRestPolicyHostMatching:
     """Host comparison is case-insensitive; only exact matches qualify."""
 
     def test_check_host_case_insensitive_upper_in_check(self) -> None:
-        policy = RestPolicy.from_config([
-            {"host": "api.github.com", "method": "GET", "path": "/**", "action": "allow"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"host": "api.github.com", "method": "GET", "path": "/**", "action": "allow"},
+            ]
+        )
         assert policy.check("API.GITHUB.COM", "GET", "/foo") == "allow"
 
     def test_check_host_case_insensitive_mixed(self) -> None:
-        policy = RestPolicy.from_config([
-            {"host": "Api.GitHub.Com", "method": "GET", "path": "/**", "action": "allow"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"host": "Api.GitHub.Com", "method": "GET", "path": "/**", "action": "allow"},
+            ]
+        )
         assert policy.check("api.github.com", "GET", "/foo") == "allow"
 
     def test_subdomain_does_not_match_parent(self) -> None:
         """rules for api.github.com must not match sub.api.github.com."""
-        policy = RestPolicy.from_config([
-            {"host": "api.github.com", "method": "GET", "path": "/**", "action": "deny"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"host": "api.github.com", "method": "GET", "path": "/**", "action": "deny"},
+            ]
+        )
         assert policy.check("sub.api.github.com", "GET", "/foo") is None
 
     def test_partial_host_suffix_does_not_match(self) -> None:
-        policy = RestPolicy.from_config([
-            {"host": "github.com", "method": "GET", "path": "/**", "action": "deny"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"host": "github.com", "method": "GET", "path": "/**", "action": "deny"},
+            ]
+        )
         assert policy.check("api.github.com", "GET", "/foo") is None
 
     def test_empty_host_in_rule_only_matches_empty_host_in_check(self) -> None:
         """A rule with host='' only matches check calls where host is also ''."""
-        policy = RestPolicy.from_config([
-            {"host": "", "method": "GET", "path": "/**", "action": "allow"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"host": "", "method": "GET", "path": "/**", "action": "allow"},
+            ]
+        )
         assert policy.check("", "GET", "/foo") == "allow"
         assert policy.check("api.com", "GET", "/foo") is None
 
@@ -750,58 +795,76 @@ class TestRestPolicyMethodMatching:
     """Method matching is case-insensitive; '*' matches any method."""
 
     def test_method_wildcard_matches_get(self) -> None:
-        policy = RestPolicy.from_config([
-            {"host": "h", "method": "*", "path": "/**", "action": "allow"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"host": "h", "method": "*", "path": "/**", "action": "allow"},
+            ]
+        )
         assert policy.check("h", "GET", "/x") == "allow"
 
     def test_method_wildcard_matches_post(self) -> None:
-        policy = RestPolicy.from_config([
-            {"host": "h", "method": "*", "path": "/**", "action": "allow"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"host": "h", "method": "*", "path": "/**", "action": "allow"},
+            ]
+        )
         assert policy.check("h", "POST", "/x") == "allow"
 
     def test_method_wildcard_matches_delete(self) -> None:
-        policy = RestPolicy.from_config([
-            {"host": "h", "method": "*", "path": "/**", "action": "deny"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"host": "h", "method": "*", "path": "/**", "action": "deny"},
+            ]
+        )
         assert policy.check("h", "DELETE", "/x") == "deny"
 
     def test_method_wildcard_matches_patch(self) -> None:
-        policy = RestPolicy.from_config([
-            {"host": "h", "method": "*", "path": "/**", "action": "allow"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"host": "h", "method": "*", "path": "/**", "action": "allow"},
+            ]
+        )
         assert policy.check("h", "PATCH", "/x") == "allow"
 
     def test_method_wildcard_matches_put(self) -> None:
-        policy = RestPolicy.from_config([
-            {"host": "h", "method": "*", "path": "/**", "action": "allow"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"host": "h", "method": "*", "path": "/**", "action": "allow"},
+            ]
+        )
         assert policy.check("h", "PUT", "/x") == "allow"
 
     def test_method_wildcard_matches_head(self) -> None:
-        policy = RestPolicy.from_config([
-            {"host": "h", "method": "*", "path": "/**", "action": "allow"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"host": "h", "method": "*", "path": "/**", "action": "allow"},
+            ]
+        )
         assert policy.check("h", "HEAD", "/x") == "allow"
 
     def test_specific_method_does_not_match_other_methods(self) -> None:
-        policy = RestPolicy.from_config([
-            {"host": "h", "method": "GET", "path": "/**", "action": "allow"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"host": "h", "method": "GET", "path": "/**", "action": "allow"},
+            ]
+        )
         for m in ("POST", "PUT", "DELETE", "PATCH", "OPTIONS"):
             assert policy.check("h", m, "/x") is None, f"Method {m!r} should not match"
 
     def test_method_case_insensitive_lower_in_rule_upper_in_check(self) -> None:
-        policy = RestPolicy.from_config([
-            {"host": "h", "method": "get", "path": "/**", "action": "allow"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"host": "h", "method": "get", "path": "/**", "action": "allow"},
+            ]
+        )
         assert policy.check("h", "GET", "/x") == "allow"
 
     def test_method_case_insensitive_upper_in_rule_lower_in_check(self) -> None:
-        policy = RestPolicy.from_config([
-            {"host": "h", "method": "DELETE", "path": "/**", "action": "deny"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"host": "h", "method": "DELETE", "path": "/**", "action": "deny"},
+            ]
+        )
         assert policy.check("h", "delete", "/x") == "deny"
 
 
@@ -814,22 +877,28 @@ class TestRestPolicyPathGlob:
     """Path matching uses fnmatch; test various glob patterns."""
 
     def test_exact_path_match(self) -> None:
-        policy = RestPolicy.from_config([
-            {"host": "h", "method": "GET", "path": "/health", "action": "allow"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"host": "h", "method": "GET", "path": "/health", "action": "allow"},
+            ]
+        )
         assert policy.check("h", "GET", "/health") == "allow"
         assert policy.check("h", "GET", "/health/check") is None
 
     def test_double_star_glob_matches_deep_paths(self) -> None:
-        policy = RestPolicy.from_config([
-            {"host": "h", "method": "GET", "path": "/repos/**", "action": "allow"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"host": "h", "method": "GET", "path": "/repos/**", "action": "allow"},
+            ]
+        )
         assert policy.check("h", "GET", "/repos/owner/repo/issues/42") == "allow"
 
     def test_double_star_glob_at_root_matches_any_path(self) -> None:
-        policy = RestPolicy.from_config([
-            {"host": "h", "method": "GET", "path": "/**", "action": "allow"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"host": "h", "method": "GET", "path": "/**", "action": "allow"},
+            ]
+        )
         assert policy.check("h", "GET", "/a/b/c/d/e") == "allow"
 
     def test_single_star_matches_one_segment(self) -> None:
@@ -841,9 +910,11 @@ class TestRestPolicyPathGlob:
         path = "/repos/owner"
         pattern = "/repos/*"
         expected = fnmatch.fnmatch(path, pattern)
-        policy = RestPolicy.from_config([
-            {"host": "h", "method": "GET", "path": pattern, "action": "allow"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"host": "h", "method": "GET", "path": pattern, "action": "allow"},
+            ]
+        )
         result = policy.check("h", "GET", path)
         if expected:
             assert result == "allow"
@@ -852,33 +923,41 @@ class TestRestPolicyPathGlob:
 
     def test_question_mark_glob_matches_single_char(self) -> None:
         """fnmatch '?' matches any single character."""
-        policy = RestPolicy.from_config([
-            {"host": "h", "method": "GET", "path": "/v?/status", "action": "allow"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"host": "h", "method": "GET", "path": "/v?/status", "action": "allow"},
+            ]
+        )
         assert policy.check("h", "GET", "/v1/status") == "allow"
         assert policy.check("h", "GET", "/v2/status") == "allow"
 
     def test_character_range_glob(self) -> None:
         """fnmatch '[abc]' matches one of the listed chars."""
-        policy = RestPolicy.from_config([
-            {"host": "h", "method": "GET", "path": "/api/v[123]/**", "action": "allow"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"host": "h", "method": "GET", "path": "/api/v[123]/**", "action": "allow"},
+            ]
+        )
         assert policy.check("h", "GET", "/api/v1/data") == "allow"
         assert policy.check("h", "GET", "/api/v2/data") == "allow"
         assert policy.check("h", "GET", "/api/v4/data") is None
 
     def test_leading_slash_required_for_match(self) -> None:
-        policy = RestPolicy.from_config([
-            {"host": "h", "method": "GET", "path": "/repos/**", "action": "allow"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"host": "h", "method": "GET", "path": "/repos/**", "action": "allow"},
+            ]
+        )
         assert policy.check("h", "GET", "repos/foo") is None
 
     def test_multiple_path_rules_per_host(self) -> None:
         """Different path rules on the same host each match independently."""
-        policy = RestPolicy.from_config([
-            {"host": "h", "method": "GET", "path": "/public/**", "action": "allow"},
-            {"host": "h", "method": "GET", "path": "/private/**", "action": "deny"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"host": "h", "method": "GET", "path": "/public/**", "action": "allow"},
+                {"host": "h", "method": "GET", "path": "/private/**", "action": "deny"},
+            ]
+        )
         assert policy.check("h", "GET", "/public/data") == "allow"
         assert policy.check("h", "GET", "/private/secret") == "deny"
         assert policy.check("h", "GET", "/other/stuff") is None
@@ -894,12 +973,19 @@ class TestRestPolicyRealisticScenarios:
 
     @pytest.fixture
     def github_policy(self) -> RestPolicy:
-        return RestPolicy.from_config([
-            {"host": "api.github.com", "method": "GET", "path": "/repos/**", "action": "allow"},
-            {"host": "api.github.com", "method": "POST", "path": "/repos/**", "action": "allow"},
-            {"host": "api.github.com", "method": "DELETE", "path": "/**", "action": "deny"},
-            {"host": "api.github.com", "method": "GET", "path": "/user", "action": "allow"},
-        ])
+        return RestPolicy.from_config(
+            [
+                {"host": "api.github.com", "method": "GET", "path": "/repos/**", "action": "allow"},
+                {
+                    "host": "api.github.com",
+                    "method": "POST",
+                    "path": "/repos/**",
+                    "action": "allow",
+                },
+                {"host": "api.github.com", "method": "DELETE", "path": "/**", "action": "deny"},
+                {"host": "api.github.com", "method": "GET", "path": "/user", "action": "allow"},
+            ]
+        )
 
     def test_github_get_repos_allowed(self, github_policy: RestPolicy) -> None:
         assert github_policy.check("api.github.com", "GET", "/repos/owner/repo") == "allow"
@@ -922,29 +1008,35 @@ class TestRestPolicyRealisticScenarios:
     def test_admin_deny_overrides_general_allow(self) -> None:
         """Deny rule for /admin/** placed first should block even when a later
         catch-all allow exists."""
-        policy = RestPolicy.from_config([
-            {"host": "api.com", "method": "GET", "path": "/admin/**", "action": "deny"},
-            {"host": "api.com", "method": "GET", "path": "/**", "action": "allow"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"host": "api.com", "method": "GET", "path": "/admin/**", "action": "deny"},
+                {"host": "api.com", "method": "GET", "path": "/**", "action": "allow"},
+            ]
+        )
         assert policy.check("api.com", "GET", "/admin/users") == "deny"
         assert policy.check("api.com", "GET", "/public/data") == "allow"
 
     def test_read_only_policy_denies_all_writes(self) -> None:
         """A read-only profile: GET allowed, all other methods denied."""
-        policy = RestPolicy.from_config([
-            {"host": "api.com", "method": "GET", "path": "/**", "action": "allow"},
-            {"host": "api.com", "method": "*", "path": "/**", "action": "deny"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"host": "api.com", "method": "GET", "path": "/**", "action": "allow"},
+                {"host": "api.com", "method": "*", "path": "/**", "action": "deny"},
+            ]
+        )
         assert policy.check("api.com", "GET", "/data") == "allow"
         for m in ("POST", "PUT", "PATCH", "DELETE"):
             assert policy.check("api.com", m, "/data") == "deny", f"Expected deny for {m}"
 
     def test_multiple_hosts_isolated(self) -> None:
         """Rules for different hosts are fully isolated from each other."""
-        policy = RestPolicy.from_config([
-            {"host": "a.com", "method": "GET", "path": "/**", "action": "allow"},
-            {"host": "b.com", "method": "GET", "path": "/**", "action": "deny"},
-        ])
+        policy = RestPolicy.from_config(
+            [
+                {"host": "a.com", "method": "GET", "path": "/**", "action": "allow"},
+                {"host": "b.com", "method": "GET", "path": "/**", "action": "deny"},
+            ]
+        )
         assert policy.check("a.com", "GET", "/x") == "allow"
         assert policy.check("b.com", "GET", "/x") == "deny"
         assert policy.check("c.com", "GET", "/x") is None

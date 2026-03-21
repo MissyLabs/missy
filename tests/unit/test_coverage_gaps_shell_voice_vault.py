@@ -11,6 +11,7 @@ Targets uncovered paths in:
 - missy/agent/code_evolution.py     (lines 709-710 already covered in s13 — verified)
 - missy/security/vault.py           (crypto unavailable raises VaultError)
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -101,31 +102,32 @@ class TestVoiceChannelEventLoopException:
             patch("asyncio.new_event_loop", side_effect=patched_new_event_loop),
             patch("asyncio.set_event_loop"),
         ):
-                # We need to replicate the thread logic with the patched loop.
-                # Build _run_loop equivalent inline and call it directly so we
-                # can inspect state synchronously.
-                def _run_loop_equivalent() -> None:
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    channel._loop = loop
+            # We need to replicate the thread logic with the patched loop.
+            # Build _run_loop equivalent inline and call it directly so we
+            # can inspect state synchronously.
+            def _run_loop_equivalent() -> None:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                channel._loop = loop
 
-                    async def _dummy_runner() -> None:
-                        pass
+                async def _dummy_runner() -> None:
+                    pass
 
-                    try:
-                        loop.run_until_complete(_dummy_runner())
-                    except Exception:
-                        import logging as _logging
-                        _logging.getLogger("missy.channels.voice.channel").error(
-                            "VoiceChannel: event loop terminated with error.",
-                            exc_info=True,
-                        )
-                    finally:
-                        loop.close()
-                        channel._loop = None
+                try:
+                    loop.run_until_complete(_dummy_runner())
+                except Exception:
+                    import logging as _logging
 
-                with caplog.at_level(logging.ERROR, logger="missy.channels.voice.channel"):
-                    _run_loop_equivalent()
+                    _logging.getLogger("missy.channels.voice.channel").error(
+                        "VoiceChannel: event loop terminated with error.",
+                        exc_info=True,
+                    )
+                finally:
+                    loop.close()
+                    channel._loop = None
+
+            with caplog.at_level(logging.ERROR, logger="missy.channels.voice.channel"):
+                _run_loop_equivalent()
 
         assert channel._loop is None
         assert "VoiceChannel: event loop terminated with error." in caplog.text
@@ -149,19 +151,20 @@ class TestVoiceChannelEventLoopException:
             patch("asyncio.new_event_loop", return_value=boom_loop),
             patch("asyncio.set_event_loop"),
         ):
-                def _run_loop_equivalent() -> None:
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    channel._loop = loop
-                    try:
-                        loop.run_until_complete(MagicMock())
-                    except Exception:
-                        pass
-                    finally:
-                        loop.close()
-                        channel._loop = None
 
-                _run_loop_equivalent()
+            def _run_loop_equivalent() -> None:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                channel._loop = loop
+                try:
+                    loop.run_until_complete(MagicMock())
+                except Exception:
+                    pass
+                finally:
+                    loop.close()
+                    channel._loop = None
+
+            _run_loop_equivalent()
 
         assert "closed" in close_calls
         assert channel._loop is None
@@ -214,11 +217,11 @@ class TestDiscordVoiceInitException:
             ),
         ):
             await channel._maybe_handle_voice_command(
-                    content="!join General",
-                    channel_id="123",
-                    guild_id="456",
-                    author_id="789",
-                )
+                content="!join General",
+                channel_id="123",
+                guild_id="456",
+                author_id="789",
+            )
 
         # _voice must remain None after the failure.
         assert channel._voice is None

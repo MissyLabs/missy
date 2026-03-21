@@ -174,7 +174,7 @@ class CostTracker:
             # Evict oldest records to prevent unbounded memory growth
             # in long-running sessions.  Totals remain accurate.
             if len(self._records) > self._MAX_RECORDS:
-                self._records = self._records[-self._MAX_RECORDS:]
+                self._records = self._records[-self._MAX_RECORDS :]
 
         return rec
 

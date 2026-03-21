@@ -25,6 +25,7 @@ import pytest
 # FileDeleteTool: O_NOFOLLOW symlink re-resolve path
 # ---------------------------------------------------------------------------
 
+
 class TestFileDeleteSymlinkReResolve:
     """Cover the O_NOFOLLOW fallback branch in file_delete."""
 
@@ -64,6 +65,7 @@ class TestFileDeleteSymlinkReResolve:
 # VoiceServer: mark_offline exception path
 # ---------------------------------------------------------------------------
 
+
 class TestVoiceServerMarkOfflineException:
     """Cover the mark_offline exception handler in _handle_connection."""
 
@@ -100,9 +102,9 @@ class TestVoiceServerMarkOfflineException:
         ws.remote_address = ("127.0.0.1", 12345)
 
         # First recv() returns the auth JSON.
-        ws.recv = AsyncMock(return_value=json.dumps(
-            {"type": "auth", "node_id": "node-1", "token": "t"}
-        ))
+        ws.recv = AsyncMock(
+            return_value=json.dumps({"type": "auth", "node_id": "node-1", "token": "t"})
+        )
 
         # After auth succeeds, the message loop iterates over the websocket.
         # Yield nothing — connection immediately ends, triggering the finally block.
@@ -124,6 +126,7 @@ class TestVoiceServerMarkOfflineException:
 # ---------------------------------------------------------------------------
 # DeviceRegistry: load exception fallback
 # ---------------------------------------------------------------------------
+
 
 class TestDeviceRegistryLoadFallback:
     """Cover the exception path in _load() that resets _nodes to {}."""
@@ -154,6 +157,7 @@ class TestDeviceRegistryLoadFallback:
 # ---------------------------------------------------------------------------
 # AuditLogger: security_events JSON decode skip
 # ---------------------------------------------------------------------------
+
 
 class TestAuditLoggerJsonDecodeSkip:
     """Cover the JSONDecodeError continue in security_events."""
@@ -186,6 +190,7 @@ class TestAuditLoggerJsonDecodeSkip:
 # Webhook: _get_client_ip XFF path
 # ---------------------------------------------------------------------------
 
+
 class TestWebhookXFFPath:
     """Cover the X-Forwarded-For IP extraction in webhook handler."""
 
@@ -199,6 +204,7 @@ class TestWebhookXFFPath:
 # ---------------------------------------------------------------------------
 # Discord voice resample: idx >= len(samples) break path
 # ---------------------------------------------------------------------------
+
 
 class TestDiscordVoiceResampleBreak:
     """Cover the break-on-out-of-bounds branch in _resample_pcm."""
@@ -223,26 +229,31 @@ class TestDiscordVoiceResampleBreak:
 # __all__ export verification
 # ---------------------------------------------------------------------------
 
+
 class TestPackageAllExports:
     """Verify __all__ is defined in every package __init__.py."""
 
-    @pytest.mark.parametrize("pkg", [
-        "missy.core",
-        "missy.config",
-        "missy.cli",
-        "missy.scheduler",
-        "missy.observability",
-        "missy.plugins",
-        "missy.gateway",
-        "missy.policy",
-        "missy.tools",
-        "missy.providers",
-        "missy.agent",
-        "missy.channels",
-        "missy.security",
-    ])
+    @pytest.mark.parametrize(
+        "pkg",
+        [
+            "missy.core",
+            "missy.config",
+            "missy.cli",
+            "missy.scheduler",
+            "missy.observability",
+            "missy.plugins",
+            "missy.gateway",
+            "missy.policy",
+            "missy.tools",
+            "missy.providers",
+            "missy.agent",
+            "missy.channels",
+            "missy.security",
+        ],
+    )
     def test_all_defined(self, pkg: str) -> None:
         import importlib
+
         mod = importlib.import_module(pkg)
         assert hasattr(mod, "__all__"), f"{pkg} missing __all__"
         assert isinstance(mod.__all__, (list, tuple))
@@ -252,6 +263,7 @@ class TestPackageAllExports:
 # ---------------------------------------------------------------------------
 # Magic number constants verification
 # ---------------------------------------------------------------------------
+
 
 class TestMagicNumberConstants:
     """Verify that magic numbers have been extracted to named constants."""

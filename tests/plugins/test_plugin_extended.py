@@ -230,8 +230,14 @@ class TestPermissionManifest:
     def test_manifest_permissions_contains_all_keys(self):
         plugin = AlphaPlugin()
         perms = plugin.get_manifest()["permissions"]
-        expected_keys = {"network", "filesystem_read", "filesystem_write", "shell",
-                         "allowed_hosts", "allowed_paths"}
+        expected_keys = {
+            "network",
+            "filesystem_read",
+            "filesystem_write",
+            "shell",
+            "allowed_hosts",
+            "allowed_paths",
+        }
         assert expected_keys == set(perms.keys())
 
     def test_full_permissions_plugin_manifest_all_true(self):

@@ -127,6 +127,7 @@ class DiscordAccountConfig:
                     return Vault().get(key)
                 except Exception:
                     import logging
+
                     logging.getLogger(__name__).debug(
                         "Failed to resolve vault:// token reference", exc_info=True
                     )

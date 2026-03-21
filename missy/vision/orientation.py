@@ -30,21 +30,24 @@ def _get_cv2() -> Any:
         with _cv2_lock:
             if _cv2 is None:
                 import cv2
+
                 _cv2 = cv2
     return _cv2
 
 
 class Orientation(IntEnum):
     """Image orientation states."""
-    NORMAL = 0          # No rotation needed
+
+    NORMAL = 0  # No rotation needed
     ROTATED_90_CW = 90  # Rotated 90° clockwise
-    ROTATED_180 = 180   # Upside down
+    ROTATED_180 = 180  # Upside down
     ROTATED_90_CCW = 270  # Rotated 90° counter-clockwise
 
 
 @dataclass
 class OrientationResult:
     """Result of orientation detection."""
+
     detected: Orientation
     confidence: float  # 0.0 to 1.0
     correction_applied: bool = False
@@ -136,7 +139,9 @@ def detect_orientation_from_exif(file_path: str) -> OrientationResult:
             if img is not None:
                 return detect_orientation(img)
             return OrientationResult(
-                detected=Orientation.NORMAL, confidence=0.0, method="file_not_found",
+                detected=Orientation.NORMAL,
+                confidence=0.0,
+                method="file_not_found",
             )
 
         # Read EXIF orientation tag from JPEG
@@ -169,7 +174,9 @@ def detect_orientation_from_exif(file_path: str) -> OrientationResult:
         pass
 
     return OrientationResult(
-        detected=Orientation.NORMAL, confidence=0.0, method="fallback",
+        detected=Orientation.NORMAL,
+        confidence=0.0,
+        method="fallback",
     )
 
 
@@ -243,15 +250,15 @@ def _parse_exif_orientation(data: bytes) -> int | None:
         marker = data[offset + 1]
         if marker == 0xE1:  # APP1
             # Found EXIF segment
-            seg_len = struct.unpack(">H", data[offset + 2:offset + 4])[0]
-            exif_data = data[offset + 4:offset + 2 + seg_len]
+            seg_len = struct.unpack(">H", data[offset + 2 : offset + 4])[0]
+            exif_data = data[offset + 4 : offset + 2 + seg_len]
             return _find_orientation_in_exif(exif_data)
 
         # Skip to next marker
         if marker in (0xD8, 0xD9):  # SOI, EOI
             offset += 2
         else:
-            seg_len = struct.unpack(">H", data[offset + 2:offset + 4])[0]
+            seg_len = struct.unpack(">H", data[offset + 2 : offset + 4])[0]
             offset += 2 + seg_len
 
     return None
@@ -289,18 +296,16 @@ def _find_orientation_in_exif(exif_data: bytes) -> int | None:
         return None
 
     # Read number of entries
-    num_entries = struct.unpack(f"{endian}H", tiff_data[ifd_offset:ifd_offset + 2])[0]
+    num_entries = struct.unpack(f"{endian}H", tiff_data[ifd_offset : ifd_offset + 2])[0]
 
     # Search for orientation tag (0x0112)
     for i in range(min(num_entries, 50)):  # cap to avoid runaway
         entry_offset = ifd_offset + 2 + i * 12
         if entry_offset + 12 > len(tiff_data):
             break
-        tag = struct.unpack(f"{endian}H", tiff_data[entry_offset:entry_offset + 2])[0]
+        tag = struct.unpack(f"{endian}H", tiff_data[entry_offset : entry_offset + 2])[0]
         if tag == 0x0112:  # Orientation
-            value = struct.unpack(
-                f"{endian}H", tiff_data[entry_offset + 8:entry_offset + 10]
-            )[0]
+            value = struct.unpack(f"{endian}H", tiff_data[entry_offset + 8 : entry_offset + 10])[0]
             return value
 
     return None

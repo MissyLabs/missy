@@ -503,7 +503,9 @@ class TestWebhookResponseCensoring:
         ch = WebhookChannel()
 
         with (
-            patch("missy.security.censor.censor_response", return_value="[REDACTED]") as mock_censor,
+            patch(
+                "missy.security.censor.censor_response", return_value="[REDACTED]"
+            ) as mock_censor,
             patch("missy.channels.webhook.logger") as mock_logger,
         ):
             ch.send("sk-ant-secret123 result text")
@@ -564,7 +566,9 @@ class TestMcpResponseIdValidation:
     """McpClient._rpc must log a warning when the response ID does not match
     the request ID, indicating a possible response-confusion attack."""
 
-    def _make_client_with_response(self, response_id: str | None, req_id_override: str | None = None):
+    def _make_client_with_response(
+        self, response_id: str | None, req_id_override: str | None = None
+    ):
         """Build a McpClient instance wired to return a fake JSON response."""
         import json
 
@@ -606,7 +610,9 @@ class TestMcpResponseIdValidation:
         client._proc = mock_proc
 
         with (
-            patch("missy.mcp.client.uuid.uuid4", return_value=MagicMock(__str__=lambda s: fixed_id)),
+            patch(
+                "missy.mcp.client.uuid.uuid4", return_value=MagicMock(__str__=lambda s: fixed_id)
+            ),
             patch("missy.mcp.client.logger") as mock_logger,
         ):
             client._rpc("tools/list")
@@ -633,7 +639,10 @@ class TestMcpResponseIdValidation:
         client._proc = mock_proc
 
         with (
-            patch("missy.mcp.client.uuid.uuid4", return_value=MagicMock(__str__=lambda s: fixed_req_id)),
+            patch(
+                "missy.mcp.client.uuid.uuid4",
+                return_value=MagicMock(__str__=lambda s: fixed_req_id),
+            ),
             pytest.raises(RuntimeError, match="MCP response ID mismatch"),
         ):
             client._rpc("tools/list")
@@ -683,7 +692,10 @@ class TestDeviceRegistryPermissionChecks:
         from missy.channels.voice.registry import DeviceRegistry
 
         reg_file = tmp_path / "devices.json"
-        self._write_registry_file(reg_file, '[{"node_id": "n1", "friendly_name": "Test", "room": "Lab", "ip_address": "10.0.0.1"}]')
+        self._write_registry_file(
+            reg_file,
+            '[{"node_id": "n1", "friendly_name": "Test", "room": "Lab", "ip_address": "10.0.0.1"}]',
+        )
 
         registry = DeviceRegistry(registry_path=str(reg_file))
 
@@ -889,7 +901,7 @@ class TestAudioLogPermissions:
 
         await server._log_audio_to_disk(
             node=node,
-            audio_buffer=b"\xAB" * 256,
+            audio_buffer=b"\xab" * 256,
             sample_rate=16000,
             channels=1,
         )
@@ -903,9 +915,7 @@ class TestAudioLogPermissions:
         file_stat = pcm_files[0].stat()
         # Mask off the file type bits — we only care about permission bits
         perm_bits = stat.S_IMODE(file_stat.st_mode)
-        assert perm_bits == 0o600, (
-            f"Expected 0o600, got {oct(perm_bits)}"
-        )
+        assert perm_bits == 0o600, f"Expected 0o600, got {oct(perm_bits)}"
 
     @pytest.mark.asyncio
     async def test_audio_log_file_contains_correct_bytes(self, node):

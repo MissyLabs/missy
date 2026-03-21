@@ -313,7 +313,9 @@ class TestReadSysfsAttr:
 class TestScanSysfs:
     """_scan_sysfs defensive behaviour."""
 
-    def test_missing_sysfs_base_logs_warning(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    def test_missing_sysfs_base_logs_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
         absent = tmp_path / "does_not_exist"
         disc = CameraDiscovery(sysfs_base=str(absent))
 
@@ -323,7 +325,9 @@ class TestScanSysfs:
         assert result == []
         assert any("does not exist" in r.message for r in caplog.records)
 
-    def test_oserror_on_iterdir_logs_warning(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    def test_oserror_on_iterdir_logs_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
         sysfs = tmp_path / "v4l"
         sysfs.mkdir()
         disc = CameraDiscovery(sysfs_base=str(sysfs))
@@ -506,7 +510,9 @@ class TestFindPreferredOrdering:
 
     def test_known_camera_preferred_over_unknown(self) -> None:
         disc = CameraDiscovery()
-        unknown = _make_device(path="/dev/video0", vendor_id="dead", product_id="beef", name="Unknown")
+        unknown = _make_device(
+            path="/dev/video0", vendor_id="dead", product_id="beef", name="Unknown"
+        )
         c270 = _make_device(path="/dev/video2", vendor_id="046d", product_id="0825", name="C270")
         disc._cache = [unknown, c270]
         disc._cache_time = 1e18

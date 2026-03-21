@@ -185,9 +185,7 @@ class TestCodeEvolutionShellFalse:
         # everything. With shell=False, "true" is run with args
         # ["|", "rm", "-rf", "/"] and exits 0 but the rm never runs.
         engine = _make_evolution_engine(tmp_path, test_command="true | rm -rf /")
-        prop = _make_approved_proposal(
-            engine._repo_root, "target.py", "old", "new"
-        )
+        prop = _make_approved_proposal(engine._repo_root, "target.py", "old", "new")
         engine._proposals = [prop]
         engine._find = MagicMock(return_value=prop)
 
@@ -217,9 +215,7 @@ class TestCodeEvolutionShellFalse:
     def test_semicolon_not_interpreted_as_command_separator(self, tmp_path):
         """A command containing ``;`` must NOT execute a second command."""
         engine = _make_evolution_engine(tmp_path, test_command="true; echo INJECTED")
-        prop = _make_approved_proposal(
-            engine._repo_root, "target.py", "old", "new"
-        )
+        prop = _make_approved_proposal(engine._repo_root, "target.py", "old", "new")
         engine._proposals = [prop]
         engine._find = MagicMock(return_value=prop)
 
@@ -251,9 +247,7 @@ class TestCodeEvolutionShellFalse:
         expected_argv = shlex.split(command)
 
         engine = _make_evolution_engine(tmp_path, test_command=command)
-        prop = _make_approved_proposal(
-            engine._repo_root, "target.py", "old", "new"
-        )
+        prop = _make_approved_proposal(engine._repo_root, "target.py", "old", "new")
         engine._proposals = [prop]
         engine._find = MagicMock(return_value=prop)
 
@@ -274,9 +268,7 @@ class TestCodeEvolutionShellFalse:
     def test_shell_false_is_explicit(self, tmp_path):
         """subprocess.run must be called with shell=False (or shell absent/False)."""
         engine = _make_evolution_engine(tmp_path, test_command="python3 -m pytest")
-        prop = _make_approved_proposal(
-            engine._repo_root, "target.py", "old", "new"
-        )
+        prop = _make_approved_proposal(engine._repo_root, "target.py", "old", "new")
         engine._proposals = [prop]
         engine._find = MagicMock(return_value=prop)
 
@@ -289,9 +281,7 @@ class TestCodeEvolutionShellFalse:
                 args_list = call_args[0][0] if call_args[0] else call_args[1].get("args", [])
                 if args_list and args_list[0] == "python3":
                     shell_val = call_args[1].get("shell", False)
-                    assert shell_val is False, (
-                        f"Expected shell=False but got shell={shell_val!r}"
-                    )
+                    assert shell_val is False, f"Expected shell=False but got shell={shell_val!r}"
                     break
 
 

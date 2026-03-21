@@ -29,10 +29,14 @@ class TestFullPuzzlePipeline:
         frame = ImageFrame(image=img, source_type=SourceType.WEBCAM)
 
         # 2. Preprocess
-        pipeline = ImagePipeline(PipelineConfig(
-            normalize_exposure=False, denoise=False, sharpen=False,
-            target_dimension=640,
-        ))
+        pipeline = ImagePipeline(
+            PipelineConfig(
+                normalize_exposure=False,
+                denoise=False,
+                sharpen=False,
+                target_dimension=640,
+            )
+        )
         processed = pipeline.process(frame.image)
         assert processed.shape[0] <= 640
         assert processed.shape[1] <= 640
@@ -194,9 +198,7 @@ class TestMultiSourceIntegration:
         assert frame.height == 200
 
         # Process through pipeline
-        pipeline = ImagePipeline(PipelineConfig(
-            normalize_exposure=False, target_dimension=200
-        ))
+        pipeline = ImagePipeline(PipelineConfig(normalize_exposure=False, target_dimension=200))
         processed = pipeline.process(frame.image)
 
         # Build analysis
@@ -222,7 +224,7 @@ class TestSceneMemoryLifecycle:
         for i in range(3):
             img = np.random.randint(0, 255, (100, 100, 3), dtype=np.uint8)
             s1.add_frame(img, source="webcam:/dev/video0")
-            s1.add_observation(f"Step {i+1} observation")
+            s1.add_observation(f"Step {i + 1} observation")
 
         s1.update_state(pieces_placed=15, total_pieces=500)
 

@@ -374,7 +374,9 @@ class TestCompactSessionEdgeCases:
         mem_store.compact_session("s1", keep_recent=3)
 
         all_turns = mem_store.get_session_turns("s1", limit=100)
-        summary_turns = [t for t in all_turns if t.role == "assistant" and "[Compacted history]" in t.content]
+        summary_turns = [
+            t for t in all_turns if t.role == "assistant" and "[Compacted history]" in t.content
+        ]
         assert len(summary_turns) == 1
         summary = summary_turns[0].content
         assert "User:" in summary
@@ -391,7 +393,9 @@ class TestCompactSessionEdgeCases:
         assert len(summary_turns) == 1
         assert "Assistant:" in summary_turns[0].content
 
-    def test_compact_summary_turn_appears_before_retained_turns(self, mem_store: MemoryStore) -> None:
+    def test_compact_summary_turn_appears_before_retained_turns(
+        self, mem_store: MemoryStore
+    ) -> None:
         for i in range(10):
             mem_store.add_turn("ordered", "user", f"msg-{i}")
 
@@ -405,9 +409,7 @@ class TestCompactSessionEdgeCases:
         assert turns[-2].content == "msg-8"
         assert turns[-3].content == "msg-7"
 
-    def test_compact_then_reload_preserves_compacted_state(
-        self, tmp_path: Path
-    ) -> None:
+    def test_compact_then_reload_preserves_compacted_state(self, tmp_path: Path) -> None:
         path = str(tmp_path / "compact_reload.json")
         s1 = MemoryStore(store_path=path)
         for i in range(8):
@@ -559,9 +561,7 @@ class TestMemoryStorePersistenceDetails:
         turns = reloaded.get_session_turns("s1")
         assert len(turns) == 1
 
-    def test_get_session_token_count_approx_chars_over_four(
-        self, mem_store: MemoryStore
-    ) -> None:
+    def test_get_session_token_count_approx_chars_over_four(self, mem_store: MemoryStore) -> None:
         mem_store.add_turn("s1", "user", "a" * 400)
         count = mem_store.get_session_token_count("s1")
         # 400 chars // 4 == 100
@@ -573,9 +573,7 @@ class TestMemoryStorePersistenceDetails:
         count = mem_store.get_session_token_count("ghost-session")
         assert count == 0
 
-    def test_get_session_token_count_multiple_turns_summed(
-        self, mem_store: MemoryStore
-    ) -> None:
+    def test_get_session_token_count_multiple_turns_summed(self, mem_store: MemoryStore) -> None:
         for _ in range(4):
             mem_store.add_turn("s1", "user", "a" * 400)
         count = mem_store.get_session_token_count("s1")
@@ -607,9 +605,7 @@ class TestMemoryStoreRecentTurnsOrdering:
         # The most recent 3 turns
         assert contents == ["item-7", "item-8", "item-9"]
 
-    def test_get_recent_turns_across_sessions_returns_tail(
-        self, mem_store: MemoryStore
-    ) -> None:
+    def test_get_recent_turns_across_sessions_returns_tail(self, mem_store: MemoryStore) -> None:
         for i in range(8):
             mem_store.add_turn(f"session-{i % 2}", "user", f"msg-{i}")
 
@@ -635,9 +631,7 @@ class TestMemoryStoreConcurrentWritesSafe:
             except Exception as exc:
                 errors.append(exc)
 
-        threads = [
-            threading.Thread(target=add_batch, args=(f"sess-{j}", 20)) for j in range(5)
-        ]
+        threads = [threading.Thread(target=add_batch, args=(f"sess-{j}", 20)) for j in range(5)]
         for t in threads:
             t.start()
         for t in threads:

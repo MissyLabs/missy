@@ -29,8 +29,16 @@ class FakeCameraDevice:
 
 
 class FakeCaptureResult:
-    def __init__(self, success=True, error="", image=None, width=1920, height=1080,
-                 device_path="", failure_type=None):
+    def __init__(
+        self,
+        success=True,
+        error="",
+        image=None,
+        width=1920,
+        height=1080,
+        device_path="",
+        failure_type=None,
+    ):
         self.success = success
         self.error = error
         self.image = image
@@ -106,6 +114,7 @@ class TestResilientCameraEdgeCases:
 
     def _make_camera(self, **kwargs):
         from missy.vision.resilient_capture import ResilientCamera
+
         return ResilientCamera(**kwargs)
 
     @patch("missy.vision.resilient_capture.get_health_monitor")
@@ -251,7 +260,8 @@ class TestResilientCameraEdgeCases:
         """Discovering camera with different USB IDs should warn about fallback."""
         fallback_device = FakeCameraDevice(
             device_path="/dev/video0",
-            vendor_id="1234", product_id="5678",
+            vendor_id="1234",
+            product_id="5678",
         )
         disc = FakeDiscovery(devices=[fallback_device])
         disc._by_id[("046d", "085c")] = fallback_device  # Returns "wrong" device
@@ -347,8 +357,9 @@ class TestResilientCameraEdgeCases:
 
         handle = FakeCameraHandle()
         handle._capture_results = [
-            FakeCaptureResult(success=False, error="Permission denied",
-                            failure_type=FailureType.PERMISSION),
+            FakeCaptureResult(
+                success=False, error="Permission denied", failure_type=FailureType.PERMISSION
+            ),
         ]
         mock_handle_cls.return_value = handle
 

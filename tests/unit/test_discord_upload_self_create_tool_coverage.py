@@ -1,6 +1,5 @@
 """Tests for untested tools (discord_upload, self_create_tool)."""
 
-
 from __future__ import annotations
 
 import json
@@ -39,9 +38,7 @@ class TestDiscordUploadTool:
                 return_value=mock_rest,
             ),
         ):
-            result = tool.execute(
-                file_path="/tmp/test.png", channel_id="123", caption="Hello"
-            )
+            result = tool.execute(file_path="/tmp/test.png", channel_id="123", caption="Hello")
         assert result.success
         assert "msg123" in result.output
         mock_rest.upload_file.assert_called_once_with(
@@ -148,9 +145,7 @@ class TestSelfCreateTool:
         meta = {"name": "test_tool", "description": "A test tool"}
         (tools_dir / "test_tool.json").write_text(json.dumps(meta))
 
-        with patch(
-            "missy.tools.builtin.self_create_tool.CUSTOM_TOOLS_DIR", tools_dir
-        ):
+        with patch("missy.tools.builtin.self_create_tool.CUSTOM_TOOLS_DIR", tools_dir):
             result = tool.execute(action="list")
         assert result.success
         assert "test_tool" in result.output
@@ -161,9 +156,7 @@ class TestSelfCreateTool:
         tools_dir.mkdir()
         (tools_dir / "bad.json").write_text("not json{{{")
 
-        with patch(
-            "missy.tools.builtin.self_create_tool.CUSTOM_TOOLS_DIR", tools_dir
-        ):
+        with patch("missy.tools.builtin.self_create_tool.CUSTOM_TOOLS_DIR", tools_dir):
             result = tool.execute(action="list")
         assert result.success
         assert "No custom tools" in result.output
@@ -181,9 +174,7 @@ class TestSelfCreateTool:
         (tools_dir / "mytool.py").write_text("print('hello')")
         (tools_dir / "mytool.json").write_text('{"name":"mytool"}')
 
-        with patch(
-            "missy.tools.builtin.self_create_tool.CUSTOM_TOOLS_DIR", tools_dir
-        ):
+        with patch("missy.tools.builtin.self_create_tool.CUSTOM_TOOLS_DIR", tools_dir):
             result = tool.execute(action="delete", tool_name="mytool")
         assert result.success
         assert "Deleted" in result.output
@@ -195,9 +186,7 @@ class TestSelfCreateTool:
         tools_dir = tmp_path / "custom-tools"
         tools_dir.mkdir()
 
-        with patch(
-            "missy.tools.builtin.self_create_tool.CUSTOM_TOOLS_DIR", tools_dir
-        ):
+        with patch("missy.tools.builtin.self_create_tool.CUSTOM_TOOLS_DIR", tools_dir):
             result = tool.execute(action="delete", tool_name="nope")
         assert not result.success
         assert "not found" in result.error
@@ -286,9 +275,7 @@ class TestSelfCreateTool:
         tool = self._make_tool()
         tools_dir = tmp_path / "custom-tools"
 
-        with patch(
-            "missy.tools.builtin.self_create_tool.CUSTOM_TOOLS_DIR", tools_dir
-        ):
+        with patch("missy.tools.builtin.self_create_tool.CUSTOM_TOOLS_DIR", tools_dir):
             result = tool.execute(
                 action="create",
                 tool_name="hello",
@@ -309,9 +296,7 @@ class TestSelfCreateTool:
         tool = self._make_tool()
         tools_dir = tmp_path / "custom-tools"
 
-        with patch(
-            "missy.tools.builtin.self_create_tool.CUSTOM_TOOLS_DIR", tools_dir
-        ):
+        with patch("missy.tools.builtin.self_create_tool.CUSTOM_TOOLS_DIR", tools_dir):
             result = tool.execute(
                 action="create",
                 tool_name="greet",

@@ -122,7 +122,9 @@ class TestVisionMemoryMetadataProtection:
         mock_mem = MagicMock()
         bridge = VisionMemoryBridge(memory_store=mock_mem)
         bridge.store_observation(
-            session_id="s1", task_type="puzzle", observation="test",
+            session_id="s1",
+            task_type="puzzle",
+            observation="test",
             metadata={"observation_id": "INJECTED_ID"},
         )
         call_args = mock_mem.add_turn.call_args
@@ -135,7 +137,9 @@ class TestVisionMemoryMetadataProtection:
         mock_mem = MagicMock()
         bridge = VisionMemoryBridge(memory_store=mock_mem)
         bridge.store_observation(
-            session_id="s1", task_type="puzzle", observation="test",
+            session_id="s1",
+            task_type="puzzle",
+            observation="test",
             metadata={"timestamp": "1970-01-01T00:00:00"},
         )
         call_args = mock_mem.add_turn.call_args
@@ -148,7 +152,9 @@ class TestVisionMemoryMetadataProtection:
         mock_mem = MagicMock()
         bridge = VisionMemoryBridge(memory_store=mock_mem)
         bridge.store_observation(
-            session_id="s1", task_type="puzzle", observation="test",
+            session_id="s1",
+            task_type="puzzle",
+            observation="test",
             metadata={"task_type": "MALICIOUS"},
         )
         call_args = mock_mem.add_turn.call_args
@@ -161,7 +167,9 @@ class TestVisionMemoryMetadataProtection:
         mock_mem = MagicMock()
         bridge = VisionMemoryBridge(memory_store=mock_mem)
         bridge.store_observation(
-            session_id="s1", task_type="general", observation="test",
+            session_id="s1",
+            task_type="general",
+            observation="test",
             metadata={"camera_model": "C922x", "scene": "tabletop"},
         )
         call_args = mock_mem.add_turn.call_args

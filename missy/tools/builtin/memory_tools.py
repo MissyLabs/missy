@@ -106,9 +106,7 @@ class MemorySearchTool(BaseTool):
                         if s.time_range_start and s.time_range_end:
                             time_info = f" ({s.time_range_start[:19]} to {s.time_range_end[:19]})"
                         snippet = s.content[:300] + ("..." if len(s.content) > 300 else "")
-                        parts.append(
-                            f"- [{s.id}] depth={s.depth}{time_info}: {snippet}"
-                        )
+                        parts.append(f"- [{s.id}] depth={s.depth}{time_info}: {snippet}")
             except Exception as exc:
                 parts.append(f"Summary search error: {exc}")
 
@@ -305,9 +303,7 @@ class MemoryExpandTool(BaseTool):
                         children.append(child)
 
             for child in children:
-                block = (
-                    f"\n### Child: {child.id} (depth={child.depth})\n{child.content}"
-                )
+                block = f"\n### Child: {child.id} (depth={child.depth})\n{child.content}"
                 if used_chars + len(block) > max_chars:
                     parts.append(f"\n[TRUNCATED — reached {max_tokens} token limit]")
                     break

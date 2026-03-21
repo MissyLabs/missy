@@ -188,9 +188,7 @@ class OutputSchema(Generic[T]):
             return stripped
 
         # Fenced code block: ```json ... ``` or ``` ... ```
-        block_match = re.search(
-            r"```(?:json)?\s*\n?([\s\S]*?)```", stripped, re.IGNORECASE
-        )
+        block_match = re.search(r"```(?:json)?\s*\n?([\s\S]*?)```", stripped, re.IGNORECASE)
         if block_match:
             candidate = block_match.group(1).strip()
             if candidate:
@@ -220,9 +218,7 @@ class OutputSchema(Generic[T]):
             loc = " -> ".join(str(p) for p in err["loc"]) if err["loc"] else "(root)"
             msg = err["msg"]
             lines.append(f'- field "{loc}": {msg}')
-        lines.append(
-            "\nPlease fix these errors and respond again with valid JSON."
-        )
+        lines.append("\nPlease fix these errors and respond again with valid JSON.")
         return "\n".join(lines)
 
 
@@ -279,9 +275,7 @@ class StructuredOutputRunner:
         last_result: StructuredResult[T] | None = None
 
         for attempt in range(schema.max_retries + 1):
-            response = self.provider.complete(
-                history, system=augmented_system, **kwargs
-            )
+            response = self.provider.complete(history, system=augmented_system, **kwargs)
             attempts = attempt + 1
             raw = response.content
             result = schema.parse(raw)
@@ -343,15 +337,11 @@ class StructuredOutputRunner:
             attempts = attempt + 1
 
             if _is_async_callable(getattr(self.provider, "acomplete", None)):
-                response = await self.provider.acomplete(
-                    history, system=augmented_system, **kwargs
-                )
+                response = await self.provider.acomplete(history, system=augmented_system, **kwargs)
             else:
                 response = await loop.run_in_executor(
                     None,
-                    lambda h=history: self.provider.complete(
-                        h, system=augmented_system, **kwargs
-                    ),
+                    lambda h=history: self.provider.complete(h, system=augmented_system, **kwargs),
                 )
 
             raw = response.content

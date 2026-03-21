@@ -12,7 +12,9 @@ from missy.agent.learnings import (
 
 class TestTaskLearning:
     def test_auto_timestamp(self):
-        tl = TaskLearning(task_type="shell", approach=["shell_exec"], outcome="success", lesson="ok")
+        tl = TaskLearning(
+            task_type="shell", approach=["shell_exec"], outcome="success", lesson="ok"
+        )
         assert tl.timestamp  # auto-populated
 
     def test_explicit_timestamp(self):

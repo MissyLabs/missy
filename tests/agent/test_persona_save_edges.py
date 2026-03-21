@@ -189,7 +189,10 @@ class TestSave:
 class TestSaveAtomicWrite:
     def test_temp_file_removed_on_yaml_dump_failure(self, tmp_path):
         pm = make_manager(tmp_path)
-        with patch("missy.agent.persona.yaml.dump", side_effect=RuntimeError("boom")), pytest.raises(RuntimeError, match="boom"):
+        with (
+            patch("missy.agent.persona.yaml.dump", side_effect=RuntimeError("boom")),
+            pytest.raises(RuntimeError, match="boom"),
+        ):
             pm.save()
         # No stale .yaml.tmp files should remain
         leftover = list(tmp_path.glob("*.yaml.tmp"))
@@ -197,7 +200,10 @@ class TestSaveAtomicWrite:
 
     def test_exception_propagated_on_failure(self, tmp_path):
         pm = make_manager(tmp_path)
-        with patch("missy.agent.persona.yaml.dump", side_effect=OSError("disk full")), pytest.raises(IOError):
+        with (
+            patch("missy.agent.persona.yaml.dump", side_effect=OSError("disk full")),
+            pytest.raises(IOError),
+        ):
             pm.save()
 
 
@@ -480,7 +486,13 @@ class TestGetSystemPromptPrefixEmpty:
 
     def test_identity_always_present(self, tmp_path):
         pm = make_manager(tmp_path)
-        pm.update(tone=[], personality_traits=[], behavioral_tendencies=[], response_style_rules=[], boundaries=[])
+        pm.update(
+            tone=[],
+            personality_traits=[],
+            behavioral_tendencies=[],
+            response_style_rules=[],
+            boundaries=[],
+        )
         prefix = pm.get_system_prompt_prefix()
         assert "# Identity" in prefix
 

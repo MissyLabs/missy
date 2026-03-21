@@ -113,7 +113,9 @@ class TestDoctorCheckCapture:
         device = CameraDevice("/dev/video0", "Test Cam", "046d", "085c", "usb-1")
         mock_handle = MagicMock()
         mock_handle.capture.return_value = CaptureResult(
-            success=True, width=1920, height=1080,
+            success=True,
+            width=1920,
+            height=1080,
             image=np.zeros((1080, 1920, 3), dtype=np.uint8),
         )
 
@@ -136,7 +138,8 @@ class TestDoctorCheckCapture:
         device = CameraDevice("/dev/video0", "Test Cam", "046d", "085c", "usb-1")
         mock_handle = MagicMock()
         mock_handle.capture.return_value = CaptureResult(
-            success=False, error="Blank frame",
+            success=False,
+            error="Blank frame",
         )
 
         doctor = VisionDoctor()
@@ -319,7 +322,9 @@ class TestDoctorCheckHealthMonitor:
         from missy.vision.doctor import VisionDoctor
 
         doctor = VisionDoctor()
-        with patch("missy.vision.health_monitor.get_health_monitor", side_effect=RuntimeError("boom")):
+        with patch(
+            "missy.vision.health_monitor.get_health_monitor", side_effect=RuntimeError("boom")
+        ):
             result = doctor.check_health_monitor()
 
         assert result.passed  # gracefully handled
@@ -375,8 +380,12 @@ class TestHealthMonitorPersistence:
         monitor = VisionHealthMonitor()
 
         # Record some data
-        monitor.record_capture(success=True, device="/dev/video0", quality_score=0.85, latency_ms=50.0)
-        monitor.record_capture(success=True, device="/dev/video0", quality_score=0.90, latency_ms=45.0)
+        monitor.record_capture(
+            success=True, device="/dev/video0", quality_score=0.85, latency_ms=50.0
+        )
+        monitor.record_capture(
+            success=True, device="/dev/video0", quality_score=0.90, latency_ms=45.0
+        )
         monitor.record_capture(success=False, device="/dev/video0", error="blank frame")
         monitor.record_capture(success=True, device="/dev/video1", quality_score=0.70)
 
@@ -407,9 +416,7 @@ class TestHealthMonitorPersistence:
 
         # Verify tables exist
         conn = sqlite3.connect(str(db_path))
-        tables = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()
+        tables = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
         conn.close()
         table_names = {t[0] for t in tables}
         assert "device_stats" in table_names

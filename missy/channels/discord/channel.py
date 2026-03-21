@@ -822,9 +822,7 @@ class DiscordChannel(BaseChannel):
 
         # Send deferred response immediately (type 5 = DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE)
         try:
-            self._rest.send_interaction_response(
-                interaction_id, interaction_token, response_type=5
-            )
+            self._rest.send_interaction_response(interaction_id, interaction_token, response_type=5)
         except Exception as exc:
             logger.error("Discord: deferred interaction response failed: %s", exc)
             return
@@ -840,7 +838,9 @@ class DiscordChannel(BaseChannel):
         try:
             app_id = self.account_config.application_id
             if not app_id:
-                logger.error("Discord: no application_id configured, cannot edit interaction response")
+                logger.error(
+                    "Discord: no application_id configured, cannot edit interaction response"
+                )
                 return
             self._rest.edit_interaction_response(app_id, interaction_token, response_text)
         except Exception as exc:

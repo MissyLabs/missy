@@ -215,9 +215,9 @@ class WebhookChannel(BaseChannel):
 
                 # Validate sender: cap length, strip control characters
                 raw_sender = str(data.get("sender", "webhook"))[:64]
-                safe_sender = "".join(
-                    c for c in raw_sender if c.isalnum() or c in "-_. @"
-                ) or "webhook"
+                safe_sender = (
+                    "".join(c for c in raw_sender if c.isalnum() or c in "-_. @") or "webhook"
+                )
 
                 msg = ChannelMessage(
                     content=prompt,

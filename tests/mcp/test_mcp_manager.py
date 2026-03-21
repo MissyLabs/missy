@@ -306,9 +306,9 @@ class TestSecurityPaths:
     def test_digest_mismatch_disconnects(self, mock_client_cls, tmp_path):
         """Digest verification failure disconnects the server."""
         config = tmp_path / "mcp.json"
-        config.write_text(json.dumps([
-            {"name": "srv", "command": "echo", "digest": "expected-hash-123"}
-        ]))
+        config.write_text(
+            json.dumps([{"name": "srv", "command": "echo", "digest": "expected-hash-123"}])
+        )
         mgr = McpManager(config_path=str(config))
 
         mock_client = MagicMock()

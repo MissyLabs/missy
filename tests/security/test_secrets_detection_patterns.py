@@ -180,10 +180,7 @@ class TestSecretsRedaction:
         from missy.security.secrets import SecretsDetector
 
         d = SecretsDetector()
-        text = (
-            "AWS: AKIAIOSFODNN7EXAMPLE and "
-            "GitHub: ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij"
-        )
+        text = "AWS: AKIAIOSFODNN7EXAMPLE and GitHub: ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij"
         redacted = d.redact(text)
         assert "AKIAIOSFODNN7EXAMPLE" not in redacted
         assert "ghp_ABCDEF" not in redacted
