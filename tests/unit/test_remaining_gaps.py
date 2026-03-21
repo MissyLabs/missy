@@ -952,18 +952,37 @@ class TestProactiveFileHandlerClass:
         """When watchdog absent the stub class is a no-op object."""
         import importlib
         import sys
+        from unittest.mock import MagicMock
 
         # Ensure watchdog modules are absent so the stub branch runs.
         saved = {}
         for key in list(sys.modules):
             if key.startswith("watchdog") or key == "missy.agent.proactive":
                 saved[key] = sys.modules.pop(key)
+
+        # Block watchdog from being re-imported
+        blocker = MagicMock()
+        blocker.side_effect = ImportError("mocked: no watchdog")
+        original_import = (
+            __builtins__.__import__ if hasattr(__builtins__, "__import__") else __import__
+        )
+
+        def _blocked_import(name, *args, **kwargs):
+            if name.startswith("watchdog"):
+                raise ImportError("mocked: no watchdog")
+            return original_import(name, *args, **kwargs)
+
+        import builtins
+
+        old_import = builtins.__import__
+        builtins.__import__ = _blocked_import
         try:
             _mod = importlib.import_module("missy.agent.proactive")
             assert not _mod._WATCHDOG_AVAILABLE
             handler = _mod._ProactiveFileHandler()
             assert handler is not None
         finally:
+            builtins.__import__ = old_import
             sys.modules.update(saved)
 
 

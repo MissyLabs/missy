@@ -132,7 +132,16 @@ class TestAtspiLogging:
 
     def test_atspi_no_silent_pass(self) -> None:
         """No bare 'pass' after exception handlers in atspi_tools."""
-        src = Path("/home/bmerriam/git/missy/missy/tools/builtin/atspi_tools.py").read_text()
+        atspi_path = (
+            Path(__file__).resolve().parent.parent.parent
+            / "missy"
+            / "tools"
+            / "builtin"
+            / "atspi_tools.py"
+        )
+        if not atspi_path.exists():
+            pytest.skip("atspi_tools.py not found")
+        src = atspi_path.read_text()
         lines = src.split("\n")
         for i, line in enumerate(lines):
             stripped = line.strip()
