@@ -3049,6 +3049,134 @@ def config_plan(ctx: click.Context) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Security tools
+# ---------------------------------------------------------------------------
+
+
+@cli.group("security")
+def security_group() -> None:
+    """Security tools and auditing."""
+
+
+@security_group.command("scan")
+@click.option("--verbose", "-v", is_flag=True, default=False, help="Show full description for each finding.")
+@click.option("--json-output", "json_output", is_flag=True, default=False, help="Output results as JSON.")
+@click.option(
+    "--severity",
+    "min_severity",
+    type=click.Choice(["critical", "high", "medium", "low", "info"]),
+    default=None,
+    help="Only show findings at or above this severity level.",
+)
+@click.pass_context
+def security_scan(
+    ctx: click.Context,
+    verbose: bool,
+    json_output: bool,
+    min_severity: str | None,
+) -> None:
+    """Scan the Missy installation for security issues.
+
+    Checks configuration, network policy, filesystem policy, shell policy,
+    MCP servers, tool permissions, secrets management, agent identity, file
+    permissions, and known vulnerability patterns.
+
+    Exits with code 1 when any CRITICAL findings are found.
+    """
+    import json as _json
+
+    from missy.security.scanner import _SEVERITY_ORDER, SecurityScanner, Severity
+
+    config_path = ctx.obj["config_path"]
+
+    # Attempt to load the config without requiring it to succeed — the scanner
+    # handles missing/malformed configs gracefully.
+    loaded_config = None
+    try:
+        from missy.config.settings import load_config
+
+        loaded_config = load_config(str(Path(config_path).expanduser()))
+    except Exception:
+        pass  # Scanner will emit SEC-000 finding
+
+    scanner = SecurityScanner(config=loaded_config, config_path=config_path)
+    result = scanner.scan_all()
+
+    # Apply severity filter
+    if min_severity is not None:
+        threshold = _SEVERITY_ORDER[Severity(min_severity)]
+        result.findings[:] = [
+            f for f in result.findings if _SEVERITY_ORDER[f.severity] <= threshold
+        ]
+        # Recompute summary for filtered set
+        for sev in Severity:
+            result.summary[sev.value] = sum(
+                1 for f in result.findings if f.severity == sev
+            )
+
+    if json_output:
+        console.print_json(_json.dumps(result.to_json(), indent=2))
+        if result.has_critical:
+            sys.exit(1)
+        return
+
+    # Rich-formatted output
+    from rich.rule import Rule
+
+    _SEV_COLOUR = {
+        "critical": "bold red",
+        "high": "red",
+        "medium": "yellow",
+        "low": "cyan",
+        "info": "dim",
+    }
+
+    console.print(Rule("[bold]Security Scan Results[/]"))
+    console.print(
+        f"  Scanned at: [dim]{result.scanned_at}[/] "
+        f"([dim]{result.scan_duration_ms:.0f}ms[/])\n"
+    )
+
+    # Severity summary bar
+    parts: list[str] = []
+    for sev in Severity:
+        count = result.summary.get(sev.value, 0)
+        colour = _SEV_COLOUR[sev.value]
+        parts.append(f"[{colour}]{sev.value.upper()} ({count})[/]")
+    console.print("  " + "  |  ".join(parts))
+    console.print()
+
+    if not result.findings:
+        console.print("  [green]No findings — installation looks secure.[/]\n")
+        return
+
+    for finding in result.findings:
+        sev_colour = _SEV_COLOUR.get(finding.severity.value, "dim")
+        sev_label = f"[{sev_colour}][{finding.severity.value.upper()}][/]"
+        console.print(f"{sev_label} [bold]{finding.id}[/]: {finding.title}")
+        if verbose and finding.description:
+            for line in finding.description.splitlines():
+                console.print(f"  [dim]{line}[/]")
+        console.print(f"  [cyan]Recommendation:[/] {finding.recommendation}")
+        if verbose and finding.details:
+            for key, value in finding.details.items():
+                console.print(f"  [dim]{key}[/]: {value}")
+        console.print()
+
+    # Exit summary
+    if result.has_critical:
+        console.print(
+            f"[bold red]CRITICAL findings: {result.critical_count}.[/] "
+            "Address these immediately before running Missy."
+        )
+        sys.exit(1)
+    else:
+        high = result.summary.get("high", 0)
+        if high:
+            console.print(f"[yellow]{high} HIGH finding(s) found.[/] Review and remediate.")
+
+
+# ---------------------------------------------------------------------------
 # Sandbox
 # ---------------------------------------------------------------------------
 
@@ -3881,6 +4009,171 @@ def vision_memory_cmd() -> None:
         console.print(table)
     else:
         console.print("\n  [dim]No active scene sessions.[/]")
+
+
+# ---------------------------------------------------------------------------
+# missy api
+# ---------------------------------------------------------------------------
+
+
+@cli.group()
+def api() -> None:
+    """REST API server management (Agent-as-a-Service)."""
+
+
+@api.command("start")
+@click.option("--host", default="127.0.0.1", show_default=True, help="Bind address.")
+@click.option("--port", default=8080, type=int, show_default=True, help="TCP port to listen on.")
+@click.option(
+    "--api-key",
+    envvar="MISSY_API_KEY",
+    default="",
+    help="API key for authentication (required). Can also be set via MISSY_API_KEY env var.",
+)
+@click.option(
+    "--provider",
+    default="anthropic",
+    show_default=True,
+    help="AI provider to use for chat requests.",
+)
+@click.pass_context
+def api_start(
+    ctx: click.Context,
+    host: str,
+    port: int,
+    api_key: str,
+    provider: str,
+) -> None:
+    """Start the REST API server.
+
+    \b
+    Exposes Missy over HTTP for programmatic use. All requests require
+    an API key (Bearer token or X-API-Key header).
+
+    \b
+    Example:
+        MISSY_API_KEY=secret missy api start --port 8080
+
+    \b
+    Endpoints:
+        GET  /api/v1/health              Liveness probe
+        GET  /api/v1/status              Agent status
+        POST /api/v1/chat                Send message to agent
+        POST /api/v1/sessions            Create session
+        GET  /api/v1/sessions            List sessions
+        GET  /api/v1/sessions/{id}       Get session
+        GET  /api/v1/sessions/{id}/history  Conversation history
+        DELETE /api/v1/sessions/{id}     End session
+        GET  /api/v1/memory/search?q=   Full-text memory search
+        GET  /api/v1/providers           List providers
+        GET  /api/v1/tools               List tools
+    """
+    if not api_key:
+        _print_error(
+            "--api-key or MISSY_API_KEY environment variable is required.",
+            hint='Generate a key with: python3 -c "import secrets; print(secrets.token_hex(32))"',
+        )
+        sys.exit(1)
+
+    from missy.agent.runtime import AgentConfig, AgentRuntime
+    from missy.api.server import ApiConfig, ApiServer
+
+    cfg = _load_subsystems(ctx.obj["config_path"])
+
+    try:
+        from missy.providers.registry import get_registry
+
+        registry = get_registry()
+    except Exception:
+        registry = None
+
+    try:
+        from missy.tools.registry import get_tool_registry
+
+        tool_reg = get_tool_registry()
+    except Exception:
+        tool_reg = None
+
+    try:
+        from missy.memory.sqlite_store import SQLiteMemoryStore
+
+        db_path = str(
+            Path(getattr(cfg, "audit_log_path", "~/.missy/audit.jsonl")).expanduser().parent
+            / "memory.db"
+        )
+        memory_store = SQLiteMemoryStore(db_path=db_path)
+    except Exception as _mem_exc:
+        logger.debug("Memory store unavailable: %s", _mem_exc)
+        memory_store = None
+
+    agent_config = AgentConfig(provider=provider)
+    runtime = AgentRuntime(agent_config)
+
+    api_config = ApiConfig(host=host, port=port, api_key=api_key)
+    server = ApiServer(
+        config=api_config,
+        runtime=runtime,
+        memory_store=memory_store,
+        provider_registry=registry,
+        tool_registry=tool_reg,
+    )
+
+    try:
+        server.start()
+        console.print(
+            f"[green]API server running on [bold]{server.url}[/][/]\n"
+            "  Press [bold]Ctrl+C[/] to stop."
+        )
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        console.print("\n[dim]Stopping API server...[/]")
+        server.stop()
+        console.print("[green]API server stopped.[/]")
+
+
+@api.command("status")
+@click.option("--host", default="127.0.0.1", show_default=True, help="API server host.")
+@click.option("--port", default=8080, type=int, show_default=True, help="API server port.")
+@click.option(
+    "--api-key",
+    envvar="MISSY_API_KEY",
+    default="",
+    help="API key for authentication.",
+)
+def api_status(host: str, port: int, api_key: str) -> None:
+    """Check if the API server is running by probing /api/v1/health."""
+    import httpx
+
+    url = f"http://{host}:{port}/api/v1/health"
+    headers = {"X-API-Key": api_key} if api_key else {}
+
+    try:
+        resp = httpx.get(url, headers=headers, timeout=3.0)
+        if resp.status_code == 200:
+            data = resp.json().get("data", {})
+            console.print(
+                f"[green]API server is running[/] at [bold]http://{host}:{port}[/]\n"
+                f"  Status : {data.get('status', '?')}\n"
+                f"  Version: {data.get('version', '?')}"
+            )
+        elif resp.status_code == 401:
+            console.print(
+                f"[yellow]API server is running[/] at [bold]http://{host}:{port}[/] "
+                "(authentication required — supply --api-key)"
+            )
+        else:
+            console.print(
+                f"[yellow]API server responded with HTTP {resp.status_code}[/] "
+                f"at [bold]http://{host}:{port}[/]"
+            )
+    except httpx.ConnectError:
+        console.print(
+            f"[red]API server is not reachable[/] at [bold]http://{host}:{port}[/]\n"
+            "  Start it with: [bold]missy api start[/]"
+        )
+    except Exception as exc:
+        _print_error(f"Unexpected error checking API server: {exc}")
 
 
 # ---------------------------------------------------------------------------

@@ -61,3 +61,16 @@ SECURITY_APPROVAL_NEEDED = "security.approval.needed"
 
 #: A human approval response was received.
 SECURITY_APPROVAL_RESPONSE = "security.approval.response"
+
+# ---------------------------------------------------------------------------
+# Sleeptime computing
+# ---------------------------------------------------------------------------
+
+#: A background memory-processing cycle has started.
+SLEEPTIME_CYCLE_START = "sleeptime.cycle.start"
+
+#: A background memory-processing cycle completed successfully.
+SLEEPTIME_CYCLE_COMPLETE = "sleeptime.cycle.complete"
+
+#: An error occurred during a sleeptime processing cycle.
+SLEEPTIME_ERROR = "sleeptime.error"

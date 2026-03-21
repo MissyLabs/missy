@@ -11,6 +11,7 @@ import stat
 import threading
 from pathlib import Path
 
+from missy.mcp.annotations import BUILTIN_ANNOTATIONS, AnnotationRegistry
 from missy.mcp.client import McpClient
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,10 @@ class McpManager:
         self._clients: dict[str, McpClient] = {}
         self._lock = threading.Lock()
         self._block_injection = block_injection
+        self._annotation_registry = AnnotationRegistry()
+        # Seed registry with known built-in tool annotations.
+        for tool_name, annotation in BUILTIN_ANNOTATIONS.items():
+            self._annotation_registry.register(tool_name, annotation)
 
     def connect_all(self) -> None:
         """Load config and connect to all configured MCP servers."""
@@ -146,6 +151,11 @@ class McpManager:
 
         with self._lock:
             self._clients[name] = client
+        # Register per-tool annotations from the client into the shared registry.
+        # Namespaced names follow the same server__tool convention used by all_tools().
+        for tool_name, annotation in client.tool_annotations.items():
+            namespaced = f"{name}__{tool_name}"
+            self._annotation_registry.register(namespaced, annotation)
         self._save_config()
         logger.info("MCP: connected to %r (%d tools)", name, len(client.tools))
         return client
@@ -281,6 +291,41 @@ class McpManager:
                 {"name": n, "alive": c.is_alive(), "tools": len(c.tools)}
                 for n, c in self._clients.items()
             ]
+
+    def get_annotation(self, tool_name: str):
+        """Return the :class:`~missy.mcp.annotations.ToolAnnotation` for *tool_name*.
+
+        Accepts both namespaced names (``"server__tool"``) and bare built-in
+        names (``"file_read"``).
+
+        Args:
+            tool_name: Fully-qualified namespaced tool name or built-in name.
+
+        Returns:
+            The stored :class:`~missy.mcp.annotations.ToolAnnotation`, or
+            ``None`` if no annotation has been registered for this tool.
+        """
+        return self._annotation_registry.get(tool_name)
+
+    def get_all_annotations(self) -> dict:
+        """Return a snapshot of all registered annotations.
+
+        Returns:
+            A dict mapping tool name (str) to
+            :class:`~missy.mcp.annotations.ToolAnnotation`.
+        """
+        return self._annotation_registry.get_all_annotations()
+
+    @property
+    def annotation_registry(self) -> AnnotationRegistry:
+        """The shared :class:`~missy.mcp.annotations.AnnotationRegistry` for this manager.
+
+        Provides full filtering and summarisation capabilities.
+
+        Returns:
+            The :class:`~missy.mcp.annotations.AnnotationRegistry` instance.
+        """
+        return self._annotation_registry
 
     def shutdown(self) -> None:
         with self._lock:

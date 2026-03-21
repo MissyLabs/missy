@@ -650,10 +650,11 @@ class TestMcpClientNotify:
 
 def _mock_client(name="srv", tools=None, alive=True, command="echo", url=None):
     client = MagicMock(
-        spec=["name", "tools", "is_alive", "connect", "disconnect", "_command", "_url", "call_tool"]
+        spec=["name", "tools", "is_alive", "connect", "disconnect", "_command", "_url", "call_tool", "tool_annotations"]
     )
     client.name = name
     client.tools = tools or []
+    client.tool_annotations = {}
     client.is_alive.return_value = alive
     client._command = command
     client._url = url
