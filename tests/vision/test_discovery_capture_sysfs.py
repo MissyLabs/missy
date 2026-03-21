@@ -354,13 +354,21 @@ class TestScanSysfs:
         sysfs = tmp_path / "v4l"
         sysfs.mkdir()
         _make_sysfs_entry(sysfs, "video0")
-        # /dev/video0 does not exist in the test environment — _scan_sysfs
-        # checks Path(device_path).exists() which will be False.
 
         disc = CameraDiscovery(sysfs_base=str(sysfs))
-        result = disc._scan_sysfs()
 
-        # Without patching /dev/video0 into existence the entry is skipped.
+        # Patch Path.exists so /dev/video0 reports as missing, regardless of
+        # whether the host machine actually has a camera at that path.
+        _real_exists = Path.exists
+
+        def _fake_exists(self: Path) -> bool:
+            if str(self) == "/dev/video0":
+                return False
+            return _real_exists(self)
+
+        with patch.object(Path, "exists", _fake_exists):
+            result = disc._scan_sysfs()
+
         assert result == []
 
     def test_video_entry_included_when_dev_node_exists(self, tmp_path: Path) -> None:

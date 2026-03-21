@@ -78,7 +78,7 @@ class TestVisionCaptureTool:
         result = tool.execute(source="/tmp/test.jpg")
         assert result.success is True
         data = json.loads(result.output)
-        assert "image_base64" in data
+        assert "saved_to" in data
 
     def test_unavailable_source(self):
         tool = VisionCaptureTool()
