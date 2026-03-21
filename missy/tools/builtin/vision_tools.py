@@ -26,13 +26,15 @@ logger = logging.getLogger(__name__)
 class VisionCaptureTool(BaseTool):
     """Capture an image from a webcam or other source.
 
-    Returns image metadata and a base64-encoded JPEG for LLM analysis.
+    Saves the image to ~/.missy/captures/ and returns the file path
+    along with metadata.  Use discord_upload_file to share the image.
     """
 
     name = "vision_capture"
     description = (
         "Capture an image from a USB webcam, file, or screenshot. "
-        "Returns image metadata and base64-encoded JPEG data."
+        "Saves to ~/.missy/captures/ and returns the file path and metadata. "
+        "Use discord_upload_file with the saved_to path to share the image."
     )
     permissions = ToolPermissions(filesystem_read=True, filesystem_write=True)
     parameters = {
@@ -104,18 +106,20 @@ class VisionCaptureTool(BaseTool):
             processed = pipeline.process(frame.image)
             quality = pipeline.assess_quality(frame.image)
 
-            # Optionally save
-            if save_path:
-                import cv2
-                Path(save_path).parent.mkdir(parents=True, exist_ok=True)
-                cv2.imwrite(save_path, frame.image)
-
-            # Encode for LLM
-            import base64
-
+            # Always save to disk — base64 is too large for tool results
+            # and will cause Discord 400 errors.
             import cv2
-            _, buf = cv2.imencode(".jpg", processed, [cv2.IMWRITE_JPEG_QUALITY, 85])
-            b64 = base64.b64encode(buf.tobytes()).decode("ascii")
+
+            if not save_path:
+                captures_dir = Path.home() / ".missy" / "captures"
+                captures_dir.mkdir(parents=True, exist_ok=True)
+                ts = frame.timestamp.strftime("%Y%m%d_%H%M%S")
+                save_path = str(captures_dir / f"capture_{ts}.jpg")
+
+            Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+            cv2.imwrite(
+                save_path, processed, [cv2.IMWRITE_JPEG_QUALITY, 85]
+            )
 
             result = {
                 "source_type": frame.source_type.value,
@@ -123,12 +127,9 @@ class VisionCaptureTool(BaseTool):
                 "width": frame.width,
                 "height": frame.height,
                 "quality": quality,
-                "image_base64": b64,
+                "saved_to": save_path,
                 "timestamp": frame.timestamp.isoformat(),
             }
-
-            if save_path:
-                result["saved_to"] = save_path
 
             return ToolResult(success=True, output=json.dumps(result))
 
@@ -223,11 +224,18 @@ class VisionBurstCaptureTool(BaseTool):
 
                     processed = pipeline.process(result.image)
                     quality = pipeline.assess_quality(result.image)
-                    import base64
 
                     import cv2
-                    _, buf = cv2.imencode(".jpg", processed, [cv2.IMWRITE_JPEG_QUALITY, 85])
-                    b64 = base64.b64encode(buf.tobytes()).decode("ascii")
+
+                    captures_dir = Path.home() / ".missy" / "captures"
+                    captures_dir.mkdir(parents=True, exist_ok=True)
+                    save_path = str(
+                        captures_dir / f"burst_best_{int(time.time())}.jpg"
+                    )
+                    cv2.imwrite(
+                        save_path, processed,
+                        [cv2.IMWRITE_JPEG_QUALITY, 85],
+                    )
 
                     return ToolResult(
                         success=True,
@@ -237,7 +245,7 @@ class VisionBurstCaptureTool(BaseTool):
                             "width": result.width,
                             "height": result.height,
                             "quality": quality,
-                            "image_base64": b64,
+                            "saved_to": save_path,
                         }),
                     )
 

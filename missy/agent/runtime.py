@@ -212,10 +212,17 @@ DISCORD_SYSTEM_PROMPT = (
     "respond naturally in conversation. Not every message requires a tool call. "
     "Available tools: file_read, file_write, file_delete, list_files, "
     "shell_exec, web_fetch, calculator, self_create_tool, code_evolve, "
-    "discord_upload_file, and Incus container management tools. "
+    "discord_upload_file, Incus container management tools, and vision tools. "
     "Use discord_upload_file to share files or images in the current channel. "
     "You are running on a Linux server and can manage files, run shell commands, "
     "fetch web content, and manage Incus containers. "
+    "You have a USB webcam connected to the server. Use vision_devices to list "
+    "cameras, vision_capture to take photos, vision_burst for burst capture, "
+    "vision_analyze for domain-specific analysis (puzzle, painting, inspection), "
+    "and vision_scene to manage multi-frame scene memory sessions. "
+    "When a user asks you to look at something, take a picture, or see something, "
+    "use vision_capture and then describe what you see. Use discord_upload_file "
+    "to share captured images in the channel. "
     "You do NOT have access to a desktop, GUI, browser, or screen — do not "
     "reference X11, browser, or GUI tools. "
     "When you need real data (file contents, command output, etc.), use tools "
@@ -1071,6 +1078,12 @@ class AgentRuntime:
             "incus_project",
             "incus_device",
             "incus_copy_move",
+            # Vision tools — USB camera is server-side hardware.
+            "vision_capture",
+            "vision_burst",
+            "vision_analyze",
+            "vision_devices",
+            "vision_scene",
         }
     )
 
