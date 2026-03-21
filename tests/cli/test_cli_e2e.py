@@ -36,6 +36,7 @@ import pytest
 from click.testing import CliRunner
 
 from missy.cli.main import cli
+from tests.cli.conftest import _make_cli_runner
 
 # ---------------------------------------------------------------------------
 # Module-level helpers and constants
@@ -124,7 +125,7 @@ def _make_mock_config(**kwargs: Any) -> MagicMock:
 @pytest.fixture()
 def runner() -> CliRunner:
     """Return a CliRunner with separate stdout/stderr streams."""
-    return CliRunner(mix_stderr=False)
+    return _make_cli_runner(mix_stderr=False)
 
 
 @pytest.fixture()

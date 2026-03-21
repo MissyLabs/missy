@@ -29,6 +29,7 @@ import pytest
 from click.testing import CliRunner
 
 from missy.cli.main import cli
+from tests.cli.conftest import _make_cli_runner
 
 # ---------------------------------------------------------------------------
 # Shared fixtures and helpers
@@ -48,7 +49,7 @@ audit_log_path: "/tmp/audit.jsonl"
 
 @pytest.fixture()
 def runner() -> CliRunner:
-    return CliRunner(mix_stderr=False)
+    return _make_cli_runner(mix_stderr=False)
 
 
 def _make_mock_config(**kwargs) -> MagicMock:

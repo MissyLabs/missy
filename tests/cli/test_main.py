@@ -11,6 +11,7 @@ import pytest
 from click.testing import CliRunner
 
 from missy.cli.main import cli
+from tests.cli.conftest import _make_cli_runner
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -20,7 +21,7 @@ from missy.cli.main import cli
 @pytest.fixture()
 def runner() -> CliRunner:
     """Return a Click CliRunner that mixes stdout/stderr."""
-    return CliRunner(mix_stderr=False)
+    return _make_cli_runner(mix_stderr=False)
 
 
 def _make_mock_config(

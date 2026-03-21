@@ -29,6 +29,7 @@ import pytest
 from click.testing import CliRunner
 
 from missy.cli.main import cli
+from tests.cli.conftest import _make_cli_runner
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -48,7 +49,7 @@ audit_log_path: "/tmp/audit.jsonl"
 
 @pytest.fixture()
 def runner() -> CliRunner:
-    return CliRunner(mix_stderr=False)
+    return _make_cli_runner(mix_stderr=False)
 
 
 def _make_mock_config(**overrides) -> MagicMock:
@@ -983,7 +984,7 @@ class TestMainEntryPoint:
 
     def test_cli_is_callable_as_main(self) -> None:
         """The cli() callable can be invoked via CliRunner simulating __main__ behaviour."""
-        runner = CliRunner(mix_stderr=False)
+        runner = _make_cli_runner(mix_stderr=False)
         # Invoke --help to confirm cli is callable without side effects
         result = runner.invoke(cli, ["--help"])
         assert result.exit_code == 0

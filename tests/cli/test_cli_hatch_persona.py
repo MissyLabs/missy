@@ -10,6 +10,7 @@ from click.testing import CliRunner
 from missy.agent.hatching import HatchingState, HatchingStatus
 from missy.agent.persona import PersonaConfig
 from missy.cli.main import cli
+from tests.cli.conftest import _make_cli_runner
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -18,7 +19,7 @@ from missy.cli.main import cli
 
 @pytest.fixture()
 def runner() -> CliRunner:
-    return CliRunner(mix_stderr=False)
+    return _make_cli_runner(mix_stderr=False)
 
 
 def _make_hatching_manager(
