@@ -1,8 +1,16 @@
 """Unified memory synthesizer for Missy.
 
 Merges all memory subsystems (conversation history, learnings, summaries,
-playbook entries) into a single deduplicated, relevance-ranked context block.
-Inspired by CoWork-OS unified context approach.
+playbook entries, graph context) into a single deduplicated, relevance-ranked
+context block.  Inspired by CoWork-OS unified context approach.
+
+Source base-relevance tiers (highest → lowest):
+
+* ``learnings``     — 0.70
+* ``graph``         — 0.65  (entity-relationship graph context)
+* ``playbook``      — 0.60
+* ``summaries``     — 0.40
+* ``conversation``  — 0.50 (default)
 
 Example::
 
@@ -11,6 +19,7 @@ Example::
     synth = MemorySynthesizer(max_tokens=4500)
     synth.add_fragments("conversation", ["discussed Docker setup"])
     synth.add_fragments("learnings", ["always check ports first"], base_relevance=0.7)
+    synth.add_fragments("graph", ["file_read --[modifies]--> config.yaml"], base_relevance=0.65)
     block = synth.synthesize("How do I fix Docker networking?")
 """
 

@@ -11,6 +11,8 @@ import threading
 import uuid
 from typing import Any
 
+from missy.mcp.annotations import ToolAnnotation
+
 logger = logging.getLogger(__name__)
 
 
@@ -32,6 +34,7 @@ class McpClient:
         self._proc: subprocess.Popen | None = None
         self._lock = threading.Lock()
         self._tools: list[dict] = []
+        self._tool_annotations: dict[str, ToolAnnotation] = {}
 
     def connect(self) -> None:
         """Start the MCP server process and perform the initialize handshake."""
@@ -148,6 +151,21 @@ class McpClient:
                 )
                 continue
             validated.append(tool)
+            # Parse annotations if present in the tool manifest.
+            ann_data = tool.get("annotations")
+            if isinstance(ann_data, dict):
+                try:
+                    self._tool_annotations[name] = ToolAnnotation.from_mcp_dict(ann_data)
+                    logger.debug(
+                        "MCP server %r: parsed annotation for tool %r", self.name, name
+                    )
+                except Exception:
+                    logger.debug(
+                        "MCP server %r: failed to parse annotation for tool %r",
+                        self.name,
+                        name,
+                        exc_info=True,
+                    )
         return validated
 
     def call_tool(self, name: str, arguments: dict) -> str:
@@ -167,6 +185,20 @@ class McpClient:
     def tools(self) -> list[dict]:
         """Raw MCP tool definitions."""
         return self._tools
+
+    @property
+    def tool_annotations(self) -> dict[str, ToolAnnotation]:
+        """Mapping of tool name to its parsed :class:`~missy.mcp.annotations.ToolAnnotation`.
+
+        Only tools that carried an ``annotations`` key in the MCP manifest
+        will have an entry here.  Use
+        :class:`~missy.mcp.annotations.AnnotationRegistry.get_or_default` for
+        a safe fallback.
+
+        Returns:
+            A shallow copy of the internal annotations dict.
+        """
+        return dict(self._tool_annotations)
 
     def is_alive(self) -> bool:
         return self._proc is not None and self._proc.poll() is None
