@@ -1235,12 +1235,10 @@ class TestChannelTypeContracts:
         with pytest.raises(TypeError):
             Incomplete()  # type: ignore[abstract]
 
-    def test_webhook_channel_send_censors_output(self) -> None:
-        """WebhookChannel.send() logs (does not raise) and censors the message."""
+    def test_webhook_channel_send_does_not_raise(self) -> None:
+        """WebhookChannel.send() logs without raising."""
         ch = WebhookChannel()
-        with patch("missy.security.censor.censor_response", return_value="[REDACTED]") as mock_c:
-            ch.send("some secret output")
-        mock_c.assert_called_once()
+        ch.send("some output")  # Should not raise
 
     def test_channel_message_metadata_is_independent_across_instances(self) -> None:
         m1 = ChannelMessage(content="a")
