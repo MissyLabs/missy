@@ -19,14 +19,15 @@
 | [Architecture](architecture.md) | System design, data flow, module dependencies |
 | [Security](security.md) | Security policy, hardening guide, vulnerability reporting |
 | [Threat Model](threat-model.md) | Attack vectors and mitigations |
-| [Memory & Persistence](memory-and-persistence.md) | Conversation memory, learnings, storage schema |
+| [Memory & Persistence](memory-and-persistence.md) | Conversation memory, learnings, graph memory, vector search |
 | [Testing](testing.md) | Test suite layout, coverage, writing tests |
 
-## Voice Edge Nodes
+## Channels
 
 | Guide | Description |
 |---|---|
-| [Edge Node Spec](voice-edge-spec.md) | Hardware target, protocol specification, pairing workflow |
+| [Discord](discord.md) | Discord bot integration, access control, slash commands |
+| [Voice & Edge Nodes](voice-edge-spec.md) | Hardware target, protocol specification, pairing workflow |
 | [missy-edge repo](https://github.com/MissyLabs/missy-edge) | Raspberry Pi client implementation |
 
 ## Implementation Deep-Dives

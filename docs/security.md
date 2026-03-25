@@ -55,7 +55,7 @@ may be loaded.
 User input is sanitized before reaching the AI provider:
 
 - Truncated to 10 000 characters to prevent oversized-payload attacks.
-- Scanned for 69 prompt-injection patterns covering system/role delimiters,
+- Scanned for 250+ prompt-injection patterns covering system/role delimiters,
   jailbreak attempts, multi-language injection (English, Spanish, French,
   German, Italian, Portuguese, Russian, Japanese, Korean), tool/function abuse,
   prompt leaking/exfiltration, model-specific tokens (Llama 2/3, GPT,
@@ -66,7 +66,7 @@ User input is sanitized before reaching the AI provider:
 
 ### Secrets Detection & Response Censoring
 
-The `SecretsDetector` scans text for 26 credential patterns (API keys
+The `SecretsDetector` scans text for 37+ credential patterns (API keys
 including `sk-proj-...`, private keys, tokens, passwords, JWTs, AWS
 credentials, GitHub/GitLab/npm/PyPI/Slack/Discord/SendGrid tokens,
 Azure AccountKey, Twilio SK, Mailgun key,
@@ -175,6 +175,49 @@ Before reloading configuration, the watcher verifies the config file is
 not a symlink, is owned by the current user, and is not group- or
 world-writable.  This prevents an attacker from injecting a malicious
 config via a symlink or permission escalation.
+
+### Prompt Drift Detection
+
+The `PromptDriftDetector` computes SHA-256 hashes of system prompts at
+the start of each session and verifies them before every provider call
+during the tool loop.  If a hash mismatch is detected (indicating the
+system prompt was tampered with mid-session), a `security.prompt_drift`
+audit event is emitted and the request is blocked.
+
+### Agent Identity & Signing
+
+Every Missy installation generates an Ed25519 keypair at
+`~/.missy/identity.pem`.  The `AgentIdentity` module signs audit events
+with this key, providing cryptographic proof of origin.  JWK export is
+supported for integration with external verification systems.
+
+### Trust Scoring
+
+The `TrustScorer` maintains a 0-1000 reliability score for each tool,
+provider, and MCP server.  Successful operations increase the score
+(+10), failures decrease it (-50), and policy violations severely
+penalise it (-200).  When a score drops below the configured threshold,
+a warning is emitted and the component may be deprioritised.
+
+### Landlock Filesystem Enforcement
+
+On supported Linux kernels (5.13+), the `LandlockPolicy` module
+uses the Landlock LSM via ctypes syscalls to apply kernel-level
+filesystem restrictions.  This provides a second layer of enforcement
+beyond the userspace `FilesystemPolicyEngine`, preventing bypasses
+even if the Python process is compromised.
+
+### Security Scanner
+
+The `SecurityScanner` (`missy security scan`) audits the Missy
+installation for common issues:
+
+- File and directory permissions (world-writable configs, exposed keys)
+- Configuration hygiene (default_deny disabled, empty allowlists)
+- Exposed secrets in config files or environment
+- Outdated dependencies with known CVEs
+
+Findings are ranked by severity and displayed as a structured report.
 
 ### Audit Logging
 
@@ -331,3 +374,4 @@ Out of scope:
 | 0.1.0 | Initial release with secure-by-default policy engine, input sanitization, secrets detection, and JSONL audit logging. |
 | 0.2.0 | Added tool output injection scanning, response censoring, webhook rate limiting, MCP server isolation, process substitution blocking, vault atomic writes, config hotreload safety, encrypted vault with ChaCha20-Poly1305. |
 | 0.3.0 | Extended sanitizer to 40+ patterns (tool abuse, prompt leaking, Japanese, Anthropic delimiters); added Azure/Twilio/Mailgun secret detection; gateway async aput/ahead methods; web_fetch header sanitization as class constant. |
+| 0.4.0 | Expanded sanitizer to 250+ patterns with Unicode normalization and base64 decode. Added PromptDriftDetector (SHA-256 tamper detection), AgentIdentity (Ed25519 signing), TrustScorer (0-1000 reliability tracking), LandlockPolicy (kernel LSM filesystem enforcement), SecurityScanner (installation auditing), SecretCensor (structured output redaction). Extended SecretsDetector to 37+ patterns. |

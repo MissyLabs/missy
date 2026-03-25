@@ -29,21 +29,27 @@ Three properties define the system:
 
 ```
 missy/
-  core/            Session management, event bus, exception hierarchy
-  config/          YAML configuration loading and policy dataclasses
-  policy/          Network, filesystem, and shell policy engines + facade
-  gateway/         PolicyHTTPClient -- the single network enforcement point
-  agent/           AgentRuntime -- orchestrates provider calls per session
-  providers/       BaseProvider ABC, Anthropic, OpenAI, Ollama, registry
-  tools/           Tool base class and registry (builtin tools)
-  skills/          Lightweight in-process callable skills and registry
+  core/            Session management, event bus, message bus, exception hierarchy
+  config/          YAML settings, hot-reload, migration, plan/rollback
+  policy/          Network, filesystem, shell, REST L7 policy engines + presets
+  gateway/         PolicyHTTPClient -- single network enforcement point
+  agent/           Runtime, circuit breaker, context, playbook, consolidation,
+                   attention, progress, approval, persona, behavior, hatching,
+                   checkpoint, cost tracking, sleeptime, condensers, code evolution,
+                   structured output, failure tracking, watchdog, proactive triggers
+  api/             Agent-as-a-Service REST API server
+  providers/       BaseProvider ABC, Anthropic, OpenAI, Ollama, registry + rate limiter
+  tools/           Tool base class, registry, 18+ built-in tools
+  skills/          Skill registry + SKILL.md discovery
   plugins/         Security-gated external plugin loader and base class
   scheduler/       APScheduler integration, human schedule parsing, job persistence
-  memory/          JSON-based per-session conversation history
-  observability/   AuditLogger -- JSONL audit trail writer
-  security/        InputSanitizer, SecretsDetector (prompt hygiene)
-  channels/        I/O channel abstractions (CLI, Discord)
-  cli/             Click + Rich command-line interface
+  memory/          SQLite FTS5 store, vector memory (FAISS), graph memory, synthesizer
+  observability/   AuditLogger (JSONL), OpenTelemetry exporter
+  security/        Input sanitizer, secrets detector, censor, vault, identity,
+                   trust scorer, drift detector, container sandbox, Landlock LSM, scanner
+  channels/        CLI, Discord (Gateway + REST), webhooks, voice (WebSocket), screencast
+  vision/          Camera discovery, capture, analysis, scene memory, health monitoring
+  cli/             Click + Rich CLI, setup wizard, OAuth
 ```
 
 ---
@@ -53,28 +59,47 @@ missy/
 The following path describes what happens when a user runs `missy ask "..."`:
 
 ```
-1. CLI (click)           Parse command-line arguments, resolve --config path
-       |
-2. Config loader         Read YAML, build MissyConfig with policy dataclasses
-       |
-3. Subsystem init        init_policy_engine(cfg)
-       |                 init_audit_logger(cfg.audit_log_path)
-       |                 init_registry(cfg)
-       |
-4. Security checks       SecretsDetector scans prompt for credentials
-       |                 InputSanitizer truncates and checks for injection
-       |
-5. AgentRuntime.run()    Resolve or create a Session
-       |                 Resolve provider (with fallback)
-       |                 Build message list (system prompt + user input)
-       |
-6. Provider.complete()   Provider-specific SDK call (Anthropic, OpenAI, Ollama)
-       |                 Ollama routes through PolicyHTTPClient -> policy check
-       |
-7. Audit events          Every step emits AuditEvent -> EventBus -> AuditLogger
-       |                 Events appended to ~/.missy/audit.jsonl
-       |
-8. Response              Plain text returned to CLI, rendered with Rich
+ 1. CLI (click)           Parse command-line arguments, resolve --config path
+        |
+ 2. Config loader         Read YAML, auto-migrate if needed, build MissyConfig
+        |                 ConfigWatcher starts hot-reload monitoring
+        |
+ 3. Subsystem init        init_policy_engine(cfg)  -- network, filesystem, shell, REST L7
+        |                 init_audit_logger(cfg.audit_log_path) + AgentIdentity (Ed25519)
+        |                 init_registry(cfg) -- providers with rate limiter + fallback
+        |                 init_message_bus() -- async event routing
+        |                 init_tool_registry() -- 18+ built-in tools + MCP servers
+        |
+ 4. Security checks       SecretsDetector scans prompt for credentials
+        |                 InputSanitizer truncates and checks for injection (250+ patterns)
+        |                 PromptDriftDetector hashes system prompts (SHA-256)
+        |
+ 5. AgentRuntime.run()    Resolve or create a Session
+        |                 Resolve provider (with fallback + circuit breaker)
+        |                 AttentionSystem extracts urgency/topics/focus
+        |                 ContextManager builds message list within token budget
+        |                 MemorySynthesizer injects relevant memories + learnings
+        |                 Playbook injects proven tool patterns
+        |
+ 6. Provider.complete()   Provider-specific SDK call (Anthropic, OpenAI, Ollama)
+        |                 All HTTP through PolicyHTTPClient -> policy + REST check
+        |                 CostTracker accumulates spend, enforces budget cap
+        |
+ 7. Tool loop             DoneCriteria verifies completion after each round
+        |                 FailureTracker rotates strategy on consecutive failures
+        |                 Checkpoint saves state for recovery
+        |                 ProgressReporter emits structured updates
+        |
+ 8. Post-processing       Learnings extracted from tool-augmented runs
+        |                 MemoryConsolidator triggers at 80% context (sleep mode)
+        |                 CondenserPipeline compresses memory (4-stage)
+        |                 SecretCensor redacts secrets from output
+        |
+ 9. Audit events          Every step emits AuditEvent -> EventBus -> AuditLogger
+        |                 Events signed by AgentIdentity, appended to audit.jsonl
+        |                 MessageBus routes to topic subscribers
+        |
+10. Response              Text returned to channel (CLI/Discord/Voice/API), rendered
 ```
 
 ### ASCII Flow Diagram
@@ -83,28 +108,48 @@ The following path describes what happens when a user runs `missy ask "..."`:
   User
    |
    v
-+-------+     +--------+     +---------------+     +---------------+
-|  CLI  | --> | Config | --> | Policy Engine | --> | Agent Runtime |
-+-------+     +--------+     +-------+-------+     +-------+-------+
-                                     |                     |
-                              +------+------+        +-----+------+
-                              | Audit       |        | Provider   |
-                              | Logger      |        | Registry   |
-                              +------+------+        +-----+------+
-                                     |                     |
-                              +------+------+        +-----+------+
-                              | audit.jsonl |        | Anthropic  |
-                              +-------------+        | OpenAI     |
-                                                     | Ollama     |
-                                                     +-----+------+
-                                                           |
-                                                     +-----+--------+
-                                                     | PolicyHTTP   |
-                                                     | Client       |
-                                                     | (gateway)    |
-                                                     +--------------+
-                                                           |
-                                                      [ Network ]
++--------------------------------------------+
+| CLI / Discord / Voice / Webhook / API      |
++---------------------+----------------------+
+                      |
+               +------+------+
+               | Config      |     +------------------+
+               | (hot-reload)|     | SecurityScanner  |
+               +------+------+     | LandlockPolicy   |
+                      |            +------------------+
+               +------+------+
+               | PolicyEngine|     +------------------+
+               | (net/fs/    |     | InputSanitizer   |
+               |  shell/REST)|     | SecretsDetector  |
+               +------+------+     | PromptDrift      |
+                      |            +------------------+
+               +------+------+
+               | AgentRuntime|
+               +------+------+
+                      |
+    +---------+-------+--------+---------+
+    |         |                |         |
++---+---+ +---+--------+ +----+----+ +--+--------+
+|Attend.| |Context Mgr | |Provider | |Tool       |
+|System | |MemorySynth.| |Registry | |Registry   |
+|Playbok| |Condensers  | |RateLimt | |MCP + Skills|
+|Sleep  | |Checkpoint  | |Circuit  | |Vision     |
++-------+ +---+--------+ +----+----+ +--+--------+
+               |                |         |
+          +----+-----+    +----+----+    |
+          |Memory    |    |PolicyHTTP|   |
+          |SQLite/   |    |Client   |<--+
+          |Vector/   |    |(gateway)|
+          |Graph     |    +----+----+
+          +----------+         |
+                          [ Network ]
+                               |
+                    +----------+---------+
+                    | AuditLogger        |
+                    | (signed, JSONL)    |
+                    | OtelExporter       |
+                    | MessageBus         |
+                    +--------------------+
 ```
 
 ---
@@ -145,7 +190,7 @@ subsystem publishes `AuditEvent` instances with:
 - `timestamp` (UTC, timezone-aware)
 - `session_id` / `task_id` (correlation)
 - `event_type` (dotted string, e.g. `agent.run.complete`)
-- `category` (one of: `network`, `filesystem`, `shell`, `plugin`, `scheduler`, `provider`)
+- `category` (one of: `network`, `filesystem`, `shell`, `plugin`, `scheduler`, `provider`, `security`, `agent`, `tool`, `mcp`, `vision`)
 - `result` (one of: `allow`, `deny`, `error`)
 - `detail` (structured dict)
 - `policy_rule` (optional rule name)
@@ -163,66 +208,68 @@ Arrows point from importer to importee.
 
 ```
 cli/main
-  +-> config/settings
+  +-> config/settings + config/migrate + config/hotreload + config/plan
   +-> policy/engine
-  +-> observability/audit_logger
+  +-> observability/audit_logger + observability/otel
   +-> providers/registry
   +-> agent/runtime
   +-> scheduler/manager
   +-> plugins/loader
-  +-> security/sanitizer
-  +-> security/secrets
-  +-> channels/cli_channel
-  +-> channels/discord/*
+  +-> security/sanitizer + security/secrets + security/identity + security/drift
+  +-> security/landlock + security/scanner + security/vault + security/trust
+  +-> channels/cli_channel + channels/discord/* + channels/voice/* + channels/screencast/*
+  +-> mcp/manager
+  +-> api/server
+  +-> vision/*
 
 agent/runtime
-  +-> providers/registry
-  +-> providers/base
-  +-> core/session
-  +-> core/events
+  +-> providers/registry + providers/base
+  +-> core/session + core/events + core/message_bus
   +-> tools/registry
+  +-> agent/attention + agent/context + agent/circuit_breaker
+  +-> agent/playbook + agent/consolidation + agent/condensers
+  +-> agent/done_criteria + agent/learnings + agent/prompt_patches
+  +-> agent/progress + agent/interactive_approval + agent/approval
+  +-> agent/sub_agent + agent/persona + agent/behavior + agent/hatching
+  +-> agent/checkpoint + agent/cost_tracker + agent/failure_tracker
+  +-> agent/structured_output + agent/sleeptime + agent/watchdog
+  +-> agent/code_evolution + agent/proactive
+  +-> memory/synthesizer + memory/sqlite_store + memory/vector_store + memory/graph_store
+  +-> security/sanitizer + security/secrets + security/censor + security/drift
 
 providers/registry
   +-> providers/base
-  +-> providers/anthropic_provider
-  +-> providers/openai_provider
-  +-> providers/ollama_provider
+  +-> providers/anthropic_provider + openai_provider + ollama_provider
+  +-> providers/rate_limiter
   +-> config/settings
 
-providers/ollama_provider
-  +-> gateway/client
-
 gateway/client
-  +-> policy/engine
+  +-> policy/engine + policy/rest_policy
+  +-> agent/interactive_approval
   +-> core/events
 
 policy/engine
-  +-> policy/network
-  +-> policy/filesystem
-  +-> policy/shell
+  +-> policy/network + policy/filesystem + policy/shell + policy/rest_policy
+  +-> policy/presets
   +-> config/settings
+
+mcp/manager
+  +-> mcp/client + mcp/digest
+  +-> gateway/client
+  +-> tools/registry
+  +-> core/events
+
+memory/sqlite_store + memory/vector_store + memory/graph_store
+  +-> memory/store (base)
 
 scheduler/manager
-  +-> scheduler/parser
-  +-> scheduler/jobs
-  +-> agent/runtime  (lazy import to avoid circular dependency)
+  +-> scheduler/parser + scheduler/jobs
+  +-> agent/runtime (lazy)
   +-> core/events
 
-plugins/loader
-  +-> plugins/base
-  +-> config/settings
+vision/*
+  +-> providers/base (for image formatting)
   +-> core/events
-  +-> core/exceptions
-
-skills/registry
-  +-> skills/base
-  +-> core/events
-
-observability/audit_logger
-  +-> core/events
-
-memory/store
-  (no internal dependencies beyond stdlib)
 ```
 
 ### Initialisation Order
@@ -255,6 +302,9 @@ Every major subsystem follows the same pattern:
 | Audit logger | `init_audit_logger(path)` | `get_audit_logger()` |
 | Plugin loader | `init_plugin_loader(cfg)` | `get_plugin_loader()` |
 | Skill registry | `init_skill_registry()` | `get_skill_registry()` |
+| Tool registry | `init_tool_registry()` | `get_tool_registry()` |
+| Message bus | `init_message_bus()` | `get_message_bus()` |
+| Agent identity | `init_identity(path)` | `get_identity()` |
 
 This pattern ensures that subsystems are explicitly initialised (never auto-
 created on first access) and that the initialisation order is visible in the
