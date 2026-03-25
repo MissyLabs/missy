@@ -11,10 +11,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 # Install
 pip install -e ".[dev]"
-pip install -e ".[voice]"       # adds faster-whisper, numpy, soundfile
-pip install -e ".[otel]"        # adds OpenTelemetry SDK + exporters
-pip install -e ".[vector]"      # adds faiss-cpu for semantic memory search
-pip install -e ".[vision]"      # adds opencv-python-headless, numpy
+pip install -e ".[voice]"         # adds faster-whisper, numpy, soundfile
+pip install -e ".[otel]"          # adds OpenTelemetry SDK + exporters
+pip install -e ".[vector]"        # adds faiss-cpu for semantic memory search
+pip install -e ".[vision]"        # adds opencv-python-headless, numpy
+pip install -e ".[desktop]"       # adds playwright (Firefox); run: playwright install firefox
+pip install -e ".[discord_voice]" # adds discord.py[voice] + voice recv; requires system ffmpeg
 
 # Tests
 python3 -m pytest tests/ -v
@@ -67,13 +69,31 @@ CLI (missy/cli/main.py)
        ├─ PersonaManager (agent/persona.py) — YAML-backed identity/tone/style with backup/rollback
        ├─ BehaviorLayer (agent/behavior.py) — tone analysis, intent classification, response shaping
        ├─ HatchingManager (agent/hatching.py) — 8-step first-run bootstrap (incl. vision check)
+       ├─ CostTracker (agent/cost_tracker.py) — per-session spend monitoring + budget caps
+       ├─ Checkpoint (agent/checkpoint.py) — WAL-mode SQLite task checkpointing + recovery
+       ├─ FailureTracker (agent/failure_tracker.py) — per-tool failure counts + strategy rotation
+       ├─ Watchdog (agent/watchdog.py) — background subsystem health monitor
+       ├─ ProactiveManager (agent/proactive.py) — file-change/disk/load/schedule triggers
+       ├─ CodeEvolutionManager (agent/code_evolution.py) — self-evolving code with approval + git rollback
+       ├─ StructuredOutput (agent/structured_output.py) — Pydantic schema enforcement on LLM responses
+       ├─ SleeptimeWorker (agent/sleeptime.py) — background memory processing during idle
+       ├─ Summarizer (agent/summarizer.py) — DAG-based conversation summarization
+       ├─ CondenserPipeline (agent/condensers.py) — 4-stage memory compression
+       ├─ CompactionManager (agent/compaction.py) — leaf + condensation pass orchestration
        ├─ ContainerSandbox (security/container.py) — optional Docker isolation
+       ├─ LandlockPolicy (security/landlock.py) — Linux Landlock LSM filesystem enforcement
+       ├─ SecurityScanner (security/scanner.py) — installation security auditing
+       ├─ GraphMemoryStore (memory/graph_store.py) — entity-relationship graph with pattern matching
        ├─ MessageBus (core/message_bus.py) — async event-driven routing
+       ├─ ApiServer (api/server.py) — Agent-as-a-Service REST API
        ├─ VisionSubsystem (vision/) — camera discovery, capture, analysis, scene memory
        └─ AuditLogger + OtelExporter (observability/)
 
 Channels:
-  CLIChannel | DiscordChannel | WebhookChannel | VoiceChannel
+  CLIChannel | DiscordChannel | WebhookChannel | VoiceChannel | ScreencastChannel
+
+ScreencastChannel (channels/screencast/):
+  → Browser-based screen capture with token auth + session management
 
 VoiceChannel (channels/voice/):
   → VoiceServer (WebSocket, port 8765)
@@ -100,6 +120,7 @@ VoiceChannel (channels/voice/):
 - `CLIChannel`: Interactive stdin/stdout
 - `DiscordChannel`: Full WebSocket Gateway API with access control (DM allowlist, guild/role policies), slash commands (`/ask`, `/status`, `/model`, `/help`)
 - `WebhookChannel`: HTTP webhook ingress
+- `ScreencastChannel`: Browser-based screen capture with token auth (`ScreencastTokenRegistry`) and session management (`SessionManager`)
 - `VoiceChannel`: WebSocket server (default port 8765) accepting connections from edge nodes (ReSpeaker, Raspberry Pi). Protocol: JSON control frames + binary PCM audio. Device pairing with PBKDF2-hashed tokens. Per-node policy modes: `full`, `safe-chat`, `muted`. STT via faster-whisper, TTS via piper binary.
 
 **Agent Loop Components (`missy/agent/`)**:
@@ -116,6 +137,17 @@ VoiceChannel (channels/voice/):
 - `PromptPatchManager`: Self-tuning prompt patches with approval workflow (proposed/approved/rejected)
 - `SubAgentRunner`: Spawns child agent instances
 - `ApprovalGate`: Human-in-the-loop approval for sensitive operations
+- `CostTracker`: Per-session cost tracking and budget enforcement (`max_spend_usd`). Raises `BudgetExceededError` when cap hit.
+- `Checkpoint`: WAL-mode SQLite checkpointing for task state. Enables `missy recover` to resume incomplete sessions.
+- `FailureTracker`: Per-tool consecutive failure counts. Injects strategy-rotation prompts after repeated failures.
+- `Watchdog`: Background health monitor for subsystems. Tracks `SubsystemHealth` status and reports degradation.
+- `ProactiveManager`: Autonomous task initiation via file-change watchers, disk/load threshold triggers, and schedule-based triggers.
+- `CodeEvolutionManager`: Self-evolving code modification engine with approval workflow, git-backed rollback, and `missy evolve` CLI.
+- `StructuredOutput`: Pydantic model schema enforcement on LLM responses with automatic retry on validation failure.
+- `SleeptimeWorker`: Background memory processing during idle periods — consolidates, indexes, and prunes memories (inspired by Letta sleeptime computing).
+- `Summarizer`: DAG-based conversation summarization with escalation tiers for progressive detail reduction.
+- `CondenserPipeline`: 4-stage memory compression — observation masking, amortized forgetting, summarizing, windowing.
+- `CompactionManager`: Orchestrates leaf passes and condensation passes over conversation history.
 
 **MCP (`missy/mcp/`)** — `McpManager` manages MCP server connections. Config at `~/.missy/mcp.json`. Tools are namespaced as `server__tool`. Auto-restarts dead servers via `health_check()`. Digest pinning (`missy mcp pin`) records SHA-256 of tool manifests; mismatches refuse to load.
 
@@ -132,6 +164,8 @@ VoiceChannel (channels/voice/):
 - `TrustScorer`: 0-1000 reliability tracking per tool/provider/MCP server. Success (+10), failure (-50), violation (-200). Warns below threshold.
 - `PromptDriftDetector`: SHA-256 hashes system prompts at start, verifies before each provider call. Emits `security.prompt_drift` audit event on tamper.
 - `ContainerSandbox`: Optional Docker-based isolation for tool execution. Per-session containers with `--network=none`, memory/CPU limits. Config: `container: { enabled: true }`.
+- `LandlockPolicy`: Linux Landlock LSM filesystem policy enforcement via ctypes syscalls. Kernel-level read/write path restrictions complementing userspace policy engine.
+- `SecurityScanner`: Installation security auditor (`missy security scan`). Checks file permissions, config hygiene, exposed secrets, and reports severity-ranked findings.
 
 **Vision (`missy/vision/`)** — On-demand visual capabilities:
 - `CameraDiscovery`: USB camera detection via sysfs with vendor/product ID matching, Logitech C922x preferred
@@ -147,13 +181,15 @@ VoiceChannel (channels/voice/):
 - Agent tools: `vision_capture`, `vision_burst`, `vision_analyze`, `vision_devices`, `vision_scene`
 - Voice integration: Auto-captures image when audio intent implies vision need
 
-**Memory (`missy/memory/`)** — `SQLiteMemoryStore` at `~/.missy/memory.db` with FTS5 search. Stores conversation turns and learnings. `cleanup()` removes turns older than N days. Optional `VectorMemoryStore` with FAISS semantic search (`pip install -e ".[vector]"`).
+**Memory (`missy/memory/`)** — `SQLiteMemoryStore` at `~/.missy/memory.db` with FTS5 search. Stores conversation turns and learnings. `cleanup()` removes turns older than N days. Optional `VectorMemoryStore` with FAISS semantic search (`pip install -e ".[vector]"`). `GraphMemoryStore` provides SQLite-backed entity-relationship graph memory with rule-based pattern matching for structured knowledge retrieval.
 
 **Message Bus (`missy/core/message_bus.py`)** — Async event-driven routing with fnmatch topic wildcards (e.g. `channel.*`), priority queue, correlation IDs, worker thread. Standard topics in `missy/core/bus_topics.py`. Runtime publishes `AGENT_RUN_START/COMPLETE/ERROR`, `TOOL_REQUEST/RESULT`. Module-level singleton via `init_message_bus()` / `get_message_bus()`.
 
 **Config Migration (`missy/config/migrate.py`)** — Auto-migrates old configs on startup. Detects manual hosts matching presets, replaces with `presets: [...]`, stamps `config_version: 2`. Backs up before modifying. Idempotent.
 
 **Config Plan (`missy/config/plan.py`)** — Automatic backups on config writes (max 5, pruned). `missy config rollback/diff/plan/backups` commands.
+
+**API Server (`missy/api/`)** — Agent-as-a-Service REST API (`missy api start`). Loopback-only binding by default, API key authentication, rate limiting, and automatic secrets censoring on responses.
 
 **Observability (`missy/observability/`)** — `AuditLogger` writes structured JSONL to `~/.missy/audit.jsonl`. `OtelExporter` sends traces/metrics to an OTLP endpoint when enabled.
 
@@ -181,6 +217,9 @@ VoiceChannel (channels/voice/):
 | Hatching log | `~/.missy/hatching_log.jsonl` |
 | Skills directory | `~/.missy/skills/` |
 | Vision captures | `~/.missy/captures/` |
+| Checkpoints DB | `~/.missy/checkpoints.db` |
+| Graph memory DB | `~/.missy/graph_memory.db` |
+| Code evolutions | `~/.missy/evolutions.json` |
 | Workspace | `~/workspace` |
 
 ### Configuration Schema
@@ -329,8 +368,6 @@ missy vault get KEY                 Retrieve a secret
 missy vault list                    List stored key names
 missy vault delete KEY              Delete a secret
 
-missy sessions cleanup              Delete old conversation history (--older-than, --dry-run)
-
 missy approvals list                List pending approval requests
 
 missy patches list                  List prompt patches
@@ -357,6 +394,23 @@ missy config rollback               Restore config from latest backup
 missy config plan                   Show what changed since last backup
 
 missy sandbox status                Show Docker container sandbox config and availability
+missy sandbox hatch                 Run hatching bootstrap in sandbox mode
+
+missy security scan                 Audit installation for security issues (permissions, config, secrets)
+
+missy api start                     Start the Agent-as-a-Service REST API (--host, --port)
+missy api status                    Show API server configuration and status
+
+missy evolve list                   List code evolution proposals
+missy evolve show EVOLUTION_ID      Show details of a code evolution proposal
+missy evolve approve EVOLUTION_ID   Approve a proposed code evolution
+missy evolve reject EVOLUTION_ID    Reject a proposed code evolution
+missy evolve apply EVOLUTION_ID     Apply an approved code evolution
+missy evolve rollback EVOLUTION_ID  Roll back an applied code evolution
+
+missy sessions list                 List active sessions
+missy sessions rename SESSION       Rename a session
+missy sessions cleanup              Delete old conversation history (--older-than, --dry-run)
 
 missy vision devices                Enumerate and diagnose available USB cameras
 missy vision capture                Capture frames (--device, --output, --count, --width, --height)
@@ -364,6 +418,9 @@ missy vision inspect                Run visual quality assessment (--file, --scr
 missy vision review                 LLM-powered visual analysis (--mode general|puzzle|painting|inspection, --file, --context)
 missy vision doctor                 Run vision subsystem diagnostics
 missy vision health                 Show capture statistics and device health status
+missy vision benchmark              Run vision capture performance benchmarks
+missy vision validate               Validate vision pipeline end-to-end
+missy vision memory                 Show vision scene memory status and history
 
 missy hatch                         First-run bootstrap wizard (--non-interactive)
 
@@ -382,22 +439,25 @@ missy recover                       List incomplete checkpoints from previous se
 ## Optional Extras
 
 ```bash
-pip install -e ".[dev]"     # pytest, pytest-asyncio, pytest-cov, black, ruff, mypy, watchdog
-pip install -e ".[voice]"   # faster-whisper, numpy, soundfile
-pip install -e ".[otel]"    # opentelemetry-sdk, OTLP gRPC + HTTP exporters
-pip install -e ".[vector]"  # faiss-cpu for semantic memory search
-pip install -e ".[vision]"  # opencv-python-headless, numpy for vision subsystem
+pip install -e ".[dev]"           # pytest, pytest-asyncio, pytest-cov, black, ruff, mypy, watchdog, hypothesis
+pip install -e ".[voice]"         # faster-whisper, numpy, soundfile
+pip install -e ".[otel]"          # opentelemetry-sdk, OTLP gRPC + HTTP exporters
+pip install -e ".[vector]"        # faiss-cpu for semantic memory search
+pip install -e ".[vision]"        # opencv-python-headless, numpy for vision subsystem
+pip install -e ".[desktop]"       # playwright (Firefox automation); run: playwright install firefox
+pip install -e ".[discord_voice]" # discord.py[voice] + voice recv extension; requires system ffmpeg
 ```
 
 Piper TTS is a separate binary, not a pip package. Install from https://github.com/rhasspy/piper.
+Desktop extra also needs: `sudo apt install python3-pyatspi` for accessibility tools.
 
 ## Documentation
 
-Full docs site: **https://missylabs.github.io/** — 60+ pages covering getting started, configuration, security, architecture, CLI reference, channels, providers, extending, edge nodes, and operations. Source at `/home/missy/missylabs.github.io/` (MkDocs Material, deployed via GitHub Actions).
+Full docs site: **https://missylabs.github.io/** — 80+ pages covering getting started, configuration, security, architecture, CLI reference, channels, providers, extending, edge nodes, operations, and Leyline P2P network. Source at `/home/missy/missylabs.github.io/` (MkDocs Material, deployed via GitHub Actions).
 
 ## Test Layout
 
-Tests under `tests/` with subdirectories: `agent/`, `channels/`, `cli/`, `config/`, `core/`, `gateway/`, `integration/`, `mcp/`, `memory/`, `observability/`, `plugins/`, `policy/`, `providers/`, `scheduler/`, `security/`, `skills/`, `tools/`, `unit/`, `vision/`. 350+ test files, 12,000+ tests, coverage threshold 85% (configured in `pyproject.toml`).
+Tests under `tests/` with subdirectories: `agent/`, `api/`, `channels/`, `cli/`, `config/`, `core/`, `gateway/`, `integration/`, `mcp/`, `memory/`, `observability/`, `plugins/`, `policy/`, `providers/`, `scheduler/`, `security/`, `skills/`, `tools/`, `unit/`, `vision/`. 480+ test files, 20,000+ tests, coverage threshold 90% (configured in `pyproject.toml`).
 
 ## Companion Project: missy-edge
 

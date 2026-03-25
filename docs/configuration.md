@@ -14,17 +14,37 @@ parsed into a `MissyConfig` dataclass hierarchy.
 
 ## Table of Contents
 
-1. [network](#network)
-2. [filesystem](#filesystem)
-3. [shell](#shell)
-4. [plugins](#plugins)
-5. [scheduling](#scheduling)
-6. [providers](#providers)
-7. [discord](#discord)
-8. [workspace_path](#workspace_path)
-9. [audit_log_path](#audit_log_path)
-10. [max_spend_usd](#max_spend_usd)
-11. [Full Annotated Example](#full-annotated-example)
+1. [config_version](#config_version)
+2. [network](#network)
+3. [filesystem](#filesystem)
+4. [shell](#shell)
+5. [plugins](#plugins)
+6. [scheduling](#scheduling)
+7. [providers](#providers)
+8. [discord](#discord)
+9. [heartbeat](#heartbeat)
+10. [observability](#observability)
+11. [vault](#vault)
+12. [voice](#voice)
+13. [container](#container)
+14. [vision](#vision)
+15. [workspace_path](#workspace_path)
+16. [audit_log_path](#audit_log_path)
+17. [max_spend_usd](#max_spend_usd)
+18. [Full Annotated Example](#full-annotated-example)
+
+---
+
+## `config_version`
+
+| Key | Type | Default |
+|---|---|---|
+| `config_version` | int | `2` |
+
+Schema version for the configuration file.  Old configs (version 1 or unversioned) are
+automatically migrated on startup.  The migration detects manually listed hosts that match
+built-in presets and replaces them with `presets: [...]`.  A backup is created before
+modification.
 
 ---
 
@@ -43,6 +63,8 @@ entry in one of the allowlists.
 | `provider_allowed_hosts` | list of strings | `[]` | Additional hosts allowed specifically for provider API traffic. Merged (union) with `allowed_hosts`. |
 | `tool_allowed_hosts` | list of strings | `[]` | Additional hosts allowed specifically for tool HTTP requests. Merged (union) with `allowed_hosts`. |
 | `discord_allowed_hosts` | list of strings | `[]` | Additional hosts allowed specifically for Discord API traffic. Merged (union) with `allowed_hosts`. |
+| `presets` | list of strings | `[]` | Named preset bundles that auto-expand to correct hosts/domains/CIDRs. Available presets: `anthropic`, `github`, `openai`, `ollama`, `discord`. Use `missy presets list` to see all. |
+| `rest_policies` | list of objects | `[]` | L7 HTTP method + path glob rules per host. Each entry has `host`, `method` (GET/POST/PUT/DELETE/PATCH/*), `path` (glob pattern like `/repos/**`), and `action` (allow/deny). |
 
 The per-category `*_allowed_hosts` lists are unioned with the global
 `allowed_hosts` and `allowed_domains` lists during policy evaluation.  They
@@ -129,6 +151,9 @@ block.
 | `base_url` | string | `null` | Override the provider's default API endpoint.  Required for Ollama (`"http://localhost:11434"`).  Also useful for OpenAI-compatible third-party services. |
 | `timeout` | int | `30` | Request timeout in seconds. |
 | `enabled` | bool | `true` | When `false`, the provider is loaded but treated as unavailable by the registry. |
+| `api_keys` | list of strings | `[]` | Multiple API keys for round-robin rotation.  Takes precedence over single `api_key` when non-empty. |
+| `fast_model` | string | `""` | Model to use for quick/simple tasks (e.g. `"claude-haiku-4-5"`).  Empty string disables tier routing for fast tasks. |
+| `premium_model` | string | `""` | Model to use for complex reasoning tasks (e.g. `"claude-opus-4-6"`).  Empty string disables tier routing for premium tasks. |
 
 ### API Key Resolution Order
 
@@ -179,6 +204,105 @@ Each entry in `guild_policies` supports:
 | `allowed_roles` | list of strings | `[]` | Whitelist of role names users must hold.  Empty means all roles. |
 | `allowed_users` | list of strings | `[]` | Whitelist of user IDs permitted to interact.  Empty means all users. |
 | `mode` | string | `"full"` | Feature mode: `"safe_chat_only"`, `"no_tools"`, or `"full"`. |
+
+---
+
+## `heartbeat`
+
+Periodic workspace monitoring during active hours.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `false` | Master switch for heartbeat monitoring. |
+| `interval_seconds` | int | `1800` | Seconds between heartbeat checks. |
+| `workspace` | string | `"~/workspace"` | Directory to monitor. |
+| `active_hours` | string | `""` | Time window for heartbeat activity (e.g. `"08:00-22:00"`).  Empty means always active. |
+
+---
+
+## `observability`
+
+OpenTelemetry integration for traces and metrics.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `otel_enabled` | bool | `false` | Enable OpenTelemetry export.  Requires `pip install -e ".[otel]"`. |
+| `otel_endpoint` | string | `"http://localhost:4317"` | OTLP collector endpoint. |
+| `otel_protocol` | string | `"grpc"` | Transport protocol: `"grpc"` or `"http/protobuf"`. |
+| `otel_service_name` | string | `"missy"` | Service name in traces and metrics. |
+| `log_level` | string | `"warning"` | Python logging level for the application. |
+
+---
+
+## `vault`
+
+Encrypted secrets store using ChaCha20-Poly1305.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `false` | Enable the encrypted vault.  When enabled, `vault://KEY_NAME` references in config are resolved from the vault. |
+| `vault_dir` | string | `"~/.missy/secrets"` | Directory for vault key and encrypted data files. |
+
+Manage secrets with `missy vault set|get|list|delete`.
+
+---
+
+## `voice`
+
+Voice channel configuration for edge node communication.  Requires `pip install -e ".[voice]"`.
+
+```yaml
+voice:
+  host: "0.0.0.0"
+  port: 8765
+  stt:
+    engine: "faster-whisper"
+    model: "base.en"
+  tts:
+    engine: "piper"
+    voice: "en_US-lessac-medium"
+```
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `host` | string | `"0.0.0.0"` | WebSocket server bind address. |
+| `port` | int | `8765` | WebSocket server port. |
+| `stt.engine` | string | `"faster-whisper"` | Speech-to-text engine. |
+| `stt.model` | string | `"base.en"` | STT model name (faster-whisper model). |
+| `tts.engine` | string | `"piper"` | Text-to-speech engine (external binary). |
+| `tts.voice` | string | `"en_US-lessac-medium"` | Piper voice model identifier. |
+
+---
+
+## `container`
+
+Optional Docker-based sandbox for tool execution.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `false` | Enable container sandbox.  Requires Docker. |
+| `image` | string | `"python:3.12-slim"` | Docker image for sandbox containers. |
+| `memory_limit` | string | `"256m"` | Container memory limit. |
+| `cpu_quota` | float | `0.5` | CPU quota (fraction of one core). |
+| `network_mode` | string | `"none"` | Docker network mode.  `"none"` disables all networking in the sandbox. |
+
+---
+
+## `vision`
+
+On-demand visual capabilities.  Requires `pip install -e ".[vision]"`.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `true` | Enable vision subsystem. |
+| `preferred_device` | string | `""` | Preferred camera device path (e.g. `/dev/video0`).  Empty auto-detects. |
+| `capture_width` | int | `1920` | Capture resolution width. |
+| `capture_height` | int | `1080` | Capture resolution height. |
+| `warmup_frames` | int | `5` | Frames to discard on camera warm-up. |
+| `max_retries` | int | `3` | Capture retry count on failure. |
+| `auto_activate_threshold` | float | `0.80` | Audio intent confidence threshold for automatic vision activation. |
+| `scene_memory_max_frames` | int | `20` | Maximum frames stored per scene session. |
+| `scene_memory_max_sessions` | int | `5` | Maximum concurrent scene sessions. |
 
 ---
 

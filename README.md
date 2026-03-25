@@ -41,6 +41,16 @@ This isn't paranoia — it's the only sane default for an AI agent that can exec
 - **Progress reporting** — structured protocol with Null/Audit/CLI reporter implementations
 - **Cost tracking** — per-session budget caps with `max_spend_usd`
 - **Message bus** — async event-driven routing with topic wildcards, priority queue, and correlation IDs
+- **Checkpoint recovery** — WAL-mode SQLite checkpointing; `missy recover` resumes incomplete sessions
+- **Failure tracking** — per-tool consecutive failure counts with automatic strategy rotation
+- **Watchdog** — background subsystem health monitoring with degradation reporting
+- **Proactive triggers** — autonomous task initiation via file-change watchers, disk/load thresholds, and schedules
+- **Code evolution** — self-evolving code modification engine with approval workflow and git-backed rollback
+- **Structured output** — Pydantic schema enforcement on LLM responses with automatic retry
+- **Sleeptime computing** — background memory processing during idle periods (consolidation, indexing, pruning)
+- **Condenser pipeline** — 4-stage memory compression: observation masking, amortized forgetting, summarizing, windowing
+- **Graph memory** — SQLite-backed entity-relationship graph with rule-based pattern matching
+- **REST API** — Agent-as-a-Service endpoint (`missy api start`) with loopback binding, API key auth, rate limiting
 
 ### Security
 - **Multi-layer policy engine** — network (CIDR + domain + host), filesystem (per-path R/W), shell (command whitelist), L7 REST (HTTP method + path per host)
@@ -53,6 +63,8 @@ This isn't paranoia — it's the only sane default for an AI agent that can exec
 - **Agent identity** — Ed25519 keypair at `~/.missy/identity.pem`, signs audit events, JWK export
 - **Trust scoring** — 0-1000 reliability tracking per tool/provider/MCP server with threshold warnings
 - **Container sandbox** — optional Docker-based isolation for tool execution (`--network=none`, memory/CPU limits)
+- **Landlock LSM** — Linux kernel-level filesystem enforcement via Landlock syscalls, complementing userspace policy
+- **Security scanner** — `missy security scan` audits installation for permission issues, config hygiene, exposed secrets
 - **MCP digest pinning** — SHA-256 verification of tool manifests; mismatches refuse to load
 - **Config hot-reload safety** — symlink, ownership, and permission checks before reload
 
@@ -61,6 +73,7 @@ This isn't paranoia — it's the only sane default for an AI agent that can exec
 - **Discord** — full Gateway WebSocket API, slash commands (`/ask`, `/status`, `/model`), DM allowlist, guild/role policies, image analysis
 - **Webhooks** — HTTP ingress with HMAC auth, rate limiting, payload validation
 - **Voice** — WebSocket server for edge nodes, faster-whisper STT, Piper TTS, device registry with PBKDF2 auth
+- **Screencast** — browser-based screen capture channel with token authentication and session management
 
 ### Automation & Extensibility
 - **Scheduler** — APScheduler with human-friendly syntax (`"daily at 09:00"`, `"every monday at 08:00"`), JSON persistence
@@ -69,6 +82,22 @@ This isn't paranoia — it's the only sane default for an AI agent that can exec
 - **Tools, skills, plugins** — three extension tiers with increasing isolation and permission requirements
 - **Vector memory** — optional FAISS-based semantic search alongside SQLite FTS5 (`pip install -e ".[vector]"`)
 - **Heartbeat** — periodic workspace monitoring during active hours
+- **Persona system** — YAML-backed agent identity/tone/style with backup, rollback, and audit logging
+- **Hatching** — 8-step first-run bootstrap wizard with idempotent initialization
+- **Behavior layer** — humanistic response shaping with tone analysis, intent classification
+
+### Vision
+- **Camera discovery** — USB camera detection via sysfs with vendor/product ID matching
+- **Image pipeline** — resize, CLAHE exposure normalization, quality assessment
+- **Scene memory** — task-scoped multi-frame memory for puzzle/painting tasks with change detection
+- **Multi-provider** — Anthropic/OpenAI/Ollama image message formatting
+- **Voice integration** — auto-captures image when audio intent implies vision need
+- **CLI tools** — `missy vision capture|inspect|review|doctor|health|benchmark|validate|memory`
+
+### Desktop Automation
+- **Browser tools** — Playwright-based Firefox automation (`pip install -e ".[desktop]"`)
+- **X11 tools** — window management and application launching
+- **Accessibility** — AT-SPI toolkit integration for GUI interaction
 
 ### Operations
 - **Config presets** — `presets: ["anthropic", "github"]` replaces manual host lists
@@ -126,10 +155,13 @@ missy setup --provider anthropic --api-key-env ANTHROPIC_API_KEY --no-prompt
 ### Optional extras
 
 ```bash
-pip install -e ".[voice]"   # faster-whisper, numpy, soundfile (for voice channel)
-pip install -e ".[otel]"    # OpenTelemetry SDK + OTLP exporters
-pip install -e ".[vector]"  # FAISS semantic memory search
-pip install -e ".[dev]"     # pytest, ruff, mypy, coverage tools
+pip install -e ".[voice]"         # faster-whisper, numpy, soundfile (for voice channel)
+pip install -e ".[otel]"          # OpenTelemetry SDK + OTLP exporters
+pip install -e ".[vector]"        # FAISS semantic memory search
+pip install -e ".[vision]"        # opencv-python-headless, numpy (for vision subsystem)
+pip install -e ".[desktop]"       # playwright (Firefox automation); then: playwright install firefox
+pip install -e ".[discord_voice]" # discord.py[voice] + voice recv; requires system ffmpeg
+pip install -e ".[dev]"           # pytest, ruff, mypy, hypothesis, coverage tools
 ```
 
 ---
@@ -137,7 +169,7 @@ pip install -e ".[dev]"     # pytest, ruff, mypy, coverage tools
 ## Architecture
 
 ```
-User ─── CLI / Discord / Webhook / Voice
+User ─── CLI / Discord / Webhook / Voice / Screencast / API
               │
               v
          AgentRuntime
@@ -155,6 +187,8 @@ PolicyEngine  ProviderRegistry           ToolRegistry
     │    │ AttentionSystem │     │ Playbook + SKILL.md│
     │    │ MemorySynth.   │     │ SkillDiscovery     │
     │    │ Consolidator   │     │ VectorMemory       │
+    │    │ Condensers     │     │ GraphMemory        │
+    │    │ Sleeptime      │     │ CodeEvolution      │
     │    └────────────────┘     └────────────────────┘
     │             │                          │
     v             v                          v
@@ -262,9 +296,24 @@ missy mcp list | add NAME | remove NAME | pin NAME
 missy skills                        # List registered skills
 missy skills scan                   # Discover SKILL.md files
 
+# Vision
+missy vision devices | capture | inspect | review | doctor
+missy vision health | benchmark | validate | memory
+
+# Persona & bootstrap
+missy persona show | edit | reset | backups | diff | rollback | log
+missy hatch                         # First-run bootstrap wizard
+
+# Security & evolution
+missy security scan                 # Audit installation security
+missy evolve list | show | approve | reject | apply | rollback
+
+# REST API
+missy api start | status
+
 # Operations
 missy sandbox status                # Docker sandbox availability
-missy sessions cleanup              # Prune old conversations
+missy sessions list | rename | cleanup
 missy cost                          # Budget status
 missy recover                       # Resume from checkpoints
 ```
@@ -307,13 +356,13 @@ ruff check missy/ tests/                              # Lint
 ruff format missy/ tests/                             # Format
 ```
 
-11,900+ tests across 340+ test files. 85% coverage threshold.
+20,000+ tests across 480+ test files. 90% coverage threshold.
 
 ---
 
 ## Documentation
 
-**Full docs: [missylabs.github.io](https://missylabs.github.io)** — 60+ pages with dark mode, search, code tabs, and mermaid diagrams.
+**Full docs: [missylabs.github.io](https://missylabs.github.io)** — 80+ pages with dark mode, search, code tabs, and mermaid diagrams.
 
 | Section | Pages | Covers |
 |---------|-------|--------|
@@ -327,6 +376,7 @@ ruff format missy/ tests/                             # Format
 | [Extending](https://missylabs.github.io/extending/) | 4 | Tools, plugins, MCP servers, SKILL.md |
 | [Missy Edge](https://missylabs.github.io/edge/) | 6 | Hardware, Pi setup, pairing, config, wake word |
 | [Operations](https://missylabs.github.io/operations/) | 4 | Backup/rollback, observability, troubleshooting |
+| [Leyline P2P](https://missylabs.github.io/leyline/) | 13 | P2P network, identity, consensus, service discovery, messaging |
 
 ### In-repo docs
 
@@ -339,23 +389,26 @@ Developer-facing references in [`docs/`](docs/) — architecture, implementation
 ```
 missy/
 ├── agent/           Runtime, circuit breaker, context, playbook, consolidation,
-│                    attention, progress, interactive approval, sub-agents, approvals
-├── channels/        CLI, Discord (Gateway + REST), webhooks, voice (WebSocket server)
+│                    attention, progress, approval, persona, behavior, hatching,
+│                    checkpoint, cost tracking, sleeptime, condensers, code evolution
+├── api/             Agent-as-a-Service REST API server
+├── channels/        CLI, Discord, webhooks, voice (WebSocket), screencast (browser)
 ├── cli/             Click + Rich CLI, setup wizard, OAuth
 ├── config/          YAML settings, hot-reload, migration, plan/rollback
 ├── core/            Session management, event bus, message bus, exceptions
 ├── gateway/         PolicyHTTPClient — single network enforcement point
 ├── mcp/             MCP server manager, health checks, digest pinning
-├── memory/          SQLite FTS5 store, vector memory (FAISS), synthesizer
+├── memory/          SQLite FTS5, vector (FAISS), graph memory, synthesizer
 ├── observability/   Audit logger (JSONL), OpenTelemetry exporter
 ├── policy/          Network, filesystem, shell, REST L7 policy engines + presets
 ├── providers/       Anthropic, OpenAI, Ollama + registry with fallback & hot-swap
 ├── scheduler/       APScheduler integration, human schedule parser
-├── security/        Input sanitizer, secrets detector, censor, vault, identity,
-│                    trust scorer, drift detector, container sandbox
+├── security/        Sanitizer, secrets, censor, vault, identity, trust scorer,
+│                    drift detector, container sandbox, Landlock LSM, scanner
 ├── skills/          Skill registry + SKILL.md discovery
 ├── plugins/         Security-gated external plugin loader
-└── tools/           Built-in tools + registry
+├── tools/           Built-in tools + registry (18+ tools)
+└── vision/          Camera discovery, capture, analysis, scene memory, health
 ```
 
 ---
