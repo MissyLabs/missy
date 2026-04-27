@@ -80,6 +80,18 @@ class TestRunStream:
             assert len(chunks) == 1
             assert "Result: 4" in chunks[0]
 
+    def test_run_stream_strips_split_thinking_tags(self, mock_registry):
+        registry, provider = mock_registry
+        provider.stream.return_value = iter(["Visible <thi", "nk>hidden</think>", " text"])
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", side_effect=RuntimeError),
+        ):
+            agent = AgentRuntime(AgentConfig(provider="test"))
+            chunks = list(agent.run_stream("Hello"))
+            assert "".join(chunks) == "Visible  text"
+            assert "hidden" not in "".join(chunks)
+
 
 class TestRateLimitIntegration:
     def test_rate_limiter_created(self, mock_registry):

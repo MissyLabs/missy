@@ -35,6 +35,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
 
+from missy.agent.subscription import AgentSubscription
 from missy.core.events import AuditEvent, event_bus
 from missy.core.exceptions import ProviderError
 from missy.core.session import Session, SessionManager
@@ -616,10 +617,20 @@ class AgentRuntime:
         self._acquire_rate_limit()
 
         full_text = ""
+        subscription = AgentSubscription(reasoning_mode="off")
+        subscription.handle_event({"type": "message_start"})
         try:
             for chunk in provider.stream(msg_objects, system=system_prompt):
-                full_text += chunk
-                yield chunk
+                update = subscription.handle_event(
+                    {"type": "message_update", "delta": chunk, "stream_event": "text_delta"}
+                )
+                full_text = update.full_visible_text
+                if update.visible_delta:
+                    yield update.visible_delta
+            final_update = subscription.handle_event({"type": "message_end"})
+            full_text = final_update.full_visible_text
+            if final_update.visible_delta:
+                yield final_update.visible_delta
         except Exception:
             logger.debug("Streaming failed; falling back to non-streaming", exc_info=True)
             # Fall back to non-streaming
