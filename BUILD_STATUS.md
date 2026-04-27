@@ -4,18 +4,26 @@ Last updated: 2026-04-27
 
 ## Current State
 
-- Loop session appears to be session 1 for the OpenClaw/humanize artifacts: `BUILD_STATUS.md`, `HUMANIZE_STATUS.md`, `OPENCLAW_PATTERNS.md`, and `LAST_SESSION_SUMMARY.md` were absent at session start.
-- Read `/home/bmerriam/openclaw-deep-dive.md` end to end.
+- Loop session 2 continued from the initialized OpenClaw/humanize artifacts.
 - Implemented the first A1 slice: `missy/agent/subscription.py` provides an `AgentSubscription` state machine for streaming message/tool/compaction events.
 - Lightly wired A1 into `AgentRuntime.run_stream()` so single-turn streaming uses the same tag-stripping and monotonic buffering path.
 - Added targeted tests for subscription reconciliation, split tag stripping, code-span awareness, reasoning streaming, reply directives, block flush points, compaction retry state, and runtime streaming integration.
+- Implemented A2 `missy/policy/tool_policy_pipeline.py` with profile layers, standard profile→provider→global→agent→group→sandbox→subagent layer construction, group expansion, glob matching, `-tool` deny syntax, fail-warning unknown allowlists, and per-step trace records.
+- Wired `AgentRuntime._get_tools()` through the A2 pipeline while preserving existing `full`, `safe-chat`, `discord`, and `no-tools` capability-mode behavior.
 
 ## Verification
 
 - `pytest tests/agent/test_subscription.py tests/agent/test_runtime_streaming.py -q` passed: 18 tests.
-- `pytest -q` passed: 20069 passed, 14 skipped in 371.15s.
+- `pytest -q` passed: 20077 passed, 14 skipped in 369.30s.
 - `ruff check .` passed.
 - `ruff format --check .` passed.
+- Session 2 focused verification passed:
+  - `pytest tests/policy/test_tool_policy_pipeline.py tests/agent/test_runtime_streaming.py tests/agent/test_coverage_gaps.py::TestRuntimeCapabilityMode -q`: 19 passed.
+  - `pytest tests/agent/test_coverage_gaps.py::TestRuntimeCapabilityMode tests/tools/test_registry_policy_edges.py -q`: 58 passed.
+  - `ruff check missy/policy/tool_policy_pipeline.py missy/agent/runtime.py tests/policy/test_tool_policy_pipeline.py tests/agent/test_runtime_streaming.py`: passed.
+  - `ruff format --check missy/policy/tool_policy_pipeline.py missy/agent/runtime.py tests/policy/test_tool_policy_pipeline.py tests/agent/test_runtime_streaming.py`: passed.
+  - `ruff check .`: passed.
+  - `ruff format --check .`: passed, 702 files already formatted.
 
 ## Repository Notes
 
@@ -25,5 +33,6 @@ Last updated: 2026-04-27
 ## Remaining Work
 
 - A1 still needs deeper runtime wiring for the tool-call loop and channel block replies.
-- A2 through A13 remain to be implemented after A1 is hardened.
+- A2 is wired for runtime capability profiles; future sessions should connect config-backed provider/global/agent/sandbox/subagent policies when those config surfaces exist.
+- A3 through A13 remain to be implemented after A1/A2 hardening.
 - H_A through H_I are tracked but not yet implemented.

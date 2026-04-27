@@ -9,7 +9,7 @@ Status values used here: `not_started`, `designed`, `implemented`, `wired`, `tes
 | ID | Pattern | Status | Missy paths | Test coverage | Notes |
 | --- | --- | --- | --- | --- | --- |
 | A1 | Streaming subscription state machine | tested | `missy/agent/subscription.py:34`, `missy/agent/subscription.py:241`, `missy/agent/runtime.py:620` | `tests/agent/test_subscription.py:8`, `tests/agent/test_runtime_streaming.py:83` | Handles `message_start/update/end`, tool events, compaction events, monotonic delta/full-content reconciliation, split think/final tag stripping, code-span awareness, reply directives, reasoning modes, and block flush points. Runtime wiring currently covers simple streaming. |
-| A2 | Layered tool policy pipeline | not_started | Planned: `missy/policy/tool_policy_pipeline.py`, `missy/tools/registry.py` | Planned: `tests/policy/test_tool_policy_pipeline.py`, `tests/tools/test_registry_policy_edges.py` | Will replace ad-hoc capability filtering and record source labels per filter step. |
+| A2 | Layered tool policy pipeline | tested | `missy/policy/tool_policy_pipeline.py:116`, `missy/policy/tool_policy_pipeline.py:176`, `missy/policy/tool_policy_pipeline.py:206`, `missy/agent/runtime.py:1086` | `tests/policy/test_tool_policy_pipeline.py:14`, `tests/policy/test_tool_policy_pipeline.py:70`, `tests/agent/test_runtime_streaming.py:119` | Implements profiles, standard layer ordering, group expansion, glob matching, inline `-tool` deny syntax, `alsoAllow`, fail-warning unknown allowlists, and trace labels. Runtime capability-mode filtering now uses the pipeline. Config-backed provider/global/agent/sandbox/subagent policy loading remains future hardening. |
 | A3 | Mutation fingerprinting + sticky lastToolError | not_started | Planned: `missy/agent/mutation_tracking.py`, `missy/agent/runtime.py`, `missy/tools/registry.py` | Planned: `tests/agent/test_mutation_tracking.py` | Needed by H_G apology calibration. |
 | A4 | Compaction retry coordination | not_started | Planned: `missy/agent/compaction.py`, `missy/agent/consolidation.py`, `missy/agent/runtime.py` | Planned: `tests/agent/test_compaction_retry.py` | A1 local compaction flags are present; manager-level retry future remains. |
 | A5 | Auth profile cooldown + fallback | not_started | Planned: `missy/providers/auth_profiles.py`, `missy/providers/registry.py`, `missy/providers/rate_limiter.py` | Planned: `tests/providers/test_auth_profiles.py` | Must honor user-pinned profile without fallback. |
@@ -28,7 +28,7 @@ Status values used here: `not_started`, `designed`, `implemented`, `wired`, `tes
 | --- | --- | --- |
 | H_A timing pauses | A7 block replies, A1 stream state | A1 block buffer/flush primitives exist; A7 not implemented. |
 | H_B tone modulation | A1 message-start prompt timing, A8 identity cascade | Not implemented. Tone must be injected before stream begins. |
-| H_C personal memory | A2 tool policy, A12 transcript repair | Not implemented. Recall tools should be policy-gated. |
+| H_C personal memory | A2 tool policy, A12 transcript repair | A2 can now gate future personal-memory recall/list/forget tools through policy layers; A12 remains unimplemented. |
 | H_D proactive follow-ups | A10 sub-agent caps, A9 hooks | Not implemented. |
 | H_E disagreement | A11 raw stream diagnostics, A9 hooks | Not implemented. |
 | H_F sleeptime thoughts | A10 sub-agent runner, A4 compaction awareness | Not implemented. |
@@ -43,3 +43,12 @@ Status values used here: `not_started`, `designed`, `implemented`, `wired`, `tes
 - `AgentSubscription` owns the event handlers and state fields at `missy/agent/subscription.py:241`.
 - Full-content resend reconciliation lives in `_reconcile_update()` at `missy/agent/subscription.py:460`.
 - `AgentRuntime.run_stream()` integration starts at `missy/agent/runtime.py:620`.
+
+## A2 Implementation Notes
+
+- Runtime capability profile constants live in `missy/policy/tool_policy_pipeline.py:21` and `missy/policy/tool_policy_pipeline.py:35`.
+- OpenClaw-compatible group expansion, including `group:fs`, is defined at `missy/policy/tool_policy_pipeline.py:71`.
+- `ToolPolicyLayer`, `ToolPolicyTraceStep`, and `ToolPolicyDecision` provide source-labelled audit records at `missy/policy/tool_policy_pipeline.py:116`.
+- `build_tool_policy_layers()` creates the standard profile → provider → global → agent → group → sandbox → subagent sequence at `missy/policy/tool_policy_pipeline.py:176`.
+- `resolve_tool_policy()` applies `allow`, `also_allow`, `deny`, globs, inline `-tool` denies, and fail-warning unknown allowlists at `missy/policy/tool_policy_pipeline.py:206`.
+- `AgentRuntime._get_tools()` delegates capability-mode filtering to A2 at `missy/agent/runtime.py:1086`.
