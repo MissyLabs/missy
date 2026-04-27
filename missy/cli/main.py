@@ -1574,6 +1574,21 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                     )
                     enriched_prompt = f"{discord_ctx}\n\n{msg.content}"
 
+                    # Keep "Missy is typing..." visible for the entire agent run.
+                    # Discord's typing indicator expires after ~10s, so refresh it.
+                    typing_stop = asyncio.Event()
+
+                    async def _typing_keepalive(
+                        cid: str = channel_id,
+                        stop: asyncio.Event = typing_stop,
+                    ) -> None:
+                        while not stop.is_set():
+                            with contextlib.suppress(Exception):
+                                await asyncio.to_thread(ch._rest.trigger_typing, cid)  # noqa: SLF001
+                            with contextlib.suppress(asyncio.TimeoutError):
+                                await asyncio.wait_for(stop.wait(), timeout=7.0)
+
+                    typing_task = asyncio.create_task(_typing_keepalive())
                     try:
                         loop = asyncio.get_running_loop()
                         response = await loop.run_in_executor(
@@ -1584,6 +1599,10 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                     except Exception as exc:
                         logger.exception("Discord agent error: %s", exc)
                         response = f"Sorry, an error occurred: {exc}"
+                    finally:
+                        typing_stop.set()
+                        with contextlib.suppress(Exception):
+                            await typing_task
 
                     try:
                         # Never use Discord reply; for bots, tag them with a mention.
