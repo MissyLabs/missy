@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from missy.policy.tool_policy_pipeline import (
     ToolPolicyLayer,
+    build_configured_tool_policy_layers,
     build_tool_policy_layers,
+    collect_tool_policy_groups,
     layers_for_capability_mode,
     profile_layer,
     resolve_tool_policy,
@@ -108,3 +110,69 @@ def test_capability_mode_layers_preserve_existing_runtime_modes():
 
     assert safe.tools == ("calculator", "x11_window_list")
     assert none.tools == ()
+
+
+def test_configured_layers_apply_provider_global_agent_sandbox_subagent_order():
+    layers = build_configured_tool_policy_layers(
+        capability_mode="full",
+        provider_name="anthropic",
+        model_id="claude-haiku-4-5",
+        global_policy={
+            "profile": "full",
+            "allow": ["*", "-shell_exec"],
+            "byProvider": {
+                "anthropic": {
+                    "deny": ["browser_*"],
+                    "byModel": {"claude-haiku-*": {"alsoAllow": ["shell_exec"]}},
+                },
+            },
+        },
+        agent_policy={"deny": ["file_delete"]},
+        sandbox_policy={"allow": ["calculator", "file_*", "shell_exec"]},
+        subagent_policy={"deny": ["shell_exec"]},
+    )
+
+    decision = resolve_tool_policy(
+        ["browser_open", "calculator", "file_delete", "file_read", "shell_exec"],
+        layers,
+    )
+
+    assert decision.tools == ("calculator", "file_read")
+    assert decision.labels() == (
+        "profile:full",
+        "provider:anthropic",
+        "provider:anthropic",
+        "global",
+        "global",
+        "agent",
+        "sandbox",
+        "subagent",
+    )
+
+
+def test_configured_layers_use_agent_profile_when_mode_is_full():
+    layers = build_configured_tool_policy_layers(
+        capability_mode="full",
+        global_policy={"profile": "coding"},
+        agent_policy={"profile": "minimal"},
+    )
+
+    decision = resolve_tool_policy(["calculator", "file_read", "shell_exec"], layers)
+
+    assert decision.tools == ("calculator", "file_read")
+    assert decision.labels() == ("profile:minimal",)
+
+
+def test_collect_tool_policy_groups_extends_builtin_groups():
+    groups = collect_tool_policy_groups(
+        {"groups": {"project": ["calculator", "custom_tool"]}},
+        {"groups": {"project": ["file_read"]}},
+    )
+    decision = resolve_tool_policy(
+        ["calculator", "custom_tool", "file_read"],
+        [ToolPolicyLayer(label="agent", allow=["group:project"])],
+        groups=groups,
+    )
+
+    assert groups["project"] == ("file_read",)
+    assert decision.tools == ("file_read",)

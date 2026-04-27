@@ -12,7 +12,7 @@ import fnmatch
 import logging
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 logger = logging.getLogger(__name__)
 
@@ -173,6 +173,62 @@ def layers_for_capability_mode(mode: str) -> tuple[ToolPolicyLayer, ...]:
     return (profile_layer(profile),)
 
 
+def build_configured_tool_policy_layers(
+    *,
+    capability_mode: str = "full",
+    provider_name: str = "",
+    model_id: str = "",
+    global_policy: Mapping[str, object] | ToolPolicyLayer | object | None = None,
+    agent_policy: Mapping[str, object] | ToolPolicyLayer | object | None = None,
+    group_policy: Mapping[str, object] | ToolPolicyLayer | object | None = None,
+    sandbox_policy: Mapping[str, object] | ToolPolicyLayer | object | None = None,
+    subagent_policy: Mapping[str, object] | ToolPolicyLayer | object | None = None,
+) -> tuple[ToolPolicyLayer, ...]:
+    """Build turn-specific layers from runtime and config-backed policies.
+
+    ``capability_mode`` preserves Missy's historical runtime switches.  In
+    ``full`` mode, config profiles from ``tools.profile`` and
+    ``agents.<id>.tools.profile`` can narrow the starting profile.
+    """
+    global_map = _policy_mapping(global_policy)
+    agent_map = _policy_mapping(agent_policy)
+    normalized_mode = (capability_mode or "full").strip().lower()
+
+    if normalized_mode in {"no-tools", "safe-chat", "discord"}:
+        layers = list(layers_for_capability_mode(normalized_mode))
+    else:
+        profile = _profile_from_config(agent_map.get("profile") or global_map.get("profile"))
+        layers = [profile_layer(profile)]
+
+    provider_payload = _merge_layer_payloads(
+        _provider_payload(global_map, provider_name, model_id),
+        _model_payload(global_map, model_id),
+    )
+    _append_layer(
+        layers, f"provider:{provider_name}" if provider_name else "provider", provider_payload
+    )
+    _append_layer(layers, "global", _layer_payload(global_map))
+    _append_layer(layers, "agent", _layer_payload(agent_map))
+    _append_layer(layers, "group", _layer_payload(_policy_mapping(group_policy)))
+    _append_layer(layers, "sandbox", _layer_payload(_policy_mapping(sandbox_policy)))
+    _append_layer(layers, "subagent", _layer_payload(_policy_mapping(subagent_policy)))
+    return tuple(layers)
+
+
+def collect_tool_policy_groups(
+    *policies: Mapping[str, object] | ToolPolicyLayer | object | None,
+) -> dict[str, tuple[str, ...]]:
+    """Collect custom group definitions from config-style policy objects."""
+    groups: dict[str, tuple[str, ...]] = {}
+    for policy in policies:
+        raw_groups = _policy_mapping(policy).get("groups")
+        if not isinstance(raw_groups, Mapping):
+            continue
+        for name, values in raw_groups.items():
+            groups[str(name)] = _coerce_specs(values)
+    return groups
+
+
 def build_tool_policy_layers(
     *,
     profile: ToolPolicyProfile = "full",
@@ -280,6 +336,105 @@ def _coerce_layer(
     if isinstance(policy, ToolPolicyLayer):
         return policy
     return ToolPolicyLayer.from_mapping(label, policy)
+
+
+def _policy_mapping(
+    policy: Mapping[str, object] | ToolPolicyLayer | object | None,
+) -> dict[str, Any]:
+    if policy is None:
+        return {}
+    if isinstance(policy, ToolPolicyLayer):
+        return {
+            "allow": policy.allow,
+            "deny": policy.deny,
+            "also_allow": policy.also_allow,
+        }
+    if isinstance(policy, Mapping):
+        return dict(policy)
+    result: dict[str, Any] = {}
+    for attr in (
+        "profile",
+        "allow",
+        "deny",
+        "also_allow",
+        "by_provider",
+        "by_model",
+        "groups",
+    ):
+        if hasattr(policy, attr):
+            result[attr] = getattr(policy, attr)
+    return result
+
+
+def _profile_from_config(value: object) -> ToolPolicyProfile:
+    profile = str(value or "full").strip().lower()
+    if profile in PROFILE_SPECS:
+        return profile  # type: ignore[return-value]
+    logger.warning("Unknown tool policy profile %r; falling back to full.", value)
+    return "full"
+
+
+def _layer_payload(policy: Mapping[str, Any]) -> dict[str, tuple[str, ...]]:
+    return {
+        "allow": _coerce_specs(policy.get("allow")),
+        "deny": _coerce_specs(policy.get("deny")),
+        "also_allow": _coerce_specs(policy.get("alsoAllow") or policy.get("also_allow")),
+    }
+
+
+def _append_layer(
+    layers: list[ToolPolicyLayer],
+    label: str,
+    payload: Mapping[str, Sequence[str]],
+) -> None:
+    if payload.get("allow") or payload.get("deny") or payload.get("also_allow"):
+        layers.append(ToolPolicyLayer.from_mapping(label, payload))
+
+
+def _provider_payload(
+    policy: Mapping[str, Any],
+    provider_name: str,
+    model_id: str,
+) -> dict[str, tuple[str, ...]]:
+    provider_map = policy.get("byProvider") or policy.get("by_provider") or {}
+    provider_policy = _lookup_specific_policy(provider_map, provider_name)
+    if not provider_policy:
+        return {}
+    by_model = provider_policy.get("byModel") or provider_policy.get("by_model") or {}
+    return _merge_layer_payloads(
+        _layer_payload(provider_policy),
+        _layer_payload(_lookup_specific_policy(by_model, model_id)),
+    )
+
+
+def _model_payload(policy: Mapping[str, Any], model_id: str) -> dict[str, tuple[str, ...]]:
+    by_model = policy.get("byModel") or policy.get("by_model") or {}
+    return _layer_payload(_lookup_specific_policy(by_model, model_id))
+
+
+def _lookup_specific_policy(policy_map: object, key: str) -> dict[str, Any]:
+    if not key or not isinstance(policy_map, Mapping):
+        return {}
+    exact = policy_map.get(key)
+    if isinstance(exact, Mapping):
+        return dict(exact)
+    for pattern, value in policy_map.items():
+        if isinstance(pattern, str) and _matches(pattern, key) and isinstance(value, Mapping):
+            return dict(value)
+    return {}
+
+
+def _merge_layer_payloads(*payloads: Mapping[str, Sequence[str]]) -> dict[str, tuple[str, ...]]:
+    allow: tuple[str, ...] = ()
+    deny: list[str] = []
+    also_allow: list[str] = []
+    for payload in payloads:
+        payload_allow = _coerce_specs(payload.get("allow"))
+        if payload_allow:
+            allow = payload_allow
+        deny.extend(_coerce_specs(payload.get("deny")))
+        also_allow.extend(_coerce_specs(payload.get("also_allow") or payload.get("alsoAllow")))
+    return {"allow": allow, "deny": tuple(deny), "also_allow": tuple(also_allow)}
 
 
 def _split_inline_denies(specs: Sequence[str]) -> tuple[tuple[str, ...], tuple[str, ...]]:

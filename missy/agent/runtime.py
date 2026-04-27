@@ -42,7 +42,8 @@ from missy.core.session import Session, SessionManager
 from missy.policy.tool_policy_pipeline import (
     MISSY_DISCORD_TOOLS,
     MISSY_SAFE_CHAT_TOOLS,
-    layers_for_capability_mode,
+    build_configured_tool_policy_layers,
+    collect_tool_policy_groups,
     resolve_tool_policy,
 )
 from missy.providers.base import CompletionResponse, Message, ToolCall, ToolResult
@@ -214,6 +215,12 @@ class AgentConfig:
     temperature: float = 0.7
     capability_mode: str = "full"  # "full" | "safe-chat" | "discord" | "no-tools"
     max_spend_usd: float = 0.0  # 0 = unlimited; per-session cost cap
+    agent_id: str = "default"
+    tool_policy: Any | None = None
+    agent_tool_policy: Any | None = None
+    group_tool_policy: Any | None = None
+    sandbox_tool_policy: Any | None = None
+    subagent_tool_policy: Any | None = None
 
 
 #: System prompt for Discord channel — no desktop/X11/browser references.
@@ -1083,10 +1090,22 @@ class AgentRuntime:
         except RuntimeError:
             return []
 
-        decision = resolve_tool_policy(
-            tool_names,
-            layers_for_capability_mode(self.config.capability_mode),
+        layers = build_configured_tool_policy_layers(
+            capability_mode=self.config.capability_mode,
+            provider_name=self.config.provider,
+            model_id=self.config.model or "",
+            global_policy=self.config.tool_policy,
+            agent_policy=self.config.agent_tool_policy,
+            group_policy=self.config.group_tool_policy,
+            sandbox_policy=self.config.sandbox_tool_policy,
+            subagent_policy=self.config.subagent_tool_policy,
         )
+        groups = collect_tool_policy_groups(
+            self.config.tool_policy,
+            self.config.agent_tool_policy,
+            self.config.group_tool_policy,
+        )
+        decision = resolve_tool_policy(tool_names, layers, groups=groups)
         self._last_tool_policy_decision = decision
 
         tools_by_name = {name: registry.get(name) for name in tool_names}

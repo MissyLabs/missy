@@ -69,6 +69,7 @@ class SandboxConfig:
     allowed_bind_mounts: list[str] = field(default_factory=list)
     timeout: int = 30
     workspace_path: str = "/workspace"
+    tools: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -342,6 +343,7 @@ def parse_sandbox_config(data: dict[str, Any]) -> SandboxConfig:
         allowed_bind_mounts=list(data.get("allowed_bind_mounts", [])),
         timeout=int(data.get("timeout", 30)),
         workspace_path=str(data.get("workspace_path", "/workspace")),
+        tools=dict(data.get("tools") or {}),
     )
 
 

@@ -149,6 +149,19 @@ class TestAgentConfigCustomValues:
         cfg = AgentConfig(max_spend_usd=5.0)
         assert cfg.max_spend_usd == 5.0
 
+    def test_custom_tool_policy_surfaces(self):
+        cfg = AgentConfig(
+            tool_policy={"profile": "coding"},
+            agent_tool_policy={"deny": ["shell_exec"]},
+            sandbox_tool_policy={"allow": ["calculator"]},
+            subagent_tool_policy={"deny": ["sessions_*"]},
+        )
+
+        assert cfg.tool_policy == {"profile": "coding"}
+        assert cfg.agent_tool_policy == {"deny": ["shell_exec"]}
+        assert cfg.sandbox_tool_policy == {"allow": ["calculator"]}
+        assert cfg.subagent_tool_policy == {"deny": ["sessions_*"]}
+
     def test_capability_mode_discord(self):
         cfg = AgentConfig(capability_mode="discord")
         assert cfg.capability_mode == "discord"
@@ -166,6 +179,10 @@ class TestAgentConfigCustomValues:
         assert "temperature" in field_names
         assert "capability_mode" in field_names
         assert "max_spend_usd" in field_names
+        assert "tool_policy" in field_names
+        assert "agent_tool_policy" in field_names
+        assert "sandbox_tool_policy" in field_names
+        assert "subagent_tool_policy" in field_names
 
 
 # ---------------------------------------------------------------------------
@@ -720,6 +737,39 @@ class TestCapabilityMode:
         with patch("missy.agent.runtime.get_tool_registry", side_effect=RuntimeError("no reg")):
             tools = runtime._get_tools()
         assert tools == []
+
+    def test_get_tools_applies_config_backed_policy_layers(self):
+        t_calc = MagicMock()
+        t_calc.name = "calculator"
+        t_file = MagicMock()
+        t_file.name = "file_read"
+        t_shell = MagicMock()
+        t_shell.name = "shell_exec"
+
+        tool_reg = MagicMock()
+        tool_reg.list_tools.return_value = ["calculator", "file_read", "shell_exec"]
+        tool_reg.get.side_effect = {
+            "calculator": t_calc,
+            "file_read": t_file,
+            "shell_exec": t_shell,
+        }.get
+
+        runtime = _make_runtime(
+            provider="fake",
+            capability_mode="full",
+            tool_policy={"profile": "full", "deny": ["shell_exec"]},
+            agent_tool_policy={"allow": ["calculator", "file_read"]},
+        )
+        with patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg):
+            tools = runtime._get_tools()
+
+        assert [tool.name for tool in tools] == ["calculator", "file_read"]
+        assert runtime._last_tool_policy_decision is not None
+        assert runtime._last_tool_policy_decision.labels() == (
+            "profile:full",
+            "global",
+            "agent",
+        )
 
 
 # ---------------------------------------------------------------------------

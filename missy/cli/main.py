@@ -83,6 +83,13 @@ plugins:
   enabled: false
   allowed_plugins: []
 
+# Tool visibility policy. Execution is still governed by network/filesystem/shell policy.
+tools:
+  profile: full
+  allow: []
+  deny: []
+  alsoAllow: []
+
 providers:
   anthropic:
     name: anthropic
@@ -194,6 +201,34 @@ def _load_subsystems(config_path: str) -> Any:
         logger.debug("OpenTelemetry init failed: %s", _otel_exc)
 
     return cfg
+
+
+def _agent_tool_policy_kwargs(
+    cfg: Any,
+    *,
+    agent_id: str = "default",
+) -> dict[str, Any]:
+    """Return AgentConfig keyword args for config-backed tool policy layers."""
+    agents = getattr(cfg, "agents", {}) or {}
+    agent_cfg = (
+        (agents.get(agent_id) or agents.get("default")) if isinstance(agents, dict) else None
+    )
+    sandbox = getattr(cfg, "sandbox", None)
+
+    def _policy(value: Any) -> Any | None:
+        if value is None or value.__class__.__module__.startswith("unittest.mock"):
+            return None
+        if isinstance(value, dict) or hasattr(value, "allow") or hasattr(value, "deny"):
+            return value
+        return None
+
+    return {
+        "agent_id": agent_id,
+        "tool_policy": _policy(getattr(cfg, "tools", None)),
+        "agent_tool_policy": _policy(getattr(agent_cfg, "tools", None)),
+        "sandbox_tool_policy": _policy(getattr(sandbox, "tools", None)),
+        "subagent_tool_policy": _policy(getattr(agent_cfg, "subagent_tools", None)),
+    }
 
 
 def _print_error(message: str, hint: str | None = None) -> None:
@@ -461,6 +496,7 @@ def ask(
         provider=provider_name,
         capability_mode=capability_mode,
         max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
+        **_agent_tool_policy_kwargs(cfg),
     )
     agent = AgentRuntime(agent_cfg)
 
@@ -538,6 +574,7 @@ def run(ctx: click.Context, provider: str | None, session: str, capability_mode:
         provider=provider_name,
         capability_mode=capability_mode,
         max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
+        **_agent_tool_policy_kwargs(cfg),
     )
     agent = AgentRuntime(agent_cfg)
     channel = CLIChannel()
@@ -1429,7 +1466,10 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                 _provider_name = (
                     next(iter(cfg.providers), "anthropic") if cfg.providers else "anthropic"
                 )
-                _agent_cfg = AgentConfig(provider=_provider_name)
+                _agent_cfg = AgentConfig(
+                    provider=_provider_name,
+                    **_agent_tool_policy_kwargs(cfg),
+                )
                 _runtime = AgentRuntime(_agent_cfg)
 
                 def _proactive_callback(prompt: str, session_id: str) -> str:
@@ -1455,7 +1495,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
     from missy.agent.runtime import DISCORD_SYSTEM_PROMPT, AgentConfig, AgentRuntime
 
     _provider_name = next(iter(cfg.providers), "anthropic") if cfg.providers else "anthropic"
-    _agent_cfg = AgentConfig(provider=_provider_name)
+    _agent_cfg = AgentConfig(provider=_provider_name, **_agent_tool_policy_kwargs(cfg))
     _agent = AgentRuntime(_agent_cfg)
 
     # Discord-specific agent with filtered tools and appropriate system prompt.
@@ -1463,6 +1503,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
         provider=_provider_name,
         system_prompt=DISCORD_SYSTEM_PROMPT,
         capability_mode="discord",
+        **_agent_tool_policy_kwargs(cfg),
     )
     _discord_agent = AgentRuntime(_discord_agent_cfg)
 
@@ -4138,7 +4179,7 @@ def api_start(
         logger.debug("Memory store unavailable: %s", _mem_exc)
         memory_store = None
 
-    agent_config = AgentConfig(provider=provider)
+    agent_config = AgentConfig(provider=provider, **_agent_tool_policy_kwargs(cfg))
     runtime = AgentRuntime(agent_config)
 
     api_config = ApiConfig(host=host, port=port, api_key=api_key)

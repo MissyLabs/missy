@@ -4,25 +4,26 @@ Date: 2026-04-27
 
 ## Completed
 
-- Consulted the OpenClaw deep dive sections for the tool policy pipeline.
-- Added `missy/policy/tool_policy_pipeline.py` for A2 layered tool availability policy.
-- Implemented built-in profiles, `group:fs` expansion, glob matching, inline `-tool` denies, `alsoAllow`, fail-warning unknown allowlists, and source-labelled trace steps.
-- Added standard profile → provider → global → agent → group → sandbox → subagent layer construction for future config-backed policy surfaces.
-- Wired `AgentRuntime._get_tools()` through the A2 pipeline and recorded `_last_tool_policy_decision`.
-- Added policy unit tests and runtime integration coverage.
-- Updated loop tracking artifacts and audit breadcrumbs.
+- Consulted the OpenClaw deep dive policy-pipeline section before extending A2.
+- Hardened A2 with config-backed tool policy surfaces:
+  - `tools.profile/allow/deny/alsoAllow/byProvider/byModel/groups`
+  - `agents.<id>.tools`
+  - `agents.<id>.subagents.tools`
+  - `sandbox.tools`
+- Added `build_configured_tool_policy_layers()` and `collect_tool_policy_groups()` to route config-backed layers through the existing policy resolver.
+- Extended `AgentConfig` and CLI-created runtimes so ask/run/gateway/API paths pass parsed policy surfaces into `AgentRuntime._get_tools()`.
+- Documented the new `tools:` and `agents.<id>.tools` YAML surface in `docs/configuration.md`.
+- Updated BUILD/HUMANIZE/OPENCLAW/TEST/AUDIT tracking artifacts.
 
 ## Verification
 
-- `pytest tests/policy/test_tool_policy_pipeline.py tests/agent/test_runtime_streaming.py tests/agent/test_coverage_gaps.py::TestRuntimeCapabilityMode -q`: passed, 19 tests.
-- `pytest tests/agent/test_coverage_gaps.py::TestRuntimeCapabilityMode tests/tools/test_registry_policy_edges.py -q`: passed, 58 tests.
-- `pytest -q`: passed, 20077 passed and 14 skipped.
+- `pytest tests/policy/test_tool_policy_pipeline.py tests/config/test_settings.py tests/agent/test_runtime_config_edges.py tests/agent/test_runtime_streaming.py tests/tools/test_registry_policy_edges.py -q`: passed, 222 tests.
+- `pytest -q`: passed, 20085 passed and 14 skipped.
 - `ruff check .`: passed.
 - `ruff format --check .`: passed.
 
 ## Recovery Breadcrumbs
 
-- Continue A2 hardening by adding config-backed provider/global/agent/sandbox/subagent policy surfaces and feeding them into `build_tool_policy_layers()`.
-- Revisit A1 stream/tool-loop wiring where Missy's providers expose stream events.
-- Add A7 `BlockChunker` and channel flush integration so pre-tool text is delivered before long tool execution.
-- Start A3 mutation fingerprinting after A2 config hardening if the next session prioritizes Tier 1 substrate.
+- A2 config-backed provider/global/agent/sandbox/subagent policy loading is done; future A2 hardening should focus on channel/group policy sources and richer audit display.
+- Next highest-value OpenClaw substrate work is A1 tool-loop streaming integration, A7 block chunking, or A3 mutation fingerprinting.
+- If starting A7, use A1’s block flush points so pre-tool assistant text drains before tool execution in Discord/CLI/Web.

@@ -8,12 +8,14 @@ from pathlib import Path
 import pytest
 
 from missy.config.settings import (
+    AgentPolicyConfig,
     FilesystemPolicy,
     MissyConfig,
     NetworkPolicy,
     PluginPolicy,
     ProviderConfig,
     ShellPolicy,
+    ToolPolicyConfig,
     get_default_config,
     load_config,
 )
@@ -134,6 +136,77 @@ class TestLoadConfigMinimal:
         assert cfg.network.default_deny is True
         assert cfg.shell.enabled is False
         assert cfg.plugins.enabled is False
+
+
+class TestLoadConfigToolPolicy:
+    def test_default_tool_policy_is_full(self):
+        cfg = get_default_config()
+        assert isinstance(cfg.tools, ToolPolicyConfig)
+        assert cfg.tools.profile == "full"
+        assert cfg.agents == {}
+
+    def test_loads_global_and_agent_tool_policy(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            tools:
+              profile: coding
+              allow: ["group:project", "-shell_exec"]
+              deny: ["browser_*"]
+              alsoAllow: ["calculator"]
+              groups:
+                project: ["file_read", "file_write"]
+              byProvider:
+                anthropic:
+                  deny: ["vision_*"]
+                  byModel:
+                    claude-haiku-*:
+                      allow: ["calculator"]
+            agents:
+              analyst:
+                tools:
+                  profile: minimal
+                  deny: ["file_write"]
+                subagents:
+                  tools:
+                    deny: ["sessions_*"]
+            sandbox:
+              enabled: true
+              tools:
+                allow: ["calculator"]
+            workspace_path: "/tmp/workspace"
+            audit_log_path: "/tmp/audit.log"
+            """,
+        )
+
+        cfg = load_config(path)
+
+        assert cfg.tools.profile == "coding"
+        assert cfg.tools.allow == ["group:project", "-shell_exec"]
+        assert cfg.tools.also_allow == ["calculator"]
+        assert cfg.tools.groups["project"] == ["file_read", "file_write"]
+        assert cfg.tools.by_provider["anthropic"]["by_model"]["claude-haiku-*"]["allow"] == [
+            "calculator"
+        ]
+        assert isinstance(cfg.agents["analyst"], AgentPolicyConfig)
+        assert cfg.agents["analyst"].tools.profile == "minimal"
+        assert cfg.agents["analyst"].subagent_tools.deny == ["sessions_*"]
+        assert cfg.sandbox is not None
+        assert cfg.sandbox.tools == {"allow": ["calculator"]}
+
+    def test_invalid_tool_profile_raises(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            tools:
+              profile: unsafe
+            workspace_path: "/tmp/workspace"
+            audit_log_path: "/tmp/audit.log"
+            """,
+        )
+
+        with pytest.raises(ConfigurationError, match="tools.profile"):
+            load_config(path)
 
 
 # ---------------------------------------------------------------------------
