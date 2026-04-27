@@ -4,21 +4,26 @@ Date: 2026-04-27
 
 ## Completed
 
-- Read `/home/bmerriam/openclaw-deep-dive.md` end to end.
-- Initialized loop status artifacts.
-- Added `missy/agent/subscription.py` with A1 streaming subscription state.
-- Wired `AgentRuntime.run_stream()` through `AgentSubscription`.
-- Added tests for subscription state behavior and runtime stream tag stripping.
+- Consulted the OpenClaw deep dive policy-pipeline section before extending A2.
+- Hardened A2 with config-backed tool policy surfaces:
+  - `tools.profile/allow/deny/alsoAllow/byProvider/byModel/groups`
+  - `agents.<id>.tools`
+  - `agents.<id>.subagents.tools`
+  - `sandbox.tools`
+- Added `build_configured_tool_policy_layers()` and `collect_tool_policy_groups()` to route config-backed layers through the existing policy resolver.
+- Extended `AgentConfig` and CLI-created runtimes so ask/run/gateway/API paths pass parsed policy surfaces into `AgentRuntime._get_tools()`.
+- Documented the new `tools:` and `agents.<id>.tools` YAML surface in `docs/configuration.md`.
+- Updated BUILD/HUMANIZE/OPENCLAW/TEST/AUDIT tracking artifacts.
 
 ## Verification
 
-- `pytest tests/agent/test_subscription.py tests/agent/test_runtime_streaming.py -q`: passed, 18 tests.
-- `pytest -q`: passed, 20069 passed and 14 skipped.
+- `pytest tests/policy/test_tool_policy_pipeline.py tests/config/test_settings.py tests/agent/test_runtime_config_edges.py tests/agent/test_runtime_streaming.py tests/tools/test_registry_policy_edges.py -q`: passed, 222 tests.
+- `pytest -q`: passed, 20085 passed and 14 skipped.
 - `ruff check .`: passed.
 - `ruff format --check .`: passed.
 
 ## Recovery Breadcrumbs
 
-- Continue with A1 hardening before starting A2: route tool-loop/channel stream events through `AgentSubscription`.
-- Then add A7 `BlockChunker` so tool-start flushes can reach Discord/CLI/Web in order.
-- Pre-existing untracked files `.embedded_prompt.txt` and `build_log.txt` were not touched.
+- A2 config-backed provider/global/agent/sandbox/subagent policy loading is done; future A2 hardening should focus on channel/group policy sources and richer audit display.
+- Next highest-value OpenClaw substrate work is A1 tool-loop streaming integration, A7 block chunking, or A3 mutation fingerprinting.
+- If starting A7, use A1’s block flush points so pre-tool assistant text drains before tool execution in Discord/CLI/Web.

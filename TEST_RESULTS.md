@@ -6,10 +6,15 @@ Last updated: 2026-04-27
 
 | Command | Result | Notes |
 | --- | --- | --- |
-| `pytest tests/agent/test_subscription.py tests/agent/test_runtime_streaming.py -q` | pass | 18 passed in 4.09s. |
-| `pytest -q` | pass | 20069 passed, 14 skipped in 371.15s. |
+| `pytest tests/policy/test_tool_policy_pipeline.py tests/agent/test_runtime_streaming.py tests/agent/test_coverage_gaps.py::TestRuntimeCapabilityMode -q` | pass | 19 passed in 5.06s. |
+| `pytest tests/agent/test_coverage_gaps.py::TestRuntimeCapabilityMode tests/tools/test_registry_policy_edges.py -q` | pass | 58 passed in 1.57s. |
+| `pytest -q` | pass | 20077 passed, 14 skipped in 369.30s. |
 | `ruff check .` | pass | Full-repo lint passed. |
-| `ruff format --check .` | pass | 700 files already formatted after formatting the two new Python files. |
+| `ruff format --check .` | pass | 702 files already formatted. |
+| `pytest tests/policy/test_tool_policy_pipeline.py tests/config/test_settings.py tests/agent/test_runtime_config_edges.py tests/agent/test_runtime_streaming.py tests/tools/test_registry_policy_edges.py -q` | pass | 222 passed in 10.40s. |
+| `pytest -q` | pass | 20085 passed, 14 skipped in 365.02s. |
+| `ruff check .` | pass | Full-repo lint passed. |
+| `ruff format --check .` | pass | 702 files already formatted. |
 
 ## Not Yet Run This Session
 

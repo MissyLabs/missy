@@ -24,6 +24,22 @@ Last updated: 2026-04-27
 - A1 runtime coverage: `tests/agent/test_runtime_streaming.py`
   - Existing streaming behavior still yields chunks.
   - Split think tags are stripped in `AgentRuntime.run_stream()`.
+- A2 policy coverage: `tests/policy/test_tool_policy_pipeline.py`
+  - `group:fs` expands to OpenClaw-style filesystem aliases.
+  - Glob allow rules and inline `-tool` deny syntax compose in one layer.
+  - `alsoAllow` can restore matching tools after a restrictive layer.
+  - Unknown plugin-only allowlists warn without hiding core tools.
+  - Standard profile → provider → global → agent → group → sandbox → subagent layer ordering records trace labels.
+  - Config-backed provider/global/agent/sandbox/subagent layers preserve ordering and source labels.
+  - Custom `tools.groups` definitions extend the built-in group map.
+  - Capability-mode layers preserve existing Missy runtime modes.
+- A2 config coverage: `tests/config/test_settings.py`
+  - `tools.*`, `tools.byProvider`, nested `byModel`, `tools.groups`, `agents.<id>.tools`, `agents.<id>.subagents.tools`, and `sandbox.tools` parse from YAML.
+  - Invalid tool profiles fail with a configuration error.
+- A2 runtime coverage: `tests/agent/test_runtime_streaming.py`
+  - `AgentRuntime._get_tools()` records a `ToolPolicyDecision` and filters `safe-chat` through the A2 profile layer.
+- A2 runtime coverage: `tests/agent/test_runtime_config_edges.py`
+  - `AgentRuntime._get_tools()` consumes config-backed global and agent policy surfaces.
 
 ## Planned Coverage By Behavior
 
