@@ -13,11 +13,13 @@ Targets remaining uncovered lines after existing coverage files:
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from missy.channels.discord import voice_binding
 from missy.channels.discord.channel import DiscordChannel
 from missy.channels.discord.config import (
     DiscordAccountConfig,
@@ -291,6 +293,7 @@ class TestMaybeHandleVoiceCommand:
         """Lines 647-651: DiscordVoiceManager init/start raises → error sent, returns True."""
         ch = _make_channel()
         ch._voice = None
+        voice_binding.set_voice_binding(MagicMock(), asyncio.get_running_loop())
 
         ch._rest.send_message = MagicMock()
 
@@ -308,6 +311,7 @@ class TestMaybeHandleVoiceCommand:
         assert result is True
         ch._rest.send_message.assert_called_once()
         assert "Voice unavailable" in ch._rest.send_message.call_args[0][1]
+        assert voice_binding.get_voice_binding() is None
 
     @pytest.mark.asyncio
     async def test_voice_command_with_agent_runtime_creates_callback(self):
@@ -341,6 +345,25 @@ class TestMaybeHandleVoiceCommand:
             )
 
         assert result is True
+        binding = voice_binding.get_voice_binding()
+        assert binding is not None
+        assert binding.manager is mock_vm
+        voice_binding.clear_voice_binding()
+
+    @pytest.mark.asyncio
+    async def test_stop_stops_voice_manager_and_clears_binding(self):
+        ch = _make_channel()
+        mock_voice = MagicMock()
+        mock_voice.stop = AsyncMock()
+        ch._voice = mock_voice
+        ch._gateway.disconnect = AsyncMock()
+        voice_binding.set_voice_binding(mock_voice, asyncio.get_running_loop())
+
+        await ch.stop()
+
+        mock_voice.stop.assert_awaited_once_with()
+        assert ch._voice is None
+        assert voice_binding.get_voice_binding() is None
 
 
 # ---------------------------------------------------------------------------

@@ -19,6 +19,7 @@ DiscordChannel                -- BaseChannel implementation
         +-- _check_dm_policy()     -- DM access control
         +-- _check_guild_policy()  -- Guild access control
         +-- asyncio.Queue          -- inbound ChannelMessage buffer
+        +-- DiscordVoiceManager    -- optional discord.py voice surface
         |
         v
 DiscordRestClient             -- wraps PolicyHTTPClient
@@ -202,6 +203,32 @@ discord:
 
 ---
 
+## Voice Surface
+
+When the `discord_voice` extra is installed, Discord voice can be controlled
+through both bang commands and agent tools:
+
+- `discord_voice_join`
+- `discord_voice_leave`
+- `discord_voice_say`
+- `discord_voice_status`
+
+The text channel lazy-starts `DiscordVoiceManager` on the first recognized
+voice command. After the manager reports ready, the channel publishes a
+process-local binding so built-in tools can dispatch onto the Discord asyncio
+loop with `asyncio.run_coroutine_threadsafe`. The binding is cleared if startup
+fails and during channel shutdown, and shutdown also stops the voice manager.
+
+The tools require Discord context from the current message, especially
+`guild_id`. Joining can target a voice channel by name/ID or follow the
+requesting user by `user_id`.
+
+Voice startup emits `discord.voice.binding_registered` on success and
+`discord.voice.start_failed` on failure. Tool invocations still pass through
+the normal tool registry audit path.
+
+---
+
 ## Security model
 
 ### Network policy enforcement
@@ -249,6 +276,8 @@ the following event types:
 | `discord.channel.require_mention_filtered` | deny | No bot mention in guild message |
 | `discord.channel.pairing_wait` | allow | Pairing request recorded |
 | `discord.channel.reply_sent` | allow | Reply sent via REST |
+| `discord.voice.binding_registered` | allow | Voice manager exposed to built-in tools |
+| `discord.voice.start_failed` | error | Voice manager failed to start and binding was cleared |
 | `discord.gateway.connect` | allow | Gateway connected |
 | `discord.gateway.disconnect` | allow/error | Gateway disconnected |
 | `discord.gateway.heartbeat_sent` | allow | Heartbeat sent |
