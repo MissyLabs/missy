@@ -1360,6 +1360,85 @@ class TestDiscordStatus:
         assert result.exit_code == 0
 
 
+class TestDiscordDiagnostics:
+    def test_discord_diagnostics_no_accounts(self, runner: CliRunner):
+        cfg_path = _write_temp_config()
+        with _SubsystemsPatch() as cfg:
+            cfg.discord = None
+            result = runner.invoke(cli, ["--config", cfg_path, "discord", "diagnostics"])
+        assert result.exit_code == 0
+        assert "No Discord" in result.output
+
+    def test_discord_diagnostics_reports_policy_voice_and_recent_events(self, runner: CliRunner):
+        from missy.channels.discord import voice_binding
+        from missy.channels.discord.config import (
+            DiscordAccountConfig,
+            DiscordConfig,
+            DiscordDMPolicy,
+            DiscordGuildPolicy,
+        )
+
+        cfg_path = _write_temp_config()
+        account = DiscordAccountConfig(
+            token_env_var="DISCORD_TOKEN",
+            token="fake-token",
+            account_id="bot-1",
+            application_id="app-1",
+            dm_policy=DiscordDMPolicy.ALLOWLIST,
+            guild_policies={
+                "guild-1": DiscordGuildPolicy(require_mention=True),
+            },
+        )
+
+        class _Manager:
+            is_ready = True
+            can_listen = True
+            can_speak = False
+
+        mock_logger = MagicMock()
+        mock_logger.get_recent_events.return_value = [
+            {
+                "timestamp": "2026-07-07T12:00:00",
+                "event_type": "discord.voice.start_failed",
+                "result": "error",
+                "detail": {"guild_id": "guild-1", "error": "ffmpeg missing"},
+            }
+        ]
+
+        try:
+            with _SubsystemsPatch() as cfg:
+                cfg.discord = DiscordConfig(enabled=True, accounts=[account])
+                cfg.network.allowed_domains = ["discord.com", "gateway.discord.gg"]
+                cfg.network.discord_allowed_hosts = []
+                voice_binding.set_voice_binding(
+                    _Manager(),
+                    MagicMock(),
+                    account_id="bot-1",
+                    guild_id="guild-1",
+                )
+                with patch(
+                    "missy.observability.audit_logger.AuditLogger",
+                    return_value=mock_logger,
+                ):
+                    result = runner.invoke(
+                        cli,
+                        ["--config", cfg_path, "discord", "diagnostics"],
+                    )
+        finally:
+            voice_binding.clear_voice_binding()
+
+        assert result.exit_code == 0
+        assert "Discord Diagnostics" in result.output
+        assert "DISCORD_TOKEN" in result.output
+        assert "discord_voice" in result.output
+        assert "guild-1" in result.output
+        assert "Recent Discord Events" in result.output
+
+    def test_discord_diagnostics_help_exits_zero(self, runner: CliRunner):
+        result = runner.invoke(cli, ["discord", "diagnostics", "--help"])
+        assert result.exit_code == 0
+
+
 class TestDiscordAudit:
     def test_discord_audit_no_events(self, runner: CliRunner):
         cfg_path = _write_temp_config()

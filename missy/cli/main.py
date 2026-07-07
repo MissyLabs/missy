@@ -1456,7 +1456,7 @@ def plugins_list(ctx: click.Context) -> None:
 
 @cli.group()
 def discord() -> None:
-    """Discord channel commands (status, probe, register-commands, audit)."""
+    """Discord channel commands (status, diagnostics, probe, register-commands, audit)."""
 
 
 @discord.command("status")
@@ -1494,6 +1494,170 @@ def discord_status(ctx: click.Context) -> None:
         )
 
     console.print(table)
+
+
+@discord.command("diagnostics")
+@click.option(
+    "--limit",
+    default=5,
+    show_default=True,
+    help="Recent Discord lifecycle events to include.",
+)
+@click.pass_context
+def discord_diagnostics(ctx: click.Context, limit: int) -> None:
+    """Show Discord configuration, policy, tool, and voice readiness."""
+    from missy.channels.discord.voice_binding import list_voice_bindings
+    from missy.observability.audit_logger import AuditLogger
+    from missy.policy.tool_policy_pipeline import (
+        MISSY_DISCORD_TOOLS,
+        build_configured_tool_policy_layers,
+        collect_tool_policy_groups,
+        resolve_tool_policy,
+    )
+
+    cfg = _load_subsystems(ctx.obj["config_path"])
+    discord_cfg = cfg.discord
+
+    if discord_cfg is None or not discord_cfg.accounts:
+        console.print("[dim]No Discord accounts configured.[/]")
+        return
+
+    console.print("[bold]Discord Diagnostics[/]")
+    enabled_text = "[green]enabled[/]" if discord_cfg.enabled else "[red]disabled[/]"
+    console.print(f"Integration: {enabled_text}")
+
+    account_table = Table(title="Accounts", show_lines=True)
+    account_table.add_column("Index", justify="right")
+    account_table.add_column("Token")
+    account_table.add_column("Application ID")
+    account_table.add_column("DM Policy")
+    account_table.add_column("Guilds", justify="right")
+    account_table.add_column("Routing")
+
+    for idx, account in enumerate(discord_cfg.accounts):
+        token_status = "[green]present[/]" if account.resolve_token() else "[yellow]missing[/]"
+        guild_policies = getattr(account, "guild_policies", {}) or {}
+        mention_required = sum(1 for policy in guild_policies.values() if policy.require_mention)
+        routing_bits = [
+            "ignore_bots=yes" if account.ignore_bots else "ignore_bots=no",
+            f"mention_required={mention_required}",
+        ]
+        account_table.add_row(
+            str(idx),
+            f"{account.token_env_var}: {token_status}",
+            account.application_id or "[yellow]missing[/]",
+            account.dm_policy.value,
+            str(len(guild_policies)),
+            ", ".join(routing_bits),
+        )
+    console.print(account_table)
+
+    def _string_set(value: Any) -> set[str]:
+        if not isinstance(value, (list, tuple, set)):
+            return set()
+        return {str(item) for item in value}
+
+    network = getattr(cfg, "network", None)
+    allowed_domains = _string_set(getattr(network, "allowed_domains", []))
+    allowed_hosts = _string_set(getattr(network, "allowed_hosts", []))
+    discord_hosts = _string_set(getattr(network, "discord_allowed_hosts", []))
+    network_values = allowed_domains | allowed_hosts | discord_hosts
+
+    policy_table = Table(title="Policy Readiness", show_lines=True)
+    policy_table.add_column("Check")
+    policy_table.add_column("Status")
+    policy_table.add_column("Hint")
+
+    def _policy_row(name: str, ok: bool, hint: str) -> None:
+        policy_table.add_row(
+            name,
+            Text("ok" if ok else "needs attention", style="green" if ok else "yellow"),
+            hint,
+        )
+
+    _policy_row(
+        "REST host discord.com",
+        "discord.com" in network_values,
+        "Add discord.com to network.allowed_domains or network.discord_allowed_hosts.",
+    )
+    _policy_row(
+        "Gateway host gateway.discord.gg",
+        "gateway.discord.gg" in network_values,
+        "Add gateway.discord.gg to network.allowed_domains or network.discord_allowed_hosts.",
+    )
+
+    layers = build_configured_tool_policy_layers(
+        capability_mode="discord",
+        global_policy=getattr(cfg, "tools", None),
+        agent_policy=None,
+        sandbox_policy=getattr(getattr(cfg, "sandbox", None), "tools", None),
+    )
+    groups = collect_tool_policy_groups(getattr(cfg, "tools", None))
+    decision = resolve_tool_policy(MISSY_DISCORD_TOOLS, layers, groups=groups)
+    visible_tools = set(decision.tools)
+    voice_tools = {
+        "discord_voice_join",
+        "discord_voice_leave",
+        "discord_voice_say",
+        "discord_voice_status",
+    }
+    _policy_row(
+        "Discord voice tools visible",
+        voice_tools.issubset(visible_tools),
+        "Discord capability mode should expose discord_voice_* unless config policy denies them.",
+    )
+    if decision.warnings:
+        _policy_row("Tool policy warnings", False, "; ".join(decision.warnings[:3]))
+
+    console.print(policy_table)
+
+    bindings = list_voice_bindings()
+    voice_table = Table(title="Runtime Voice Bindings", show_lines=True)
+    voice_table.add_column("Account ID")
+    voice_table.add_column("Guild ID")
+    voice_table.add_column("Ready", justify="center")
+    voice_table.add_column("Listen", justify="center")
+    voice_table.add_column("Speak", justify="center")
+    if bindings:
+        for binding in bindings:
+            voice_table.add_row(
+                str(binding.get("account_id") or "[dim]unknown[/]"),
+                str(binding.get("guild_id") or "[dim]unknown[/]"),
+                "yes" if binding.get("ready") else "no",
+                "yes" if binding.get("can_listen") else "no",
+                "yes" if binding.get("can_speak") else "no",
+            )
+    else:
+        voice_table.add_row("[dim]-[/]", "[dim]-[/]", "no", "no", "no")
+    console.print(voice_table)
+
+    with contextlib.suppress(Exception):
+        al = AuditLogger(log_path=cfg.audit_log_path)
+        recent = [
+            event
+            for event in al.get_recent_events(limit=max(limit * 10, 20))
+            if str(event.get("event_type", "")).startswith("discord.")
+        ][-limit:]
+        if recent:
+            audit_table = Table(title=f"Recent Discord Events (last {len(recent)})")
+            audit_table.add_column("Timestamp", style="dim")
+            audit_table.add_column("Event")
+            audit_table.add_column("Result")
+            audit_table.add_column("Detail")
+            for event in recent:
+                detail = event.get("detail", {})
+                detail_str = (
+                    json.dumps(detail, separators=(",", ":"))
+                    if isinstance(detail, dict)
+                    else str(detail)
+                )
+                audit_table.add_row(
+                    str(event.get("timestamp", ""))[:19],
+                    str(event.get("event_type", "")),
+                    str(event.get("result", "")),
+                    detail_str[:80] + ("..." if len(detail_str) > 80 else ""),
+                )
+            console.print(audit_table)
 
 
 @discord.command("probe")
