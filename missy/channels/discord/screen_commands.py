@@ -7,6 +7,11 @@ Commands:
 - !screen analyze [id]     — show latest analysis result
 - !screen status           — show server status
 
+The same five actions are also recognised as natural language, without the
+``!screen`` prefix, e.g. "share my screen", "list screen sessions",
+"stop the screen share", "what's on the screen", "screencast status". See
+:func:`infer_screen_intent`.
+
 Parsed from MESSAGE_CREATE events and routed to
 :class:`~missy.channels.screencast.channel.ScreencastChannel`.
 """
@@ -14,6 +19,7 @@ Parsed from MESSAGE_CREATE events and routed to
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -27,6 +33,145 @@ class ScreenCommandResult:
     reply: str | None = None
 
 
+@dataclass(frozen=True)
+class ScreenIntent:
+    action: str  # "share" | "list" | "stop" | "analyze" | "status"
+    label: str | None = None
+    session_id: str | None = None
+
+
+_BOT_MENTION_RE = re.compile(r"^(<@!?\d+>\s*)+")
+_SPACE_RE = re.compile(r"\s+")
+
+
+def _clean_text(content: str | None) -> str:
+    text = _SPACE_RE.sub(" ", (content or "").strip())
+    return _BOT_MENTION_RE.sub("", text).strip()
+
+
+def _strip_leading_politeness(text: str) -> str:
+    previous = text
+    while True:
+        current = re.sub(
+            r"^(please|can you|could you|would you)\s+",
+            "",
+            previous,
+            flags=re.I,
+        ).strip()
+        if current == previous:
+            return current
+        previous = current
+
+
+_TRAILING_FILLER_RE = re.compile(
+    r"\s+(?:right now|now|at the moment|currently|please|for me|thanks|thank you)$",
+    re.I,
+)
+
+
+def _strip_trailing_filler(text: str) -> str:
+    """Remove trailing conversational filler ("right now", "please", ...).
+
+    Applied after politeness stripping so that phrasings like "what's on the
+    screen right now" still match the fullmatch patterns below. Stripping is
+    repeated so multiple stacked fillers ("... now please") are all removed.
+    """
+    previous = text
+    while True:
+        current = _TRAILING_FILLER_RE.sub("", previous).strip()
+        if current == previous:
+            return current
+        previous = current
+
+
+# Natural-language patterns for each screencast action. Every pattern is
+# anchored on the "screen"/"screencast" noun and matched with re.fullmatch
+# so that ordinary conversation (and unrelated commands like the image
+# handler's "screenshot"/"picture" phrasings) never accidentally match.
+_SHARE_PATTERNS = (
+    r"share (?:my|the|our) screen(?:\s+with\s+(?:you|everyone|the group))?"
+    r"(?:,?\s+(?:labell?ed|called|named)\s+(?P<label>.+))?",
+    r"start(?: a)? screen shar(?:e|ing)(?:,?\s+(?:labell?ed|called|named)\s+(?P<label>.+))?",
+    r"start sharing (?:my|the) screen(?:,?\s+(?:labell?ed|called|named)\s+(?P<label>.+))?",
+    r"begin(?: a)? screen shar(?:e|ing)(?:,?\s+(?:labell?ed|called|named)\s+(?P<label>.+))?",
+    r"let me show you my screen",
+    r"show you my screen",
+)
+
+_LIST_PATTERNS = (
+    r"list (?:the )?(?:active )?screen(?:cast)? (?:sessions|shares)",
+    r"what screen (?:shares|sessions) are active",
+    r"show (?:me )?(?:the )?active screen (?:sessions|shares)",
+    r"show (?:me )?(?:the )?screen (?:sessions|shares)",
+)
+
+_STOP_PATTERNS = (
+    r"stop (?:the |my )?screen shar(?:e|ing)(?:\s+(?P<session_id>\S+))?",
+    r"stop screen shar(?:e|ing)(?:\s+(?P<session_id>\S+))?",
+    r"end (?:my |the )?screen (?:session|share)(?:\s+(?P<session_id>\S+))?",
+)
+
+_ANALYZE_PATTERNS = (
+    r"analyz\w* (?:the |my )?screen(?:\s+shar(?:e|ing))?(?:\s+(?P<session_id>\S+))?",
+    r"what'?s on (?:the |my )?screen",
+    r"look at (?:my |the )?screen(?:\s+shar(?:e|ing))?(?:\s+(?P<session_id>\S+))?",
+)
+
+_STATUS_PATTERNS = (r"screen(?:cast)? (?:server )?status",)
+
+
+def _clean_capture(value: str | None) -> str | None:
+    if not value:
+        return None
+    cleaned = value.strip(" .!\"'")
+    return cleaned or None
+
+
+def infer_screen_intent(content: str | None) -> ScreenIntent | None:
+    """Parse supported natural-language Discord screencast requests.
+
+    Recognises flexible phrasings for the five ``!screen`` subcommands
+    without requiring the bang prefix, e.g. "share my screen", "stop the
+    screen share", "what's on the screen", "screencast status". Returns
+    ``None`` for anything that is not clearly a screencast request,
+    including screenshot/image phrasings handled elsewhere (e.g. "analyze
+    this picture", "save the screenshot").
+    """
+    text = _strip_trailing_filler(_strip_leading_politeness(_clean_text(content)))
+    if not text or text.startswith("!"):
+        return None
+
+    for pattern in _SHARE_PATTERNS:
+        match = re.fullmatch(pattern, text, flags=re.I)
+        if match:
+            groups = match.groupdict()
+            return ScreenIntent(action="share", label=_clean_capture(groups.get("label")))
+
+    for pattern in _LIST_PATTERNS:
+        if re.fullmatch(pattern, text, flags=re.I):
+            return ScreenIntent(action="list")
+
+    for pattern in _STOP_PATTERNS:
+        match = re.fullmatch(pattern, text, flags=re.I)
+        if match:
+            groups = match.groupdict()
+            return ScreenIntent(action="stop", session_id=_clean_capture(groups.get("session_id")))
+
+    for pattern in _ANALYZE_PATTERNS:
+        match = re.fullmatch(pattern, text, flags=re.I)
+        if match:
+            groups = match.groupdict()
+            return ScreenIntent(
+                action="analyze", session_id=_clean_capture(groups.get("session_id"))
+            )
+
+    for pattern in _STATUS_PATTERNS:
+        if re.fullmatch(pattern, text, flags=re.I):
+            return ScreenIntent(action="status")
+
+    return None
+
+
 async def maybe_handle_screen_command(
     *,
     content: str,
@@ -35,6 +180,10 @@ async def maybe_handle_screen_command(
     screencast: Any | None,
 ) -> ScreenCommandResult:
     """Parse and execute a screen command if applicable.
+
+    Tries the bang-prefixed ``!screen ...`` syntax first for backward
+    compatibility, then falls back to natural-language phrasing via
+    :func:`infer_screen_intent`.
 
     Args:
         content: Message content (already stripped of bot mentions).
@@ -47,27 +196,36 @@ async def maybe_handle_screen_command(
         optional reply to send back.
     """
     text = (content or "").strip()
-    if not text.startswith("!screen"):
-        return ScreenCommandResult(False)
 
-    parts = text.split(None, 2)  # ["!screen", subcommand, ...rest]
-    if len(parts) < 2:
-        return ScreenCommandResult(
-            True,
-            "Usage: `!screen share [label]` | `!screen list` | "
-            "`!screen stop [id]` | `!screen analyze [id]` | `!screen status`",
-        )
+    subcmd: str | None
+    rest = ""
 
-    subcmd = parts[1].lower()
-    rest = parts[2].strip() if len(parts) > 2 else ""
+    if text.startswith("!screen"):
+        parts = text.split(None, 2)  # ["!screen", subcommand, ...rest]
+        if len(parts) < 2:
+            return ScreenCommandResult(
+                True,
+                "Usage: `!screen share [label]` | `!screen list` | "
+                "`!screen stop [id]` | `!screen analyze [id]` | `!screen status`",
+            )
 
-    if subcmd not in ("share", "list", "stop", "analyze", "status"):
-        return ScreenCommandResult(False)
+        subcmd = parts[1].lower()
+        rest = parts[2].strip() if len(parts) > 2 else ""
+
+        if subcmd not in ("share", "list", "stop", "analyze", "status"):
+            return ScreenCommandResult(False)
+    else:
+        intent = infer_screen_intent(text)
+        if intent is None:
+            return ScreenCommandResult(False)
+
+        subcmd = intent.action
+        rest = (intent.label or "") if subcmd == "share" else (intent.session_id or "")
 
     if screencast is None:
         return ScreenCommandResult(True, "Screencast is not enabled on this bot.")
 
-    # ------- !screen share [label] -------
+    # ------- share [label] -------
     if subcmd == "share":
         return _handle_share(
             screencast=screencast,
@@ -76,19 +234,19 @@ async def maybe_handle_screen_command(
             label=rest,
         )
 
-    # ------- !screen list -------
+    # ------- list -------
     if subcmd == "list":
         return _handle_list(screencast=screencast)
 
-    # ------- !screen stop [session_id] -------
+    # ------- stop [session_id] -------
     if subcmd == "stop":
         return _handle_stop(screencast=screencast, session_id=rest)
 
-    # ------- !screen analyze [session_id] -------
+    # ------- analyze [session_id] -------
     if subcmd == "analyze":
         return _handle_analyze(screencast=screencast, session_id=rest)
 
-    # ------- !screen status -------
+    # ------- status -------
     if subcmd == "status":
         return _handle_status(screencast=screencast)
 

@@ -16,6 +16,8 @@ from missy.channels.discord.image_analyze import (
 )
 from missy.channels.discord.image_commands import (
     ImageCommandResult,
+    ImageIntent,
+    infer_image_intent,
     maybe_handle_image_command,
 )
 
@@ -334,3 +336,189 @@ class TestResultDataclass:
         r = ImageCommandResult(True, "reply")
         with pytest.raises(AttributeError):
             r.handled = False
+
+
+# ---------------------------------------------------------------------------
+# infer_image_intent - natural-language analyze phrasings
+# ---------------------------------------------------------------------------
+
+
+class TestInferImageIntentAnalyze:
+    def test_analyze_the_image(self):
+        intent = infer_image_intent("analyze the image")
+        assert intent == ImageIntent(action="analyze")
+
+    def test_describe_the_image(self):
+        intent = infer_image_intent("describe the image")
+        assert intent == ImageIntent(action="analyze")
+
+    def test_analyze_the_screenshot(self):
+        intent = infer_image_intent("analyze the screenshot")
+        assert intent == ImageIntent(action="analyze")
+
+    def test_whats_in_this_picture(self):
+        intent = infer_image_intent("what's in this picture?")
+        assert intent == ImageIntent(action="analyze")
+
+    def test_what_is_in_this_screenshot(self):
+        intent = infer_image_intent("what is in this screenshot")
+        assert intent == ImageIntent(action="analyze")
+
+    def test_look_at_last_image_and_tell_me(self):
+        intent = infer_image_intent("look at the last image and tell me if the build succeeded")
+        assert intent is not None
+        assert intent.action == "analyze"
+        assert intent.question == "if the build succeeded"
+
+    def test_analyze_image_with_colon_question(self):
+        intent = infer_image_intent("analyze the image: is there an error dialog visible")
+        assert intent is not None
+        assert intent.action == "analyze"
+        assert intent.question == "is there an error dialog visible"
+
+    def test_politeness_stripped(self):
+        intent = infer_image_intent("please analyze the image")
+        assert intent == ImageIntent(action="analyze")
+
+    def test_can_you_analyze(self):
+        intent = infer_image_intent("can you analyze the screenshot")
+        assert intent == ImageIntent(action="analyze")
+
+    def test_bot_mention_stripped(self):
+        intent = infer_image_intent("<@123456> analyze the image")
+        assert intent == ImageIntent(action="analyze")
+
+
+# ---------------------------------------------------------------------------
+# infer_image_intent - natural-language screenshot-save phrasings
+# ---------------------------------------------------------------------------
+
+
+class TestInferImageIntentScreenshotSave:
+    def test_save_the_screenshot(self):
+        intent = infer_image_intent("save the screenshot")
+        assert intent == ImageIntent(action="screenshot_save")
+
+    def test_save_that_image_to_disk(self):
+        intent = infer_image_intent("save that image to disk")
+        assert intent == ImageIntent(action="screenshot_save")
+
+    def test_save_the_image_to_path(self):
+        intent = infer_image_intent("save the image to /tmp/shots")
+        assert intent == ImageIntent(action="screenshot_save", save_dir="/tmp/shots")
+
+    def test_save_last_screenshot(self):
+        intent = infer_image_intent("save the last screenshot")
+        assert intent == ImageIntent(action="screenshot_save")
+
+
+# ---------------------------------------------------------------------------
+# infer_image_intent - negative / conservative cases
+# ---------------------------------------------------------------------------
+
+
+class TestInferImageIntentNegative:
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "hello",
+            "how are you",
+            "what's the weather",
+            "what time is it",
+            "can you help me analyze my finances",
+            "analyze this business problem for me",
+            "save my progress",
+            "save the document to /tmp",
+            "what's up",
+            "",
+        ],
+    )
+    def test_ordinary_conversation_returns_none(self, text):
+        assert infer_image_intent(text) is None
+
+    def test_none_content_returns_none(self):
+        assert infer_image_intent(None) is None
+
+    def test_bang_command_returns_none(self):
+        # Bang commands are handled by the legacy parser, not NL inference.
+        assert infer_image_intent("!analyze") is None
+
+
+# ---------------------------------------------------------------------------
+# maybe_handle_image_command - natural-language routing
+# ---------------------------------------------------------------------------
+
+
+class TestNaturalLanguageRouting:
+    @pytest.mark.asyncio
+    async def test_nl_analyze_routes_to_handler(self):
+        rest = MagicMock()
+        with patch("missy.channels.discord.image_commands._handle_analyze") as mock_analyze:
+            mock_analyze.return_value = ImageCommandResult(True, "Result")
+            result = await maybe_handle_image_command(
+                content="analyze the image", channel_id="123", rest_client=rest
+            )
+            assert result.handled is True
+            mock_analyze.assert_awaited_once_with("123", rest, "")
+
+    @pytest.mark.asyncio
+    async def test_nl_analyze_with_question_routes_question(self):
+        rest = MagicMock()
+        with patch("missy.channels.discord.image_commands._handle_analyze") as mock_analyze:
+            mock_analyze.return_value = ImageCommandResult(True, "Result")
+            result = await maybe_handle_image_command(
+                content="look at the last image and tell me what broke",
+                channel_id="123",
+                rest_client=rest,
+            )
+            assert result.handled is True
+            mock_analyze.assert_awaited_once_with("123", rest, "what broke")
+
+    @pytest.mark.asyncio
+    async def test_nl_save_routes_to_handler(self):
+        rest = MagicMock()
+        with patch("missy.channels.discord.image_commands._handle_screenshot") as mock_ss:
+            mock_ss.return_value = ImageCommandResult(True, "Saved")
+            result = await maybe_handle_image_command(
+                content="save the screenshot", channel_id="123", rest_client=rest
+            )
+            assert result.handled is True
+            mock_ss.assert_awaited_once_with("123", rest, "save")
+
+    @pytest.mark.asyncio
+    async def test_nl_save_with_dir_routes_to_handler(self):
+        rest = MagicMock()
+        with patch("missy.channels.discord.image_commands._handle_screenshot") as mock_ss:
+            mock_ss.return_value = ImageCommandResult(True, "Saved")
+            result = await maybe_handle_image_command(
+                content="save the image to /tmp/shots", channel_id="123", rest_client=rest
+            )
+            assert result.handled is True
+            mock_ss.assert_awaited_once_with("123", rest, "save /tmp/shots")
+
+    @pytest.mark.asyncio
+    async def test_nl_no_rest_client(self):
+        result = await maybe_handle_image_command(
+            content="analyze the image", channel_id="123", rest_client=None
+        )
+        assert result.handled is True
+        assert "not available" in result.reply.lower()
+
+    @pytest.mark.asyncio
+    async def test_ordinary_conversation_not_handled(self):
+        result = await maybe_handle_image_command(
+            content="how are you", channel_id="123", rest_client=MagicMock()
+        )
+        assert result.handled is False
+
+    @pytest.mark.asyncio
+    async def test_bang_commands_still_work_unchanged(self):
+        # Legacy bang-command path takes precedence and behaves as before.
+        rest = MagicMock()
+        with patch("missy.channels.discord.image_commands._handle_analyze") as mock_analyze:
+            mock_analyze.return_value = ImageCommandResult(True, "Result")
+            result = await maybe_handle_image_command(
+                content="!analyze what is this", channel_id="123", rest_client=rest
+            )
+            assert result.handled is True
+            mock_analyze.assert_awaited_once_with("123", rest, "what is this")
