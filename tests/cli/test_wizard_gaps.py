@@ -506,3 +506,4 @@ class TestRunWizardOAuthTokenSummaryDisplay:
         content = config_file.read_text()
         # The provider should be openai-codex after OAuth succeeds
         assert "openai-codex" in content
+        assert "oauth-access-token-123456789" not in content

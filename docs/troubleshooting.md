@@ -377,6 +377,30 @@ This sets Python logging to `DEBUG` level, which outputs:
 - Job loading and scheduling details
 - Plugin loading steps
 
+Application logs are written to `~/.missy/missy.log` by default. Use:
+
+```bash
+missy logs path
+missy logs tail --limit 120
+```
+
+### OpenAI Codex OAuth 401
+
+If the `openai-codex` provider reports HTTP 401 or 403 from
+`https://chatgpt.com/backend-api/codex/responses`, refresh the ChatGPT OAuth
+token:
+
+```bash
+missy providers auth openai-codex --method oauth
+```
+
+Then check provider events and app logs:
+
+```bash
+missy audit recent --category provider
+missy logs tail --limit 120
+```
+
 ### Reading the Audit Log
 
 **Recent events** (all categories):

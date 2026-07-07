@@ -274,6 +274,7 @@ OpenTelemetry integration for traces and metrics.
 | `otel_endpoint` | string | `"http://localhost:4317"` | OTLP collector endpoint. |
 | `otel_protocol` | string | `"grpc"` | Transport protocol: `"grpc"` or `"http/protobuf"`. |
 | `otel_service_name` | string | `"missy"` | Service name in traces and metrics. |
+| `log_file_path` | string | `"~/.missy/missy.log"` | Rotating application log file for Python logs and provider diagnostics. |
 | `log_level` | string | `"warning"` | Python logging level for the application. |
 
 ---
@@ -521,4 +522,8 @@ discord:
 # ---------------------------------------------------------------------------
 workspace_path: "~/workspace"
 audit_log_path: "~/.missy/audit.jsonl"
+
+observability:
+  log_file_path: "~/.missy/missy.log"
+  log_level: "warning"
 ```

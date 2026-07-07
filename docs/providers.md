@@ -136,6 +136,34 @@ missy providers auth openai --api-key sk-...
 
 **Network policy**: Add `api.openai.com` to `network.allowed_hosts`.
 
+### OpenAI Codex OAuth
+
+**Implementation**: `missy/providers/codex_provider.py`
+
+The `openai-codex` provider uses the ChatGPT OAuth token stored at
+`~/.missy/secrets/openai-oauth.json` and calls
+`https://chatgpt.com/backend-api/codex/responses`. The access token is
+short-lived; Missy refreshes it from the token file and does not store it in
+`config.yaml`.
+
+Configure or refresh it with:
+
+```bash
+missy providers auth openai-codex --method oauth
+```
+
+Example config:
+
+```yaml
+providers:
+  openai-codex:
+    name: openai-codex
+    model: "gpt-5.2-codex"
+    timeout: 60
+```
+
+**Network policy**: Allow `chatgpt.com` and `auth.openai.com`.
+
 **Using with OpenAI-compatible services**: Set `base_url` to the alternative
 endpoint and add that host to `network.allowed_hosts`:
 
