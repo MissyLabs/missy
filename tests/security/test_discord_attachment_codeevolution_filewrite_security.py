@@ -82,7 +82,12 @@ class TestDiscordSaveAttachmentSanitization:
 
         mock_client = MagicMock()
         mock_client.download_attachment.return_value = b"fake-image-data"
-        attachment = {"url": "https://cdn.discordapp.com/attachments/fake", "filename": filename}
+        content_type = "image/jpeg" if filename.lower().endswith((".jpg", ".jpeg")) else "image/png"
+        attachment = {
+            "url": "https://cdn.discordapp.com/attachments/fake",
+            "filename": filename,
+            "content_type": content_type,
+        }
         return save_discord_attachment(
             rest_client=mock_client,
             attachment=attachment,

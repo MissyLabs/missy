@@ -1,17 +1,16 @@
 # AUDIT_CONNECTIVITY
 
-- Timestamp: 2026-07-07 18:49:30 EDT
+- Timestamp: 2026-07-07 19:08:32 EDT
 
 Expected connectivity posture:
 
 - default-deny network where practical
 - exact provider endpoints
-- exact Discord REST endpoint: `discord.com`
-- exact Discord Gateway endpoint: `gateway.discord.gg`
+- exact Discord REST and Gateway endpoints
+- exact Discord CDN hosts for attachment downloads
 - no unreviewed broad outbound access
 
-Current Discord connectivity work:
+Session update:
 
-- `missy discord diagnostics` now checks whether `discord.com` and `gateway.discord.gg` are present in allowed domains, allowed hosts, or Discord-specific allowed hosts.
-- `missy discord probe` remains the live REST token/API connectivity check.
-- Gateway heartbeat/reconnect/resume live status still needs a service-visible diagnostics surface.
+- Discord image attachment metadata must reference `https://cdn.discordapp.com` or `https://media.discordapp.net` before routing or download.
+- `DiscordRestClient.download_attachment()` still enforces Discord CDN hosts at download time through the policy-backed HTTP client.

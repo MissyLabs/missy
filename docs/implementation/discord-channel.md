@@ -136,6 +136,10 @@ _allow_bot_author(author, content, guild_id)
    NO (filtered) -> emit discord.channel.bot_filtered deny audit event
    YES |
         v
+_validate_attachment_metadata()
+   NO -> emit discord.channel.attachment_denied deny audit event
+   YES |
+        v
   guild_id is None?
         |               |
        YES             NO
@@ -165,6 +169,24 @@ _check_dm_policy()  _check_guild_policy()
 4. `allowed_users` non-empty and author not in list → deny + emit `allowlist_denied`
 5. `require_mention == True` and bot not @-mentioned → deny + emit `require_mention_filtered`
 6. All checks pass → allow
+
+### Attachment metadata gate
+
+Attachment policy runs before DM/guild routing so unsafe media never reaches
+the agent queue. Non-image attachments deny the whole message. Image attachments
+are accepted only when Discord metadata passes these checks:
+
+- HTTPS URL on `cdn.discordapp.com` or `media.discordapp.net`
+- supported image MIME type, or image filename extension when MIME is absent
+- MIME/extension consistency when both are available
+- declared size at or below 8 MiB
+- declared dimensions, when available, within 8192 pixels per side and 40
+  megapixels total
+
+Accepted image metadata is normalized into `discord_image_attachments` with
+sanitized filename, content type, size, width, height, and original Discord CDN
+URLs. The image command path revalidates the metadata before download; the REST
+client also rejects non-Discord CDN hosts.
 
 ---
 
@@ -252,6 +274,60 @@ All events share the base `AuditEvent` fields:
   "result": "allow",
   "detail": {
     "author_id": "<discord user id>"
+  }
+}
+```
+
+### discord.channel.attachment_denied
+
+```json
+{
+  "event_type": "discord.channel.attachment_denied",
+  "result": "deny",
+  "detail": {
+    "reason": "attachment_metadata_not_permitted",
+    "author_id": "<discord user id>",
+    "channel_id": "<discord channel id>",
+    "attachment_count": 1,
+    "attachments": [
+      {
+        "filename": "image.png",
+        "content_type": "image/png",
+        "size": 9000000,
+        "width": 1200,
+        "height": 800,
+        "url_host": "cdn.discordapp.com",
+        "max_size": 8388608,
+        "max_dimension": 8192,
+        "max_pixels": 40000000,
+        "reasons": ["image_too_large"]
+      }
+    ]
+  }
+}
+```
+
+### discord.channel.image_attachment_allowed
+
+```json
+{
+  "event_type": "discord.channel.image_attachment_allowed",
+  "result": "allow",
+  "detail": {
+    "author_id": "<discord user id>",
+    "channel_id": "<discord channel id>",
+    "image_count": 1,
+    "attachments": [
+      {
+        "filename": "image.png",
+        "content_type": "image/png",
+        "size": 1024,
+        "width": 1200,
+        "height": 800,
+        "url_host": "cdn.discordapp.com",
+        "reasons": []
+      }
+    ]
   }
 }
 ```

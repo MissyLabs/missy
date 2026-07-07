@@ -10,9 +10,22 @@ from __future__ import annotations
 import base64
 import logging
 import os
+from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
+
+MAX_IMAGE_ATTACHMENT_BYTES = 8 * 1024 * 1024
+MAX_IMAGE_DIMENSION = 8192
+MAX_IMAGE_PIXELS = 40_000_000
+
+_DISCORD_ATTACHMENT_HOSTS = frozenset(
+    {
+        "cdn.discordapp.com",
+        "media.discordapp.net",
+    }
+)
 
 # Image content types we accept for vision analysis.
 _IMAGE_CONTENT_TYPES = frozenset(
@@ -38,10 +51,117 @@ _IMAGE_EXTENSIONS = frozenset(
     }
 )
 
+_CONTENT_TYPE_EXTENSIONS = {
+    "image/png": frozenset({".png"}),
+    "image/jpeg": frozenset({".jpg", ".jpeg"}),
+    "image/jpg": frozenset({".jpg", ".jpeg"}),
+    "image/gif": frozenset({".gif"}),
+    "image/webp": frozenset({".webp"}),
+}
+
+
+@dataclass(frozen=True)
+class AttachmentValidation:
+    """Metadata validation result for a Discord attachment."""
+
+    allowed: bool
+    reasons: list[str] = field(default_factory=list)
+    details: dict[str, Any] = field(default_factory=dict)
+
+
+def sanitize_attachment_filename(filename: str | None, default: str = "attachment") -> str:
+    """Return a basename-only attachment filename safe for local metadata/use."""
+    safe_filename = os.path.basename(filename or "").replace("\x00", "")
+    return safe_filename or default
+
+
+def _normalise_content_type(attachment: dict[str, Any]) -> str:
+    return str(attachment.get("content_type") or "").split(";", 1)[0].strip().lower()
+
+
+def _filename_extension(filename: str) -> str:
+    return os.path.splitext(filename.lower())[1]
+
+
+def _int_or_none(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _attachment_host(url: str) -> str:
+    try:
+        return (urlparse(url).hostname or "").lower()
+    except Exception:
+        return ""
+
+
+def validate_image_attachment(attachment: dict[str, Any]) -> AttachmentValidation:
+    """Validate Discord image attachment metadata before routing or download."""
+    reasons: list[str] = []
+    raw_filename = str(attachment.get("filename") or "")
+    safe_filename = sanitize_attachment_filename(raw_filename)
+    ext = _filename_extension(safe_filename)
+    content_type = _normalise_content_type(attachment)
+    url = str(attachment.get("url") or attachment.get("proxy_url") or "")
+    parsed = urlparse(url) if url else None
+    host = (parsed.hostname or "").lower() if parsed else ""
+
+    if not url:
+        reasons.append("missing_url")
+    elif parsed.scheme != "https" or host not in _DISCORD_ATTACHMENT_HOSTS:
+        reasons.append("invalid_discord_cdn_url")
+
+    if content_type:
+        if content_type not in _IMAGE_CONTENT_TYPES:
+            reasons.append("unsupported_content_type")
+        elif ext and ext in _IMAGE_EXTENSIONS and ext not in _CONTENT_TYPE_EXTENSIONS[content_type]:
+            reasons.append("mime_extension_mismatch")
+    elif ext not in _IMAGE_EXTENSIONS:
+        reasons.append("unsupported_file_extension")
+
+    size = _int_or_none(attachment.get("size"))
+    if size is not None:
+        if size < 0:
+            reasons.append("invalid_size")
+        elif size > MAX_IMAGE_ATTACHMENT_BYTES:
+            reasons.append("image_too_large")
+
+    width = _int_or_none(attachment.get("width"))
+    height = _int_or_none(attachment.get("height"))
+    if width is not None and (width <= 0 or width > MAX_IMAGE_DIMENSION):
+        reasons.append("invalid_width")
+    if height is not None and (height <= 0 or height > MAX_IMAGE_DIMENSION):
+        reasons.append("invalid_height")
+    if (
+        width is not None
+        and height is not None
+        and width > 0
+        and height > 0
+        and width * height > MAX_IMAGE_PIXELS
+    ):
+        reasons.append("image_dimensions_too_large")
+
+    details = {
+        "filename": safe_filename,
+        "content_type": content_type,
+        "size": size,
+        "width": width,
+        "height": height,
+        "url_host": host or _attachment_host(url),
+        "max_size": MAX_IMAGE_ATTACHMENT_BYTES,
+        "max_dimension": MAX_IMAGE_DIMENSION,
+        "max_pixels": MAX_IMAGE_PIXELS,
+    }
+    return AttachmentValidation(allowed=not reasons, reasons=reasons, details=details)
+
 
 def is_image_attachment(attachment: dict[str, Any]) -> bool:
     """Return True if the Discord attachment dict looks like an image."""
-    ct = (attachment.get("content_type") or "").lower()
+    ct = _normalise_content_type(attachment)
     if ct in _IMAGE_CONTENT_TYPES:
         return True
     filename = (attachment.get("filename") or "").lower()
@@ -166,9 +286,19 @@ def analyze_discord_attachment(
     url = attachment.get("url") or attachment.get("proxy_url")
     if not url:
         raise ValueError("Attachment has no download URL.")
+    validation = validate_image_attachment(attachment)
+    if not validation.allowed:
+        raise ValueError(
+            "Attachment failed image metadata validation: " + ", ".join(validation.reasons)
+        )
 
-    filename = attachment.get("filename", "unknown")
+    filename = validation.details["filename"]
     image_data = rest_client.download_attachment(url)
+    if len(image_data) > MAX_IMAGE_ATTACHMENT_BYTES:
+        raise ValueError(
+            f"Downloaded attachment exceeds maximum image size "
+            f"({len(image_data)} > {MAX_IMAGE_ATTACHMENT_BYTES} bytes)."
+        )
 
     # Optionally save for documentation.
     saved_to = None
@@ -212,12 +342,14 @@ def save_discord_attachment(
     if not url:
         raise ValueError("Attachment has no download URL.")
 
+    validation = validate_image_attachment(attachment)
+    if not validation.allowed:
+        raise ValueError(
+            "Attachment failed image metadata validation: " + ", ".join(validation.reasons)
+        )
+
     raw_filename = attachment.get("filename", "screenshot.png")
-    # Sanitize filename: strip path separators and directory traversal to
-    # prevent writing outside save_dir (e.g. "../../etc/cron.d/backdoor").
-    safe_filename = os.path.basename(raw_filename).replace("\x00", "")
-    if not safe_filename:
-        safe_filename = "attachment"
+    safe_filename = validation.details["filename"]
     save_dir = os.path.expanduser(save_dir)
     os.makedirs(save_dir, exist_ok=True, mode=0o700)
 
@@ -229,6 +361,11 @@ def save_discord_attachment(
         raise ValueError(f"Attachment filename {raw_filename!r} resolves outside save directory.")
 
     image_data = rest_client.download_attachment(url)
+    if len(image_data) > MAX_IMAGE_ATTACHMENT_BYTES:
+        raise ValueError(
+            f"Downloaded attachment exceeds maximum image size "
+            f"({len(image_data)} > {MAX_IMAGE_ATTACHMENT_BYTES} bytes)."
+        )
     fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "wb") as f:
         f.write(image_data)

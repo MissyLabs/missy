@@ -570,32 +570,55 @@ class DiscordChannel(BaseChannel):
         # 3. Attachment policy gate.
         attachments: list[dict] = data.get("attachments") or []
         if attachments:
-            from missy.channels.discord.image_analyze import is_image_attachment
+            from missy.channels.discord.image_analyze import (
+                is_image_attachment,
+                validate_image_attachment,
+            )
 
-            image_attachments = [a for a in attachments if is_image_attachment(a)]
-            non_image_attachments = [a for a in attachments if not is_image_attachment(a)]
+            attachment_validations = [(a, validate_image_attachment(a)) for a in attachments]
+            image_attachments = [
+                (a, v) for a, v in attachment_validations if is_image_attachment(a) and v.allowed
+            ]
+            denied_attachments = [
+                (a, v)
+                for a, v in attachment_validations
+                if not is_image_attachment(a) or not v.allowed
+            ]
 
             # Allow image attachments through (for vision analysis).
             # Non-image attachments are still denied.
-            if non_image_attachments:
+            if denied_attachments:
+                denied_details = []
+                for attachment, validation in denied_attachments:
+                    reasons = (
+                        validation.reasons
+                        if is_image_attachment(attachment)
+                        else ["non_image_attachments_not_permitted"]
+                    )
+                    denied_details.append({**validation.details, "reasons": reasons})
                 self._emit_audit(
                     "discord.channel.attachment_denied",
                     "deny",
                     {
                         "author_id": author_id,
                         "channel_id": channel_id,
-                        "attachment_count": len(non_image_attachments),
-                        "reason": "non_image_attachments_not_permitted",
+                        "attachment_count": len(denied_attachments),
+                        "attachments": denied_details,
+                        "reason": "attachment_metadata_not_permitted",
                     },
                 )
                 logger.info(
-                    "Discord: message with %d non-image attachment(s) from %s denied by policy",
-                    len(non_image_attachments),
+                    "Discord: message with %d denied attachment(s) from %s denied by policy",
+                    len(denied_attachments),
                     author_id,
                 )
                 return
 
             if image_attachments:
+                allowed_details = [
+                    {**validation.details, "reasons": []}
+                    for _attachment, validation in image_attachments
+                ]
                 self._emit_audit(
                     "discord.channel.image_attachment_allowed",
                     "allow",
@@ -603,6 +626,7 @@ class DiscordChannel(BaseChannel):
                         "author_id": author_id,
                         "channel_id": channel_id,
                         "image_count": len(image_attachments),
+                        "attachments": allowed_details,
                     },
                 )
                 logger.info(
@@ -643,19 +667,22 @@ class DiscordChannel(BaseChannel):
         # Include image attachment info in metadata for vision analysis.
         image_attachment_data: list[dict] = []
         if attachments:
-            from missy.channels.discord.image_analyze import is_image_attachment
+            from missy.channels.discord.image_analyze import validate_image_attachment
 
-            image_attachment_data = [
-                {
-                    "url": a.get("url", ""),
-                    "proxy_url": a.get("proxy_url", ""),
-                    "filename": a.get("filename", ""),
-                    "content_type": a.get("content_type", ""),
-                    "size": a.get("size", 0),
-                }
-                for a in attachments
-                if is_image_attachment(a)
-            ]
+            for attachment in attachments:
+                validation = validate_image_attachment(attachment)
+                if validation.allowed:
+                    image_attachment_data.append(
+                        {
+                            "url": attachment.get("url", ""),
+                            "proxy_url": attachment.get("proxy_url", ""),
+                            "filename": validation.details["filename"],
+                            "content_type": validation.details["content_type"],
+                            "size": validation.details["size"] or 0,
+                            "width": validation.details["width"] or 0,
+                            "height": validation.details["height"] or 0,
+                        }
+                    )
 
         msg = ChannelMessage(
             content=content,

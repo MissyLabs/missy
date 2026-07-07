@@ -1,15 +1,15 @@
 # OpenClaw Gap Analysis
 
-Last updated: 2026-07-07
+Last updated: 2026-07-07 19:08 EDT
 
 ## Current Focus: Discord Integration
 
-Missy now has a stronger Discord operator path: voice tools are policy-visible in Discord mode, scoped voice bindings expose readiness/capability snapshots, and `missy discord diagnostics` summarizes configuration, routing, network policy, tool visibility, runtime voice bindings, and recent Discord audit events.
+Missy now has a stronger Discord operator and safety path: diagnostics summarize configuration and runtime readiness, voice tools are policy-visible in Discord mode, scoped voice bindings expose readiness/capability snapshots, and Discord image attachment metadata is validated before agent routing or download.
 
 ## Remaining Discord Gaps
 
-- Discord media safety remains partial: accepted image attachments need stronger size, MIME, image-dimension, filename, and URL-fetch policy coverage.
 - Gateway lifecycle diagnostics still need clearer operator-facing status for reconnects, heartbeat health, resume state, and slash command registration failures.
+- Byte-level image verification remains partial: metadata is bounded, but file signature and true decoded dimensions are not yet verified without an image dependency.
 - Runtime voice binding diagnostics are process-local; a separate service status channel is needed for out-of-process CLI visibility.
 
 ## OpenClaw-Style Operator Ergonomics Gaps
@@ -26,4 +26,4 @@ Missy now has a stronger Discord operator path: voice tools are policy-visible i
 
 ## Recommended Next Slice
 
-Harden accepted Discord image attachment handling with explicit metadata validation, URL fetch policy checks, and accepted/denied attachment audit detail.
+Add gateway lifecycle diagnostics for heartbeat health, reconnect/resume state, and slash command registration failures.

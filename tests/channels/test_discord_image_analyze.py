@@ -66,6 +66,89 @@ class TestIsImageAttachment:
         assert not is_image_attachment({})
 
 
+class TestValidateImageAttachment:
+    def test_accepts_valid_discord_cdn_image_metadata(self):
+        from missy.channels.discord.image_analyze import validate_image_attachment
+
+        result = validate_image_attachment(
+            {
+                "content_type": "image/png",
+                "filename": "shot.png",
+                "url": "https://cdn.discordapp.com/attachments/1/2/shot.png",
+                "size": 1024,
+                "width": 800,
+                "height": 600,
+            }
+        )
+
+        assert result.allowed is True
+        assert result.reasons == []
+        assert result.details["filename"] == "shot.png"
+        assert result.details["url_host"] == "cdn.discordapp.com"
+
+    def test_rejects_oversize_image_metadata(self):
+        from missy.channels.discord.image_analyze import (
+            MAX_IMAGE_ATTACHMENT_BYTES,
+            validate_image_attachment,
+        )
+
+        result = validate_image_attachment(
+            {
+                "content_type": "image/png",
+                "filename": "shot.png",
+                "url": "https://cdn.discordapp.com/attachments/1/2/shot.png",
+                "size": MAX_IMAGE_ATTACHMENT_BYTES + 1,
+            }
+        )
+
+        assert result.allowed is False
+        assert "image_too_large" in result.reasons
+
+    def test_rejects_mime_extension_mismatch(self):
+        from missy.channels.discord.image_analyze import validate_image_attachment
+
+        result = validate_image_attachment(
+            {
+                "content_type": "image/png",
+                "filename": "photo.jpg",
+                "url": "https://cdn.discordapp.com/attachments/1/2/photo.jpg",
+            }
+        )
+
+        assert result.allowed is False
+        assert "mime_extension_mismatch" in result.reasons
+
+    def test_rejects_bad_dimensions(self):
+        from missy.channels.discord.image_analyze import validate_image_attachment
+
+        result = validate_image_attachment(
+            {
+                "content_type": "image/jpeg",
+                "filename": "photo.jpg",
+                "url": "https://cdn.discordapp.com/attachments/1/2/photo.jpg",
+                "width": 10000,
+                "height": 500,
+            }
+        )
+
+        assert result.allowed is False
+        assert "invalid_width" in result.reasons
+
+    def test_rejects_non_discord_cdn_url(self):
+        from missy.channels.discord.image_analyze import validate_image_attachment
+
+        result = validate_image_attachment(
+            {
+                "content_type": "image/png",
+                "filename": "shot.png",
+                "url": "https://example.com/shot.png",
+            }
+        )
+
+        assert result.allowed is False
+        assert "invalid_discord_cdn_url" in result.reasons
+
+
 class TestFindLatestImage:
     def test_finds_image_in_first_message(self):
         from missy.channels.discord.image_analyze import find_latest_image
@@ -147,7 +230,11 @@ class TestAnalyzeDiscordAttachment:
 
         result = analyze_discord_attachment(
             mock_rest,
-            {"url": "https://cdn.discordapp.com/a.png", "filename": "a.png"},
+            {
+                "url": "https://cdn.discordapp.com/a.png",
+                "filename": "a.png",
+                "content_type": "image/png",
+            },
             "Describe it",
         )
         assert result["analysis"] == "A desktop screenshot"
@@ -165,7 +252,11 @@ class TestAnalyzeDiscordAttachment:
         save_path = str(tmp_path / "saved.png")
         result = analyze_discord_attachment(
             mock_rest,
-            {"url": "https://cdn.discordapp.com/a.png", "filename": "a.png"},
+            {
+                "url": "https://cdn.discordapp.com/a.png",
+                "filename": "a.png",
+                "content_type": "image/png",
+            },
             "Describe it",
             save_path=save_path,
         )
@@ -188,7 +279,11 @@ class TestSaveDiscordAttachment:
 
         path = save_discord_attachment(
             mock_rest,
-            {"url": "https://cdn.discordapp.com/a.png", "filename": "shot.png"},
+            {
+                "url": "https://cdn.discordapp.com/a.png",
+                "filename": "shot.png",
+                "content_type": "image/png",
+            },
             save_dir=str(tmp_path),
         )
         assert path.endswith("_shot.png")
@@ -444,8 +539,10 @@ class TestAttachmentPolicy:
                 {
                     "content_type": "image/png",
                     "filename": "shot.png",
-                    "url": "http://x",
+                    "url": "https://cdn.discordapp.com/attachments/1/2/shot.png",
                     "size": 1024,
+                    "width": 800,
+                    "height": 600,
                 }
             ],
         }
@@ -455,6 +552,7 @@ class TestAttachmentPolicy:
         msg = await ch._queue.get()
         assert len(msg.metadata["discord_image_attachments"]) == 1
         assert msg.metadata["discord_image_attachments"][0]["filename"] == "shot.png"
+        assert msg.metadata["discord_image_attachments"][0]["width"] == 800
 
     @pytest.mark.asyncio
     async def test_non_image_attachment_denied(self):
@@ -483,13 +581,65 @@ class TestAttachmentPolicy:
             "content": "<@999> files",
             "id": "444",
             "attachments": [
-                {"content_type": "image/png", "filename": "shot.png", "url": "http://x"},
+                {
+                    "content_type": "image/png",
+                    "filename": "shot.png",
+                    "url": "https://cdn.discordapp.com/attachments/1/2/shot.png",
+                },
                 {"content_type": "application/pdf", "filename": "doc.pdf", "url": "http://y"},
             ],
         }
         await ch._handle_message(data)
         # Mixed = denied (non-image present).
         assert ch._queue.empty()
+
+    @pytest.mark.asyncio
+    async def test_invalid_image_metadata_denied_with_audit_details(self):
+        ch = self._make_channel()
+        ch._emit_audit = MagicMock()
+        data = {
+            "author": {"id": "111", "bot": False},
+            "channel_id": "222",
+            "guild_id": "333",
+            "content": "<@999> look",
+            "id": "444",
+            "attachments": [
+                {
+                    "content_type": "image/png",
+                    "filename": "huge.png",
+                    "url": "https://cdn.discordapp.com/attachments/1/2/huge.png",
+                    "size": 9 * 1024 * 1024,
+                }
+            ],
+        }
+
+        await ch._handle_message(data)
+
+        assert ch._queue.empty()
+        ch._emit_audit.assert_any_call(
+            "discord.channel.attachment_denied",
+            "deny",
+            {
+                "author_id": "111",
+                "channel_id": "222",
+                "attachment_count": 1,
+                "attachments": [
+                    {
+                        "filename": "huge.png",
+                        "content_type": "image/png",
+                        "size": 9 * 1024 * 1024,
+                        "width": None,
+                        "height": None,
+                        "url_host": "cdn.discordapp.com",
+                        "max_size": 8 * 1024 * 1024,
+                        "max_dimension": 8192,
+                        "max_pixels": 40_000_000,
+                        "reasons": ["image_too_large"],
+                    }
+                ],
+                "reason": "attachment_metadata_not_permitted",
+            },
+        )
 
     @pytest.mark.asyncio
     async def test_no_attachment_passes_through(self):
