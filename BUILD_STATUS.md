@@ -1,50 +1,59 @@
 # Build Status
 
-Last updated: 2026-04-27
+Last updated: 2026-07-07
 
-## Current State
+## Completed Work
 
-- Loop session 3 continued from the initialized OpenClaw/humanize artifacts.
-- Implemented the first A1 slice: `missy/agent/subscription.py` provides an `AgentSubscription` state machine for streaming message/tool/compaction events.
-- Lightly wired A1 into `AgentRuntime.run_stream()` so single-turn streaming uses the same tag-stripping and monotonic buffering path.
-- Added targeted tests for subscription reconciliation, split tag stripping, code-span awareness, reasoning streaming, reply directives, block flush points, compaction retry state, and runtime streaming integration.
-- Implemented A2 `missy/policy/tool_policy_pipeline.py` with profile layers, standard profile→provider→global→agent→group→sandbox→subagent layer construction, group expansion, glob matching, `-tool` deny syntax, fail-warning unknown allowlists, and per-step trace records.
-- Wired `AgentRuntime._get_tools()` through the A2 pipeline while preserving existing `full`, `safe-chat`, `discord`, and `no-tools` capability-mode behavior.
-- Hardened A2 with config-backed policy surfaces:
-  - `tools.profile/allow/deny/alsoAllow/byProvider/byModel/groups`
-  - `agents.<id>.tools.*`
-  - `agents.<id>.subagents.tools.*`
-  - `sandbox.tools.*`
-- Routed parsed YAML policy objects through CLI-created `AgentConfig` instances for ask/run/gateway/API paths.
-- Documented tool visibility policy in `docs/configuration.md`.
+- Continued the Discord integration overhaul without replacing existing channel, gateway, REST, policy, or voice modules.
+- Added a process-local Discord voice binding layer so built-in tools can safely dispatch onto the active Discord voice manager's asyncio loop.
+- Added built-in Discord voice tools:
+  - `discord_voice_join`
+  - `discord_voice_leave`
+  - `discord_voice_say`
+  - `discord_voice_status`
+- Registered the Discord voice tools in the built-in tool registry so the agent runtime can actually expose them through normal tool selection.
+- Declared Discord network permissions on the voice tools for `discord.com` and `gateway.discord.gg`, keeping tool execution behind the registry policy checks.
+- Tightened Discord channel lifecycle:
+  - voice binding is registered only after `DiscordVoiceManager.start()` succeeds;
+  - stale voice binding is cleared on startup failure;
+  - `DiscordChannel.stop()` stops the voice manager and clears the binding before disconnecting the raw Gateway client.
+- Added audit events for voice tool lifecycle:
+  - `discord.voice.binding_registered`
+  - `discord.voice.start_failed`
+- Hardened optional-dependency tests so missing `faster_whisper`, `torch`, and `ctranslate2` paths are simulated even when those packages are installed in the host environment.
+- Installed OpenCV test dependency in the runtime environment after the full suite exposed missing/incompatible `cv2` state:
+  - apt package: `python3-opencv`
+  - user-site wheel: `opencv-python-headless 5.0.0.93`, required because user-site NumPy is `2.4.3`.
 
-## Verification
+## Current Architecture State
 
-- `pytest tests/agent/test_subscription.py tests/agent/test_runtime_streaming.py -q` passed: 18 tests.
-- `pytest -q` passed: 20077 passed, 14 skipped in 369.30s.
-- `ruff check .` passed.
-- `ruff format --check .` passed.
-- Session 2 focused verification passed:
-  - `pytest tests/policy/test_tool_policy_pipeline.py tests/agent/test_runtime_streaming.py tests/agent/test_coverage_gaps.py::TestRuntimeCapabilityMode -q`: 19 passed.
-  - `pytest tests/agent/test_coverage_gaps.py::TestRuntimeCapabilityMode tests/tools/test_registry_policy_edges.py -q`: 58 passed.
-  - `ruff check missy/policy/tool_policy_pipeline.py missy/agent/runtime.py tests/policy/test_tool_policy_pipeline.py tests/agent/test_runtime_streaming.py`: passed.
-  - `ruff format --check missy/policy/tool_policy_pipeline.py missy/agent/runtime.py tests/policy/test_tool_policy_pipeline.py tests/agent/test_runtime_streaming.py`: passed.
-  - `ruff check .`: passed.
-  - `ruff format --check .`: passed, 702 files already formatted.
-- Session 3 focused verification passed:
-  - `pytest tests/policy/test_tool_policy_pipeline.py tests/config/test_settings.py tests/agent/test_runtime_config_edges.py tests/agent/test_runtime_streaming.py tests/tools/test_registry_policy_edges.py -q`: 222 passed.
-  - `pytest -q`: 20085 passed, 14 skipped in 365.02s.
-  - `ruff check .`: passed.
-  - `ruff format --check .`: passed, 702 files already formatted.
+- Discord text traffic continues to use Missy's raw Gateway client plus `DiscordRestClient` over `PolicyHTTPClient`.
+- Discord access control still enforces own-message filtering, bot-loop prevention, DM policy, guild policy, allowlists, require-mention behavior, credential detection, and attachment gating before messages enter the agent queue.
+- Discord voice remains an optional surface backed by `DiscordVoiceManager` and lazy-started from recognized voice commands.
+- Agent-callable Discord voice actions now flow through:
+  1. runtime tool selection,
+  2. `ToolRegistry` permission checks and audit,
+  3. `discord_voice_*` built-in tools,
+  4. `voice_binding.py`,
+  5. active `DiscordVoiceManager` coroutine dispatch.
+- The binding is process-local and lifecycle-scoped. Multi-account voice routing still needs a stronger account/guild scoped binding model.
 
-## Repository Notes
+## Remaining Tasks
 
-- Pre-existing untracked files at session start: `.embedded_prompt.txt`, `build_log.txt`.
-- No new third-party dependencies were added.
+- Replace the process-wide single voice binding with an account-aware or guild-aware binding registry before relying on concurrent multi-account Discord voice.
+- Add explicit policy/profile defaults for when `discord_voice_*` tools should be visible in Discord capability mode.
+- Extend structured Discord diagnostics to report voice binding state, manager readiness, listen/speak availability, and configured policy gates.
+- Continue hardening Discord attachment/media flows with size limits, MIME validation, URL fetch policy, and audit details for accepted image attachments.
+- Continue gateway lifecycle improvements: reconnect backoff tuning, shutdown ordering tests, heartbeat diagnostics, and slash command registration observability.
+- Expand operator docs for Discord voice prerequisites, system ffmpeg, optional STT/TTS availability, and safe troubleshooting commands.
 
-## Remaining Work
+## Blockers
 
-- A1 still needs deeper runtime wiring for the tool-call loop and channel block replies.
-- A2 is wired and config-backed for provider/global/agent/sandbox/subagent policies; future hardening can add channel/group policy sources and richer audit display.
-- A3 through A13 remain to be implemented after A1/A2 hardening.
-- H_A through H_I are tracked but not yet implemented.
+- No code blocker remains for this session.
+- The first full-suite run failed because the environment lacked a compatible OpenCV import path. This was corrected in the runtime environment and the full suite now passes.
+
+## Next Actions
+
+1. Add an account/guild scoped `DiscordVoiceBindingRegistry` and migrate tools to select a binding from Discord context.
+2. Add Discord diagnostics output for voice binding readiness and lifecycle audit events.
+3. Add policy visibility tests proving `discord_voice_*` tools are available only in intended Discord/tool profiles.

@@ -67,15 +67,12 @@ class TestFasterWhisperSTTLoad:
 
     def test_load_raises_import_error_when_faster_whisper_missing(self):
         stt = self._make_stt()
-        import sys
 
-        saved = sys.modules.pop("faster_whisper", None)
-        try:
-            with pytest.raises(ImportError, match="faster-whisper"):
-                stt.load()
-        finally:
-            if saved is not None:
-                sys.modules["faster_whisper"] = saved
+        with (
+            patch.dict("sys.modules", {"faster_whisper": None}),
+            pytest.raises(ImportError, match="faster-whisper"),
+        ):
+            stt.load()
 
     def test_unload_clears_model(self):
         stt = self._make_stt()
@@ -106,20 +103,12 @@ class TestFasterWhisperSTTAutoDevice:
         return FasterWhisperSTT(device=device, compute_type=compute_type)
 
     def test_auto_device_falls_back_to_cpu_when_torch_missing(self):
-        import sys
-
         from missy.channels.voice.stt.whisper import FasterWhisperSTT
 
-        # Remove torch and ctranslate2 so detection falls through to cpu
-        saved_torch = sys.modules.pop("torch", None)
-        saved_ct2 = sys.modules.pop("ctranslate2", None)
-        try:
+        # Force both optional CUDA probes to look unavailable even when the
+        # host test environment has one of the packages installed.
+        with patch.dict("sys.modules", {"torch": None, "ctranslate2": None}):
             result = FasterWhisperSTT._detect_device()
-        finally:
-            if saved_torch is not None:
-                sys.modules["torch"] = saved_torch
-            if saved_ct2 is not None:
-                sys.modules["ctranslate2"] = saved_ct2
         assert result == "cpu"
 
     def test_auto_device_uses_cuda_when_torch_available(self):

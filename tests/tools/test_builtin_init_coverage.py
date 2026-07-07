@@ -116,3 +116,16 @@ class TestAllToolClassesList:
         assert TTSSpeakTool in _ALL_TOOL_CLASSES
         assert AudioListDevicesTool in _ALL_TOOL_CLASSES
         assert AudioSetVolumeTool in _ALL_TOOL_CLASSES
+
+    def test_discord_voice_tools_present(self):
+        from missy.tools.builtin.discord_voice import (
+            DiscordVoiceJoinTool,
+            DiscordVoiceLeaveTool,
+            DiscordVoiceSayTool,
+            DiscordVoiceStatusTool,
+        )
+
+        assert DiscordVoiceJoinTool in _ALL_TOOL_CLASSES
+        assert DiscordVoiceLeaveTool in _ALL_TOOL_CLASSES
+        assert DiscordVoiceSayTool in _ALL_TOOL_CLASSES
+        assert DiscordVoiceStatusTool in _ALL_TOOL_CLASSES

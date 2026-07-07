@@ -33,6 +33,12 @@ from missy.tools.builtin.browser_tools import (
 from missy.tools.builtin.calculator import CalculatorTool
 from missy.tools.builtin.code_evolve import CodeEvolveTool
 from missy.tools.builtin.discord_upload import DiscordUploadTool
+from missy.tools.builtin.discord_voice import (
+    DiscordVoiceJoinTool,
+    DiscordVoiceLeaveTool,
+    DiscordVoiceSayTool,
+    DiscordVoiceStatusTool,
+)
 from missy.tools.builtin.file_delete import FileDeleteTool
 from missy.tools.builtin.file_read import FileReadTool
 from missy.tools.builtin.file_write import FileWriteTool
@@ -97,6 +103,10 @@ __all__ = [
     "CalculatorTool",
     "CodeEvolveTool",
     "DiscordUploadTool",
+    "DiscordVoiceJoinTool",
+    "DiscordVoiceLeaveTool",
+    "DiscordVoiceSayTool",
+    "DiscordVoiceStatusTool",
     "FileDeleteTool",
     "IncusCopyMoveTool",
     "IncusConfigTool",
@@ -157,6 +167,10 @@ _ALL_TOOL_CLASSES = [
     CalculatorTool,
     CodeEvolveTool,
     DiscordUploadTool,
+    DiscordVoiceJoinTool,
+    DiscordVoiceLeaveTool,
+    DiscordVoiceSayTool,
+    DiscordVoiceStatusTool,
     FileDeleteTool,
     FileReadTool,
     IncusCopyMoveTool,

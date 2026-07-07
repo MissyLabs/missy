@@ -13,6 +13,8 @@ missy/channels/discord/
 ├── rest.py              Discord REST API v10 client (wraps PolicyHTTPClient)
 ├── gateway.py           Discord Gateway WebSocket client (websockets library)
 ├── channel.py           DiscordChannel — BaseChannel implementation
+├── voice.py             Optional discord.py voice manager
+├── voice_binding.py     Process-local manager/loop binding for tools
 └── commands.py          Slash command definitions and routing
 ```
 
@@ -49,6 +51,27 @@ missy/channels/discord/
                    |
             ChannelMessage
 ```
+
+## Voice tool lifecycle
+
+`DiscordChannel` lazy-starts `DiscordVoiceManager` when a message matches a
+voice intent. Once startup completes, the channel registers the active manager
+and its asyncio loop in `voice_binding.py`. Built-in tools
+(`discord_voice_join`, `discord_voice_leave`, `discord_voice_say`, and
+`discord_voice_status`) fetch that binding and dispatch manager coroutines with
+`asyncio.run_coroutine_threadsafe`.
+
+The binding is deliberately lifecycle-scoped:
+
+1. It is set only after `DiscordVoiceManager.start()` succeeds.
+2. It is cleared if manager startup raises.
+3. It is cleared during `DiscordChannel.stop()`.
+4. `DiscordChannel.stop()` also stops the manager before disconnecting the raw
+   Gateway client.
+
+This keeps agent-triggered voice actions tied to the currently running Discord
+channel instead of leaving stale process-global state behind after failures or
+shutdown.
 
 ---
 
@@ -234,6 +257,33 @@ All events share the base `AuditEvent` fields:
     "channel_id": "<discord channel id>",
     "reply_to": "<message id or null>",
     "error": "<only on result=error>"
+  }
+}
+```
+
+### discord.voice.binding_registered
+
+```json
+{
+  "event_type": "discord.voice.binding_registered",
+  "result": "allow",
+  "detail": {
+    "guild_id": "<discord guild id>",
+    "channel_id": "<discord text channel id>"
+  }
+}
+```
+
+### discord.voice.start_failed
+
+```json
+{
+  "event_type": "discord.voice.start_failed",
+  "result": "error",
+  "detail": {
+    "guild_id": "<discord guild id>",
+    "channel_id": "<discord text channel id>",
+    "error": "<startup error>"
   }
 }
 ```
