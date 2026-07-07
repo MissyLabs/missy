@@ -357,9 +357,7 @@ class SchedulerManager:
             if job.consecutive_failures > 0:
                 self._reschedule_into_window(job)
             else:
-                logger.info(
-                    "Job %s outside active_hours %s; skipping.", job.id, job.active_hours
-                )
+                logger.info("Job %s outside active_hours %s; skipping.", job.id, job.active_hours)
             return
 
         session_id = str(uuid.uuid4())
@@ -526,7 +524,9 @@ class SchedulerManager:
                 logger.warning("Failed to remove one-shot job %r after run: %s", job_id, exc)
 
     @staticmethod
-    def _next_active_window_start(active_hours: str, now: datetime | None = None) -> datetime | None:
+    def _next_active_window_start(
+        active_hours: str, now: datetime | None = None
+    ) -> datetime | None:
         """Return the next local datetime at which *active_hours* opens.
 
         Args:
@@ -545,9 +545,7 @@ class SchedulerManager:
         if not m:
             return None
         ref = now or datetime.now()
-        start = ref.replace(
-            hour=int(m.group(1)), minute=int(m.group(2)), second=0, microsecond=0
-        )
+        start = ref.replace(hour=int(m.group(1)), minute=int(m.group(2)), second=0, microsecond=0)
         if start <= ref:
             start += timedelta(days=1)
         return start

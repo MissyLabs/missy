@@ -72,9 +72,7 @@ def _policy_request_hook(request: httpx.Request) -> None:
     except RuntimeError:
         # Policy engine not initialised yet (e.g. provider used before
         # runtime bootstrap). Allow but log — do not crash provider startup.
-        logger.debug(
-            "Policy engine not initialised; allowing provider request to %s", host
-        )
+        logger.debug("Policy engine not initialised; allowing provider request to %s", host)
         return
 
     try:

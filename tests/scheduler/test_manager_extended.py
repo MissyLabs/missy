@@ -122,9 +122,7 @@ class TestRunJob:
                 started_manager._run_job(job.id)
                 MockRuntime.assert_not_called()
 
-    def test_pending_retry_outside_window_is_rescheduled(
-        self, started_manager: SchedulerManager
-    ):
+    def test_pending_retry_outside_window_is_rescheduled(self, started_manager: SchedulerManager):
         """A retry (consecutive_failures>0) landing outside active_hours must
         be rescheduled into the next window rather than silently dropped."""
         job = started_manager.add_job(

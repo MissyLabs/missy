@@ -119,7 +119,7 @@ class TestHandleMessageCredentialDetection:
     """Integration-level tests for credential detection in _handle_message."""
 
     def _run(self, coro):
-        return asyncio.get_event_loop().run_until_complete(coro)
+        return asyncio.run(coro)
 
     def test_secret_message_is_dropped(self) -> None:
         """A message containing an AWS key should not be enqueued."""
