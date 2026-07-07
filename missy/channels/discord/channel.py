@@ -734,20 +734,26 @@ class DiscordChannel(BaseChannel):
         channel_id: str,
         content: str,
     ) -> bool:
-        """Check for !analyze / !screenshot commands and handle them."""
+        """Handle image requests, either as !analyze / !screenshot bang
+        commands or as natural-language phrasings ("what's in this
+        screenshot?", "save that image to /tmp")."""
         import re
 
         text = content.strip()
         # Strip leading bot mentions so "@Missy !analyze" works.
         text = re.sub(r"^(<@!?\d+>\s*)+", "", text).strip()
-        if not text.startswith("!"):
-            return False
 
-        cmd = text.split()[0].lower()
-        if cmd not in ("!analyze", "!screenshot"):
-            return False
+        from missy.channels.discord.image_commands import (
+            infer_image_intent,
+            maybe_handle_image_command,
+        )
 
-        from missy.channels.discord.image_commands import maybe_handle_image_command
+        # Accept either an explicit bang command (!analyze / !screenshot) or a
+        # natural-language image request. Anything else falls through to the
+        # normal agent path so ordinary conversation is unaffected.
+        is_bang = text.startswith("!") and text.split()[0].lower() in ("!analyze", "!screenshot")
+        if not is_bang and infer_image_intent(text) is None:
+            return False
 
         # Show typing indicator while processing.
         if self._rest is not None:
@@ -775,16 +781,24 @@ class DiscordChannel(BaseChannel):
         author_id: str,
         content: str,
     ) -> bool:
-        """Check for !screen commands and handle them."""
+        """Handle screencast requests, either as "!screen ..." bang commands
+        or as natural-language phrasings ("share my screen", "what's on the
+        screen", "stop the screen share")."""
         import re
 
         text = content.strip()
         # Strip leading bot mentions so "@Missy !screen share" works.
         text = re.sub(r"^(<@!?\d+>\s*)+", "", text).strip()
-        if not text.startswith("!screen"):
-            return False
 
-        from missy.channels.discord.screen_commands import maybe_handle_screen_command
+        from missy.channels.discord.screen_commands import (
+            infer_screen_intent,
+            maybe_handle_screen_command,
+        )
+
+        # Accept either an explicit "!screen ..." command or a natural-language
+        # screen request; otherwise fall through to the normal agent path.
+        if not text.startswith("!screen") and infer_screen_intent(text) is None:
+            return False
 
         result = await maybe_handle_screen_command(
             content=text,
