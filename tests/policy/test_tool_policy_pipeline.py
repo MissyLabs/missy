@@ -112,6 +112,29 @@ def test_capability_mode_layers_preserve_existing_runtime_modes():
     assert none.tools == ()
 
 
+def test_discord_capability_mode_includes_voice_tools():
+    decision = resolve_tool_policy(
+        [
+            "calculator",
+            "discord_upload_file",
+            "discord_voice_join",
+            "discord_voice_leave",
+            "discord_voice_say",
+            "discord_voice_status",
+            "browser_navigate",
+            "x11_click",
+        ],
+        layers_for_capability_mode("discord"),
+    )
+
+    assert "discord_voice_join" in decision.tools
+    assert "discord_voice_leave" in decision.tools
+    assert "discord_voice_say" in decision.tools
+    assert "discord_voice_status" in decision.tools
+    assert "browser_navigate" not in decision.tools
+    assert "x11_click" not in decision.tools
+
+
 def test_configured_layers_apply_provider_global_agent_sandbox_subagent_order():
     layers = build_configured_tool_policy_layers(
         capability_mode="full",

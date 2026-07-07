@@ -230,6 +230,20 @@ Voice startup emits `discord.voice.binding_registered` on success and
 `discord.voice.start_failed` on failure. Tool invocations still pass through
 the normal tool registry audit path.
 
+`missy discord diagnostics` reports the current static and in-process Discord
+readiness in one place:
+
+- account token presence, application IDs, DM policy, guild count, bot-loop
+  filtering, and require-mention routing
+- `discord.com` and `gateway.discord.gg` network policy readiness
+- Discord capability-mode visibility for `discord_voice_*`
+- process-local account/guild voice bindings with ready, listen, and speak
+  capability flags
+- recent Discord lifecycle audit events such as voice startup failures
+
+The diagnostics command never prints token values; it only reports whether a
+token resolved from config, environment, or vault.
+
 ---
 
 ## Security model

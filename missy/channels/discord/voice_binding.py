@@ -114,10 +114,19 @@ def get_voice_binding(
         return None
 
 
-def list_voice_bindings() -> list[dict[str, str]]:
+def list_voice_bindings() -> list[dict[str, str | bool]]:
     """Return a diagnostics-friendly snapshot of registered scopes."""
     with _lock:
-        return [
-            {"account_id": binding.account_id, "guild_id": binding.guild_id}
-            for binding in _bindings.values()
-        ]
+        snapshot: list[dict[str, str | bool]] = []
+        for binding in _bindings.values():
+            manager = binding.manager
+            snapshot.append(
+                {
+                    "account_id": binding.account_id,
+                    "guild_id": binding.guild_id,
+                    "ready": bool(getattr(manager, "is_ready", False)),
+                    "can_listen": bool(getattr(manager, "can_listen", False)),
+                    "can_speak": bool(getattr(manager, "can_speak", False)),
+                }
+            )
+        return snapshot

@@ -75,6 +75,13 @@ account and guild instead of leaving stale process-global state behind after
 failures or shutdown. If multiple accounts are registered for the same guild
 and the tool call omits `account_id`, lookup is ambiguous and fails closed.
 
+`missy discord diagnostics` reads the same process-local binding registry for
+operator-facing status. The registry snapshot includes the account/guild scope
+plus manager readiness and whether STT/TTS-backed listen/speak paths are
+available. In a separate CLI process the runtime table may be empty even when a
+service process has active voice; static policy and recent audit checks still
+run from configuration and the audit log.
+
 ---
 
 ## Gateway connection lifecycle
