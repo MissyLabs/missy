@@ -1,28 +1,40 @@
 # BUILD_RESULTS
 
-- Timestamp: 2026-07-07 19:08:32 EDT
+- Timestamp: 2026-07-07 19:48 EDT
 - Branch: overhaul/discord-20260707-215326
 - Primary focus: complete Discord integration overhaul
 
-## Repository Snapshot
+## Changed Files
 
-- Implemented in-place changes to Discord channel/media helpers, docs, tests, and required tracking artifacts.
-- Existing untracked loop/controller files remain uncommitted and were not used as implementation inputs.
+- `missy/channels/discord/gateway.py`
+- `missy/channels/discord/channel.py`
+- `missy/cli/main.py`
+- `tests/channels/test_discord_protocol_deep.py`
+- `tests/channels/test_discord_channel_coverage.py`
+- `tests/cli/test_cli_commands.py`
+- `docs/discord.md`
+- `docs/implementation/discord-channel.md`
+- `docs/implementation/audit-events.md`
+- common tracking artifacts
 
-## Commands Run
+## Build And Verification Results
 
-```bash
-pytest tests/channels/test_discord_image_analyze.py tests/channels/test_discord_image_gaps.py::TestSaveDiscordAttachmentPathTraversal tests/security/test_discord_attachment_codeevolution_filewrite_security.py::TestDiscordSaveAttachmentSanitization -q
-pytest tests/channels/test_discord_image_analyze.py tests/channels/test_discord_image_gaps.py tests/channels/discord/test_image_commands.py tests/channels/test_discord_channel_coverage.py tests/channels/test_discord_channel_gap_coverage.py tests/channels/test_discord_protocol_deep.py tests/security/test_discord_attachment_codeevolution_filewrite_security.py::TestDiscordSaveAttachmentSanitization -q
-pytest -q
-ruff check .
-ruff format --check .
+```text
+pytest tests/channels/test_discord_protocol_deep.py tests/channels/test_discord_extended.py tests/channels/test_discord_channel_coverage.py tests/cli/test_cli_commands.py::TestDiscordDiagnostics tests/unit/test_hardening_piper_discord.py::TestDiscordGatewayOpcodes -q
+288 passed in 15.36s
 ```
 
-## Results
+```text
+timeout 1200 pytest -q
+20270 passed, 13 skipped in 377.44s (0:06:17)
+```
 
-- Focused image/security suite: 54 passed.
-- Broader Discord media/channel/protocol suite: 353 passed.
-- Full pytest suite: 20266 passed, 13 skipped in 367.66s.
-- Ruff lint: passed.
-- Ruff format check: 708 files already formatted.
+```text
+ruff check .
+All checks passed.
+```
+
+```text
+ruff format --check .
+708 files already formatted.
+```

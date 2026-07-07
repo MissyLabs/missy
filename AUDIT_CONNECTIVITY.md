@@ -1,16 +1,14 @@
 # AUDIT_CONNECTIVITY
 
-- Timestamp: 2026-07-07 19:08:32 EDT
+- Timestamp: 2026-07-07 19:48 EDT
 
 Expected connectivity posture:
-
 - default-deny network where practical
 - exact provider endpoints
-- exact Discord REST and Gateway endpoints
-- exact Discord CDN hosts for attachment downloads
+- exact Discord gateway and REST endpoints
 - no unreviewed broad outbound access
 
-Session update:
-
-- Discord image attachment metadata must reference `https://cdn.discordapp.com` or `https://media.discordapp.net` before routing or download.
-- `DiscordRestClient.download_attachment()` still enforces Discord CDN hosts at download time through the policy-backed HTTP client.
+Session connectivity notes:
+- Discord REST remains routed through `PolicyHTTPClient`.
+- Discord Gateway WSS lifecycle now records heartbeat ACK, reconnect request, invalid-session, resume-sent, and session-resumed audit signals.
+- `missy discord diagnostics` summarizes recent lifecycle signals from the audit log without exposing bot tokens or Gateway resume URLs.

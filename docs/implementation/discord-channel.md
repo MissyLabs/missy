@@ -106,7 +106,8 @@ run from configuration and the audit log.
 
 5. **Heartbeat loop** — Sends `{"op": 1, "d": <last_sequence>}` on the
    interval provided in HELLO, with a random initial jitter to avoid
-   thundering-herd reconnects.
+   thundering-herd reconnects. The client records the heartbeat interval,
+   last heartbeat send time, and last ACK time for diagnostics.
 
 6. **RECONNECT (op 7)** — Server requests a reconnect. The client closes
    the connection; `run()` catches the exception and reconnects.
@@ -119,6 +120,13 @@ run from configuration and the audit log.
 
 9. **run()** — The outer loop catches all exceptions, logs them, waits 5
    seconds, and reconnects. Call `disconnect()` to stop cleanly.
+
+`DiscordGatewayClient.get_diagnostics()` returns a redacted lifecycle snapshot
+for in-process operators and tests. It exposes booleans and counters such as
+connected/running state, heartbeat task health, heartbeat ACK overdue status,
+sequence number, session/resume availability, invalid-session count,
+server-requested reconnect count, and resume attempt count. It does not expose
+bot tokens or Gateway resume URLs.
 
 ---
 
@@ -379,13 +387,32 @@ All events share the base `AuditEvent` fields:
 
 ```json
 {
-  "event_type": "discord.gateway.connect | discord.gateway.disconnect | discord.gateway.heartbeat_sent | discord.gateway.session_resumed",
+  "event_type": "discord.gateway.connect | discord.gateway.disconnect | discord.gateway.heartbeat_sent | discord.gateway.heartbeat_ack | discord.gateway.reconnect_requested | discord.gateway.invalid_session | discord.gateway.resume_sent | discord.gateway.session_resumed",
   "result": "allow | error",
   "detail": {
     "url": "<wss url — only on connect>",
     "seq": "<sequence number — only on heartbeat_sent>",
     "bot_user_id": "<only on READY connect>",
-    "error": "<only on result=error>"
+    "error": "<only on result=error>",
+    "reconnect_count": "<only on reconnecting disconnect errors>",
+    "server_reconnect_count": "<only on reconnect_requested>",
+    "resumable": "<only on invalid_session>",
+    "invalid_session_count": "<only on invalid_session>",
+    "resume_attempt_count": "<only on resume_sent/session_resumed>"
+  }
+}
+```
+
+### discord.slash_commands.*
+
+```json
+{
+  "event_type": "discord.slash_commands.registered | discord.slash_commands.registration_failed",
+  "result": "allow | error",
+  "detail": {
+    "scope": "global",
+    "command_count": "<only on success>",
+    "error": "<only on failure>"
   }
 }
 ```

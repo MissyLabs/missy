@@ -1633,11 +1633,61 @@ def discord_diagnostics(ctx: click.Context, limit: int) -> None:
 
     with contextlib.suppress(Exception):
         al = AuditLogger(log_path=cfg.audit_log_path)
-        recent = [
+        all_recent_discord = [
             event
             for event in al.get_recent_events(limit=max(limit * 10, 20))
             if str(event.get("event_type", "")).startswith("discord.")
-        ][-limit:]
+        ]
+        lifecycle_event_types = {
+            "discord.gateway.heartbeat_sent",
+            "discord.gateway.heartbeat_ack",
+            "discord.gateway.reconnect_requested",
+            "discord.gateway.invalid_session",
+            "discord.gateway.resume_sent",
+            "discord.gateway.session_resumed",
+            "discord.slash_commands.registered",
+            "discord.slash_commands.registration_failed",
+        }
+        lifecycle_counts: dict[str, int] = {}
+        for event in all_recent_discord:
+            event_type = str(event.get("event_type", ""))
+            if event_type in lifecycle_event_types:
+                lifecycle_counts[event_type] = lifecycle_counts.get(event_type, 0) + 1
+        lifecycle_table = Table(title="Recent Lifecycle Signals", show_lines=True)
+        lifecycle_table.add_column("Signal")
+        lifecycle_table.add_column("Count", justify="right")
+        lifecycle_table.add_column("Operator Meaning")
+        lifecycle_rows = [
+            (
+                "heartbeat",
+                lifecycle_counts.get("discord.gateway.heartbeat_sent", 0)
+                + lifecycle_counts.get("discord.gateway.heartbeat_ack", 0),
+                "Gateway heartbeat traffic observed.",
+            ),
+            (
+                "reconnect/resume",
+                lifecycle_counts.get("discord.gateway.reconnect_requested", 0)
+                + lifecycle_counts.get("discord.gateway.resume_sent", 0)
+                + lifecycle_counts.get("discord.gateway.session_resumed", 0),
+                "Gateway reconnect or resume activity observed.",
+            ),
+            (
+                "invalid-session",
+                lifecycle_counts.get("discord.gateway.invalid_session", 0),
+                "Discord invalidated a Gateway session.",
+            ),
+            (
+                "slash-registration",
+                lifecycle_counts.get("discord.slash_commands.registered", 0)
+                + lifecycle_counts.get("discord.slash_commands.registration_failed", 0),
+                "Slash command registration attempt observed.",
+            ),
+        ]
+        for name, count, meaning in lifecycle_rows:
+            lifecycle_table.add_row(name, str(count), meaning)
+        console.print(lifecycle_table)
+
+        recent = all_recent_discord[-limit:]
         if recent:
             audit_table = Table(title=f"Recent Discord Events (last {len(recent)})")
             audit_table.add_column("Timestamp", style="dim")

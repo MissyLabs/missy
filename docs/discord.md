@@ -239,7 +239,9 @@ readiness in one place:
 - Discord capability-mode visibility for `discord_voice_*`
 - process-local account/guild voice bindings with ready, listen, and speak
   capability flags
-- recent Discord lifecycle audit events such as voice startup failures
+- recent Discord lifecycle signals from the audit log: heartbeat traffic,
+  reconnect/resume activity, invalid sessions, slash command registration, and
+  voice startup failures
 
 The diagnostics command never prints token values; it only reports whether a
 token resolved from config, environment, or vault.
@@ -323,7 +325,13 @@ the following event types:
 | `discord.gateway.connect` | allow | Gateway connected |
 | `discord.gateway.disconnect` | allow/error | Gateway disconnected |
 | `discord.gateway.heartbeat_sent` | allow | Heartbeat sent |
+| `discord.gateway.heartbeat_ack` | allow | Discord acknowledged the last heartbeat |
+| `discord.gateway.reconnect_requested` | allow | Discord requested a reconnect |
+| `discord.gateway.invalid_session` | error | Discord invalidated the Gateway session |
+| `discord.gateway.resume_sent` | allow | Gateway sent a RESUME payload |
 | `discord.gateway.session_resumed` | allow | Session resumed |
+| `discord.slash_commands.registered` | allow | Slash command bulk registration succeeded |
+| `discord.slash_commands.registration_failed` | error | Slash command registration failed |
 
 ---
 

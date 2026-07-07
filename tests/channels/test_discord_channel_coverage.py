@@ -155,6 +155,11 @@ class TestStart:
             await ch.start()
 
         ch._rest.register_slash_commands.assert_called_once()
+        status = ch.get_diagnostics()["slash_registration"]
+        assert status["attempted"] is True
+        assert status["ok"] is True
+        assert status["scope"] == "global"
+        assert status["command_count"] > 0
 
     @pytest.mark.asyncio
     async def test_start_logs_warning_when_slash_registration_fails(self, caplog):
@@ -173,6 +178,10 @@ class TestStart:
             await ch.start()
 
         assert any("slash command registration" in r.message.lower() for r in caplog.records)
+        status = ch.get_diagnostics()["slash_registration"]
+        assert status["attempted"] is True
+        assert status["ok"] is False
+        assert "403 Forbidden" in status["error"]
 
     @pytest.mark.asyncio
     async def test_start_skips_registration_when_no_app_id(self):
@@ -185,6 +194,7 @@ class TestStart:
             await ch.start()
 
         ch._rest.register_slash_commands.assert_not_called()
+        assert ch.get_diagnostics()["slash_registration"]["attempted"] is False
 
 
 # ---------------------------------------------------------------------------

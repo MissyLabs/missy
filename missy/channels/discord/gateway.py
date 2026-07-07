@@ -35,6 +35,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import time
 from collections.abc import Callable, Coroutine
 from typing import Any
 
@@ -100,6 +101,19 @@ class DiscordGatewayClient:
         self._resume_gateway_url: str | None = None
         self._bot_user_id: str | None = None
         self._running: bool = False
+        self._heartbeat_interval: float | None = None
+        self._last_heartbeat_sent_at: float | None = None
+        self._last_heartbeat_ack_at: float | None = None
+        self._last_ready_at: float | None = None
+        self._last_resume_sent_at: float | None = None
+        self._last_resumed_at: float | None = None
+        self._last_disconnect_at: float | None = None
+        self._last_disconnect_error: str | None = None
+        self._last_invalid_session_resumable: bool | None = None
+        self._reconnect_count: int = 0
+        self._resume_attempt_count: int = 0
+        self._invalid_session_count: int = 0
+        self._server_reconnect_count: int = 0
 
     # ------------------------------------------------------------------
     # Public interface
@@ -109,6 +123,69 @@ class DiscordGatewayClient:
     def bot_user_id(self) -> str | None:
         """The Discord user ID of the connected bot, available after READY."""
         return self._bot_user_id
+
+    def get_diagnostics(self) -> dict[str, Any]:
+        """Return a redacted lifecycle snapshot for operator diagnostics."""
+        self._ensure_diagnostic_state()
+        now = time.time()
+
+        def _age(ts: float | None) -> float | None:
+            if ts is None:
+                return None
+            return max(0.0, round(now - ts, 3))
+
+        heartbeat_task_active = self._heartbeat_task is not None and not self._heartbeat_task.done()
+        heartbeat_ack_overdue = False
+        if self._last_heartbeat_sent_at is not None:
+            heartbeat_ack_overdue = (
+                self._last_heartbeat_ack_at is None
+                or self._last_heartbeat_ack_at < self._last_heartbeat_sent_at
+            )
+
+        return {
+            "running": self._running,
+            "connected": self._ws is not None,
+            "heartbeat_task_active": heartbeat_task_active,
+            "heartbeat_interval_seconds": self._heartbeat_interval,
+            "heartbeat_ack_overdue": heartbeat_ack_overdue,
+            "last_heartbeat_sent_age_seconds": _age(self._last_heartbeat_sent_at),
+            "last_heartbeat_ack_age_seconds": _age(self._last_heartbeat_ack_at),
+            "sequence": self._sequence,
+            "discord_session_active": bool(self._discord_session_id),
+            "resume_gateway_url_present": bool(self._resume_gateway_url),
+            "bot_user_id": self._bot_user_id,
+            "last_ready_age_seconds": _age(self._last_ready_at),
+            "last_resume_sent_age_seconds": _age(self._last_resume_sent_at),
+            "last_resumed_age_seconds": _age(self._last_resumed_at),
+            "last_disconnect_age_seconds": _age(self._last_disconnect_at),
+            "last_disconnect_error": self._last_disconnect_error,
+            "last_invalid_session_resumable": self._last_invalid_session_resumable,
+            "reconnect_count": self._reconnect_count,
+            "resume_attempt_count": self._resume_attempt_count,
+            "invalid_session_count": self._invalid_session_count,
+            "server_reconnect_count": self._server_reconnect_count,
+        }
+
+    def _ensure_diagnostic_state(self) -> None:
+        """Backfill lifecycle diagnostic fields for low-level test objects."""
+        defaults: dict[str, Any] = {
+            "_heartbeat_interval": None,
+            "_last_heartbeat_sent_at": None,
+            "_last_heartbeat_ack_at": None,
+            "_last_ready_at": None,
+            "_last_resume_sent_at": None,
+            "_last_resumed_at": None,
+            "_last_disconnect_at": None,
+            "_last_disconnect_error": None,
+            "_last_invalid_session_resumable": None,
+            "_reconnect_count": 0,
+            "_resume_attempt_count": 0,
+            "_invalid_session_count": 0,
+            "_server_reconnect_count": 0,
+        }
+        for name, value in defaults.items():
+            if not hasattr(self, name):
+                setattr(self, name, value)
 
     async def connect(self) -> None:
         """Open the Gateway WebSocket connection and complete the handshake.
@@ -149,6 +226,7 @@ class DiscordGatewayClient:
                 logger.debug("Gateway close error (ignored): %s", exc)
             self._ws = None
 
+        self._last_disconnect_at = time.time()
         self._emit_audit("discord.gateway.disconnect", "allow", {})
 
     async def run(self) -> None:
@@ -166,10 +244,13 @@ class DiscordGatewayClient:
                 if not self._running:
                     break
                 logger.warning("Gateway disconnected: %s — reconnecting in 5s", exc)
+                self._reconnect_count += 1
+                self._last_disconnect_at = time.time()
+                self._last_disconnect_error = str(exc)
                 self._emit_audit(
                     "discord.gateway.disconnect",
                     "error",
-                    {"error": str(exc)},
+                    {"error": str(exc), "reconnect_count": self._reconnect_count},
                 )
                 await asyncio.sleep(5)
 
@@ -192,6 +273,7 @@ class DiscordGatewayClient:
 
     async def _handle_payload(self, payload: dict[str, Any]) -> None:
         """Route a Gateway payload to the appropriate handler."""
+        self._ensure_diagnostic_state()
         op: int = payload.get("op", -1)
         data: Any = payload.get("d")
         seq: int | None = payload.get("s")
@@ -213,19 +295,41 @@ class DiscordGatewayClient:
             await self._send_heartbeat()
 
         elif op == _OP_HEARTBEAT_ACK:
+            self._last_heartbeat_ack_at = time.time()
+            self._emit_audit(
+                "discord.gateway.heartbeat_ack",
+                "allow",
+                {"seq": self._sequence},
+            )
             logger.debug("Gateway: heartbeat acknowledged")
 
         elif op == _OP_RECONNECT:
             logger.info("Gateway: server requested reconnect")
+            self._server_reconnect_count += 1
+            self._emit_audit(
+                "discord.gateway.reconnect_requested",
+                "allow",
+                {"server_reconnect_count": self._server_reconnect_count},
+            )
             await self._ws.close()
 
         elif op == _OP_INVALID_SESSION:
             resumable: bool = bool(data)
             logger.warning("Gateway: invalid session (resumable=%s)", resumable)
+            self._invalid_session_count += 1
+            self._last_invalid_session_resumable = resumable
             if not resumable:
                 self._discord_session_id = None
                 self._resume_gateway_url = None
                 self._sequence = None
+            self._emit_audit(
+                "discord.gateway.invalid_session",
+                "error",
+                {
+                    "resumable": resumable,
+                    "invalid_session_count": self._invalid_session_count,
+                },
+            )
             await asyncio.sleep(2)
             await self._ws.close()
 
@@ -234,11 +338,13 @@ class DiscordGatewayClient:
 
     async def _handle_dispatch(self, event_name: str | None, data: Any) -> None:
         """Handle a DISPATCH (opcode 0) event."""
+        self._ensure_diagnostic_state()
         if event_name == "READY":
             self._discord_session_id = data.get("session_id")
             self._resume_gateway_url = data.get("resume_gateway_url")
             bot_user = data.get("user", {})
             self._bot_user_id = str(bot_user.get("id", ""))
+            self._last_ready_at = time.time()
             logger.info(
                 "Gateway: READY as %s#%s (id=%s)",
                 bot_user.get("username"),
@@ -253,7 +359,12 @@ class DiscordGatewayClient:
             return
 
         if event_name == "RESUMED":
-            self._emit_audit("discord.gateway.session_resumed", "allow", {})
+            self._last_resumed_at = time.time()
+            self._emit_audit(
+                "discord.gateway.session_resumed",
+                "allow",
+                {"resume_attempt_count": self._resume_attempt_count},
+            )
             logger.info("Gateway: session resumed")
             return
 
@@ -276,6 +387,8 @@ class DiscordGatewayClient:
 
     async def _start_heartbeat(self, interval: float) -> None:
         """Cancel any existing heartbeat task and start a new one."""
+        self._ensure_diagnostic_state()
+        self._heartbeat_interval = interval
         if self._heartbeat_task is not None:
             self._heartbeat_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -295,11 +408,13 @@ class DiscordGatewayClient:
 
     async def _send_heartbeat(self) -> None:
         """Send a single heartbeat payload to the Gateway."""
+        self._ensure_diagnostic_state()
         if self._ws is None:
             return
         payload = json.dumps({"op": _OP_HEARTBEAT, "d": self._sequence})
         try:
             await self._ws.send(payload)
+            self._last_heartbeat_sent_at = time.time()
             self._emit_audit("discord.gateway.heartbeat_sent", "allow", {"seq": self._sequence})
             logger.debug("Gateway: heartbeat sent (seq=%s)", self._sequence)
         except Exception as exc:
@@ -335,6 +450,7 @@ class DiscordGatewayClient:
 
     async def _send_resume(self) -> None:
         """Send the RESUME payload to restore an existing session."""
+        self._ensure_diagnostic_state()
         payload = {
             "op": _OP_RESUME,
             "d": {
@@ -344,6 +460,13 @@ class DiscordGatewayClient:
             },
         }
         await self._ws.send(json.dumps(payload))
+        self._resume_attempt_count += 1
+        self._last_resume_sent_at = time.time()
+        self._emit_audit(
+            "discord.gateway.resume_sent",
+            "allow",
+            {"seq": self._sequence, "resume_attempt_count": self._resume_attempt_count},
+        )
         logger.info("Gateway: RESUME sent (seq=%s)", self._sequence)
 
     # ------------------------------------------------------------------

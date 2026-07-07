@@ -131,6 +131,14 @@ if `tzinfo` is `None`.
 | `discord.channel.pairing_wait` | `network` | `allow` | `DiscordChannel._check_pairing()` | `author_id` |
 | `discord.channel.attachment_denied` | `network` | `deny` | `DiscordChannel._handle_message()` | `author_id`, `channel_id`, `attachment_count`, `reason` |
 | `discord.channel.reply_sent` | `network` | `allow` / `error` | `DiscordChannel.send_to()` | `channel_id`, `reply_to`, `error` |
+| `discord.gateway.heartbeat_sent` | `network` | `allow` | `DiscordGatewayClient._send_heartbeat()` | `seq` |
+| `discord.gateway.heartbeat_ack` | `network` | `allow` | `DiscordGatewayClient._handle_payload()` | `seq` |
+| `discord.gateway.reconnect_requested` | `network` | `allow` | `DiscordGatewayClient._handle_payload()` | `server_reconnect_count` |
+| `discord.gateway.invalid_session` | `network` | `error` | `DiscordGatewayClient._handle_payload()` | `resumable`, `invalid_session_count` |
+| `discord.gateway.resume_sent` | `network` | `allow` | `DiscordGatewayClient._send_resume()` | `seq`, `resume_attempt_count` |
+| `discord.gateway.session_resumed` | `network` | `allow` | `DiscordGatewayClient._handle_dispatch()` | `resume_attempt_count` |
+| `discord.slash_commands.registered` | `network` | `allow` | `DiscordChannel.start()` | `scope`, `command_count` |
+| `discord.slash_commands.registration_failed` | `network` | `error` | `DiscordChannel.start()` | `scope`, `error` |
 
 ---
 

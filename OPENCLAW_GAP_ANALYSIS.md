@@ -1,21 +1,21 @@
 # OpenClaw Gap Analysis
 
-Last updated: 2026-07-07 19:08 EDT
+Last updated: 2026-07-07 19:48 EDT
 
 ## Current Focus: Discord Integration
 
-Missy now has a stronger Discord operator and safety path: diagnostics summarize configuration and runtime readiness, voice tools are policy-visible in Discord mode, scoped voice bindings expose readiness/capability snapshots, and Discord image attachment metadata is validated before agent routing or download.
+Missy now has stronger Discord operator and safety paths: diagnostics summarize configuration and runtime readiness, voice tools are policy-visible in Discord mode, scoped voice bindings expose readiness/capability snapshots, image attachment metadata is validated before agent routing or download, and Gateway lifecycle signals are visible through redacted snapshots plus audit-backed CLI summaries.
 
 ## Remaining Discord Gaps
 
-- Gateway lifecycle diagnostics still need clearer operator-facing status for reconnects, heartbeat health, resume state, and slash command registration failures.
+- Live Gateway snapshots are process-local; a separate service status channel is needed for exact out-of-process CLI visibility.
 - Byte-level image verification remains partial: metadata is bounded, but file signature and true decoded dimensions are not yet verified without an image dependency.
 - Runtime voice binding diagnostics are process-local; a separate service status channel is needed for out-of-process CLI visibility.
 
 ## OpenClaw-Style Operator Ergonomics Gaps
 
 - Audit output should make allow/deny causes easy to scan without requiring raw event inspection across subsystems.
-- Recovery guidance should be attached to common failures: missing token, missing intents, policy-denied Discord host, voice dependency missing, ffmpeg missing, STT/TTS unavailable, wrong-guild voice scope, and ambiguous multi-account scope.
+- Recovery guidance should be attached to common failures: missing token, missing intents, policy-denied Discord host, voice dependency missing, ffmpeg missing, STT/TTS unavailable, wrong-guild voice scope, ambiguous multi-account scope, slash registration failure, invalid Gateway session, and stale heartbeat ACKs.
 - Diagnostics patterns should become reusable for scheduler, provider routing, plugin/tool policy, filesystem, shell, and network actions.
 
 ## Cross-Subsystem Gaps To Preserve For Future Focus
@@ -26,4 +26,4 @@ Missy now has a stronger Discord operator and safety path: diagnostics summarize
 
 ## Recommended Next Slice
 
-Add gateway lifecycle diagnostics for heartbeat health, reconnect/resume state, and slash command registration failures.
+Add a service status surface for live out-of-process Discord Gateway snapshots.
