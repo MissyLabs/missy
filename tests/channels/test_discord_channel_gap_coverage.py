@@ -293,7 +293,12 @@ class TestMaybeHandleVoiceCommand:
         """Lines 647-651: DiscordVoiceManager init/start raises → error sent, returns True."""
         ch = _make_channel()
         ch._voice = None
-        voice_binding.set_voice_binding(MagicMock(), asyncio.get_running_loop())
+        voice_binding.set_voice_binding(
+            MagicMock(),
+            asyncio.get_running_loop(),
+            account_id=ch._voice_account_id(),
+            guild_id="g1",
+        )
 
         ch._rest.send_message = MagicMock()
 
@@ -311,7 +316,7 @@ class TestMaybeHandleVoiceCommand:
         assert result is True
         ch._rest.send_message.assert_called_once()
         assert "Voice unavailable" in ch._rest.send_message.call_args[0][1]
-        assert voice_binding.get_voice_binding() is None
+        assert voice_binding.get_voice_binding(guild_id="g1") is None
 
     @pytest.mark.asyncio
     async def test_voice_command_with_agent_runtime_creates_callback(self):
@@ -345,9 +350,37 @@ class TestMaybeHandleVoiceCommand:
             )
 
         assert result is True
-        binding = voice_binding.get_voice_binding()
+        binding = voice_binding.get_voice_binding(account_id=ch._voice_account_id(), guild_id="g1")
         assert binding is not None
         assert binding.manager is mock_vm
+        assert binding.account_id == "bot-001"
+        assert binding.guild_id == "g1"
+        voice_binding.clear_voice_binding()
+
+    @pytest.mark.asyncio
+    async def test_existing_voice_manager_registers_new_guild_scope(self):
+        ch = _make_channel()
+        ch._voice = MagicMock()
+
+        mock_result = MagicMock()
+        mock_result.handled = True
+        mock_result.reply = None
+
+        with patch(
+            "missy.channels.discord.voice_commands.maybe_handle_voice_command",
+            AsyncMock(return_value=mock_result),
+        ):
+            result = await ch._maybe_handle_voice_command(
+                guild_id="g2",
+                channel_id="c1",
+                author_id="u1",
+                content="join the general voice channel",
+            )
+
+        assert result is True
+        binding = voice_binding.get_voice_binding(account_id=ch._voice_account_id(), guild_id="g2")
+        assert binding is not None
+        assert binding.manager is ch._voice
         voice_binding.clear_voice_binding()
 
     @pytest.mark.asyncio
@@ -357,7 +390,12 @@ class TestMaybeHandleVoiceCommand:
         mock_voice.stop = AsyncMock()
         ch._voice = mock_voice
         ch._gateway.disconnect = AsyncMock()
-        voice_binding.set_voice_binding(mock_voice, asyncio.get_running_loop())
+        voice_binding.set_voice_binding(
+            mock_voice,
+            asyncio.get_running_loop(),
+            account_id=ch._voice_account_id(),
+            guild_id="g1",
+        )
 
         await ch.stop()
 
