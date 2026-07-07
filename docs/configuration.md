@@ -190,7 +190,7 @@ block.
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `name` | string | (same as the mapping key) | Canonical provider name.  Must match one of the built-in provider implementations: `anthropic`, `openai`, or `ollama`. |
-| `model` | string | (required) | Model identifier to use for inference (e.g. `"claude-sonnet-4-6"`, `"gpt-4o"`, `"llama3.2"`). |
+| `model` | string | (required) | Model identifier to use for inference (e.g. `"claude-sonnet-4-6"`, `"auto"` for OpenAI auto-detection, `"llama3.2"`). |
 | `api_key` | string | `null` | API key for the provider.  **Not recommended** -- use environment variables instead.  When `null`, the provider reads `<PROVIDER_NAME>_API_KEY` from the environment (e.g. `ANTHROPIC_API_KEY`). |
 | `base_url` | string | `null` | Override the provider's default API endpoint.  Required for Ollama (`"http://localhost:11434"`).  Also useful for OpenAI-compatible third-party services. |
 | `timeout` | int | `30` | Request timeout in seconds. |
@@ -479,7 +479,7 @@ providers:
 
   openai:
     name: openai
-    model: "gpt-4o"
+    model: "auto"
     # api_key: null                       # Reads OPENAI_API_KEY from env
     # base_url: null                      # Uses SDK default
     timeout: 30

@@ -93,7 +93,7 @@ tools:
 providers:
   anthropic:
     name: anthropic
-    model: "claude-3-5-sonnet-20241022"
+    model: "claude-sonnet-4-6"
     timeout: 30
 
 workspace_path: "~/workspace"
@@ -1047,6 +1047,158 @@ def providers_switch(ctx: click.Context, name: str) -> None:
         sys.exit(1)
 
     _print_success(f"Active provider switched to [bold]{name}[/].")
+
+
+@providers_group.command("auth")
+@click.argument("name", default="openai", required=False)
+@click.option(
+    "--method",
+    type=click.Choice(["api-key", "oauth"], case_sensitive=False),
+    default="api-key",
+    show_default=True,
+    help="OpenAI auth method to refresh.",
+)
+@click.option("--api-key", default=None, help="OpenAI API key. Omit to be prompted.")
+@click.option(
+    "--api-key-env",
+    default=None,
+    help="Environment variable containing the OpenAI API key; stored as a $ENV reference.",
+)
+@click.option("--model", default=None, help='Model selector to store, e.g. "auto" or "gpt-5.5".')
+@click.option("--no-verify", is_flag=True, default=False, help="Skip the OpenAI verification call.")
+@click.pass_context
+def providers_auth(
+    ctx: click.Context,
+    name: str,
+    method: str,
+    api_key: str | None,
+    api_key_env: str | None,
+    model: str | None,
+    no_verify: bool,
+) -> None:
+    """Refresh provider credentials in the config file.
+
+    Currently supports OpenAI API-key auth and OpenAI OAuth/Codex auth.
+    """
+    method = method.lower()
+    if name not in {"openai", "openai-codex"}:
+        _print_error("Only OpenAI re-auth is currently supported.")
+        sys.exit(1)
+
+    import os
+
+    import yaml
+
+    config_file = Path(ctx.obj["config_path"]).expanduser()
+    if not config_file.exists():
+        _print_error(
+            f"Config file not found: {config_file}",
+            hint="Run `missy init` or pass --config to the file you want to update.",
+        )
+        sys.exit(1)
+
+    try:
+        raw = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
+    except Exception as exc:
+        _print_error(f"Could not read config YAML: {exc}")
+        sys.exit(1)
+
+    if not isinstance(raw, dict):
+        _print_error("Config root must be a mapping.")
+        sys.exit(1)
+
+    providers = raw.setdefault("providers", {})
+    if not isinstance(providers, dict):
+        _print_error("Config providers section must be a mapping.")
+        sys.exit(1)
+
+    provider_key = name
+    provider_cfg = providers.get(provider_key)
+    if not isinstance(provider_cfg, dict):
+        provider_cfg = None
+        for key, value in providers.items():
+            if isinstance(value, dict) and value.get("name") == name:
+                provider_key = key
+                provider_cfg = value
+                break
+    if provider_cfg is None:
+        provider_key = "openai-codex" if method == "oauth" else "openai"
+        provider_cfg = {}
+        providers[provider_key] = provider_cfg
+
+    verify_secret: str | None = None
+    if method == "oauth":
+        from missy.cli.oauth import run_openai_oauth
+        from missy.cli.wizard import _PROVIDERS
+
+        console.print("[dim]Starting OpenAI OAuth flow...[/]")
+        token = run_openai_oauth()
+        if not token:
+            _print_error("OpenAI OAuth did not return a token.")
+            sys.exit(1)
+        provider_cfg["name"] = "openai-codex"
+        provider_cfg["api_key"] = token
+        provider_cfg["model"] = (
+            model or provider_cfg.get("model") or _PROVIDERS["openai-codex"]["models"]["primary"]
+        )
+    else:
+        provider_cfg["name"] = "openai"
+        if api_key_env:
+            verify_secret = os.environ.get(api_key_env)
+            if not verify_secret and not no_verify:
+                _print_error(
+                    f"Environment variable {api_key_env!r} is not set.",
+                    hint="Set it first, pass --no-verify, or use --api-key.",
+                )
+                sys.exit(1)
+            provider_cfg["api_key"] = f"${api_key_env}"
+        else:
+            if api_key is None:
+                api_key = click.prompt("OpenAI API key", hide_input=True)
+            if "=" in api_key:
+                api_key = api_key.split("=", 1)[1].strip()
+            api_key = api_key.strip()
+            if not api_key:
+                _print_error("OpenAI API key cannot be empty.")
+                sys.exit(1)
+            provider_cfg["api_key"] = api_key
+            verify_secret = api_key
+        provider_cfg["model"] = model or provider_cfg.get("model") or "auto"
+
+    provider_cfg.setdefault("timeout", 30)
+
+    network = raw.setdefault("network", {})
+    if isinstance(network, dict):
+        presets = network.setdefault("presets", [])
+        if isinstance(presets, list) and "openai" not in presets:
+            presets.append("openai")
+
+    if method == "api-key" and not no_verify and verify_secret:
+        from missy.cli.wizard import _verify_openai
+
+        console.print("[dim]Verifying OpenAI credentials...[/]")
+        if not _verify_openai(verify_secret):
+            _print_error(
+                "OpenAI verification failed; config was not modified.",
+                hint="Pass --no-verify to save the credential anyway.",
+            )
+            sys.exit(1)
+
+    try:
+        from missy.cli.wizard import _write_config_atomic
+        from missy.config.plan import backup_config
+
+        backup_path = backup_config(config_file)
+        content = yaml.safe_dump(raw, sort_keys=False, allow_unicode=True)
+        _write_config_atomic(config_file, content)
+    except Exception as exc:
+        _print_error(f"Failed to update config: {exc}")
+        sys.exit(1)
+
+    _print_success(
+        f"Updated [bold]{provider_key}[/] auth in [bold]{config_file}[/].\n"
+        f"Backup: [dim]{backup_path}[/]"
+    )
 
 
 # ---------------------------------------------------------------------------

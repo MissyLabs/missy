@@ -18,6 +18,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+import yaml
 from click.testing import CliRunner
 
 from missy.cli.main import cli
@@ -289,6 +290,75 @@ class TestProvidersList:
 
         assert result.exit_code == 0
         assert "not loaded" in result.output
+
+
+class TestProvidersAuth:
+    """Tests for `missy providers auth`."""
+
+    def test_providers_auth_openai_updates_config_without_verify(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        cfg_path = tmp_path / "config.yaml"
+        cfg_path.write_text(
+            """\
+config_version: 2
+network:
+  default_deny: true
+  presets: []
+providers:
+  openai:
+    name: openai
+    model: gpt-4o
+    api_key: sk-old
+workspace_path: /tmp/workspace
+audit_log_path: /tmp/audit.jsonl
+""",
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(
+            cli,
+            [
+                "--config",
+                str(cfg_path),
+                "providers",
+                "auth",
+                "openai",
+                "--api-key",
+                "sk-new",
+                "--model",
+                "auto",
+                "--no-verify",
+            ],
+        )
+
+        assert result.exit_code == 0
+        data = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+        assert data["providers"]["openai"]["api_key"] == "sk-new"
+        assert data["providers"]["openai"]["model"] == "auto"
+        assert "openai" in data["network"]["presets"]
+
+    def test_providers_auth_openai_env_ref_requires_set_env_when_verifying(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        cfg_path = tmp_path / "config.yaml"
+        cfg_path.write_text("providers: {}\n", encoding="utf-8")
+
+        result = runner.invoke(
+            cli,
+            [
+                "--config",
+                str(cfg_path),
+                "providers",
+                "auth",
+                "openai",
+                "--api-key-env",
+                "MISSING_OPENAI_KEY",
+            ],
+        )
+
+        assert result.exit_code == 1
+        assert "MISSING_OPENAI_KEY" in (result.output + result.stderr)
 
 
 # ===========================================================================

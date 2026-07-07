@@ -793,7 +793,10 @@ class AgentRuntime:
         try:
             for iteration in range(self.config.max_iterations):
                 _progress.on_iteration(iteration, self.config.max_iterations)
-                provider_messages = self._dicts_to_messages(system_prompt, loop_messages)
+                if getattr(provider, "accepts_message_dicts", False) is True:
+                    provider_messages = self._dicts_to_native_messages(system_prompt, loop_messages)
+                else:
+                    provider_messages = self._dicts_to_messages(system_prompt, loop_messages)
 
                 # Rate limit before calling provider
                 self._acquire_rate_limit()
@@ -1650,6 +1653,17 @@ class AgentRuntime:
                 result.append(Message(role="user", content=content_str))
             elif role in ("user", "assistant"):
                 result.append(Message(role=role, content=str(content)))
+        return result
+
+    def _dicts_to_native_messages(
+        self, system_prompt: str, message_dicts: list[dict]
+    ) -> list[dict]:
+        """Convert context-manager message dicts while preserving tool metadata."""
+        result: list[dict] = [{"role": "system", "content": system_prompt}]
+        for d in message_dicts:
+            role = d.get("role", "")
+            if role in {"user", "assistant", "tool"}:
+                result.append(dict(d))
         return result
 
     # ------------------------------------------------------------------

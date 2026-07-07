@@ -25,7 +25,7 @@ import logging
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from missy.providers.rate_limiter import RateLimiter
@@ -225,7 +225,7 @@ class BaseProvider(ABC):
         yield response.content
 
     @staticmethod
-    def _estimate_tokens(messages: list[Message], system: str = "") -> int:
+    def _estimate_tokens(messages: list[Message] | list[dict[str, Any]], system: str = "") -> int:
         """Roughly estimate the prompt token count for rate limiting.
 
         Uses the common heuristic of ~4 characters per token over the
@@ -234,13 +234,18 @@ class BaseProvider(ABC):
         reconciles the estimate against the provider's reported usage.
 
         Args:
-            messages: The conversation turns being sent.
+            messages: The conversation turns being sent. Providers may pass
+                canonical :class:`Message` objects or native API message dicts.
             system: Optional system prompt sent alongside *messages*.
 
         Returns:
             An estimated prompt token count (always ``>= 0``).
         """
-        char_count = sum(len(m.content) for m in messages if m.content)
+        char_count = 0
+        for message in messages:
+            content = message.get("content") if isinstance(message, dict) else message.content
+            if content:
+                char_count += len(str(content))
         char_count += len(system or "")
         return char_count // 4
 

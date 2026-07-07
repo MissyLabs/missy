@@ -566,7 +566,7 @@ class TestRunWizardNoninteractive:
         )
         parsed = yaml.safe_load(cfg.read_text())
         assert "openai" in parsed["providers"]
-        assert parsed["providers"]["openai"]["model"] == "gpt-4o"
+        assert parsed["providers"]["openai"]["model"] == "auto"
 
     def test_ollama_provider_no_key_required(self, tmp_path):
         from missy.cli.wizard import run_wizard_noninteractive
@@ -779,7 +779,22 @@ class TestVerifyOpenai:
             result = _verify_openai("sk-badkey")
         assert result is False
 
-    def test_uses_gpt4o_mini_for_verification(self):
+    def test_uses_detected_current_model_for_verification(self):
+        from missy.cli.wizard import _verify_openai
+
+        mock_client = MagicMock()
+        mock_client.models.list.return_value.data = [
+            MagicMock(id="gpt-5.4-mini"),
+            MagicMock(id="gpt-5.5"),
+        ]
+        mock_client.chat.completions.create.return_value = MagicMock()
+        with patch("openai.OpenAI", return_value=mock_client):
+            _verify_openai("sk-test")
+
+        call_kwargs = mock_client.chat.completions.create.call_args
+        assert call_kwargs.kwargs.get("model") == "gpt-5.5"
+
+    def test_max_completion_tokens_is_1(self):
         from missy.cli.wizard import _verify_openai
 
         mock_client = MagicMock()
@@ -788,18 +803,7 @@ class TestVerifyOpenai:
             _verify_openai("sk-test")
 
         call_kwargs = mock_client.chat.completions.create.call_args
-        assert call_kwargs.kwargs.get("model") == "gpt-4o-mini"
-
-    def test_max_tokens_is_1(self):
-        from missy.cli.wizard import _verify_openai
-
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = MagicMock()
-        with patch("openai.OpenAI", return_value=mock_client):
-            _verify_openai("sk-test")
-
-        call_kwargs = mock_client.chat.completions.create.call_args
-        assert call_kwargs.kwargs.get("max_tokens") == 1
+        assert call_kwargs.kwargs.get("max_completion_tokens") == 1
 
     def test_api_key_passed_to_client(self):
         from missy.cli.wizard import _verify_openai
