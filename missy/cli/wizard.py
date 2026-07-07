@@ -56,14 +56,16 @@ _PROVIDERS = {
         "env_var": "OPENAI_API_KEY",
         "key_prefix": "sk-",
         "models": {
-            "primary": "gpt-4o",
-            "fast": "gpt-4o-mini",
-            "premium": "gpt-4-turbo",
+            "primary": "auto",
+            "fast": "gpt-5.4-mini",
+            "premium": "gpt-5.5",
         },
         "model_choices": [
-            ("gpt-4o", "GPT-4o — balanced (recommended)"),
-            ("gpt-4o-mini", "GPT-4o Mini — fastest / cheapest"),
-            ("gpt-4-turbo", "GPT-4 Turbo — most capable"),
+            ("auto", "Auto-detect best available current model (recommended)"),
+            ("gpt-5.5", "GPT-5.5 — most capable frontier model"),
+            ("gpt-5.4", "GPT-5.4 — balanced frontier model"),
+            ("gpt-5.4-mini", "GPT-5.4 Mini — faster / cheaper"),
+            ("gpt-5.4-nano", "GPT-5.4 Nano — cheapest simple-task model"),
         ],
     },
     # openai-codex is set dynamically when the user chooses OAuth in the openai flow.
@@ -74,15 +76,14 @@ _PROVIDERS = {
         "env_var": None,
         "key_prefix": None,
         "models": {
-            "primary": "gpt-5.2",
-            "fast": "gpt-5.1-codex-mini",
+            "primary": "gpt-5.3-codex",
+            "fast": "gpt-5.2-codex",
             "premium": "gpt-5.3-codex",
         },
         "model_choices": [
-            ("gpt-5.2", "GPT-5.2 — balanced (recommended)"),
-            ("gpt-5.1-codex-mini", "GPT-5.1 Codex Mini — fastest"),
-            ("gpt-5.1-codex-max", "GPT-5.1 Codex Max — high capacity"),
-            ("gpt-5.3-codex", "GPT-5.3 Codex — most capable"),
+            ("gpt-5.3-codex", "GPT-5.3 Codex — most capable (recommended)"),
+            ("gpt-5.2-codex", "GPT-5.2 Codex — previous stable fallback"),
+            ("gpt-5.2", "GPT-5.2 — general fallback"),
         ],
     },
     "ollama": {
@@ -228,10 +229,22 @@ def _verify_openai(api_key: str) -> bool:
     try:
         import openai
 
+        from missy.providers.openai_provider import _FALLBACK_MODEL, _PREFERRED_CHAT_MODELS
+
         client = openai.OpenAI(api_key=api_key)
+        model = _FALLBACK_MODEL
+        try:
+            available = {
+                getattr(item, "id", "")
+                for item in getattr(client.models.list(), "data", [])
+                if getattr(item, "id", "")
+            }
+            model = next((m for m in _PREFERRED_CHAT_MODELS if m in available), model)
+        except Exception:
+            pass
         client.chat.completions.create(
-            model="gpt-4o-mini",
-            max_tokens=1,
+            model=model,
+            max_completion_tokens=1,
             messages=[{"role": "user", "content": "hi"}],
         )
         return True
@@ -462,7 +475,7 @@ def run_wizard(config_path: str) -> None:
     console.print("\n[bold]Step 2 of 5 — AI Provider(s)[/]")
     console.print("  Choose which providers to configure:\n")
     console.print("    [bold]1[/]. Anthropic (Claude)")
-    console.print("    [bold]2[/]. OpenAI (GPT-4o / Codex)")
+    console.print("    [bold]2[/]. OpenAI (GPT / Codex)")
     console.print("    [bold]3[/]. Ollama (local models)")
     console.print("    [bold]4[/]. Anthropic + OpenAI (both)")
     console.print("    [bold]5[/]. All three")

@@ -32,7 +32,16 @@ class TestOpenAIInit:
 
     def test_default_model_when_empty(self):
         p = OpenAIProvider(_make_config(model=""))
-        assert p._model == "gpt-4o"
+        assert p._model == "auto"
+
+    def test_api_key_setter_resets_cached_client(self):
+        p = OpenAIProvider(_make_config())
+        p._client = object()
+        p._resolved_model = "gpt-5.4"
+        p.api_key = "sk-new-key"
+        assert p._client is None
+        assert p._resolved_model is None
+        assert p.api_key == "sk-new-key"
 
 
 class TestOpenAIAvailability:
@@ -43,6 +52,11 @@ class TestOpenAIAvailability:
     def test_unavailable_no_key(self):
         p = OpenAIProvider(_make_config(api_key=None))
         assert p.is_available() is False
+
+    @patch.dict("os.environ", {"OPENAI_API_KEY": "sk-env-key"})
+    def test_available_with_env_key(self):
+        p = OpenAIProvider(_make_config(api_key=None))
+        assert p.is_available() is True
 
 
 class TestOpenAIComplete:
@@ -141,6 +155,39 @@ class TestOpenAIComplete:
         call_kwargs = mock_sdk.OpenAI.call_args[1]
         assert call_kwargs["base_url"] == "http://local:8080"
 
+    @patch("missy.providers.openai_provider._openai_sdk")
+    @patch("missy.providers.openai_provider._OPENAI_AVAILABLE", True)
+    def test_auto_model_uses_best_available_model(self, mock_sdk):
+        mock_client = MagicMock()
+        mock_client.models.list.return_value = SimpleNamespace(
+            data=[
+                SimpleNamespace(id="gpt-4o"),
+                SimpleNamespace(id="gpt-5.4-mini"),
+                SimpleNamespace(id="gpt-5.5"),
+            ]
+        )
+        mock_client.chat.completions.create.return_value = self._mock_response(model="gpt-5.5")
+        mock_sdk.OpenAI.return_value = mock_client
+
+        p = OpenAIProvider(_make_config(model="auto"))
+        p.complete([Message(role="user", content="Hi")])
+        call_kwargs = mock_client.chat.completions.create.call_args[1]
+        assert call_kwargs["model"] == "gpt-5.5"
+
+    @patch("missy.providers.openai_provider._openai_sdk")
+    @patch("missy.providers.openai_provider._OPENAI_AVAILABLE", True)
+    def test_gpt5_omits_custom_temperature_and_maps_max_tokens(self, mock_sdk):
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = self._mock_response(model="gpt-5.5")
+        mock_sdk.OpenAI.return_value = mock_client
+
+        p = OpenAIProvider(_make_config(model="gpt-5.5"))
+        p.complete([Message(role="user", content="Hi")], temperature=0.2, max_tokens=7)
+        call_kwargs = mock_client.chat.completions.create.call_args[1]
+        assert "temperature" not in call_kwargs
+        assert call_kwargs["max_completion_tokens"] == 7
+        assert "max_tokens" not in call_kwargs
+
 
 class TestOpenAIToolSchema:
     def test_function_format(self):
@@ -159,7 +206,77 @@ class TestOpenAIToolSchema:
         assert schemas[0]["function"]["name"] == "calc"
 
 
+class TestOpenAIMessagePayload:
+    def test_runtime_tool_messages_are_converted_to_openai_shape(self):
+        p = OpenAIProvider(_make_config())
+        messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "use a tool"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "call_1", "name": "calc", "arguments": {"expr": "1+1"}},
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "name": "calc",
+                "content": "2",
+                "is_error": False,
+            },
+        ]
+        payload = p._messages_to_chat_payload(messages)
+        assert payload[2]["tool_calls"][0] == {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "calc", "arguments": '{"expr": "1+1"}'},
+        }
+        assert payload[3] == {"role": "tool", "tool_call_id": "call_1", "content": "2"}
+
+
 class TestOpenAICompleteWithTools:
+    @patch("missy.providers.openai_provider._openai_sdk")
+    @patch("missy.providers.openai_provider._OPENAI_AVAILABLE", True)
+    def test_native_dict_tool_messages_do_not_break_token_estimate(self, mock_sdk):
+        resp = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content="done", tool_calls=None),
+                    finish_reason="stop",
+                )
+            ],
+            model="gpt-4o",
+            usage=SimpleNamespace(prompt_tokens=10, completion_tokens=2, total_tokens=12),
+            model_dump=dict,
+        )
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = resp
+        mock_sdk.OpenAI.return_value = mock_client
+
+        p = OpenAIProvider(_make_config())
+        messages = [
+            {"role": "user", "content": "use a tool"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "call_1", "name": "calc", "arguments": {}}],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "2"},
+        ]
+
+        result = p.complete_with_tools(messages, [])
+
+        assert result.content == "done"
+        call_kwargs = mock_client.chat.completions.create.call_args[1]
+        assert call_kwargs["messages"][2] == {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": "2",
+        }
+        assert "tools" not in call_kwargs
+
     @patch("missy.providers.openai_provider._openai_sdk")
     @patch("missy.providers.openai_provider._OPENAI_AVAILABLE", True)
     def test_tool_call_parsing(self, mock_sdk):

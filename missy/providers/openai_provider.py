@@ -12,7 +12,7 @@ Example::
     from missy.config.settings import ProviderConfig
     from missy.providers.openai_provider import OpenAIProvider
 
-    config = ProviderConfig(name="openai", model="gpt-4o", api_key="<REDACTED>")
+    config = ProviderConfig(name="openai", model="auto", api_key="<REDACTED>")
     provider = OpenAIProvider(config)
     response = provider.complete([Message(role="user", content="Hello")])
 """
@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from collections.abc import Iterator
 from typing import Any
 
@@ -31,7 +32,34 @@ from .base import BaseProvider, CompletionResponse, Message, ToolCall
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_MODEL = "gpt-4o"
+_DEFAULT_MODEL = "auto"
+_FALLBACK_MODEL = "gpt-5.5"
+_AUTO_MODEL_SENTINELS = {"", "auto", "latest", "best"}
+_PREFERRED_CHAT_MODELS = (
+    "gpt-5.5",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.4-nano",
+    "gpt-5",
+    "gpt-5-mini",
+    "gpt-5-nano",
+    "gpt-4.1",
+    "gpt-4.1-mini",
+    "gpt-4o",
+    "gpt-4o-mini",
+)
+_NON_CHAT_MODEL_MARKERS = (
+    "audio",
+    "dall",
+    "embedding",
+    "image",
+    "moderation",
+    "realtime",
+    "sora",
+    "tts",
+    "transcribe",
+    "whisper",
+)
 
 try:
     import openai as _openai_sdk
@@ -53,6 +81,7 @@ class OpenAIProvider(BaseProvider):
     """
 
     name = "openai"
+    accepts_message_dicts = True
 
     def __init__(self, config: ProviderConfig) -> None:
         self._api_key: str | None = config.api_key
@@ -60,6 +89,30 @@ class OpenAIProvider(BaseProvider):
         self._model: str = config.model or _DEFAULT_MODEL
         self._timeout: int = config.timeout
         self._client: Any | None = None
+        self._resolved_model: str | None = None
+
+    @property
+    def api_key(self) -> str | None:
+        """Return the active API key, if one is configured directly."""
+        return self._api_key
+
+    @api_key.setter
+    def api_key(self, value: str | None) -> None:
+        """Update the API key and force the SDK client to be rebuilt."""
+        self._api_key = value
+        self._client = None
+        self._resolved_model = None
+
+    @property
+    def model(self) -> str:
+        """Return the configured model selector."""
+        return self._model
+
+    @model.setter
+    def model(self, value: str) -> None:
+        """Update the model selector and clear any cached auto resolution."""
+        self._model = value or _DEFAULT_MODEL
+        self._resolved_model = None
 
     # ------------------------------------------------------------------
     # BaseProvider interface
@@ -72,7 +125,7 @@ class OpenAIProvider(BaseProvider):
             ``True`` if the ``openai`` package is importable and an API key
             is present.
         """
-        return _OPENAI_AVAILABLE and bool(self._api_key)
+        return _OPENAI_AVAILABLE and bool(self._api_key or os.environ.get("OPENAI_API_KEY"))
 
     def _make_client(self) -> Any:
         """Return a cached OpenAI client, creating one on first call.
@@ -97,6 +150,153 @@ class OpenAIProvider(BaseProvider):
                 logger.debug("Could not build policy-aware http client", exc_info=True)
             self._client = _openai_sdk.OpenAI(**client_kwargs)
         return self._client
+
+    def _resolve_model(self, requested_model: str | None = None) -> str:
+        """Resolve ``auto`` / ``latest`` to the best available chat model.
+
+        The OpenAI models endpoint is account-aware, so this prefers the
+        newest known chat models only when the active credentials can see
+        them. If the endpoint is unavailable, fall back to the current
+        recommended frontier model instead of a legacy GPT-4-era default.
+        """
+        model = (requested_model or self._model or _DEFAULT_MODEL).strip()
+        if model.lower() not in _AUTO_MODEL_SENTINELS:
+            return model
+        if self._resolved_model:
+            return self._resolved_model
+
+        try:
+            response = self._make_client().models.list()
+            raw_models = getattr(response, "data", response)
+            model_ids: set[str] = set()
+            for item in raw_models:
+                model_id = getattr(item, "id", None)
+                if model_id is None and isinstance(item, dict):
+                    model_id = item.get("id")
+                if model_id:
+                    model_ids.add(str(model_id))
+
+            for preferred in _PREFERRED_CHAT_MODELS:
+                if preferred in model_ids:
+                    self._resolved_model = preferred
+                    return preferred
+
+            chat_like = sorted(
+                mid
+                for mid in model_ids
+                if mid.startswith(("gpt-", "chatgpt-"))
+                and not any(marker in mid.lower() for marker in _NON_CHAT_MODEL_MARKERS)
+            )
+            if chat_like:
+                self._resolved_model = chat_like[-1]
+                return chat_like[-1]
+        except Exception:
+            logger.debug("OpenAI model auto-detection failed; using fallback", exc_info=True)
+
+        self._resolved_model = _FALLBACK_MODEL
+        return _FALLBACK_MODEL
+
+    @staticmethod
+    def _supports_custom_temperature(model: str) -> bool:
+        """Return whether custom temperature should be sent for *model*."""
+        model_lower = model.lower()
+        return not model_lower.startswith(("gpt-5", "o1", "o3", "o4"))
+
+    def _apply_common_generation_kwargs(
+        self,
+        call_kwargs: dict[str, Any],
+        kwargs: dict[str, Any],
+        model: str,
+    ) -> None:
+        """Normalize common generation kwargs for current OpenAI chat models."""
+        if "temperature" in kwargs:
+            temperature = kwargs.pop("temperature")
+            supports_temperature = self._supports_custom_temperature(model)
+            try:
+                is_default_temperature = float(temperature) == 1.0
+            except (TypeError, ValueError):
+                is_default_temperature = False
+            if temperature is not None and not supports_temperature and not is_default_temperature:
+                logger.debug("Omitting unsupported temperature override for OpenAI model %r", model)
+            elif temperature is not None:
+                call_kwargs["temperature"] = temperature
+
+        if "max_completion_tokens" in kwargs:
+            call_kwargs["max_completion_tokens"] = kwargs.pop("max_completion_tokens")
+        elif "max_tokens" in kwargs:
+            call_kwargs["max_completion_tokens"] = kwargs.pop("max_tokens")
+
+        call_kwargs.update(kwargs)
+
+    @staticmethod
+    def _message_to_chat_payload(message: Message | dict[str, Any]) -> dict[str, Any] | None:
+        """Convert Missy's message shape to OpenAI Chat Completions format."""
+        if isinstance(message, Message):
+            return {"role": message.role, "content": message.content}
+
+        role = str(message.get("role", ""))
+        if role in {"system", "user"}:
+            return {"role": role, "content": str(message.get("content", ""))}
+
+        if role == "assistant":
+            payload: dict[str, Any] = {
+                "role": "assistant",
+                "content": str(message.get("content", "") or ""),
+            }
+            tool_calls = message.get("tool_calls") or []
+            if tool_calls:
+                payload["tool_calls"] = []
+                for call in tool_calls:
+                    if not isinstance(call, dict):
+                        continue
+                    if "function" in call:
+                        payload["tool_calls"].append(call)
+                        continue
+                    arguments = call.get("arguments", {})
+                    if not isinstance(arguments, str):
+                        arguments = json.dumps(arguments)
+                    payload["tool_calls"].append(
+                        {
+                            "id": str(call.get("id", "")),
+                            "type": "function",
+                            "function": {
+                                "name": str(call.get("name", "")),
+                                "arguments": arguments,
+                            },
+                        }
+                    )
+            return payload
+
+        if role == "tool":
+            tool_call_id = message.get("tool_call_id")
+            if not tool_call_id:
+                return None
+            return {
+                "role": "tool",
+                "tool_call_id": str(tool_call_id),
+                "content": str(message.get("content", "")),
+            }
+
+        return None
+
+    def _messages_to_chat_payload(
+        self,
+        messages: list[Message] | list[dict[str, Any]],
+        system: str = "",
+    ) -> list[dict[str, Any]]:
+        """Build a Chat Completions-compatible message list."""
+        api_messages: list[dict[str, Any]] = []
+        has_system = any(
+            (msg.role if isinstance(msg, Message) else msg.get("role")) == "system"
+            for msg in messages
+        )
+        if system and not has_system:
+            api_messages.append({"role": "system", "content": system})
+        for msg in messages:
+            payload = self._message_to_chat_payload(msg)
+            if payload is not None:
+                api_messages.append(payload)
+        return api_messages
 
     def complete(self, messages: list[Message], **kwargs: Any) -> CompletionResponse:
         """Send *messages* to the OpenAI Chat Completions API.
@@ -123,19 +323,14 @@ class OpenAIProvider(BaseProvider):
 
         session_id = kwargs.pop("session_id", "")
         task_id = kwargs.pop("task_id", "")
-        model = kwargs.pop("model", self._model)
-
-        api_messages = [{"role": msg.role, "content": msg.content} for msg in messages]
+        model = self._resolve_model(kwargs.pop("model", self._model))
+        api_messages = self._messages_to_chat_payload(messages)
 
         call_kwargs: dict[str, Any] = {
             "model": model,
             "messages": api_messages,
         }
-        if "temperature" in kwargs:
-            call_kwargs["temperature"] = kwargs.pop("temperature")
-        if "max_tokens" in kwargs:
-            call_kwargs["max_tokens"] = kwargs.pop("max_tokens")
-        call_kwargs.update(kwargs)
+        self._apply_common_generation_kwargs(call_kwargs, kwargs, model)
 
         self._acquire_rate_limit(estimated_tokens=self._estimate_tokens(messages))
 
@@ -241,20 +436,16 @@ class OpenAIProvider(BaseProvider):
         tool_schemas = self.get_tool_schema(tools)
 
         # Build message list; inject system prompt if provided
-        api_messages: list[dict] = []
-        has_system = any(m.role == "system" for m in messages)
-        if system and not has_system:
-            api_messages.append({"role": "system", "content": system})
-
-        for msg in messages:
-            api_messages.append({"role": msg.role, "content": msg.content})
+        model = self._resolve_model(self._model)
+        api_messages = self._messages_to_chat_payload(messages, system=system)
 
         call_kwargs: dict[str, Any] = {
-            "model": self._model,
+            "model": model,
             "messages": api_messages,
-            "tools": tool_schemas,
-            "tool_choice": "auto",
         }
+        if tool_schemas:
+            call_kwargs["tools"] = tool_schemas
+            call_kwargs["tool_choice"] = "auto"
 
         self._acquire_rate_limit(estimated_tokens=self._estimate_tokens(messages, system))
 
@@ -336,16 +527,11 @@ class OpenAIProvider(BaseProvider):
         if not _OPENAI_AVAILABLE:
             raise ProviderError("openai SDK is not installed. Run: pip install openai")
 
-        api_messages: list[dict] = []
-        has_system = any(m.role == "system" for m in messages)
-        if system and not has_system:
-            api_messages.append({"role": "system", "content": system})
-
-        for msg in messages:
-            api_messages.append({"role": msg.role, "content": msg.content})
+        model = self._resolve_model(self._model)
+        api_messages = self._messages_to_chat_payload(messages, system=system)
 
         call_kwargs: dict[str, Any] = {
-            "model": self._model,
+            "model": model,
             "messages": api_messages,
             "stream": True,
         }

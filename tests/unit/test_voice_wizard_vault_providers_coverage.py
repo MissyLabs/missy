@@ -529,7 +529,8 @@ class TestOpenAIProviderMaxTokensKwarg:
             mod._OPENAI_AVAILABLE = original_avail
 
         call_kwargs = sdk.OpenAI.return_value.chat.completions.create.call_args.kwargs
-        assert call_kwargs.get("max_tokens") == 128
+        assert call_kwargs.get("max_completion_tokens") == 128
+        assert "max_tokens" not in call_kwargs
 
 
 # ---------------------------------------------------------------------------

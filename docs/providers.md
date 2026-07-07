@@ -100,7 +100,7 @@ Uses the official `openai` Python SDK to call the Chat Completions API.  The
 SDK is imported lazily.  The `base_url` parameter allows targeting any
 OpenAI-compatible endpoint (Groq, Together AI, local vLLM, etc.).
 
-**Default model**: `gpt-4o`
+**Default model**: `auto` (detects the best available current OpenAI chat model)
 
 **Required environment variable**: `OPENAI_API_KEY`
 
@@ -110,7 +110,7 @@ forwarded as-is to the Chat Completions API.
 **Supported kwargs**:
 
 - `temperature` (float) -- sampling temperature
-- `max_tokens` (int) -- maximum completion tokens
+- `max_tokens` / `max_completion_tokens` (int) -- maximum completion tokens
 - `model` (str) -- override the configured model
 
 **Configuration**:
@@ -119,12 +119,19 @@ forwarded as-is to the Chat Completions API.
 providers:
   openai:
     name: openai
-    model: "gpt-4o"
+    model: "auto"
     timeout: 30
 ```
 
 ```bash
 export OPENAI_API_KEY="sk-..."
+```
+
+Refresh credentials without hand-editing YAML:
+
+```bash
+missy providers auth openai --api-key-env OPENAI_API_KEY
+missy providers auth openai --api-key sk-...
 ```
 
 **Network policy**: Add `api.openai.com` to `network.allowed_hosts`.

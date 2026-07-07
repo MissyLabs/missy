@@ -131,7 +131,7 @@ providers:
     timeout: 30
   openai:
     name: openai
-    model: "gpt-4o"
+    model: "auto"
     timeout: 30
   ollama:
     name: ollama
