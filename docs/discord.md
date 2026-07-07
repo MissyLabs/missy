@@ -255,6 +255,11 @@ Every Discord REST request uses `PolicyHTTPClient`, which calls
 in `allowed_domains`, the request is blocked and a `PolicyViolationError`
 is raised — no data leaves the machine.
 
+Attachment downloads are narrower than general REST calls. Image analysis and
+save commands only accept attachment URLs whose metadata points at Discord CDN
+hosts (`cdn.discordapp.com` or `media.discordapp.net`) over HTTPS. The REST
+client still enforces the CDN host allowlist at download time.
+
 ### Token handling
 
 Bot tokens are read from environment variables at runtime. They are:
@@ -276,8 +281,28 @@ a process-global variable, so multi-account deployments are safe.
 
 ### Attachment policy
 
-The channel does not fetch, download, or forward message attachments. Only
-the text `content` field of messages is forwarded to the agent.
+The channel does not fetch, download, or forward attachments during normal
+message routing. It only places validated image attachment metadata into
+`ChannelMessage` metadata for explicit image commands.
+
+Accepted image metadata must pass all of these checks before the message reaches
+the agent queue:
+
+- MIME type is one of `image/png`, `image/jpeg`, `image/jpg`, `image/gif`, or
+  `image/webp`, or the filename has an image extension when MIME metadata is
+  missing.
+- MIME type and filename extension do not conflict.
+- Declared size is at most 8 MiB.
+- Declared width and height, when present, are positive, no larger than 8192
+  pixels per side, and no more than 40 megapixels total.
+- The URL is an HTTPS Discord CDN URL.
+
+Any non-image attachment or invalid image metadata denies the whole message
+before it reaches the agent. Deny audit events include normalized filename,
+content type, size, dimensions, CDN host, validation limits, and reason codes
+such as `unsupported_content_type`, `mime_extension_mismatch`,
+`image_too_large`, `invalid_width`, `invalid_height`, or
+`invalid_discord_cdn_url`.
 
 ### Audit trail
 

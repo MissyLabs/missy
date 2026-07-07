@@ -1,27 +1,52 @@
 # TEST_RESULTS
 
-- Timestamp: 2026-07-07 18:49:30 EDT
-- Command: `pytest -q`
+- Timestamp: 2026-07-07 19:08:32 EDT
 
-```text
-20260 passed, 13 skipped in 364.17s (0:06:04)
+## Focused Discord Image/Security
+
+Command:
+
+```bash
+pytest tests/channels/test_discord_image_analyze.py tests/channels/test_discord_image_gaps.py::TestSaveDiscordAttachmentPathTraversal tests/security/test_discord_attachment_codeevolution_filewrite_security.py::TestDiscordSaveAttachmentSanitization -q
 ```
 
-Additional checks:
+Result:
 
 ```text
-pytest tests/cli/test_cli_commands.py::TestDiscordDiagnostics tests/policy/test_tool_policy_pipeline.py tests/tools/test_discord_voice_tools.py -q
-34 passed in 0.36s
+54 passed in 0.30s
+```
 
-pytest tests/cli/test_cli_commands.py::TestDiscordStatus tests/cli/test_cli_commands.py::TestDiscordAudit tests/cli/test_cli_commands.py::TestDiscordDiagnostics tests/cli/test_cli_main_extended.py::TestDiscordProbeBranches tests/cli/test_cli_main_extended.py::TestDiscordRegisterCommandsBranches tests/channels/test_discord_channel_gap_coverage.py tests/channels/test_discord_voice_extended.py tests/tools/test_discord_voice_tools.py tests/policy/test_tool_policy_pipeline.py -q
-144 passed in 1.17s
+## Broader Discord Media/Channel/Protocol
 
-pytest tests/agent/test_runtime_coverage_gaps.py::TestGetToolsDiscordMode tests/agent/test_runtime_config_edges.py -q
-95 passed in 1.47s
+Command:
 
-ruff check .
-All checks passed!
+```bash
+pytest tests/channels/test_discord_image_analyze.py tests/channels/test_discord_image_gaps.py tests/channels/discord/test_image_commands.py tests/channels/test_discord_channel_coverage.py tests/channels/test_discord_channel_gap_coverage.py tests/channels/test_discord_protocol_deep.py tests/security/test_discord_attachment_codeevolution_filewrite_security.py::TestDiscordSaveAttachmentSanitization -q
+```
 
-ruff format --check .
-708 files already formatted
+Result:
+
+```text
+353 passed in 8.16s
+```
+
+## Full Suite
+
+Command:
+
+```bash
+pytest -q
+```
+
+Result:
+
+```text
+20266 passed, 13 skipped in 367.66s (0:06:07)
+```
+
+## Lint/Format
+
+```text
+ruff check .: passed
+ruff format --check .: 708 files already formatted
 ```
