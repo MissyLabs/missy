@@ -1,11 +1,11 @@
-"""Voice command handlers for Discord.
+"""Natural-language voice action handlers for Discord.
 
-Commands:
-- !join              — join the user's current voice channel
-- !join <name>       — join a voice channel by name
-- !join <id>         — join a voice channel by snowflake ID
-- !leave             — leave the current voice channel
-- !say <text>        — speak text via TTS
+Recognised examples:
+- join my voice channel
+- join the General voice channel
+- talk to me in the General voice channel
+- leave the voice channel
+- say hello world in voice
 
 Parsed from MESSAGE_CREATE events and routed to
 :class:`~missy.channels.discord.voice.DiscordVoiceManager`.
@@ -14,6 +14,7 @@ Parsed from MESSAGE_CREATE events and routed to
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 
 from missy.channels.discord.voice import DiscordVoiceError, DiscordVoiceManager
@@ -27,6 +28,132 @@ class VoiceCommandResult:
     reply: str | None = None
 
 
+@dataclass(frozen=True)
+class VoiceIntent:
+    action: str
+    channel_name: str | None = None
+    channel_id: int | None = None
+    speech: str | None = None
+
+
+_BOT_MENTION_RE = re.compile(r"^(<@!?\d+>\s*)+")
+_SPACE_RE = re.compile(r"\s+")
+
+
+def _clean_text(content: str | None) -> str:
+    text = _SPACE_RE.sub(" ", (content or "").strip())
+    return _BOT_MENTION_RE.sub("", text).strip()
+
+
+def _strip_leading_politeness(text: str) -> str:
+    previous = text
+    while True:
+        current = re.sub(
+            r"^(please|can you|could you|would you)\s+",
+            "",
+            previous,
+            flags=re.I,
+        ).strip()
+        if current == previous:
+            return current
+        previous = current
+
+
+def _normalise_channel_target(raw_target: str) -> tuple[str | None, int | None] | None:
+    target = raw_target.strip(" .")
+    target = re.sub(r"^(?:the|a|an)\s+", "", target, flags=re.I)
+    target = re.sub(r"^(?:my|current|my current|this)\s+", "", target, flags=re.I)
+    target = re.sub(r"\s+(?:voice\s+channel|voice\s+room|voice)$", "", target, flags=re.I)
+    target = re.sub(r"^(?:voice\s+channel|voice\s+room|voice)\s+", "", target, flags=re.I)
+    target = target.strip(" .")
+
+    if target.startswith("#"):
+        target = target[1:].strip()
+
+    if target.lower() in {
+        "",
+        "me",
+        "mine",
+        "my",
+        "current",
+        "channel",
+        "room",
+        "voice",
+        "voice channel",
+        "voice room",
+    }:
+        return (None, None)
+
+    if target.isdigit():
+        return (None, int(target))
+
+    return (target, None)
+
+
+def parse_voice_intent(content: str | None) -> VoiceIntent | None:
+    """Parse supported natural-language Discord voice requests."""
+    text = _strip_leading_politeness(_clean_text(content))
+    if not text or text.startswith("!"):
+        return None
+
+    lower = text.lower()
+    if re.fullmatch(
+        r"(?:leave|exit)\s+(?:the\s+)?(?:current\s+)?voice(?:\s+channel|\s+room)?",
+        lower,
+    ) or re.fullmatch(
+        r"(?:disconnect|drop out)\s+(?:from\s+)?(?:the\s+)?voice(?:\s+channel|\s+room)?",
+        lower,
+    ):
+        return VoiceIntent(action="leave")
+
+    say_match = re.fullmatch(
+        r"(?:say|speak|read)\s+(?P<speech>.+?)\s+(?:in|to|over|through)\s+"
+        r"(?:the\s+)?voice(?:\s+channel|\s+room)?",
+        text,
+        flags=re.I,
+    )
+    if say_match:
+        return VoiceIntent(action="say", speech=say_match.group("speech").strip())
+
+    tell_match = re.fullmatch(
+        r"tell\s+(?:the\s+)?voice(?:\s+channel|\s+room)?\s+(?P<speech>.+)",
+        text,
+        flags=re.I,
+    )
+    if tell_match:
+        return VoiceIntent(action="say", speech=tell_match.group("speech").strip())
+
+    no_speech_match = re.fullmatch(
+        r"(?:say|speak|read)\s+(?:in|to|over|through)\s+(?:the\s+)?voice"
+        r"(?:\s+channel|\s+room)?",
+        text,
+        flags=re.I,
+    )
+    if no_speech_match:
+        return VoiceIntent(action="say")
+
+    join_patterns = (
+        r"(?:join me|talk to me|talk with me|listen to me|listen)\s+"
+        r"(?:in|on|from)\s+(?P<target>.+)",
+        r"(?:connect|come)\s+(?:to|into)\s+(?P<target>.+)",
+        r"(?:join|enter)\s+(?P<target>.+)",
+    )
+    for pattern in join_patterns:
+        match = re.fullmatch(pattern, text, flags=re.I)
+        if not match:
+            continue
+        target_text = match.group("target")
+        if "voice" not in target_text.lower() and not target_text.strip().startswith("#"):
+            continue
+        target = _normalise_channel_target(target_text)
+        if target is None:
+            continue
+        channel_name, channel_id = target
+        return VoiceIntent(action="join", channel_name=channel_name, channel_id=channel_id)
+
+    return None
+
+
 async def maybe_handle_voice_command(
     *,
     content: str,
@@ -35,23 +162,17 @@ async def maybe_handle_voice_command(
     author_id: str,
     voice: DiscordVoiceManager | None,
 ) -> VoiceCommandResult:
-    """Parse and execute a voice command if applicable.
+    """Parse and execute a voice request if applicable.
 
     Returns a result indicating whether the message was handled and an
     optional reply to send back.
     """
-    text = (content or "").strip()
-    if not text.startswith("!"):
-        return VoiceCommandResult(False)
-
-    cmd_part, _, rest = text.partition(" ")
-    cmd = cmd_part.lower()
-
-    if cmd not in ("!join", "!leave", "!say"):
+    intent = parse_voice_intent(content)
+    if intent is None:
         return VoiceCommandResult(False)
 
     if not guild_id:
-        return VoiceCommandResult(True, "Voice commands only work in servers.")
+        return VoiceCommandResult(True, "Voice requests only work in servers.")
 
     if voice is None:
         return VoiceCommandResult(True, "Voice is not enabled on this bot.")
@@ -60,28 +181,24 @@ async def maybe_handle_voice_command(
         return VoiceCommandResult(True, "Voice is still starting up, try again in a moment.")
 
     gid = int(guild_id)
-    rest = rest.strip()
 
-    # ------- !join -------
-    if cmd == "!join":
+    if intent.action == "join":
         try:
-            if not rest:
+            if intent.channel_id is not None:
+                channel_name = await voice.join(
+                    gid,
+                    channel_id=intent.channel_id,
+                )
+            elif intent.channel_name:
+                channel_name = await voice.join(
+                    gid,
+                    channel_name=intent.channel_name,
+                )
+            else:
                 # No argument: join the user's current voice channel.
                 channel_name = await voice.join(
                     gid,
                     user_id=int(author_id),
-                )
-            elif rest.isdigit():
-                # Numeric argument: join by channel ID.
-                channel_name = await voice.join(
-                    gid,
-                    channel_id=int(rest),
-                )
-            else:
-                # Text argument: join by channel name.
-                channel_name = await voice.join(
-                    gid,
-                    channel_name=rest,
                 )
             logger.info(
                 "Discord voice: joined %r guild=%s by=%s",
@@ -100,8 +217,7 @@ async def maybe_handle_voice_command(
         except DiscordVoiceError as exc:
             return VoiceCommandResult(True, str(exc))
 
-    # ------- !leave -------
-    if cmd == "!leave":
+    if intent.action == "leave":
         try:
             channel_name = await voice.leave(gid)
             if channel_name:
@@ -111,15 +227,17 @@ async def maybe_handle_voice_command(
         except DiscordVoiceError as exc:
             return VoiceCommandResult(True, str(exc))
 
-    # ------- !say -------
-    if cmd == "!say":
-        if not rest:
-            return VoiceCommandResult(True, "Usage: `!say <text>`")
+    if intent.action == "say":
+        if not intent.speech:
+            return VoiceCommandResult(
+                True,
+                "Tell me what to say in voice, for example: `say hello in voice`",
+            )
         try:
-            await voice.say(gid, rest)
+            await voice.say(gid, intent.speech)
             logger.info(
                 "Discord voice: spoke %d chars guild=%s by=%s",
-                len(rest),
+                len(intent.speech),
                 guild_id,
                 author_id,
             )

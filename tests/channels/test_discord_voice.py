@@ -3,7 +3,7 @@
 Covers:
 - DiscordVoiceManager channel resolution (by user, by name, by ID)
 - join / leave / say lifecycle
-- Natural command parsing (!join, !join <name>, !leave, !say)
+- Natural-language voice request parsing
 - Error paths (not connected, channel not found, etc.)
 """
 
@@ -291,7 +291,7 @@ class TestVoiceCommands:
         voice = self._make_voice()
         result = _run(
             maybe_handle_voice_command(
-                content="!join",
+                content="join my voice channel",
                 channel_id="ch-1",
                 guild_id="999",
                 author_id="42",
@@ -306,7 +306,7 @@ class TestVoiceCommands:
         voice = self._make_voice()
         result = _run(
             maybe_handle_voice_command(
-                content="!join Music Room",
+                content="join the Music Room voice channel",
                 channel_id="ch-1",
                 guild_id="999",
                 author_id="42",
@@ -321,7 +321,7 @@ class TestVoiceCommands:
         voice = self._make_voice()
         result = _run(
             maybe_handle_voice_command(
-                content="!join 12345",
+                content="join the 12345 voice channel",
                 channel_id="ch-1",
                 guild_id="999",
                 author_id="42",
@@ -336,7 +336,7 @@ class TestVoiceCommands:
         voice.join = AsyncMock(side_effect=DiscordVoiceError("bad channel"))
         result = _run(
             maybe_handle_voice_command(
-                content="!join nonexistent",
+                content="join the nonexistent voice channel",
                 channel_id="ch-1",
                 guild_id="999",
                 author_id="42",
@@ -350,7 +350,7 @@ class TestVoiceCommands:
         voice = self._make_voice()
         result = _run(
             maybe_handle_voice_command(
-                content="!leave",
+                content="leave the voice channel",
                 channel_id="ch-1",
                 guild_id="999",
                 author_id="42",
@@ -366,7 +366,7 @@ class TestVoiceCommands:
         voice.leave = AsyncMock(return_value=None)
         result = _run(
             maybe_handle_voice_command(
-                content="!leave",
+                content="leave the voice channel",
                 channel_id="ch-1",
                 guild_id="999",
                 author_id="42",
@@ -380,7 +380,7 @@ class TestVoiceCommands:
         voice = self._make_voice()
         result = _run(
             maybe_handle_voice_command(
-                content="!say hello world",
+                content="say hello world in voice",
                 channel_id="ch-1",
                 guild_id="999",
                 author_id="42",
@@ -395,7 +395,7 @@ class TestVoiceCommands:
         voice = self._make_voice()
         result = _run(
             maybe_handle_voice_command(
-                content="!say",
+                content="say in voice",
                 channel_id="ch-1",
                 guild_id="999",
                 author_id="42",
@@ -403,14 +403,14 @@ class TestVoiceCommands:
             )
         )
         assert result.handled is True
-        assert "usage" in result.reply.lower()
+        assert "what to say" in result.reply.lower()
 
     def test_say_error(self):
         voice = self._make_voice()
         voice.say = AsyncMock(side_effect=DiscordVoiceError("not connected"))
         result = _run(
             maybe_handle_voice_command(
-                content="!say hi",
+                content="say hi in voice",
                 channel_id="ch-1",
                 guild_id="999",
                 author_id="42",
@@ -423,7 +423,7 @@ class TestVoiceCommands:
     def test_non_voice_command_ignored(self):
         result = _run(
             maybe_handle_voice_command(
-                content="!foo",
+                content="please order pizza",
                 channel_id="ch-1",
                 guild_id="999",
                 author_id="42",
@@ -436,7 +436,7 @@ class TestVoiceCommands:
         voice = self._make_voice()
         result = _run(
             maybe_handle_voice_command(
-                content="!join",
+                content="join my voice channel",
                 channel_id="ch-1",
                 guild_id=None,
                 author_id="42",
@@ -449,7 +449,7 @@ class TestVoiceCommands:
     def test_voice_not_enabled(self):
         result = _run(
             maybe_handle_voice_command(
-                content="!join",
+                content="join my voice channel",
                 channel_id="ch-1",
                 guild_id="999",
                 author_id="42",
@@ -464,7 +464,7 @@ class TestVoiceCommands:
         voice.is_ready = False
         result = _run(
             maybe_handle_voice_command(
-                content="!join",
+                content="join my voice channel",
                 channel_id="ch-1",
                 guild_id="999",
                 author_id="42",
@@ -492,7 +492,7 @@ class TestVoiceCommands:
         voice.can_speak = True
         result = _run(
             maybe_handle_voice_command(
-                content="!join",
+                content="join my voice channel",
                 channel_id="ch-1",
                 guild_id="999",
                 author_id="42",
@@ -508,7 +508,7 @@ class TestVoiceCommands:
         voice.can_speak = False
         result = _run(
             maybe_handle_voice_command(
-                content="!join",
+                content="join my voice channel",
                 channel_id="ch-1",
                 guild_id="999",
                 author_id="42",

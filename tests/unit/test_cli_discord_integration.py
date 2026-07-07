@@ -8,7 +8,7 @@ Targets:
 - channels/voice/channel.py lines 249-250
 - channels/discord/channel.py lines 639-640
 - channels/discord/voice.py line 794
-- channels/discord/voice_commands.py line 130
+- channels/discord/voice_commands.py fallthrough
 - channels/voice/server.py line 362
 - channels/webhook.py line 127
 - cli/oauth.py line 411
@@ -337,15 +337,15 @@ class TestDiscordVoiceResampleBreak:
 
 
 class TestVoiceCommandsFallthrough:
-    """Cover discord/voice_commands.py line 130."""
+    """Cover unrecognized Discord voice requests."""
 
     @pytest.mark.asyncio
     async def test_unrecognized_command_returns_false(self) -> None:
-        """Unrecognized voice commands should return result with handled=False."""
+        """Unrecognized voice requests should return handled=False."""
         from missy.channels.discord.voice_commands import maybe_handle_voice_command
 
         result = await maybe_handle_voice_command(
-            content="!nonexistent_command",
+            content="start the disco lights",
             channel_id="ch1",
             guild_id="g1",
             author_id="a1",

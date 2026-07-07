@@ -323,12 +323,12 @@ class DiscordVoiceManager:
             if target is None:
                 raise DiscordVoiceError(
                     "You're not in a voice channel. Join one first, "
-                    "or specify a channel name: `!join General`"
+                    "or ask me to join the General voice channel."
                 )
         else:
             raise DiscordVoiceError(
                 "Specify a voice channel name or join a voice channel first. "
-                "Usage: `!join` or `!join <channel name>`"
+                "For example: `join my voice channel` or `join the General voice channel`"
             )
 
         # Already connected to this channel?
@@ -397,7 +397,9 @@ class DiscordVoiceManager:
 
         state = self._guild_states.get(guild_id)
         if not state or not getattr(state.voice_client, "is_connected", lambda: False)():
-            raise DiscordVoiceError("I'm not in a voice channel. Use `!join` to bring me in first.")
+            raise DiscordVoiceError(
+                "I'm not in a voice channel. Ask me to join your voice channel first."
+            )
 
         await self._play_tts(state, text)
 

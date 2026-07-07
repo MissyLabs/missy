@@ -2,7 +2,7 @@
 
 
 Targets:
-  voice_commands.py:130 — unrecognized voice command fallthrough
+  voice_commands.py — unrecognized voice request fallthrough
   network.py:157-158 — getaddrinfo returns unparseable address
   cli/main.py:2667 — __name__ == "__main__" entry point
 """
@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 # ---------------------------------------------------------------------------
-# voice_commands.py line 130: unrecognized command fallthrough
+# voice_commands.py: unrecognized request fallthrough
 # ---------------------------------------------------------------------------
 
 
@@ -26,12 +26,12 @@ class TestVoiceCommandFallthrough:
         return v
 
     @pytest.mark.asyncio
-    async def test_unrecognized_bang_command_returns_not_handled(self, voice_mock):
-        """Line 51: unknown !command returns VoiceCommandResult(False)."""
+    async def test_unrecognized_request_returns_not_handled(self, voice_mock):
+        """Unknown non-voice requests return VoiceCommandResult(False)."""
         from missy.channels.discord.voice_commands import maybe_handle_voice_command
 
         result = await maybe_handle_voice_command(
-            content="!unknowncmd",
+            content="start the disco lights",
             channel_id="ch1",
             guild_id="123",
             author_id="456",
@@ -41,7 +41,7 @@ class TestVoiceCommandFallthrough:
 
     @pytest.mark.asyncio
     async def test_regular_message_not_handled(self, voice_mock):
-        """Line 44-45: Regular messages (not starting with !) return handled=False."""
+        """Regular messages return handled=False."""
         from missy.channels.discord.voice_commands import maybe_handle_voice_command
 
         result = await maybe_handle_voice_command(
@@ -59,7 +59,7 @@ class TestVoiceCommandFallthrough:
         from missy.channels.discord.voice_commands import maybe_handle_voice_command
 
         result = await maybe_handle_voice_command(
-            content="!join",
+            content="join my voice channel",
             channel_id="ch1",
             guild_id="123",
             author_id="456",
@@ -70,14 +70,14 @@ class TestVoiceCommandFallthrough:
 
 
 # ---------------------------------------------------------------------------
-# voice_commands: !say with DiscordVoiceError
+# voice_commands: say in voice with DiscordVoiceError
 # ---------------------------------------------------------------------------
 
 
 class TestVoiceCommandSayError:
     @pytest.mark.asyncio
     async def test_say_command_voice_error(self):
-        """Lines 127-128: !say raises DiscordVoiceError."""
+        """Lines 127-128: say in voice raises DiscordVoiceError."""
         from missy.channels.discord.voice import DiscordVoiceError
         from missy.channels.discord.voice_commands import maybe_handle_voice_command
 
@@ -86,7 +86,7 @@ class TestVoiceCommandSayError:
         voice.say.side_effect = DiscordVoiceError("TTS unavailable")
 
         result = await maybe_handle_voice_command(
-            content="!say hello world",
+            content="say hello world in voice",
             channel_id="ch1",
             guild_id="123",
             author_id="456",

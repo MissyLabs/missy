@@ -557,13 +557,12 @@ class TestFallbackSandboxGenericException:
 
 
 # ===========================================================================
-# Discord voice commands — leave with DiscordVoiceError (lines 111-112)
-# and the final return VoiceCommandResult(False) (line 130)
+# Discord voice requests — leave with DiscordVoiceError and fallthrough
 # ===========================================================================
 
 
 class TestVoiceCommandLeaveError:
-    """Lines 111-112: !leave raises DiscordVoiceError → reply = str(exc)."""
+    """Lines 111-112: leave the voice channel raises DiscordVoiceError → reply = str(exc)."""
 
     @pytest.mark.asyncio
     async def test_leave_discord_voice_error_returned_as_reply(self) -> None:
@@ -575,7 +574,7 @@ class TestVoiceCommandLeaveError:
         voice.leave = AsyncMock(side_effect=DiscordVoiceError("not in a channel"))
 
         result = await maybe_handle_voice_command(
-            content="!leave",
+            content="leave the voice channel",
             channel_id="111",
             guild_id="123456789",
             author_id="999",
@@ -594,7 +593,7 @@ class TestVoiceCommandLeaveError:
         voice.leave = AsyncMock(return_value="General")
 
         result = await maybe_handle_voice_command(
-            content="!leave",
+            content="leave the voice channel",
             channel_id="111",
             guild_id="123456789",
             author_id="999",
@@ -613,7 +612,7 @@ class TestVoiceCommandLeaveError:
         voice.leave = AsyncMock(return_value=None)
 
         result = await maybe_handle_voice_command(
-            content="!leave",
+            content="leave the voice channel",
             channel_id="111",
             guild_id="123456789",
             author_id="999",
@@ -625,21 +624,14 @@ class TestVoiceCommandLeaveError:
 
 
 class TestVoiceCommandFinalFalseReturn:
-    """Line 130: a command that starts with ! but is not !join/!leave/!say
-    returns VoiceCommandResult(False) at line 51, not line 130.
-    Line 130 is the guard at the bottom of the function — it is reached when
-    the cmd variable matches none of the three if-blocks above it. Because the
-    cmd whitelist check at line 50 exits early for unknown commands, line 130
-    is only reachable if the logic reaches it via all three cmd checks failing.
-    We cover it by confirming that an unrecognised command exits before voice
-    checks."""
+    """Unrecognised messages are ignored before voice checks."""
 
     @pytest.mark.asyncio
-    async def test_unknown_bang_command_not_handled(self) -> None:
+    async def test_unrecognized_request_not_handled(self) -> None:
         from missy.channels.discord.voice_commands import maybe_handle_voice_command
 
         result = await maybe_handle_voice_command(
-            content="!unknown",
+            content="start the disco lights",
             channel_id="ch1",
             guild_id="g1",
             author_id="u1",
@@ -651,7 +643,7 @@ class TestVoiceCommandFinalFalseReturn:
 
     @pytest.mark.asyncio
     async def test_say_voice_error_returned_as_reply(self) -> None:
-        """Lines 127-128: !say raises DiscordVoiceError → reply = str(exc)."""
+        """Lines 127-128: say in voice raises DiscordVoiceError → reply = str(exc)."""
         from missy.channels.discord.voice import DiscordVoiceError
         from missy.channels.discord.voice_commands import maybe_handle_voice_command
 
@@ -660,7 +652,7 @@ class TestVoiceCommandFinalFalseReturn:
         voice.say = AsyncMock(side_effect=DiscordVoiceError("TTS is not configured."))
 
         result = await maybe_handle_voice_command(
-            content="!say hello world",
+            content="say hello world in voice",
             channel_id="111",
             guild_id="123456789",
             author_id="999",
@@ -672,14 +664,14 @@ class TestVoiceCommandFinalFalseReturn:
 
     @pytest.mark.asyncio
     async def test_say_empty_text_returns_usage_hint(self) -> None:
-        """!say with no text returns the usage hint."""
+        """say in voice with no text returns the usage hint."""
         from missy.channels.discord.voice_commands import maybe_handle_voice_command
 
         voice = MagicMock()
         voice.is_ready = True
 
         result = await maybe_handle_voice_command(
-            content="!say",
+            content="say in voice",
             channel_id="111",
             guild_id="123456789",
             author_id="999",
@@ -687,11 +679,11 @@ class TestVoiceCommandFinalFalseReturn:
         )
 
         assert result.handled is True
-        assert "Usage" in (result.reply or "")
+        assert "what to say" in (result.reply or "")
 
     @pytest.mark.asyncio
     async def test_say_success_returns_handled_no_reply(self) -> None:
-        """Successful !say returns handled=True with reply=None."""
+        """Successful say in voice returns handled=True with reply=None."""
         from missy.channels.discord.voice_commands import maybe_handle_voice_command
 
         voice = MagicMock()
@@ -699,7 +691,7 @@ class TestVoiceCommandFinalFalseReturn:
         voice.say = AsyncMock(return_value=None)
 
         result = await maybe_handle_voice_command(
-            content="!say hello",
+            content="say hello in voice",
             channel_id="111",
             guild_id="123456789",
             author_id="999",
@@ -723,7 +715,7 @@ class TestVoiceCommandGuards:
         from missy.channels.discord.voice_commands import maybe_handle_voice_command
 
         result = await maybe_handle_voice_command(
-            content="!join",
+            content="join my voice channel",
             channel_id="ch1",
             guild_id=None,
             author_id="u1",
@@ -738,7 +730,7 @@ class TestVoiceCommandGuards:
         from missy.channels.discord.voice_commands import maybe_handle_voice_command
 
         result = await maybe_handle_voice_command(
-            content="!join",
+            content="join my voice channel",
             channel_id="ch1",
             guild_id="g1",
             author_id="u1",
@@ -756,7 +748,7 @@ class TestVoiceCommandGuards:
         voice.is_ready = False
 
         result = await maybe_handle_voice_command(
-            content="!join",
+            content="join my voice channel",
             channel_id="ch1",
             guild_id="g1",
             author_id="u1",

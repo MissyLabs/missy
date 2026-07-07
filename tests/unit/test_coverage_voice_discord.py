@@ -162,9 +162,9 @@ class TestNetworkPolicyIPParseError:
 
 
 class TestDiscordVoiceCommands:
-    """Test maybe_handle_voice_command for unrecognized commands."""
+    """Test maybe_handle_voice_command for unrecognized voice requests."""
 
-    def test_non_bang_command_not_handled(self) -> None:
+    def test_regular_message_not_handled(self) -> None:
         from missy.channels.discord.voice_commands import maybe_handle_voice_command
 
         result = asyncio.run(
@@ -178,19 +178,18 @@ class TestDiscordVoiceCommands:
         )
         assert result.handled is False
 
-    def test_unrecognized_bang_command(self) -> None:
+    def test_unrecognized_request_not_handled(self) -> None:
         from missy.channels.discord.voice_commands import maybe_handle_voice_command
 
         result = asyncio.run(
             maybe_handle_voice_command(
-                content="!nonexistent_cmd",
+                content="start the disco lights",
                 channel_id="123",
                 guild_id="456",
                 author_id="789",
                 voice=None,
             )
         )
-        # Unrecognized ! commands should not be handled
         assert result.handled is False
 
 
