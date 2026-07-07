@@ -1157,6 +1157,70 @@ class TestSendHeartbeat:
         # Must not propagate.
         await gw._send_heartbeat()
 
+    @pytest.mark.asyncio
+    async def test_diagnostics_reports_heartbeat_waiting_for_ack(self):
+        gw = _make_gateway()
+        mock_ws = AsyncMock()
+        gw._ws = mock_ws
+        gw._sequence = 77
+
+        await gw._send_heartbeat()
+
+        snapshot = gw.get_diagnostics()
+        assert snapshot["connected"] is True
+        assert snapshot["sequence"] == 77
+        assert snapshot["heartbeat_ack_overdue"] is True
+        assert snapshot["last_heartbeat_sent_age_seconds"] is not None
+
+
+class TestGatewayDiagnostics:
+    @pytest.mark.asyncio
+    async def test_heartbeat_ack_clears_overdue_diagnostic(self):
+        gw = _make_gateway()
+        mock_ws = AsyncMock()
+        gw._ws = mock_ws
+
+        await gw._send_heartbeat()
+        assert gw.get_diagnostics()["heartbeat_ack_overdue"] is True
+
+        await gw._handle_payload({"op": _OP_HEARTBEAT_ACK, "d": None, "s": 9})
+
+        snapshot = gw.get_diagnostics()
+        assert snapshot["heartbeat_ack_overdue"] is False
+        assert snapshot["last_heartbeat_ack_age_seconds"] is not None
+
+    @pytest.mark.asyncio
+    async def test_invalid_session_updates_diagnostics(self):
+        gw = _make_gateway()
+        gw._ws = AsyncMock()
+        gw._discord_session_id = "sess-1"
+        gw._resume_gateway_url = "wss://resume.gateway"
+        gw._sequence = 123
+
+        with patch("asyncio.sleep", new=AsyncMock()):
+            await gw._handle_payload({"op": _OP_INVALID_SESSION, "d": False, "s": None})
+
+        snapshot = gw.get_diagnostics()
+        assert snapshot["invalid_session_count"] == 1
+        assert snapshot["last_invalid_session_resumable"] is False
+        assert snapshot["discord_session_active"] is False
+        assert snapshot["resume_gateway_url_present"] is False
+
+    @pytest.mark.asyncio
+    async def test_resume_attempt_and_resumed_dispatch_update_diagnostics(self):
+        gw = _make_gateway()
+        gw._ws = AsyncMock()
+        gw._discord_session_id = "sess-1"
+        gw._sequence = 10
+
+        await gw._send_resume()
+        await gw._handle_dispatch("RESUMED", {})
+
+        snapshot = gw.get_diagnostics()
+        assert snapshot["resume_attempt_count"] == 1
+        assert snapshot["last_resume_sent_age_seconds"] is not None
+        assert snapshot["last_resumed_age_seconds"] is not None
+
 
 # ===========================================================================
 # Gateway — _identify_or_resume

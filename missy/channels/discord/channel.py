@@ -135,6 +135,13 @@ class DiscordChannel(BaseChannel):
             session_id=session_id,
             task_id=task_id,
         )
+        self._slash_registration_status: dict[str, Any] = {
+            "attempted": False,
+            "ok": None,
+            "scope": None,
+            "command_count": 0,
+            "error": None,
+        }
 
         self._gateway_task: asyncio.Task[None] | None = None
 
@@ -146,6 +153,13 @@ class DiscordChannel(BaseChannel):
     def bot_user_id(self) -> str | None:
         """The Discord user ID of the connected bot, available after READY."""
         return self._bot_user_id or self._gateway.bot_user_id
+
+    def get_diagnostics(self) -> dict[str, Any]:
+        """Return redacted channel lifecycle diagnostics."""
+        return {
+            "gateway": self._gateway.get_diagnostics(),
+            "slash_registration": dict(self._slash_registration_status),
+        }
 
     def set_agent_runtime(self, agent_runtime: Any) -> None:
         """Provide the agent runtime for voice conversation support."""
@@ -176,8 +190,35 @@ class DiscordChannel(BaseChannel):
                     application_id=self.account_config.application_id,
                     commands=SLASH_COMMANDS,
                 )
+                self._slash_registration_status = {
+                    "attempted": True,
+                    "ok": True,
+                    "scope": "global",
+                    "command_count": len(SLASH_COMMANDS),
+                    "error": None,
+                }
+                self._emit_audit(
+                    "discord.slash_commands.registered",
+                    "allow",
+                    {
+                        "scope": "global",
+                        "command_count": len(SLASH_COMMANDS),
+                    },
+                )
                 logger.info("Discord: slash commands registered globally")
             except Exception as exc:
+                self._slash_registration_status = {
+                    "attempted": True,
+                    "ok": False,
+                    "scope": "global",
+                    "command_count": 0,
+                    "error": str(exc),
+                }
+                self._emit_audit(
+                    "discord.slash_commands.registration_failed",
+                    "error",
+                    {"scope": "global", "error": str(exc)},
+                )
                 logger.warning("Discord: slash command registration failed: %s", exc)
 
     async def stop(self) -> None:

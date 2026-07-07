@@ -1398,11 +1398,23 @@ class TestDiscordDiagnostics:
         mock_logger = MagicMock()
         mock_logger.get_recent_events.return_value = [
             {
+                "timestamp": "2026-07-07T11:59:58",
+                "event_type": "discord.gateway.heartbeat_ack",
+                "result": "allow",
+                "detail": {"seq": 12},
+            },
+            {
+                "timestamp": "2026-07-07T11:59:59",
+                "event_type": "discord.slash_commands.registration_failed",
+                "result": "error",
+                "detail": {"scope": "global", "error": "403 Forbidden"},
+            },
+            {
                 "timestamp": "2026-07-07T12:00:00",
                 "event_type": "discord.voice.start_failed",
                 "result": "error",
                 "detail": {"guild_id": "guild-1", "error": "ffmpeg missing"},
-            }
+            },
         ]
 
         try:
@@ -1432,6 +1444,8 @@ class TestDiscordDiagnostics:
         assert "DISCORD_TOKEN" in result.output
         assert "discord_voice" in result.output
         assert "guild-1" in result.output
+        assert "Recent Lifecycle Signals" in result.output
+        assert "slash-registration" in result.output
         assert "Recent Discord Events" in result.output
 
     def test_discord_diagnostics_help_exits_zero(self, runner: CliRunner):
