@@ -224,6 +224,26 @@ class BaseProvider(ABC):
         response = self.complete(messages, system=system)
         yield response.content
 
+    @staticmethod
+    def _estimate_tokens(messages: list[Message], system: str = "") -> int:
+        """Roughly estimate the prompt token count for rate limiting.
+
+        Uses the common heuristic of ~4 characters per token over the
+        message contents plus the system prompt.  This is deliberately
+        cheap and approximate; :meth:`_record_rate_limit_usage` later
+        reconciles the estimate against the provider's reported usage.
+
+        Args:
+            messages: The conversation turns being sent.
+            system: Optional system prompt sent alongside *messages*.
+
+        Returns:
+            An estimated prompt token count (always ``>= 0``).
+        """
+        char_count = sum(len(m.content) for m in messages if m.content)
+        char_count += len(system or "")
+        return char_count // 4
+
     def _acquire_rate_limit(self, estimated_tokens: int = 0) -> None:
         """Block until the rate limiter permits a request, if one is set."""
         if self.rate_limiter is not None:

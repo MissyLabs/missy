@@ -39,9 +39,36 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+try:
+    import resource as _resource
+except ImportError:  # pragma: no cover - non-POSIX platforms
+    _resource = None  # type: ignore[assignment]
+
 logger = logging.getLogger(__name__)
 
 _MAX_OUTPUT_BYTES = 32_768
+
+
+def _parse_memory_bytes(value: str) -> int | None:
+    """Parse a Docker-style memory string (e.g. ``"256m"``) to bytes.
+
+    Args:
+        value: A memory limit string with an optional ``k``/``m``/``g`` suffix.
+
+    Returns:
+        The size in bytes, or ``None`` when the value cannot be parsed.
+    """
+    if not value:
+        return None
+    text = value.strip().lower()
+    multipliers = {"k": 1024, "m": 1024**2, "g": 1024**3, "b": 1}
+    unit = text[-1]
+    try:
+        if unit in multipliers:
+            return int(float(text[:-1]) * multipliers[unit])
+        return int(float(text))
+    except (ValueError, TypeError):
+        return None
 
 
 @dataclass
@@ -58,6 +85,11 @@ class SandboxConfig:
         allowed_bind_mounts: Host paths that may be bind-mounted into containers.
         timeout: Default execution timeout in seconds.
         workspace_path: Path inside the container to mount the workspace.
+        require_isolation: When ``True`` (the default) and sandboxing is
+            enabled, execution is *refused* if Docker is unavailable rather
+            than silently falling back to unsandboxed host execution
+            (fail-closed).  Set to ``False`` to explicitly opt in to the
+            best-effort :class:`FallbackSandbox` when Docker is missing.
     """
 
     enabled: bool = False
@@ -69,6 +101,7 @@ class SandboxConfig:
     allowed_bind_mounts: list[str] = field(default_factory=list)
     timeout: int = 30
     workspace_path: str = "/workspace"
+    require_isolation: bool = True
     tools: dict[str, Any] = field(default_factory=dict)
 
 
@@ -225,11 +258,22 @@ class DockerSandbox:
 
 
 class FallbackSandbox:
-    """Fallback sandbox when Docker is not available.
+    """Best-effort fallback sandbox when Docker is not available.
 
-    Uses subprocess with restricted settings: no shell interpretation,
-    working directory jailed to workspace, output truncation, and
-    configurable timeout.
+    .. warning::
+
+        This fallback does **NOT** provide the containment guarantees of
+        :class:`DockerSandbox`.  In particular it provides **no network
+        isolation** and **no read-only root filesystem** — commands run on
+        the host with full filesystem write and network access.  It applies
+        only best-effort process resource limits (CPU time and address space)
+        via :func:`resource.setrlimit` where the platform supports them, plus
+        a scrubbed environment and output/timeout caps.
+
+        Because of these limitations it is used only when
+        :attr:`SandboxConfig.require_isolation` is ``False`` (explicit
+        opt-in).  When isolation is required and Docker is unavailable,
+        :func:`get_sandbox` returns a :class:`RefusingSandbox` instead.
     """
 
     def __init__(self, config: SandboxConfig | None = None) -> None:
@@ -238,6 +282,31 @@ class FallbackSandbox:
     def is_available(self) -> bool:
         """Fallback is always available."""
         return True
+
+    def _build_preexec_fn(self) -> Any | None:
+        """Return a ``preexec_fn`` that applies best-effort resource limits.
+
+        Uses :func:`resource.setrlimit` to cap CPU seconds and address space
+        based on the config.  Returns ``None`` on non-POSIX platforms where
+        :mod:`resource` is unavailable.  All limit application is guarded so a
+        failure to set one limit never blocks execution.
+        """
+        if _resource is None:
+            return None
+
+        cpu_seconds = min(int(self.config.timeout) or 30, 300)
+        mem_bytes = _parse_memory_bytes(self.config.memory_limit)
+
+        def _apply_limits() -> None:  # pragma: no cover - runs in child process
+            import contextlib
+
+            with contextlib.suppress(ValueError, OSError):
+                _resource.setrlimit(_resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds + 1))
+            if mem_bytes:
+                with contextlib.suppress(ValueError, OSError):
+                    _resource.setrlimit(_resource.RLIMIT_AS, (mem_bytes, mem_bytes))
+
+        return _apply_limits
 
     def execute(
         self,
@@ -248,6 +317,13 @@ class FallbackSandbox:
         **_kwargs: Any,
     ) -> SandboxResult:
         """Execute *command* via subprocess (no Docker isolation).
+
+        .. warning::
+
+            This does NOT provide network isolation or a read-only root
+            filesystem.  It applies only a scrubbed environment, an output
+            cap, a timeout, and best-effort ``setrlimit`` CPU/address-space
+            limits where the platform supports them.
 
         Args:
             command: Shell command to execute.
@@ -307,6 +383,7 @@ class FallbackSandbox:
                 timeout=effective_timeout,
                 executable="/bin/bash",
                 env=safe_env,
+                preexec_fn=self._build_preexec_fn(),
             )
             combined = proc.stdout + proc.stderr
             if len(combined) > _MAX_OUTPUT_BYTES:
@@ -329,6 +406,46 @@ class FallbackSandbox:
             return SandboxResult(success=False, output=None, error=str(exc), sandboxed=False)
 
 
+class RefusingSandbox:
+    """Sandbox that refuses to run commands (fail-closed).
+
+    Returned by :func:`get_sandbox` when sandboxing is enabled,
+    :attr:`SandboxConfig.require_isolation` is ``True``, and Docker is not
+    available.  Every :meth:`execute` call returns a failed
+    :class:`SandboxResult` explaining that Docker isolation is required —
+    the command is never run.
+    """
+
+    def __init__(self, config: SandboxConfig | None = None) -> None:
+        self.config = config or SandboxConfig()
+
+    def is_available(self) -> bool:
+        """A refusing sandbox is never "available" for execution."""
+        return False
+
+    def execute(
+        self,
+        command: str,  # noqa: ARG002 - signature parity with other sandboxes
+        *,
+        cwd: str | None = None,  # noqa: ARG002
+        timeout: int | None = None,  # noqa: ARG002
+        **_kwargs: Any,
+    ) -> SandboxResult:
+        """Refuse execution and return a failed :class:`SandboxResult`."""
+        return SandboxResult(
+            success=False,
+            output=None,
+            error=(
+                "Sandbox isolation is required (sandbox.require_isolation=true) "
+                "but Docker is not available; refusing to run the command "
+                "unsandboxed. Install/start Docker, or set "
+                "sandbox.require_isolation=false to allow the best-effort "
+                "unsandboxed fallback."
+            ),
+            sandboxed=False,
+        )
+
+
 def parse_sandbox_config(data: dict[str, Any]) -> SandboxConfig:
     """Parse a ``sandbox:`` YAML section into :class:`SandboxConfig`."""
     if not isinstance(data, dict):
@@ -343,15 +460,28 @@ def parse_sandbox_config(data: dict[str, Any]) -> SandboxConfig:
         allowed_bind_mounts=list(data.get("allowed_bind_mounts", [])),
         timeout=int(data.get("timeout", 30)),
         workspace_path=str(data.get("workspace_path", "/workspace")),
+        require_isolation=bool(data.get("require_isolation", True)),
         tools=dict(data.get("tools") or {}),
     )
 
 
-def get_sandbox(config: SandboxConfig | None = None) -> DockerSandbox | FallbackSandbox:
+def get_sandbox(
+    config: SandboxConfig | None = None,
+) -> DockerSandbox | FallbackSandbox | RefusingSandbox:
     """Return the best available sandbox implementation.
 
     Returns a :class:`DockerSandbox` when Docker is accessible and sandbox
-    is enabled; otherwise returns a :class:`FallbackSandbox`.
+    is enabled.  When sandbox is enabled but Docker is unavailable, the
+    behaviour depends on :attr:`SandboxConfig.require_isolation`:
+
+    * ``True`` (default): returns a :class:`RefusingSandbox` that refuses to
+      execute — fail-closed, so an operator who enabled sandboxing for
+      safety never silently loses it.
+    * ``False``: returns a best-effort :class:`FallbackSandbox` (with a loud
+      warning) that runs the command on the host with limited protections.
+
+    When sandbox is disabled entirely a :class:`FallbackSandbox` is returned
+    for direct execution.
     """
     cfg = config or SandboxConfig()
     if cfg.enabled:
@@ -359,5 +489,17 @@ def get_sandbox(config: SandboxConfig | None = None) -> DockerSandbox | Fallback
         if sandbox.is_available():
             logger.info("Docker sandbox available — using containerized execution")
             return sandbox
-        logger.warning("Docker sandbox enabled but Docker not available — falling back")
+        if cfg.require_isolation:
+            logger.error(
+                "Docker sandbox enabled and isolation required but Docker is "
+                "unavailable — refusing to execute commands unsandboxed. Set "
+                "sandbox.require_isolation=false to opt in to the best-effort "
+                "fallback."
+            )
+            return RefusingSandbox(cfg)
+        logger.warning(
+            "Docker sandbox enabled but Docker not available and "
+            "require_isolation=false — falling back to best-effort unsandboxed "
+            "execution (NO network isolation, NO read-only root)."
+        )
     return FallbackSandbox(cfg)

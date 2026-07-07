@@ -122,6 +122,61 @@ class TestRunJob:
                 started_manager._run_job(job.id)
                 MockRuntime.assert_not_called()
 
+    def test_pending_retry_outside_window_is_rescheduled(
+        self, started_manager: SchedulerManager
+    ):
+        """A retry (consecutive_failures>0) landing outside active_hours must
+        be rescheduled into the next window rather than silently dropped."""
+        job = started_manager.add_job(
+            "retry-gated", "every 5 minutes", "task", active_hours="03:00-03:01"
+        )
+        job.consecutive_failures = 1
+        now = datetime.now()
+        if now.hour == 3 and now.minute <= 1:
+            pytest.skip("Running inside the 3AM window")
+
+        with patch("missy.agent.runtime.AgentRuntime") as MockRuntime:
+            started_manager._run_job(job.id)
+            MockRuntime.assert_not_called()
+
+        # A window-retry APScheduler job must now exist.
+        retry_job = started_manager._scheduler.get_job(f"{job.id}_window_retry")
+        assert retry_job is not None
+
+    def test_no_pending_failures_outside_window_not_rescheduled(
+        self, started_manager: SchedulerManager
+    ):
+        """A first fire outside active_hours with no pending failures is
+        skipped without creating a window-retry job."""
+        job = started_manager.add_job(
+            "fresh-gated", "every 5 minutes", "task", active_hours="03:00-03:01"
+        )
+        now = datetime.now()
+        if now.hour == 3 and now.minute <= 1:
+            pytest.skip("Running inside the 3AM window")
+
+        with patch("missy.agent.runtime.AgentRuntime") as MockRuntime:
+            started_manager._run_job(job.id)
+            MockRuntime.assert_not_called()
+
+        assert started_manager._scheduler.get_job(f"{job.id}_window_retry") is None
+
+    def test_next_active_window_start_same_day(self):
+        ref = datetime(2026, 3, 14, 2, 0, 0)  # before 03:00
+        result = SchedulerManager._next_active_window_start("03:00-03:01", now=ref)
+        assert result == datetime(2026, 3, 14, 3, 0, 0)
+
+    def test_next_active_window_start_next_day(self):
+        ref = datetime(2026, 3, 14, 12, 0, 0)  # after 03:00
+        result = SchedulerManager._next_active_window_start("03:00-03:01", now=ref)
+        assert result == datetime(2026, 3, 15, 3, 0, 0)
+
+    def test_next_active_window_start_empty(self):
+        assert SchedulerManager._next_active_window_start("", now=datetime.now()) is None
+
+    def test_next_active_window_start_malformed(self):
+        assert SchedulerManager._next_active_window_start("not-a-window") is None
+
 
 class TestScheduleJobVariants:
     """Tests for _schedule_job with different trigger types."""

@@ -351,7 +351,15 @@ class SchedulerManager:
         # Active-hours gate
         # ------------------------------------------------------------------
         if not job.should_run_now():
-            logger.info("Job %s outside active_hours %s; skipping.", job.id, job.active_hours)
+            # A pending retry (consecutive_failures > 0) that lands outside the
+            # active-hours window must NOT be silently dropped — reschedule it
+            # to the next in-window time instead so retries are never lost.
+            if job.consecutive_failures > 0:
+                self._reschedule_into_window(job)
+            else:
+                logger.info(
+                    "Job %s outside active_hours %s; skipping.", job.id, job.active_hours
+                )
             return
 
         session_id = str(uuid.uuid4())
@@ -516,6 +524,87 @@ class SchedulerManager:
                 self.remove_job(job_id)
             except Exception as exc:
                 logger.warning("Failed to remove one-shot job %r after run: %s", job_id, exc)
+
+    @staticmethod
+    def _next_active_window_start(active_hours: str, now: datetime | None = None) -> datetime | None:
+        """Return the next local datetime at which *active_hours* opens.
+
+        Args:
+            active_hours: A ``"HH:MM-HH:MM"`` window string.
+            now: The reference local time (defaults to :func:`datetime.now`).
+
+        Returns:
+            The next naive local :class:`datetime` at the window's start time,
+            or ``None`` when *active_hours* is empty or malformed.
+        """
+        import re
+
+        if not active_hours:
+            return None
+        m = re.match(r"(\d{2}):(\d{2})-(\d{2}):(\d{2})", active_hours)
+        if not m:
+            return None
+        ref = now or datetime.now()
+        start = ref.replace(
+            hour=int(m.group(1)), minute=int(m.group(2)), second=0, microsecond=0
+        )
+        if start <= ref:
+            start += timedelta(days=1)
+        return start
+
+    def _reschedule_into_window(self, job: ScheduledJob) -> None:
+        """Reschedule a pending retry that fired outside its active-hours window.
+
+        Computes the next in-window time and registers a one-shot APScheduler
+        date job so the retry is not lost.  Falls back to the base schedule if
+        the window cannot be computed.
+
+        Args:
+            job: The job whose retry landed outside ``active_hours``.
+        """
+        run_date = self._next_active_window_start(job.active_hours)
+        if run_date is None:
+            logger.info(
+                "Job %s outside active_hours %s but window unparseable; not rescheduling.",
+                job.id,
+                job.active_hours,
+            )
+            return
+
+        retry_job_id = f"{job.id}_window_retry"
+        try:
+            self._scheduler.add_job(
+                func=self._run_job,
+                trigger="date",
+                run_date=run_date,
+                kwargs={"job_id": job.id},
+                id=retry_job_id,
+                name=f"{job.name} (window retry)",
+                replace_existing=True,
+            )
+        except Exception as exc:
+            logger.error(
+                "Failed to reschedule retry for job %r into active window: %s", job.name, exc
+            )
+            return
+
+        logger.info(
+            "Job %s retry landed outside active_hours %s; rescheduled to %s.",
+            job.id,
+            job.active_hours,
+            run_date.isoformat(),
+        )
+        self._emit_event(
+            event_type="scheduler.job.retry_rescheduled",
+            result="allow",
+            detail={
+                "job_id": job.id,
+                "name": job.name,
+                "active_hours": job.active_hours,
+                "consecutive_failures": job.consecutive_failures,
+                "next_run_date": run_date.isoformat(),
+            },
+        )
 
     # ------------------------------------------------------------------
     # Persistence

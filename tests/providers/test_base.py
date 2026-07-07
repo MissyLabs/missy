@@ -136,3 +136,25 @@ class TestBaseProvider:
     def test_cannot_instantiate_base_provider_directly(self):
         with pytest.raises(TypeError):
             BaseProvider()  # type: ignore[abstract]
+
+
+class TestEstimateTokens:
+    def test_estimate_uses_char_over_four(self):
+        messages = [Message(role="user", content="a" * 40)]
+        # 40 chars // 4 == 10
+        assert StubProvider._estimate_tokens(messages) == 10
+
+    def test_estimate_includes_system_prompt(self):
+        messages = [Message(role="user", content="a" * 8)]
+        assert StubProvider._estimate_tokens(messages, system="b" * 8) == 4
+
+    def test_estimate_empty(self):
+        assert StubProvider._estimate_tokens([]) == 0
+
+    def test_acquire_rate_limit_passes_estimated_tokens(self):
+        from unittest.mock import MagicMock
+
+        provider = StubProvider()
+        provider.rate_limiter = MagicMock()
+        provider._acquire_rate_limit(estimated_tokens=123)
+        provider.rate_limiter.acquire.assert_called_once_with(tokens=123)

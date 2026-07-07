@@ -166,6 +166,12 @@ class ProviderConfig:
             will fall back to the relevant environment variable.
         base_url: Optional base URL override for the provider's HTTP API.
         timeout: Request timeout in seconds.  Defaults to ``30``.
+        requests_per_minute: Rate-limiter request budget per minute
+            (0 = unlimited).
+        tokens_per_minute: Rate-limiter token budget per minute
+            (0 = unlimited).
+        max_wait_seconds: Maximum time :meth:`RateLimiter.acquire` blocks
+            waiting for capacity before raising.
     """
 
     name: str
@@ -177,6 +183,9 @@ class ProviderConfig:
     api_keys: list = field(default_factory=list)  # Multiple API keys for rotation
     fast_model: str = ""  # Model for fast/simple tier (e.g. claude-haiku-4-5)
     premium_model: str = ""  # Model for premium/complex tier (e.g. claude-opus-4-6)
+    requests_per_minute: int = 60  # RateLimiter RPM budget (0 = unlimited)
+    tokens_per_minute: int = 100_000  # RateLimiter TPM budget (0 = unlimited)
+    max_wait_seconds: float = 30.0  # Max blocking wait in RateLimiter.acquire
 
 
 # ---------------------------------------------------------------------------
@@ -569,6 +578,9 @@ def _parse_providers(data: dict[str, Any]) -> dict[str, ProviderConfig]:
             api_keys=api_keys,
             fast_model=str(raw.get("fast_model", "")),
             premium_model=str(raw.get("premium_model", "")),
+            requests_per_minute=int(raw.get("requests_per_minute", 60)),
+            tokens_per_minute=int(raw.get("tokens_per_minute", 100_000)),
+            max_wait_seconds=float(raw.get("max_wait_seconds", 30.0)),
         )
     return providers
 

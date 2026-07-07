@@ -105,6 +105,25 @@ class TestSandboxRouting:
         tool.execute(command="ls", cwd="/workspace")
         mock_sandbox.execute.assert_called_once_with("ls", cwd="/workspace", timeout=30)
 
+    def test_refusing_sandbox_surfaces_failed_result(self):
+        """Fail-closed: when Docker is required but unavailable the tool
+        surfaces a clean failed ToolResult and does not run the command."""
+        from unittest.mock import patch
+
+        from missy.security.sandbox import SandboxConfig
+
+        cfg = SandboxConfig(enabled=True, require_isolation=True)
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = FileNotFoundError  # docker info fails
+            tool = ShellExecTool(sandbox_config=cfg)
+
+        # The command must NOT run on the host.
+        with patch("subprocess.run") as mock_run:
+            result = tool.execute(command="echo test")
+            mock_run.assert_not_called()
+        assert result.success is False
+        assert "Docker" in result.error
+
 
 # ---------------------------------------------------------------------------
 # Schema
