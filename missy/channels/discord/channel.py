@@ -185,11 +185,15 @@ class DiscordChannel(BaseChannel):
         if self._voice is not None:
             with contextlib.suppress(Exception):
                 await self._voice.stop()
+            with contextlib.suppress(Exception):
+                from missy.channels.discord.voice_binding import clear_voice_binding
+
+                clear_voice_binding(manager=self._voice)
             self._voice = None
         with contextlib.suppress(Exception):
             from missy.channels.discord.voice_binding import clear_voice_binding
 
-            clear_voice_binding()
+            clear_voice_binding(account_id=self._voice_account_id())
         await self._gateway.disconnect()
         if self._gateway_task is not None:
             self._gateway_task.cancel()
@@ -723,25 +727,49 @@ class DiscordChannel(BaseChannel):
                 await self._voice.start(token)
                 from missy.channels.discord.voice_binding import set_voice_binding
 
-                set_voice_binding(self._voice, asyncio.get_running_loop())
+                account_id = self._voice_account_id()
+                set_voice_binding(
+                    self._voice,
+                    asyncio.get_running_loop(),
+                    account_id=account_id,
+                    guild_id=guild_id,
+                )
                 self._emit_audit(
                     "discord.voice.binding_registered",
                     "allow",
-                    {"guild_id": guild_id, "channel_id": channel_id},
+                    {
+                        "account_id": account_id,
+                        "guild_id": guild_id,
+                        "channel_id": channel_id,
+                    },
                 )
             except Exception as exc:
                 self._voice = None
                 with contextlib.suppress(Exception):
                     from missy.channels.discord.voice_binding import clear_voice_binding
 
-                    clear_voice_binding()
+                    clear_voice_binding(account_id=self._voice_account_id(), guild_id=guild_id)
                 self._emit_audit(
                     "discord.voice.start_failed",
                     "error",
-                    {"guild_id": guild_id, "channel_id": channel_id, "error": str(exc)},
+                    {
+                        "account_id": self._voice_account_id(),
+                        "guild_id": guild_id,
+                        "channel_id": channel_id,
+                        "error": str(exc),
+                    },
                 )
                 self._rest.send_message(channel_id, f"Voice unavailable: {exc}")
                 return True
+        else:
+            from missy.channels.discord.voice_binding import set_voice_binding
+
+            set_voice_binding(
+                self._voice,
+                asyncio.get_running_loop(),
+                account_id=self._voice_account_id(),
+                guild_id=guild_id,
+            )
 
         result = await maybe_handle_voice_command(
             content=text,
@@ -1275,6 +1303,10 @@ class DiscordChannel(BaseChannel):
     # ------------------------------------------------------------------
     # Audit helpers
     # ------------------------------------------------------------------
+
+    def _voice_account_id(self) -> str:
+        """Return the stable account key used for Discord voice binding scopes."""
+        return str(self.account_config.account_id or self.bot_user_id or self._session_id).strip()
 
     def _emit_audit(
         self,

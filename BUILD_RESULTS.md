@@ -1,24 +1,27 @@
-# Build Results
+# BUILD_RESULTS
 
-Last updated: 2026-07-07
+- Timestamp: 2026-07-07 18:30:57 EDT
+- Branch: overhaul/discord-20260707-215326
+- Primary focus: complete Discord integration overhaul
 
-## Result
+## Build Changes
 
-- Repository is coherent and verified after the Discord voice tool bridge work.
-- No package metadata or dependency declarations were changed.
-- Runtime test environment was updated to satisfy existing declared optional vision dependencies:
-  - apt: `python3-opencv`
-  - user-site pip: `opencv-python-headless 5.0.0.93`
+- Implemented account/guild scoped Discord voice binding registry.
+- Updated Discord voice tools and channel lifecycle to use scoped lookup and cleanup.
+- Updated Discord docs and required loop tracking artifacts.
 
-## Commands
+## Verification
 
-| Command | Result |
-| --- | --- |
-| `ruff check .` | pass |
-| `ruff format --check .` | pass |
-| `pytest -q` | pass: 20252 passed, 13 skipped |
+```text
+pytest tests/tools/test_discord_voice_tools.py tests/channels/test_discord_channel_gap_coverage.py -q
+42 passed in 0.30s
 
-## Notes
+pytest -q
+20256 passed, 13 skipped in 367.28s (0:06:07)
 
-- The first `pytest -q` run exposed environment drift rather than code failures: `cv2` was missing/incompatible, and optional STT tests assumed `faster_whisper`/`ctranslate2` were absent.
-- Optional-dependency tests now force missing imports with `patch.dict("sys.modules", {"package": None})`, making them independent of host package state.
+ruff check .
+All checks passed!
+
+ruff format --check .
+708 files already formatted
+```

@@ -81,7 +81,12 @@ def fake_manager():
 
 @pytest.fixture
 def bound(fake_manager, loop_thread):
-    voice_binding.set_voice_binding(fake_manager, loop_thread)
+    voice_binding.set_voice_binding(
+        fake_manager,
+        loop_thread,
+        account_id="bot-001",
+        guild_id="42",
+    )
     try:
         yield fake_manager
     finally:
@@ -112,9 +117,78 @@ def test_join_no_binding_returns_error():
     assert "not active" in result.error
 
 
+def test_join_wrong_guild_binding_returns_error(bound):
+    result = DiscordVoiceJoinTool().execute(guild_id="43", user_id="456")
+    assert result.success is False
+    assert "account/guild" in result.error
+
+
+def test_join_ambiguous_multi_account_binding_returns_error(fake_manager, loop_thread):
+    other = MagicMock()
+    other.is_ready = True
+    voice_binding.set_voice_binding(
+        fake_manager,
+        loop_thread,
+        account_id="bot-001",
+        guild_id="42",
+    )
+    voice_binding.set_voice_binding(
+        other,
+        loop_thread,
+        account_id="bot-002",
+        guild_id="42",
+    )
+    try:
+        result = DiscordVoiceJoinTool().execute(guild_id="42", user_id="456")
+    finally:
+        voice_binding.clear_voice_binding()
+
+    assert result.success is False
+    assert "account/guild" in result.error
+
+
+def test_join_selects_account_scoped_binding(fake_manager, loop_thread):
+    other = MagicMock()
+    other.is_ready = True
+    other.can_listen = False
+    other.can_speak = False
+
+    async def _other_join(guild_id, **kwargs):
+        other.join_calls.append((guild_id, kwargs))
+        return "Other"
+
+    other.join_calls = []
+    other.join = _other_join
+
+    voice_binding.set_voice_binding(
+        fake_manager,
+        loop_thread,
+        account_id="bot-001",
+        guild_id="42",
+    )
+    voice_binding.set_voice_binding(
+        other,
+        loop_thread,
+        account_id="bot-002",
+        guild_id="42",
+    )
+    try:
+        result = DiscordVoiceJoinTool().execute(
+            guild_id="42",
+            account_id="bot-002",
+            user_id="456",
+        )
+    finally:
+        voice_binding.clear_voice_binding()
+
+    assert result.success is True
+    assert other.join_calls == [(42, {"user_id": 456})]
+    assert fake_manager.join_calls == []
+
+
 def test_join_manager_not_ready(loop_thread, fake_manager):
     fake_manager.is_ready = False
-    voice_binding.set_voice_binding(fake_manager, loop_thread)
+    voice_binding.set_voice_binding(fake_manager, loop_thread, guild_id="123")
     try:
         result = DiscordVoiceJoinTool().execute(guild_id="123", user_id="456")
     finally:

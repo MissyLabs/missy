@@ -56,10 +56,11 @@ missy/channels/discord/
 
 `DiscordChannel` lazy-starts `DiscordVoiceManager` when a message matches a
 voice intent. Once startup completes, the channel registers the active manager
-and its asyncio loop in `voice_binding.py`. Built-in tools
-(`discord_voice_join`, `discord_voice_leave`, `discord_voice_say`, and
-`discord_voice_status`) fetch that binding and dispatch manager coroutines with
-`asyncio.run_coroutine_threadsafe`.
+and its asyncio loop in `voice_binding.py` under an account/guild scope.
+Built-in tools (`discord_voice_join`, `discord_voice_leave`,
+`discord_voice_say`, and `discord_voice_status`) fetch the matching binding
+from `guild_id` plus optional `account_id`, then dispatch manager coroutines
+with `asyncio.run_coroutine_threadsafe`.
 
 The binding is deliberately lifecycle-scoped:
 
@@ -70,8 +71,9 @@ The binding is deliberately lifecycle-scoped:
    Gateway client.
 
 This keeps agent-triggered voice actions tied to the currently running Discord
-channel instead of leaving stale process-global state behind after failures or
-shutdown.
+account and guild instead of leaving stale process-global state behind after
+failures or shutdown. If multiple accounts are registered for the same guild
+and the tool call omits `account_id`, lookup is ambiguous and fails closed.
 
 ---
 
@@ -268,6 +270,7 @@ All events share the base `AuditEvent` fields:
   "event_type": "discord.voice.binding_registered",
   "result": "allow",
   "detail": {
+    "account_id": "<discord bot account id or channel session id>",
     "guild_id": "<discord guild id>",
     "channel_id": "<discord text channel id>"
   }
@@ -281,6 +284,7 @@ All events share the base `AuditEvent` fields:
   "event_type": "discord.voice.start_failed",
   "result": "error",
   "detail": {
+    "account_id": "<discord bot account id or channel session id>",
     "guild_id": "<discord guild id>",
     "channel_id": "<discord text channel id>",
     "error": "<startup error>"

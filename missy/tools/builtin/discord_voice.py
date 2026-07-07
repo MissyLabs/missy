@@ -23,16 +23,28 @@ _DISCORD_VOICE_PERMISSIONS = ToolPermissions(
 )
 
 
-def _require_binding() -> tuple[Any, asyncio.AbstractEventLoop] | ToolResult:
-    binding = get_voice_binding()
+def _normalize_account_id(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    account_id = str(value).strip()
+    return account_id or None
+
+
+def _require_binding(
+    *,
+    guild_id: int,
+    account_id: str | None = None,
+) -> tuple[Any, asyncio.AbstractEventLoop] | ToolResult:
+    binding = get_voice_binding(account_id=account_id, guild_id=str(guild_id))
     if binding is None:
         return ToolResult(
             success=False,
             output=None,
             error=(
-                "Discord voice is not active. Ask the user to start the bot with "
-                "voice enabled (`pip install -e '.[discord_voice]'`) or to run "
-                "`!join` once so the voice manager initializes."
+                "Discord voice is not active for this account/guild. Ask the user "
+                "to start the bot with voice enabled (`pip install -e "
+                "'.[discord_voice]'`) or to run `!join` once in this server so "
+                "the voice manager initializes."
             ),
         )
     if not binding.manager.is_ready:
@@ -80,6 +92,13 @@ class DiscordVoiceJoinTool(BaseTool):
             ),
             "required": True,
         },
+        "account_id": {
+            "type": "string",
+            "description": (
+                "Optional Discord bot account ID from message context. Required "
+                "only when multiple Discord accounts are active for the same guild."
+            ),
+        },
         "channel": {
             "type": "string",
             "description": (
@@ -102,13 +121,9 @@ class DiscordVoiceJoinTool(BaseTool):
         guild_id: str = "",
         channel: str = "",
         user_id: str = "",
+        account_id: str = "",
         **_kwargs: Any,
     ) -> ToolResult:
-        binding = _require_binding()
-        if isinstance(binding, ToolResult):
-            return binding
-        manager, loop = binding
-
         gid = _coerce_guild_id(guild_id)
         if gid is None:
             return ToolResult(
@@ -116,6 +131,10 @@ class DiscordVoiceJoinTool(BaseTool):
                 output=None,
                 error="guild_id is required (look for [DISCORD CONTEXT] in the user message).",
             )
+        binding = _require_binding(guild_id=gid, account_id=_normalize_account_id(account_id))
+        if isinstance(binding, ToolResult):
+            return binding
+        manager, loop = binding
 
         ch = (channel or "").strip()
         uid = _coerce_guild_id(user_id)
@@ -174,14 +193,16 @@ class DiscordVoiceLeaveTool(BaseTool):
             ),
             "required": True,
         },
+        "account_id": {
+            "type": "string",
+            "description": (
+                "Optional Discord bot account ID from message context. Required "
+                "only when multiple Discord accounts are active for the same guild."
+            ),
+        },
     }
 
-    def execute(self, *, guild_id: str = "", **_kwargs: Any) -> ToolResult:
-        binding = _require_binding()
-        if isinstance(binding, ToolResult):
-            return binding
-        manager, loop = binding
-
+    def execute(self, *, guild_id: str = "", account_id: str = "", **_kwargs: Any) -> ToolResult:
         gid = _coerce_guild_id(guild_id)
         if gid is None:
             return ToolResult(
@@ -189,6 +210,10 @@ class DiscordVoiceLeaveTool(BaseTool):
                 output=None,
                 error="guild_id is required (look for [DISCORD CONTEXT] in the user message).",
             )
+        binding = _require_binding(guild_id=gid, account_id=_normalize_account_id(account_id))
+        if isinstance(binding, ToolResult):
+            return binding
+        manager, loop = binding
 
         try:
             left = _run_coro(loop, manager.leave(gid))
@@ -220,6 +245,13 @@ class DiscordVoiceSayTool(BaseTool):
             ),
             "required": True,
         },
+        "account_id": {
+            "type": "string",
+            "description": (
+                "Optional Discord bot account ID from message context. Required "
+                "only when multiple Discord accounts are active for the same guild."
+            ),
+        },
         "text": {
             "type": "string",
             "description": "The text to speak aloud (plain prose, no markdown).",
@@ -232,13 +264,9 @@ class DiscordVoiceSayTool(BaseTool):
         *,
         guild_id: str = "",
         text: str = "",
+        account_id: str = "",
         **_kwargs: Any,
     ) -> ToolResult:
-        binding = _require_binding()
-        if isinstance(binding, ToolResult):
-            return binding
-        manager, loop = binding
-
         gid = _coerce_guild_id(guild_id)
         if gid is None:
             return ToolResult(
@@ -246,6 +274,10 @@ class DiscordVoiceSayTool(BaseTool):
                 output=None,
                 error="guild_id is required (look for [DISCORD CONTEXT] in the user message).",
             )
+        binding = _require_binding(guild_id=gid, account_id=_normalize_account_id(account_id))
+        if isinstance(binding, ToolResult):
+            return binding
+        manager, loop = binding
 
         spoken = (text or "").strip()
         if not spoken:
@@ -278,14 +310,16 @@ class DiscordVoiceStatusTool(BaseTool):
             ),
             "required": True,
         },
+        "account_id": {
+            "type": "string",
+            "description": (
+                "Optional Discord bot account ID from message context. Required "
+                "only when multiple Discord accounts are active for the same guild."
+            ),
+        },
     }
 
-    def execute(self, *, guild_id: str = "", **_kwargs: Any) -> ToolResult:
-        binding = _require_binding()
-        if isinstance(binding, ToolResult):
-            return binding
-        manager, _loop = binding
-
+    def execute(self, *, guild_id: str = "", account_id: str = "", **_kwargs: Any) -> ToolResult:
         gid = _coerce_guild_id(guild_id)
         if gid is None:
             return ToolResult(
@@ -293,6 +327,10 @@ class DiscordVoiceStatusTool(BaseTool):
                 output=None,
                 error="guild_id is required (look for [DISCORD CONTEXT] in the user message).",
             )
+        binding = _require_binding(guild_id=gid, account_id=_normalize_account_id(account_id))
+        if isinstance(binding, ToolResult):
+            return binding
+        manager, _loop = binding
 
         try:
             connected = manager.is_connected(gid)
