@@ -293,7 +293,7 @@ class TestImageCommands:
         from missy.channels.discord.image_commands import maybe_handle_image_command
 
         result = await maybe_handle_image_command(
-            content="!join",
+            content="join my voice channel",
             channel_id="123456789012345678",
             rest_client=MagicMock(),
         )

@@ -217,7 +217,7 @@ class TestDiscordVoiceInitException:
             ),
         ):
             await channel._maybe_handle_voice_command(
-                content="!join General",
+                content="join the General voice channel",
                 channel_id="123",
                 guild_id="456",
                 author_id="789",

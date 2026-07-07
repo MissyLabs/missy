@@ -7,7 +7,7 @@ Covers:
 - voice registry load exception fallback (lines 184-188)
 - audit_logger security_events JSON decode error (line 210-211)
 - webhook _get_client_ip XFF path (line 127)
-- voice_commands fallthrough (line 130)
+- voice_commands fallthrough
 - discord voice resample edge (line 794 — idx >= len)
 """
 

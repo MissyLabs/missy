@@ -681,15 +681,12 @@ class DiscordChannel(BaseChannel):
         content: str,
     ) -> bool:
         text = content.strip()
-        # Strip leading bot mentions so "@Missy !join General" works.
-        import re
+        from missy.channels.discord.voice_commands import (
+            maybe_handle_voice_command,
+            parse_voice_intent,
+        )
 
-        text = re.sub(r"^(<@!?\d+>\s*)+", "", text).strip()
-        if not text.startswith("!"):
-            return False
-
-        cmd = text.split()[0].lower()
-        if cmd not in ("!join", "!leave", "!say"):
+        if parse_voice_intent(text) is None:
             return False
 
         # Lazy-start the voice manager on first voice command.
@@ -720,8 +717,6 @@ class DiscordChannel(BaseChannel):
                 self._voice = None
                 self._rest.send_message(channel_id, f"Voice unavailable: {exc}")
                 return True
-
-        from missy.channels.discord.voice_commands import maybe_handle_voice_command
 
         result = await maybe_handle_voice_command(
             content=text,

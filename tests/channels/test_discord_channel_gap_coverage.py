@@ -160,7 +160,7 @@ class TestHandleMessageVoiceCommandEarlyReturn:
 
         data = _make_message(
             author_id="user-1",
-            content="!join general",
+            content="join the general voice channel",
             guild_id="guild-1",
         )
         await ch._handle_message(data)
@@ -208,8 +208,8 @@ class TestHandleMessageDeleteRaisesWarning:
 @pytest.mark.filterwarnings("ignore::RuntimeWarning")
 class TestMaybeHandleVoiceCommand:
     @pytest.mark.asyncio
-    async def test_content_not_starting_with_exclamation_returns_false(self):
-        """Line 627: non-! content returns False immediately."""
+    async def test_regular_message_returns_false(self):
+        """Non-voice content returns False immediately."""
         ch = _make_channel()
         result = await ch._maybe_handle_voice_command(
             guild_id="g1", channel_id="c1", author_id="u1", content="hello world"
@@ -218,10 +218,10 @@ class TestMaybeHandleVoiceCommand:
 
     @pytest.mark.asyncio
     async def test_unknown_voice_command_returns_false(self):
-        """Line 631: !unknown is not in the known command set → returns False."""
+        """Unrecognized voice-like content returns False."""
         ch = _make_channel()
         result = await ch._maybe_handle_voice_command(
-            guild_id="g1", channel_id="c1", author_id="u1", content="!unknown"
+            guild_id="g1", channel_id="c1", author_id="u1", content="start the disco lights"
         )
         assert result is False
 
@@ -251,7 +251,10 @@ class TestMaybeHandleVoiceCommand:
             AsyncMock(return_value=mock_result),
         ):
             result = await ch._maybe_handle_voice_command(
-                guild_id="g1", channel_id="c1", author_id="u1", content="!join general"
+                guild_id="g1",
+                channel_id="c1",
+                author_id="u1",
+                content="join the general voice channel",
             )
 
         assert result is True
@@ -274,7 +277,10 @@ class TestMaybeHandleVoiceCommand:
             AsyncMock(return_value=mock_result),
         ):
             result = await ch._maybe_handle_voice_command(
-                guild_id="g1", channel_id="c1", author_id="u1", content="!join general"
+                guild_id="g1",
+                channel_id="c1",
+                author_id="u1",
+                content="join the general voice channel",
             )
 
         assert result is True
@@ -293,7 +299,10 @@ class TestMaybeHandleVoiceCommand:
             side_effect=RuntimeError("voice unavailable"),
         ):
             result = await ch._maybe_handle_voice_command(
-                guild_id="g1", channel_id="c1", author_id="u1", content="!join general"
+                guild_id="g1",
+                channel_id="c1",
+                author_id="u1",
+                content="join the general voice channel",
             )
 
         assert result is True
@@ -325,7 +334,10 @@ class TestMaybeHandleVoiceCommand:
             ),
         ):
             result = await ch._maybe_handle_voice_command(
-                guild_id="g1", channel_id="c1", author_id="u1", content="!join general"
+                guild_id="g1",
+                channel_id="c1",
+                author_id="u1",
+                content="join the general voice channel",
             )
 
         assert result is True

@@ -209,7 +209,7 @@ class TestDiscordVoiceResampleBreak:
 
 
 # ---------------------------------------------------------------------------
-# Discord voice_commands: unhandled command (line 130)
+# Discord voice_commands: unhandled request
 # ---------------------------------------------------------------------------
 
 
@@ -235,7 +235,7 @@ class TestDiscordVoiceCommandsFallthrough:
         from missy.channels.discord.voice_commands import maybe_handle_voice_command
 
         result = await maybe_handle_voice_command(
-            content="!join",
+            content="join my voice channel",
             channel_id="123",
             guild_id="456",
             author_id="789",
