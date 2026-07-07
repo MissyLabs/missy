@@ -187,6 +187,15 @@ class TestLoadOAuthToken:
 
         assert result is None
 
+    def test_force_refresh_is_forwarded(self):
+        from missy.providers.codex_provider import _load_oauth_token
+
+        with patch("missy.cli.oauth.refresh_token_if_needed", return_value="oauth-new") as mock:
+            result = _load_oauth_token(force_refresh=True)
+
+        assert result == "oauth-new"
+        mock.assert_called_once_with(force=True)
+
 
 class TestMessagesToInput:
     """Tests for _messages_to_input."""
@@ -376,6 +385,16 @@ class TestCodexProviderGetToken:
 
         assert token == "direct-key"
         mock_load.assert_not_called()
+
+    def test_expired_configured_jwt_uses_refreshable_oauth_token(self):
+        from missy.providers.codex_provider import CodexProvider
+
+        expired = _make_jwt_token({"exp": 1})
+        p = CodexProvider(_make_config(api_key=expired))
+        with patch("missy.providers.codex_provider._load_oauth_token", return_value="fresh"):
+            token = p._get_token()
+
+        assert token == "fresh"
 
     def test_falls_back_to_oauth_when_no_api_key(self):
         from missy.providers.codex_provider import CodexProvider
@@ -684,10 +703,61 @@ class TestCodexProviderStream:
 
         with (
             patch("missy.providers.codex_provider.PolicyHTTPClient") as mock_cls,
+            patch("missy.providers.codex_provider._load_oauth_token", return_value=None),
             pytest.raises(ProviderError, match="401"),
         ):
             mock_cls.return_value.post.side_effect = http_error
             list(self.provider.stream(self._messages()))
+
+    def test_retries_once_with_forced_oauth_refresh_on_401(self):
+        import httpx
+
+        mock_resp = MagicMock(spec=httpx.Response)
+        mock_resp.status_code = 401
+        mock_resp.text = "Unauthorized"
+        http_error = httpx.HTTPStatusError("401", request=MagicMock(), response=mock_resp)
+
+        success = MagicMock()
+        success.raise_for_status = MagicMock()
+        success.iter_lines.return_value = iter(
+            _sse({"type": "response.output_text.delta", "delta": "ok"})
+        )
+        success.close = MagicMock()
+
+        with (
+            patch("missy.providers.codex_provider.PolicyHTTPClient") as mock_cls,
+            patch(
+                "missy.providers.codex_provider._load_oauth_token",
+                return_value="fresh-token",
+            ) as mock_load,
+        ):
+            mock_cls.return_value.post.side_effect = [http_error, success]
+            result = list(self.provider.stream(self._messages()))
+
+        assert result == ["ok"]
+        mock_load.assert_called_once_with(force_refresh=True)
+        second_headers = mock_cls.return_value.post.call_args_list[1].kwargs["headers"]
+        assert second_headers["Authorization"] == "Bearer fresh-token"
+
+    def test_401_without_refresh_has_actionable_auth_error(self):
+        import httpx
+
+        mock_resp = MagicMock(spec=httpx.Response)
+        mock_resp.status_code = 401
+        mock_resp.text = "Unauthorized"
+        http_error = httpx.HTTPStatusError("401", request=MagicMock(), response=mock_resp)
+
+        with (
+            patch("missy.providers.codex_provider.PolicyHTTPClient") as mock_cls,
+            patch("missy.providers.codex_provider._load_oauth_token", return_value=None),
+            pytest.raises(ProviderError) as exc,
+        ):
+            mock_cls.return_value.post.side_effect = http_error
+            list(self.provider.stream(self._messages()))
+
+        msg = str(exc.value)
+        assert "authentication failed" in msg
+        assert "missy providers auth openai-codex --method oauth" in msg
 
     def test_empty_stream_yields_nothing(self):
         lines = ["data: [DONE]"]
@@ -953,7 +1023,10 @@ class TestCodexProviderCompleteWithTools:
         mock_resp.text = "Forbidden"
         http_error = httpx.HTTPStatusError("403", request=MagicMock(), response=mock_resp)
 
-        with patch("missy.providers.codex_provider.PolicyHTTPClient") as mock_cls:
+        with (
+            patch("missy.providers.codex_provider.PolicyHTTPClient") as mock_cls,
+            patch("missy.providers.codex_provider._load_oauth_token", return_value=None),
+        ):
             mock_cls.return_value.post.side_effect = http_error
             with pytest.raises(ProviderError, match="403"):
                 self.provider.complete_with_tools(self._messages(), tools=[])

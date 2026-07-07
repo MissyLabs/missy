@@ -21,6 +21,7 @@ import json
 import logging
 import sys
 import time
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +47,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_CONFIG = "~/.missy/config.yaml"
 DEFAULT_AUDIT_LOG = "~/.missy/audit.jsonl"
 DEFAULT_JOBS_FILE = "~/.missy/jobs.json"
+DEFAULT_APP_LOG = "~/.missy/missy.log"
 
 # ---------------------------------------------------------------------------
 # Default config YAML written by ``missy init``
@@ -109,6 +111,7 @@ heartbeat:
 observability:
   otel_enabled: false
   otel_endpoint: "http://localhost:4317"
+  log_file_path: "~/.missy/missy.log"
   log_level: "warning"
 
 # Vault: encrypted secrets store
@@ -178,6 +181,8 @@ def _load_subsystems(config_path: str) -> Any:
         err_console.print(f"[red]Unexpected error loading configuration: {exc}[/]")
         sys.exit(1)
 
+    _configure_file_logging(cfg)
+
     init_policy_engine(cfg)
     init_audit_logger(cfg.audit_log_path)
     init_registry(cfg)
@@ -201,6 +206,75 @@ def _load_subsystems(config_path: str) -> Any:
         logger.debug("OpenTelemetry init failed: %s", _otel_exc)
 
     return cfg
+
+
+def _parse_log_level(value: Any, default: int = logging.WARNING) -> int:
+    """Return a logging level from a config value."""
+    if isinstance(value, int):
+        return value
+    name = str(value or "").strip().upper()
+    return int(getattr(logging, name, default))
+
+
+def _app_log_path(cfg: Any) -> Path:
+    """Resolve the configured application log file path."""
+    obs = getattr(cfg, "observability", None)
+    raw = getattr(obs, "log_file_path", "") if obs is not None else ""
+    if raw is None or raw.__class__.__module__.startswith("unittest.mock"):
+        raw = ""
+    return Path(raw or DEFAULT_APP_LOG).expanduser()
+
+
+def _configure_file_logging(cfg: Any) -> Path:
+    """Attach a rotating application log file handler to the root logger."""
+    log_path = _app_log_path(cfg)
+    root = logging.getLogger()
+    obs = getattr(cfg, "observability", None)
+    configured_level = _parse_log_level(getattr(obs, "log_level", "warning"), logging.WARNING)
+    level = logging.DEBUG if root.getEffectiveLevel() <= logging.DEBUG else configured_level
+
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    except OSError as exc:
+        logger.warning("Could not create log directory %s: %s", log_path.parent, exc)
+        return log_path
+
+    for handler in list(root.handlers):
+        if not getattr(handler, "_missy_app_log_handler", False):
+            continue
+        if getattr(handler, "_missy_app_log_path", "") == str(log_path):
+            handler.setLevel(level)
+            root.setLevel(min(root.getEffectiveLevel(), level))
+            return log_path
+        root.removeHandler(handler)
+        with contextlib.suppress(Exception):
+            handler.close()
+
+    try:
+        file_handler = RotatingFileHandler(
+            log_path,
+            maxBytes=5_000_000,
+            backupCount=3,
+            encoding="utf-8",
+            delay=True,
+        )
+    except OSError as exc:
+        logger.warning("Could not open application log %s: %s", log_path, exc)
+        return log_path
+
+    file_handler.setLevel(level)
+    file_handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s %(levelname)s [%(name)s] %(message)s",
+            datefmt="%Y-%m-%dT%H:%M:%S%z",
+        )
+    )
+    file_handler._missy_app_log_handler = True  # type: ignore[attr-defined]
+    file_handler._missy_app_log_path = str(log_path)  # type: ignore[attr-defined]
+    root.addHandler(file_handler)
+    root.setLevel(min(root.getEffectiveLevel(), level))
+    logger.debug("Application log configured at %s", log_path)
+    return log_path
 
 
 def _agent_tool_policy_kwargs(
@@ -974,6 +1048,48 @@ def audit_recent(ctx: click.Context, limit: int, category: str | None) -> None:
 
 
 # ---------------------------------------------------------------------------
+# missy logs
+# ---------------------------------------------------------------------------
+
+
+@cli.group("logs", invoke_without_command=True)
+@click.pass_context
+def logs_group(ctx: click.Context) -> None:
+    """Application log commands."""
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(logs_path_cmd)
+
+
+@logs_group.command("path")
+@click.pass_context
+def logs_path_cmd(ctx: click.Context) -> None:
+    """Print the configured application log path."""
+    cfg = _load_subsystems(ctx.obj["config_path"])
+    console.print(str(_app_log_path(cfg)))
+
+
+@logs_group.command("tail")
+@click.option("--limit", default=80, show_default=True, help="Maximum log lines to show.")
+@click.pass_context
+def logs_tail_cmd(ctx: click.Context, limit: int) -> None:
+    """Show recent application log lines."""
+    cfg = _load_subsystems(ctx.obj["config_path"])
+    log_path = _app_log_path(cfg)
+    if not log_path.exists():
+        console.print(f"[dim]No application log found at {log_path}.[/]")
+        return
+
+    try:
+        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as exc:
+        _print_error(f"Could not read application log {log_path}: {exc}")
+        sys.exit(1)
+
+    for line in lines[-max(0, limit) :]:
+        console.print(line)
+
+
+# ---------------------------------------------------------------------------
 # missy providers
 # ---------------------------------------------------------------------------
 
@@ -1137,7 +1253,9 @@ def providers_auth(
             _print_error("OpenAI OAuth did not return a token.")
             sys.exit(1)
         provider_cfg["name"] = "openai-codex"
-        provider_cfg["api_key"] = token
+        # run_openai_oauth writes ~/.missy/secrets/openai-oauth.json with the
+        # refresh token. Keep short-lived access tokens out of config.yaml.
+        provider_cfg.pop("api_key", None)
         provider_cfg["model"] = (
             model or provider_cfg.get("model") or _PROVIDERS["openai-codex"]["models"]["primary"]
         )
@@ -1976,6 +2094,12 @@ def doctor(ctx: click.Context) -> None:
         table.add_row("audit log", ok, str(audit_path))
     else:
         table.add_row("audit log", warn, f"not found: {audit_path}")
+
+    app_log_path = _app_log_path(cfg)
+    if app_log_path.exists():
+        table.add_row("application log", ok, str(app_log_path))
+    else:
+        table.add_row("application log", warn, f"not found yet: {app_log_path}")
 
     # 3. Workspace
     workspace = Path(cfg.workspace_path).expanduser()

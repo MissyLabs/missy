@@ -277,7 +277,7 @@ def load_token() -> dict | None:
         return None
 
 
-def refresh_token_if_needed(client_id: str | None = None) -> str | None:
+def refresh_token_if_needed(client_id: str | None = None, force: bool = False) -> str | None:
     """Return a valid access token, refreshing if within the expiry margin.
 
     Returns the access token string, or None if no token is stored or
@@ -290,7 +290,7 @@ def refresh_token_if_needed(client_id: str | None = None) -> str | None:
     cid = client_id or token_data.get("client_id") or DEFAULT_CLIENT_ID
     expires_at = token_data.get("expires_at", 0)
 
-    if time.time() < expires_at - REFRESH_MARGIN_SECONDS:
+    if not force and time.time() < expires_at - REFRESH_MARGIN_SECONDS:
         return token_data["access_token"]
 
     # Token expired or about to expire — refresh.

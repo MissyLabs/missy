@@ -335,6 +335,23 @@ class TestRefreshTokenIfNeeded:
             result = refresh_token_if_needed("cid")
         assert result == "valid-token"
 
+    def test_force_refresh_when_token_not_expired(self, tmp_path):
+        future = int(time.time()) + 7200
+        data = {
+            "access_token": "valid-token",
+            "refresh_token": "rt",
+            "expires_at": future,
+            "client_id": "cid",
+        }
+        new_resp = {"access_token": "forced-token", "refresh_token": "new-rt", "expires_in": 3600}
+        with _patch_token_file(tmp_path):
+            oauth_module._save_token(data)
+            with patch.object(oauth_module, "_do_refresh", return_value=new_resp) as mock_refresh:
+                result = refresh_token_if_needed("cid", force=True)
+
+        assert result == "forced-token"
+        mock_refresh.assert_called_once_with("cid", "rt")
+
     def test_returns_none_when_no_token_stored(self, tmp_path):
         with _patch_token_file(tmp_path):
             result = refresh_token_if_needed()

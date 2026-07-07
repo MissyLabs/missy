@@ -525,6 +525,7 @@ class TestSettingsDefaults:
         assert c.observability.otel_enabled is False
         assert c.observability.otel_endpoint == "http://localhost:4317"
         assert c.observability.log_level == "warning"
+        assert c.observability.log_file_path == "~/.missy/missy.log"
 
     def test_vault_defaults_when_section_absent(self, tmp_path):
         """Missing vault section yields VaultConfig with vault disabled."""
@@ -1043,6 +1044,7 @@ class TestSchedulingAndHeartbeatParsing:
               otel_endpoint: http://collector:4317
               otel_protocol: http/protobuf
               otel_service_name: my-agent
+              log_file_path: /tmp/missy-debug.log
               log_level: debug
             """),
         )
@@ -1051,4 +1053,5 @@ class TestSchedulingAndHeartbeatParsing:
         assert c.observability.otel_endpoint == "http://collector:4317"
         assert c.observability.otel_protocol == "http/protobuf"
         assert c.observability.otel_service_name == "my-agent"
+        assert c.observability.log_file_path == "/tmp/missy-debug.log"
         assert c.observability.log_level == "debug"

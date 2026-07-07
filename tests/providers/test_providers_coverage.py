@@ -1507,6 +1507,7 @@ class TestCodexProviderStream:
 
         with (
             patch("missy.providers.codex_provider.PolicyHTTPClient") as mock_cls,
+            patch("missy.providers.codex_provider._load_oauth_token", return_value=None),
             pytest.raises(ProviderError, match="401"),
         ):
             mock_cls.return_value.post.side_effect = http_error
@@ -1671,6 +1672,7 @@ class TestCodexProviderCompleteWithTools:
 
         with (
             patch("missy.providers.codex_provider.PolicyHTTPClient") as mock_cls,
+            patch("missy.providers.codex_provider._load_oauth_token", return_value=None),
             pytest.raises(ProviderError, match="403"),
         ):
             mock_cls.return_value.post.side_effect = http_error

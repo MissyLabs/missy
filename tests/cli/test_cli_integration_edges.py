@@ -338,6 +338,46 @@ audit_log_path: /tmp/audit.jsonl
         assert data["providers"]["openai"]["model"] == "auto"
         assert "openai" in data["network"]["presets"]
 
+    def test_providers_auth_openai_codex_oauth_omits_access_token(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        cfg_path = tmp_path / "config.yaml"
+        cfg_path.write_text(
+            """\
+config_version: 2
+network:
+  default_deny: true
+  presets: []
+providers: {}
+workspace_path: /tmp/workspace
+audit_log_path: /tmp/audit.jsonl
+""",
+            encoding="utf-8",
+        )
+
+        with patch("missy.cli.oauth.run_openai_oauth", return_value="oauth-access-token"):
+            result = runner.invoke(
+                cli,
+                [
+                    "--config",
+                    str(cfg_path),
+                    "providers",
+                    "auth",
+                    "openai-codex",
+                    "--method",
+                    "oauth",
+                    "--model",
+                    "gpt-5.2-codex",
+                ],
+            )
+
+        assert result.exit_code == 0
+        data = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+        assert data["providers"]["openai-codex"]["name"] == "openai-codex"
+        assert data["providers"]["openai-codex"]["model"] == "gpt-5.2-codex"
+        assert "api_key" not in data["providers"]["openai-codex"]
+        assert "oauth-access-token" not in cfg_path.read_text(encoding="utf-8")
+
     def test_providers_auth_openai_env_ref_requires_set_env_when_verifying(
         self, runner: CliRunner, tmp_path: Path
     ) -> None:

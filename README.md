@@ -107,6 +107,7 @@ This isn't paranoia — it's the only sane default for an AI agent that can exec
 
 ### Observability
 - **Audit logger** — every policy decision, provider call, and tool execution as JSONL, signed by agent identity
+- **Application logs** — rotating Python/provider diagnostics at `~/.missy/missy.log` (`missy logs tail`)
 - **OpenTelemetry** — optional traces and metrics via OTLP (gRPC or HTTP)
 - **Cost tracking** — per-session spend monitoring with configurable caps
 

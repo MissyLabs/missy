@@ -227,6 +227,7 @@ class ObservabilityConfig:
     otel_protocol: str = "grpc"  # "grpc" | "http/protobuf"
     otel_service_name: str = "missy"
     log_level: str = "warning"
+    log_file_path: str = "~/.missy/missy.log"
 
 
 @dataclass
@@ -560,7 +561,8 @@ def _parse_providers(data: dict[str, Any]) -> dict[str, ProviderConfig]:
         if "model" not in raw:
             raise ConfigurationError(f"Provider '{key}' is missing required field 'model'.")
         api_keys = list(raw.get("api_keys", []))
-        api_key = raw.get("api_key") or os.environ.get(f"{key.upper()}_API_KEY")
+        env_key = f"{key.upper().replace('-', '_')}_API_KEY"
+        api_key = raw.get("api_key") or os.environ.get(env_key)
         # If api_key is not set but api_keys has entries, use the first one.
         if not api_key and api_keys:
             api_key = api_keys[0]
@@ -609,6 +611,7 @@ def _parse_observability(data: dict[str, Any]) -> ObservabilityConfig:
         otel_protocol=str(data.get("otel_protocol", "grpc")),
         otel_service_name=str(data.get("otel_service_name", "missy")),
         log_level=str(data.get("log_level", "warning")),
+        log_file_path=str(data.get("log_file_path", "~/.missy/missy.log")),
     )
 
 

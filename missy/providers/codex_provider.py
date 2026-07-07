@@ -34,6 +34,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import time
 from collections.abc import Iterator
 from typing import Any
 
@@ -48,30 +49,86 @@ logger = logging.getLogger(__name__)
 _CODEX_BASE = "https://chatgpt.com/backend-api"
 _CODEX_ENDPOINT = f"{_CODEX_BASE}/codex/responses"
 _DEFAULT_MODEL = "gpt-5.2"
+_TOKEN_REFRESH_MARGIN_SECONDS = 300
+_AUTH_STATUS_CODES = {401, 403}
+
+
+def _decode_jwt_payload(token: str) -> dict[str, Any]:
+    """Decode a JWT payload without verification for local metadata checks."""
+    try:
+        parts = token.split(".")
+        if len(parts) < 2:
+            return {}
+        padding = 4 - len(parts[1]) % 4
+        payload = json.loads(base64.urlsafe_b64decode(parts[1] + "=" * padding))
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        return {}
 
 
 def _extract_account_id(token: str) -> str:
     """Pull ``chatgpt_account_id`` from the JWT payload without verification."""
-    try:
-        parts = token.split(".")
-        if len(parts) < 2:
-            return ""
-        padding = 4 - len(parts[1]) % 4
-        payload = json.loads(base64.urlsafe_b64decode(parts[1] + "=" * padding))
-        ns = payload.get("https://api.openai.com/auth", {})
-        return ns.get("chatgpt_account_id", "") or payload.get("sub", "")
-    except Exception:
+    payload = _decode_jwt_payload(token)
+    if not payload:
         return ""
+    ns = payload.get("https://api.openai.com/auth", {})
+    return ns.get("chatgpt_account_id", "") or payload.get("sub", "")
 
 
-def _load_oauth_token() -> str | None:
+def _token_needs_refresh(token: str) -> bool:
+    """Return True when a JWT access token is expired or nearly expired."""
+    payload = _decode_jwt_payload(token)
+    exp = payload.get("exp")
+    if exp is None:
+        return False
+    try:
+        return time.time() >= float(exp) - _TOKEN_REFRESH_MARGIN_SECONDS
+    except (TypeError, ValueError):
+        return False
+
+
+def _load_oauth_token(force_refresh: bool = False) -> str | None:
     """Load the stored OAuth access token, refreshing if needed."""
     try:
         from missy.cli.oauth import refresh_token_if_needed
 
-        return refresh_token_if_needed()
+        return refresh_token_if_needed(force=force_refresh)
     except Exception:
+        logger.debug("Failed to load OpenAI OAuth token", exc_info=True)
         return None
+
+
+def _http_status(exc: Exception) -> int | None:
+    """Extract an HTTP status code from an httpx-style exception."""
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    return int(status_code) if isinstance(status_code, int) else None
+
+
+def _http_body_excerpt(exc: Exception, limit: int = 240) -> str:
+    """Return a compact, non-secret response body excerpt for diagnostics."""
+    response = getattr(exc, "response", None)
+    text = getattr(response, "text", "") if response is not None else ""
+    text = " ".join(str(text).split())
+    if not text:
+        return ""
+    return text[:limit] + ("..." if len(text) > limit else "")
+
+
+def _codex_request_error(exc: Exception) -> ProviderError:
+    """Translate low-level transport errors into operator-facing ProviderError."""
+    status_code = _http_status(exc)
+    if status_code in _AUTH_STATUS_CODES:
+        status_label = "Unauthorized" if status_code == 401 else "Forbidden"
+        detail = _http_body_excerpt(exc)
+        suffix = f" Upstream response: {detail}" if detail else ""
+        return ProviderError(
+            f"openai-codex authentication failed (HTTP {status_code} {status_label}). "
+            "Refresh ChatGPT OAuth with "
+            "`missy providers auth openai-codex --method oauth`, then retry."
+            f"{suffix}"
+        )
+    return ProviderError(f"openai-codex request failed: {exc}")
 
 
 def _messages_to_input(messages: list[Message]) -> list[dict]:
@@ -120,12 +177,17 @@ class CodexProvider(BaseProvider):
         self._model: str = config.model or _DEFAULT_MODEL
         self._timeout: int = config.timeout or 60
 
-    def _get_token(self) -> str:
-        token = self._api_key or _load_oauth_token()
+    def _get_token(self, *, force_refresh: bool = False) -> str:
+        if self._api_key and not force_refresh and not _token_needs_refresh(self._api_key):
+            return self._api_key
+
+        token = _load_oauth_token(force_refresh=force_refresh)
+        if not token and self._api_key and not force_refresh:
+            token = self._api_key
         if not token:
             raise ProviderError(
                 "openai-codex: no OAuth token available. "
-                "Run 'missy setup' and choose OpenAI → OAuth."
+                "Run 'missy setup' and choose OpenAI -> OAuth."
             )
         return token
 
@@ -193,17 +255,24 @@ class CodexProvider(BaseProvider):
             ProviderError: On HTTP errors or stream error events.
         """
         try:
-            response = client.post(
-                _CODEX_ENDPOINT,
-                json=body,
-                headers=self._headers(token, account_id),
-                stream=True,
-            )
-            response.raise_for_status()
-        except ProviderError:
-            raise
+            response = self._post_sse(client, body, token, account_id)
         except Exception as exc:
-            raise ProviderError(f"openai-codex request failed: {exc}") from exc
+            if _http_status(exc) in _AUTH_STATUS_CODES:
+                refreshed = _load_oauth_token(force_refresh=True)
+                if refreshed and refreshed != token:
+                    try:
+                        response = self._post_sse(
+                            client,
+                            body,
+                            refreshed,
+                            _extract_account_id(refreshed),
+                        )
+                    except Exception as retry_exc:
+                        raise _codex_request_error(retry_exc) from retry_exc
+                else:
+                    raise _codex_request_error(exc) from exc
+            else:
+                raise _codex_request_error(exc) from exc
 
         try:
             for line in response.iter_lines():
@@ -224,6 +293,23 @@ class CodexProvider(BaseProvider):
         finally:
             response.close()
 
+    def _post_sse(
+        self,
+        client: PolicyHTTPClient,
+        body: dict[str, Any],
+        token: str,
+        account_id: str,
+    ) -> Any:
+        """Issue the Codex SSE POST and validate the HTTP status."""
+        response = client.post(
+            _CODEX_ENDPOINT,
+            json=body,
+            headers=self._headers(token, account_id),
+            stream=True,
+        )
+        response.raise_for_status()
+        return response
+
     def complete(self, messages: list[Message], **kwargs: Any) -> CompletionResponse:
         """Single-turn completion — collects the SSE stream and returns full text."""
         session_id = kwargs.pop("session_id", "")
@@ -231,7 +317,12 @@ class CodexProvider(BaseProvider):
 
         self._acquire_rate_limit()
 
-        text = "".join(self.stream(messages))
+        try:
+            text = "".join(self.stream(messages, session_id=session_id, task_id=task_id))
+        except ProviderError as exc:
+            logger.warning("openai-codex completion failed: %s", exc, exc_info=True)
+            self._emit_event(session_id, task_id, "error", str(exc))
+            raise
 
         self._emit_event(session_id, task_id, "allow", "completion successful")
 
@@ -276,7 +367,10 @@ class CodexProvider(BaseProvider):
         token = self._get_token()
         account_id = _extract_account_id(token)
         body = self._build_body(messages, stream=True)
-        client = self._make_client()
+        client = self._make_client(
+            session_id=str(kwargs.get("session_id", "")),
+            task_id=str(kwargs.get("task_id", "")),
+        )
 
         for event in self._stream_sse(client, body, token, account_id):
             etype = event.get("type", "")
@@ -290,6 +384,7 @@ class CodexProvider(BaseProvider):
         messages: list[Message],
         tools: list,
         system: str = "",
+        **kwargs: Any,
     ) -> CompletionResponse:
         """Tool-calling completion — collects SSE stream and parses tool calls.
 
@@ -314,6 +409,9 @@ class CodexProvider(BaseProvider):
         if system:
             messages = [Message(role="system", content=system), *messages]
 
+        session_id = str(kwargs.get("session_id", ""))
+        task_id = str(kwargs.get("task_id", ""))
+
         token = self._get_token()
         account_id = _extract_account_id(token)
         # Convert BaseTool instances → schema dicts if needed.
@@ -321,43 +419,50 @@ class CodexProvider(BaseProvider):
             self.get_tool_schema(tools) if tools and not isinstance(tools[0], dict) else tools
         )
         body = self._build_body(messages, tools=tool_schemas)
-        client = self._make_client()
+        client = self._make_client(session_id=session_id, task_id=task_id)
 
         tool_calls: list[ToolCall] = []
         text_parts: list[str] = []
         current_fn: dict = {}
 
-        for event in self._stream_sse(client, body, token, account_id):
-            etype = event.get("type", "")
-            if etype == "response.output_text.delta":
-                text_parts.append(event.get("delta", ""))
-            elif etype == "response.output_item.added":
-                item = event.get("item", {})
-                if item.get("type") == "function_call":
-                    current_fn = {
-                        "id": item.get("call_id", item.get("id", "")),
-                        "name": item.get("name", ""),
-                        "arguments": item.get("arguments", ""),
-                    }
-            elif etype == "response.function_call_arguments.delta":
-                current_fn["arguments"] = current_fn.get("arguments", "") + event.get("delta", "")
-            elif etype == "response.function_call_arguments.done" and current_fn.get("name"):
-                try:
-                    args = json.loads(current_fn.get("arguments", "{}"))
-                except json.JSONDecodeError:
-                    args = {}
-                tool_calls.append(
-                    ToolCall(
-                        id=current_fn["id"],
-                        name=current_fn["name"],
-                        arguments=args,
+        try:
+            for event in self._stream_sse(client, body, token, account_id):
+                etype = event.get("type", "")
+                if etype == "response.output_text.delta":
+                    text_parts.append(event.get("delta", ""))
+                elif etype == "response.output_item.added":
+                    item = event.get("item", {})
+                    if item.get("type") == "function_call":
+                        current_fn = {
+                            "id": item.get("call_id", item.get("id", "")),
+                            "name": item.get("name", ""),
+                            "arguments": item.get("arguments", ""),
+                        }
+                elif etype == "response.function_call_arguments.delta":
+                    current_fn["arguments"] = current_fn.get("arguments", "") + event.get(
+                        "delta", ""
                     )
-                )
-                current_fn = {}
+                elif etype == "response.function_call_arguments.done" and current_fn.get("name"):
+                    try:
+                        args = json.loads(current_fn.get("arguments", "{}"))
+                    except json.JSONDecodeError:
+                        args = {}
+                    tool_calls.append(
+                        ToolCall(
+                            id=current_fn["id"],
+                            name=current_fn["name"],
+                            arguments=args,
+                        )
+                    )
+                    current_fn = {}
+        except ProviderError as exc:
+            logger.warning("openai-codex tool completion failed: %s", exc, exc_info=True)
+            self._emit_event(session_id, task_id, "error", str(exc))
+            raise
 
         finish_reason = "tool_calls" if tool_calls else "stop"
 
-        self._emit_event("", "", "allow", f"completion: {finish_reason}")
+        self._emit_event(session_id, task_id, "allow", f"completion: {finish_reason}")
 
         return CompletionResponse(
             content="".join(text_parts),

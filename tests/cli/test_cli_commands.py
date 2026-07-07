@@ -68,6 +68,8 @@ def _make_mock_config(**kwargs) -> MagicMock:
     cfg.network.allowed_hosts = []
     cfg.discord = None
     cfg.max_spend_usd = 0.0
+    cfg.observability.log_file_path = "/tmp/missy.log"
+    cfg.observability.log_level = "warning"
     # vault sub-config
     vault_sub = MagicMock()
     vault_sub.vault_dir = "~/.missy/secrets"
@@ -685,6 +687,50 @@ class TestAuditRecent:
     def test_audit_recent_help_exits_zero(self, runner: CliRunner):
         result = runner.invoke(cli, ["audit", "recent", "--help"])
         assert result.exit_code == 0
+
+
+# ===========================================================================
+# missy logs
+# ===========================================================================
+
+
+class TestLogs:
+    def test_logs_path_prints_configured_path(self, runner: CliRunner, tmp_path):
+        cfg_path = _write_temp_config()
+        cfg = _make_mock_config()
+        cfg.observability.log_file_path = str(tmp_path / "missy.log")
+
+        with _SubsystemsPatch(cfg):
+            result = runner.invoke(cli, ["--config", cfg_path, "logs", "path"])
+
+        assert result.exit_code == 0
+        assert str(tmp_path / "missy.log") in result.output
+
+    def test_logs_tail_prints_recent_lines(self, runner: CliRunner, tmp_path):
+        cfg_path = _write_temp_config()
+        log_path = tmp_path / "missy.log"
+        log_path.write_text("one\ntwo\nthree\n", encoding="utf-8")
+        cfg = _make_mock_config()
+        cfg.observability.log_file_path = str(log_path)
+
+        with _SubsystemsPatch(cfg):
+            result = runner.invoke(cli, ["--config", cfg_path, "logs", "tail", "--limit", "2"])
+
+        assert result.exit_code == 0
+        assert "two" in result.output
+        assert "three" in result.output
+        assert "one" not in result.output
+
+    def test_logs_tail_missing_file_prints_message(self, runner: CliRunner, tmp_path):
+        cfg_path = _write_temp_config()
+        cfg = _make_mock_config()
+        cfg.observability.log_file_path = str(tmp_path / "missing.log")
+
+        with _SubsystemsPatch(cfg):
+            result = runner.invoke(cli, ["--config", cfg_path, "logs", "tail"])
+
+        assert result.exit_code == 0
+        assert "No application log found" in result.output
 
 
 # ===========================================================================

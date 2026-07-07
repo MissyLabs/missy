@@ -405,6 +405,7 @@ def _build_config_yaml(
         "observability:",
         "  otel_enabled: false",
         '  otel_endpoint: "http://localhost:4317"',
+        '  log_file_path: "~/.missy/missy.log"',
         '  log_level: "warning"',
         "",
         "vault:",
@@ -549,7 +550,10 @@ def run_wizard(config_path: str) -> None:
                     # OAuth tokens go to chatgpt.com/backend-api, not api.openai.com.
                     # Switch provider name to openai-codex so the right provider is used.
                     pkey = "openai-codex"
-                    api_key = oauth_token
+                    # run_openai_oauth persists the refreshable token bundle to
+                    # ~/.missy/secrets/openai-oauth.json. Do not copy the
+                    # short-lived access token into config.yaml.
+                    api_key = None
                     verify_results.append(("openai-oauth", True))
                     console.print(
                         "    [green]OAuth token acquired.[/] "
@@ -743,7 +747,9 @@ def run_wizard(config_path: str) -> None:
     table.add_row("Workspace", str(workspace_path))
     for p in providers_cfg:
         key = p.get("api_key") or ""
-        if not key:
+        if p["name"] == "openai-codex" and any(r[0] == "openai-oauth" for r in verify_results):
+            key_display = "(OAuth token file)"
+        elif not key:
             key_display = "(env var)"
         elif key.startswith("vault://"):
             key_display = key

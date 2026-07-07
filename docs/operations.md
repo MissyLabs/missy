@@ -190,11 +190,26 @@ missy --debug ask "Hello"
 ```
 
 `--debug` enables Python `DEBUG`-level logging, which includes policy check
-details, provider selection, and audit event publishing.
+details, provider selection, and audit event publishing. Python application
+logs are also written to the configured rotating log file, defaulting to
+`~/.missy/missy.log`.
+
+Find or inspect the application log:
+
+```bash
+missy logs path
+missy logs tail --limit 120
+```
 
 ---
 
-## 4. Monitoring and Audit Logs
+## 4. Monitoring and Logs
+
+### Application log location
+
+The application log captures Python warnings/errors, provider diagnostics, and
+debug logs when enabled. The default path is `~/.missy/missy.log`; override it
+with `observability.log_file_path`.
 
 ### Audit log location
 
