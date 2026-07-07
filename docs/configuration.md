@@ -19,19 +19,20 @@ parsed into a `MissyConfig` dataclass hierarchy.
 3. [filesystem](#filesystem)
 4. [shell](#shell)
 5. [plugins](#plugins)
-6. [scheduling](#scheduling)
-7. [providers](#providers)
-8. [discord](#discord)
-9. [heartbeat](#heartbeat)
-10. [observability](#observability)
-11. [vault](#vault)
-12. [voice](#voice)
-13. [container](#container)
-14. [vision](#vision)
-15. [workspace_path](#workspace_path)
-16. [audit_log_path](#audit_log_path)
-17. [max_spend_usd](#max_spend_usd)
-18. [Full Annotated Example](#full-annotated-example)
+6. [tools](#tools)
+7. [scheduling](#scheduling)
+8. [providers](#providers)
+9. [discord](#discord)
+10. [heartbeat](#heartbeat)
+11. [observability](#observability)
+12. [vault](#vault)
+13. [voice](#voice)
+14. [container](#container)
+15. [vision](#vision)
+16. [workspace_path](#workspace_path)
+17. [audit_log_path](#audit_log_path)
+18. [max_spend_usd](#max_spend_usd)
+19. [Full Annotated Example](#full-annotated-example)
 
 ---
 
@@ -123,6 +124,49 @@ Controls the plugin loading system.  Disabled by default.
 To disable all third-party plugins globally, set `enabled: false` (which is
 the default).  Even when `enabled: true`, only plugins explicitly named in
 `allowed_plugins` may load.
+
+---
+
+## `tools`
+
+Controls the tools exposed to the model before runtime execution policy checks.
+Execution still fails closed in the tool registry; this section only shapes
+which tool schemas are visible on a turn.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `profile` | string | `full` | One of `minimal`, `coding`, `messaging`, or `full`. |
+| `allow` | list of strings | `[]` | Tool names, glob patterns, or `group:<name>` entries to keep visible. |
+| `deny` | list of strings | `[]` | Tool names or glob patterns to remove. |
+| `alsoAllow` | list of strings | `[]` | Adds tools back after a restrictive layer. |
+| `byProvider` | mapping | `{}` | Provider-specific `allow`/`deny`/`alsoAllow`, with optional nested `byModel`. |
+| `groups` | mapping | `{}` | Custom tool groups used by `group:<name>` references. |
+
+Per-agent overrides live under `agents.<id>.tools`; subagent-specific filters
+can be declared under `agents.<id>.subagents.tools`. Layers are applied as
+profile, provider, global, agent, group, sandbox, then subagent.
+
+```yaml
+tools:
+  profile: coding
+  deny: ["browser_*"]
+  byProvider:
+    anthropic:
+      deny: ["vision_*"]
+      byModel:
+        claude-haiku-*:
+          allow: ["calculator", "file_read"]
+  groups:
+    project: ["file_read", "file_write"]
+
+agents:
+  default:
+    tools:
+      allow: ["group:project", "-shell_exec"]
+    subagents:
+      tools:
+        deny: ["sessions_*"]
+```
 
 ---
 

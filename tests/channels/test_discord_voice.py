@@ -27,7 +27,7 @@ from missy.channels.discord.voice_commands import (
 
 
 def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 def _make_voice_channel(*, channel_id: int = 100, name: str = "General"):

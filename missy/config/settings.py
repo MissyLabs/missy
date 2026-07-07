@@ -129,6 +129,27 @@ class PluginPolicy:
     allowed_plugins: list[str] = field(default_factory=list)
 
 
+@dataclass
+class ToolPolicyConfig:
+    """Controls which registered tools are exposed to an agent turn."""
+
+    profile: str = "full"
+    allow: list[str] = field(default_factory=list)
+    deny: list[str] = field(default_factory=list)
+    also_allow: list[str] = field(default_factory=list)
+    by_provider: dict[str, dict[str, Any]] = field(default_factory=dict)
+    by_model: dict[str, dict[str, Any]] = field(default_factory=dict)
+    groups: dict[str, list[str]] = field(default_factory=dict)
+
+
+@dataclass
+class AgentPolicyConfig:
+    """Per-agent policy surfaces loaded from ``agents.<id>``."""
+
+    tools: ToolPolicyConfig = field(default_factory=ToolPolicyConfig)
+    subagent_tools: ToolPolicyConfig = field(default_factory=ToolPolicyConfig)
+
+
 # ---------------------------------------------------------------------------
 # Provider config
 # ---------------------------------------------------------------------------
@@ -145,6 +166,12 @@ class ProviderConfig:
             will fall back to the relevant environment variable.
         base_url: Optional base URL override for the provider's HTTP API.
         timeout: Request timeout in seconds.  Defaults to ``30``.
+        requests_per_minute: Rate-limiter request budget per minute
+            (0 = unlimited).
+        tokens_per_minute: Rate-limiter token budget per minute
+            (0 = unlimited).
+        max_wait_seconds: Maximum time :meth:`RateLimiter.acquire` blocks
+            waiting for capacity before raising.
     """
 
     name: str
@@ -156,6 +183,9 @@ class ProviderConfig:
     api_keys: list = field(default_factory=list)  # Multiple API keys for rotation
     fast_model: str = ""  # Model for fast/simple tier (e.g. claude-haiku-4-5)
     premium_model: str = ""  # Model for premium/complex tier (e.g. claude-opus-4-6)
+    requests_per_minute: int = 60  # RateLimiter RPM budget (0 = unlimited)
+    tokens_per_minute: int = 100_000  # RateLimiter TPM budget (0 = unlimited)
+    max_wait_seconds: float = 30.0  # Max blocking wait in RateLimiter.acquire
 
 
 # ---------------------------------------------------------------------------
@@ -332,6 +362,8 @@ class MissyConfig:
     vision: VisionConfig = field(default_factory=VisionConfig)
     max_spend_usd: float = 0.0  # 0 = unlimited; per-session budget cap
     config_version: int = 0  # schema version stamp (0 = pre-migration)
+    tools: ToolPolicyConfig = field(default_factory=ToolPolicyConfig)
+    agents: dict[str, AgentPolicyConfig] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -406,6 +438,95 @@ def _parse_plugins(data: dict[str, Any]) -> PluginPolicy:
     )
 
 
+def _as_list_of_strings(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list | tuple | set):
+        return [str(item) for item in value if str(item)]
+    return [str(value)]
+
+
+def _parse_policy_map(raw: Any, *, context: str) -> dict[str, dict[str, Any]]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ConfigurationError(f"{context} must be a mapping, got {type(raw).__name__}.")
+    parsed: dict[str, dict[str, Any]] = {}
+    for key, value in raw.items():
+        if not isinstance(value, dict):
+            raise ConfigurationError(
+                f"{context}.{key} must be a mapping, got {type(value).__name__}."
+            )
+        item = dict(value)
+        if by_model := item.get("byModel") or item.get("by_model"):
+            item["by_model"] = _parse_policy_map(by_model, context=f"{context}.{key}.byModel")
+        parsed[str(key)] = item
+    return parsed
+
+
+def _parse_tool_groups(raw: Any, *, context: str) -> dict[str, list[str]]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ConfigurationError(f"{context} must be a mapping, got {type(raw).__name__}.")
+    return {str(name): _as_list_of_strings(values) for name, values in raw.items()}
+
+
+def _parse_tool_policy(data: Any, *, context: str = "tools") -> ToolPolicyConfig:
+    if data is None:
+        return ToolPolicyConfig()
+    if not isinstance(data, dict):
+        raise ConfigurationError(f"{context} must be a mapping, got {type(data).__name__}.")
+    profile = str(data.get("profile", "full") or "full").strip().lower()
+    if profile not in {"minimal", "coding", "messaging", "full"}:
+        raise ConfigurationError(
+            f"{context}.profile must be one of minimal, coding, messaging, full."
+        )
+    return ToolPolicyConfig(
+        profile=profile,
+        allow=_as_list_of_strings(data.get("allow")),
+        deny=_as_list_of_strings(data.get("deny")),
+        also_allow=_as_list_of_strings(data.get("alsoAllow") or data.get("also_allow")),
+        by_provider=_parse_policy_map(
+            data.get("byProvider") or data.get("by_provider"),
+            context=f"{context}.byProvider",
+        ),
+        by_model=_parse_policy_map(
+            data.get("byModel") or data.get("by_model"),
+            context=f"{context}.byModel",
+        ),
+        groups=_parse_tool_groups(data.get("groups"), context=f"{context}.groups"),
+    )
+
+
+def _parse_agents(data: Any) -> dict[str, AgentPolicyConfig]:
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise ConfigurationError(f"agents must be a mapping, got {type(data).__name__}.")
+    agents: dict[str, AgentPolicyConfig] = {}
+    for agent_id, raw in data.items():
+        if not isinstance(raw, dict):
+            raise ConfigurationError(
+                f"agents.{agent_id} must be a mapping, got {type(raw).__name__}."
+            )
+        subagents = raw.get("subagents") or {}
+        if subagents and not isinstance(subagents, dict):
+            raise ConfigurationError(
+                f"agents.{agent_id}.subagents must be a mapping, got {type(subagents).__name__}."
+            )
+        agents[str(agent_id)] = AgentPolicyConfig(
+            tools=_parse_tool_policy(raw.get("tools"), context=f"agents.{agent_id}.tools"),
+            subagent_tools=_parse_tool_policy(
+                subagents.get("tools") if isinstance(subagents, dict) else None,
+                context=f"agents.{agent_id}.subagents.tools",
+            ),
+        )
+    return agents
+
+
 def _resolve_vault_ref(value: str | None) -> str | None:
     """Resolve a ``vault://`` or ``$ENV`` reference in a config value.
 
@@ -457,6 +578,9 @@ def _parse_providers(data: dict[str, Any]) -> dict[str, ProviderConfig]:
             api_keys=api_keys,
             fast_model=str(raw.get("fast_model", "")),
             premium_model=str(raw.get("premium_model", "")),
+            requests_per_minute=int(raw.get("requests_per_minute", 60)),
+            tokens_per_minute=int(raw.get("tokens_per_minute", 100_000)),
+            max_wait_seconds=float(raw.get("max_wait_seconds", 30.0)),
         )
     return providers
 
@@ -616,6 +740,8 @@ def load_config(path: str) -> MissyConfig:
             filesystem=_parse_filesystem(data.get("filesystem") or {}),
             shell=_parse_shell(data.get("shell") or {}),
             plugins=_parse_plugins(data.get("plugins") or {}),
+            tools=_parse_tool_policy(data.get("tools"), context="tools"),
+            agents=_parse_agents(data.get("agents")),
             providers=_parse_providers(data.get("providers") or {}),
             workspace_path=str(data.get("workspace_path", ".")),
             audit_log_path=str(data.get("audit_log_path", "~/.missy/audit.log")),
@@ -664,6 +790,8 @@ def get_default_config() -> MissyConfig:
         ),
         shell=ShellPolicy(enabled=False, allowed_commands=[]),
         plugins=PluginPolicy(enabled=False, allowed_plugins=[]),
+        tools=ToolPolicyConfig(),
+        agents={},
         providers={},
         workspace_path=str(Path.home() / "missy-workspace"),
         audit_log_path=str(Path.home() / ".missy" / "audit.log"),

@@ -866,7 +866,7 @@ class TestVoiceServerConcurrentConnections:
 
         import asyncio
 
-        asyncio.get_event_loop().run_until_complete(voice_server._handle_connection(ws))
+        asyncio.run(voice_server._handle_connection(ws))
         ws.close.assert_awaited_with(1013, "Server at capacity")
 
     def test_status_includes_engine_names(self, tmp_path: Path) -> None:

@@ -7,7 +7,7 @@ Last updated: 2026-04-27
 | ID | Pattern | Status | Notes |
 | --- | --- | --- | --- |
 | A1 | Streaming subscription state machine | tested | Core module and focused tests added; lightly wired to `AgentRuntime.run_stream()`. Needs channel/tool-loop integration. |
-| A2 | Layered tool policy pipeline | not_started | Next Tier 1 target after A1 hardening. |
+| A2 | Layered tool policy pipeline | hardened | `missy/policy/tool_policy_pipeline.py` is wired into `AgentRuntime._get_tools()` for runtime capability profiles and config-backed provider/global/agent/sandbox/subagent policy surfaces. Channel/group policy sources remain future hardening. |
 | A3 | Mutation fingerprinting + sticky lastToolError | not_started | Needed before apology calibration can avoid duplicate apologies. |
 | A4 | Compaction retry coordination | not_started | A1 tracks retry state locally; runtime manager work remains. |
 | A5 | Auth profile cooldown + fallback | not_started | Provider registry/rate limiter work remains. |
@@ -42,10 +42,18 @@ Last updated: 2026-04-27
 - Added `tests/agent/test_subscription.py`.
 - Expanded `tests/agent/test_runtime_streaming.py`.
 - Verified with full `pytest -q`, `ruff check .`, and `ruff format --check .`.
+- Session 2 added the A2 layered tool policy pipeline with profile bundles, group expansion, glob matching, inline `-tool` denies, `alsoAllow`, fail-warning unknown allowlists, and structured trace records.
+- Session 2 wired `AgentRuntime._get_tools()` to resolve tools through the pipeline and record `_last_tool_policy_decision` for audit/debugging.
+- Session 2 added `tests/policy/test_tool_policy_pipeline.py` and runtime coverage for policy decisions in `tests/agent/test_runtime_streaming.py`.
+- Session 3 added config parsing for `tools.*`, `tools.byProvider`, `tools.byModel`, `tools.groups`, `agents.<id>.tools`, `agents.<id>.subagents.tools`, and `sandbox.tools`.
+- Session 3 added `build_configured_tool_policy_layers()` and `collect_tool_policy_groups()` so runtime policy resolution now consumes YAML-backed provider/global/agent/sandbox/subagent layers.
+- Session 3 routed parsed tool policies into CLI-created runtimes for ask/run/gateway/API paths and documented the YAML surface in `docs/configuration.md`.
+- Session 3 added config, policy-pipeline, and runtime tests for those surfaces, then verified the full test suite and full-repo ruff.
 
 ## Next Steps
 
-1. Harden A1 by routing provider/tool-loop stream events through `AgentSubscription`, not only the simple `run_stream()` path.
+1. Harden A1 by routing provider/tool-loop stream events through `AgentSubscription` where Missy's providers expose stream events, not only the simple `run_stream()` path.
 2. Add the A7 `BlockChunker` and connect it to A1 flush points so pre-tool text can be delivered through Discord/CLI/Web in order.
-3. Start A2 with `missy/policy/tool_policy_pipeline.py`, then replace runtime capability-mode filtering with the audited pipeline.
-4. Keep `OPENCLAW_PATTERNS.md`, `HUMANIZE_STATUS.md`, `BUILD_STATUS.md`, `TEST_RESULTS.md`, and `LAST_SESSION_SUMMARY.md` current before each commit.
+3. Start A3 mutation fingerprinting so H_G apology calibration can avoid duplicate apologies for the same failed mutating action.
+4. Add channel/group policy sources on top of the A2 pipeline when Discord/CLI/Web channel identity context is available.
+5. Keep `OPENCLAW_PATTERNS.md`, `HUMANIZE_STATUS.md`, `BUILD_STATUS.md`, `TEST_RESULTS.md`, and `LAST_SESSION_SUMMARY.md` current before each commit.

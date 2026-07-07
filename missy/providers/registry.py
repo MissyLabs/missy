@@ -232,8 +232,13 @@ class ProviderRegistry:
                 continue
             try:
                 instance = provider_cls(provider_config)
-                # Attach a rate limiter so providers enforce RPM/TPM limits.
-                instance.rate_limiter = RateLimiter()
+                # Attach a rate limiter sized from the provider's configured
+                # RPM/TPM/wait limits so operators can tune to their plan tier.
+                instance.rate_limiter = RateLimiter(
+                    requests_per_minute=getattr(provider_config, "requests_per_minute", 60),
+                    tokens_per_minute=getattr(provider_config, "tokens_per_minute", 100_000),
+                    max_wait_seconds=getattr(provider_config, "max_wait_seconds", 30.0),
+                )
                 registry.register(key, instance, config=provider_config)
                 logger.debug("Registered provider %r (%s).", key, provider_cls.__name__)
             except Exception:

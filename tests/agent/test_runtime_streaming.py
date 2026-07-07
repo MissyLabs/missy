@@ -116,6 +116,32 @@ class TestRateLimitIntegration:
             rl_mock.acquire.assert_called()
 
 
+class TestRuntimeToolPolicyPipeline:
+    def test_get_tools_records_policy_decision(self, mock_registry):
+        registry, _ = mock_registry
+        tool_registry = MagicMock()
+        tool_registry.list_tools.return_value = ["calculator", "shell_exec"]
+        calculator = MagicMock()
+        calculator.name = "calculator"
+        shell = MagicMock()
+        shell.name = "shell_exec"
+        tool_registry.get.side_effect = lambda name: {
+            "calculator": calculator,
+            "shell_exec": shell,
+        }.get(name)
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_registry),
+        ):
+            agent = AgentRuntime(AgentConfig(provider="test", capability_mode="safe-chat"))
+            tools = agent._get_tools()
+
+        assert [tool.name for tool in tools] == ["calculator"]
+        assert agent._last_tool_policy_decision is not None
+        assert agent._last_tool_policy_decision.labels() == ("profile:minimal",)
+
+
 class TestCostPersistence:
     def test_record_cost_passes_session_id(self, mock_registry):
         registry, provider = mock_registry

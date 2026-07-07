@@ -181,6 +181,27 @@ class TestFromConfig:
         registry = ProviderRegistry.from_config(config)
         assert registry.list_providers() == []
 
+    def test_from_config_builds_rate_limiter_from_provider_config(self):
+        config = _make_config(
+            providers={
+                "my_ollama": ProviderConfig(
+                    name="ollama",
+                    model="llama3.2",
+                    requests_per_minute=17,
+                    tokens_per_minute=4200,
+                    max_wait_seconds=12.5,
+                )
+            }
+        )
+        registry = ProviderRegistry.from_config(config)
+        provider = registry.get("my_ollama")
+        assert provider is not None
+        limiter = provider.rate_limiter
+        assert limiter is not None
+        assert limiter._rpm == 17
+        assert limiter._tpm == 4200
+        assert limiter._max_wait == 12.5
+
 
 # ---------------------------------------------------------------------------
 # Singleton: init_registry / get_registry

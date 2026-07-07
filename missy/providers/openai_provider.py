@@ -75,13 +75,26 @@ class OpenAIProvider(BaseProvider):
         return _OPENAI_AVAILABLE and bool(self._api_key)
 
     def _make_client(self) -> Any:
-        """Return a cached OpenAI client, creating one on first call."""
+        """Return a cached OpenAI client, creating one on first call.
+
+        The SDK is given a policy-aware ``http_client`` so that all provider
+        egress transits the network policy check (consistent with the
+        gateway), rather than issuing unchecked HTTP directly.
+        """
         if self._client is None:
             client_kwargs: dict[str, Any] = {"timeout": float(self._timeout)}
             if self._api_key:
                 client_kwargs["api_key"] = self._api_key
             if self._base_url:
                 client_kwargs["base_url"] = self._base_url
+            try:
+                from missy.providers.policy_http import build_policy_http_client
+
+                client_kwargs["http_client"] = build_policy_http_client(
+                    timeout=float(self._timeout)
+                )
+            except Exception:  # pragma: no cover - defensive; never block startup
+                logger.debug("Could not build policy-aware http client", exc_info=True)
             self._client = _openai_sdk.OpenAI(**client_kwargs)
         return self._client
 
@@ -124,7 +137,7 @@ class OpenAIProvider(BaseProvider):
             call_kwargs["max_tokens"] = kwargs.pop("max_tokens")
         call_kwargs.update(kwargs)
 
-        self._acquire_rate_limit()
+        self._acquire_rate_limit(estimated_tokens=self._estimate_tokens(messages))
 
         try:
             client = self._make_client()
@@ -243,7 +256,7 @@ class OpenAIProvider(BaseProvider):
             "tool_choice": "auto",
         }
 
-        self._acquire_rate_limit()
+        self._acquire_rate_limit(estimated_tokens=self._estimate_tokens(messages, system))
 
         try:
             client = self._make_client()

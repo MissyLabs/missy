@@ -79,12 +79,26 @@ class AnthropicProvider(BaseProvider):
         return _ANTHROPIC_AVAILABLE and bool(self._api_key)
 
     def _make_client(self) -> Any:
-        """Return a cached Anthropic client, creating one on first call."""
+        """Return a cached Anthropic client, creating one on first call.
+
+        The SDK is given a policy-aware ``http_client`` so that all provider
+        egress transits the network policy check (consistent with the
+        gateway), rather than issuing unchecked HTTP directly.
+        """
         if self._client is None:
-            self._client = _anthropic_sdk.Anthropic(
-                api_key=self._api_key,
-                timeout=float(self._timeout),
-            )
+            client_kwargs: dict[str, Any] = {
+                "api_key": self._api_key,
+                "timeout": float(self._timeout),
+            }
+            try:
+                from missy.providers.policy_http import build_policy_http_client
+
+                client_kwargs["http_client"] = build_policy_http_client(
+                    timeout=float(self._timeout)
+                )
+            except Exception:  # pragma: no cover - defensive; never block startup
+                logger.debug("Could not build policy-aware http client", exc_info=True)
+            self._client = _anthropic_sdk.Anthropic(**client_kwargs)
         return self._client
 
     def complete(self, messages: list[Message], **kwargs: Any) -> CompletionResponse:
@@ -139,7 +153,9 @@ class AnthropicProvider(BaseProvider):
         # Forward any remaining provider-specific kwargs
         call_kwargs.update(kwargs)
 
-        self._acquire_rate_limit()
+        self._acquire_rate_limit(
+            estimated_tokens=self._estimate_tokens(messages, system_content or "")
+        )
 
         try:
             client = self._make_client()
@@ -263,7 +279,9 @@ class AnthropicProvider(BaseProvider):
         if system_content:
             call_kwargs["system"] = system_content
 
-        self._acquire_rate_limit()
+        self._acquire_rate_limit(
+            estimated_tokens=self._estimate_tokens(messages, system_content or "")
+        )
 
         try:
             client = self._make_client()

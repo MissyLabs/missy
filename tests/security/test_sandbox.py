@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 from missy.security.sandbox import (
     DockerSandbox,
     FallbackSandbox,
+    RefusingSandbox,
     SandboxConfig,
     get_sandbox,
     parse_sandbox_config,
@@ -53,6 +54,14 @@ class TestSandboxConfig:
         assert not cfg.read_only_root
         assert cfg.allowed_bind_mounts == ["/tmp/work"]
         assert cfg.timeout == 60
+
+    def test_parse_sandbox_config_require_isolation_default(self) -> None:
+        cfg = parse_sandbox_config({"enabled": True})
+        assert cfg.require_isolation is True
+
+    def test_parse_sandbox_config_require_isolation_false(self) -> None:
+        cfg = parse_sandbox_config({"enabled": True, "require_isolation": False})
+        assert cfg.require_isolation is False
 
     def test_parse_sandbox_config_empty(self) -> None:
         cfg = parse_sandbox_config({})
@@ -259,6 +268,45 @@ class TestFallbackSandbox:
             assert not result.success
             assert "timed out" in result.error
 
+    def test_execute_applies_resource_limits_preexec(self) -> None:
+        # The fallback applies best-effort resource limits via a preexec_fn.
+        sandbox = FallbackSandbox(SandboxConfig(memory_limit="128m", timeout=15))
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
+            sandbox.execute("echo hi")
+            assert mock_run.call_args.kwargs.get("preexec_fn") is not None
+
+    def test_build_preexec_fn_sets_rlimits(self) -> None:
+        # The preexec callable invokes setrlimit for CPU and address space.
+        sandbox = FallbackSandbox(SandboxConfig(memory_limit="64m", timeout=10))
+        fn = sandbox._build_preexec_fn()
+        assert fn is not None
+        calls: list = []
+        with patch("missy.security.sandbox._resource") as mock_res:
+            mock_res.RLIMIT_CPU = 0
+            mock_res.RLIMIT_AS = 9
+            mock_res.setrlimit.side_effect = lambda *a: calls.append(a)
+            fn()
+        limited = {a[0] for a in calls}
+        assert 0 in limited  # CPU
+        assert 9 in limited  # address space
+
+
+# ---------------------------------------------------------------------------
+# RefusingSandbox
+# ---------------------------------------------------------------------------
+
+
+class TestRefusingSandbox:
+    def test_not_available(self) -> None:
+        assert RefusingSandbox().is_available() is False
+
+    def test_execute_refuses(self) -> None:
+        result = RefusingSandbox().execute("echo hi")
+        assert result.success is False
+        assert result.sandboxed is False
+        assert "Docker" in result.error
+
 
 # ---------------------------------------------------------------------------
 # get_sandbox
@@ -273,8 +321,24 @@ class TestGetSandbox:
             sandbox = get_sandbox(cfg)
             assert isinstance(sandbox, DockerSandbox)
 
-    def test_returns_fallback_when_docker_unavailable(self) -> None:
+    def test_refuses_when_docker_unavailable_and_isolation_required(self) -> None:
+        # New fail-closed behavior: when sandboxing is enabled, isolation is
+        # required (default), and Docker is unavailable, get_sandbox returns a
+        # RefusingSandbox rather than silently falling back to host execution.
         cfg = SandboxConfig(enabled=True)
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = FileNotFoundError
+            sandbox = get_sandbox(cfg)
+            assert isinstance(sandbox, RefusingSandbox)
+            result = sandbox.execute("echo hi")
+            assert result.success is False
+            assert result.error is not None
+            assert "Docker" in result.error
+
+    def test_returns_fallback_when_docker_unavailable_and_isolation_optional(self) -> None:
+        # Opt-in fallback: require_isolation=False keeps the best-effort
+        # FallbackSandbox when Docker is missing.
+        cfg = SandboxConfig(enabled=True, require_isolation=False)
         with patch("subprocess.run") as mock_run:
             mock_run.side_effect = FileNotFoundError
             sandbox = get_sandbox(cfg)

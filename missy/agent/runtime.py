@@ -39,6 +39,13 @@ from missy.agent.subscription import AgentSubscription
 from missy.core.events import AuditEvent, event_bus
 from missy.core.exceptions import ProviderError
 from missy.core.session import Session, SessionManager
+from missy.policy.tool_policy_pipeline import (
+    MISSY_DISCORD_TOOLS,
+    MISSY_SAFE_CHAT_TOOLS,
+    build_configured_tool_policy_layers,
+    collect_tool_policy_groups,
+    resolve_tool_policy,
+)
 from missy.providers.base import CompletionResponse, Message, ToolCall, ToolResult
 from missy.providers.registry import get_registry
 from missy.security.censor import censor_response
@@ -208,6 +215,12 @@ class AgentConfig:
     temperature: float = 0.7
     capability_mode: str = "full"  # "full" | "safe-chat" | "discord" | "no-tools"
     max_spend_usd: float = 0.0  # 0 = unlimited; per-session cost cap
+    agent_id: str = "default"
+    tool_policy: Any | None = None
+    agent_tool_policy: Any | None = None
+    group_tool_policy: Any | None = None
+    sandbox_tool_policy: Any | None = None
+    subagent_tool_policy: Any | None = None
 
 
 #: System prompt for Discord channel — no desktop/X11/browser references.
@@ -301,6 +314,7 @@ class AgentRuntime:
         self._behavior = self._make_behavior_layer()
         self._response_shaper = self._make_response_shaper()
         self._intent_interpreter = self._make_intent_interpreter()
+        self._last_tool_policy_decision = None
         # Message bus (graceful degradation)
         self._message_bus = self._make_message_bus()
 
@@ -1051,62 +1065,10 @@ class AgentRuntime:
     # ------------------------------------------------------------------
 
     # Safe tools allowed in safe-chat mode (read-only, no side effects)
-    _SAFE_CHAT_TOOLS = frozenset(
-        {
-            "calculator",
-            "file_read",
-            "list_files",
-            "web_fetch",
-            "browser_get_content",
-            "browser_get_url",
-            "browser_screenshot",
-            "x11_screenshot",
-            "x11_window_list",
-            "atspi_get_tree",
-            "atspi_get_text",
-        }
-    )
+    _SAFE_CHAT_TOOLS = frozenset(MISSY_SAFE_CHAT_TOOLS)
 
     # Tools available in Discord mode — no desktop/X11/browser/atspi tools.
-    _DISCORD_TOOLS = frozenset(
-        {
-            "calculator",
-            "file_read",
-            "file_write",
-            "file_delete",
-            "list_files",
-            "web_fetch",
-            "shell_exec",
-            "self_create_tool",
-            "code_evolve",
-            "discord_upload_file",
-            "tts_speak",
-            "audio_list_devices",
-            "audio_set_volume",
-            # Incus container tools are fine — they're server-side.
-            "incus_list",
-            "incus_info",
-            "incus_launch",
-            "incus_instance_action",
-            "incus_exec",
-            "incus_file",
-            "incus_snapshot",
-            "incus_image",
-            "incus_network",
-            "incus_storage",
-            "incus_config",
-            "incus_profile",
-            "incus_project",
-            "incus_device",
-            "incus_copy_move",
-            # Vision tools — USB camera is server-side hardware.
-            "vision_capture",
-            "vision_burst",
-            "vision_analyze",
-            "vision_devices",
-            "vision_scene",
-        }
-    )
+    _DISCORD_TOOLS = frozenset(MISSY_DISCORD_TOOLS)
 
     def _get_tools(self) -> list:
         """Return registered tools, or an empty list when unavailable.
@@ -1122,22 +1084,32 @@ class AgentRuntime:
             A list of :class:`~missy.tools.base.BaseTool` instances, or
             ``[]`` when the registry is not initialised.
         """
-        if self.config.capability_mode == "no-tools":
-            return []
-
         try:
             registry = get_tool_registry()
             tool_names = registry.list_tools()
-            tools = [registry.get(name) for name in tool_names if registry.get(name) is not None]
         except RuntimeError:
             return []
 
-        if self.config.capability_mode == "safe-chat":
-            tools = [t for t in tools if getattr(t, "name", "") in self._SAFE_CHAT_TOOLS]
-        elif self.config.capability_mode == "discord":
-            tools = [t for t in tools if getattr(t, "name", "") in self._DISCORD_TOOLS]
+        layers = build_configured_tool_policy_layers(
+            capability_mode=self.config.capability_mode,
+            provider_name=self.config.provider,
+            model_id=self.config.model or "",
+            global_policy=self.config.tool_policy,
+            agent_policy=self.config.agent_tool_policy,
+            group_policy=self.config.group_tool_policy,
+            sandbox_policy=self.config.sandbox_tool_policy,
+            subagent_policy=self.config.subagent_tool_policy,
+        )
+        groups = collect_tool_policy_groups(
+            self.config.tool_policy,
+            self.config.agent_tool_policy,
+            self.config.group_tool_policy,
+        )
+        decision = resolve_tool_policy(tool_names, layers, groups=groups)
+        self._last_tool_policy_decision = decision
 
-        return tools
+        tools_by_name = {name: registry.get(name) for name in tool_names}
+        return [tool for name in decision.tools if (tool := tools_by_name.get(name)) is not None]
 
     #: Exception types considered transient and eligible for automatic retry.
     _TRANSIENT_ERRORS: tuple[type[Exception], ...] = ()

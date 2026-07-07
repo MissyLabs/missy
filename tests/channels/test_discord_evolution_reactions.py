@@ -49,6 +49,10 @@ def channel(mock_rest: MagicMock) -> DiscordChannel:
     return ch
 
 
+def _run(coro):
+    return asyncio.run(coro)
+
+
 # ---------------------------------------------------------------------------
 # add_evolution_reactions
 # ---------------------------------------------------------------------------
@@ -84,7 +88,7 @@ class TestHandleReaction:
             "channel_id": "ch-1",
             "emoji": {"name": "\u2705"},
         }
-        asyncio.get_event_loop().run_until_complete(channel._handle_reaction(data))
+        _run(channel._handle_reaction(data))
         mock_rest.send_message.assert_not_called()
 
     def test_ignores_untracked_message(self, channel: DiscordChannel, mock_rest: MagicMock):
@@ -94,7 +98,7 @@ class TestHandleReaction:
             "channel_id": "ch-1",
             "emoji": {"name": "\u2705"},
         }
-        asyncio.get_event_loop().run_until_complete(channel._handle_reaction(data))
+        _run(channel._handle_reaction(data))
         mock_rest.send_message.assert_not_called()
 
     def test_ignores_irrelevant_emoji(self, channel: DiscordChannel, mock_rest: MagicMock):
@@ -105,7 +109,7 @@ class TestHandleReaction:
             "channel_id": "ch-1",
             "emoji": {"name": "\U0001f44d"},  # 👍 — not ✅ or ❌
         }
-        asyncio.get_event_loop().run_until_complete(channel._handle_reaction(data))
+        _run(channel._handle_reaction(data))
         mock_rest.send_message.assert_not_called()
 
     def test_approve_reaction(self, channel: DiscordChannel, mock_rest: MagicMock):
@@ -123,7 +127,7 @@ class TestHandleReaction:
             "missy.agent.code_evolution.CodeEvolutionManager",
             return_value=mock_mgr,
         ):
-            asyncio.get_event_loop().run_until_complete(channel._handle_reaction(data))
+            _run(channel._handle_reaction(data))
 
         mock_mgr.approve.assert_called_once_with("evo-1")
         mock_rest.send_message.assert_called_once()
@@ -155,7 +159,7 @@ class TestHandleReaction:
             "missy.agent.code_evolution.CodeEvolutionManager",
             return_value=mock_mgr,
         ):
-            asyncio.get_event_loop().run_until_complete(channel._handle_reaction(data))
+            _run(channel._handle_reaction(data))
 
         mock_mgr.reject.assert_called_once_with("evo-1")
         assert "msg-1" not in channel._pending_evolutions
@@ -175,7 +179,7 @@ class TestHandleReaction:
             "missy.agent.code_evolution.CodeEvolutionManager",
             return_value=mock_mgr,
         ):
-            asyncio.get_event_loop().run_until_complete(channel._handle_reaction(data))
+            _run(channel._handle_reaction(data))
 
         # Should still send a message (error message)
         mock_rest.send_message.assert_called_once()
@@ -188,7 +192,7 @@ class TestHandleReaction:
 
 class TestSendToReturnsId:
     def test_returns_last_message_id(self, channel: DiscordChannel, mock_rest: MagicMock):
-        result = asyncio.get_event_loop().run_until_complete(channel.send_to("ch-1", "hello"))
+        result = _run(channel.send_to("ch-1", "hello"))
         assert result == "sent-msg-123"
 
     def test_raises_on_error(self, channel: DiscordChannel, mock_rest: MagicMock):
@@ -196,7 +200,7 @@ class TestSendToReturnsId:
 
         mock_rest.send_message.side_effect = Exception("fail")
         with pytest.raises(DiscordSendError):
-            asyncio.get_event_loop().run_until_complete(channel.send_to("ch-1", "hello"))
+            _run(channel.send_to("ch-1", "hello"))
 
 
 # ---------------------------------------------------------------------------
@@ -230,8 +234,6 @@ class TestGatewayForwardsReactions:
 
         gw = DiscordGatewayClient(bot_token="Bot test", on_message=on_msg)
         # Simulate a DISPATCH with MESSAGE_REACTION_ADD
-        asyncio.get_event_loop().run_until_complete(
-            gw._handle_dispatch("MESSAGE_REACTION_ADD", {"message_id": "m1"})
-        )
+        _run(gw._handle_dispatch("MESSAGE_REACTION_ADD", {"message_id": "m1"}))
         assert len(received) == 1
         assert received[0]["t"] == "MESSAGE_REACTION_ADD"
