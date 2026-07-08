@@ -1,6 +1,6 @@
 # OpenClaw Gap Analysis
 
-Last updated: 2026-07-08 13:29:18 EDT
+Last updated: 2026-07-08 13:56:58 EDT
 
 ## Current Focus
 
@@ -17,12 +17,12 @@ remains clean-room and Python-native.
 | Secure key handling | in place | Config/env loading remains; changed path does not log secrets. |
 | Network policy integration | in place | SDK client attempts policy-aware HTTP wiring. |
 | Model listing/selection | in place | `auto` uses model listing with current preferred chat-model fallback. |
-| Chat/text generation | in place | Current implementation remains Chat Completions-compatible. |
-| Responses API path | not_started | Highest-value next OpenAI architecture slice. |
-| Tool schema normalization | live | Uses provider schema adapter. |
+| Chat/text generation | improved | Native OpenAI text/vision can use Responses; compatibility path remains Chat. |
+| Responses API path | started | Plain native OpenAI requests route to `client.responses.create` when safe. |
+| Tool schema normalization | live | Uses provider schema adapter; native Responses tool path remains future work. |
 | Tool transcript repair | improved | Invalid/duplicate/orphaned tool turns are removed before SDK call. |
-| Vision input support | improved | Safe OpenAI image content blocks are preserved; unsafe schemes are stripped. |
-| Streaming reconciliation | partial | Text delta streaming exists; tool-call/full-content reconciliation remains. |
+| Vision input support | improved | Safe image blocks are preserved and converted to Responses `input_image` when eligible. |
+| Streaming reconciliation | partial | Text delta streaming exists on Chat; Responses stream support remains. |
 | Structured output | partial | Generic Missy validator exists; OpenAI-native response format support remains. |
 | Embeddings | not_started | Needed only if external vector workflows require OpenAI embeddings. |
 | Diagnostics/doctor | partial | General diagnostics exist; OpenAI-specific probes remain. |
@@ -42,11 +42,12 @@ remains clean-room and Python-native.
 | A8 | Per-channel identity cascade | not_started | |
 | A9 | Before/after hook system | not_started | |
 | A10 | Sub-agent depth + child caps | not_started | |
-| A11 | Raw-stream JSONL diagnostics | not_started | Relevant to OpenAI streaming and Web TUI run viewer. |
-| A12 | Transcript dual-repair | improved | OpenAI now repairs invalid/orphaned tool turns before SDK calls. |
+| A11 | Raw-stream JSONL diagnostics | not_started | Relevant to OpenAI Responses streaming and Web TUI run viewer. |
+| A12 | Transcript dual-repair | improved | OpenAI repairs invalid/orphaned tool turns before SDK calls. |
 | A13 | Context-window guard | not_started | |
 
 ## Recommended Next Slice
 
-Implement a first-class OpenAI Responses API adapter path behind a local
-abstraction, with Chat Completions retained as an OpenAI-compatible fallback.
+Add Responses streaming/event reconciliation or native structured output support
+behind the OpenAI adapter, with Chat Completions retained as compatibility
+fallback.

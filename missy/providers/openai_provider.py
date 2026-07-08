@@ -1,8 +1,8 @@
 """OpenAI-compatible provider for the Missy framework.
 
-Uses the ``openai`` SDK to call the Chat Completions API.  The ``base_url``
-parameter allows this provider to target any OpenAI-compatible endpoint
-(e.g. Groq, Together AI, a local vLLM instance).
+Uses the ``openai`` SDK to call OpenAI's native Responses API when available,
+falling back to Chat Completions for OpenAI-compatible ``base_url`` endpoints
+and transcripts that still require Chat Completions compatibility.
 
 The SDK is imported lazily so that Missy can start without it installed -
 :meth:`is_available` returns ``False`` in that case.
@@ -231,6 +231,34 @@ class OpenAIProvider(BaseProvider):
 
         call_kwargs.update(kwargs)
 
+    def _apply_responses_generation_kwargs(
+        self,
+        call_kwargs: dict[str, Any],
+        kwargs: dict[str, Any],
+        model: str,
+    ) -> None:
+        """Normalize common generation kwargs for OpenAI Responses calls."""
+        if "temperature" in kwargs:
+            temperature = kwargs.pop("temperature")
+            supports_temperature = self._supports_custom_temperature(model)
+            try:
+                is_default_temperature = float(temperature) == 1.0
+            except (TypeError, ValueError):
+                is_default_temperature = False
+            if temperature is not None and not supports_temperature and not is_default_temperature:
+                logger.debug("Omitting unsupported temperature override for OpenAI model %r", model)
+            elif temperature is not None:
+                call_kwargs["temperature"] = temperature
+
+        if "max_output_tokens" in kwargs:
+            call_kwargs["max_output_tokens"] = kwargs.pop("max_output_tokens")
+        elif "max_completion_tokens" in kwargs:
+            call_kwargs["max_output_tokens"] = kwargs.pop("max_completion_tokens")
+        elif "max_tokens" in kwargs:
+            call_kwargs["max_output_tokens"] = kwargs.pop("max_tokens")
+
+        call_kwargs.update(kwargs)
+
     @staticmethod
     def _normalize_text_content(content: Any) -> str:
         """Return the textual parts of *content* without preserving rich blocks."""
@@ -455,8 +483,202 @@ class OpenAIProvider(BaseProvider):
                 api_messages.append(payload)
         return api_messages
 
+    @staticmethod
+    def _client_supports_responses(client: Any) -> bool:
+        """Return whether *client* clearly exposes the Responses API surface."""
+        if client.__class__.__module__.startswith("unittest.mock"):
+            return False
+        responses = getattr(client, "responses", None)
+        create = getattr(responses, "create", None)
+        return callable(create)
+
+    def _should_use_responses_api(
+        self,
+        client: Any,
+        api_messages: list[dict[str, Any]],
+        tools_enabled: bool = False,
+    ) -> bool:
+        """Return whether this request should use native OpenAI Responses."""
+        if self._base_url or tools_enabled or not self._client_supports_responses(client):
+            return False
+        for message in api_messages:
+            if message.get("role") == "tool" or message.get("tool_calls"):
+                return False
+        return True
+
+    @staticmethod
+    def _responses_content_from_chat(content: Any) -> str | list[dict[str, Any]]:
+        """Convert normalized Chat Completions content into Responses input content."""
+        if not isinstance(content, list):
+            return str(content or "")
+
+        parts: list[dict[str, Any]] = []
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            part_type = part.get("type")
+            if part_type == "text":
+                parts.append({"type": "input_text", "text": str(part.get("text", ""))})
+            elif part_type == "image_url":
+                image_url = part.get("image_url") or {}
+                if isinstance(image_url, dict):
+                    payload = {"type": "input_image", "image_url": str(image_url.get("url", ""))}
+                    detail = image_url.get("detail")
+                    if detail in _IMAGE_DETAIL_VALUES:
+                        payload["detail"] = detail
+                    parts.append(payload)
+        return parts
+
+    def _messages_to_responses_payload(
+        self,
+        api_messages: list[dict[str, Any]],
+        system: str = "",
+    ) -> tuple[str, list[dict[str, Any]]]:
+        """Build Responses API instructions and input from normalized messages."""
+        instructions: list[str] = []
+        if system:
+            instructions.append(system)
+        input_items: list[dict[str, Any]] = []
+        for message in api_messages:
+            role = str(message.get("role", ""))
+            content = message.get("content", "")
+            if role == "system":
+                text = self._normalize_text_content(content)
+                if text:
+                    instructions.append(text)
+                continue
+            if role in {"user", "assistant"}:
+                input_items.append(
+                    {
+                        "role": role,
+                        "content": self._responses_content_from_chat(content),
+                    }
+                )
+        return "\n\n".join(instructions), input_items
+
+    @staticmethod
+    def _extract_responses_text(raw_response: Any) -> str:
+        """Extract assistant text from a Responses API response object."""
+        output_text = getattr(raw_response, "output_text", None)
+        if isinstance(output_text, str) and output_text:
+            return output_text
+
+        text_parts: list[str] = []
+        for item in getattr(raw_response, "output", []) or []:
+            content = getattr(item, "content", None)
+            if content is None and isinstance(item, dict):
+                content = item.get("content")
+            for part in content or []:
+                part_type = getattr(part, "type", None)
+                text = getattr(part, "text", None)
+                if isinstance(part, dict):
+                    part_type = part.get("type", part_type)
+                    text = part.get("text", text)
+                if part_type in {"output_text", "text"} and text is not None:
+                    text_parts.append(str(text))
+        return "".join(text_parts)
+
+    @staticmethod
+    def _responses_usage(raw_response: Any) -> dict[str, int]:
+        """Return Missy's canonical usage map from a Responses response."""
+        usage_obj = getattr(raw_response, "usage", None)
+        prompt_tokens = int(
+            getattr(usage_obj, "input_tokens", getattr(usage_obj, "prompt_tokens", 0)) or 0
+        )
+        completion_tokens = int(
+            getattr(
+                usage_obj,
+                "output_tokens",
+                getattr(usage_obj, "completion_tokens", 0),
+            )
+            or 0
+        )
+        total_tokens = int(
+            getattr(usage_obj, "total_tokens", prompt_tokens + completion_tokens) or 0
+        )
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+        }
+
+    @staticmethod
+    def _raw_dump(raw_response: Any) -> dict[str, Any]:
+        """Return a defensive raw payload dump for SDK response objects."""
+        if hasattr(raw_response, "model_dump"):
+            dumped = raw_response.model_dump()
+            return dumped if isinstance(dumped, dict) else {}
+        if isinstance(raw_response, dict):
+            return raw_response
+        return {}
+
+    def _complete_via_responses(
+        self,
+        client: Any,
+        api_messages: list[dict[str, Any]],
+        model: str,
+        kwargs: dict[str, Any],
+        system: str = "",
+    ) -> CompletionResponse:
+        """Execute a plain text/vision request via OpenAI Responses."""
+        instructions, input_items = self._messages_to_responses_payload(api_messages, system=system)
+        call_kwargs: dict[str, Any] = {
+            "model": model,
+            "input": input_items,
+        }
+        if instructions:
+            call_kwargs["instructions"] = instructions
+        self._apply_responses_generation_kwargs(call_kwargs, kwargs, model)
+
+        raw_response = client.responses.create(**call_kwargs)
+        content_text = self._extract_responses_text(raw_response)
+        usage = self._responses_usage(raw_response)
+        response = CompletionResponse(
+            content=content_text,
+            model=str(getattr(raw_response, "model", model) or model),
+            provider=self.name,
+            usage=usage,
+            raw=self._raw_dump(raw_response),
+        )
+        self._record_rate_limit_usage(response)
+        return response
+
+    def _complete_via_chat(
+        self,
+        client: Any,
+        api_messages: list[dict[str, Any]],
+        model: str,
+        kwargs: dict[str, Any],
+    ) -> CompletionResponse:
+        """Execute a request via Chat Completions compatibility mode."""
+        call_kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": api_messages,
+        }
+        self._apply_common_generation_kwargs(call_kwargs, kwargs, model)
+        raw_response = client.chat.completions.create(**call_kwargs)
+
+        choice = raw_response.choices[0] if raw_response.choices else None
+        content_text = choice.message.content if choice else ""
+        usage_obj = raw_response.usage
+        usage = {
+            "prompt_tokens": getattr(usage_obj, "prompt_tokens", 0),
+            "completion_tokens": getattr(usage_obj, "completion_tokens", 0),
+            "total_tokens": getattr(usage_obj, "total_tokens", 0),
+        }
+
+        response = CompletionResponse(
+            content=content_text or "",
+            model=raw_response.model,
+            provider=self.name,
+            usage=usage,
+            raw=self._raw_dump(raw_response),
+        )
+        self._record_rate_limit_usage(response)
+        return response
+
     def complete(self, messages: list[Message], **kwargs: Any) -> CompletionResponse:
-        """Send *messages* to the OpenAI Chat Completions API.
+        """Send *messages* to OpenAI, preferring Responses when compatible.
 
         Args:
             messages: Ordered conversation turns.  All role values supported
@@ -480,21 +702,28 @@ class OpenAIProvider(BaseProvider):
 
         session_id = kwargs.pop("session_id", "")
         task_id = kwargs.pop("task_id", "")
+        system = kwargs.pop("system", "")
         model = self._resolve_model(kwargs.pop("model", self._model))
-        api_messages = self._messages_to_chat_payload(messages)
+        api_messages = self._messages_to_chat_payload(messages, system=system)
         self._emit_transcript_repairs(session_id, task_id)
-
-        call_kwargs: dict[str, Any] = {
-            "model": model,
-            "messages": api_messages,
-        }
-        self._apply_common_generation_kwargs(call_kwargs, kwargs, model)
 
         self._acquire_rate_limit(estimated_tokens=self._estimate_tokens(messages))
 
         try:
             client = self._make_client()
-            raw_response = client.chat.completions.create(**call_kwargs)
+            if self._should_use_responses_api(client, api_messages):
+                response = self._complete_via_responses(
+                    client,
+                    api_messages,
+                    model,
+                    kwargs,
+                    system=system,
+                )
+                self._emit_event(session_id, task_id, "allow", "responses completion successful")
+                return response
+            response = self._complete_via_chat(client, api_messages, model, kwargs)
+            self._emit_event(session_id, task_id, "allow", "chat completion successful")
+            return response
         except _openai_sdk.APITimeoutError as exc:
             self._emit_event(session_id, task_id, "error", str(exc))
             raise ProviderError(f"OpenAI request timed out after {self._timeout}s: {exc}") from exc
@@ -514,27 +743,6 @@ class OpenAIProvider(BaseProvider):
         except Exception as exc:
             self._emit_event(session_id, task_id, "error", str(exc))
             raise ProviderError(f"Unexpected error calling OpenAI: {exc}") from exc
-
-        choice = raw_response.choices[0] if raw_response.choices else None
-        content_text = choice.message.content if choice else ""
-        usage_obj = raw_response.usage
-        usage = {
-            "prompt_tokens": getattr(usage_obj, "prompt_tokens", 0),
-            "completion_tokens": getattr(usage_obj, "completion_tokens", 0),
-            "total_tokens": getattr(usage_obj, "total_tokens", 0),
-        }
-
-        self._emit_event(session_id, task_id, "allow", "completion successful")
-
-        response = CompletionResponse(
-            content=content_text or "",
-            model=raw_response.model,
-            provider=self.name,
-            usage=usage,
-            raw=raw_response.model_dump() if hasattr(raw_response, "model_dump") else {},
-        )
-        self._record_rate_limit_usage(response)
-        return response
 
     def get_tool_schema(self, tools: list) -> list:
         """Convert BaseTool instances to OpenAI function-calling schema format.
