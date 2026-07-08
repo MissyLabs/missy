@@ -227,6 +227,8 @@ class TestOperatorConsole:
                 assert "Runtime posture" in console.text
                 assert "Audit Trail" in console.text
                 assert "audit-result" in console.text
+                assert "audit-severity" in console.text
+                assert "audit-detail" in console.text
         finally:
             srv.stop()
 
@@ -357,6 +359,58 @@ class TestAuditEndpoint:
             assert "[REDACTED]" in event["detail"]["message"]
             assert "sk-ant-" not in str(event)
             assert data["facets"]["category"]["provider"] == 1
+        finally:
+            srv.stop()
+
+    def test_audit_endpoint_paginates_newest_first_with_stable_redacted_ids(self) -> None:
+        event_bus.clear()
+        for idx in range(3):
+            event_bus.publish(
+                AuditEvent(
+                    timestamp=datetime(2026, 7, 8, 12, idx, tzinfo=UTC),
+                    session_id=f"sess-{idx}",
+                    task_id=f"task-{idx}",
+                    event_type="tool.execute",
+                    category="tool",
+                    result="allow",
+                    detail={
+                        "severity": "info",
+                        "actor": "runtime",
+                        "source": "test",
+                        "subsystem": "tool",
+                        "action": "execute",
+                        "token": f"secret-{idx}",
+                    },
+                )
+            )
+
+        port = _free_port()
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            first = httpx.get(
+                f"http://127.0.0.1:{port}/api/v1/audit?category=tool&source=test&limit=2&offset=0",
+                headers=HEADERS,
+            )
+            assert first.status_code == 200
+            first_data = first.json()["data"]
+            assert first_data["total"] == 3
+            assert first_data["count"] == 2
+            assert first_data["has_more"] is True
+            assert first_data["events"][0]["session_id"] == "sess-2"
+            assert first_data["events"][0]["id"]
+            assert first_data["events"][0]["detail"]["token"] == "[REDACTED]"
+
+            second = httpx.get(
+                f"http://127.0.0.1:{port}/api/v1/audit?category=tool&source=test&limit=2&offset=2",
+                headers=HEADERS,
+            )
+            second_data = second.json()["data"]
+            assert second_data["count"] == 1
+            assert second_data["has_more"] is False
+            assert second_data["events"][0]["session_id"] == "sess-0"
         finally:
             srv.stop()
 
