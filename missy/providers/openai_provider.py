@@ -381,6 +381,10 @@ class OpenAIProvider(BaseProvider):
     def get_tool_schema(self, tools: list) -> list:
         """Convert BaseTool instances to OpenAI function-calling schema format.
 
+        Delegates to :func:`~missy.providers.schema_adapter.normalize_for_provider`
+        for canonical → OpenAI conversion, falling back to inline construction
+        if the adapter is unavailable.
+
         Args:
             tools: List of :class:`~missy.tools.base.BaseTool` instances.
 
@@ -388,6 +392,22 @@ class OpenAIProvider(BaseProvider):
             A list of OpenAI-format tool dicts with ``type`` and ``function``
             keys.
         """
+        try:
+            from missy.providers.schema_adapter import normalize_for_provider
+
+            schemas = []
+            for tool in tools:
+                base = tool.get_schema() if hasattr(tool, "get_schema") else {}
+                canonical: dict[str, Any] = {
+                    "name": getattr(tool, "name", ""),
+                    "description": getattr(tool, "description", ""),
+                    **base,
+                }
+                schemas.append(normalize_for_provider(canonical, "openai"))
+            return schemas
+        except Exception:
+            logger.debug("schema_adapter unavailable; falling back to inline schema build")
+
         schemas = []
         for tool in tools:
             base_schema = tool.get_schema() if hasattr(tool, "get_schema") else {}

@@ -73,6 +73,20 @@ logger = logging.getLogger(__name__)
 _MAX_TOOL_RESULT_CHARS = 200_000
 
 
+def _fingerprint_tc(name: str, arguments: dict) -> str:
+    """Return a stable SHA-256 fingerprint for a tool call.
+
+    The fingerprint is derived from the tool name and a sorted JSON
+    serialisation of *arguments* so that calls with identical semantics
+    produce the same key regardless of dict insertion order.
+    """
+    import hashlib
+    import json as _json
+
+    payload = _json.dumps({"name": name, "args": arguments}, sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+
 def _rewrite_heredoc_command(tool_args: dict) -> dict:
     """Rewrite shell commands containing heredocs to use temp files.
 
@@ -317,6 +331,8 @@ class AgentRuntime:
         self._last_tool_policy_decision = None
         # Message bus (graceful degradation)
         self._message_bus = self._make_message_bus()
+        # Request tracker for tool intelligence (graceful degradation)
+        self._request_tracker = self._make_request_tracker()
 
     # ------------------------------------------------------------------
     # Message bus helper
@@ -342,6 +358,41 @@ class AgentRuntime:
             bus.publish(BusMessage(topic=topic, payload=payload, source=source))
         except Exception:
             logger.debug("Failed to publish bus message for topic %r", topic, exc_info=True)
+
+    # ------------------------------------------------------------------
+    # Request tracker
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _make_request_tracker() -> Any:
+        """Return a RequestTracker, or None if unavailable."""
+        try:
+            from missy.tools.intelligence import get_request_tracker
+
+            return get_request_tracker()
+        except Exception:
+            logger.debug("RequestTracker not available; skipping request tracking.")
+            return None
+
+    def _track_request(
+        self,
+        user_input: str,
+        session_id: str,
+        tool_calls: list[str],
+        provider: str,
+    ) -> None:
+        """Record a completed turn to the request tracker. Never raises."""
+        if self._request_tracker is None:
+            return
+        try:
+            self._request_tracker.record(
+                session_id=session_id,
+                user_message=user_input,
+                tool_calls=tool_calls or [],
+                metadata={"provider": provider},
+            )
+        except Exception:
+            logger.debug("RequestTracker.record() failed", exc_info=True)
 
     def switch_provider(self, name: str) -> None:
         """Switch the active provider at runtime.
@@ -529,6 +580,9 @@ class AgentRuntime:
                 )
             logger.exception("Unexpected error during completion")
             raise ProviderError(f"Unexpected error during completion: {exc}") from exc
+
+        # Record turn to request tracker for pattern detection.
+        self._track_request(user_input, sid, all_tool_names_used, provider.name)
 
         # Persist turn
         self._save_turn(sid, "user", user_input)
@@ -783,6 +837,12 @@ class AgentRuntime:
         # Mutable message list for the loop; starts from what context manager gave us
         loop_messages: list[dict] = list(messages)
 
+        # --- OpenClaw A3: mutation fingerprinting + sticky lastToolError ---
+        # Maps fingerprint → call count across all iterations.
+        _mutation_fp_counts: dict[str, int] = {}
+        # Maps fingerprint → last error text (cleared when same fp succeeds).
+        _mutation_fp_errors: dict[str, str] = {}
+
         # Resolve progress reporter (graceful degradation for tests that bypass __init__)
         _progress = getattr(self, "_progress", None)
         if _progress is None:
@@ -869,6 +929,14 @@ class AgentRuntime:
                             )
                         _progress.on_tool_done(tc.name, "error" if tr.is_error else "ok")
                         tool_results.append(tr)
+
+                        # OpenClaw A3: mutation fingerprinting
+                        _fp = _fingerprint_tc(tc.name, tc.arguments or {})
+                        _mutation_fp_counts[_fp] = _mutation_fp_counts.get(_fp, 0) + 1
+                        if tr.is_error:
+                            _mutation_fp_errors[_fp] = tr.content or "unknown error"
+                        else:
+                            _mutation_fp_errors.pop(_fp, None)
 
                         # Feature #7: track failures / successes per tool
                         if failure_tracker is not None:
@@ -970,6 +1038,34 @@ class AgentRuntime:
 
                         # Feature #9: error-driven code evolution analysis
                         self._analyze_for_evolution(tc.name, tr.content, failure_tracker)
+
+                    # OpenClaw A3: inject sticky lastToolError for repeated-error fingerprints.
+                    # When the model has called the same tool with the same arguments
+                    # multiple times and keeps getting an error, surface the pattern
+                    # explicitly so the model can change strategy.
+                    _repeated_errors: list[str] = []
+                    for _fp, _err in _mutation_fp_errors.items():
+                        if _mutation_fp_counts.get(_fp, 0) >= 2:
+                            _repeated_errors.append(_err)
+                    if _repeated_errors:
+                        _last_err_msg = (
+                            "lastToolError: The following tool call(s) have been attempted "
+                            "multiple times with the same arguments and keep failing. "
+                            "Try a different approach, different arguments, or a different tool:\n"
+                            + "\n".join(f"  • {e[:200]}" for e in _repeated_errors)
+                        )
+                        loop_messages.append({"role": "user", "content": _last_err_msg})
+                        with contextlib.suppress(Exception):
+                            self._emit_event(
+                                session_id=session_id,
+                                task_id=task_id,
+                                event_type="agent.tool.mutation_fingerprint",
+                                result="warn",
+                                detail={
+                                    "repeated_error_count": len(_repeated_errors),
+                                    "iteration": iteration,
+                                },
+                            )
 
                     # Feature #8: checkpoint after each round of tool results
                     if _cm is not None and _checkpoint_id is not None:

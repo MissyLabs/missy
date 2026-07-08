@@ -4779,7 +4779,9 @@ def candidates_list(ctx: click.Context, state: str | None, owner: str | None, li
         try:
             ls = ToolLifecycleState(state.lower())
         except ValueError:
-            _print_error(f"Unknown state {state!r}. Valid states: {[s.value for s in ToolLifecycleState]}")
+            _print_error(
+                f"Unknown state {state!r}. Valid states: {[s.value for s in ToolLifecycleState]}"
+            )
             raise SystemExit(1) from None
 
     candidates = store.list_all(state=ls, owner=owner, limit=limit)
@@ -4862,6 +4864,7 @@ def candidates_show(ctx: click.Context, candidate_id: str) -> None:
     if c.provider_enabled:
         console.print(f"[bold]Provider enabled:[/] {c.provider_enabled}")
     import json as _json
+
     console.print(f"[bold]Schema:[/]\n{_json.dumps(c.schema, indent=2)}")
 
 
@@ -4945,8 +4948,10 @@ def requests_stats(ctx: click.Context, min_count: int, top: int) -> None:
     tracker = get_request_tracker()
     total_events = tracker.event_count()
     patterns = tracker.get_frequent_patterns(min_count=min_count, limit=top)
-    console.print(f"[bold]Request tracker[/]: {total_events} events recorded, "
-                  f"{tracker.pattern_count()} distinct patterns.")
+    console.print(
+        f"[bold]Request tracker[/]: {total_events} events recorded, "
+        f"{tracker.pattern_count()} distinct patterns."
+    )
     if not patterns:
         console.print(f"[dim]No patterns with ≥{min_count} occurrences found.[/]")
         return
@@ -5043,6 +5048,154 @@ def benchmark_compare(ctx: click.Context, tool_name: str) -> None:
             f"{s.mean_cost_usd:.6f}",
         )
     console.print(t)
+
+
+@tools_benchmark.command("run")
+@click.argument("tool_name")
+@click.option(
+    "--provider",
+    "provider_label",
+    default="direct",
+    show_default=True,
+    help="Provider label to attach to results (use 'direct' for registry-only execution).",
+)
+@click.option(
+    "--no-persist",
+    is_flag=True,
+    default=False,
+    help="Do not save results to the benchmark store.",
+)
+@click.pass_context
+def benchmark_run(
+    ctx: click.Context, tool_name: str, provider_label: str, no_persist: bool
+) -> None:
+    """Run a benchmark suite for TOOL_NAME against the tool registry.
+
+    Builds a synthetic test suite from the tool's schema examples (or a
+    minimal smoke-test if no examples are declared), executes each task
+    directly through the registry, scores it, and prints a summary.
+
+    Use --provider to label results for cross-provider comparison.
+    Results are persisted by default; pass --no-persist to skip.
+    """
+    from missy.tools.benchmark.runner import BenchmarkRunner
+    from missy.tools.registry import get_tool_registry
+
+    registry = get_tool_registry()
+    tool = registry.get(tool_name)
+    if tool is None:
+        _print_error(
+            f"Tool {tool_name!r} is not registered. "
+            "Run 'missy tools candidates list' to see available candidates, "
+            "or check your tool registry."
+        )
+        raise SystemExit(1)
+
+    # Build suite from tool schema examples, or a minimal smoke task
+    suite = _build_suite_from_tool(tool, provider_label)
+    if suite.task_count() == 0:
+        _print_error(f"Could not build any benchmark tasks for tool {tool_name!r}.")
+        raise SystemExit(1)
+
+    console.print(
+        f"Running [bold]{suite.task_count()}[/] task(s) for "
+        f"[bold]{tool_name}[/] (provider=[cyan]{provider_label}[/]) …"
+    )
+    runner = BenchmarkRunner(provider=provider_label)
+    report = runner.run_suite(suite, registry=registry, persist=not no_persist)
+
+    # Print per-task results
+    t = Table(title=f"Benchmark: {tool_name} ({provider_label})", show_lines=False)
+    t.add_column("Task")
+    t.add_column("Success")
+    t.add_column("Composite", justify="right")
+    t.add_column("Latency ms", justify="right")
+    t.add_column("Correctness", justify="right")
+    t.add_column("Error", max_width=40)
+    for sr in report.scored_results:
+        ok = "[green]✓[/]" if sr.result.success else "[red]✗[/]"
+        t.add_row(
+            sr.result.task_id[:12],
+            ok,
+            f"{sr.composite:.3f}",
+            f"{sr.result.latency_ms:.0f}",
+            f"{sr.correctness:.3f}",
+            (sr.result.error or "")[:40],
+        )
+    console.print(t)
+
+    agg = report.aggregate
+    composite = agg.get("composite", 0.0)
+    color = "green" if composite >= 0.7 else "yellow" if composite >= 0.4 else "red"
+    console.print(
+        f"\n[bold]Aggregate[/]: composite=[{color}]{composite:.3f}[/] "
+        f"correctness={agg.get('correctness', 0):.3f} "
+        f"reliability={agg.get('reliability', 0):.3f} "
+        f"latency={agg.get('latency_ms', 0):.0f}ms "
+        f"errors={report.error_count}/{suite.task_count()}"
+    )
+    if not no_persist:
+        console.print("[dim]Results saved. Use 'missy tools benchmark results' to review.[/]")
+
+
+def _build_suite_from_tool(tool: Any, provider_label: str) -> Any:
+    """Build a :class:`BenchmarkSuite` from *tool* schema examples.
+
+    Looks for ``examples`` in the tool's schema dict.  Each example must
+    have an ``input`` key (dict of args) and an optional ``expected_output``
+    key.  Falls back to a smoke task built from required parameters when no
+    examples are declared.
+    """
+    from missy.tools.benchmark.runner import BenchmarkSuite, BenchmarkTask
+
+    schema = tool.get_schema() if hasattr(tool, "get_schema") else {}
+    suite = BenchmarkSuite(
+        name=f"{tool.name}_auto_{provider_label}",
+        tool_name=tool.name,
+        description=f"Auto-generated suite for {tool.name}",
+    )
+
+    examples = schema.get("examples", [])
+    for ex in examples:
+        if not isinstance(ex, dict) or "input" not in ex:
+            continue
+        task = BenchmarkTask.create(
+            tool_name=tool.name,
+            input_args=dict(ex["input"]),
+            expected_output=ex.get("expected_output"),
+            tags=["auto", "example"],
+        )
+        suite.add_task(task)
+
+    # If no examples, build a minimal smoke task using required parameters
+    if suite.task_count() == 0:
+        params = schema.get("parameters", {})
+        required = params.get("required", [])
+        properties = params.get("properties", {})
+        smoke_args: dict = {}
+        for req_param in required:
+            prop = properties.get(req_param, {})
+            ptype = prop.get("type", "string")
+            if ptype == "string":
+                smoke_args[req_param] = prop.get("example") or prop.get("default") or "test"
+            elif ptype in ("integer", "number"):
+                smoke_args[req_param] = prop.get("default") or 1
+            elif ptype == "boolean":
+                smoke_args[req_param] = prop.get("default") or False
+            elif ptype == "array":
+                smoke_args[req_param] = prop.get("default") or []
+            else:
+                smoke_args[req_param] = None
+        if smoke_args or not required:
+            task = BenchmarkTask.create(
+                tool_name=tool.name,
+                input_args=smoke_args,
+                expected_output=None,
+                tags=["auto", "smoke"],
+            )
+            suite.add_task(task)
+
+    return suite
 
 
 # ---------------------------------------------------------------------------

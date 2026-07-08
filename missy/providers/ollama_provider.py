@@ -186,17 +186,42 @@ class OllamaProvider(BaseProvider):
             {"type": "function", "function": {"name": "...", "description": "...",
              "parameters": {"type": "object", "properties": {...}, "required": [...]}}}
 
+        Delegates to :func:`~missy.providers.schema_adapter.normalize_for_provider`
+        for canonical → Ollama (OpenAI-compatible) conversion.
+
         Args:
             tools: List of :class:`~missy.tools.base.BaseTool` instances.
 
         Returns:
             A list of Ollama-native tool schema dicts.
         """
+        try:
+            from missy.providers.schema_adapter import normalize_for_provider
+
+            schemas = []
+            for tool in tools:
+                base = tool.get_schema() if hasattr(tool, "get_schema") else {}
+                canonical: dict[str, Any] = {
+                    "name": getattr(tool, "name", ""),
+                    "description": getattr(tool, "description", ""),
+                    **base,
+                }
+                # Pre-normalise parameters so the adapter receives a proper JSON
+                # Schema object.  Ollama historically expected this wrapping.
+                params = canonical.get("parameters")
+                if params is None or (isinstance(params, dict) and not params):
+                    canonical["parameters"] = {"type": "object", "properties": {}}
+                elif isinstance(params, dict) and "type" not in params:
+                    canonical["parameters"] = {"type": "object", "properties": params}
+                schemas.append(normalize_for_provider(canonical, "ollama"))
+            return schemas
+        except Exception:
+            logger.debug("schema_adapter unavailable; falling back to inline schema build")
+
         schemas = []
         for tool in tools:
             base_schema = tool.get_schema() if hasattr(tool, "get_schema") else {}
             params = base_schema.get("parameters", {})
-            # Ensure parameters has a proper JSON Schema structure
             if params and "type" not in params:
                 params = {"type": "object", "properties": params}
             schemas.append(
