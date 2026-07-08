@@ -12,6 +12,7 @@ import socket
 import threading
 import time
 from collections.abc import Generator
+from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -20,7 +21,12 @@ import httpx
 import pytest
 
 from missy.api.server import ApiConfig, ApiResponse, ApiServer, _SessionRegistry
-from missy.config.settings import get_default_config
+from missy.channels.discord.config import (
+    DiscordAccountConfig,
+    DiscordConfig,
+    DiscordDMPolicy,
+)
+from missy.config.settings import NetworkPolicy, get_default_config
 from missy.core.events import AuditEvent, event_bus
 from missy.observability.audit_logger import init_audit_logger
 from missy.policy.engine import init_policy_engine
@@ -862,6 +868,63 @@ class TestDiagnostics:
                 check["name"] == "Elevated permissions" and check["summary"]["network"] == 1
                 for check in tools["checks"]
             )
+            gateway = next(section for section in data["sections"] if section["key"] == "gateway")
+            assert any(check["name"] == "Policy HTTP client" for check in gateway["checks"])
+        finally:
+            srv.stop()
+
+    def test_diagnostics_reports_discord_policy_readiness_and_remediation(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("MISSY_TEST_DISCORD_TOKEN", "discord-token-secret-1234567890")
+        config = replace(
+            get_default_config(),
+            network=NetworkPolicy(
+                default_deny=True,
+                allowed_domains=[],
+                allowed_hosts=[],
+                discord_allowed_hosts=["discord.com"],
+            ),
+            discord=DiscordConfig(
+                enabled=True,
+                accounts=[
+                    DiscordAccountConfig(
+                        token_env_var="MISSY_TEST_DISCORD_TOKEN",
+                        application_id="12345",
+                        dm_policy=DiscordDMPolicy.PAIRING,
+                    )
+                ],
+            ),
+        )
+        init_policy_engine(config)
+
+        port = _free_port()
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            resp = httpx.get(
+                f"http://127.0.0.1:{port}/api/v1/diagnostics",
+                headers=HEADERS,
+            )
+            assert resp.status_code == 200
+            data = resp.json()["data"]
+            discord = next(section for section in data["sections"] if section["key"] == "discord")
+            assert any(
+                check["name"] == "Account 0 token" and check["summary"] == "present"
+                for check in discord["checks"]
+            )
+            gateway_host = next(
+                check
+                for check in discord["checks"]
+                if check["name"] == "Gateway host gateway.discord.gg"
+            )
+            assert gateway_host["status"] == "warn"
+            assert "remediation" in gateway_host
+
+            rendered = str(data)
+            assert "discord-token-secret" not in rendered
         finally:
             srv.stop()
 

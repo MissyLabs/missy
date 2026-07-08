@@ -38,6 +38,7 @@ class PolicyEngine:
     """
 
     def __init__(self, config: MissyConfig) -> None:
+        self.config: MissyConfig = config
         self.network: NetworkPolicyEngine = NetworkPolicyEngine(config.network)
         self.filesystem: FilesystemPolicyEngine = FilesystemPolicyEngine(config.filesystem)
         self.shell: ShellPolicyEngine = ShellPolicyEngine(config.shell)
