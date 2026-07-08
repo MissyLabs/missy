@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from collections.abc import Iterator
 from typing import Any
 from urllib.parse import urlparse
@@ -229,6 +230,10 @@ class OpenAIProvider(BaseProvider):
         elif "max_tokens" in kwargs:
             call_kwargs["max_completion_tokens"] = kwargs.pop("max_tokens")
 
+        structured_schema = kwargs.pop("structured_output_schema", None)
+        if structured_schema is not None:
+            call_kwargs["response_format"] = self._chat_response_format(structured_schema)
+
         call_kwargs.update(kwargs)
 
     def _apply_responses_generation_kwargs(
@@ -257,7 +262,42 @@ class OpenAIProvider(BaseProvider):
         elif "max_tokens" in kwargs:
             call_kwargs["max_output_tokens"] = kwargs.pop("max_tokens")
 
+        structured_schema = kwargs.pop("structured_output_schema", None)
+        if structured_schema is not None:
+            call_kwargs["text"] = {
+                "format": self._responses_text_format(structured_schema),
+            }
+
         call_kwargs.update(kwargs)
+
+    @staticmethod
+    def _structured_schema_name(schema: Any) -> str:
+        """Return an OpenAI-safe response format name for a Missy schema."""
+        model_class = getattr(schema, "model_class", None)
+        raw_name = getattr(model_class, "__name__", None) or "structured_output"
+        name = re.sub(r"[^A-Za-z0-9_-]+", "_", str(raw_name)).strip("_-")
+        return (name or "structured_output")[:64]
+
+    def _responses_text_format(self, schema: Any) -> dict[str, Any]:
+        """Build the Responses API ``text.format`` JSON schema payload."""
+        payload: dict[str, Any] = {
+            "type": "json_schema",
+            "name": self._structured_schema_name(schema),
+            "schema": schema.to_json_schema(),
+            "strict": bool(getattr(schema, "strict", False)),
+        }
+        description = getattr(schema, "description", "")
+        if description:
+            payload["description"] = str(description)
+        return payload
+
+    def _chat_response_format(self, schema: Any) -> dict[str, Any]:
+        """Build the Chat Completions ``response_format`` JSON schema payload."""
+        text_format = self._responses_text_format(schema)
+        return {
+            "type": "json_schema",
+            "json_schema": text_format,
+        }
 
     @staticmethod
     def _normalize_text_content(content: Any) -> str:
@@ -865,6 +905,10 @@ class OpenAIProvider(BaseProvider):
         except Exception as exc:
             self._emit_event(session_id, task_id, "error", str(exc))
             raise ProviderError(f"Unexpected error calling OpenAI: {exc}") from exc
+
+    def structured_output_kwargs(self, schema: Any) -> dict[str, Any]:
+        """Ask OpenAI to enforce Missy's structured output schema natively."""
+        return {"structured_output_schema": schema}
 
     def get_tool_schema(self, tools: list) -> list:
         """Convert BaseTool instances to OpenAI function-calling schema format.

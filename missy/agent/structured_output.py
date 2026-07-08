@@ -270,12 +270,18 @@ class StructuredOutputRunner:
         from missy.providers.base import Message as _Message
 
         augmented_system = _build_system(system, schema)
+        provider_kwargs = _provider_structured_output_kwargs(self.provider, schema)
         history = list(messages)
         attempts = 0
         last_result: StructuredResult[T] | None = None
 
         for attempt in range(schema.max_retries + 1):
-            response = self.provider.complete(history, system=augmented_system, **kwargs)
+            response = self.provider.complete(
+                history,
+                system=augmented_system,
+                **provider_kwargs,
+                **kwargs,
+            )
             attempts = attempt + 1
             raw = response.content
             result = schema.parse(raw)
@@ -328,6 +334,7 @@ class StructuredOutputRunner:
         from missy.providers.base import Message as _Message
 
         augmented_system = _build_system(system, schema)
+        provider_kwargs = _provider_structured_output_kwargs(self.provider, schema)
         history = list(messages)
         attempts = 0
         last_result: StructuredResult[T] | None = None
@@ -337,11 +344,21 @@ class StructuredOutputRunner:
             attempts = attempt + 1
 
             if _is_async_callable(getattr(self.provider, "acomplete", None)):
-                response = await self.provider.acomplete(history, system=augmented_system, **kwargs)
+                response = await self.provider.acomplete(
+                    history,
+                    system=augmented_system,
+                    **provider_kwargs,
+                    **kwargs,
+                )
             else:
                 response = await loop.run_in_executor(
                     None,
-                    lambda h=history: self.provider.complete(h, system=augmented_system, **kwargs),
+                    lambda h=history: self.provider.complete(
+                        h,
+                        system=augmented_system,
+                        **provider_kwargs,
+                        **kwargs,
+                    ),
                 )
 
             raw = response.content
@@ -440,6 +457,16 @@ def _build_system(system: str, schema: OutputSchema) -> str:
     if system:
         return f"{system}\n\n{instruction}"
     return instruction
+
+
+def _provider_structured_output_kwargs(provider: object, schema: OutputSchema) -> dict:
+    """Return native structured-output kwargs when the provider supports them."""
+    from missy.providers.base import BaseProvider
+
+    if not isinstance(provider, BaseProvider):
+        return {}
+    native_kwargs = provider.structured_output_kwargs(schema)
+    return dict(native_kwargs or {})
 
 
 def _format_errors_as_feedback(errors: list[str]) -> str:
