@@ -23,6 +23,7 @@ import logging
 import os
 import re
 from collections import Counter
+from hashlib import blake2b
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -69,7 +70,8 @@ class SimpleVectorizer:
 
         counts: Counter[int] = Counter()
         for token in tokens:
-            bucket = hash(token) % self.dimension
+            digest = blake2b(token.encode("utf-8"), digest_size=8).digest()
+            bucket = int.from_bytes(digest, "big") % self.dimension
             counts[bucket] += 1
 
         vec = [0.0] * self.dimension

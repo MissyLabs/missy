@@ -12,12 +12,15 @@ import socket
 import threading
 import time
 from collections.abc import Generator
+from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
 
 from missy.api.server import ApiConfig, ApiResponse, ApiServer, _SessionRegistry
+from missy.core.events import AuditEvent, event_bus
+from missy.observability.audit_logger import init_audit_logger
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -222,6 +225,8 @@ class TestOperatorConsole:
                 assert console.status_code == 200
                 assert "data-csrf=" in console.text
                 assert "Runtime posture" in console.text
+                assert "Audit Trail" in console.text
+                assert "audit-result" in console.text
         finally:
             srv.stop()
 
@@ -247,6 +252,111 @@ class TestOperatorConsole:
                 csrf = console.text.split('data-csrf="', 1)[1].split('"', 1)[0]
                 allowed = client.post("/api/v1/sessions", json={}, headers={"X-CSRF-Token": csrf})
                 assert allowed.status_code == 201
+        finally:
+            srv.stop()
+
+    def test_web_security_actions_emit_audit_events(self, tmp_path) -> None:
+        init_audit_logger(str(tmp_path / "audit.jsonl"))
+        port = _free_port()
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/login")
+        try:
+            with httpx.Client(
+                base_url=f"http://127.0.0.1:{port}", follow_redirects=False
+            ) as client:
+                client.post("/login", data={"api_key": "wrong"})
+                client.post("/login", data={"api_key": API_KEY})
+                client.post("/api/v1/sessions", json={})
+                audit = client.get(
+                    "/api/v1/audit?source=web_tui&subsystem=auth&limit=10",
+                    headers=HEADERS,
+                )
+                assert audit.status_code == 200
+                events = audit.json()["data"]["events"]
+                assert any(e["event_type"] == "web.login" and e["result"] == "deny" for e in events)
+                assert any(
+                    e["event_type"] == "web.login" and e["result"] == "allow" for e in events
+                )
+
+                csrf_audit = client.get(
+                    "/api/v1/audit?source=web_tui&subsystem=security&result=deny&limit=10",
+                    headers=HEADERS,
+                )
+                assert csrf_audit.status_code == 200
+                assert any(
+                    e["event_type"] == "web.csrf" for e in csrf_audit.json()["data"]["events"]
+                )
+        finally:
+            srv.stop()
+
+
+# ---------------------------------------------------------------------------
+# Audit endpoint
+# ---------------------------------------------------------------------------
+
+
+class TestAuditEndpoint:
+    def test_audit_endpoint_requires_auth(self, base_url: str) -> None:
+        resp = httpx.get(f"{base_url}/audit")
+        assert resp.status_code == 401
+
+    def test_audit_endpoint_filters_and_redacts_events(self, tmp_path) -> None:
+        event_bus.clear()
+        init_audit_logger(str(tmp_path / "audit.jsonl"))
+        event_bus.publish(
+            AuditEvent(
+                timestamp=datetime.now(UTC),
+                session_id="sess-a",
+                task_id="task-a",
+                event_type="provider.request",
+                category="provider",
+                result="deny",
+                detail={
+                    "severity": "critical",
+                    "actor": "runtime",
+                    "source": "provider",
+                    "subsystem": "provider",
+                    "action": "request",
+                    "api_key": "sk-ant-abcdefghijklmnopqrstuvwxyz123456",
+                    "message": "token: abcdefghijklmnopqrstuvwxyz123456",
+                },
+                policy_rule="network.default_deny",
+            )
+        )
+        event_bus.publish(
+            AuditEvent(
+                timestamp=datetime.now(UTC),
+                session_id="sess-b",
+                task_id="task-b",
+                event_type="tool.execute",
+                category="tool",
+                result="allow",
+                detail={"severity": "info", "subsystem": "tool", "action": "execute"},
+            )
+        )
+
+        port = _free_port()
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            resp = httpx.get(
+                f"http://127.0.0.1:{port}/api/v1/audit"
+                "?category=provider&result=deny&severity=critical&limit=20",
+                headers=HEADERS,
+            )
+            assert resp.status_code == 200
+            data = resp.json()["data"]
+            assert data["count"] == 1
+            event = data["events"][0]
+            assert event["event_type"] == "provider.request"
+            assert event["detail"]["api_key"] == "[REDACTED]"
+            assert "[REDACTED]" in event["detail"]["message"]
+            assert "sk-ant-" not in str(event)
+            assert data["facets"]["category"]["provider"] == 1
         finally:
             srv.stop()
 

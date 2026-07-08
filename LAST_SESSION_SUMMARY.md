@@ -4,23 +4,29 @@ Date: 2026-07-08
 
 ## Changed
 
-- Added a secure local browser operator console to `missy/api/server.py`.
-- Added Web UI login, logout, cookie-backed browser sessions, session expiry, and CSRF protection for unsafe cookie-authenticated API requests.
-- Added a responsive dashboard page for runtime status, providers, tools, recent sessions, and security posture.
-- Preserved existing `/api/v1/*` API-key and bearer-token authentication behavior.
-- Added API tests for unauthenticated redirects, login failure, hardened cookies, console rendering, cookie-authenticated API reads, CSRF enforcement, and logout revocation.
-- Updated the required status/audit/gap artifacts for the Web TUI primary focus.
+- Added authenticated `GET /api/v1/audit` with filtering, facets, audit-file support, event-bus fallback, and recursive server-side redaction.
+- Added Web TUI audit trail panel with result/subsystem filters.
+- Emitted structured audit events for browser login allow/deny, logout allow/deny, and browser API CSRF denials.
+- Escaped JSON-derived dashboard values before HTML insertion to reduce XSS risk in the local console.
+- Added API tests for audit endpoint authentication, filtering, redaction, console audit rendering, and Web UI audit event emission.
+- Fixed nondeterministic vector memory hashing by replacing Python `hash()` buckets with stable BLAKE2b buckets.
+- Updated required loop artifacts for the Web TUI primary focus.
 
 ## Verification
 
 ```text
 python3 -m pytest tests/api/test_server.py -q
-71 passed in 8.20s
+74 passed in 7.74s
+```
+
+```text
+python3 -m pytest tests/api/test_server.py tests/memory/test_vector_store_coverage.py::TestSimpleVectorizer -q
+82 passed in 9.27s
 ```
 
 ```text
 python3 -m pytest -q
-20449 passed, 13 skipped in 364.27s (0:06:04)
+20452 passed, 13 skipped in 376.44s (0:06:16)
 ```
 
 ```text
@@ -35,11 +41,11 @@ python3 -m ruff format --check .
 
 ## Remains
 
-- Browser console rendering should be split out of the monolithic API server module.
-- Audit browsing, diagnostics panels, run/session streaming, and safe operator controls still need implementation.
-- Browser login/logout and CSRF denials should emit structured audit events.
-- The existing unrelated `LOOP_INSTRUCTIONS.md` modification remains in the working tree.
+- `missy/api/server.py` is now carrying too much Web TUI rendering, session, CSRF, and audit-browser logic; extract this into dedicated modules next.
+- Audit UI needs richer filters, pagination, timestamps, and event detail inspection.
+- Diagnostics panels, run/session streaming viewer, and safe operator controls still need implementation.
+- Existing unrelated `LOOP_INSTRUCTIONS.md` modification remains in the working tree.
 
 ## First Next Step
 
-Refactor the Web TUI/session helpers into dedicated internal modules, then add audit-backed browser login/logout/CSRF events and an audit log API/view.
+Extract Web TUI/session/audit helper code out of `missy/api/server.py`, then expand the audit browser into a full detail view with timestamp and actor/source filtering.
