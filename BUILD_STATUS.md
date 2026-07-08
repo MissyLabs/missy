@@ -1,41 +1,43 @@
 # Build Status
 
-Last updated: 2026-07-07 19:48 EDT
+Last updated: 2026-07-08
+
+## Current State
+
+The tool-intelligence overhaul branch is being rebased onto `origin/master`.
+The final branch state should include both active overhaul streams:
+
+- Tool intelligence runtime wiring, provider schema normalization, benchmark-run CLI, and OpenClaw A3 mutation fingerprinting.
+- Discord diagnostics, Gateway lifecycle audit signals, image/voice safety improvements, and Discord operator documentation from `master`.
 
 ## Completed Work
 
-- Continued the Discord integration overhaul in the existing Gateway, REST, channel, diagnostics, audit, and CLI architecture.
-- Added a redacted `DiscordGatewayClient.get_diagnostics()` lifecycle snapshot with heartbeat interval/ACK health, sequence, session/resume availability, reconnect counters, invalid-session counters, and last lifecycle timings.
-- Added lifecycle audit events for heartbeat ACKs, server reconnect requests, invalid sessions, resume attempts, and resumed sessions.
-- Added process-local `DiscordChannel.get_diagnostics()` output for Gateway lifecycle state and slash command registration status.
-- Audited slash command registration success and failure from `DiscordChannel.start()`.
-- Extended `missy discord diagnostics` with a "Recent Lifecycle Signals" table summarizing heartbeat, reconnect/resume, invalid-session, and slash-registration signals from the audit log.
-- Updated Discord operator and implementation docs plus the audit event catalogue for the new lifecycle and slash-registration events.
-- Added tests for Gateway diagnostics, heartbeat ACK health, invalid-session diagnostics, resume diagnostics, slash registration state, CLI lifecycle signal output, and compatibility with low-level `__new__` gateway tests.
+| Area | Status | Notes |
+|---|---|---|
+| OpenClaw A1 streaming subscription state machine | tested | Existing runtime support remains. |
+| OpenClaw A2 layered tool policy pipeline | hardened | Includes current `master` policy updates. |
+| OpenClaw A3 mutation fingerprinting | implemented | Repeated failing tool calls inject sticky `lastToolError`. |
+| OpenClaw A6 provider schema normalization | live | Anthropic, OpenAI, and Ollama provider schema methods delegate to `normalize_for_provider()` with fallback. |
+| Tool request tracking | wired | Runtime records completed turns through `RequestTracker` best-effort. |
+| Tool benchmark command | implemented | `missy tools benchmark run TOOL_NAME`. |
+| Discord diagnostics | implemented on master | Gateway lifecycle, audit-backed CLI summaries, and voice/image safety updates are merged. |
 
-## Current Architecture State
+## Tests
 
-- Discord text traffic still uses Missy's raw Gateway client plus `DiscordRestClient` over `PolicyHTTPClient`.
-- Discord access control enforces own-message filtering, bot-loop prevention, DM policy, guild policy, allowlists, require-mention behavior, credential detection, and attachment gating before messages enter the agent queue.
-- Attachment routing is explicit and fail-closed: non-image attachments or invalid image metadata deny the whole message before agent enqueue.
-- Accepted image metadata is normalized into `discord_image_attachments` for explicit image commands; image command downloads revalidate metadata and REST download still restricts hosts to Discord CDN domains.
-- Gateway lifecycle state is now observable in process via `get_diagnostics()` and durable out of process via structured Discord lifecycle audit events.
-- Discord voice remains optional and lazy-started from recognized voice commands, with account/guild scoped runtime bindings for `discord_voice_*` tools.
-- `missy discord diagnostics` now summarizes config, policy, tool visibility, voice bindings, recent lifecycle signals, and recent Discord audit events without printing secrets.
+- Post-merge tool-intelligence focused suite: 37 passed.
+- Post-merge Discord/CLI focused suite: 281 passed.
+- Post-merge policy/security/STT focused suite: 43 passed.
+- Post-merge ruff check and format check passed.
+- Full suite before conflict resolution: 20404 passed, 13 skipped, 2 optional voice/STT environment failures.
+- Discord-focused verification from `master` before merge: 288 targeted Discord tests passed, 212 security tests passed, bounded full suite passed with 20270 passed and 13 skipped.
 
-## Remaining Tasks
+## Remaining Work
 
-- Add byte-level image validation when an image library dependency is available or gated behind the existing vision extra.
-- Expand diagnostics with live service-process Gateway snapshots when a service status channel exists outside the current CLI process.
-- Expand operator docs with concrete Discord voice troubleshooting examples for ffmpeg, optional STT/TTS availability, missing intents, and policy-denied Discord hosts.
-- Keep OpenClaw-style diagnostics patterns generic enough for later primary focuses such as provider routing, scheduler execution, and tool delegation.
+1. Add provider-specific enablement from benchmark scores.
+2. Add fallback routing based on provider/tool benchmark thresholds.
+3. Add service status surface for live out-of-process Discord Gateway snapshots.
+4. Add optional byte-level Discord image validation.
 
 ## Blockers
 
-- No code blocker remains for this session.
-
-## Next Actions
-
-1. Add a service status surface for live out-of-process Discord Gateway snapshots.
-2. Consider optional byte-level image verification under the vision dependency surface.
-3. Add safe operator troubleshooting examples for Discord voice dependencies and policy-denied Discord hosts.
+- No code blocker remains for the rebase conflict resolution.
