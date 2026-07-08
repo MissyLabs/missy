@@ -8,6 +8,12 @@ from typing import TYPE_CHECKING, Any
 
 from missy.api.audit_browser import redact_audit_value
 from missy.policy.engine import get_policy_engine
+from missy.policy.tool_policy_pipeline import (
+    MISSY_DISCORD_TOOLS,
+    build_configured_tool_policy_layers,
+    collect_tool_policy_groups,
+    resolve_tool_policy,
+)
 
 if TYPE_CHECKING:
     from missy.agent.runtime import AgentRuntime
@@ -33,6 +39,8 @@ def build_diagnostics(
         _tool_section(tool_registry),
         _memory_section(memory_store),
         _policy_section(),
+        _gateway_section(),
+        _discord_section(),
         _scheduler_section(runtime),
         _runtime_section(runtime, session_count),
     ]
@@ -53,11 +61,13 @@ def _web_section(api_config: ApiConfig) -> dict[str, Any]:
             "Bind address",
             "ok" if api_config.host in {"127.0.0.1", "::1", "localhost"} else "warn",
             "loopback" if api_config.host in {"127.0.0.1", "::1", "localhost"} else "non-loopback",
+            remediation="Bind to 127.0.0.1 or protect non-loopback access with a firewall.",
         ),
         _check(
             "API key",
             "ok" if bool(api_config.api_key) else "error",
             "configured" if api_config.api_key else "missing",
+            remediation="Set MISSY_API_KEY or ApiConfig.api_key before enabling the Web TUI.",
         ),
         _check(
             "Browser UI",
@@ -159,7 +169,18 @@ def _policy_section() -> dict[str, Any]:
     try:
         engine = get_policy_engine()
     except RuntimeError:
-        return _section("policy", "Policy", [_check("Policy engine", "error", "not initialized")])
+        return _section(
+            "policy",
+            "Policy",
+            [
+                _check(
+                    "Policy engine",
+                    "error",
+                    "not initialized",
+                    remediation="Initialize policy before starting operator-facing channels.",
+                )
+            ],
+        )
 
     checks = [_check("Policy engine", "ok", "initialized")]
     network = getattr(engine, "network", None)
@@ -170,6 +191,7 @@ def _policy_section() -> dict[str, Any]:
                 "Network default deny",
                 "ok" if bool(getattr(network_policy, "default_deny", True)) else "warn",
                 bool(getattr(network_policy, "default_deny", True)),
+                remediation="Enable network.default_deny for local-first operation.",
             )
         )
         checks.append(
@@ -190,6 +212,28 @@ def _policy_section() -> dict[str, Any]:
                 },
             )
         )
+        checks.append(
+            _check(
+                "Provider network scope",
+                "ok" if getattr(network_policy, "provider_allowed_hosts", []) else "warn",
+                _host_scope_summary(network_policy, "provider"),
+                remediation=(
+                    "Use network.provider_allowed_hosts for model APIs instead of broad "
+                    "global allowlists."
+                ),
+            )
+        )
+        checks.append(
+            _check(
+                "Tool network scope",
+                "ok" if getattr(network_policy, "tool_allowed_hosts", []) else "warn",
+                _host_scope_summary(network_policy, "tool"),
+                remediation=(
+                    "Use network.tool_allowed_hosts for network-capable tools and keep "
+                    "tool destinations narrow."
+                ),
+            )
+        )
 
     shell = getattr(engine, "shell", None)
     shell_policy = getattr(shell, "_policy", None)
@@ -197,16 +241,196 @@ def _policy_section() -> dict[str, Any]:
         enabled = bool(getattr(shell_policy, "enabled", False))
         allowed = len(getattr(shell_policy, "allowed_commands", []) or [])
         checks.append(
-            _check("Shell", "warn" if enabled else "ok", {"enabled": enabled, "allowed": allowed})
+            _check(
+                "Shell",
+                "warn" if enabled else "ok",
+                {"enabled": enabled, "allowed": allowed},
+                remediation="Keep shell disabled unless specific commands are required.",
+            )
         )
+    rest_policy = getattr(engine, "rest_policy", None)
+    rules = getattr(rest_policy, "_rules", []) if rest_policy is not None else []
+    checks.append(
+        _check(
+            "REST method/path rules",
+            "ok" if rules else "warn",
+            {"rules": len(rules)},
+            remediation="Add network.rest_policies for high-risk REST APIs such as GitHub or Discord.",
+        )
+    )
     return _section("policy", "Policy", checks)
+
+
+def _gateway_section() -> dict[str, Any]:
+    try:
+        from missy.gateway.client import PolicyHTTPClient
+    except Exception as exc:
+        return _section(
+            "gateway",
+            "Gateway",
+            [
+                _check(
+                    "Policy HTTP client",
+                    "error",
+                    _safe_error(exc),
+                    remediation="Install gateway dependencies and route outbound HTTP through it.",
+                )
+            ],
+        )
+
+    checks = [
+        _check("Policy HTTP client", "ok", PolicyHTTPClient.__name__),
+        _check(
+            "Response size cap",
+            "ok",
+            {"bytes": getattr(PolicyHTTPClient, "DEFAULT_MAX_RESPONSE_BYTES", 0)},
+        ),
+    ]
+    try:
+        get_policy_engine()
+        checks.append(_check("Policy binding", "ok", "active"))
+    except RuntimeError:
+        checks.append(
+            _check(
+                "Policy binding",
+                "error",
+                "policy engine not initialized",
+                remediation="Call init_policy_engine(config) before network-capable runtime startup.",
+            )
+        )
+    return _section("gateway", "Gateway", checks)
+
+
+def _discord_section() -> dict[str, Any]:
+    try:
+        engine = get_policy_engine()
+    except RuntimeError:
+        return _section(
+            "discord",
+            "Discord",
+            [_check("Configuration", "warn", "policy config unavailable")],
+        )
+
+    cfg = getattr(engine, "config", None)
+    discord_cfg = getattr(cfg, "discord", None)
+    network = getattr(cfg, "network", None)
+    if discord_cfg is None or not getattr(discord_cfg, "accounts", []):
+        return _section(
+            "discord",
+            "Discord",
+            [_check("Configuration", "warn", "no accounts configured")],
+        )
+
+    accounts = list(getattr(discord_cfg, "accounts", []) or [])
+    checks = [
+        _check(
+            "Integration",
+            "ok" if bool(getattr(discord_cfg, "enabled", False)) else "warn",
+            "enabled" if bool(getattr(discord_cfg, "enabled", False)) else "disabled",
+            remediation="Set discord.enabled=true when the Discord channel should run.",
+        ),
+        _check("Accounts", "ok" if accounts else "warn", len(accounts)),
+    ]
+
+    for idx, account in enumerate(accounts):
+        token_present = False
+        with contextlib.suppress(Exception):
+            token_present = bool(account.resolve_token())
+        checks.append(
+            _check(
+                f"Account {idx} token",
+                "ok" if token_present else "warn",
+                "present"
+                if token_present
+                else f"missing env:{getattr(account, 'token_env_var', '')}",
+                remediation="Set the configured Discord token environment variable or vault reference.",
+            )
+        )
+        checks.append(
+            _check(
+                f"Account {idx} routing",
+                "ok",
+                {
+                    "application_id": bool(getattr(account, "application_id", "")),
+                    "dm_policy": str(getattr(account, "dm_policy", "")),
+                    "guilds": len(getattr(account, "guild_policies", {}) or {}),
+                    "ignore_bots": bool(getattr(account, "ignore_bots", True)),
+                },
+            )
+        )
+
+    network_values = _network_values(network)
+    checks.extend(
+        [
+            _check(
+                "REST host discord.com",
+                "ok" if "discord.com" in network_values else "warn",
+                "allowed" if "discord.com" in network_values else "missing",
+                remediation="Add discord.com to network.allowed_domains or discord_allowed_hosts.",
+            ),
+            _check(
+                "Gateway host gateway.discord.gg",
+                "ok" if "gateway.discord.gg" in network_values else "warn",
+                "allowed" if "gateway.discord.gg" in network_values else "missing",
+                remediation=(
+                    "Add gateway.discord.gg to network.allowed_domains or discord_allowed_hosts."
+                ),
+            ),
+        ]
+    )
+
+    with contextlib.suppress(Exception):
+        layers = build_configured_tool_policy_layers(
+            capability_mode="discord",
+            global_policy=getattr(cfg, "tools", None),
+            agent_policy=None,
+            sandbox_policy=getattr(getattr(cfg, "sandbox", None), "tools", None),
+        )
+        groups = collect_tool_policy_groups(getattr(cfg, "tools", None))
+        decision = resolve_tool_policy(MISSY_DISCORD_TOOLS, layers, groups=groups)
+        voice_tools = {
+            "discord_voice_join",
+            "discord_voice_leave",
+            "discord_voice_say",
+            "discord_voice_status",
+        }
+        checks.append(
+            _check(
+                "Discord voice tools",
+                "ok" if voice_tools.issubset(set(decision.tools)) else "warn",
+                {"visible": sorted(voice_tools.intersection(decision.tools))},
+                remediation="Review Discord capability-mode tool policy if voice controls are missing.",
+            )
+        )
+        if decision.warnings:
+            checks.append(_check("Tool policy warnings", "warn", decision.warnings[:3]))
+
+    return _section("discord", "Discord", checks)
 
 
 def _scheduler_section(runtime: AgentRuntime | None) -> dict[str, Any]:
     scheduler = getattr(runtime, "_scheduler", None) if runtime is not None else None
+    checks = []
+    with contextlib.suppress(Exception):
+        cfg = getattr(get_policy_engine(), "config", None)
+        scheduling = getattr(cfg, "scheduling", None)
+        if scheduling is not None:
+            checks.append(
+                _check(
+                    "Scheduling policy",
+                    "ok" if bool(getattr(scheduling, "enabled", True)) else "warn",
+                    {
+                        "enabled": bool(getattr(scheduling, "enabled", True)),
+                        "max_jobs": int(getattr(scheduling, "max_jobs", 0) or 0),
+                        "active_hours": str(getattr(scheduling, "active_hours", "")),
+                    },
+                    remediation="Disable scheduling or set max_jobs/active_hours for tighter posture.",
+                )
+            )
     if scheduler is None:
-        return _section("scheduler", "Scheduler", [_check("Scheduler", "warn", "not attached")])
-    checks = [_check("Scheduler", "ok", type(scheduler).__name__)]
+        checks.append(_check("Scheduler", "warn", "not attached"))
+        return _section("scheduler", "Scheduler", checks)
+    checks.append(_check("Scheduler", "ok", type(scheduler).__name__))
     with contextlib.suppress(Exception):
         jobs = scheduler.list_jobs()
         checks.append(_check("Jobs", "ok", len(jobs)))
@@ -234,15 +458,45 @@ def _section(key: str, label: str, checks: list[dict[str, Any]]) -> dict[str, An
     return {"key": key, "label": label, "status": status, "checks": checks}
 
 
-def _check(name: str, status: str, summary: Any) -> dict[str, Any]:
+def _check(
+    name: str,
+    status: str,
+    summary: Any,
+    *,
+    remediation: str | None = None,
+) -> dict[str, Any]:
     if is_dataclass(summary):
         summary = asdict(summary)
-    return {
+    result = {
         "name": str(name),
         "status": status if status in {"ok", "warn", "error"} else "warn",
         "summary": redact_audit_value(summary),
     }
+    if remediation and result["status"] != "ok":
+        result["remediation"] = redact_audit_value(remediation)
+    return result
 
 
 def _safe_error(exc: Exception) -> str:
     return redact_audit_value(f"{type(exc).__name__}: {exc}")
+
+
+def _host_scope_summary(network_policy: Any, category: str) -> dict[str, Any]:
+    values = {
+        "global_hosts": len(getattr(network_policy, "allowed_hosts", []) or []),
+        "global_domains": len(getattr(network_policy, "allowed_domains", []) or []),
+    }
+    key = f"{category}_allowed_hosts"
+    values["category_hosts"] = len(getattr(network_policy, key, []) or [])
+    return values
+
+
+def _network_values(network: Any) -> set[str]:
+    values: set[str] = set()
+    for attr in ("allowed_domains", "allowed_hosts", "discord_allowed_hosts"):
+        raw = getattr(network, attr, []) if network is not None else []
+        if not isinstance(raw, (list, tuple, set)):
+            continue
+        for item in raw:
+            values.add(str(item).lower().rsplit(":", 1)[0].strip("[]"))
+    return values
