@@ -186,6 +186,30 @@ class BaseProvider(ABC):
         """
         return {}
 
+    def diagnostics(self) -> dict[str, Any]:
+        """Return a redacted, local-only provider health snapshot.
+
+        Implementations should avoid live provider calls here so operator
+        diagnostics are safe to run without credentials, quota usage, or
+        unintended network access.
+        """
+        available = False
+        try:
+            available = self.is_available()
+        except Exception:
+            logger.debug("Provider %r availability check failed", self.name, exc_info=True)
+        return {
+            "provider": self.name,
+            "status": "ok" if available else "warn",
+            "checks": [
+                {
+                    "name": "availability",
+                    "status": "ok" if available else "warn",
+                    "summary": "available" if available else "not available",
+                }
+            ],
+        }
+
     def complete_with_tools(
         self,
         messages: list[Message],

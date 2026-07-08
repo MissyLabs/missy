@@ -4,40 +4,31 @@ Date: 2026-07-08
 
 ## Changed
 
-- Added a provider-neutral `structured_output_kwargs(schema)` hook to
-  `BaseProvider`.
-- Updated `StructuredOutputRunner` to pass native structured-output kwargs into
-  every sync and async provider attempt while retaining Missy's Pydantic
-  validation and retry behavior.
-- Added OpenAI-native structured output formatting for:
-  - Responses API calls via `text.format`.
-  - Chat Completions compatibility calls via `response_format`.
-- Sanitized OpenAI response-format schema names and preserved schema
-  descriptions plus strict-mode intent.
-- Added tests for the generic structured-output provider hook and OpenAI
-  Responses/Chat structured-output request construction.
-- Updated provider docs and provider-abstraction implementation docs.
+- Added `BaseProvider.diagnostics()` for redacted, local-only provider health
+  snapshots.
+- Implemented OpenAI diagnostics for SDK availability, credential source,
+  endpoint host, network allowlist posture, model selection state,
+  timeout/rate-limit settings, and supported capabilities.
+- Wired provider diagnostics into Web/API diagnostics and `missy doctor`.
+- Added tests proving OpenAI diagnostic redaction, custom endpoint network
+  warnings, API diagnostic rendering, and existing CLI doctor behavior.
+- Updated provider and provider-abstraction documentation.
 
 ## Verification
 
 ```text
-python3 -m ruff format missy/providers/base.py missy/agent/structured_output.py missy/providers/openai_provider.py tests/agent/test_structured_output.py tests/providers/test_openai_provider.py
-5 files left unchanged
-```
-
-```text
-python3 -m pytest tests/agent/test_structured_output.py tests/providers/test_openai_provider.py -q
-101 passed in 1.30s
+python3 -m pytest tests/providers/test_openai_provider.py tests/api/test_server.py::TestDiagnostics::test_diagnostics_reports_redacted_operator_posture tests/cli/test_cli_commands.py::TestDoctor::test_doctor_shows_provider_not_available -q
+39 passed in 1.91s
 ```
 
 ```text
 python3 -m pytest tests/providers -q
-843 passed in 22.61s
+845 passed in 23.46s
 ```
 
 ```text
-python3 -m pytest tests/agent -q
-4109 passed, 4 skipped in 44.75s
+python3 -m pytest tests/api/test_server.py tests/cli/test_cli_commands.py::TestDoctor tests/cli/test_cli_commands.py::TestDoctorBranches -q
+97 passed in 17.12s
 ```
 
 ```text
@@ -52,21 +43,21 @@ All checks passed!
 
 ```text
 python3 -m pytest -q
-20487 passed, 6 skipped, 3 warnings in 397.50s (0:06:37)
+20489 passed, 6 skipped, 3 warnings in 392.42s (0:06:32)
 ```
 
 ## Remains
 
-- Native Responses tool/function calling still needs a transcript model that
-  can preserve replayable Responses output items safely.
+- Native Responses tool/function calling still needs a replayable transcript
+  model for Responses output items.
 - Streamed provider-native tool-call deltas and final validation remain future
   work.
-- OpenAI diagnostics, embeddings, cost accounting, retry/fallback audit
-  coverage remain incomplete.
-- Existing unrelated `LOOP_INSTRUCTIONS.md` modification remains in the working
-  tree.
+- Embeddings, usage/cost audit events, retry/fallback audit coverage, and
+  optional live OpenAI diagnostic probes remain incomplete.
+- Existing unrelated `LOOP_INSTRUCTIONS.md` modification remains in the
+  working tree.
 
 ## First Next Step
 
-Implement OpenAI provider diagnostics/doctor checks or design the Responses
-tool/function-call transcript model before adding native Responses tools.
+Design the native Responses tool-call transcript model before implementing
+OpenAI Responses function calling.

@@ -91,6 +91,9 @@ class OpenAIProvider(BaseProvider):
         self._base_url: str | None = config.base_url
         self._model: str = config.model or _DEFAULT_MODEL
         self._timeout: int = config.timeout
+        self._requests_per_minute: int = config.requests_per_minute
+        self._tokens_per_minute: int = config.tokens_per_minute
+        self._max_wait_seconds: float = config.max_wait_seconds
         self._client: Any | None = None
         self._resolved_model: str | None = None
         self._last_transcript_repairs: list[dict[str, Any]] = []
@@ -130,6 +133,168 @@ class OpenAIProvider(BaseProvider):
             is present.
         """
         return _OPENAI_AVAILABLE and bool(self._api_key or os.environ.get("OPENAI_API_KEY"))
+
+    @staticmethod
+    def _normalized_host(value: str) -> str:
+        """Return a lowercase host without port/brackets from a host or URL."""
+        parsed = urlparse(value if "://" in value else f"https://{value}")
+        host = parsed.hostname or value
+        return host.strip("[]").lower().rsplit(":", 1)[0]
+
+    @staticmethod
+    def _host_matches_domain(host: str, pattern: str) -> bool:
+        pattern_lower = pattern.lower()
+        if pattern_lower.startswith("*."):
+            suffix = pattern_lower[2:]
+            return host == suffix or host.endswith("." + suffix)
+        return host == pattern_lower
+
+    def _endpoint_host(self) -> str:
+        """Return the host this provider will contact for inference."""
+        if self._base_url:
+            return self._normalized_host(self._base_url)
+        return "api.openai.com"
+
+    def _credential_source(self) -> str:
+        """Return where the active API key would come from, without the key."""
+        if self._api_key:
+            return "config"
+        if os.environ.get("OPENAI_API_KEY"):
+            return "environment"
+        return "missing"
+
+    def _network_policy_summary(self, host: str) -> tuple[str, str, str | None]:
+        """Return local policy posture for *host* without DNS or audit events."""
+        try:
+            from missy.policy.engine import get_policy_engine
+
+            engine = get_policy_engine()
+            network = getattr(engine, "network", None)
+            policy = getattr(network, "_policy", None)
+        except Exception:
+            return (
+                "warn",
+                "policy engine not initialized",
+                ("Initialize policy before running provider-backed sessions."),
+            )
+
+        if policy is None:
+            return (
+                "warn",
+                "network policy unavailable",
+                ("Initialize network policy before provider calls."),
+            )
+        if not bool(getattr(policy, "default_deny", True)):
+            return "warn", "default_allow", "Enable network.default_deny for provider egress."
+
+        host_values = [
+            *list(getattr(policy, "allowed_hosts", []) or []),
+            *list(getattr(policy, "provider_allowed_hosts", []) or []),
+        ]
+        for entry in host_values:
+            if host == self._normalized_host(str(entry)):
+                return "ok", f"allowed host:{host}", None
+
+        for pattern in list(getattr(policy, "allowed_domains", []) or []):
+            if self._host_matches_domain(host, str(pattern)):
+                return "ok", f"allowed domain:{pattern}", None
+
+        return (
+            "warn",
+            f"missing provider allowlist for {host}",
+            (
+                f"Add {host!r} to network.provider_allowed_hosts, network.allowed_hosts, "
+                "or use the openai network preset for native OpenAI."
+            ),
+        )
+
+    def diagnostics(self) -> dict[str, Any]:
+        """Return redacted OpenAI provider diagnostics without live API calls."""
+        credential_source = self._credential_source()
+        endpoint_host = self._endpoint_host()
+        network_status, network_summary, network_remediation = self._network_policy_summary(
+            endpoint_host
+        )
+        native_openai = self._base_url is None
+        available = _OPENAI_AVAILABLE and credential_source != "missing"
+        checks: list[dict[str, Any]] = [
+            {
+                "name": "sdk",
+                "status": "ok" if _OPENAI_AVAILABLE else "error",
+                "summary": "installed" if _OPENAI_AVAILABLE else "not installed",
+                "remediation": "Install the openai package." if not _OPENAI_AVAILABLE else None,
+            },
+            {
+                "name": "credential",
+                "status": "ok" if credential_source != "missing" else "error",
+                "summary": f"configured via {credential_source}"
+                if credential_source != "missing"
+                else "missing OPENAI_API_KEY/config key",
+                "remediation": "Set OPENAI_API_KEY or a protected provider api_key reference."
+                if credential_source == "missing"
+                else None,
+            },
+            {
+                "name": "endpoint",
+                "status": "ok",
+                "summary": {
+                    "host": endpoint_host,
+                    "native_openai": native_openai,
+                    "base_url_override": bool(self._base_url),
+                },
+            },
+            {
+                "name": "network_policy",
+                "status": network_status,
+                "summary": network_summary,
+                "remediation": network_remediation,
+            },
+            {
+                "name": "model_selection",
+                "status": "ok",
+                "summary": {
+                    "configured": self._model,
+                    "resolved": self._resolved_model,
+                    "auto": self._model.lower() in _AUTO_MODEL_SENTINELS,
+                },
+            },
+            {
+                "name": "rate_limits",
+                "status": "ok" if self._requests_per_minute or self._tokens_per_minute else "warn",
+                "summary": {
+                    "requests_per_minute": self._requests_per_minute,
+                    "tokens_per_minute": self._tokens_per_minute,
+                    "max_wait_seconds": self._max_wait_seconds,
+                    "timeout_seconds": self._timeout,
+                },
+                "remediation": "Set provider RPM/TPM budgets for deterministic throttling."
+                if not (self._requests_per_minute or self._tokens_per_minute)
+                else None,
+            },
+            {
+                "name": "capabilities",
+                "status": "ok",
+                "summary": {
+                    "responses_api": "native eligible" if native_openai else "chat-compatible",
+                    "chat_completions": True,
+                    "streaming": True,
+                    "tool_calling": "chat_completions",
+                    "structured_output": True,
+                    "vision_input": True,
+                    "embeddings": False,
+                },
+            },
+        ]
+        status = (
+            "error"
+            if any(c["status"] == "error" for c in checks)
+            else ("warn" if any(c["status"] == "warn" for c in checks) else "ok")
+        )
+        return {
+            "provider": self.name,
+            "status": status if available else "error",
+            "checks": checks,
+        }
 
     def _make_client(self) -> Any:
         """Return a cached OpenAI client, creating one on first call.
