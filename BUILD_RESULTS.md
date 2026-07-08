@@ -1,40 +1,23 @@
 # BUILD_RESULTS
 
-- Timestamp: 2026-07-07 19:48 EDT
-- Branch: overhaul/discord-20260707-215326
-- Primary focus: complete Discord integration overhaul
+- Timestamp: 2026-07-08
+- Branch: overhaul/tools-20260708-020326
+- Base: origin/master
 
-## Changed Files
+## Repository Snapshot
 
-- `missy/channels/discord/gateway.py`
-- `missy/channels/discord/channel.py`
-- `missy/cli/main.py`
-- `tests/channels/test_discord_protocol_deep.py`
-- `tests/channels/test_discord_channel_coverage.py`
-- `tests/cli/test_cli_commands.py`
-- `docs/discord.md`
-- `docs/implementation/discord-channel.md`
-- `docs/implementation/audit-events.md`
-- common tracking artifacts
+This rebase replayed the tool-intelligence overhaul commits on top of the Discord diagnostics work in `origin/master`.
 
-## Build And Verification Results
+## Code Areas Present After Rebase
 
-```text
-pytest tests/channels/test_discord_protocol_deep.py tests/channels/test_discord_extended.py tests/channels/test_discord_channel_coverage.py tests/cli/test_cli_commands.py::TestDiscordDiagnostics tests/unit/test_hardening_piper_discord.py::TestDiscordGatewayOpcodes -q
-288 passed in 15.36s
-```
+- Tool intelligence runtime wiring in `missy/agent/runtime.py`.
+- Provider schema adapter wiring in `missy/providers/anthropic_provider.py`, `missy/providers/openai_provider.py`, and `missy/providers/ollama_provider.py`.
+- `missy tools benchmark run` in `missy/cli/main.py`.
+- Discord Gateway diagnostics, Discord voice binding, Discord voice tools, and related tests from `origin/master`.
 
-```text
-timeout 1200 pytest -q
-20270 passed, 13 skipped in 377.44s (0:06:17)
-```
+## Verification To Rerun
 
-```text
-ruff check .
-All checks passed.
-```
-
-```text
-ruff format --check .
-708 files already formatted.
-```
+- Tool-intelligence focused tests.
+- Discord-focused tests touched by `origin/master`.
+- CLI command tests where `missy/cli/main.py` auto-merged.
+- Ruff check and format check.

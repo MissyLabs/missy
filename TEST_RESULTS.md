@@ -64,3 +64,30 @@ pytest tests/security/test_identity_drift_edges.py tests/security/test_injection
 timeout 1200 pytest -q
 20270 passed, 13 skipped
 ```
+
+## Verification After Rebase
+
+```text
+python3 -m pytest tests/agent/test_mutation_fingerprint.py tests/agent/test_request_tracker_wiring.py tests/cli/test_benchmark_run_cmd.py tests/providers/test_schema_adapter_wiring.py -q
+37 passed in 1.15s
+```
+
+```text
+python3 -m pytest tests/channels/test_discord_protocol_deep.py tests/channels/test_discord_channel_coverage.py tests/channels/test_discord_channel_gap_coverage.py tests/channels/test_discord_image_analyze.py tests/cli/test_cli_commands.py::TestDiscordDiagnostics tests/tools/test_discord_voice_tools.py tests/tools/test_builtin_init_coverage.py -q
+281 passed in 8.09s
+```
+
+```text
+python3 -m pytest tests/policy/test_tool_policy_pipeline.py tests/security/test_discord_attachment_codeevolution_filewrite_security.py tests/unit/test_remaining_gaps.py::TestFasterWhisperSTTLoad tests/unit/test_remaining_gaps.py::TestFasterWhisperSTTAutoDevice -q
+43 passed in 0.82s
+```
+
+```text
+python3 -m ruff check .
+All checks passed!
+```
+
+```text
+python3 -m ruff format --check .
+726 files already formatted
+```

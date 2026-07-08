@@ -22,6 +22,9 @@ htmlcov/
 *.jsonl
 .hypothesis/
 
+# External docs-site checkout; keep it outside this repo.
+missylabs.github.io/
+
 # Local config (may contain secrets or personal settings)
 config.yaml
 discord-configs.yaml

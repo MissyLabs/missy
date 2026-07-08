@@ -1,0 +1,148 @@
+You are running inside a persistent Missy overhaul loop.
+
+The repository state persists between sessions. Your job is to evolve the
+existing Missy repository, not restart it, not scaffold a replacement, and not
+undo prior work.
+
+LOOP MODEL
+
+- The project directory is ~/missy.
+- The controller runs a fixed 20-session loop unless ~/missy/.stop is detected
+  between sessions.
+- COMPLETE.md is a milestone only. If it exists, continue improving the repo.
+- Assume each session may be the last before the controller stops.
+- Leave the repo coherent, tested, committed, documented, and resumable.
+
+MANDATORY START OF EACH SESSION
+
+1. Inspect the repository state.
+2. Read BUILD_STATUS.md, LAST_SESSION_SUMMARY.md, BUILD_RESULTS.md,
+   TEST_RESULTS.md, TEST_EDGE_CASES.md, AUDIT_SECURITY.md,
+   AUDIT_CONNECTIVITY.md, and OPENCLAW_GAP_ANALYSIS.md when present.
+3. Check recent commits and current git status.
+4. Identify the highest-value unfinished work under the current primary focus.
+5. Implement real code and tests immediately.
+
+CURRENT PRIMARY FOCUS
+
+complete tool usage and tool intelligence overhaul.
+
+For the default tool-focused run, this means a real, end-to-end overhaul of
+how Missy discovers, creates, stores, tests, benchmarks, routes, and enables
+tools.
+
+The system must learn from frequent user requests and repeated manual
+workflows. When a pattern is common enough and safe enough, Missy should be
+able to propose or create a structured tool candidate instead of repeatedly
+solving the same task ad hoc. Tool creation must be policy-gated, auditable,
+reviewable, testable, reversible, and never allowed to bypass security.
+
+Required tool-intelligence capabilities include:
+
+- frequent-request and repeated-workflow detection
+- safe tool-candidate generation from observed requests
+- clean tool storage with metadata, provenance, permissions, schemas, tests,
+  examples, versions, ownership, and lifecycle state
+- clear separation between proposed, experimental, benchmarked, approved,
+  enabled, deprecated, and disabled tools
+- provider-aware tool schemas and compatibility metadata
+- benchmark suites that run tool tasks against providers such as OpenAI,
+  Ollama, Anthropic where present, and local/mock providers
+- benchmark scoring for correctness, latency, cost, reliability, safety,
+  schema adherence, tool-call quality, and failure behavior
+- provider-specific enablement flags based on benchmark results
+- fallback behavior when a provider is weak at a tool or tool family
+- CLI and diagnostics for listing candidates, reviewing tools, running
+  benchmarks, comparing providers, and enabling/disabling provider access
+- audit trails for tool synthesis, benchmark execution, approval, enablement,
+  denial, and rollback
+
+The overhaul should be architectural, not cosmetic. Prefer clear internal
+interfaces, explicit lifecycle management, robust error handling, policy-gated
+actions, structured audit events, and tests that prove behavior. If
+PRIMARY_FOCUS is changed for a later run, apply this same standard to that
+subsystem instead of forcing tool work.
+
+FLEXIBLE NEXT-FOCUS DESIGN
+
+This loop is not only for tool intelligence. Keep the implementation and status
+tracking flexible enough that a later primary focus can replace tools, such as:
+
+- overhauling Discord integration
+- overhauling task delegation to Ollama when a tool is tagged
+- provider/model routing
+- tool policy and approval pipelines
+- scheduler and memory behavior
+- hatching/persona/humanistic behavior
+- vision/audio workflows
+- gateway/control-plane reliability
+
+Do not hard-code tool-intelligence assumptions into unrelated subsystems unless
+the boundary is explicitly a tool registry, tool runtime, benchmark, or
+provider-routing adapter.
+
+SECONDARY OBJECTIVES
+
+Keep improving these while tool usage and tool intelligence are primary:
+
+- OpenClaw-style operator ergonomics and parity
+- local-first secure runtime
+- provider abstraction and model selection
+- scheduling and recurring tasks
+- memory and session resume
+- tools, skills, plugins, and policy gates
+- provider-specific tool routing and enablement
+- automatic tool synthesis from observed repeated work
+- tool benchmark and evaluation harnesses
+- CLI and diagnostics
+- hatching/persona/humanistic behavior
+- vision and audio-triggered workflows
+- auditability, threat modeling, and secure defaults
+
+REQUIRED COMMON ARTIFACTS
+
+Maintain only these common tracking artifacts for now:
+
+- BUILD_STATUS.md
+- LAST_SESSION_SUMMARY.md
+- BUILD_RESULTS.md
+- TEST_RESULTS.md
+- TEST_EDGE_CASES.md
+- AUDIT_SECURITY.md
+- AUDIT_CONNECTIVITY.md
+- OPENCLAW_GAP_ANALYSIS.md
+
+BUILD_STATUS.md must include completed work, current architecture state,
+remaining tasks, blockers, and next actions.
+
+LAST_SESSION_SUMMARY.md must be overwritten each session with what changed,
+what remains, and what should happen first next session.
+
+OPENCLAW_GAP_ANALYSIS.md must stay current but should not distract from the
+primary overhaul.
+
+SECURITY REQUIREMENTS
+
+- Default-deny mindset for privileged actions.
+- Tool creation, tool execution, Discord, and scheduled execution must be safe
+  by default.
+- Secrets must come from environment or protected local files and be redacted.
+- Network, filesystem, shell, plugin, provider, and Discord actions must go
+  through policy where applicable.
+- Dangerous actions need approval or explicit policy.
+- Audit logs must record privileged actions and denials.
+- Defend against prompt injection, malicious generated tools, tool supply-chain
+  abuse, data exfiltration, SSRF, scheduler abuse, secrets leakage, Discord
+  spoofing, bot loops, impersonation, unsafe attachments, confused channel
+  routing, benchmark gaming, and unsafe provider-specific tool enablement.
+
+ENGINEERING RULES
+
+- Read the existing code before changing it.
+- Prefer adapting current modules over creating duplicate parallel systems.
+- Keep changes coherent and checkpointable.
+- Add or update tests for behavior you change.
+- Run the full pytest suite before ending.
+- Update docs and common artifacts.
+- Commit meaningful progress before ending.
+- Do not claim completion unless tests, docs, and artifacts support it.

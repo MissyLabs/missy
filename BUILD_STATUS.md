@@ -4,8 +4,8 @@ Last updated: 2026-07-08
 
 ## Current State
 
-The tool-intelligence overhaul branch is being rebased onto `origin/master`.
-The final branch state should include both active overhaul streams:
+The tool-intelligence overhaul branch has been rebased onto `origin/master`.
+The final branch state includes both active overhaul streams:
 
 - Tool intelligence runtime wiring, provider schema normalization, benchmark-run CLI, and OpenClaw A3 mutation fingerprinting.
 - Discord diagnostics, Gateway lifecycle audit signals, image/voice safety improvements, and Discord operator documentation from `master`.
@@ -24,6 +24,10 @@ The final branch state should include both active overhaul streams:
 
 ## Tests
 
+- Post-rebase tool-intelligence focused suite: 37 passed.
+- Post-rebase Discord/CLI focused suite: 281 passed.
+- Post-rebase policy/security/STT focused suite: 43 passed.
+- Post-rebase ruff check and format check passed.
 - Post-merge tool-intelligence focused suite: 37 passed.
 - Post-merge Discord/CLI focused suite: 281 passed.
 - Post-merge policy/security/STT focused suite: 43 passed.
