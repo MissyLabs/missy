@@ -19,7 +19,7 @@ from missy.agent.structured_output import (
     _build_system,
     _format_errors_as_feedback,
 )
-from missy.providers.base import CompletionResponse, Message
+from missy.providers.base import BaseProvider, CompletionResponse, Message
 
 # ---------------------------------------------------------------------------
 # Helper models and fixtures
@@ -57,6 +57,24 @@ def _make_provider(*responses: str) -> MagicMock:
     provider = MagicMock()
     provider.complete.side_effect = [_make_response(r) for r in responses]
     return provider
+
+
+class NativeStructuredProvider(BaseProvider):
+    name = "native"
+
+    def __init__(self, response: str) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.response = response
+
+    def is_available(self) -> bool:
+        return True
+
+    def complete(self, messages: list[Message], **kwargs) -> CompletionResponse:
+        self.calls.append(kwargs)
+        return _make_response(self.response)
+
+    def structured_output_kwargs(self, schema: Any) -> dict[str, Any]:
+        return {"native_schema_name": schema.model_class.__name__}
 
 
 # ---------------------------------------------------------------------------
@@ -391,6 +409,16 @@ class TestStructuredOutputRunnerSync:
         system_arg = call_kwargs[1].get("system") or call_kwargs[0][1]
         assert "Be helpful." in system_arg
         assert "JSON" in system_arg
+
+    def test_provider_native_structured_kwargs_are_forwarded(self):
+        provider = NativeStructuredProvider('{"name": "Native", "value": 4}')
+        runner = StructuredOutputRunner(provider)
+        schema = OutputSchema(SimpleModel)
+
+        result = runner.complete_structured([Message(role="user", content="hi")], schema)
+
+        assert result.success is True
+        assert provider.calls[0]["native_schema_name"] == "SimpleModel"
 
     def test_zero_retries_no_retry(self):
         provider = _make_provider("bad")

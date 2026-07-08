@@ -4,39 +4,40 @@ Date: 2026-07-08
 
 ## Changed
 
-- Added native OpenAI Responses streaming behind the existing OpenAI provider
-  adapter.
-- Routed compatible native OpenAI `stream()` calls to `client.responses.stream`
-  while retaining Chat Completions streaming for `base_url` providers and
-  unsupported client shapes.
-- Reused the Responses input/instructions conversion path for streaming text,
-  vision, and system prompts.
-- Reconciled incremental `response.output_text.delta` events with final/full
-  Responses text snapshots to avoid duplicate emitted chunks.
-- Converted Responses stream `response.failed` and `error` events into
-  `ProviderError`.
-- Expanded focused OpenAI provider tests and updated provider documentation.
+- Added a provider-neutral `structured_output_kwargs(schema)` hook to
+  `BaseProvider`.
+- Updated `StructuredOutputRunner` to pass native structured-output kwargs into
+  every sync and async provider attempt while retaining Missy's Pydantic
+  validation and retry behavior.
+- Added OpenAI-native structured output formatting for:
+  - Responses API calls via `text.format`.
+  - Chat Completions compatibility calls via `response_format`.
+- Sanitized OpenAI response-format schema names and preserved schema
+  descriptions plus strict-mode intent.
+- Added tests for the generic structured-output provider hook and OpenAI
+  Responses/Chat structured-output request construction.
+- Updated provider docs and provider-abstraction implementation docs.
 
 ## Verification
 
 ```text
-python3 -m ruff format missy/providers/openai_provider.py tests/providers/test_openai_provider.py
-1 file reformatted, 1 file left unchanged
+python3 -m ruff format missy/providers/base.py missy/agent/structured_output.py missy/providers/openai_provider.py tests/agent/test_structured_output.py tests/providers/test_openai_provider.py
+5 files left unchanged
 ```
 
 ```text
-python3 -m ruff check missy/providers/openai_provider.py tests/providers/test_openai_provider.py
-All checks passed!
-```
-
-```text
-python3 -m pytest tests/providers/test_openai_provider.py -q
-33 passed in 0.94s
+python3 -m pytest tests/agent/test_structured_output.py tests/providers/test_openai_provider.py -q
+101 passed in 1.30s
 ```
 
 ```text
 python3 -m pytest tests/providers -q
-841 passed in 23.39s
+843 passed in 22.61s
+```
+
+```text
+python3 -m pytest tests/agent -q
+4109 passed, 4 skipped in 44.75s
 ```
 
 ```text
@@ -51,7 +52,7 @@ All checks passed!
 
 ```text
 python3 -m pytest -q
-20484 passed, 6 skipped, 3 warnings in 397.19s (0:06:37)
+20487 passed, 6 skipped, 3 warnings in 397.50s (0:06:37)
 ```
 
 ## Remains
@@ -60,7 +61,6 @@ python3 -m pytest -q
   can preserve replayable Responses output items safely.
 - Streamed provider-native tool-call deltas and final validation remain future
   work.
-- Structured output should use OpenAI-native response formats where available.
 - OpenAI diagnostics, embeddings, cost accounting, retry/fallback audit
   coverage remain incomplete.
 - Existing unrelated `LOOP_INSTRUCTIONS.md` modification remains in the working
@@ -68,6 +68,5 @@ python3 -m pytest -q
 
 ## First Next Step
 
-Implement OpenAI-native structured output support or begin Responses
-tool/function calling after defining how replayable Responses output items are
-stored in Missy's provider-neutral transcript model.
+Implement OpenAI provider diagnostics/doctor checks or design the Responses
+tool/function-call transcript model before adding native Responses tools.

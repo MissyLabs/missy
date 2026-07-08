@@ -87,6 +87,21 @@ class CompletionResponse:
 provider produced it. The `raw` field preserves the full provider-specific
 payload for debugging or accessing provider-specific fields.
 
+## Optional Structured Output Hook
+
+Providers may implement:
+
+```python
+def structured_output_kwargs(self, schema: Any) -> dict[str, Any]:
+    ...
+```
+
+The structured output runner calls this hook once per structured request and
+passes the returned kwargs into each provider completion attempt.  Providers
+that do not override it keep Missy's generic prompt-and-validate behavior.  The
+OpenAI provider uses this hook to request native JSON Schema enforcement while
+keeping the agent-layer structured-output code provider-neutral.
+
 ---
 
 ## Anthropic Provider Implementation

@@ -6,12 +6,19 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pydantic import BaseModel
 
+from missy.agent.structured_output import OutputSchema
 from missy.config.settings import ProviderConfig
 from missy.core.events import event_bus
 from missy.core.exceptions import ProviderError
 from missy.providers.base import Message
 from missy.providers.openai_provider import OpenAIProvider
+
+
+class StructuredAnswer(BaseModel):
+    answer: str
+    confidence: float
 
 
 def _make_config(**overrides) -> ProviderConfig:
@@ -332,6 +339,57 @@ class TestOpenAIComplete:
         assert result.content == "Hello!"
         response_create.assert_not_called()
         mock_client.chat.completions.create.assert_called_once()
+
+    @patch("missy.providers.openai_provider._openai_sdk")
+    @patch("missy.providers.openai_provider._OPENAI_AVAILABLE", True)
+    def test_responses_api_uses_native_structured_output_format(self, mock_sdk):
+        response_create = MagicMock(
+            return_value=SimpleNamespace(
+                output_text='{"answer":"yes","confidence":0.9}',
+                output=[],
+                model="gpt-5.5",
+                usage=SimpleNamespace(input_tokens=3, output_tokens=2, total_tokens=5),
+                model_dump=dict,
+            )
+        )
+        mock_sdk.OpenAI.return_value = SimpleNamespace(
+            responses=SimpleNamespace(create=response_create),
+            chat=SimpleNamespace(completions=SimpleNamespace(create=MagicMock())),
+        )
+
+        p = OpenAIProvider(_make_config(model="gpt-5.5"))
+        schema = OutputSchema(StructuredAnswer, strict=True)
+        p.complete(
+            [Message(role="user", content="answer")],
+            **p.structured_output_kwargs(schema),
+        )
+
+        call_kwargs = response_create.call_args[1]
+        assert call_kwargs["text"]["format"]["type"] == "json_schema"
+        assert call_kwargs["text"]["format"]["name"] == "StructuredAnswer"
+        assert call_kwargs["text"]["format"]["strict"] is True
+        assert call_kwargs["text"]["format"]["schema"]["properties"]["answer"]["type"] == "string"
+
+    @patch("missy.providers.openai_provider._openai_sdk")
+    @patch("missy.providers.openai_provider._OPENAI_AVAILABLE", True)
+    def test_chat_fallback_uses_native_structured_response_format(self, mock_sdk):
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = self._mock_response(
+            text='{"answer":"yes","confidence":0.9}'
+        )
+        mock_sdk.OpenAI.return_value = mock_client
+
+        p = OpenAIProvider(_make_config(base_url="https://api.groq.com/openai/v1"))
+        schema = OutputSchema(StructuredAnswer)
+        p.complete(
+            [Message(role="user", content="answer")],
+            **p.structured_output_kwargs(schema),
+        )
+
+        call_kwargs = mock_client.chat.completions.create.call_args[1]
+        assert call_kwargs["response_format"]["type"] == "json_schema"
+        assert call_kwargs["response_format"]["json_schema"]["name"] == "StructuredAnswer"
+        assert "text" not in call_kwargs
 
 
 class TestOpenAIToolSchema:

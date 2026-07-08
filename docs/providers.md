@@ -9,7 +9,7 @@ provider, API key management, and fallback behaviour.
 ## Provider Abstraction Model
 
 All providers implement the `BaseProvider` abstract base class defined in
-`missy/providers/base.py`.  The interface consists of two methods:
+`missy/providers/base.py`.  The required interface consists of two methods:
 
 ```python
 class BaseProvider(ABC):
@@ -25,6 +25,12 @@ class BaseProvider(ABC):
         """Return True if this provider is ready to accept requests."""
         ...
 ```
+
+Providers may also override `structured_output_kwargs(schema)` to return
+provider-native completion kwargs for Missy's structured output runner.  The
+base implementation returns `{}`, so generic prompt-and-validate structured
+output remains portable across providers that do not support native schema
+enforcement.
 
 ### Message
 
@@ -106,6 +112,12 @@ and compatible streaming requests when the installed SDK exposes the relevant
 OpenAI-compatible `base_url` providers and for transcripts that include
 tool-result turns or assistant tool-call history.
 OpenAI-specific message rules remain isolated in `missy/providers/openai_provider.py`.
+
+Structured output requests from `StructuredOutputRunner` use OpenAI-native JSON
+Schema enforcement when routed through this provider.  Native Responses calls
+send the schema through `text.format`; Chat Completions compatibility calls
+send the equivalent `response_format` payload.  Missy's existing Pydantic
+validation and retry loop still validates the returned content.
 
 **Default model**: `auto` (detects the best available current OpenAI chat model)
 

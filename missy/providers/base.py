@@ -177,6 +177,15 @@ class BaseProvider(ABC):
             )
         return schemas
 
+    def structured_output_kwargs(self, schema: Any) -> dict[str, Any]:
+        """Return provider-native kwargs for structured output enforcement.
+
+        Providers that support native schema-constrained generation can
+        override this method. The default returns an empty mapping so Missy's
+        generic prompt-and-validate structured output loop remains portable.
+        """
+        return {}
+
     def complete_with_tools(
         self,
         messages: list[Message],
