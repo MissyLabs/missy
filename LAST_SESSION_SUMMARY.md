@@ -4,26 +4,18 @@ Date: 2026-07-08
 
 ## Changed
 
-- Added `missy/api/operator_controls.py` with a safe, confirmed
-  `provider.set_default` operator control.
-- Added authenticated `/api/v1/controls` and POST
-  `/api/v1/controls/provider.set_default` routes.
-- Enforced exact confirmation strings, safe provider target validation,
-  availability checks, existing browser CSRF protection, and structured
-  `web.control` audit events for allow and deny outcomes.
-- Added a Web TUI Controls panel that displays provider targets and can switch
-  the default provider after a browser confirmation.
-- Extracted login/message rendering and the shared console stylesheet into
-  `missy/api/web_console.py`.
-- Added API tests for controls auth, listing, confirmation denial, successful
-  provider switching, audit output, and browser CSRF denial.
+- Extracted the authenticated Web TUI console shell from
+  `missy/api/server.py` into `missy/api/web_console.py`.
+- Added `render_console()` for the main browser operator page and
+  `console_script()` for the embedded dashboard JavaScript.
+- Kept the existing console behavior intact: authenticated status, providers,
+  tools, sessions, diagnostics, controls, audit filters, CSRF-protected logout,
+  and confirmed provider control POSTs still use the same API endpoints.
+- Added direct renderer tests for CSRF token escaping, required UI element IDs,
+  client-side escaping hooks, audit detail rendering, CSRF header wiring, and
+  confirmed control payload wiring.
 
 ## Verification
-
-```text
-python3 -m ruff check .
-All checks passed!
-```
 
 ```text
 python3 -m ruff format --check .
@@ -31,20 +23,25 @@ python3 -m ruff format --check .
 ```
 
 ```text
+python3 -m ruff check .
+All checks passed!
+```
+
+```text
 python3 -m pytest tests/api/test_server.py -q
-83 passed in 14.82s
+85 passed in 10.19s
 ```
 
 ```text
 python3 -m pytest -q
-20461 passed, 13 skipped in 393.49s (0:06:33)
+20463 passed, 13 skipped in 381.13s (0:06:21)
 ```
 
 ## Remains
 
-- Main console HTML/JavaScript still lives in `missy/api/server.py`.
-- Safe controls are only started; tools, jobs, channels, and experimental
-  features still need policy-gated controls.
+- Safe controls are still limited to provider default switching; tools,
+  scheduled jobs, channels, and experimental features need policy-gated control
+  surfaces.
 - Run/session streaming viewer is still not implemented.
 - Live diagnostics probes should be added carefully behind policy and timeout
   controls.
@@ -53,6 +50,5 @@ python3 -m pytest -q
 
 ## First Next Step
 
-Extract the main console HTML/JavaScript into a Web TUI renderer/assets module,
-then add the next small safe controls API slice for tool or scheduled-job
-enablement with explicit policy and audit behavior.
+Add the next safe controls slice for tools or scheduled jobs with explicit
+policy gates, confirmation text, denial audit events, and focused API/UI tests.

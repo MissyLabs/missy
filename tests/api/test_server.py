@@ -21,6 +21,7 @@ import httpx
 import pytest
 
 from missy.api.server import ApiConfig, ApiResponse, ApiServer, _SessionRegistry
+from missy.api.web_console import console_script, render_console
 from missy.channels.discord.config import (
     DiscordAccountConfig,
     DiscordConfig,
@@ -166,6 +167,25 @@ class TestAuthentication:
 
 
 class TestOperatorConsole:
+    def test_console_renderer_escapes_csrf_and_keeps_ui_hooks(self) -> None:
+        html = render_console(csrf_token='csrf"><script>alert(1)</script>')
+
+        assert 'data-csrf="csrf&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;"' in html
+        assert 'data-csrf="csrf"><script>' not in html
+        assert "Runtime posture" in html
+        assert "Audit Trail" in html
+        assert 'id="audit-result"' in html
+        assert 'id="controls"' in html
+        assert "/api/v1' + path" in html
+
+    def test_console_script_keeps_safe_client_side_escaping_and_control_post(self) -> None:
+        script = console_script()
+
+        assert "function esc(value)" in script
+        assert "textContent = event ? JSON.stringify(event, null, 2)" in script
+        assert "X-CSRF-Token" in script
+        assert "JSON.stringify({target, confirm: confirmation})" in script
+
     def test_root_redirects_to_login_without_browser_session(self) -> None:
         port = _free_port()
         cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
