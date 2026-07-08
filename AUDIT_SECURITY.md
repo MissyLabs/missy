@@ -1,35 +1,29 @@
 # AUDIT_SECURITY
 
 - Timestamp: 2026-07-08
-- Branch: overhaul/tools-20260708-020326
+- Branch: overhaul/web-tui-20260708-122250
 
 ## Expected Security Posture
 
-- Privileged tool creation and execution remain default-deny and policy-gated.
-- Generated or proposed tool candidates must stay disabled until reviewed and approved.
-- Benchmark results must never enable provider/tool access by themselves without an explicit approval path.
-- Provider schema adapters must preserve tool schemas without expanding permissions.
-- Discord message, image, voice, Gateway, and REST handling must continue to enforce access control, attachment gating, and policy-routed network access.
-- Diagnostics and audit output must avoid exposing secrets, bot tokens, API keys, Gateway resume URLs, or sensitive request payloads.
+- Web TUI access is denied unless the configured API key is provided through the login form.
+- Existing JSON API clients still require `X-API-Key`, bearer token, or a valid browser session.
+- Browser sessions use unguessable tokens stored server-side and delivered in HttpOnly, SameSite=Strict cookies.
+- Unsafe browser-authenticated API calls require a matching `X-CSRF-Token`.
+- HTML responses use restrictive security headers: CSP, frame denial, no-store caching, nosniff, and no-referrer.
+- The API server still binds to loopback by default and warns on non-loopback binding.
+- Secrets in runtime responses remain censored by the existing chat path.
 
-## Tool Intelligence Notes
+## Web TUI Notes
 
-- Runtime request tracking records completed turns through `RequestTracker` on a best-effort basis and fails closed to normal runtime behavior if tracking is unavailable.
-- OpenClaw A3 mutation fingerprinting detects repeated failing tool calls with identical arguments and injects a sticky `lastToolError` strategy prompt without reclassifying tool policy decisions.
-- `missy tools benchmark run` builds suites from registered tool metadata and executes through the registry, preserving registry execution controls.
-- Provider schema conversion now routes through `normalize_for_provider()` with existing inline fallbacks.
-
-## Discord Notes From Master
-
-- Discord text traffic still uses Missy's raw Gateway client plus `DiscordRestClient` over `PolicyHTTPClient`.
-- Access control continues to enforce own-message filtering, bot-loop prevention, DM policy, guild policy, allowlists, require-mention behavior, credential detection, and attachment gating before messages enter the agent queue.
-- Accepted image metadata is normalized into `discord_image_attachments`; downloads revalidate metadata and restrict REST download hosts to Discord CDN domains.
-- Gateway lifecycle state is observable through redacted diagnostics and structured Discord lifecycle audit events.
-- Discord voice remains optional and lazy-started from recognized voice commands with scoped runtime bindings for `discord_voice_*` tools.
+- The current Web TUI has no privileged enable/disable controls yet; it is read-mostly except for session creation through existing APIs and logout.
+- API-key-authenticated clients are intentionally not forced through browser CSRF because they are not ambient browser credentials.
+- Browser session state is process-local and expires by idle timeout; restarting the server clears browser sessions.
+- Inline CSS/JS is currently allowed by CSP to keep the stdlib-only first console coherent; a later asset split should remove `unsafe-inline`.
 
 ## Follow-Up Security Work
 
-- Add provider-specific enablement gates from benchmark scores without automatic activation.
-- Add fallback routing only after provider/tool approval semantics are explicit.
-- Add byte-level Discord image validation when an image dependency is available or tied to the existing vision extra.
-- Keep diagnostics patterns reusable across Discord, scheduler, provider routing, plugin/tool policy, filesystem, shell, and network actions.
+- Emit structured audit events for login success, login failure, logout, CSRF denial, and privileged operator actions.
+- Add policy-gated controls with explicit confirmation for providers, tools, scheduled jobs, channels, and experiments.
+- Add audit log redaction tests for browser-rendered event details.
+- Add XSS-focused tests around tool/provider/session names rendered into the dashboard.
+- Consider secure-cookie enforcement when serving behind HTTPS or a local TLS terminator.

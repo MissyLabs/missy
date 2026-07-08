@@ -149,6 +149,136 @@ class TestAuthentication:
 
 
 # ---------------------------------------------------------------------------
+# Browser operator console
+# ---------------------------------------------------------------------------
+
+
+class TestOperatorConsole:
+    def test_root_redirects_to_login_without_browser_session(self) -> None:
+        port = _free_port()
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/login")
+        try:
+            resp = httpx.get(f"http://127.0.0.1:{port}/", follow_redirects=False)
+            assert resp.status_code == 303
+            assert resp.headers["location"] == "/login"
+        finally:
+            srv.stop()
+
+    def test_login_page_has_security_headers(self) -> None:
+        port = _free_port()
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/login")
+        try:
+            resp = httpx.get(f"http://127.0.0.1:{port}/login")
+            assert resp.status_code == 200
+            assert "Missy Operator Console" in resp.text
+            assert resp.headers["X-Frame-Options"] == "DENY"
+            assert "frame-ancestors 'none'" in resp.headers["Content-Security-Policy"]
+            assert resp.headers["Cache-Control"] == "no-store"
+        finally:
+            srv.stop()
+
+    def test_bad_login_does_not_set_session_cookie(self) -> None:
+        port = _free_port()
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/login")
+        try:
+            resp = httpx.post(
+                f"http://127.0.0.1:{port}/login",
+                data={"api_key": "wrong"},
+                follow_redirects=False,
+            )
+            assert resp.status_code == 303
+            assert resp.headers["location"] == "/login?error=1"
+            assert "set-cookie" not in resp.headers
+        finally:
+            srv.stop()
+
+    def test_good_login_sets_hardened_cookie_and_loads_console(self) -> None:
+        port = _free_port()
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/login")
+        try:
+            with httpx.Client(
+                base_url=f"http://127.0.0.1:{port}", follow_redirects=False
+            ) as client:
+                login = client.post("/login", data={"api_key": API_KEY})
+                assert login.status_code == 303
+                cookie = login.headers["set-cookie"]
+                assert "missy_operator_session=" in cookie
+                assert "HttpOnly" in cookie
+                assert "SameSite=Strict" in cookie
+
+                console = client.get("/")
+                assert console.status_code == 200
+                assert "data-csrf=" in console.text
+                assert "Runtime posture" in console.text
+        finally:
+            srv.stop()
+
+    def test_browser_cookie_can_read_api_but_unsafe_api_requires_csrf(self) -> None:
+        port = _free_port()
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/login")
+        try:
+            with httpx.Client(
+                base_url=f"http://127.0.0.1:{port}", follow_redirects=False
+            ) as client:
+                client.post("/login", data={"api_key": API_KEY})
+                read_resp = client.get("/api/v1/status")
+                assert read_resp.status_code == 200
+
+                denied = client.post("/api/v1/sessions", json={})
+                assert denied.status_code == 403
+                assert denied.json()["error"] == "CSRF token required"
+
+                console = client.get("/")
+                csrf = console.text.split('data-csrf="', 1)[1].split('"', 1)[0]
+                allowed = client.post("/api/v1/sessions", json={}, headers={"X-CSRF-Token": csrf})
+                assert allowed.status_code == 201
+        finally:
+            srv.stop()
+
+    def test_logout_requires_csrf_and_revokes_browser_session(self) -> None:
+        port = _free_port()
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/login")
+        try:
+            with httpx.Client(
+                base_url=f"http://127.0.0.1:{port}", follow_redirects=False
+            ) as client:
+                client.post("/login", data={"api_key": API_KEY})
+                denied = client.post("/logout")
+                assert denied.status_code == 403
+
+                console = client.get("/")
+                csrf = console.text.split('data-csrf="', 1)[1].split('"', 1)[0]
+                logout = client.post("/logout", headers={"X-CSRF-Token": csrf})
+                assert logout.status_code == 303
+                assert logout.headers["location"] == "/login"
+                assert "Max-Age=0" in logout.headers["set-cookie"]
+
+                after = client.get("/", follow_redirects=False)
+                assert after.status_code == 303
+                assert after.headers["location"] == "/login"
+        finally:
+            srv.stop()
+
+
+# ---------------------------------------------------------------------------
 # Status endpoint
 # ---------------------------------------------------------------------------
 
