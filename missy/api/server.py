@@ -760,7 +760,12 @@ def _make_handler(
 
         def _handle_list_controls(self) -> tuple[int, dict]:
             """GET /api/v1/controls — list safe operator controls."""
-            return ApiResponse.ok(list_operator_controls(provider_registry=provider_registry))
+            return ApiResponse.ok(
+                list_operator_controls(
+                    provider_registry=provider_registry,
+                    scheduler=getattr(runtime, "_scheduler", None) if runtime is not None else None,
+                )
+            )
 
         def _handle_execute_control(self, control_id: str, body: dict) -> tuple[int, dict]:
             """POST /api/v1/controls/{id} — execute a confirmed operator control."""
@@ -768,6 +773,7 @@ def _make_handler(
                 control_id,
                 body,
                 provider_registry=provider_registry,
+                scheduler=getattr(runtime, "_scheduler", None) if runtime is not None else None,
             )
             result = "allow" if status < 400 else "deny"
             severity = "info" if result == "allow" else "warning"
