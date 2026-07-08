@@ -2,35 +2,28 @@
 
 - Timestamp: 2026-07-08
 
-## Tool Intelligence Edge Cases
+## Web TUI / Operator Console Edge Cases
 
-- Frequent-request detection avoids noisy false positives.
-- Generated tool candidates remain disabled until approved.
-- Generated tool permissions are least-privilege.
-- Tool metadata includes provenance, schema, tests, versions, and lifecycle state.
-- Benchmark runs compare provider labels without bypassing registry or policy controls.
-- Provider-specific enablement respects benchmark thresholds.
-- Unsafe or flaky tools are flagged or disabled per provider.
-- Tool schema incompatibilities are detected and reported.
-- Benchmark failures do not enable tools accidentally.
-- Repeated failing tool calls with identical arguments surface `lastToolError`.
+- Empty API key configuration rejects API and browser login attempts.
+- Browser root redirects to login when no valid session cookie exists.
+- Wrong operator key does not issue a browser session cookie.
+- Browser session cookies are HttpOnly and SameSite=Strict.
+- Browser-authenticated unsafe API calls fail closed without a CSRF token.
+- API-key-authenticated unsafe API calls remain compatible and do not require browser CSRF.
+- Logout requires CSRF and revokes the in-memory session.
+- HTML responses include CSP, frame denial, no-store caching, nosniff, and referrer policy headers.
+- Dashboard API failures degrade visibly instead of breaking the first screen.
 
-## Discord Edge Cases
+## Remaining Web TUI Edge Cases To Cover
 
-- Gateway reconnect and shutdown.
-- Heartbeat sent/ACK visibility and stale ACK diagnostics.
-- Invalid-session handling for resumable and non-resumable sessions.
-- RESUME attempts and RESUMED dispatch audit.
-- Slash command registration success/failure diagnostics.
-- Discord REST retry, rate-limit, and failure handling.
-- DM pairing and unknown sender denial.
-- Guild/channel allowlist denial.
-- Require-mention filtering.
-- Bot-authored message and loop prevention.
-- Attachment/media safety.
-- Policy-gated tool execution from Discord.
+- Expired browser sessions redirect cleanly and do not allow API calls.
+- Login/logout/CSRF-denial audit events are emitted and redacted.
+- Audit browser filters combine severity, actor/source, subsystem, action, result, and time ranges correctly.
+- Safe operator controls are default-deny and policy-gated.
+- Streaming session/run viewer handles partial output, tool-call errors, retry/fallback, and reconnects.
+- Mobile dashboard does not clip provider/tool/session rows.
 
 ## Cross-Focus Edge Cases
 
-- Diagnostics patterns stay reusable for provider routing, scheduler execution, and tool delegation.
-- Tool policy visibility, approval, and execution enforcement stay separate.
+- Diagnostics patterns should stay reusable for Discord, scheduler, provider routing, tool delegation, memory, gateway, policy, and network posture.
+- Tool policy visibility, approval, and execution enforcement must stay separate from Web TUI presentation state.

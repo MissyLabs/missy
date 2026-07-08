@@ -1,18 +1,23 @@
 # AUDIT_CONNECTIVITY
 
 - Timestamp: 2026-07-08
-- Branch: overhaul/tools-20260708-020326
-- Base: origin/master
+- Branch: overhaul/web-tui-20260708-122250
 
 ## Expected Connectivity Posture
 
-- Default-deny network where practical.
-- Exact provider, benchmark, Discord Gateway, Discord REST, and CDN endpoints should remain policy-visible.
-- No unreviewed broad outbound access should be introduced by tool intelligence, provider schema adaptation, benchmarks, or Discord diagnostics.
+- Default API server host remains `127.0.0.1`.
+- The Web TUI adds no outbound network access.
+- Dashboard JavaScript only calls same-origin `/api/v1/*` endpoints.
+- Provider, Discord, Gateway, REST, CDN, benchmark, and tool network behavior remains governed by existing policy paths.
 
 ## Session Connectivity Notes
 
-- Provider tool schema normalization is local-only and does not add network access.
-- `missy tools benchmark run` executes through the local tool registry and labels provider results; it does not bypass existing provider or tool policy.
-- Discord REST remains routed through `PolicyHTTPClient`.
-- Discord Gateway lifecycle diagnostics record heartbeat ACK, reconnect request, invalid-session, resume-sent, and session-resumed audit signals without exposing tokens or Gateway resume URLs.
+- Browser login, dashboard render, session validation, and CSRF checks are local in-process operations.
+- Dashboard fetches are same-origin and covered by the server's existing rate limiter and authentication pipeline.
+- No unreviewed broad outbound access was introduced.
+
+## Follow-Up Connectivity Work
+
+- Add explicit diagnostics panels for network posture and policy-denied hosts.
+- Surface Discord Gateway and provider connectivity snapshots through authenticated Web TUI APIs.
+- Keep any future WebSocket or streaming endpoint same-origin authenticated and CSRF/replay aware.

@@ -29,12 +29,15 @@ from __future__ import annotations
 
 import contextlib
 import hmac
+import html
 import json
 import logging
+import secrets
 import threading
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from http import cookies
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlparse
@@ -86,6 +89,9 @@ class ApiConfig:
     api_key: str = ""
     max_request_bytes: int = _MAX_REQUEST_BYTES
     rate_limit_rpm: int = 60
+    web_ui_enabled: bool = True
+    web_session_ttl_seconds: int = 8 * 60 * 60
+    web_cookie_name: str = "missy_operator_session"
 
 
 # ---------------------------------------------------------------------------
@@ -182,6 +188,68 @@ class _SessionRegistry:
             return len(self._sessions)
 
 
+@dataclass
+class _WebSession:
+    """Authenticated browser operator session."""
+
+    token: str
+    csrf_token: str
+    created_at: float
+    last_seen: float
+
+
+class _WebSessionStore:
+    """Thread-safe in-memory browser session store."""
+
+    def __init__(self, ttl_seconds: int) -> None:
+        self._ttl_seconds = max(60, ttl_seconds)
+        self._sessions: dict[str, _WebSession] = {}
+        self._lock = threading.Lock()
+
+    def create(self) -> _WebSession:
+        now = time.time()
+        session = _WebSession(
+            token=secrets.token_urlsafe(32),
+            csrf_token=secrets.token_urlsafe(32),
+            created_at=now,
+            last_seen=now,
+        )
+        with self._lock:
+            self._sessions[session.token] = session
+            self._evict_locked(now)
+        return session
+
+    def get(self, token: str | None) -> _WebSession | None:
+        if not token:
+            return None
+        now = time.time()
+        with self._lock:
+            session = self._sessions.get(token)
+            if session is None:
+                return None
+            if now - session.last_seen > self._ttl_seconds:
+                self._sessions.pop(token, None)
+                return None
+            session.last_seen = now
+            self._evict_locked(now)
+            return session
+
+    def revoke(self, token: str | None) -> None:
+        if not token:
+            return
+        with self._lock:
+            self._sessions.pop(token, None)
+
+    def _evict_locked(self, now: float) -> None:
+        expired = [
+            token
+            for token, session in self._sessions.items()
+            if now - session.last_seen > self._ttl_seconds
+        ]
+        for token in expired:
+            self._sessions.pop(token, None)
+
+
 # ---------------------------------------------------------------------------
 # HTTP request handler
 # ---------------------------------------------------------------------------
@@ -190,6 +258,7 @@ class _SessionRegistry:
 def _make_handler(
     api_config: ApiConfig,
     session_registry: _SessionRegistry,
+    web_sessions: _WebSessionStore,
     rate_tracker: dict,
     rate_lock: threading.Lock,
     runtime: AgentRuntime | None,
@@ -228,45 +297,81 @@ def _make_handler(
         # ----------------------------------------------------------------
 
         def _handle(self, method: str) -> None:
-            """Authenticate, rate-limit, route, and respond."""
-            if not self._authenticate():
-                self._send_json(*ApiResponse.error("Unauthorized", 401))
-                return
-
-            client_ip = self.client_address[0]
-            if not self._check_rate_limit(client_ip):
-                self._send_json(*ApiResponse.error("Rate limit exceeded", 429))
-                return
-
+            """Rate-limit, authenticate, route, and respond."""
             parsed = urlparse(self.path)
             path = parsed.path.rstrip("/") or "/"
             params = {k: v[0] if len(v) == 1 else v for k, v in parse_qs(parsed.query).items()}
 
+            client_ip = self.client_address[0]
+            if not self._check_rate_limit(client_ip):
+                if path.startswith(_API_PREFIX):
+                    self._send_json(*ApiResponse.error("Rate limit exceeded", 429))
+                else:
+                    self._send_html(
+                        429,
+                        self._render_message("Rate limit exceeded", "Too many requests."),
+                    )
+                return
+
+            if api_config.web_ui_enabled and not path.startswith(_API_PREFIX):
+                self._route_web(method, path, params)
+                return
+
+            auth_kind = self._authenticate()
+            if auth_kind is None:
+                self._send_json(*ApiResponse.error("Unauthorized", 401))
+                return
+            if auth_kind == "web_session" and method in {"POST", "PUT", "PATCH", "DELETE"}:
+                web_session = self._current_web_session()
+                provided = self.headers.get("X-CSRF-Token", "")
+                expected = web_session.csrf_token if web_session is not None else ""
+                if not provided or not hmac.compare_digest(provided, expected):
+                    self._send_json(*ApiResponse.error("CSRF token required", 403))
+                    return
+
             status, body = self._route(method, path, params)
             self._send_json(status, body)
 
-        def _authenticate(self) -> bool:
-            """Return True when the request carries the correct API key.
+        def _authenticate(self) -> str | None:
+            """Return the authenticated credential kind, if any.
 
             Accepts either ``Authorization: Bearer <key>`` or
-            ``X-API-Key: <key>``.  Uses :func:`hmac.compare_digest` to
-            prevent timing-based key enumeration.
+            ``X-API-Key: <key>``. Browser sessions are accepted only when
+            the Web UI is enabled. Unsafe browser-authenticated API requests
+            are CSRF-checked by the caller.
 
-            An empty configured key always returns ``False``.
+            An empty configured key never authenticates API-key requests.
             """
             expected = api_config.api_key
-            if not expected:
-                return False
+            if expected:
+                auth_header = self.headers.get("Authorization", "")
+                if auth_header.lower().startswith("bearer "):
+                    provided = auth_header[7:]
+                else:
+                    provided = self.headers.get("X-API-Key", "")
 
-            auth_header = self.headers.get("Authorization", "")
-            if auth_header.lower().startswith("bearer "):
-                provided = auth_header[7:]
-            else:
-                provided = self.headers.get("X-API-Key", "")
+                if provided and hmac.compare_digest(provided.encode(), expected.encode()):
+                    return "api_key"
 
-            if not provided:
-                return False
-            return hmac.compare_digest(provided.encode(), expected.encode())
+            if api_config.web_ui_enabled and self._current_web_session() is not None:
+                return "web_session"
+
+            return None
+
+        def _current_web_session(self) -> _WebSession | None:
+            return web_sessions.get(self._cookie_value(api_config.web_cookie_name))
+
+        def _cookie_value(self, name: str) -> str | None:
+            raw = self.headers.get("Cookie")
+            if not raw:
+                return None
+            jar = cookies.SimpleCookie()
+            try:
+                jar.load(raw)
+            except cookies.CookieError:
+                return None
+            morsel = jar.get(name)
+            return morsel.value if morsel is not None else None
 
         def _check_rate_limit(self, client_ip: str) -> bool:
             """Sliding-window rate limit: returns False when limit exceeded."""
@@ -381,6 +486,272 @@ def _make_handler(
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(body)
+
+        def _send_html(
+            self,
+            status: int,
+            body_text: str,
+            *,
+            extra_headers: dict[str, str] | None = None,
+        ) -> None:
+            body = body_text.encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header(
+                "Content-Security-Policy",
+                "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+                "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+                "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+            )
+            self.send_header("Cache-Control", "no-store")
+            for key, value in (extra_headers or {}).items():
+                self.send_header(key, value)
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _redirect(self, location: str, *, extra_headers: dict[str, str] | None = None) -> None:
+            self.send_response(303)
+            self.send_header("Location", location)
+            self.send_header("Content-Length", "0")
+            self.send_header("Cache-Control", "no-store")
+            for key, value in (extra_headers or {}).items():
+                self.send_header(key, value)
+            self.end_headers()
+
+        def _route_web(self, method: str, path: str, params: dict) -> None:
+            if method == "GET" and path == "/login":
+                if self._current_web_session() is not None:
+                    self._redirect("/")
+                    return
+                message = str(params.get("error", ""))
+                self._send_html(200, self._render_login(error=message == "1"))
+                return
+
+            if method == "POST" and path == "/login":
+                self._handle_web_login()
+                return
+
+            if method == "POST" and path == "/logout":
+                self._handle_web_logout()
+                return
+
+            if method == "GET" and path == "/":
+                session = self._current_web_session()
+                if session is None:
+                    self._redirect("/login")
+                    return
+                self._send_html(200, self._render_console(session))
+                return
+
+            self._send_html(404, self._render_message("Not found", "No operator page exists here."))
+
+        def _handle_web_login(self) -> None:
+            body = self._read_form()
+            provided = body.get("api_key", "")
+            expected = api_config.api_key
+            if not expected or not provided or not hmac.compare_digest(provided, expected):
+                self._redirect("/login?error=1")
+                return
+
+            session = web_sessions.create()
+            cookie = self._make_cookie(api_config.web_cookie_name, session.token)
+            self._redirect("/", extra_headers={"Set-Cookie": cookie})
+
+        def _handle_web_logout(self) -> None:
+            token = self._cookie_value(api_config.web_cookie_name)
+            session = web_sessions.get(token)
+            provided = self.headers.get("X-CSRF-Token", "")
+            if (
+                session is None
+                or not provided
+                or not hmac.compare_digest(provided, session.csrf_token)
+            ):
+                self._send_html(
+                    403,
+                    self._render_message(
+                        "CSRF token required", "Refresh the console and try again."
+                    ),
+                )
+                return
+            web_sessions.revoke(token)
+            self._redirect(
+                "/login",
+                extra_headers={
+                    "Set-Cookie": self._make_cookie(api_config.web_cookie_name, "", max_age=0)
+                },
+            )
+
+        def _read_form(self) -> dict[str, str]:
+            content_type = (self.headers.get("Content-Type") or "").split(";")[0].strip()
+            if content_type != "application/x-www-form-urlencoded":
+                return {}
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+            except (ValueError, TypeError):
+                return {}
+            if length < 0 or length > min(api_config.max_request_bytes, 64_000):
+                return {}
+            raw = self.rfile.read(length).decode("utf-8", errors="replace")
+            return {k: v[0] if v else "" for k, v in parse_qs(raw, keep_blank_values=True).items()}
+
+        def _make_cookie(self, name: str, value: str, *, max_age: int | None = None) -> str:
+            morsel = cookies.SimpleCookie()
+            morsel[name] = value
+            morsel[name]["path"] = "/"
+            morsel[name]["httponly"] = True
+            morsel[name]["samesite"] = "Strict"
+            if max_age is not None:
+                morsel[name]["max-age"] = str(max_age)
+            return morsel.output(header="").strip()
+
+        def _render_login(self, *, error: bool = False) -> str:
+            error_html = (
+                '<p class="error" role="alert">Invalid operator key. Try again.</p>'
+                if error
+                else ""
+            )
+            return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Missy Operator Login</title>
+  <style>{self._console_css()}</style>
+</head>
+<body class="login-body">
+  <main class="login-panel" aria-labelledby="login-title">
+    <div class="brand-mark">M</div>
+    <h1 id="login-title">Missy Operator Console</h1>
+    <p class="muted">Local control plane access requires the configured API key.</p>
+    {error_html}
+    <form method="post" action="/login">
+      <label for="api_key">Operator key</label>
+      <input id="api_key" name="api_key" type="password" autocomplete="current-password" required autofocus>
+      <button type="submit">Enter Console</button>
+    </form>
+  </main>
+</body>
+</html>"""
+
+        def _render_message(self, title: str, message: str) -> str:
+            return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{html.escape(title)}</title><style>{self._console_css()}</style></head>
+<body class="login-body"><main class="login-panel"><h1>{html.escape(title)}</h1>
+<p class="muted">{html.escape(message)}</p><a class="button-link" href="/">Back to console</a></main></body></html>"""
+
+        def _render_console(self, session: _WebSession) -> str:
+            csrf = html.escape(session.csrf_token, quote=True)
+            return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Missy Operator Console</title>
+  <style>{self._console_css()}</style>
+</head>
+<body>
+  <header class="topbar">
+    <div><p class="eyebrow">Local control plane</p><h1>Missy Operator Console</h1></div>
+    <button id="logout" type="button">Sign out</button>
+  </header>
+  <main class="console-shell" data-csrf="{csrf}">
+    <section class="hero">
+      <div>
+        <p class="eyebrow">Runtime posture</p>
+        <h2 id="runtime-status">Loading status...</h2>
+        <p id="runtime-summary" class="muted">Checking providers, tools, sessions, and memory.</p>
+      </div>
+      <div class="status-grid" aria-label="Runtime metrics">
+        <article><span id="provider-count">-</span><p>Providers</p></article>
+        <article><span id="tool-count">-</span><p>Tools</p></article>
+        <article><span id="session-count">-</span><p>Sessions</p></article>
+        <article><span id="memory-state">-</span><p>Memory</p></article>
+      </div>
+    </section>
+    <section class="panel-grid">
+      <article class="panel"><div class="panel-head"><h3>Providers</h3><span id="provider-health" class="pill">Loading</span></div><div id="providers" class="list"></div></article>
+      <article class="panel"><div class="panel-head"><h3>Tools</h3><span id="tool-health" class="pill">Loading</span></div><div id="tools" class="list"></div></article>
+      <article class="panel"><div class="panel-head"><h3>Sessions</h3><span class="pill">Recent</span></div><div id="sessions" class="list"></div></article>
+      <article class="panel"><div class="panel-head"><h3>Security</h3><span class="pill secure">Local</span></div><div class="list">
+        <div class="row"><strong>Authentication</strong><span>Cookie session + API key</span></div>
+        <div class="row"><strong>CSRF</strong><span>Required for browser actions</span></div>
+        <div class="row"><strong>Headers</strong><span>CSP, no-store, frame deny</span></div>
+        <div class="row"><strong>Network</strong><span>Loopback by default</span></div>
+      </div></article>
+    </section>
+  </main>
+  <script>
+const root = document.querySelector('.console-shell');
+const csrf = root.dataset.csrf;
+async function api(path, options = {{}}) {{
+  const response = await fetch('/api/v1' + path, {{
+    ...options,
+    headers: {{'Accept': 'application/json', 'X-CSRF-Token': csrf, ...(options.headers || {{}})}},
+    credentials: 'same-origin'
+  }});
+  if (!response.ok) throw new Error(path + ' returned ' + response.status);
+  return response.json();
+}}
+function setText(id, value) {{ document.getElementById(id).textContent = value; }}
+function empty(label) {{ return `<div class="empty">${{label}}</div>`; }}
+function renderRows(id, rows, fallback) {{
+  document.getElementById(id).innerHTML = rows.length ? rows.join('') : empty(fallback);
+}}
+async function loadConsole() {{
+  try {{
+    const [status, providers, tools, sessions] = await Promise.all([
+      api('/status'), api('/providers'), api('/tools'), api('/sessions?limit=8')
+    ]);
+    const s = status.data;
+    setText('runtime-status', 'Runtime online');
+    setText('runtime-summary', `Default provider: ${{s.default_provider || 'not configured'}}`);
+    setText('provider-count', (s.providers_available || []).length);
+    setText('tool-count', s.tool_count || 0);
+    setText('session-count', s.session_count || 0);
+    setText('memory-state', s.memory && s.memory.has_memory ? 'On' : 'Idle');
+    const providerRows = providers.data.providers.map(p => `<div class="row"><strong>${{p.name}}</strong><span class="${{p.available ? 'ok' : 'warn'}}">${{p.available ? 'available' : 'offline'}}${{p.is_default ? ' / default' : ''}}</span></div>`);
+    renderRows('providers', providerRows, 'No providers registered.');
+    setText('provider-health', providerRows.length ? 'Ready' : 'Empty');
+    const toolRows = tools.data.tools.slice(0, 12).map(t => `<div class="row"><strong>${{t.name}}</strong><span>${{t.description || 'No description'}}</span></div>`);
+    renderRows('tools', toolRows, 'No tools registered.');
+    setText('tool-health', `${{tools.data.tools.length}} total`);
+    const sessionRows = sessions.data.sessions.map(s => `<div class="row"><strong>${{s.name || s.session_id.slice(0, 8)}}</strong><span>${{s.provider || 'provider unset'}} / ${{s.turn_count}} turns</span></div>`);
+    renderRows('sessions', sessionRows, 'No API sessions yet.');
+  }} catch (error) {{
+    setText('runtime-status', 'Console degraded');
+    setText('runtime-summary', error.message);
+  }}
+}}
+document.getElementById('logout').addEventListener('click', async () => {{
+  await fetch('/logout', {{method: 'POST', headers: {{'X-CSRF-Token': csrf}}, credentials: 'same-origin'}});
+  window.location = '/login';
+}});
+loadConsole();
+setInterval(loadConsole, 15000);
+  </script>
+</body>
+</html>"""
+
+        def _console_css(self) -> str:
+            return """
+:root{color-scheme:dark;--bg:#0b1020;--panel:#121a2e;--panel2:#18243c;--text:#edf4ff;--muted:#9fb0cc;--line:#2a3858;--accent:#63d2ff;--ok:#7ee787;--warn:#ffd166;--bad:#ff7b72}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at top left,#193158 0,#0b1020 36rem);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;line-height:1.45}
+.topbar{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:1.25rem clamp(1rem,4vw,2.5rem);border-bottom:1px solid var(--line);background:rgba(11,16,32,.82);backdrop-filter:blur(14px);position:sticky;top:0;z-index:2}
+h1,h2,h3,p{margin:0}h1{font-size:clamp(1.3rem,3vw,2rem)}h2{font-size:clamp(1.8rem,4vw,3rem);letter-spacing:0}h3{font-size:1rem}.eyebrow{color:var(--accent);font-size:.75rem;text-transform:uppercase;font-weight:700;letter-spacing:.12em}.muted{color:var(--muted)}
+button,.button-link{border:1px solid #3b82f6;background:#1d4ed8;color:white;border-radius:8px;padding:.7rem 1rem;font-weight:700;cursor:pointer;text-decoration:none;display:inline-block}button:hover,.button-link:hover{background:#2563eb}
+.console-shell{width:min(1180px,100%);margin:0 auto;padding:clamp(1rem,3vw,2rem)}.hero{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,520px);gap:1rem;align-items:stretch;margin-bottom:1rem}
+.hero>div,.panel{background:linear-gradient(180deg,rgba(24,36,60,.95),rgba(18,26,46,.95));border:1px solid var(--line);border-radius:8px;padding:1rem;box-shadow:0 16px 40px rgba(0,0,0,.22)}
+.status-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.75rem}.status-grid article{background:#0f172a;border:1px solid var(--line);border-radius:8px;padding:.9rem}.status-grid span{display:block;font-size:1.8rem;font-weight:800}.status-grid p{color:var(--muted);font-size:.85rem}
+.panel-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem}.panel-head{display:flex;align-items:center;justify-content:space-between;gap:.75rem;margin-bottom:.75rem}.pill{border:1px solid var(--line);border-radius:999px;padding:.25rem .55rem;color:var(--muted);font-size:.78rem}.pill.secure{color:var(--ok);border-color:#2f6f48}
+.list{display:grid;gap:.5rem}.row{display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;border-top:1px solid var(--line);padding:.7rem 0}.row:first-child{border-top:0}.row strong{min-width:0;overflow-wrap:anywhere}.row span{color:var(--muted);text-align:right;overflow-wrap:anywhere}.ok{color:var(--ok)!important}.warn{color:var(--warn)!important}.empty{border:1px dashed var(--line);border-radius:8px;color:var(--muted);padding:1rem;text-align:center}
+.login-body{display:grid;place-items:center;padding:1rem}.login-panel{width:min(440px,100%);background:rgba(18,26,46,.96);border:1px solid var(--line);border-radius:8px;padding:1.25rem;box-shadow:0 20px 60px rgba(0,0,0,.32)}.brand-mark{width:3rem;height:3rem;display:grid;place-items:center;border-radius:8px;background:#1d4ed8;font-weight:900;margin-bottom:1rem}.login-panel form{display:grid;gap:.75rem;margin-top:1rem}.login-panel label{font-weight:700}.login-panel input{width:100%;border:1px solid var(--line);background:#0f172a;color:var(--text);border-radius:8px;padding:.8rem}.error{color:var(--bad);margin-top:.75rem}
+@media (max-width:820px){.hero,.panel-grid{grid-template-columns:1fr}.status-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.topbar{position:static;align-items:flex-start}.row{display:grid}.row span{text-align:left}}
+"""
 
         # ----------------------------------------------------------------
         # Route handlers
@@ -757,6 +1128,7 @@ class ApiServer:
         self.tool_registry = tool_registry
 
         self._session_registry = _SessionRegistry()
+        self._web_sessions = _WebSessionStore(config.web_session_ttl_seconds)
         self._rate_tracker: dict[str, list[float]] = {}
         self._rate_lock = threading.Lock()
 
@@ -796,6 +1168,7 @@ class ApiServer:
         handler_class = _make_handler(
             api_config=self.config,
             session_registry=self._session_registry,
+            web_sessions=self._web_sessions,
             rate_tracker=self._rate_tracker,
             rate_lock=self._rate_lock,
             runtime=self.runtime,

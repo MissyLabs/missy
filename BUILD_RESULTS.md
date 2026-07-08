@@ -1,23 +1,29 @@
 # BUILD_RESULTS
 
 - Timestamp: 2026-07-08
-- Branch: overhaul/tools-20260708-020326
-- Base: origin/master
+- Branch: overhaul/web-tui-20260708-122250
+- Primary focus: Web TUI and operator console overhaul
 
 ## Repository Snapshot
 
-This rebase replayed the tool-intelligence overhaul commits on top of the Discord diagnostics work in `origin/master`.
+This session added the first browser-native operator console on top of the existing secure local REST API. The work is incremental and Missy-native: it does not scaffold a replacement app or introduce a separate frontend framework.
 
-## Code Areas Present After Rebase
+## Code Areas Changed
 
-- Tool intelligence runtime wiring in `missy/agent/runtime.py`.
-- Provider schema adapter wiring in `missy/providers/anthropic_provider.py`, `missy/providers/openai_provider.py`, and `missy/providers/ollama_provider.py`.
-- `missy tools benchmark run` in `missy/cli/main.py`.
-- Discord Gateway diagnostics, Discord voice binding, Discord voice tools, and related tests from `origin/master`.
+- `missy/api/server.py`
+  - Added browser session configuration fields to `ApiConfig`.
+  - Added `_WebSessionStore` and `_WebSession`.
+  - Added `/login`, `/logout`, and `/` Web UI routes.
+  - Added hardened HTML response headers.
+  - Added cookie session auth for browser API calls.
+  - Added CSRF enforcement for unsafe browser-authenticated API calls.
+  - Added responsive operator dashboard HTML/CSS/JS.
+- `tests/api/test_server.py`
+  - Added operator console security and workflow tests.
 
-## Verification To Rerun
+## Verification
 
-- Tool-intelligence focused tests.
-- Discord-focused tests touched by `origin/master`.
-- CLI command tests where `missy/cli/main.py` auto-merged.
-- Ruff check and format check.
+- Focused API suite: 71 passed.
+- Full suite: 20449 passed, 13 skipped.
+- Ruff check: passed.
+- Ruff format check: passed.
