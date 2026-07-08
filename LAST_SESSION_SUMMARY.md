@@ -4,23 +4,24 @@ Date: 2026-07-08
 
 ## Changed
 
-- Added a native OpenAI Responses API path behind the existing OpenAI provider
+- Added native OpenAI Responses streaming behind the existing OpenAI provider
   adapter.
-- Kept Chat Completions as the fallback for OpenAI-compatible `base_url`
-  providers and transcripts containing tool-result/tool-call state.
-- Converted normalized OpenAI text and image parts to Responses `input_text`
-  and `input_image` content.
-- Mapped system messages/system kwargs to Responses `instructions`.
-- Extracted Responses text from both `output_text` and structured
-  `response.output` content parts.
-- Mapped Responses usage into Missy's canonical usage fields.
-- Updated provider documentation and focused OpenAI provider tests.
+- Routed compatible native OpenAI `stream()` calls to `client.responses.stream`
+  while retaining Chat Completions streaming for `base_url` providers and
+  unsupported client shapes.
+- Reused the Responses input/instructions conversion path for streaming text,
+  vision, and system prompts.
+- Reconciled incremental `response.output_text.delta` events with final/full
+  Responses text snapshots to avoid duplicate emitted chunks.
+- Converted Responses stream `response.failed` and `error` events into
+  `ProviderError`.
+- Expanded focused OpenAI provider tests and updated provider documentation.
 
 ## Verification
 
 ```text
 python3 -m ruff format missy/providers/openai_provider.py tests/providers/test_openai_provider.py
-2 files left unchanged
+1 file reformatted, 1 file left unchanged
 ```
 
 ```text
@@ -30,12 +31,12 @@ All checks passed!
 
 ```text
 python3 -m pytest tests/providers/test_openai_provider.py -q
-29 passed in 0.82s
+33 passed in 0.94s
 ```
 
 ```text
 python3 -m pytest tests/providers -q
-837 passed in 26.00s
+841 passed in 23.39s
 ```
 
 ```text
@@ -50,15 +51,15 @@ All checks passed!
 
 ```text
 python3 -m pytest -q
-20480 passed, 6 skipped, 3 warnings in 401.95s (0:06:41)
+20484 passed, 6 skipped, 3 warnings in 397.19s (0:06:37)
 ```
 
 ## Remains
 
 - Native Responses tool/function calling still needs a transcript model that
   can preserve replayable Responses output items safely.
-- Streaming still needs Responses event parsing, tool-call delta
-  reconciliation, and final response validation.
+- Streamed provider-native tool-call deltas and final validation remain future
+  work.
 - Structured output should use OpenAI-native response formats where available.
 - OpenAI diagnostics, embeddings, cost accounting, retry/fallback audit
   coverage remain incomplete.
@@ -67,5 +68,6 @@ python3 -m pytest -q
 
 ## First Next Step
 
-Implement Responses streaming/event reconciliation or native structured output
-support, keeping OpenAI-specific behavior inside the adapter boundary.
+Implement OpenAI-native structured output support or begin Responses
+tool/function calling after defining how replayable Responses output items are
+stored in Missy's provider-neutral transcript model.

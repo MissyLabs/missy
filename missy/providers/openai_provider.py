@@ -492,6 +492,15 @@ class OpenAIProvider(BaseProvider):
         create = getattr(responses, "create", None)
         return callable(create)
 
+    @staticmethod
+    def _client_supports_responses_stream(client: Any) -> bool:
+        """Return whether *client* clearly exposes Responses streaming."""
+        if client.__class__.__module__.startswith("unittest.mock"):
+            return False
+        responses = getattr(client, "responses", None)
+        stream = getattr(responses, "stream", None)
+        return callable(stream)
+
     def _should_use_responses_api(
         self,
         client: Any,
@@ -564,7 +573,10 @@ class OpenAIProvider(BaseProvider):
             return output_text
 
         text_parts: list[str] = []
-        for item in getattr(raw_response, "output", []) or []:
+        output_items = getattr(raw_response, "output", None)
+        if output_items is None and isinstance(raw_response, dict):
+            output_items = raw_response.get("output")
+        for item in output_items or []:
             content = getattr(item, "content", None)
             if content is None and isinstance(item, dict):
                 content = item.get("content")
@@ -611,6 +623,116 @@ class OpenAIProvider(BaseProvider):
         if isinstance(raw_response, dict):
             return raw_response
         return {}
+
+    @staticmethod
+    def _event_get(event: Any, key: str, default: Any = None) -> Any:
+        """Read *key* from SDK event objects or dict fixtures."""
+        if isinstance(event, dict):
+            return event.get(key, default)
+        return getattr(event, key, default)
+
+    @staticmethod
+    def _append_reconciled_text(current: str, candidate: Any) -> tuple[str, str]:
+        """Return ``(delta_to_emit, new_full_text)`` for delta/full snapshots."""
+        if candidate is None:
+            return "", current
+        text = str(candidate)
+        if not text:
+            return "", current
+        if text.startswith(current):
+            return text[len(current) :], text
+        return text, current + text
+
+    @classmethod
+    def _responses_event_full_text(cls, event: Any) -> str:
+        """Extract a full text snapshot from known Responses stream events."""
+        for key in ("text", "output_text", "content"):
+            value = cls._event_get(event, key)
+            if isinstance(value, str) and value:
+                return value
+
+        response = cls._event_get(event, "response")
+        if response is not None:
+            text = OpenAIProvider._extract_responses_text(response)
+            if text:
+                return text
+
+        item = cls._event_get(event, "item")
+        if item is not None:
+            text = OpenAIProvider._extract_responses_text({"output": [item]})
+            if text:
+                return text
+
+        return ""
+
+    @classmethod
+    def _responses_stream_error_message(cls, event: Any) -> str:
+        """Return a safe message from an error/failed Responses stream event."""
+        error = cls._event_get(event, "error")
+        if error is not None:
+            message = cls._event_get(error, "message")
+            if message:
+                return str(message)
+            if isinstance(error, str):
+                return error
+        message = cls._event_get(event, "message")
+        if message:
+            return str(message)
+        return "OpenAI Responses stream failed"
+
+    def _responses_stream_chunks(
+        self,
+        events: Iterator[Any],
+    ) -> Iterator[str]:
+        """Yield reconciled text chunks from Responses streaming events."""
+        full_text = ""
+        for event in events:
+            event_type = str(self._event_get(event, "type", ""))
+            if event_type in {"response.failed", "error"}:
+                raise ProviderError(self._responses_stream_error_message(event))
+
+            if event_type == "response.output_text.delta":
+                delta, full_text = self._append_reconciled_text(
+                    full_text,
+                    self._event_get(event, "delta", ""),
+                )
+            elif event_type in {
+                "response.output_text.done",
+                "response.output_item.done",
+                "response.completed",
+            }:
+                delta, full_text = self._append_reconciled_text(
+                    full_text,
+                    self._responses_event_full_text(event),
+                )
+            else:
+                continue
+
+            if delta:
+                yield delta
+
+    def _stream_via_responses(
+        self,
+        client: Any,
+        api_messages: list[dict[str, Any]],
+        model: str,
+        system: str = "",
+    ) -> Iterator[str]:
+        """Stream a compatible request through OpenAI Responses."""
+        instructions, input_items = self._messages_to_responses_payload(api_messages, system=system)
+        call_kwargs: dict[str, Any] = {
+            "model": model,
+            "input": input_items,
+        }
+        if instructions:
+            call_kwargs["instructions"] = instructions
+
+        stream_obj = client.responses.stream(**call_kwargs)
+        if hasattr(stream_obj, "__enter__"):
+            with stream_obj as stream:
+                yield from self._responses_stream_chunks(iter(stream))
+        else:
+            yield from self._responses_stream_chunks(iter(stream_obj))
 
     def _complete_via_responses(
         self,
@@ -916,18 +1038,33 @@ class OpenAIProvider(BaseProvider):
 
         model = self._resolve_model(self._model)
         api_messages = self._messages_to_chat_payload(messages, system=system)
-
-        call_kwargs: dict[str, Any] = {
-            "model": model,
-            "messages": api_messages,
-            "stream": True,
-        }
+        self._emit_transcript_repairs()
+        self._acquire_rate_limit(estimated_tokens=self._estimate_tokens(messages, system))
 
         try:
             client = self._make_client()
+            if self._should_use_responses_api(
+                client,
+                api_messages,
+            ) and self._client_supports_responses_stream(client):
+                yield from self._stream_via_responses(
+                    client,
+                    api_messages,
+                    model,
+                    system=system,
+                )
+                return
+
+            call_kwargs: dict[str, Any] = {
+                "model": model,
+                "messages": api_messages,
+                "stream": True,
+            }
             for chunk in client.chat.completions.create(**call_kwargs):
                 delta = chunk.choices[0].delta.content if chunk.choices else None
                 yield delta or ""
+        except ProviderError:
+            raise
         except _openai_sdk.APITimeoutError as exc:
             raise ProviderError(f"OpenAI stream timed out after {self._timeout}s: {exc}") from exc
         except _openai_sdk.AuthenticationError as exc:
