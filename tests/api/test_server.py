@@ -13,14 +13,17 @@ import threading
 import time
 from collections.abc import Generator
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
 
 from missy.api.server import ApiConfig, ApiResponse, ApiServer, _SessionRegistry
+from missy.config.settings import get_default_config
 from missy.core.events import AuditEvent, event_bus
 from missy.observability.audit_logger import init_audit_logger
+from missy.policy.engine import init_policy_engine
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -786,6 +789,79 @@ class TestTools:
             assert len(tools) == 1
             assert tools[0]["name"] == "calculator"
             assert tools[0]["description"] == "Evaluates expressions"
+        finally:
+            srv.stop()
+
+
+# ---------------------------------------------------------------------------
+# Diagnostics endpoint
+# ---------------------------------------------------------------------------
+
+
+class TestDiagnostics:
+    def test_diagnostics_requires_auth(self, base_url: str) -> None:
+        resp = httpx.get(f"{base_url}/diagnostics")
+        assert resp.status_code == 401
+
+    def test_diagnostics_reports_redacted_operator_posture(self) -> None:
+        init_policy_engine(get_default_config())
+        port = _free_port()
+
+        mock_provider_registry = MagicMock()
+        mock_provider_registry.list_providers.return_value = ["anthropic"]
+        mock_provider_registry.get_default_name.return_value = "anthropic"
+        mock_provider = MagicMock()
+        mock_provider.is_available.return_value = True
+        mock_provider_registry.get.return_value = mock_provider
+
+        mock_tool_registry = MagicMock()
+        mock_tool_registry.list_tools.return_value = ["web_fetch"]
+        mock_tool = MagicMock()
+        mock_tool.permissions = SimpleNamespace(
+            network=True,
+            filesystem_read=False,
+            filesystem_write=False,
+            shell=False,
+        )
+        mock_tool_registry.get.return_value = mock_tool
+
+        cfg = ApiConfig(
+            host="127.0.0.1",
+            port=port,
+            api_key="sk-test-diagnostic-secret-abcdefghijklmnopqrstuvwxyz",
+        )
+        srv = ApiServer(
+            config=cfg,
+            provider_registry=mock_provider_registry,
+            tool_registry=mock_tool_registry,
+        )
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            resp = httpx.get(
+                f"http://127.0.0.1:{port}/api/v1/diagnostics",
+                headers={"X-API-Key": cfg.api_key},
+            )
+            assert resp.status_code == 200
+            data = resp.json()["data"]
+            assert data["overall"] in {"ok", "warn"}
+            labels = {section["label"] for section in data["sections"]}
+            assert {"Web entrypoint", "Providers", "Tools", "Policy"}.issubset(labels)
+
+            rendered = str(data)
+            assert cfg.api_key not in rendered
+            assert "sk-test-diagnostic-secret" not in rendered
+
+            policy = next(section for section in data["sections"] if section["key"] == "policy")
+            assert any(
+                check["name"] == "Network default deny" and check["summary"] is True
+                for check in policy["checks"]
+            )
+            tools = next(section for section in data["sections"] if section["key"] == "tools")
+            assert any(
+                check["name"] == "Elevated permissions" and check["summary"]["network"] == 1
+                for check in tools["checks"]
+            )
         finally:
             srv.stop()
 

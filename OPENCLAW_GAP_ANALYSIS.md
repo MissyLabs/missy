@@ -1,6 +1,6 @@
 # OpenClaw Gap Analysis
 
-Last updated: 2026-07-08 09:19:07 EDT
+Last updated: 2026-07-08 09:31:21 EDT
 
 ## Current Focus
 
@@ -18,7 +18,7 @@ remains clean-room and Python-native.
 | Polished dashboard | started | Runtime, providers, tools, sessions, security posture, and audit trail are shown. |
 | Session/run viewer | not_started | Needs streaming output, tool calls, errors, costs, routing, fallback, resume context. |
 | Audit log browser | improved | `/api/v1/audit` supports filters, facets, file/memory sources, redaction, IDs, totals, offsets, and `has_more`; UI has filters, pagination, and details. |
-| Diagnostics/doctor views | not_started | Needs Discord, providers, scheduler, tools, memory, gateway, policy, network posture. |
+| Diagnostics/doctor views | started | `/api/v1/diagnostics` and the Web TUI panel now report Web entrypoint, providers, tools, memory, policy, scheduler, and runtime posture. Needs deeper Discord/gateway/network probes and remediation. |
 | Safe operator controls | not_started | Must be policy-gated, default-deny, audited, and confirmation guarded. |
 | Responsive/accessibility coverage | partial | CSS is responsive; browser/visual tests still needed. |
 | Backend Web TUI security | improved | Auth, CSRF, rate limit, hardened headers, audit events, redaction, XSS-resistant dashboard rendering, and redacted audit search are in place. |
@@ -43,5 +43,6 @@ remains clean-room and Python-native.
 
 ## Recommended Next Slice
 
-Extract the remaining Web TUI rendering assets out of `missy/api/server.py`, or
-add the first diagnostics/doctor API and panel for provider/tool/policy posture.
+Deepen diagnostics with Discord, gateway, network probes, policy explanations,
+and remediation actions; then extract the remaining Web TUI rendering assets out
+of `missy/api/server.py`.

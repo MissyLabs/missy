@@ -42,6 +42,7 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlparse
 
 from missy.api.audit_browser import query_audit_events, redact_audit_value
+from missy.api.diagnostics import build_diagnostics
 from missy.api.web_sessions import WebSession, WebSessionStore
 from missy.core.events import AuditEvent, event_bus
 
@@ -353,6 +354,8 @@ def _make_handler(
                 return self._handle_list_providers()
             if method == "GET" and path == f"{_API_PREFIX}/tools":
                 return self._handle_list_tools()
+            if method == "GET" and path == f"{_API_PREFIX}/diagnostics":
+                return self._handle_diagnostics()
             if method == "GET" and path == f"{_API_PREFIX}/audit":
                 return self._handle_audit_events(params)
             if method == "GET" and path == f"{_API_PREFIX}/memory/search":
@@ -689,6 +692,7 @@ def _make_handler(
       <article class="panel"><div class="panel-head"><h3>Providers</h3><span id="provider-health" class="pill">Loading</span></div><div id="providers" class="list"></div></article>
       <article class="panel"><div class="panel-head"><h3>Tools</h3><span id="tool-health" class="pill">Loading</span></div><div id="tools" class="list"></div></article>
       <article class="panel"><div class="panel-head"><h3>Sessions</h3><span class="pill">Recent</span></div><div id="sessions" class="list"></div></article>
+      <article class="panel diagnostics-panel"><div class="panel-head"><h3>Diagnostics</h3><span id="diagnostics-health" class="pill">Loading</span></div><div id="diagnostics" class="list"></div></article>
       <article class="panel audit-panel"><div class="panel-head"><h3>Audit Trail</h3><span id="audit-health" class="pill">Loading</span></div>
         <div class="filter-row" aria-label="Audit filters">
           <select id="audit-result" aria-label="Audit result"><option value="">All results</option><option value="deny">Denied</option><option value="allow">Allowed</option><option value="error">Errors</option></select>
@@ -763,8 +767,8 @@ function renderAuditDetail(event) {{
 }}
 async function loadConsole() {{
   try {{
-    const [status, providers, tools, sessions, audit] = await Promise.all([
-      api('/status'), api('/providers'), api('/tools'), api('/sessions?limit=8'), api(auditPath())
+    const [status, providers, tools, sessions, diagnostics, audit] = await Promise.all([
+      api('/status'), api('/providers'), api('/tools'), api('/sessions?limit=8'), api('/diagnostics'), api(auditPath())
     ]);
     const s = status.data;
     setText('runtime-status', 'Runtime online');
@@ -781,6 +785,13 @@ async function loadConsole() {{
     setText('tool-health', `${{tools.data.tools.length}} total`);
     const sessionRows = sessions.data.sessions.map(s => `<div class="row"><strong>${{esc(s.name || s.session_id.slice(0, 8))}}</strong><span>${{esc(s.provider || 'provider unset')}} / ${{s.turn_count}} turns</span></div>`);
     renderRows('sessions', sessionRows, 'No API sessions yet.');
+    const diagnosticRows = diagnostics.data.sections.map(section => {{
+      const summary = section.checks.slice(0, 3).map(check => `${{check.name}}: ${{typeof check.summary === 'object' ? JSON.stringify(check.summary) : check.summary}}`).join(' / ');
+      const statusClass = section.status === 'ok' ? 'ok' : 'warn';
+      return `<div class="row"><strong>${{esc(section.label)}}</strong><span class="${{statusClass}}">${{esc(section.status)}} &middot; ${{esc(summary)}}</span></div>`;
+    }});
+    renderRows('diagnostics', diagnosticRows, 'Diagnostics are unavailable.');
+    setText('diagnostics-health', diagnostics.data.overall);
     latestAuditEvents = audit.data.events;
     const auditRows = latestAuditEvents.map(e => {{
       const d = e.detail || {{}};
@@ -843,7 +854,7 @@ button,.button-link{border:1px solid #3b82f6;background:#1d4ed8;color:white;bord
 .status-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.75rem}.status-grid article{background:#0f172a;border:1px solid var(--line);border-radius:8px;padding:.9rem}.status-grid span{display:block;font-size:1.8rem;font-weight:800}.status-grid p{color:var(--muted);font-size:.85rem}
 .panel-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem}.panel-head{display:flex;align-items:center;justify-content:space-between;gap:.75rem;margin-bottom:.75rem}.pill{border:1px solid var(--line);border-radius:999px;padding:.25rem .55rem;color:var(--muted);font-size:.78rem}.pill.secure{color:var(--ok);border-color:#2f6f48}
 .list{display:grid;gap:.5rem}.row{display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;border-top:1px solid var(--line);padding:.7rem 0}.row:first-child{border-top:0}.row strong{min-width:0;overflow-wrap:anywhere}.row span{color:var(--muted);text-align:right;overflow-wrap:anywhere}.ok{color:var(--ok)!important}.warn{color:var(--warn)!important}.empty{border:1px dashed var(--line);border-radius:8px;color:var(--muted);padding:1rem;text-align:center}
-.filter-row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.5rem;margin-bottom:.5rem}.filter-row select,.filter-row input{min-width:0;border:1px solid var(--line);background:#0f172a;color:var(--text);border-radius:8px;padding:.6rem}.audit-actions{display:flex;gap:.5rem;margin:.25rem 0 .5rem}.audit-actions button{padding:.45rem .7rem}.audit-actions button:disabled{opacity:.45;cursor:not-allowed}.audit-row{width:100%;background:transparent;border:0;border-top:1px solid var(--line);border-radius:0;color:var(--text);padding:.7rem 0;text-align:left}.audit-row:hover,.audit-row:focus{background:rgba(99,210,255,.08);outline:1px solid var(--line)}.audit-row span{font-size:.82rem}.detail{max-height:18rem;overflow:auto;margin:.75rem 0 0;border:1px solid var(--line);border-radius:8px;background:#0f172a;color:var(--muted);padding:.75rem;white-space:pre-wrap;overflow-wrap:anywhere}
+.filter-row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.5rem;margin-bottom:.5rem}.filter-row select,.filter-row input{min-width:0;border:1px solid var(--line);background:#0f172a;color:var(--text);border-radius:8px;padding:.6rem}.diagnostics-panel .row span{font-size:.82rem}.audit-actions{display:flex;gap:.5rem;margin:.25rem 0 .5rem}.audit-actions button{padding:.45rem .7rem}.audit-actions button:disabled{opacity:.45;cursor:not-allowed}.audit-row{width:100%;background:transparent;border:0;border-top:1px solid var(--line);border-radius:0;color:var(--text);padding:.7rem 0;text-align:left}.audit-row:hover,.audit-row:focus{background:rgba(99,210,255,.08);outline:1px solid var(--line)}.audit-row span{font-size:.82rem}.detail{max-height:18rem;overflow:auto;margin:.75rem 0 0;border:1px solid var(--line);border-radius:8px;background:#0f172a;color:var(--muted);padding:.75rem;white-space:pre-wrap;overflow-wrap:anywhere}
 .login-body{display:grid;place-items:center;padding:1rem}.login-panel{width:min(440px,100%);background:rgba(18,26,46,.96);border:1px solid var(--line);border-radius:8px;padding:1.25rem;box-shadow:0 20px 60px rgba(0,0,0,.32)}.brand-mark{width:3rem;height:3rem;display:grid;place-items:center;border-radius:8px;background:#1d4ed8;font-weight:900;margin-bottom:1rem}.login-panel form{display:grid;gap:.75rem;margin-top:1rem}.login-panel label{font-weight:700}.login-panel input{width:100%;border:1px solid var(--line);background:#0f172a;color:var(--text);border-radius:8px;padding:.8rem}.error{color:var(--bad);margin-top:.75rem}
 @media (max-width:820px){.hero,.panel-grid{grid-template-columns:1fr}.status-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.topbar{position:static;align-items:flex-start}.row{display:grid}.row span{text-align:left}}
 @media (max-width:520px){.filter-row{grid-template-columns:1fr}}
@@ -948,6 +959,19 @@ button,.button-link{border:1px solid #3b82f6;background:#1d4ed8;color:white;bord
         def _handle_audit_events(self, params: dict) -> tuple[int, dict]:
             """GET /api/v1/audit — browse redacted audit events with filters."""
             return ApiResponse.ok(query_audit_events(params))
+
+        def _handle_diagnostics(self) -> tuple[int, dict]:
+            """GET /api/v1/diagnostics — local operator doctor summary."""
+            return ApiResponse.ok(
+                build_diagnostics(
+                    api_config=api_config,
+                    session_count=session_registry.count(),
+                    runtime=runtime,
+                    memory_store=memory_store,
+                    provider_registry=provider_registry,
+                    tool_registry=tool_registry,
+                )
+            )
 
         def _handle_chat(self, body: dict) -> tuple[int, dict]:
             """POST /api/v1/chat — send a message to the agent and get a reply.

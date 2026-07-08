@@ -1,6 +1,6 @@
 # Build Status
 
-Last updated: 2026-07-08 09:19:07 EDT
+Last updated: 2026-07-08 09:31:21 EDT
 
 ## Current State
 
@@ -10,20 +10,15 @@ contract, while browser access uses explicit login, hardened cookies, CSRF for
 unsafe browser-authenticated API calls, no-store responses, and server-side
 audit redaction.
 
-This session completed a cleanup-plus-audit-browser slice:
+This session added the first diagnostics/doctor slice on top of the existing
+Web TUI architecture:
 
-- Moved browser operator session storage from `missy/api/server.py` into
-  `missy/api/web_sessions.py`.
-- Moved audit filtering, redaction, facets, event conversion, pagination, and
-  stable redacted event IDs into `missy/api/audit_browser.py`.
-- Extended `GET /api/v1/audit` with `offset`, `total`, `limit`, `has_more`, and
-  newest-first pagination while preserving existing filters.
-- Expanded the Web TUI Audit Trail panel with severity, actor, source, redacted
-  search, since/until timestamp controls, previous/next paging, and a keyboard
-  focusable event-detail inspector.
-- Kept JSON-derived console values escaped before insertion into HTML.
-- Added API tests proving audit pagination, newest-first ordering, stable event
-  IDs, and recursive redaction.
+- Added `missy/api/diagnostics.py` as a redacted diagnostics view-model module.
+- Added authenticated `GET /api/v1/diagnostics` for Web entrypoint, providers,
+  tools, memory, policy, scheduler, and runtime posture.
+- Added a dense Diagnostics panel to the browser console.
+- Added API tests proving diagnostics auth, redaction, initialized
+  default-deny policy reporting, and elevated tool permission summaries.
 
 ## Completed Work
 
@@ -36,6 +31,8 @@ This session completed a cleanup-plus-audit-browser slice:
 | Operator dashboard | improved | Runtime, providers, tools, sessions, security posture, and richer audit trail are shown. |
 | Audit log browser API | improved | Authenticated `/api/v1/audit` supports filters, facets, redaction, IDs, totals, offsets, and `has_more`. |
 | Audit browser UI | improved | Search, actor/source, severity, timestamp filters, pagination, and event details are available. |
+| Diagnostics API | started | Authenticated `/api/v1/diagnostics` reports redacted local posture across Web, providers, tools, memory, policy, scheduler, and runtime. |
+| Diagnostics UI | started | Browser console now includes a compact Diagnostics panel. |
 | Console security tests | expanded | API suite covers audit auth, filtering, redaction, Web UI event emission, CSRF, cookies, logout, and pagination. |
 
 ## Current Architecture State
@@ -50,22 +47,24 @@ This session completed a cleanup-plus-audit-browser slice:
   process event bus for lightweight/test server usage.
 - Audit matching is performed against redacted records to avoid search-based
   secret disclosure.
+- Diagnostics are built from already-injected server dependencies and redact
+  summaries before returning them to the operator console.
 - `LOOP_INSTRUCTIONS.md` remains modified from outside this session and was not
   touched.
 
 ## Tests
 
-- `python3 -m pytest tests/api/test_server.py -q`: 75 passed.
 - `python3 -m ruff check .`: passed.
-- `python3 -m ruff format --check .`: 728 files already formatted.
-- `python3 -m pytest -q`: 20453 passed, 13 skipped in 382.78s.
+- `python3 -m ruff format --check .`: 729 files already formatted.
+- `python3 -m pytest tests/api/test_server.py -q`: 77 passed.
+- `python3 -m pytest -q`: 20455 passed, 13 skipped in 389.39s.
 
 ## Remaining Work
 
 1. Continue extracting Web TUI rendering and frontend assets out of
    `missy/api/server.py` into clearer internal modules.
-2. Add diagnostics/doctor panels for Discord, providers, scheduler, tools,
-   memory, gateway, policy, and network posture.
+2. Deepen diagnostics/doctor panels with Discord, gateway, network probes,
+   policy explanations, and actionable remediation.
 3. Add safe policy-gated controls for providers, tools, scheduled jobs,
    channels, and experimental features.
 4. Add run/session viewer with streaming output, tool calls, errors, model
