@@ -2359,6 +2359,39 @@ def doctor(ctx: click.Context) -> None:
             table.add_row(
                 f"provider:{name}", status, "api key present" if avail else "not available"
             )
+            diagnostics = getattr(p, "diagnostics", None)
+            if callable(diagnostics):
+                from missy.api.audit_browser import redact_audit_value
+
+                try:
+                    report = diagnostics()
+                except Exception as exc:
+                    logging.getLogger(__name__).debug(
+                        "Provider %s diagnostics failed", name, exc_info=True
+                    )
+                    table.add_row(
+                        f"provider:{name}:diagnostics",
+                        warn,
+                        str(redact_audit_value(f"error: {exc}")),
+                    )
+                else:
+                    if isinstance(report, dict):
+                        for item in report.get("checks", []) or []:
+                            if not isinstance(item, dict):
+                                continue
+                            item_status = str(item.get("status", "warn"))
+                            status_text = (
+                                ok
+                                if item_status == "ok"
+                                else fail
+                                if item_status == "error"
+                                else warn
+                            )
+                            table.add_row(
+                                f"provider:{name}:{item.get('name', 'diagnostic')}",
+                                status_text,
+                                str(redact_audit_value(item.get("summary", ""))),
+                            )
 
     # 7. Shell policy
     shell_status = warn if cfg.shell.enabled else ok

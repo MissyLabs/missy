@@ -1109,6 +1109,17 @@ class TestDiagnostics:
         mock_provider_registry.get_default_name.return_value = "anthropic"
         mock_provider = MagicMock()
         mock_provider.is_available.return_value = True
+        mock_provider.diagnostics.return_value = {
+            "provider": "anthropic",
+            "status": "ok",
+            "checks": [
+                {
+                    "name": "credential",
+                    "status": "ok",
+                    "summary": "configured via env",
+                }
+            ],
+        }
         mock_provider_registry.get.return_value = mock_provider
 
         mock_tool_registry = MagicMock()
@@ -1153,6 +1164,13 @@ class TestDiagnostics:
             assert any(
                 check["name"] == "Network default deny" and check["summary"] is True
                 for check in policy["checks"]
+            )
+            providers = next(
+                section for section in data["sections"] if section["key"] == "providers"
+            )
+            assert any(
+                check["name"] == "anthropic credential" and check["summary"] == "configured via env"
+                for check in providers["checks"]
             )
             tools = next(section for section in data["sections"] if section["key"] == "tools")
             assert any(

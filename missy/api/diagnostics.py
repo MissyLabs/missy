@@ -108,6 +108,8 @@ def _provider_section(
         if name == default_name:
             summary += " / default"
         checks.append(_check(name, status, summary))
+        if provider is not None:
+            checks.extend(_provider_diagnostic_checks(name, provider))
     if not checks:
         checks.append(_check("Registered providers", "warn", "none"))
     if runtime is not None:
@@ -115,6 +117,40 @@ def _provider_section(
             _check("Runtime provider", "ok", str(getattr(runtime.config, "provider", "")))
         )
     return _section("providers", "Providers", checks)
+
+
+def _provider_diagnostic_checks(name: str, provider: Any) -> list[dict[str, Any]]:
+    diagnostics = getattr(provider, "diagnostics", None)
+    if not callable(diagnostics):
+        return []
+    try:
+        report = diagnostics()
+    except Exception as exc:
+        return [
+            _check(
+                f"{name} diagnostics",
+                "warn",
+                _safe_error(exc),
+                remediation="Review provider configuration and logs.",
+            )
+        ]
+    if not isinstance(report, dict):
+        return []
+
+    checks: list[dict[str, Any]] = []
+    for item in report.get("checks", []) or []:
+        if not isinstance(item, dict):
+            continue
+        check_name = item.get("name", "diagnostic")
+        checks.append(
+            _check(
+                f"{name} {check_name}",
+                str(item.get("status", "warn")),
+                item.get("summary", ""),
+                remediation=item.get("remediation"),
+            )
+        )
+    return checks
 
 
 def _tool_section(tool_registry: ToolRegistry | None) -> dict[str, Any]:

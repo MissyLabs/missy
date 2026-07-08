@@ -8,10 +8,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pydantic import BaseModel
 
+import missy.policy.engine as engine_module
 from missy.agent.structured_output import OutputSchema
-from missy.config.settings import ProviderConfig
+from missy.config.settings import ProviderConfig, get_default_config
 from missy.core.events import event_bus
 from missy.core.exceptions import ProviderError
+from missy.policy.engine import init_policy_engine
 from missy.providers.base import Message
 from missy.providers.openai_provider import OpenAIProvider
 
@@ -65,6 +67,72 @@ class TestOpenAIAvailability:
     def test_available_with_env_key(self):
         p = OpenAIProvider(_make_config(api_key=None))
         assert p.is_available() is True
+
+
+class TestOpenAIDiagnostics:
+    def setup_method(self):
+        self._original_engine = engine_module._engine
+
+    def teardown_method(self):
+        engine_module._engine = self._original_engine
+
+    def test_diagnostics_report_redacted_key_source_and_openai_policy(self):
+        cfg = get_default_config()
+        cfg.network.allowed_hosts = ["api.openai.com"]
+        init_policy_engine(cfg)
+
+        secret = "sk-test-diagnostic-secret-abcdefghijklmnopqrstuvwxyz"
+        p = OpenAIProvider(_make_config(api_key=secret, model="auto"))
+
+        report = p.diagnostics()
+        rendered = str(report)
+
+        assert report["provider"] == "openai"
+        assert secret not in rendered
+        assert any(
+            check["name"] == "credential" and check["summary"] == "configured via config"
+            for check in report["checks"]
+        )
+        assert any(
+            check["name"] == "network_policy" and check["status"] == "ok"
+            for check in report["checks"]
+        )
+        assert any(
+            check["name"] == "capabilities" and check["summary"]["structured_output"] is True
+            for check in report["checks"]
+        )
+
+    def test_diagnostics_warn_on_missing_custom_endpoint_allowlist(self):
+        cfg = get_default_config()
+        cfg.network.allowed_hosts = ["api.openai.com"]
+        cfg.network.allowed_domains = []
+        cfg.network.provider_allowed_hosts = []
+        init_policy_engine(cfg)
+
+        p = OpenAIProvider(
+            _make_config(
+                api_key=None,
+                base_url="https://token:secret@example.invalid/openai/v1?api_key=bad",
+            )
+        )
+
+        report = p.diagnostics()
+        rendered = str(report)
+
+        assert "token:secret" not in rendered
+        assert "api_key=bad" not in rendered
+        assert any(
+            check["name"] == "endpoint"
+            and check["summary"]["host"] == "example.invalid"
+            and check["summary"]["base_url_override"] is True
+            for check in report["checks"]
+        )
+        assert any(
+            check["name"] == "network_policy"
+            and check["status"] == "warn"
+            and "example.invalid" in check["summary"]
+            for check in report["checks"]
+        )
 
 
 class TestOpenAIComplete:

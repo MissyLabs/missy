@@ -119,6 +119,12 @@ send the schema through `text.format`; Chat Completions compatibility calls
 send the equivalent `response_format` payload.  Missy's existing Pydantic
 validation and retry loop still validates the returned content.
 
+`missy doctor` and the Web/API diagnostics endpoint include OpenAI-specific
+local checks for SDK installation, credential source, endpoint host, network
+policy posture, model selection, timeout/rate-limit settings, and supported
+capabilities. These checks do not make live OpenAI API calls and never include
+the configured API key or full `base_url` value in diagnostic output.
+
 **Default model**: `auto` (detects the best available current OpenAI chat model)
 
 **Required environment variable**: `OPENAI_API_KEY`

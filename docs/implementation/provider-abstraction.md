@@ -102,6 +102,21 @@ that do not override it keep Missy's generic prompt-and-validate behavior.  The
 OpenAI provider uses this hook to request native JSON Schema enforcement while
 keeping the agent-layer structured-output code provider-neutral.
 
+## Optional Diagnostics Hook
+
+Providers may implement:
+
+```python
+def diagnostics(self) -> dict[str, Any]:
+    ...
+```
+
+The diagnostics hook returns a redacted, local-only health snapshot for CLI and
+Web/API operator views. It should not make live provider calls. The default
+implementation reports availability; concrete providers can add checks for SDK
+installation, credential source, endpoint/network policy posture, model
+selection, rate limits, and supported capabilities.
+
 ---
 
 ## Anthropic Provider Implementation
