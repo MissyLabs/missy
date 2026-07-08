@@ -1,15 +1,18 @@
 # TEST_EDGE_CASES
 
-- Timestamp: 2026-07-08 11:42:04
+- Timestamp: 2026-07-08 13:29:18 EDT
 
-Current edge-case focus:
-- Web TUI auth/session handling cannot be bypassed
-- audit log browser filters correctly and redacts secrets
-- destructive actions require explicit confirmation and policy
-- dashboard handles empty/loading/error states
-- session viewer handles streaming, tool calls, failures, and costs
-- provider/tool/channel controls enforce server-side policy
-- frontend remains responsive on desktop and mobile
-- UI APIs reject CSRF/XSS/path traversal style attacks where relevant
-- diagnostics views do not leak tokens, secrets, or unsafe paths
-- future overhaul compatibility for Discord, tools, scheduling, and provider routing
+Current OpenAI provider edge-case focus:
+
+- OpenAI user content lists preserve safe text and image blocks.
+- Unsafe OpenAI image URL schemes are stripped before provider invocation.
+- Assistant tool calls with missing IDs or names are removed.
+- Duplicate tool-call IDs are removed before request submission.
+- Tool-result messages without a pending assistant tool call are dropped.
+- Transcript repair emits structured audit events with correlation IDs.
+- Malformed provider responses still produce safe `CompletionResponse` values
+  or `ProviderError` failures.
+- Streaming must reconcile delta chunks, full content, tool-call deltas,
+  partial streams, and provider-side validation errors.
+- Responses API migration must not leak OpenAI-only message assumptions into
+  Anthropic, Ollama, Codex, or ACPX providers.

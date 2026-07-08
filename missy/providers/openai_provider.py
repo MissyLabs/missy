@@ -24,6 +24,7 @@ import logging
 import os
 from collections.abc import Iterator
 from typing import Any
+from urllib.parse import urlparse
 
 from missy.config.settings import ProviderConfig
 from missy.core.exceptions import ProviderError
@@ -60,6 +61,7 @@ _NON_CHAT_MODEL_MARKERS = (
     "transcribe",
     "whisper",
 )
+_IMAGE_DETAIL_VALUES = {"auto", "low", "high"}
 
 try:
     import openai as _openai_sdk
@@ -90,6 +92,7 @@ class OpenAIProvider(BaseProvider):
         self._timeout: int = config.timeout
         self._client: Any | None = None
         self._resolved_model: str | None = None
+        self._last_transcript_repairs: list[dict[str, Any]] = []
 
     @property
     def api_key(self) -> str | None:
@@ -229,19 +232,137 @@ class OpenAIProvider(BaseProvider):
         call_kwargs.update(kwargs)
 
     @staticmethod
-    def _message_to_chat_payload(message: Message | dict[str, Any]) -> dict[str, Any] | None:
+    def _normalize_text_content(content: Any) -> str:
+        """Return the textual parts of *content* without preserving rich blocks."""
+        if content is None:
+            return ""
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            text_parts: list[str] = []
+            for part in content:
+                if isinstance(part, dict) and part.get("type") in {"text", "input_text"}:
+                    text = part.get("text")
+                    if text is not None:
+                        text_parts.append(str(text))
+                elif isinstance(part, str):
+                    text_parts.append(part)
+            return "\n".join(text_parts)
+        return str(content)
+
+    @staticmethod
+    def _is_safe_image_url(url: str) -> bool:
+        """Return whether *url* is safe to forward as OpenAI image input."""
+        if url.startswith("data:image/") and ";base64," in url:
+            return True
+        parsed = urlparse(url)
+        return parsed.scheme == "https" and bool(parsed.netloc)
+
+    def _normalize_user_content(self, content: Any) -> str | list[dict[str, Any]]:
+        """Normalize user content, preserving safe OpenAI text/image blocks."""
+        if not isinstance(content, list):
+            return self._normalize_text_content(content)
+
+        normalized: list[dict[str, Any]] = []
+        for part in content:
+            if isinstance(part, str):
+                normalized.append({"type": "text", "text": part})
+                continue
+            if not isinstance(part, dict):
+                self._record_transcript_repair("drop_unsupported_user_content_part")
+                continue
+
+            part_type = str(part.get("type", ""))
+            if part_type in {"text", "input_text"}:
+                text = part.get("text")
+                if text is not None:
+                    normalized.append({"type": "text", "text": str(text)})
+                else:
+                    self._record_transcript_repair("drop_empty_text_part")
+                continue
+
+            if part_type in {"image_url", "input_image"}:
+                image_url = part.get("image_url")
+                if isinstance(image_url, dict):
+                    url = image_url.get("url") or part.get("url")
+                    detail = image_url.get("detail", part.get("detail", "auto"))
+                else:
+                    url = image_url or part.get("url")
+                    detail = part.get("detail", "auto")
+
+                url_text = str(url or "")
+                detail_text = str(detail or "auto")
+                if detail_text not in _IMAGE_DETAIL_VALUES:
+                    detail_text = "auto"
+                if self._is_safe_image_url(url_text):
+                    normalized.append(
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": url_text, "detail": detail_text},
+                        }
+                    )
+                else:
+                    self._record_transcript_repair("drop_unsafe_image_url")
+                continue
+
+            self._record_transcript_repair("drop_unsupported_user_content_part")
+
+        if not normalized:
+            self._record_transcript_repair("empty_user_content_after_normalization")
+            return ""
+        return normalized
+
+    def _record_transcript_repair(self, reason: str, **detail: Any) -> None:
+        """Remember a transcript repair for later audit emission."""
+        repair = {"reason": reason}
+        repair.update({k: v for k, v in detail.items() if v is not None})
+        self._last_transcript_repairs.append(repair)
+
+    def _emit_transcript_repairs(self, session_id: str = "", task_id: str = "") -> None:
+        """Publish provider-turn repair audit events for the latest payload."""
+        if not self._last_transcript_repairs:
+            return
+        repairs = list(self._last_transcript_repairs)
+        self._last_transcript_repairs = []
+        try:
+            from missy.core.events import AuditEvent, event_bus
+
+            event = AuditEvent.now(
+                session_id=session_id,
+                task_id=task_id,
+                event_type="provider_transcript_repair",
+                category="provider",
+                result="allow",
+                detail={"provider": self.name, "model": self._model, "repairs": repairs},
+            )
+            event_bus.publish(event)
+        except Exception:
+            logger.exception("Failed to emit OpenAI transcript repair audit event")
+
+    def _message_to_chat_payload(
+        self,
+        message: Message | dict[str, Any],
+    ) -> dict[str, Any] | None:
         """Convert Missy's message shape to OpenAI Chat Completions format."""
         if isinstance(message, Message):
-            return {"role": message.role, "content": message.content}
+            if message.role == "user":
+                return {
+                    "role": message.role,
+                    "content": self._normalize_user_content(message.content),
+                }
+            return {"role": message.role, "content": self._normalize_text_content(message.content)}
 
         role = str(message.get("role", ""))
         if role in {"system", "user"}:
-            return {"role": role, "content": str(message.get("content", ""))}
+            content = message.get("content", "")
+            if role == "user":
+                return {"role": role, "content": self._normalize_user_content(content)}
+            return {"role": role, "content": self._normalize_text_content(content)}
 
         if role == "assistant":
             payload: dict[str, Any] = {
                 "role": "assistant",
-                "content": str(message.get("content", "") or ""),
+                "content": self._normalize_text_content(message.get("content", "")),
             }
             tool_calls = message.get("tool_calls") or []
             if tool_calls:
@@ -285,7 +406,10 @@ class OpenAIProvider(BaseProvider):
         system: str = "",
     ) -> list[dict[str, Any]]:
         """Build a Chat Completions-compatible message list."""
+        self._last_transcript_repairs = []
         api_messages: list[dict[str, Any]] = []
+        pending_tool_call_ids: set[str] = set()
+        emitted_tool_call_ids: set[str] = set()
         has_system = any(
             (msg.role if isinstance(msg, Message) else msg.get("role")) == "system"
             for msg in messages
@@ -295,6 +419,39 @@ class OpenAIProvider(BaseProvider):
         for msg in messages:
             payload = self._message_to_chat_payload(msg)
             if payload is not None:
+                if payload["role"] == "assistant" and payload.get("tool_calls"):
+                    valid_tool_calls: list[dict[str, Any]] = []
+                    for call in payload["tool_calls"]:
+                        call_id = str(call.get("id", ""))
+                        function = call.get("function") if isinstance(call, dict) else None
+                        name = function.get("name") if isinstance(function, dict) else ""
+                        if not call_id or not name:
+                            self._record_transcript_repair("drop_invalid_assistant_tool_call")
+                            continue
+                        if call_id in emitted_tool_call_ids:
+                            self._record_transcript_repair(
+                                "drop_duplicate_assistant_tool_call",
+                                tool_call_id=call_id,
+                            )
+                            continue
+                        valid_tool_calls.append(call)
+                        pending_tool_call_ids.add(call_id)
+                        emitted_tool_call_ids.add(call_id)
+                    if valid_tool_calls:
+                        payload["tool_calls"] = valid_tool_calls
+                    else:
+                        payload.pop("tool_calls", None)
+
+                if payload["role"] == "tool":
+                    tool_call_id = str(payload.get("tool_call_id", ""))
+                    if tool_call_id not in pending_tool_call_ids:
+                        self._record_transcript_repair(
+                            "drop_orphan_tool_result",
+                            tool_call_id=tool_call_id,
+                        )
+                        continue
+                    pending_tool_call_ids.remove(tool_call_id)
+
                 api_messages.append(payload)
         return api_messages
 
@@ -325,6 +482,7 @@ class OpenAIProvider(BaseProvider):
         task_id = kwargs.pop("task_id", "")
         model = self._resolve_model(kwargs.pop("model", self._model))
         api_messages = self._messages_to_chat_payload(messages)
+        self._emit_transcript_repairs(session_id, task_id)
 
         call_kwargs: dict[str, Any] = {
             "model": model,
@@ -458,6 +616,7 @@ class OpenAIProvider(BaseProvider):
         # Build message list; inject system prompt if provided
         model = self._resolve_model(self._model)
         api_messages = self._messages_to_chat_payload(messages, system=system)
+        self._emit_transcript_repairs()
 
         call_kwargs: dict[str, Any] = {
             "model": model,

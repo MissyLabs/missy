@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from missy.config.settings import ProviderConfig
+from missy.core.events import event_bus
 from missy.core.exceptions import ProviderError
 from missy.providers.base import Message
 from missy.providers.openai_provider import OpenAIProvider
@@ -207,6 +208,12 @@ class TestOpenAIToolSchema:
 
 
 class TestOpenAIMessagePayload:
+    def setup_method(self):
+        event_bus.clear()
+
+    def teardown_method(self):
+        event_bus.clear()
+
     def test_runtime_tool_messages_are_converted_to_openai_shape(self):
         p = OpenAIProvider(_make_config())
         messages = [
@@ -234,6 +241,96 @@ class TestOpenAIMessagePayload:
             "function": {"name": "calc", "arguments": '{"expr": "1+1"}'},
         }
         assert payload[3] == {"role": "tool", "tool_call_id": "call_1", "content": "2"}
+
+    def test_vision_message_preserves_safe_openai_image_parts(self):
+        p = OpenAIProvider(_make_config())
+        payload = p._messages_to_chat_payload(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "data:image/png;base64,abc123",
+                                "detail": "high",
+                            },
+                        },
+                        {"type": "text", "text": "describe"},
+                    ],
+                }
+            ]
+        )
+        assert payload == [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "data:image/png;base64,abc123",
+                            "detail": "high",
+                        },
+                    },
+                    {"type": "text", "text": "describe"},
+                ],
+            }
+        ]
+
+    def test_unsafe_image_url_is_removed_from_openai_payload(self):
+        p = OpenAIProvider(_make_config())
+        payload = p._messages_to_chat_payload(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "file:///etc/passwd"},
+                        },
+                        {"type": "text", "text": "describe"},
+                    ],
+                }
+            ]
+        )
+        assert payload == [{"role": "user", "content": [{"type": "text", "text": "describe"}]}]
+        assert p._last_transcript_repairs == [{"reason": "drop_unsafe_image_url"}]
+
+    @patch("missy.providers.openai_provider._openai_sdk")
+    @patch("missy.providers.openai_provider._OPENAI_AVAILABLE", True)
+    def test_orphan_tool_result_is_repaired_and_audited(self, mock_sdk):
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content="repaired", tool_calls=None),
+                    finish_reason="stop",
+                )
+            ],
+            model="gpt-4o",
+            usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            model_dump=dict,
+        )
+        mock_sdk.OpenAI.return_value = mock_client
+
+        p = OpenAIProvider(_make_config())
+        p.complete(
+            [
+                {"role": "user", "content": "hi"},
+                {"role": "tool", "tool_call_id": "missing", "content": "orphan"},
+            ],
+            session_id="sess-openai",
+            task_id="task-openai",
+        )
+
+        call_kwargs = mock_client.chat.completions.create.call_args[1]
+        assert call_kwargs["messages"] == [{"role": "user", "content": "hi"}]
+        events = event_bus.get_events(event_type="provider_transcript_repair")
+        assert len(events) == 1
+        assert events[0].session_id == "sess-openai"
+        assert events[0].detail["repairs"] == [
+            {"reason": "drop_orphan_tool_result", "tool_call_id": "missing"}
+        ]
 
 
 class TestOpenAICompleteWithTools:
