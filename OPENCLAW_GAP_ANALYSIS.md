@@ -1,6 +1,6 @@
 # OpenClaw Gap Analysis
 
-Last updated: 2026-07-08 10:19:19 EDT
+Last updated: 2026-07-08 10:38:28 EDT
 
 ## Current Focus
 
@@ -20,9 +20,9 @@ remains clean-room and Python-native.
 | Audit log browser | improved | `/api/v1/audit` supports filters, facets, file/memory sources, redaction, IDs, totals, offsets, and `has_more`; UI has filters, pagination, and details. |
 | Diagnostics/doctor views | improved | `/api/v1/diagnostics` covers Web, providers, tools, memory, policy, gateway, Discord, scheduler, runtime, and remediation hints. |
 | Safe operator controls | started | `/api/v1/controls` lists controls; `provider.set_default` is confirmed, validated, CSRF-protected for browser sessions, and audited. |
-| Responsive/accessibility coverage | partial | CSS is responsive; browser/visual tests still needed. |
+| Responsive/accessibility coverage | partial | CSS is responsive; renderer tests cover hooks and escaping; browser/visual tests still needed. |
 | Backend Web TUI security | improved | Auth, CSRF, rate limit, hardened headers, audit events, redaction, XSS-resistant dashboard rendering, and redacted audit search are in place. |
-| Renderer/assets architecture | started | Login/message rendering and CSS moved to `missy/api/web_console.py`; main console HTML/JS still needs extraction. |
+| Renderer/assets architecture | improved | Login, message, console shell, CSS, and JavaScript are now in `missy/api/web_console.py`; server routing is thinner. |
 
 ## OpenClaw Pattern Status
 
@@ -44,6 +44,5 @@ remains clean-room and Python-native.
 
 ## Recommended Next Slice
 
-Extract the main Web TUI console HTML/JavaScript out of `missy/api/server.py`,
-then add the next safe controls slice for tools or scheduler jobs with explicit
-policy gates, confirmation text, denial audit events, and focused API tests.
+Add the next safe controls slice for tools or scheduler jobs with explicit
+policy gates, confirmation text, denial audit events, and focused API/UI tests.
