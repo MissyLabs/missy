@@ -42,6 +42,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlparse
 
+from missy.core.events import AuditEvent, event_bus
+
 if TYPE_CHECKING:
     from missy.agent.runtime import AgentRuntime
     from missy.memory.sqlite_store import SQLiteMemoryStore
@@ -64,6 +66,18 @@ _MAX_REQUEST_BYTES = 1_048_576
 _RATE_WINDOW_SECONDS = 60
 # Maximum IPs tracked before evicting stale entries.
 _MAX_TRACKED_IPS = 10_000
+_AUDIT_SENSITIVE_KEYS = {
+    "api_key",
+    "apikey",
+    "authorization",
+    "cookie",
+    "csrf",
+    "csrf_token",
+    "key",
+    "password",
+    "secret",
+    "token",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -326,6 +340,15 @@ def _make_handler(
                 provided = self.headers.get("X-CSRF-Token", "")
                 expected = web_session.csrf_token if web_session is not None else ""
                 if not provided or not hmac.compare_digest(provided, expected):
+                    self._emit_web_audit(
+                        event_type="web.csrf",
+                        result="deny",
+                        action="api_csrf_check",
+                        subsystem="security",
+                        severity="warning",
+                        path=path,
+                        method=method,
+                    )
                     self._send_json(*ApiResponse.error("CSRF token required", 403))
                     return
 
@@ -404,6 +427,8 @@ def _make_handler(
                 return self._handle_list_providers()
             if method == "GET" and path == f"{_API_PREFIX}/tools":
                 return self._handle_list_tools()
+            if method == "GET" and path == f"{_API_PREFIX}/audit":
+                return self._handle_audit_events(params)
             if method == "GET" and path == f"{_API_PREFIX}/memory/search":
                 return self._handle_memory_search(params)
 
@@ -554,10 +579,25 @@ def _make_handler(
             provided = body.get("api_key", "")
             expected = api_config.api_key
             if not expected or not provided or not hmac.compare_digest(provided, expected):
+                self._emit_web_audit(
+                    event_type="web.login",
+                    result="deny",
+                    action="login",
+                    subsystem="auth",
+                    severity="warning",
+                    reason="invalid_key",
+                )
                 self._redirect("/login?error=1")
                 return
 
             session = web_sessions.create()
+            self._emit_web_audit(
+                event_type="web.login",
+                result="allow",
+                action="login",
+                subsystem="auth",
+                severity="info",
+            )
             cookie = self._make_cookie(api_config.web_cookie_name, session.token)
             self._redirect("/", extra_headers={"Set-Cookie": cookie})
 
@@ -570,6 +610,14 @@ def _make_handler(
                 or not provided
                 or not hmac.compare_digest(provided, session.csrf_token)
             ):
+                self._emit_web_audit(
+                    event_type="web.logout",
+                    result="deny",
+                    action="logout",
+                    subsystem="auth",
+                    severity="warning",
+                    reason="csrf_required",
+                )
                 self._send_html(
                     403,
                     self._render_message(
@@ -578,6 +626,13 @@ def _make_handler(
                 )
                 return
             web_sessions.revoke(token)
+            self._emit_web_audit(
+                event_type="web.logout",
+                result="allow",
+                action="logout",
+                subsystem="auth",
+                severity="info",
+            )
             self._redirect(
                 "/login",
                 extra_headers={
@@ -607,6 +662,37 @@ def _make_handler(
             if max_age is not None:
                 morsel[name]["max-age"] = str(max_age)
             return morsel.output(header="").strip()
+
+        def _emit_web_audit(
+            self,
+            *,
+            event_type: str,
+            result: str,
+            action: str,
+            subsystem: str,
+            severity: str,
+            **detail: Any,
+        ) -> None:
+            safe_detail = {
+                "actor": "operator",
+                "source": "web_tui",
+                "subsystem": subsystem,
+                "action": action,
+                "severity": severity,
+                "remote_addr": self.client_address[0],
+                **detail,
+            }
+            with contextlib.suppress(Exception):
+                event_bus.publish(
+                    AuditEvent.now(
+                        session_id="web",
+                        task_id="-",
+                        event_type=event_type,
+                        category="channel",
+                        result=result,  # type: ignore[arg-type]
+                        detail=_redact_audit_value(safe_detail),
+                    )
+                )
 
         def _render_login(self, *, error: bool = False) -> str:
             error_html = (
@@ -677,6 +763,13 @@ def _make_handler(
       <article class="panel"><div class="panel-head"><h3>Providers</h3><span id="provider-health" class="pill">Loading</span></div><div id="providers" class="list"></div></article>
       <article class="panel"><div class="panel-head"><h3>Tools</h3><span id="tool-health" class="pill">Loading</span></div><div id="tools" class="list"></div></article>
       <article class="panel"><div class="panel-head"><h3>Sessions</h3><span class="pill">Recent</span></div><div id="sessions" class="list"></div></article>
+      <article class="panel"><div class="panel-head"><h3>Audit Trail</h3><span id="audit-health" class="pill">Loading</span></div>
+        <div class="filter-row" aria-label="Audit filters">
+          <select id="audit-result" aria-label="Audit result"><option value="">All results</option><option value="deny">Denied</option><option value="allow">Allowed</option><option value="error">Errors</option></select>
+          <select id="audit-subsystem" aria-label="Audit subsystem"><option value="">All subsystems</option><option value="auth">Auth</option><option value="security">Security</option><option value="network">Network</option><option value="tool">Tools</option><option value="provider">Providers</option></select>
+        </div>
+        <div id="audit" class="list"></div>
+      </article>
       <article class="panel"><div class="panel-head"><h3>Security</h3><span class="pill secure">Local</span></div><div class="list">
         <div class="row"><strong>Authentication</strong><span>Cookie session + API key</span></div>
         <div class="row"><strong>CSRF</strong><span>Required for browser actions</span></div>
@@ -699,13 +792,24 @@ async function api(path, options = {{}}) {{
 }}
 function setText(id, value) {{ document.getElementById(id).textContent = value; }}
 function empty(label) {{ return `<div class="empty">${{label}}</div>`; }}
+function esc(value) {{
+  return String(value ?? '').replace(/[&<>"']/g, char => ({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[char]));
+}}
 function renderRows(id, rows, fallback) {{
   document.getElementById(id).innerHTML = rows.length ? rows.join('') : empty(fallback);
 }}
+function auditPath() {{
+  const params = new URLSearchParams({{limit: '8'}});
+  const result = document.getElementById('audit-result').value;
+  const subsystem = document.getElementById('audit-subsystem').value;
+  if (result) params.set('result', result);
+  if (subsystem) params.set('subsystem', subsystem);
+  return '/audit?' + params.toString();
+}}
 async function loadConsole() {{
   try {{
-    const [status, providers, tools, sessions] = await Promise.all([
-      api('/status'), api('/providers'), api('/tools'), api('/sessions?limit=8')
+    const [status, providers, tools, sessions, audit] = await Promise.all([
+      api('/status'), api('/providers'), api('/tools'), api('/sessions?limit=8'), api(auditPath())
     ]);
     const s = status.data;
     setText('runtime-status', 'Runtime online');
@@ -714,14 +818,21 @@ async function loadConsole() {{
     setText('tool-count', s.tool_count || 0);
     setText('session-count', s.session_count || 0);
     setText('memory-state', s.memory && s.memory.has_memory ? 'On' : 'Idle');
-    const providerRows = providers.data.providers.map(p => `<div class="row"><strong>${{p.name}}</strong><span class="${{p.available ? 'ok' : 'warn'}}">${{p.available ? 'available' : 'offline'}}${{p.is_default ? ' / default' : ''}}</span></div>`);
+    const providerRows = providers.data.providers.map(p => `<div class="row"><strong>${{esc(p.name)}}</strong><span class="${{p.available ? 'ok' : 'warn'}}">${{p.available ? 'available' : 'offline'}}${{p.is_default ? ' / default' : ''}}</span></div>`);
     renderRows('providers', providerRows, 'No providers registered.');
     setText('provider-health', providerRows.length ? 'Ready' : 'Empty');
-    const toolRows = tools.data.tools.slice(0, 12).map(t => `<div class="row"><strong>${{t.name}}</strong><span>${{t.description || 'No description'}}</span></div>`);
+    const toolRows = tools.data.tools.slice(0, 12).map(t => `<div class="row"><strong>${{esc(t.name)}}</strong><span>${{esc(t.description || 'No description')}}</span></div>`);
     renderRows('tools', toolRows, 'No tools registered.');
     setText('tool-health', `${{tools.data.tools.length}} total`);
-    const sessionRows = sessions.data.sessions.map(s => `<div class="row"><strong>${{s.name || s.session_id.slice(0, 8)}}</strong><span>${{s.provider || 'provider unset'}} / ${{s.turn_count}} turns</span></div>`);
+    const sessionRows = sessions.data.sessions.map(s => `<div class="row"><strong>${{esc(s.name || s.session_id.slice(0, 8))}}</strong><span>${{esc(s.provider || 'provider unset')}} / ${{s.turn_count}} turns</span></div>`);
     renderRows('sessions', sessionRows, 'No API sessions yet.');
+    const auditRows = audit.data.events.map(e => {{
+      const d = e.detail || {{}};
+      const resultClass = e.result === 'deny' || e.result === 'error' ? 'warn' : 'ok';
+      return `<div class="row audit-row"><strong>${{esc(d.subsystem || e.category)}} / ${{esc(d.action || e.event_type)}}</strong><span class="${{resultClass}}">${{esc(e.result)}} &middot; ${{esc(d.severity || 'info')}} &middot; ${{esc(e.timestamp || '')}}</span></div>`;
+    }});
+    renderRows('audit', auditRows, 'No audit events match these filters.');
+    setText('audit-health', `${{audit.data.count}} shown`);
   }} catch (error) {{
     setText('runtime-status', 'Console degraded');
     setText('runtime-summary', error.message);
@@ -731,6 +842,8 @@ document.getElementById('logout').addEventListener('click', async () => {{
   await fetch('/logout', {{method: 'POST', headers: {{'X-CSRF-Token': csrf}}, credentials: 'same-origin'}});
   window.location = '/login';
 }});
+document.getElementById('audit-result').addEventListener('change', loadConsole);
+document.getElementById('audit-subsystem').addEventListener('change', loadConsole);
 loadConsole();
 setInterval(loadConsole, 15000);
   </script>
@@ -749,8 +862,10 @@ button,.button-link{border:1px solid #3b82f6;background:#1d4ed8;color:white;bord
 .status-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.75rem}.status-grid article{background:#0f172a;border:1px solid var(--line);border-radius:8px;padding:.9rem}.status-grid span{display:block;font-size:1.8rem;font-weight:800}.status-grid p{color:var(--muted);font-size:.85rem}
 .panel-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem}.panel-head{display:flex;align-items:center;justify-content:space-between;gap:.75rem;margin-bottom:.75rem}.pill{border:1px solid var(--line);border-radius:999px;padding:.25rem .55rem;color:var(--muted);font-size:.78rem}.pill.secure{color:var(--ok);border-color:#2f6f48}
 .list{display:grid;gap:.5rem}.row{display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;border-top:1px solid var(--line);padding:.7rem 0}.row:first-child{border-top:0}.row strong{min-width:0;overflow-wrap:anywhere}.row span{color:var(--muted);text-align:right;overflow-wrap:anywhere}.ok{color:var(--ok)!important}.warn{color:var(--warn)!important}.empty{border:1px dashed var(--line);border-radius:8px;color:var(--muted);padding:1rem;text-align:center}
+.filter-row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.5rem;margin-bottom:.5rem}.filter-row select{min-width:0;border:1px solid var(--line);background:#0f172a;color:var(--text);border-radius:8px;padding:.6rem}.audit-row span{font-size:.82rem}
 .login-body{display:grid;place-items:center;padding:1rem}.login-panel{width:min(440px,100%);background:rgba(18,26,46,.96);border:1px solid var(--line);border-radius:8px;padding:1.25rem;box-shadow:0 20px 60px rgba(0,0,0,.32)}.brand-mark{width:3rem;height:3rem;display:grid;place-items:center;border-radius:8px;background:#1d4ed8;font-weight:900;margin-bottom:1rem}.login-panel form{display:grid;gap:.75rem;margin-top:1rem}.login-panel label{font-weight:700}.login-panel input{width:100%;border:1px solid var(--line);background:#0f172a;color:var(--text);border-radius:8px;padding:.8rem}.error{color:var(--bad);margin-top:.75rem}
 @media (max-width:820px){.hero,.panel-grid{grid-template-columns:1fr}.status-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.topbar{position:static;align-items:flex-start}.row{display:grid}.row span{text-align:left}}
+@media (max-width:520px){.filter-row{grid-template-columns:1fr}}
 """
 
         # ----------------------------------------------------------------
@@ -848,6 +963,78 @@ button,.button-link{border:1px solid #3b82f6;background:#1d4ed8;color:white;bord
             except Exception as exc:
                 logger.warning("Error listing tools: %s", exc)
             return ApiResponse.ok({"tools": result})
+
+        def _handle_audit_events(self, params: dict) -> tuple[int, dict]:
+            """GET /api/v1/audit — browse redacted audit events with filters."""
+            try:
+                limit = max(1, min(int(params.get("limit", 50)), 500))
+            except (ValueError, TypeError):
+                limit = 50
+
+            scan_limit = max(limit * 10, 200)
+            source = "memory"
+            try:
+                from missy.observability.audit_logger import get_audit_logger
+
+                events = get_audit_logger().get_recent_events(limit=scan_limit)
+                source = "file"
+            except Exception:
+                events = [_event_to_record(event) for event in event_bus.get_events()]
+                events = events[-scan_limit:]
+
+            filtered = [
+                _redact_audit_value(event)
+                for event in events
+                if _audit_record_matches(event, params)
+            ]
+            filtered = filtered[-limit:]
+
+            facets: dict[str, dict[str, int]] = {
+                "category": {},
+                "result": {},
+                "severity": {},
+                "subsystem": {},
+            }
+            for event in filtered:
+                detail = event.get("detail") if isinstance(event.get("detail"), dict) else {}
+                values = {
+                    "category": event.get("category"),
+                    "result": event.get("result"),
+                    "severity": detail.get("severity"),
+                    "subsystem": detail.get("subsystem") or event.get("category"),
+                }
+                for key, value in values.items():
+                    if value:
+                        value_s = str(value)
+                        facets[key][value_s] = facets[key].get(value_s, 0) + 1
+
+            return ApiResponse.ok(
+                {
+                    "events": filtered,
+                    "count": len(filtered),
+                    "source": source,
+                    "filters": {
+                        key: params[key]
+                        for key in (
+                            "q",
+                            "event_type",
+                            "category",
+                            "result",
+                            "session_id",
+                            "task_id",
+                            "severity",
+                            "actor",
+                            "source",
+                            "subsystem",
+                            "action",
+                            "since",
+                            "until",
+                        )
+                        if params.get(key)
+                    },
+                    "facets": facets,
+                }
+            )
 
         def _handle_chat(self, body: dict) -> tuple[int, dict]:
             """POST /api/v1/chat — send a message to the agent and get a reply.
@@ -1084,6 +1271,73 @@ def _evict_stale(tracker: dict, cutoff: float) -> None:
     stale = [ip for ip, ts in tracker.items() if not ts or all(t <= cutoff for t in ts)]
     for ip in stale:
         del tracker[ip]
+
+
+def _redact_audit_value(value: Any, *, key: str = "") -> Any:
+    """Return a copy of an audit value with credential material removed."""
+    key_l = key.lower()
+    if any(marker in key_l for marker in _AUDIT_SENSITIVE_KEYS):
+        return "[REDACTED]"
+    if isinstance(value, dict):
+        return {str(k): _redact_audit_value(v, key=str(k)) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redact_audit_value(item) for item in value]
+    if isinstance(value, tuple):
+        return [_redact_audit_value(item) for item in value]
+    if isinstance(value, str):
+        try:
+            from missy.security.secrets import secrets_detector
+
+            return secrets_detector.redact(value)
+        except Exception:
+            return value
+    return value
+
+
+def _audit_record_matches(record: dict[str, Any], params: dict[str, Any]) -> bool:
+    detail = record.get("detail") if isinstance(record.get("detail"), dict) else {}
+    exact_filters = {
+        "event_type": record.get("event_type"),
+        "category": record.get("category"),
+        "result": record.get("result"),
+        "session_id": record.get("session_id"),
+        "task_id": record.get("task_id"),
+        "severity": detail.get("severity"),
+        "actor": detail.get("actor"),
+        "source": detail.get("source"),
+        "subsystem": detail.get("subsystem") or record.get("category"),
+        "action": detail.get("action") or record.get("event_type"),
+    }
+    for param, value in exact_filters.items():
+        wanted = params.get(param)
+        if wanted and str(value or "").lower() != str(wanted).lower():
+            return False
+
+    query = str(params.get("q") or "").strip().lower()
+    if query:
+        haystack = json.dumps(record, sort_keys=True, default=str).lower()
+        if query not in haystack:
+            return False
+
+    timestamp = str(record.get("timestamp") or "")
+    since = str(params.get("since") or "")
+    until = str(params.get("until") or "")
+    if since and timestamp < since:
+        return False
+    return not (until and timestamp > until)
+
+
+def _event_to_record(event: AuditEvent) -> dict[str, Any]:
+    return {
+        "timestamp": event.timestamp.isoformat(),
+        "session_id": event.session_id,
+        "task_id": event.task_id,
+        "event_type": event.event_type,
+        "category": event.category,
+        "result": event.result,
+        "detail": event.detail,
+        "policy_rule": event.policy_rule,
+    }
 
 
 # ---------------------------------------------------------------------------
