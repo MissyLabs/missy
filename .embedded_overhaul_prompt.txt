@@ -25,59 +25,58 @@ MANDATORY START OF EACH SESSION
 
 CURRENT PRIMARY FOCUS
 
-complete web TUI and operator console overhaul.
+complete OpenAI provider overhaul.
 
-For the default Web TUI-focused run, this means a real, end-to-end overhaul of
-Missy's browser-based operator experience.
+For the default OpenAI-provider-focused run, this means a real, end-to-end
+overhaul of Missy's OpenAI provider implementation and every integration point
+that depends on it.
 
-Build a full Web TUI / operator console that is intuitive, secure, clean, and
-visually polished. Pretty matters. The interface should feel like a serious
-local AI operations product, not a debug page. It should be fast, readable,
-responsive, accessible, and useful from the first screen.
+The OpenAI provider must be correct, secure, observable, testable, and
+compatible with Missy's broader provider abstraction. It should support modern
+OpenAI API behavior through clean local abstractions without leaking OpenAI
+specific assumptions into unrelated providers.
 
-Use OpenClaw and Odin (https://github.com/Calmingstorm/Odin) as product and
-operator-experience references where appropriate, but implement clean-room
-Python/Missy-native behavior. Do not copy upstream code. Extract useful
-patterns: control-plane ergonomics, live status, sessions, tool visibility,
-auditability, diagnostics, run history, and clear operator controls.
+Required OpenAI provider capabilities include:
 
-Required Web TUI capabilities include:
-
-- secure local Web UI entrypoint with explicit authentication/session handling
-- polished dashboard for runtime status, providers, channels, tools, scheduler,
-  memory, security posture, and recent activity
-- session/run viewer with streaming output, tool calls, errors, costs, model
-  routing, provider fallback, and resumable context
-- audit log browser with filters, severity, actor/source, subsystem, action,
-  allow/deny result, timestamps, and redacted sensitive values
-- pretty, dense, scannable tool/provider/security panels
-- diagnostics/doctor views for Discord, providers, scheduler, tools, memory,
-  gateway, policy, and network posture where supported
-- safe controls for enabling/disabling providers, tools, scheduled jobs,
-  channels, and experimental features
-- responsive design for desktop and mobile without clipped text or broken
-  layouts
-- accessible colors, keyboard navigation, loading/empty/error states, and
-  clear destructive-action confirmations
-- backend APIs that enforce auth, policy, redaction, CSRF protections where
-  relevant, rate limits where appropriate, and structured audit events
-- tests for security, routing, UI API behavior, audit filtering, redaction, and
-  core Web TUI workflows
+- clear provider interface compliance with Missy's provider base classes
+- secure API key loading from environment or protected config, with redaction
+- strict network policy integration for OpenAI endpoints
+- model listing, model selection, and model capability metadata
+- chat/text response generation through the current preferred OpenAI API path
+- streaming responses with robust delta/full-content reconciliation
+- tool/function calling support with provider-specific schema normalization
+- structured output support where Missy's runtime supports it
+- image/vision input support where practical and safely modeled
+- embeddings support if the repo has memory/vector workflows that need it
+- retry, timeout, cancellation, and rate-limit handling
+- auth/profile fallback and cooldown behavior where the provider registry
+  supports it
+- cost/token accounting and usage reporting
+- provider diagnostics and doctor commands
+- compatibility tests with mocked OpenAI responses and error cases
+- transcript repair and provider-turn validation for OpenAI-specific message
+  constraints
+- audit events for provider invocation, denial, error, retry, fallback, and
+  usage/cost recording
+- safe handling of tool-call IDs, JSON schemas, malformed responses, partial
+  streams, network failures, and provider-side validation errors
 
 The overhaul should be architectural, not cosmetic. Prefer clear internal
 interfaces, explicit lifecycle management, robust error handling, policy-gated
 actions, structured audit events, and tests that prove behavior. If
 PRIMARY_FOCUS is changed for a later run, apply this same standard to that
-subsystem instead of forcing Web TUI work.
+subsystem instead of forcing OpenAI provider work.
 
 FLEXIBLE NEXT-FOCUS DESIGN
 
-This loop is not only for Web TUI work. Keep the implementation and status
-tracking flexible enough that a later primary focus can replace the UI, such as:
+This loop is not only for OpenAI provider work. Keep the implementation and
+status tracking flexible enough that a later primary focus can replace the
+provider, such as:
 
 - overhauling Discord integration
 - overhauling tool usage and automatic tool creation
 - overhauling task delegation to Ollama when a tool is tagged
+- overhauling the Web TUI and operator console
 - provider/model routing
 - tool policy and approval pipelines
 - scheduler and memory behavior
@@ -85,13 +84,13 @@ tracking flexible enough that a later primary focus can replace the UI, such as:
 - vision/audio workflows
 - gateway/control-plane reliability
 
-Do not hard-code Web TUI assumptions into unrelated subsystems unless the
-boundary is explicitly an API, view model, UI adapter, auth layer, or frontend
-asset.
+Do not hard-code OpenAI assumptions into unrelated subsystems unless the
+boundary is explicitly an OpenAI adapter, schema adapter, provider diagnostic,
+or provider capability record.
 
 SECONDARY OBJECTIVES
 
-Keep improving these while the Web TUI and operator console are primary:
+Keep improving these while the OpenAI provider is primary:
 
 - OpenClaw-style operator ergonomics and parity
 - local-first secure runtime
@@ -99,9 +98,9 @@ Keep improving these while the Web TUI and operator console are primary:
 - scheduling and recurring tasks
 - memory and session resume
 - tools, skills, plugins, and policy gates
-- audit log browsing, filtering, and redaction
-- secure local web APIs and auth/session handling
-- polished operator workflows and visual design
+- provider abstraction and model routing
+- OpenAI-specific tool calling, streaming, structured outputs, and diagnostics
+- provider security, redaction, usage accounting, and audit logging
 - CLI and diagnostics
 - hatching/persona/humanistic behavior
 - vision and audio-triggered workflows
@@ -132,18 +131,19 @@ primary overhaul.
 SECURITY REQUIREMENTS
 
 - Default-deny mindset for privileged actions.
-- Web TUI access, tool creation, tool execution, Discord, and scheduled
-  execution must be safe by default.
+- OpenAI provider access, tool creation, tool execution, Discord, Web TUI, and
+  scheduled execution must be safe by default.
 - Secrets must come from environment or protected local files and be redacted.
 - Network, filesystem, shell, plugin, provider, and Discord actions must go
   through policy where applicable.
 - Dangerous actions need approval or explicit policy.
 - Audit logs must record privileged actions and denials.
 - Defend against prompt injection, malicious generated tools, tool supply-chain
-  abuse, Web UI auth bypass, CSRF, XSS, data exfiltration, SSRF, scheduler
-  abuse, secrets leakage, Discord spoofing, bot loops, impersonation, unsafe
-  attachments, confused channel routing, benchmark gaming, and unsafe
-  provider-specific tool enablement.
+  abuse, provider credential leakage, unsafe OpenAI endpoint access, malformed
+  provider responses, data exfiltration, SSRF, scheduler abuse, secrets
+  leakage, Discord spoofing, bot loops, impersonation, unsafe attachments,
+  confused channel routing, benchmark gaming, Web UI auth bypass, CSRF, XSS,
+  and unsafe provider-specific tool enablement.
 
 ENGINEERING RULES
 
