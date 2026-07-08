@@ -1,6 +1,16 @@
 # AUDIT_SECURITY
 
-- Timestamp: 2026-07-08 09:27:22
+- Timestamp: 2026-07-08 09:31:21
+
+## Current Web TUI Security Notes
+
+- Browser diagnostics are served only from authenticated `/api/v1/diagnostics`.
+- Diagnostics are assembled from already-injected server dependencies and pass
+  through existing audit redaction helpers before response rendering.
+- The Diagnostics panel renders API-derived text through the console escape
+  helper before insertion into HTML.
+- The endpoint reports presence/count/status posture, not raw API keys,
+  cookies, CSRF tokens, provider secrets, or unrestricted filesystem paths.
 
 ## Expected common security and operations docs
 - present: README.md
