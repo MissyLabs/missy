@@ -351,6 +351,117 @@ class TestOpenAIToolSchema:
         assert schemas[0]["function"]["name"] == "calc"
 
 
+class TestOpenAIStream:
+    @patch("missy.providers.openai_provider._openai_sdk")
+    @patch("missy.providers.openai_provider._OPENAI_AVAILABLE", True)
+    def test_native_openai_stream_uses_responses_events(self, mock_sdk):
+        response_stream = MagicMock(
+            return_value=iter(
+                [
+                    {"type": "response.output_text.delta", "delta": "Hello"},
+                    {"type": "response.output_text.delta", "delta": " world"},
+                ]
+            )
+        )
+        mock_client = SimpleNamespace(
+            responses=SimpleNamespace(create=MagicMock(), stream=response_stream),
+            chat=SimpleNamespace(completions=SimpleNamespace(create=MagicMock())),
+        )
+        mock_sdk.OpenAI.return_value = mock_client
+
+        p = OpenAIProvider(_make_config(model="gpt-5.5"))
+        chunks = list(
+            p.stream(
+                [
+                    Message(role="system", content="Be brief."),
+                    Message(role="user", content="Hi"),
+                ],
+                system="Runtime system.",
+            )
+        )
+
+        assert chunks == ["Hello", " world"]
+        response_stream.assert_called_once()
+        call_kwargs = response_stream.call_args[1]
+        assert call_kwargs == {
+            "model": "gpt-5.5",
+            "input": [{"role": "user", "content": "Hi"}],
+            "instructions": "Runtime system.\n\nBe brief.",
+        }
+        mock_client.chat.completions.create.assert_not_called()
+
+    @patch("missy.providers.openai_provider._openai_sdk")
+    @patch("missy.providers.openai_provider._OPENAI_AVAILABLE", True)
+    def test_responses_stream_reconciles_full_text_snapshots(self, mock_sdk):
+        response_stream = MagicMock(
+            return_value=iter(
+                [
+                    {"type": "response.output_text.delta", "delta": "Hel"},
+                    {"type": "response.output_text.done", "text": "Hello"},
+                    {
+                        "type": "response.completed",
+                        "response": SimpleNamespace(output_text="Hello world"),
+                    },
+                ]
+            )
+        )
+        mock_sdk.OpenAI.return_value = SimpleNamespace(
+            responses=SimpleNamespace(create=MagicMock(), stream=response_stream),
+            chat=SimpleNamespace(completions=SimpleNamespace(create=MagicMock())),
+        )
+
+        p = OpenAIProvider(_make_config(model="gpt-5.5"))
+        chunks = list(p.stream([Message(role="user", content="Hi")]))
+
+        assert chunks == ["Hel", "lo", " world"]
+
+    @patch("missy.providers.openai_provider._openai_sdk")
+    @patch("missy.providers.openai_provider._OPENAI_AVAILABLE", True)
+    def test_responses_stream_failed_event_raises_provider_error(self, mock_sdk):
+        response_stream = MagicMock(
+            return_value=iter(
+                [
+                    {
+                        "type": "response.failed",
+                        "error": {"message": "quota exceeded"},
+                    }
+                ]
+            )
+        )
+        mock_sdk.OpenAI.return_value = SimpleNamespace(
+            responses=SimpleNamespace(create=MagicMock(), stream=response_stream),
+            chat=SimpleNamespace(completions=SimpleNamespace(create=MagicMock())),
+        )
+
+        p = OpenAIProvider(_make_config(model="gpt-5.5"))
+        with pytest.raises(ProviderError, match="quota exceeded"):
+            list(p.stream([Message(role="user", content="Hi")]))
+
+    @patch("missy.providers.openai_provider._openai_sdk")
+    @patch("missy.providers.openai_provider._OPENAI_AVAILABLE", True)
+    def test_base_url_stream_keeps_chat_completions_fallback(self, mock_sdk):
+        response_stream = MagicMock()
+        chat_stream = [
+            SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content="chat"))],
+            )
+        ]
+        mock_client = SimpleNamespace(
+            responses=SimpleNamespace(create=MagicMock(), stream=response_stream),
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(create=MagicMock(return_value=chat_stream))
+            ),
+        )
+        mock_sdk.OpenAI.return_value = mock_client
+
+        p = OpenAIProvider(_make_config(model="gpt-4o", base_url="https://api.groq.com/openai/v1"))
+        chunks = list(p.stream([Message(role="user", content="Hi")]))
+
+        assert chunks == ["chat"]
+        response_stream.assert_not_called()
+        mock_client.chat.completions.create.assert_called_once()
+
+
 class TestOpenAIMessagePayload:
     def setup_method(self):
         event_bus.clear()

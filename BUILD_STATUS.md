@@ -1,49 +1,54 @@
 # Build Status
 
-Last updated: 2026-07-08 13:56:58 EDT
+Last updated: 2026-07-08 14:14:39 EDT
 
 ## Current State
 
 Primary focus remains the OpenAI provider overhaul. The provider layer now has
-a first-class native OpenAI Responses execution path for compatible plain
-text/vision requests while retaining Chat Completions for OpenAI-compatible
-`base_url` providers and tool-call transcripts.
+native OpenAI Responses execution for compatible plain text/vision completion
+requests and native Responses streaming for compatible stream requests. Chat
+Completions remains the compatibility path for OpenAI-compatible `base_url`
+providers and transcripts containing tool-result turns or assistant tool-call
+history.
 
-This session added the Responses adapter slice:
+This session added the Responses streaming slice:
 
-- Added internal OpenAI request routing that prefers `client.responses.create`
-  only for native OpenAI clients with compatible transcripts.
-- Preserved Chat Completions fallback for `base_url` endpoints, tool-result
-  turns, and assistant tool-call history.
-- Converted normalized OpenAI text/image content into Responses `input_text`
-  and `input_image` parts, with system prompts mapped to `instructions`.
-- Added Responses output extraction from `output_text` and structured
-  `response.output` content parts.
-- Mapped Responses usage counters back into Missy's canonical
-  `prompt_tokens`, `completion_tokens`, and `total_tokens` shape.
-- Added focused tests covering Responses routing, output extraction, vision
-  conversion, and Chat fallback.
+- Added conservative stream routing that uses `client.responses.stream` only
+  for native OpenAI clients with compatible transcripts.
+- Preserved Chat Completions streaming fallback for `base_url` endpoints and
+  unsupported SDK/client shapes.
+- Converted streaming requests through the same Responses input/instructions
+  payload builder used by non-streaming completions.
+- Reconciled `response.output_text.delta` events with final/full-text
+  Responses events so repeated snapshots do not duplicate emitted text.
+- Converted Responses stream `response.failed` and `error` events into
+  `ProviderError` with safe provider messages.
+- Expanded focused OpenAI provider tests for Responses stream routing,
+  full-content reconciliation, failed events, and Chat fallback.
+- Updated OpenAI provider documentation for native Responses streaming.
 
 ## Completed Work
 
 | Area | Status | Notes |
 |---|---|---|
-| Provider interface compliance | improved | OpenAI still returns canonical `CompletionResponse` for both Responses and Chat paths. |
+| Provider interface compliance | improved | OpenAI still returns canonical `CompletionResponse` and `stream()` yields canonical text chunks. |
 | Secure credential loading | in place | API key comes from config/env; changed path does not log secrets. |
 | Network policy integration | in place | SDK client is built with policy-aware HTTP where available. |
 | Model selection | in place | `auto` resolves through model listing with preferred current chat models and fallback. |
-| Responses API path | started | Native OpenAI text/vision requests can use Responses; tool calls remain on Chat. |
-| Chat compatibility | preserved | `base_url` providers continue to use Chat Completions. |
+| Responses API path | improved | Native OpenAI text/vision completions and compatible streams can use Responses. |
+| Chat compatibility | preserved | `base_url` providers and tool transcripts continue to use Chat Completions. |
+| Streaming reconciliation | improved | Responses stream deltas and final/full-content snapshots are reconciled. |
 | Tool schema normalization | in place | OpenAI tool schemas delegate to `schema_adapter.normalize_for_provider()`. |
 | Tool transcript repair | improved | Invalid/duplicate assistant tool calls and orphan tool results are dropped before request. |
-| Vision input support | improved | Safe image content blocks are preserved and converted for Responses when eligible. |
+| Vision input support | improved | Safe image blocks are preserved and converted for Responses when eligible. |
 | Auditability | partial | Provider invoke/error and transcript repair events exist; retry/fallback/cost events remain. |
-| Tests | improved | Provider tests now cover native Responses routing and fallback behavior. |
+| Tests | improved | Provider and full repository suites pass after the streaming slice. |
 
 ## Current Architecture State
 
-- OpenAI-specific message normalization and transcript repair remain contained
-  in `missy/providers/openai_provider.py`.
+- OpenAI-specific message normalization, transcript repair, Responses routing,
+  and stream-event reconciliation remain contained in
+  `missy/providers/openai_provider.py`.
 - The Responses path is intentionally conservative: it is used only for native
   OpenAI clients without `base_url` and without tool transcript state.
 - Chat Completions remains the compatibility path for OpenAI-like providers
@@ -54,20 +59,20 @@ This session added the Responses adapter slice:
 
 ## Tests
 
-- `python3 -m ruff format missy/providers/openai_provider.py tests/providers/test_openai_provider.py`: passed.
+- `python3 -m ruff format missy/providers/openai_provider.py tests/providers/test_openai_provider.py`: passed; 1 file reformatted.
 - `python3 -m ruff check missy/providers/openai_provider.py tests/providers/test_openai_provider.py`: passed.
-- `python3 -m pytest tests/providers/test_openai_provider.py -q`: 29 passed.
-- `python3 -m pytest tests/providers -q`: 837 passed.
+- `python3 -m pytest tests/providers/test_openai_provider.py -q`: 33 passed.
+- `python3 -m pytest tests/providers -q`: 841 passed.
 - `python3 -m ruff format --check .`: 731 files already formatted.
 - `python3 -m ruff check .`: passed.
-- `python3 -m pytest -q`: 20480 passed, 6 skipped, 3 warnings in 401.95s.
+- `python3 -m pytest -q`: 20484 passed, 6 skipped, 3 warnings in 397.19s.
 
 ## Remaining Work
 
 1. Add native Responses tool/function calling once Missy's tool-loop transcript
    model can preserve Responses output items safely.
-2. Expand OpenAI streaming reconciliation to cover Responses stream events,
-   provider-native tool-call deltas, and final response validation.
+2. Add provider-native tool-call stream delta reconciliation and final response
+   validation for streamed tool workflows.
 3. Add structured output support that can use OpenAI-native response formats
    when available and fall back to Missy's generic validator otherwise.
 4. Add embeddings support if vector-memory workflows need an external OpenAI
