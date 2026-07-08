@@ -171,9 +171,12 @@ async function loadConsole() {
     setText('diagnostics-health', diagnostics.data.overall);
     const controlRows = controls.data.controls.flatMap(control => control.targets.map(target => {
       const disabled = !control.enabled || !target.available || target.is_current ? 'disabled' : '';
-      const label = target.is_current ? 'Current' : 'Set default';
-      const state = target.available ? (target.is_current ? 'current default' : 'available') : 'offline';
-      return `<div class="row"><strong>${esc(target.name)}</strong><div class="row-actions"><span class="${target.available ? 'ok' : 'warn'}">${esc(state)}</span><button class="secondary control-action" type="button" data-control-id="${esc(control.id)}" data-target="${esc(target.name)}" data-confirmation="${esc(target.confirmation)}" ${disabled}>${label}</button></div></div>`;
+      const label = target.is_current ? 'Current' : (target.action_label || control.label);
+      const state = target.state || (target.available ? (target.is_current ? 'current default' : 'available') : 'offline');
+      const targetLabel = target.label || target.name;
+      const meta = [target.provider, target.schedule].filter(Boolean).join(' / ');
+      const title = meta ? `${targetLabel} (${meta})` : targetLabel;
+      return `<div class="row"><strong>${esc(title)}</strong><div class="row-actions"><span class="${target.available ? 'ok' : 'warn'}">${esc(state)}</span><button class="secondary control-action" type="button" data-control-id="${esc(control.id)}" data-control-label="${esc(control.label)}" data-target="${esc(target.name)}" data-target-label="${esc(targetLabel)}" data-confirmation="${esc(target.confirmation)}" ${disabled}>${esc(label)}</button></div></div>`;
     }));
     renderRows('controls', controlRows, 'No safe controls are available.');
     setText('controls-health', controlRows.length ? `${controlRows.length} targets` : 'Empty');
@@ -226,7 +229,9 @@ document.getElementById('controls').addEventListener('click', async event => {
   if (!button || button.disabled) return;
   const target = button.dataset.target;
   const confirmation = button.dataset.confirmation;
-  if (!window.confirm(`Set ${target} as the default provider?`)) return;
+  const targetLabel = button.dataset.targetLabel || target;
+  const controlLabel = button.dataset.controlLabel || 'Run control';
+  if (!window.confirm(`${controlLabel}: ${targetLabel}?`)) return;
   button.disabled = true;
   await api('/controls/' + encodeURIComponent(button.dataset.controlId), {
     method: 'POST',

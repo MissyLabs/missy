@@ -1,6 +1,6 @@
 # OpenClaw Gap Analysis
 
-Last updated: 2026-07-08 10:38:28 EDT
+Last updated: 2026-07-08 10:57:27 EDT
 
 ## Current Focus
 
@@ -19,10 +19,10 @@ remains clean-room and Python-native.
 | Session/run viewer | not_started | Needs streaming output, tool calls, errors, costs, routing, fallback, resume context. |
 | Audit log browser | improved | `/api/v1/audit` supports filters, facets, file/memory sources, redaction, IDs, totals, offsets, and `has_more`; UI has filters, pagination, and details. |
 | Diagnostics/doctor views | improved | `/api/v1/diagnostics` covers Web, providers, tools, memory, policy, gateway, Discord, scheduler, runtime, and remediation hints. |
-| Safe operator controls | started | `/api/v1/controls` lists controls; `provider.set_default` is confirmed, validated, CSRF-protected for browser sessions, and audited. |
+| Safe operator controls | improved | Provider default switching plus scheduler pause/resume are confirmed, validated, CSRF-protected for browser sessions, and audited. |
 | Responsive/accessibility coverage | partial | CSS is responsive; renderer tests cover hooks and escaping; browser/visual tests still needed. |
 | Backend Web TUI security | improved | Auth, CSRF, rate limit, hardened headers, audit events, redaction, XSS-resistant dashboard rendering, and redacted audit search are in place. |
-| Renderer/assets architecture | improved | Login, message, console shell, CSS, and JavaScript are now in `missy/api/web_console.py`; server routing is thinner. |
+| Renderer/assets architecture | improved | Login, message, console shell, CSS, and JavaScript live in `missy/api/web_console.py`; server routing is thinner. |
 
 ## OpenClaw Pattern Status
 
@@ -44,5 +44,5 @@ remains clean-room and Python-native.
 
 ## Recommended Next Slice
 
-Add the next safe controls slice for tools or scheduler jobs with explicit
-policy gates, confirmation text, denial audit events, and focused API/UI tests.
+Add the next safe controls slice for tools or channels with explicit policy
+gates, confirmation text, denial audit events, and focused API/UI tests.

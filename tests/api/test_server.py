@@ -184,6 +184,8 @@ class TestOperatorConsole:
         assert "function esc(value)" in script
         assert "textContent = event ? JSON.stringify(event, null, 2)" in script
         assert "X-CSRF-Token" in script
+        assert "data-control-label" in script
+        assert "data-target-label" in script
         assert "JSON.stringify({target, confirm: confirmation})" in script
 
     def test_root_redirects_to_login_without_browser_session(self) -> None:
@@ -920,6 +922,129 @@ class TestOperatorControls:
                 )
                 assert denied.status_code == 403
                 mock_registry.set_default.assert_not_called()
+        finally:
+            srv.stop()
+
+    def test_controls_lists_scheduler_pause_and_resume_targets(self) -> None:
+        port = _free_port()
+        scheduler = MagicMock()
+        scheduler.list_jobs.return_value = [
+            SimpleNamespace(
+                id="job-enabled",
+                name="Morning summary",
+                schedule="daily at 09:00",
+                provider="anthropic",
+                enabled=True,
+            ),
+            SimpleNamespace(
+                id="job-paused",
+                name="Evening review",
+                schedule="daily at 18:00",
+                provider="openai",
+                enabled=False,
+            ),
+        ]
+        runtime = SimpleNamespace(_scheduler=scheduler)
+
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, runtime=runtime)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            resp = httpx.get(f"http://127.0.0.1:{port}/api/v1/controls", headers=HEADERS)
+            assert resp.status_code == 200
+            controls = {c["id"]: c for c in resp.json()["data"]["controls"]}
+
+            pause_targets = {t["name"]: t for t in controls["scheduler.pause_job"]["targets"]}
+            assert pause_targets["job-enabled"]["available"] is True
+            assert pause_targets["job-enabled"]["confirmation"] == "pause-job:job-enabled"
+            assert pause_targets["job-paused"]["available"] is False
+
+            resume_targets = {t["name"]: t for t in controls["scheduler.resume_job"]["targets"]}
+            assert resume_targets["job-paused"]["available"] is True
+            assert resume_targets["job-paused"]["confirmation"] == "resume-job:job-paused"
+            assert resume_targets["job-enabled"]["available"] is False
+        finally:
+            srv.stop()
+
+    def test_pause_scheduler_job_requires_confirmation_and_audits_denial(self, tmp_path) -> None:
+        event_bus.clear()
+        init_audit_logger(str(tmp_path / "audit.jsonl"))
+        port = _free_port()
+        scheduler = MagicMock()
+        scheduler.list_jobs.return_value = [
+            SimpleNamespace(id="job-enabled", name="Morning summary", enabled=True)
+        ]
+        runtime = SimpleNamespace(_scheduler=scheduler)
+
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, runtime=runtime)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            resp = httpx.post(
+                f"http://127.0.0.1:{port}/api/v1/controls/scheduler.pause_job",
+                json={"target": "job-enabled"},
+                headers=HEADERS,
+            )
+            assert resp.status_code == 409
+            scheduler.pause_job.assert_not_called()
+
+            audit = httpx.get(
+                f"http://127.0.0.1:{port}/api/v1/audit"
+                "?event_type=web.control&result=deny&subsystem=scheduler&limit=10",
+                headers=HEADERS,
+            )
+            events = audit.json()["data"]["events"]
+            assert any(
+                e["detail"]["action"] == "scheduler.pause_job"
+                and e["detail"]["reason"] == "confirmation_required"
+                for e in events
+            )
+        finally:
+            srv.stop()
+
+    def test_pause_and_resume_scheduler_job_mutates_and_audits_allow(self, tmp_path) -> None:
+        event_bus.clear()
+        init_audit_logger(str(tmp_path / "audit.jsonl"))
+        port = _free_port()
+        job = SimpleNamespace(id="job-enabled", name="Morning summary", enabled=True)
+        scheduler = MagicMock()
+        scheduler.list_jobs.return_value = [job]
+        runtime = SimpleNamespace(_scheduler=scheduler)
+
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, runtime=runtime)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            pause = httpx.post(
+                f"http://127.0.0.1:{port}/api/v1/controls/scheduler.pause_job",
+                json={"target": "job-enabled", "confirm": "pause-job:job-enabled"},
+                headers=HEADERS,
+            )
+            assert pause.status_code == 200
+            assert pause.json()["data"]["current_enabled"] is False
+            scheduler.pause_job.assert_called_once_with("job-enabled")
+
+            job.enabled = False
+            resume = httpx.post(
+                f"http://127.0.0.1:{port}/api/v1/controls/scheduler.resume_job",
+                json={"target": "job-enabled", "confirm": "resume-job:job-enabled"},
+                headers=HEADERS,
+            )
+            assert resume.status_code == 200
+            assert resume.json()["data"]["current_enabled"] is True
+            scheduler.resume_job.assert_called_once_with("job-enabled")
+
+            audit = httpx.get(
+                f"http://127.0.0.1:{port}/api/v1/audit"
+                "?event_type=web.control&result=allow&subsystem=scheduler&limit=10",
+                headers=HEADERS,
+            )
+            events = audit.json()["data"]["events"]
+            assert any(e["detail"]["action"] == "scheduler.pause_job" for e in events)
+            assert any(e["detail"]["action"] == "scheduler.resume_job" for e in events)
         finally:
             srv.stop()
 
