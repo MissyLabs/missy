@@ -25,50 +25,58 @@ MANDATORY START OF EACH SESSION
 
 CURRENT PRIMARY FOCUS
 
-complete tool usage and tool intelligence overhaul.
+complete web TUI and operator console overhaul.
 
-For the default tool-focused run, this means a real, end-to-end overhaul of
-how Missy discovers, creates, stores, tests, benchmarks, routes, and enables
-tools.
+For the default Web TUI-focused run, this means a real, end-to-end overhaul of
+Missy's browser-based operator experience.
 
-The system must learn from frequent user requests and repeated manual
-workflows. When a pattern is common enough and safe enough, Missy should be
-able to propose or create a structured tool candidate instead of repeatedly
-solving the same task ad hoc. Tool creation must be policy-gated, auditable,
-reviewable, testable, reversible, and never allowed to bypass security.
+Build a full Web TUI / operator console that is intuitive, secure, clean, and
+visually polished. Pretty matters. The interface should feel like a serious
+local AI operations product, not a debug page. It should be fast, readable,
+responsive, accessible, and useful from the first screen.
 
-Required tool-intelligence capabilities include:
+Use OpenClaw and Odin (https://github.com/Calmingstorm/Odin) as product and
+operator-experience references where appropriate, but implement clean-room
+Python/Missy-native behavior. Do not copy upstream code. Extract useful
+patterns: control-plane ergonomics, live status, sessions, tool visibility,
+auditability, diagnostics, run history, and clear operator controls.
 
-- frequent-request and repeated-workflow detection
-- safe tool-candidate generation from observed requests
-- clean tool storage with metadata, provenance, permissions, schemas, tests,
-  examples, versions, ownership, and lifecycle state
-- clear separation between proposed, experimental, benchmarked, approved,
-  enabled, deprecated, and disabled tools
-- provider-aware tool schemas and compatibility metadata
-- benchmark suites that run tool tasks against providers such as OpenAI,
-  Ollama, Anthropic where present, and local/mock providers
-- benchmark scoring for correctness, latency, cost, reliability, safety,
-  schema adherence, tool-call quality, and failure behavior
-- provider-specific enablement flags based on benchmark results
-- fallback behavior when a provider is weak at a tool or tool family
-- CLI and diagnostics for listing candidates, reviewing tools, running
-  benchmarks, comparing providers, and enabling/disabling provider access
-- audit trails for tool synthesis, benchmark execution, approval, enablement,
-  denial, and rollback
+Required Web TUI capabilities include:
+
+- secure local Web UI entrypoint with explicit authentication/session handling
+- polished dashboard for runtime status, providers, channels, tools, scheduler,
+  memory, security posture, and recent activity
+- session/run viewer with streaming output, tool calls, errors, costs, model
+  routing, provider fallback, and resumable context
+- audit log browser with filters, severity, actor/source, subsystem, action,
+  allow/deny result, timestamps, and redacted sensitive values
+- pretty, dense, scannable tool/provider/security panels
+- diagnostics/doctor views for Discord, providers, scheduler, tools, memory,
+  gateway, policy, and network posture where supported
+- safe controls for enabling/disabling providers, tools, scheduled jobs,
+  channels, and experimental features
+- responsive design for desktop and mobile without clipped text or broken
+  layouts
+- accessible colors, keyboard navigation, loading/empty/error states, and
+  clear destructive-action confirmations
+- backend APIs that enforce auth, policy, redaction, CSRF protections where
+  relevant, rate limits where appropriate, and structured audit events
+- tests for security, routing, UI API behavior, audit filtering, redaction, and
+  core Web TUI workflows
 
 The overhaul should be architectural, not cosmetic. Prefer clear internal
 interfaces, explicit lifecycle management, robust error handling, policy-gated
 actions, structured audit events, and tests that prove behavior. If
 PRIMARY_FOCUS is changed for a later run, apply this same standard to that
-subsystem instead of forcing tool work.
+subsystem instead of forcing Web TUI work.
 
 FLEXIBLE NEXT-FOCUS DESIGN
 
-This loop is not only for tool intelligence. Keep the implementation and status
-tracking flexible enough that a later primary focus can replace tools, such as:
+This loop is not only for Web TUI work. Keep the implementation and status
+tracking flexible enough that a later primary focus can replace the UI, such as:
 
 - overhauling Discord integration
+- overhauling tool usage and automatic tool creation
 - overhauling task delegation to Ollama when a tool is tagged
 - provider/model routing
 - tool policy and approval pipelines
@@ -77,13 +85,13 @@ tracking flexible enough that a later primary focus can replace tools, such as:
 - vision/audio workflows
 - gateway/control-plane reliability
 
-Do not hard-code tool-intelligence assumptions into unrelated subsystems unless
-the boundary is explicitly a tool registry, tool runtime, benchmark, or
-provider-routing adapter.
+Do not hard-code Web TUI assumptions into unrelated subsystems unless the
+boundary is explicitly an API, view model, UI adapter, auth layer, or frontend
+asset.
 
 SECONDARY OBJECTIVES
 
-Keep improving these while tool usage and tool intelligence are primary:
+Keep improving these while the Web TUI and operator console are primary:
 
 - OpenClaw-style operator ergonomics and parity
 - local-first secure runtime
@@ -91,9 +99,9 @@ Keep improving these while tool usage and tool intelligence are primary:
 - scheduling and recurring tasks
 - memory and session resume
 - tools, skills, plugins, and policy gates
-- provider-specific tool routing and enablement
-- automatic tool synthesis from observed repeated work
-- tool benchmark and evaluation harnesses
+- audit log browsing, filtering, and redaction
+- secure local web APIs and auth/session handling
+- polished operator workflows and visual design
 - CLI and diagnostics
 - hatching/persona/humanistic behavior
 - vision and audio-triggered workflows
@@ -124,17 +132,18 @@ primary overhaul.
 SECURITY REQUIREMENTS
 
 - Default-deny mindset for privileged actions.
-- Tool creation, tool execution, Discord, and scheduled execution must be safe
-  by default.
+- Web TUI access, tool creation, tool execution, Discord, and scheduled
+  execution must be safe by default.
 - Secrets must come from environment or protected local files and be redacted.
 - Network, filesystem, shell, plugin, provider, and Discord actions must go
   through policy where applicable.
 - Dangerous actions need approval or explicit policy.
 - Audit logs must record privileged actions and denials.
 - Defend against prompt injection, malicious generated tools, tool supply-chain
-  abuse, data exfiltration, SSRF, scheduler abuse, secrets leakage, Discord
-  spoofing, bot loops, impersonation, unsafe attachments, confused channel
-  routing, benchmark gaming, and unsafe provider-specific tool enablement.
+  abuse, Web UI auth bypass, CSRF, XSS, data exfiltration, SSRF, scheduler
+  abuse, secrets leakage, Discord spoofing, bot loops, impersonation, unsafe
+  attachments, confused channel routing, benchmark gaming, and unsafe
+  provider-specific tool enablement.
 
 ENGINEERING RULES
 

@@ -1,14 +1,14 @@
 # LOOP_INSTRUCTIONS
 
-Current time: 2026-07-07 22:30:53
-Controller: Claude
-Primary focus: complete tool usage and tool intelligence overhaul
-Branch: overhaul/tools-20260708-020326
+Current time: 2026-07-08 08:22:51
+Controller: Codex
+Primary focus: complete web TUI and operator console overhaul
+Branch: overhaul/web-tui-20260708-122250
 
 Requirements:
 - Evolve the existing ~/missy repo.
-- Treat complete tool usage and tool intelligence overhaul as the current primary overhaul.
-- Keep the design flexible for future non-tool overhauls.
+- Treat complete web TUI and operator console overhaul as the current primary overhaul.
+- Keep the design flexible for future non-Web-TUI overhauls.
 - Update common artifacts only.
 - Run full pytest before ending.
 - Commit progress before ending.
