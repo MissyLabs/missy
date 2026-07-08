@@ -1,6 +1,6 @@
 # OpenClaw Gap Analysis
 
-Last updated: 2026-07-08 09:59:08 EDT
+Last updated: 2026-07-08 10:19:19 EDT
 
 ## Current Focus
 
@@ -15,20 +15,21 @@ remains clean-room and Python-native.
 |---|---|---|
 | Secure local Web UI entrypoint | started | `/login` and `/` implemented with cookie sessions and CSRF. |
 | Explicit authentication/session handling | improved | Browser session storage is extracted into `missy/api/web_sessions.py`. |
-| Polished dashboard | started | Runtime, providers, tools, sessions, security posture, audit trail, and diagnostics are shown. |
+| Polished dashboard | started | Runtime, providers, tools, sessions, diagnostics, controls, security posture, and audit trail are shown. |
 | Session/run viewer | not_started | Needs streaming output, tool calls, errors, costs, routing, fallback, resume context. |
 | Audit log browser | improved | `/api/v1/audit` supports filters, facets, file/memory sources, redaction, IDs, totals, offsets, and `has_more`; UI has filters, pagination, and details. |
-| Diagnostics/doctor views | improved | `/api/v1/diagnostics` now covers Web, providers, tools, memory, policy, gateway, Discord, scheduler, runtime, and remediation hints. |
-| Safe operator controls | not_started | Must be policy-gated, default-deny, audited, and confirmation guarded. |
+| Diagnostics/doctor views | improved | `/api/v1/diagnostics` covers Web, providers, tools, memory, policy, gateway, Discord, scheduler, runtime, and remediation hints. |
+| Safe operator controls | started | `/api/v1/controls` lists controls; `provider.set_default` is confirmed, validated, CSRF-protected for browser sessions, and audited. |
 | Responsive/accessibility coverage | partial | CSS is responsive; browser/visual tests still needed. |
 | Backend Web TUI security | improved | Auth, CSRF, rate limit, hardened headers, audit events, redaction, XSS-resistant dashboard rendering, and redacted audit search are in place. |
+| Renderer/assets architecture | started | Login/message rendering and CSS moved to `missy/api/web_console.py`; main console HTML/JS still needs extraction. |
 
 ## OpenClaw Pattern Status
 
 | ID | Pattern | Status | Notes |
 |---|---|---|---|
 | A1 | Streaming subscription state machine | tested | Runtime support remains in place. |
-| A2 | Layered tool policy pipeline | hardened | Policy surfaces include current security updates and are now reflected in Discord diagnostics. |
+| A2 | Layered tool policy pipeline | hardened | Policy surfaces include current security updates and are reflected in diagnostics. |
 | A3 | Mutation fingerprinting + sticky lastToolError | implemented | Repeated identical failing tool calls are fingerprinted and surfaced to the model. |
 | A4 | Compaction retry coordination | not_started | Manager-level retry coordination remains future work. |
 | A5 | Auth profile cooldown + fallback | not_started | Must preserve user-pinned profile behavior. |
@@ -43,6 +44,6 @@ remains clean-room and Python-native.
 
 ## Recommended Next Slice
 
-Extract Web TUI rendering assets out of `missy/api/server.py`, then implement a
-small safe controls API with policy-gated enable/disable operations and audit
-events.
+Extract the main Web TUI console HTML/JavaScript out of `missy/api/server.py`,
+then add the next safe controls slice for tools or scheduler jobs with explicit
+policy gates, confirmation text, denial audit events, and focused API tests.
