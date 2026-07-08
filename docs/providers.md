@@ -100,10 +100,11 @@ Uses the official `openai` Python SDK through a policy-aware HTTP client.  The
 SDK is imported lazily.  The `base_url` parameter allows targeting any
 OpenAI-compatible endpoint (Groq, Together AI, local vLLM, etc.).
 
-Missy's OpenAI adapter currently keeps Chat Completions compatibility for the
-shared provider abstraction while isolating OpenAI-specific message rules in
-`missy/providers/openai_provider.py`.  The next architectural migration target
-is a Responses API execution path for native OpenAI agent workflows.
+Missy's OpenAI adapter uses the Responses API for native OpenAI text and vision
+requests when the installed SDK exposes `client.responses.create`.  It retains
+Chat Completions compatibility for OpenAI-compatible `base_url` providers and
+for transcripts that include tool-result turns or assistant tool-call history.
+OpenAI-specific message rules remain isolated in `missy/providers/openai_provider.py`.
 
 **Default model**: `auto` (detects the best available current OpenAI chat model)
 
@@ -115,6 +116,8 @@ is a Responses API execution path for native OpenAI agent workflows.
   OpenAI adapter boundary.
 - User content may be plain text or a content list containing OpenAI-compatible
   `text`, `input_text`, `image_url`, or `input_image` parts.
+- Native OpenAI Responses requests convert text parts to `input_text`, image
+  parts to `input_image`, and system prompts to Responses `instructions`.
 - Image inputs are forwarded only when they use a base64 `data:image/...` URI
   or an `https://` URL. Unsafe schemes such as `file://` and `http://` are
   stripped before the provider call.

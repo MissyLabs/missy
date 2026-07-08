@@ -4,24 +4,23 @@ Date: 2026-07-08
 
 ## Changed
 
-- Re-centered the loop tracking state on the OpenAI provider overhaul.
-- Hardened OpenAI message normalization to preserve safe multimodal content
-  lists instead of coercing all user content to strings.
-- Added safe OpenAI image handling for `data:image/...;base64,...` and `https://`
-  image URLs while stripping unsafe schemes before provider invocation.
-- Added OpenAI transcript repair for invalid assistant tool calls, duplicate
-  tool-call IDs, and orphaned tool-result messages.
-- Added `provider_transcript_repair` audit events for OpenAI repair decisions.
-- Added focused OpenAI provider tests for vision payload preservation, unsafe
-  image URL stripping, and orphan tool-result repair audit.
-- Updated `docs/providers.md` with the current OpenAI adapter behavior and the
-  remaining Responses API migration target.
+- Added a native OpenAI Responses API path behind the existing OpenAI provider
+  adapter.
+- Kept Chat Completions as the fallback for OpenAI-compatible `base_url`
+  providers and transcripts containing tool-result/tool-call state.
+- Converted normalized OpenAI text and image parts to Responses `input_text`
+  and `input_image` content.
+- Mapped system messages/system kwargs to Responses `instructions`.
+- Extracted Responses text from both `output_text` and structured
+  `response.output` content parts.
+- Mapped Responses usage into Missy's canonical usage fields.
+- Updated provider documentation and focused OpenAI provider tests.
 
 ## Verification
 
 ```text
-python3 -m ruff format --check missy/providers/openai_provider.py tests/providers/test_openai_provider.py
-2 files already formatted
+python3 -m ruff format missy/providers/openai_provider.py tests/providers/test_openai_provider.py
+2 files left unchanged
 ```
 
 ```text
@@ -30,28 +29,14 @@ All checks passed!
 ```
 
 ```text
-python3 -m pytest tests/providers/test_openai_provider.py tests/providers/test_openai.py -q
-42 passed in 1.02s
+python3 -m pytest tests/providers/test_openai_provider.py -q
+29 passed in 0.82s
 ```
 
 ```text
 python3 -m pytest tests/providers -q
-833 passed in 23.27s
+837 passed in 26.00s
 ```
-
-## Remains
-
-- OpenAI still needs a first-class Responses API path with Chat Completions
-  compatibility fallback for OpenAI-compatible providers.
-- Streaming needs robust tool-call delta reconciliation and final transcript
-  validation.
-- Structured output should use OpenAI-native response formats where available.
-- OpenAI diagnostics, embeddings, cost accounting, and retry/fallback audit
-  coverage remain incomplete.
-- Existing unrelated `LOOP_INSTRUCTIONS.md` modification remains in the working
-  tree.
-
-## Final Verification
 
 ```text
 python3 -m ruff format --check .
@@ -65,10 +50,22 @@ All checks passed!
 
 ```text
 python3 -m pytest -q
-20476 passed, 6 skipped, 3 warnings in 402.11s (0:06:42)
+20480 passed, 6 skipped, 3 warnings in 401.95s (0:06:41)
 ```
+
+## Remains
+
+- Native Responses tool/function calling still needs a transcript model that
+  can preserve replayable Responses output items safely.
+- Streaming still needs Responses event parsing, tool-call delta
+  reconciliation, and final response validation.
+- Structured output should use OpenAI-native response formats where available.
+- OpenAI diagnostics, embeddings, cost accounting, retry/fallback audit
+  coverage remain incomplete.
+- Existing unrelated `LOOP_INSTRUCTIONS.md` modification remains in the working
+  tree.
 
 ## First Next Step
 
-Implement the OpenAI Responses API adapter path behind a local abstraction,
-keeping current Chat Completions behavior as the compatibility fallback.
+Implement Responses streaming/event reconciliation or native structured output
+support, keeping OpenAI-specific behavior inside the adapter boundary.

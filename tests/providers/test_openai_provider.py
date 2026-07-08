@@ -189,6 +189,150 @@ class TestOpenAIComplete:
         assert call_kwargs["max_completion_tokens"] == 7
         assert "max_tokens" not in call_kwargs
 
+    @patch("missy.providers.openai_provider._openai_sdk")
+    @patch("missy.providers.openai_provider._OPENAI_AVAILABLE", True)
+    def test_native_openai_uses_responses_api_when_available(self, mock_sdk):
+        response_create = MagicMock(
+            return_value=SimpleNamespace(
+                output_text="Hello from Responses",
+                output=[],
+                model="gpt-5.5",
+                usage=SimpleNamespace(input_tokens=11, output_tokens=4, total_tokens=15),
+                model_dump=lambda: {"id": "resp_123"},
+            )
+        )
+        mock_client = SimpleNamespace(
+            responses=SimpleNamespace(create=response_create),
+            chat=SimpleNamespace(completions=SimpleNamespace(create=MagicMock())),
+        )
+        mock_sdk.OpenAI.return_value = mock_client
+
+        p = OpenAIProvider(_make_config(model="gpt-5.5"))
+        result = p.complete(
+            [
+                Message(role="system", content="Be brief."),
+                Message(role="user", content="Hi"),
+            ],
+            max_tokens=9,
+        )
+
+        assert result.content == "Hello from Responses"
+        assert result.usage == {
+            "prompt_tokens": 11,
+            "completion_tokens": 4,
+            "total_tokens": 15,
+        }
+        response_create.assert_called_once()
+        call_kwargs = response_create.call_args[1]
+        assert call_kwargs == {
+            "model": "gpt-5.5",
+            "input": [{"role": "user", "content": "Hi"}],
+            "instructions": "Be brief.",
+            "max_output_tokens": 9,
+        }
+        mock_client.chat.completions.create.assert_not_called()
+
+    @patch("missy.providers.openai_provider._openai_sdk")
+    @patch("missy.providers.openai_provider._OPENAI_AVAILABLE", True)
+    def test_responses_api_extracts_text_from_output_parts(self, mock_sdk):
+        response_create = MagicMock(
+            return_value=SimpleNamespace(
+                output_text="",
+                output=[
+                    SimpleNamespace(
+                        type="message",
+                        content=[
+                            SimpleNamespace(type="output_text", text="Hello"),
+                            {"type": "output_text", "text": " world"},
+                        ],
+                    )
+                ],
+                model="gpt-5.5",
+                usage=SimpleNamespace(input_tokens=3, output_tokens=2),
+                model_dump=lambda: {"id": "resp_456"},
+            )
+        )
+        mock_sdk.OpenAI.return_value = SimpleNamespace(
+            responses=SimpleNamespace(create=response_create),
+            chat=SimpleNamespace(completions=SimpleNamespace(create=MagicMock())),
+        )
+
+        p = OpenAIProvider(_make_config(model="gpt-5.5"))
+        result = p.complete([Message(role="user", content="Hi")])
+
+        assert result.content == "Hello world"
+        assert result.usage["total_tokens"] == 5
+
+    @patch("missy.providers.openai_provider._openai_sdk")
+    @patch("missy.providers.openai_provider._OPENAI_AVAILABLE", True)
+    def test_responses_api_converts_vision_parts(self, mock_sdk):
+        response_create = MagicMock(
+            return_value=SimpleNamespace(
+                output_text="vision ok",
+                output=[],
+                model="gpt-5.5",
+                usage=SimpleNamespace(input_tokens=1, output_tokens=1, total_tokens=2),
+                model_dump=dict,
+            )
+        )
+        mock_sdk.OpenAI.return_value = SimpleNamespace(
+            responses=SimpleNamespace(create=response_create),
+            chat=SimpleNamespace(completions=SimpleNamespace(create=MagicMock())),
+        )
+
+        p = OpenAIProvider(_make_config(model="gpt-5.5"))
+        p.complete(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "describe"},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "https://example.com/image.png",
+                                "detail": "low",
+                            },
+                        },
+                    ],
+                }
+            ]
+        )
+
+        call_kwargs = response_create.call_args[1]
+        assert call_kwargs["input"] == [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "describe"},
+                    {
+                        "type": "input_image",
+                        "image_url": "https://example.com/image.png",
+                        "detail": "low",
+                    },
+                ],
+            }
+        ]
+
+    @patch("missy.providers.openai_provider._openai_sdk")
+    @patch("missy.providers.openai_provider._OPENAI_AVAILABLE", True)
+    def test_base_url_keeps_chat_completions_fallback(self, mock_sdk):
+        response_create = MagicMock()
+        mock_client = SimpleNamespace(
+            responses=SimpleNamespace(create=response_create),
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(create=MagicMock(return_value=self._mock_response()))
+            ),
+        )
+        mock_sdk.OpenAI.return_value = mock_client
+
+        p = OpenAIProvider(_make_config(base_url="https://api.groq.com/openai/v1"))
+        result = p.complete([Message(role="user", content="Hi")])
+
+        assert result.content == "Hello!"
+        response_create.assert_not_called()
+        mock_client.chat.completions.create.assert_called_once()
+
 
 class TestOpenAIToolSchema:
     def test_function_format(self):
