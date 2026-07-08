@@ -4740,6 +4740,312 @@ def api_status(host: str, port: int, api_key: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# tools — tool intelligence, candidates, and benchmarks
+# ---------------------------------------------------------------------------
+
+
+@cli.group("tools", invoke_without_command=True)
+@click.pass_context
+def tools_group(ctx: click.Context) -> None:
+    """Tool intelligence: candidates, request patterns, and benchmarks."""
+    if ctx.invoked_subcommand is None:
+        console.print(ctx.get_help())
+
+
+@tools_group.group("candidates", invoke_without_command=True)
+@click.pass_context
+def tools_candidates(ctx: click.Context) -> None:
+    """Manage tool candidates (proposed → approved → enabled)."""
+    if ctx.invoked_subcommand is None:
+        console.print(ctx.get_help())
+
+
+@tools_candidates.command("list")
+@click.option(
+    "--state",
+    default=None,
+    help="Filter by lifecycle state: proposed, experimental, benchmarked, approved, enabled, deprecated, disabled.",
+)
+@click.option("--owner", default=None, help="Filter by owner string.")
+@click.option("--limit", default=50, show_default=True, help="Maximum rows to show.")
+@click.pass_context
+def candidates_list(ctx: click.Context, state: str | None, owner: str | None, limit: int) -> None:
+    """List tool candidates."""
+    from missy.tools.intelligence import ToolLifecycleState, get_candidate_store
+
+    store = get_candidate_store()
+    ls = None
+    if state:
+        try:
+            ls = ToolLifecycleState(state.lower())
+        except ValueError:
+            _print_error(f"Unknown state {state!r}. Valid states: {[s.value for s in ToolLifecycleState]}")
+            raise SystemExit(1) from None
+
+    candidates = store.list_all(state=ls, owner=owner, limit=limit)
+    if not candidates:
+        console.print("[dim]No candidates found.[/]")
+        return
+
+    t = Table(title=f"Tool Candidates ({len(candidates)} shown)", show_lines=False)
+    t.add_column("ID", style="dim", no_wrap=True, max_width=12)
+    t.add_column("Name", style="bold")
+    t.add_column("State")
+    t.add_column("Owner")
+    t.add_column("Score", justify="right")
+    t.add_column("Updated")
+    for c in candidates:
+        best_score = ""
+        if c.benchmark_scores:
+            best = max(c.benchmark_scores, key=lambda s: s.composite)
+            best_score = f"{best.composite:.2f}"
+        state_color = {
+            "proposed": "yellow",
+            "experimental": "cyan",
+            "benchmarked": "blue",
+            "approved": "green",
+            "enabled": "bright_green",
+            "deprecated": "dim",
+            "disabled": "red",
+        }.get(c.state.value, "white")
+        t.add_row(
+            c.id[:12],
+            c.name,
+            f"[{state_color}]{c.state.value}[/]",
+            c.owner,
+            best_score,
+            c.updated_at[:10] if c.updated_at else "",
+        )
+    console.print(t)
+
+
+@tools_candidates.command("show")
+@click.argument("candidate_id")
+@click.pass_context
+def candidates_show(ctx: click.Context, candidate_id: str) -> None:
+    """Show details for a single tool candidate."""
+    from missy.tools.intelligence import get_candidate_store
+
+    store = get_candidate_store()
+    c = store.get(candidate_id)
+    if c is None:
+        _print_error(f"Candidate {candidate_id!r} not found.")
+        raise SystemExit(1)
+
+    console.print(Panel(f"[bold]{c.name}[/] — {c.state.value}", title="Tool Candidate"))
+    console.print(f"[bold]ID:[/] {c.id}")
+    console.print(f"[bold]Description:[/] {c.description}")
+    console.print(f"[bold]Owner:[/] {c.owner}    [bold]Version:[/] {c.version}")
+    console.print(f"[bold]Provenance:[/] {c.provenance}")
+    if c.notes:
+        console.print(f"[bold]Notes:[/] {c.notes}")
+    if c.permissions:
+        console.print(f"[bold]Permissions:[/] {c.permissions}")
+    if c.tags:
+        console.print(f"[bold]Tags:[/] {', '.join(c.tags)}")
+    if c.benchmark_scores:
+        t = Table(title="Benchmark Scores")
+        t.add_column("Provider")
+        t.add_column("Composite", justify="right")
+        t.add_column("Correctness", justify="right")
+        t.add_column("Reliability", justify="right")
+        t.add_column("Run At")
+        for s in c.benchmark_scores:
+            t.add_row(
+                s.provider,
+                f"{s.composite:.3f}",
+                f"{s.correctness:.3f}",
+                f"{s.reliability:.3f}",
+                s.run_at[:10] if s.run_at else "",
+            )
+        console.print(t)
+    if c.provider_enabled:
+        console.print(f"[bold]Provider enabled:[/] {c.provider_enabled}")
+    import json as _json
+    console.print(f"[bold]Schema:[/]\n{_json.dumps(c.schema, indent=2)}")
+
+
+@tools_candidates.command("approve")
+@click.argument("candidate_id")
+@click.option("--notes", default="", help="Approval notes.")
+@click.pass_context
+def candidates_approve(ctx: click.Context, candidate_id: str, notes: str) -> None:
+    """Approve a proposed tool candidate."""
+    from missy.tools.intelligence import ToolLifecycleState, get_candidate_store
+
+    store = get_candidate_store()
+    updated = store.transition(
+        candidate_id, ToolLifecycleState.APPROVED, notes=notes, actor="operator"
+    )
+    if updated is None:
+        _print_error(f"Candidate {candidate_id!r} not found.")
+        raise SystemExit(1)
+    console.print(f"[green]Approved[/] candidate [bold]{updated.name}[/] ({candidate_id[:12]})")
+
+
+@tools_candidates.command("enable")
+@click.argument("candidate_id")
+@click.option("--notes", default="", help="Enablement notes.")
+@click.pass_context
+def candidates_enable(ctx: click.Context, candidate_id: str, notes: str) -> None:
+    """Enable an approved tool candidate for agent use."""
+    from missy.tools.intelligence import ToolLifecycleState, get_candidate_store
+
+    store = get_candidate_store()
+    c = store.get(candidate_id)
+    if c is None:
+        _print_error(f"Candidate {candidate_id!r} not found.")
+        raise SystemExit(1)
+    if c.state not in (ToolLifecycleState.APPROVED, ToolLifecycleState.BENCHMARKED):
+        _print_error(
+            f"Candidate must be in 'approved' or 'benchmarked' state to enable "
+            f"(current: {c.state.value})."
+        )
+        raise SystemExit(1)
+    updated = store.transition(
+        candidate_id, ToolLifecycleState.ENABLED, notes=notes, actor="operator"
+    )
+    console.print(f"[bright_green]Enabled[/] candidate [bold]{updated.name}[/]")
+
+
+@tools_candidates.command("deny")
+@click.argument("candidate_id")
+@click.option("--reason", default="", help="Denial reason (recommended).")
+@click.pass_context
+def candidates_deny(ctx: click.Context, candidate_id: str, reason: str) -> None:
+    """Deny a tool candidate (moves to disabled state)."""
+    from missy.tools.intelligence import ToolLifecycleState, get_candidate_store
+
+    store = get_candidate_store()
+    updated = store.transition(
+        candidate_id, ToolLifecycleState.DISABLED, notes=reason, actor="operator"
+    )
+    if updated is None:
+        _print_error(f"Candidate {candidate_id!r} not found.")
+        raise SystemExit(1)
+    console.print(f"[red]Disabled[/] candidate [bold]{updated.name}[/] ({candidate_id[:12]})")
+
+
+@tools_group.group("requests", invoke_without_command=True)
+@click.pass_context
+def tools_requests(ctx: click.Context) -> None:
+    """Inspect recorded request patterns."""
+    if ctx.invoked_subcommand is None:
+        console.print(ctx.get_help())
+
+
+@tools_requests.command("stats")
+@click.option("--min-count", default=2, show_default=True, help="Minimum occurrence count.")
+@click.option("--top", default=20, show_default=True, help="Number of patterns to show.")
+@click.pass_context
+def requests_stats(ctx: click.Context, min_count: int, top: int) -> None:
+    """Show the most frequent request patterns."""
+    from missy.tools.intelligence import get_request_tracker
+
+    tracker = get_request_tracker()
+    total_events = tracker.event_count()
+    patterns = tracker.get_frequent_patterns(min_count=min_count, limit=top)
+    console.print(f"[bold]Request tracker[/]: {total_events} events recorded, "
+                  f"{tracker.pattern_count()} distinct patterns.")
+    if not patterns:
+        console.print(f"[dim]No patterns with ≥{min_count} occurrences found.[/]")
+        return
+    t = Table(title=f"Top {len(patterns)} Patterns (min_count={min_count})")
+    t.add_column("Key", style="dim", max_width=10)
+    t.add_column("Count", justify="right")
+    t.add_column("Score", justify="right")
+    t.add_column("Common Tools")
+    t.add_column("Representative", max_width=50)
+    for p in patterns:
+        t.add_row(
+            p.pattern_key,
+            str(p.count),
+            f"{p.frequency_score:.3f}",
+            ", ".join(p.common_tools) or "—",
+            p.representative[:50],
+        )
+    console.print(t)
+
+
+@tools_group.group("benchmark", invoke_without_command=True)
+@click.pass_context
+def tools_benchmark(ctx: click.Context) -> None:
+    """Run and inspect tool benchmarks."""
+    if ctx.invoked_subcommand is None:
+        console.print(ctx.get_help())
+
+
+@tools_benchmark.command("results")
+@click.option("--tool", "tool_name", default=None, help="Filter by tool name.")
+@click.option("--provider", default=None, help="Filter by provider.")
+@click.option("--limit", default=30, show_default=True, help="Maximum rows.")
+@click.pass_context
+def benchmark_results(
+    ctx: click.Context, tool_name: str | None, provider: str | None, limit: int
+) -> None:
+    """Show stored benchmark results."""
+    from missy.tools.benchmark import get_benchmark_store
+
+    store = get_benchmark_store()
+    rows = store.query(tool_name=tool_name, provider=provider, limit=limit)
+    if not rows:
+        console.print("[dim]No benchmark results found.[/]")
+        return
+    t = Table(title=f"Benchmark Results ({len(rows)} shown)")
+    t.add_column("Tool")
+    t.add_column("Provider")
+    t.add_column("Composite", justify="right")
+    t.add_column("Correctness", justify="right")
+    t.add_column("Latency ms", justify="right")
+    t.add_column("Success")
+    t.add_column("Recorded")
+    for r in rows:
+        t.add_row(
+            r["tool_name"],
+            r["provider"],
+            f"{r['composite']:.3f}",
+            f"{r['correctness']:.3f}",
+            f"{r['latency_ms']:.0f}",
+            "[green]✓[/]" if r["success"] else "[red]✗[/]",
+            (r["recorded_at"] or "")[:16],
+        )
+    console.print(t)
+
+
+@tools_benchmark.command("compare")
+@click.argument("tool_name")
+@click.pass_context
+def benchmark_compare(ctx: click.Context, tool_name: str) -> None:
+    """Compare provider scores for a tool."""
+    from missy.tools.benchmark import get_benchmark_store
+
+    store = get_benchmark_store()
+    summaries = store.provider_summary(tool_name)
+    if not summaries:
+        console.print(f"[dim]No benchmark data for tool {tool_name!r}.[/]")
+        return
+    t = Table(title=f"Provider Comparison: {tool_name}")
+    t.add_column("Provider", style="bold")
+    t.add_column("Runs", justify="right")
+    t.add_column("Composite", justify="right")
+    t.add_column("Correctness", justify="right")
+    t.add_column("Reliability", justify="right")
+    t.add_column("Latency ms", justify="right")
+    t.add_column("Cost USD", justify="right")
+    for s in summaries:
+        t.add_row(
+            s.provider,
+            str(s.run_count),
+            f"{s.mean_composite:.3f}",
+            f"{s.mean_correctness:.3f}",
+            f"{s.mean_reliability:.3f}",
+            f"{s.mean_latency_ms:.0f}",
+            f"{s.mean_cost_usd:.6f}",
+        )
+    console.print(t)
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 

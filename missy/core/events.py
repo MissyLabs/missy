@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 # Allowed values for AuditEvent.category
 EventCategory = Literal[
-    "network", "filesystem", "shell", "plugin", "scheduler", "provider", "channel"
+    "network", "filesystem", "shell", "plugin", "scheduler", "provider", "channel", "tool"
 ]
 
 # Allowed values for AuditEvent.result
