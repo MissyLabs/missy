@@ -1,84 +1,81 @@
 # Build Status
 
-Last updated: 2026-07-08 10:57:27 EDT
+Last updated: 2026-07-08 13:29:18 EDT
 
 ## Current State
 
-Primary focus remains the Web TUI and browser operator console overhaul. The
-stdlib `ApiServer` owns transport, authentication, browser sessions, CSRF,
-rate limiting, security headers, and JSON API dispatch. Web rendering,
-diagnostics, audit browsing, session state, and operator controls remain split
-behind focused modules.
+Primary focus is back on the OpenAI provider overhaul. The provider layer keeps
+OpenAI-specific assumptions inside `missy/providers/openai_provider.py` and the
+shared provider abstraction remains provider-neutral.
 
-This session expanded safe operator controls from provider switching into
-scheduler job control:
+This session hardened OpenAI message normalization and transcript repair:
 
-- Added scheduler pause/resume controls to `missy/api/operator_controls.py`.
-- `/api/v1/controls` now lists provider controls plus scheduler job targets
-  from the runtime-attached scheduler when present.
-- `/api/v1/controls/scheduler.pause_job` and
-  `/api/v1/controls/scheduler.resume_job` require exact confirmation strings,
-  validate target IDs, enforce current job state, call `pause_job()` /
-  `resume_job()`, and emit structured `web.control` audit events through the
-  existing server path.
-- Updated the browser console control renderer so controls are generic rather
-  than provider-only, with labels, target names, schedule/provider metadata,
-  and generic confirmation prompts.
-- Added focused API tests for scheduler control listing, denied confirmation,
-  allowed pause/resume mutations, audit allow/deny events, and frontend control
-  data hooks.
+- Preserved safe OpenAI multimodal user content lists, including `text`,
+  `input_text`, `image_url`, and `input_image` parts.
+- Allowed image inputs only when they use base64 `data:image/...` URIs or
+  `https://` URLs; unsafe schemes are stripped before provider invocation.
+- Added OpenAI tool-turn validation so assistant tool calls with missing IDs or
+  names, duplicate tool-call IDs, and orphaned tool-result messages are removed
+  before the SDK call.
+- Added `provider_transcript_repair` audit events for OpenAI transcript repairs
+  with session/task correlation when available.
+- Documented the current OpenAI adapter behavior and the remaining Responses
+  API migration target in `docs/providers.md`.
 
 ## Completed Work
 
 | Area | Status | Notes |
 |---|---|---|
-| Existing JSON API auth | preserved | `X-API-Key`, bearer token auth, and browser sessions still guard `/api/v1/*`. |
-| Browser operator entrypoint | implemented | `/login`, `/logout`, and `/` use cookie sessions and CSRF. |
-| Web session handling | extracted | `WebSession` and `WebSessionStore` live in `missy/api/web_sessions.py`. |
-| CSRF protection | implemented | Unsafe browser API calls and logout require the per-session CSRF token; denials are audited. |
-| Operator dashboard | improved | Runtime, providers, tools, sessions, diagnostics, controls, security posture, and audit trail are shown. |
-| Audit log browser API | improved | Authenticated `/api/v1/audit` supports filters, facets, redaction, IDs, totals, offsets, and `has_more`. |
-| Diagnostics API | improved | `/api/v1/diagnostics` reports Web, providers, tools, memory, policy, gateway, Discord, scheduler, and runtime posture. |
-| Safe controls API | improved | Provider default switching and scheduler pause/resume are confirmed, validated, CSRF-protected for browser sessions, and audited. |
-| Renderer extraction | improved | Login, message, main console shell, CSS, and JavaScript live in `missy/api/web_console.py`. |
-| Console tests | expanded | API suite covers auth, CSRF, controls, audit behavior, scheduler controls, and renderer hooks. |
+| Provider interface compliance | improved | OpenAI still returns canonical `CompletionResponse` and isolates provider-specific message repair internally. |
+| Secure credential loading | in place | API key comes from config/env; no key is logged by the changed path. |
+| Network policy integration | in place | SDK client is built with policy-aware HTTP where available. |
+| Model selection | in place | `auto` resolves through model listing with preferred current chat models and fallback. |
+| Tool schema normalization | in place | OpenAI tool schemas delegate to `schema_adapter.normalize_for_provider()`. |
+| Tool transcript repair | improved | Invalid/duplicate assistant tool calls and orphan tool results are dropped before request. |
+| Vision input support | improved | Safe OpenAI image content blocks are preserved; unsafe image URL schemes are stripped. |
+| Auditability | improved | Transcript repair emits structured provider audit events. |
+| Tests | improved | Added OpenAI provider tests for safe vision parts, unsafe image stripping, and orphan tool-result repair audit. |
 
 ## Current Architecture State
 
-- `missy/api/server.py` remains the thin transport/router layer for the Web TUI
-  and API, delegating console HTML/JS/CSS to `missy/api/web_console.py`.
-- `missy/api/operator_controls.py` is now the policy-shaped control boundary
-  for provider and scheduler mutations. Unknown controls, invalid targets,
-  missing dependencies, missing confirmation, unavailable providers, unknown
-  jobs, and wrong job state fail closed.
-- Scheduler controls intentionally use the runtime-attached scheduler instead
-  of creating a parallel scheduler service.
-- Dashboard JavaScript calls `/api/v1/status`, `/providers`, `/tools`,
-  `/sessions`, `/diagnostics`, `/controls`, and `/audit` with same-origin
-  credentials and the embedded CSRF token.
-- `LOOP_INSTRUCTIONS.md` remains modified from outside this session and was not
-  touched.
+- `OpenAIProvider` still uses the Chat Completions-compatible SDK path to match
+  Missy's existing provider abstraction and OpenAI-compatible `base_url`
+  integrations.
+- OpenAI-specific content and tool-turn validation happens before SDK calls, so
+  unrelated providers do not inherit OpenAI transcript assumptions.
+- Repairs are conservative: invalid content is removed rather than guessed or
+  rewritten into potentially incorrect tool state.
+- The public OpenAI platform docs now expose Responses API as the unified modern
+  endpoint family; migrating Missy's OpenAI adapter to a first-class Responses
+  path remains the highest-value unfinished OpenAI architecture item.
+- Existing unrelated `LOOP_INSTRUCTIONS.md` modification remains in the working
+  tree and was not touched.
 
 ## Tests
 
+- `python3 -m ruff format --check missy/providers/openai_provider.py tests/providers/test_openai_provider.py`: passed.
+- `python3 -m ruff check missy/providers/openai_provider.py tests/providers/test_openai_provider.py`: passed.
+- `python3 -m pytest tests/providers/test_openai_provider.py tests/providers/test_openai.py -q`: 42 passed.
+- `python3 -m pytest tests/providers -q`: 833 passed.
 - `python3 -m ruff format --check .`: 731 files already formatted.
 - `python3 -m ruff check .`: passed.
-- `python3 -m pytest tests/api/test_server.py -q`: 88 passed.
-- `python3 -m pytest -q`: 20466 passed, 13 skipped in 387.83s.
+- `python3 -m pytest -q`: 20476 passed, 6 skipped, 3 warnings in 402.11s.
 
 ## Remaining Work
 
-1. Expand safe controls to tools, channels, and experimental features with
-   policy and confirmation gates.
-2. Add a real session/run viewer with streaming output, tool calls, errors,
-   costs, model routing, fallback, and resumable context.
-3. Add deeper live probes where safe and useful, especially gateway/network
-   reachability checks that do not bypass policy.
-4. Split embedded console JavaScript/CSS further if stdlib static asset support
-   can preserve CSP and cache behavior.
-5. Add responsive visual regression coverage or Playwright smoke checks once a
-   browser test dependency is available.
+1. Add a first-class OpenAI Responses API execution path while preserving
+   OpenAI-compatible Chat Completions fallback for `base_url` providers.
+2. Expand OpenAI streaming reconciliation to cover provider-native tool-call
+   deltas and final response validation, not just text deltas.
+3. Add structured output support that can use OpenAI-native response formats
+   when available and fall back to Missy's generic validator otherwise.
+4. Add embeddings support if vector-memory workflows need an external OpenAI
+   embedding backend.
+5. Add provider diagnostics/doctor checks for OpenAI credentials, model list,
+   network policy, rate-limit posture, and redaction.
+6. Extend audit events for retry, rate-limit cooldown, usage/cost recording,
+   fallback, and provider-side validation denials.
 
 ## Blockers
 
-- No code blocker remains for the current Web TUI slice.
+- No code blocker for the next OpenAI provider slice.

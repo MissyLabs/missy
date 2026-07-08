@@ -96,16 +96,35 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 
 **Implementation**: `missy/providers/openai_provider.py`
 
-Uses the official `openai` Python SDK to call the Chat Completions API.  The
+Uses the official `openai` Python SDK through a policy-aware HTTP client.  The
 SDK is imported lazily.  The `base_url` parameter allows targeting any
 OpenAI-compatible endpoint (Groq, Together AI, local vLLM, etc.).
+
+Missy's OpenAI adapter currently keeps Chat Completions compatibility for the
+shared provider abstraction while isolating OpenAI-specific message rules in
+`missy/providers/openai_provider.py`.  The next architectural migration target
+is a Responses API execution path for native OpenAI agent workflows.
 
 **Default model**: `auto` (detects the best available current OpenAI chat model)
 
 **Required environment variable**: `OPENAI_API_KEY`
 
-**System message handling**: System, user, and assistant messages are
-forwarded as-is to the Chat Completions API.
+**Message handling**:
+
+- System, user, assistant, and tool-result turns are converted inside the
+  OpenAI adapter boundary.
+- User content may be plain text or a content list containing OpenAI-compatible
+  `text`, `input_text`, `image_url`, or `input_image` parts.
+- Image inputs are forwarded only when they use a base64 `data:image/...` URI
+  or an `https://` URL. Unsafe schemes such as `file://` and `http://` are
+  stripped before the provider call.
+- Assistant tool calls must have a non-empty ID and function name. Invalid or
+  duplicate tool calls are removed before the SDK call.
+- Tool-result messages are forwarded only when they match a pending assistant
+  tool-call ID. Orphaned tool results are dropped to avoid OpenAI transcript
+  validation failures.
+- Any repair is emitted as a `provider_transcript_repair` audit event with the
+  repair reasons and correlation IDs when supplied.
 
 **Supported kwargs**:
 
@@ -305,6 +324,10 @@ export OPENAI_API_KEY="sk-..."
 Every provider completion emits a `provider_invoke` audit event with category
 `"provider"` and result `"allow"` (on success) or `"error"` (on failure).  The
 event detail includes the provider name, model, and a human-readable message.
+OpenAI-specific transcript normalization may also emit
+`provider_transcript_repair` when unsafe image parts, invalid assistant tool
+calls, duplicate tool-call IDs, or orphaned tool results are removed before a
+request.
 
 These events can be reviewed with:
 

@@ -4,20 +4,54 @@ Date: 2026-07-08
 
 ## Changed
 
-- Added scheduler pause/resume to the Web TUI safe controls API.
-- `/api/v1/controls` now returns `scheduler.pause_job` and
-  `scheduler.resume_job` controls when the API runtime has an attached
-  scheduler.
-- Control execution now validates scheduler targets, requires exact
-  `pause-job:{target}` / `resume-job:{target}` confirmations, rejects wrong
-  job state, mutates through `pause_job()` / `resume_job()`, and audits both
-  allowed and denied attempts as `web.control` events.
-- Updated the browser console controls panel to render generic control labels,
-  target labels, provider/schedule metadata, and generic confirmation prompts.
-- Added API tests covering scheduler control listing, confirmation denial,
-  allowed pause/resume, audit filtering, and frontend control hooks.
+- Re-centered the loop tracking state on the OpenAI provider overhaul.
+- Hardened OpenAI message normalization to preserve safe multimodal content
+  lists instead of coercing all user content to strings.
+- Added safe OpenAI image handling for `data:image/...;base64,...` and `https://`
+  image URLs while stripping unsafe schemes before provider invocation.
+- Added OpenAI transcript repair for invalid assistant tool calls, duplicate
+  tool-call IDs, and orphaned tool-result messages.
+- Added `provider_transcript_repair` audit events for OpenAI repair decisions.
+- Added focused OpenAI provider tests for vision payload preservation, unsafe
+  image URL stripping, and orphan tool-result repair audit.
+- Updated `docs/providers.md` with the current OpenAI adapter behavior and the
+  remaining Responses API migration target.
 
 ## Verification
+
+```text
+python3 -m ruff format --check missy/providers/openai_provider.py tests/providers/test_openai_provider.py
+2 files already formatted
+```
+
+```text
+python3 -m ruff check missy/providers/openai_provider.py tests/providers/test_openai_provider.py
+All checks passed!
+```
+
+```text
+python3 -m pytest tests/providers/test_openai_provider.py tests/providers/test_openai.py -q
+42 passed in 1.02s
+```
+
+```text
+python3 -m pytest tests/providers -q
+833 passed in 23.27s
+```
+
+## Remains
+
+- OpenAI still needs a first-class Responses API path with Chat Completions
+  compatibility fallback for OpenAI-compatible providers.
+- Streaming needs robust tool-call delta reconciliation and final transcript
+  validation.
+- Structured output should use OpenAI-native response formats where available.
+- OpenAI diagnostics, embeddings, cost accounting, and retry/fallback audit
+  coverage remain incomplete.
+- Existing unrelated `LOOP_INSTRUCTIONS.md` modification remains in the working
+  tree.
+
+## Final Verification
 
 ```text
 python3 -m ruff format --check .
@@ -30,27 +64,11 @@ All checks passed!
 ```
 
 ```text
-python3 -m pytest tests/api/test_server.py -q
-88 passed in 14.45s
-```
-
-```text
 python3 -m pytest -q
-20466 passed, 13 skipped in 387.83s (0:06:27)
+20476 passed, 6 skipped, 3 warnings in 402.11s (0:06:42)
 ```
-
-## Remains
-
-- Safe controls still need tool, channel, and experimental-feature control
-  surfaces with policy gates and audit coverage.
-- Run/session streaming viewer is still not implemented.
-- Live diagnostics probes should be added carefully behind policy and timeout
-  controls.
-- Existing unrelated `LOOP_INSTRUCTIONS.md` modification remains in the working
-  tree.
 
 ## First Next Step
 
-Add the next safe controls slice for tools or channels, keeping the same
-confirmation, policy, CSRF, and structured audit behavior used for providers
-and scheduler jobs.
+Implement the OpenAI Responses API adapter path behind a local abstraction,
+keeping current Chat Completions behavior as the compatibility fallback.
