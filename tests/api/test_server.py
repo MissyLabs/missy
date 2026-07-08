@@ -238,6 +238,8 @@ class TestOperatorConsole:
                 assert "audit-result" in console.text
                 assert "audit-severity" in console.text
                 assert "audit-detail" in console.text
+                assert "Controls" in console.text
+                assert "/api/v1' + path" in console.text
         finally:
             srv.stop()
 
@@ -754,6 +756,150 @@ class TestProviders:
             anthropic = next(p for p in providers if p["name"] == "anthropic")
             assert anthropic["available"] is True
             assert anthropic["is_default"] is True
+        finally:
+            srv.stop()
+
+
+# ---------------------------------------------------------------------------
+# Operator controls endpoint
+# ---------------------------------------------------------------------------
+
+
+class TestOperatorControls:
+    def test_controls_requires_auth(self, base_url: str) -> None:
+        resp = httpx.get(f"{base_url}/controls")
+        assert resp.status_code == 401
+
+    def test_controls_lists_provider_targets(self) -> None:
+        port = _free_port()
+        mock_registry = MagicMock()
+        mock_registry.list_providers.return_value = ["anthropic", "openai"]
+        mock_registry.get_default_name.return_value = "anthropic"
+        mock_anthropic = MagicMock()
+        mock_anthropic.is_available.return_value = True
+        mock_openai = MagicMock()
+        mock_openai.is_available.return_value = False
+        mock_registry.get.side_effect = lambda name: {
+            "anthropic": mock_anthropic,
+            "openai": mock_openai,
+        }[name]
+
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, provider_registry=mock_registry)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            resp = httpx.get(f"http://127.0.0.1:{port}/api/v1/controls", headers=HEADERS)
+            assert resp.status_code == 200
+            controls = resp.json()["data"]["controls"]
+            provider_control = next(c for c in controls if c["id"] == "provider.set_default")
+            assert provider_control["requires_confirmation"] is True
+            targets = {target["name"]: target for target in provider_control["targets"]}
+            assert targets["anthropic"]["is_current"] is True
+            assert targets["anthropic"]["confirmation"] == "set-default:anthropic"
+            assert targets["openai"]["available"] is False
+        finally:
+            srv.stop()
+
+    def test_set_default_provider_requires_confirmation_and_audits_denial(self, tmp_path) -> None:
+        event_bus.clear()
+        init_audit_logger(str(tmp_path / "audit.jsonl"))
+        port = _free_port()
+        mock_registry = MagicMock()
+        mock_registry.list_providers.return_value = ["anthropic", "openai"]
+        mock_registry.get_default_name.return_value = "anthropic"
+        mock_provider = MagicMock()
+        mock_provider.is_available.return_value = True
+        mock_registry.get.return_value = mock_provider
+
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, provider_registry=mock_registry)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            resp = httpx.post(
+                f"http://127.0.0.1:{port}/api/v1/controls/provider.set_default",
+                json={"target": "openai"},
+                headers=HEADERS,
+            )
+            assert resp.status_code == 409
+            mock_registry.set_default.assert_not_called()
+
+            audit = httpx.get(
+                f"http://127.0.0.1:{port}/api/v1/audit"
+                "?event_type=web.control&result=deny&subsystem=provider&limit=10",
+                headers=HEADERS,
+            )
+            assert audit.status_code == 200
+            events = audit.json()["data"]["events"]
+            assert any(
+                e["detail"]["action"] == "provider.set_default"
+                and e["detail"]["reason"] == "confirmation_required"
+                for e in events
+            )
+        finally:
+            srv.stop()
+
+    def test_set_default_provider_switches_available_provider_and_audits_allow(
+        self, tmp_path
+    ) -> None:
+        event_bus.clear()
+        init_audit_logger(str(tmp_path / "audit.jsonl"))
+        port = _free_port()
+        mock_registry = MagicMock()
+        mock_registry.list_providers.return_value = ["anthropic", "openai"]
+        mock_registry.get_default_name.return_value = "anthropic"
+        mock_provider = MagicMock()
+        mock_provider.is_available.return_value = True
+        mock_registry.get.return_value = mock_provider
+
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, provider_registry=mock_registry)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            resp = httpx.post(
+                f"http://127.0.0.1:{port}/api/v1/controls/provider.set_default",
+                json={"target": "openai", "confirm": "set-default:openai"},
+                headers=HEADERS,
+            )
+            assert resp.status_code == 200
+            data = resp.json()["data"]
+            assert data["previous"] == "anthropic"
+            assert data["current"] == "openai"
+            mock_registry.set_default.assert_called_once_with("openai")
+
+            audit = httpx.get(
+                f"http://127.0.0.1:{port}/api/v1/audit"
+                "?event_type=web.control&result=allow&subsystem=provider&limit=10",
+                headers=HEADERS,
+            )
+            events = audit.json()["data"]["events"]
+            assert any(
+                e["detail"]["target"] == "openai" and e["detail"]["current"] == "openai"
+                for e in events
+            )
+        finally:
+            srv.stop()
+
+    def test_browser_control_post_requires_csrf(self) -> None:
+        port = _free_port()
+        mock_registry = MagicMock()
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, provider_registry=mock_registry)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/login")
+        try:
+            with httpx.Client(
+                base_url=f"http://127.0.0.1:{port}", follow_redirects=False
+            ) as client:
+                client.post("/login", data={"api_key": API_KEY})
+                denied = client.post(
+                    "/api/v1/controls/provider.set_default",
+                    json={"target": "openai", "confirm": "set-default:openai"},
+                )
+                assert denied.status_code == 403
+                mock_registry.set_default.assert_not_called()
         finally:
             srv.stop()
 
