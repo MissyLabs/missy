@@ -1,24 +1,27 @@
 # OpenClaw Gap Analysis
 
-Last updated: 2026-07-08
+Last updated: 2026-07-08 09:19:07 EDT
 
 ## Current Focus
 
-The active primary focus is the Web TUI and operator console overhaul. OpenClaw and Odin remain references for operator ergonomics, diagnostics, auditability, safe controls, run visibility, and control-plane clarity; Missy implementation remains clean-room and Python-native.
+The active primary focus is the Web TUI and operator console overhaul. OpenClaw
+and Odin remain references for operator ergonomics, diagnostics, auditability,
+safe controls, run visibility, and control-plane clarity; Missy implementation
+remains clean-room and Python-native.
 
 ## Web TUI / Operator Experience Status
 
 | Capability | Status | Notes |
 |---|---|---|
 | Secure local Web UI entrypoint | started | `/login` and `/` implemented with cookie sessions and CSRF. |
-| Explicit authentication/session handling | started | API key login, HttpOnly cookie, in-memory expiry, logout revocation, and auth audit events. |
+| Explicit authentication/session handling | improved | Browser session storage is extracted into `missy/api/web_sessions.py`. |
 | Polished dashboard | started | Runtime, providers, tools, sessions, security posture, and audit trail are shown. |
 | Session/run viewer | not_started | Needs streaming output, tool calls, errors, costs, routing, fallback, resume context. |
-| Audit log browser | started | `/api/v1/audit` supports filters, facets, file/memory sources, redaction, and a first dashboard panel. |
+| Audit log browser | improved | `/api/v1/audit` supports filters, facets, file/memory sources, redaction, IDs, totals, offsets, and `has_more`; UI has filters, pagination, and details. |
 | Diagnostics/doctor views | not_started | Needs Discord, providers, scheduler, tools, memory, gateway, policy, network posture. |
 | Safe operator controls | not_started | Must be policy-gated, default-deny, audited, and confirmation guarded. |
 | Responsive/accessibility coverage | partial | CSS is responsive; browser/visual tests still needed. |
-| Backend Web TUI security | improved | Auth, CSRF, rate limit, hardened headers, audit events, redaction, and XSS-resistant dashboard rendering are in place. |
+| Backend Web TUI security | improved | Auth, CSRF, rate limit, hardened headers, audit events, redaction, XSS-resistant dashboard rendering, and redacted audit search are in place. |
 
 ## OpenClaw Pattern Status
 
@@ -40,4 +43,5 @@ The active primary focus is the Web TUI and operator console overhaul. OpenClaw 
 
 ## Recommended Next Slice
 
-Extract the Web TUI/session/audit helpers out of `missy/api/server.py`, then expand the audit browser with timestamp controls, actor/source filters, pagination, and event detail drilldown.
+Extract the remaining Web TUI rendering assets out of `missy/api/server.py`, or
+add the first diagnostics/doctor API and panel for provider/tool/policy posture.
