@@ -1186,7 +1186,7 @@ class AgentRuntime:
         """
         try:
             registry = get_tool_registry()
-            tool_names = registry.list_tools()
+            tool_names = [name for name in registry.list_tools() if registry.is_enabled(name)]
         except RuntimeError:
             return []
 

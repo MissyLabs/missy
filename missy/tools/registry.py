@@ -40,6 +40,7 @@ class ToolRegistry:
 
     def __init__(self) -> None:
         self._tools: dict[str, BaseTool] = {}
+        self._disabled: set[str] = set()
 
     # ------------------------------------------------------------------
     # Mutation
@@ -74,10 +75,73 @@ class ToolRegistry:
     def list_tools(self) -> list[str]:
         """Return a sorted list of all registered tool names.
 
+        Includes disabled tools; use :meth:`is_enabled` to check state.
+
         Returns:
             A new list of string keys in ascending alphabetical order.
         """
         return sorted(self._tools)
+
+    def list_disabled_tools(self) -> list[str]:
+        """Return a sorted list of tool names currently disabled by an operator.
+
+        Returns:
+            A new list of string keys in ascending alphabetical order.
+        """
+        return sorted(self._disabled)
+
+    def is_enabled(self, name: str) -> bool:
+        """Return whether *name* is currently enabled for exposure/execution.
+
+        Unregistered names are reported as enabled (there is nothing to
+        disable); callers should check :meth:`get` separately if they need
+        to distinguish "unknown" from "enabled".
+
+        Args:
+            name: Registry key to check.
+
+        Returns:
+            ``False`` if an operator has disabled the tool, ``True`` otherwise.
+        """
+        return name not in self._disabled
+
+    # ------------------------------------------------------------------
+    # Operator enable/disable
+    # ------------------------------------------------------------------
+
+    def disable(self, name: str) -> None:
+        """Mark a registered tool as disabled.
+
+        Disabled tools are excluded from the tool schemas exposed to the
+        model (see :meth:`~missy.agent.runtime.AgentRuntime._get_tools`) and
+        :meth:`execute` refuses to run them, so this is a defense-in-depth
+        control on both the "can the model call it" and "will it actually
+        run" axes.
+
+        Args:
+            name: Registry key of the tool to disable.
+
+        Raises:
+            KeyError: When *name* is not registered.
+        """
+        if name not in self._tools:
+            raise KeyError(f"No tool registered under the name {name!r}.")
+        self._disabled.add(name)
+        logger.info("Tool %r disabled by operator.", name)
+
+    def enable(self, name: str) -> None:
+        """Clear a previous :meth:`disable` for *name*.
+
+        Args:
+            name: Registry key of the tool to re-enable.
+
+        Raises:
+            KeyError: When *name* is not registered.
+        """
+        if name not in self._tools:
+            raise KeyError(f"No tool registered under the name {name!r}.")
+        self._disabled.discard(name)
+        logger.info("Tool %r re-enabled by operator.", name)
 
     # ------------------------------------------------------------------
     # Execution
@@ -124,6 +188,15 @@ class ToolRegistry:
         tool = self._tools.get(tool_name)
         if tool is None:
             raise KeyError(f"No tool registered under the name {tool_name!r}.")
+
+        if tool_name in self._disabled:
+            logger.warning("Execution denied for disabled tool %r.", tool_name)
+            self._emit_event(tool_name, session_id, task_id, "deny", "Tool disabled by operator")
+            return ToolResult(
+                success=False,
+                output=None,
+                error=f"Tool {tool_name!r} is disabled by operator.",
+            )
 
         # Policy checks - failures surface as ToolResult(success=False)
         # rather than raised exceptions so the agent can handle them gracefully.

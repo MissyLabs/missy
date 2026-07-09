@@ -269,6 +269,44 @@ class ResilientMemoryStore:
             self._on_failure(exc)
             return []
 
+    def get_total_costs(self, limit: int = 50) -> list:
+        """Return per-session cost summaries from the primary store.
+
+        Args:
+            limit: Maximum number of sessions to return.
+
+        Returns:
+            A list of per-session cost dicts, or ``[]`` on primary failure
+            (cost records are not held in the in-memory fallback cache).
+        """
+        try:
+            result = self._primary.get_total_costs(limit=limit)
+            self._on_success()
+            return result
+        except Exception as exc:
+            self._on_failure(exc)
+            return []
+
+    def get_cost_totals(self) -> dict:
+        """Return dashboard-wide aggregate spend from the primary store.
+
+        Returns:
+            A dict of aggregate totals, or a zeroed dict on primary failure.
+        """
+        try:
+            result = self._primary.get_cost_totals()
+            self._on_success()
+            return result
+        except Exception as exc:
+            self._on_failure(exc)
+            return {
+                "call_count": 0,
+                "session_count": 0,
+                "total_prompt_tokens": 0,
+                "total_completion_tokens": 0,
+                "total_cost_usd": 0.0,
+            }
+
     # ------------------------------------------------------------------
     # Maintenance
     # ------------------------------------------------------------------
