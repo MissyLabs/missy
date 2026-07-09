@@ -20,6 +20,8 @@ button,.button-link{border:1px solid #3b82f6;background:#1d4ed8;color:white;bord
 .list{display:grid;gap:.5rem}.row{display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;border-top:1px solid var(--line);padding:.7rem 0}.row:first-child{border-top:0}.row strong{min-width:0;overflow-wrap:anywhere}.row span{color:var(--muted);text-align:right;overflow-wrap:anywhere}.row-actions{display:flex;align-items:center;justify-content:flex-end;gap:.5rem;flex-wrap:wrap}.row-actions span{text-align:left}.ok{color:var(--ok)!important}.warn{color:var(--warn)!important}.empty{border:1px dashed var(--line);border-radius:8px;color:var(--muted);padding:1rem;text-align:center}
 .filter-row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.5rem;margin-bottom:.5rem}.filter-row select,.filter-row input{min-width:0;border:1px solid var(--line);background:#0f172a;color:var(--text);border-radius:8px;padding:.6rem}.diagnostics-panel .row span{font-size:.82rem}.diagnostics-panel em{display:block;color:var(--muted);font-style:normal;margin-top:.25rem}.audit-actions{display:flex;gap:.5rem;margin:.25rem 0 .5rem}.audit-actions button{padding:.45rem .7rem}.audit-actions button:disabled{opacity:.45;cursor:not-allowed}.audit-row{width:100%;background:transparent;border:0;border-top:1px solid var(--line);border-radius:0;color:var(--text);padding:.7rem 0;text-align:left}.audit-row:hover,.audit-row:focus{background:rgba(99,210,255,.08);outline:1px solid var(--line)}.audit-row span{font-size:.82rem}.detail{max-height:18rem;overflow:auto;margin:.75rem 0 0;border:1px solid var(--line);border-radius:8px;background:#0f172a;color:var(--muted);padding:.75rem;white-space:pre-wrap;overflow-wrap:anywhere}
 .run-console{margin-bottom:1rem}.run-console textarea{width:100%;min-height:4.5rem;resize:vertical;border:1px solid var(--line);background:#0f172a;color:var(--text);border-radius:8px;padding:.7rem;font:inherit}.run-form-actions{display:flex;gap:.5rem;margin-top:.6rem}.run-log{display:grid;gap:.4rem;margin-top:.85rem;max-height:14rem;overflow:auto}.run-log:empty{display:none}.run-log .run-event{border-left:3px solid var(--line);padding:.35rem .6rem;font-size:.82rem;color:var(--muted);background:#0f172a;border-radius:0 6px 6px 0}.run-log .run-event.tool{border-left-color:var(--accent)}.run-log .run-event.error{border-left-color:var(--bad);color:var(--bad)}.run-log .run-event.complete{border-left-color:var(--ok);color:var(--ok)}.run-console .detail{margin-top:.75rem}
+.op-form{display:grid;gap:.5rem;margin-top:.85rem;border-top:1px solid var(--line);padding-top:.85rem}.op-form input,.op-form textarea{width:100%;border:1px solid var(--line);background:#0f172a;color:var(--text);border-radius:8px;padding:.6rem;font:inherit}.op-form textarea{resize:vertical;min-height:3.5rem}.op-form-actions{display:flex;justify-content:flex-end}.op-form-actions button{padding:.5rem .9rem}.op-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.5rem}
+.row-actions button.danger{border-color:#7f1d1d;background:#450a0a}.row-actions button.danger:hover{background:#7f1d1d}.pin-marker{color:var(--warn)}
 .login-body{display:grid;place-items:center;padding:1rem}.login-panel{width:min(440px,100%);background:rgba(18,26,46,.96);border:1px solid var(--line);border-radius:8px;padding:1.25rem;box-shadow:0 20px 60px rgba(0,0,0,.32)}.brand-mark{width:3rem;height:3rem;display:grid;place-items:center;border-radius:8px;background:#1d4ed8;font-weight:900;margin-bottom:1rem}.login-panel form{display:grid;gap:.75rem;margin-top:1rem}.login-panel label{font-weight:700}.login-panel input{width:100%;border:1px solid var(--line);background:#0f172a;color:var(--text);border-radius:8px;padding:.8rem}.error{color:var(--bad);margin-top:.75rem}
 @media (max-width:820px){.hero,.panel-grid{grid-template-columns:1fr}.status-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.topbar{position:static;align-items:flex-start}.row{display:grid}.row span{text-align:left}.row-actions{justify-content:flex-start}}
 @media (max-width:520px){.filter-row{grid-template-columns:1fr}}
@@ -78,6 +80,26 @@ def render_console(*, csrf_token: str) -> str:
       <article class="panel"><div class="panel-head"><h3>Sessions</h3><span class="pill">Recent</span></div><div id="sessions" class="list"></div></article>
       <article class="panel diagnostics-panel"><div class="panel-head"><h3>Diagnostics</h3><span id="diagnostics-health" class="pill">Loading</span></div><div id="diagnostics" class="list"></div></article>
       <article class="panel"><div class="panel-head"><h3>Controls</h3><span id="controls-health" class="pill">Loading</span></div><div id="controls" class="list"></div></article>
+      <article class="panel scheduler-panel"><div class="panel-head"><h3>Scheduled Jobs</h3><span id="scheduler-health" class="pill">Loading</span></div>
+        <div id="scheduler-jobs" class="list"></div>
+        <form id="scheduler-form" class="op-form" aria-label="Create a scheduled job">
+          <input id="job-name" type="text" placeholder="Job name" aria-label="Job name" required>
+          <input id="job-schedule" type="text" placeholder="Schedule, e.g. daily at 09:00" aria-label="Job schedule" required>
+          <textarea id="job-task" placeholder="Task prompt sent to the agent" aria-label="Job task" rows="2" required></textarea>
+          <div class="op-form-grid">
+            <input id="job-provider" type="text" placeholder="Provider (optional)" aria-label="Job provider">
+            <input id="job-active-hours" type="text" placeholder="Active hours HH:MM-HH:MM (optional)" aria-label="Job active hours">
+          </div>
+          <div class="op-form-actions"><button type="submit">Add job</button></div>
+        </form>
+      </article>
+      <article class="panel memory-panel"><div class="panel-head"><h3>Memory Browser</h3><span id="memory-health" class="pill">Loading</span></div>
+        <div class="filter-row" aria-label="Memory filters">
+          <input id="memory-query" type="search" placeholder="Search memory" aria-label="Memory search query">
+          <input id="memory-session" type="search" placeholder="Session ID (optional)" aria-label="Memory session filter">
+        </div>
+        <div id="memory-results" class="list"><div class="empty">Search memory to see results.</div></div>
+      </article>
       <article class="panel audit-panel"><div class="panel-head"><h3>Audit Trail</h3><span id="audit-health" class="pill">Loading</span></div>
         <div class="filter-row" aria-label="Audit filters">
           <select id="audit-result" aria-label="Audit result"><option value="">All results</option><option value="deny">Denied</option><option value="allow">Allowed</option><option value="error">Errors</option></select>
@@ -159,8 +181,8 @@ function renderAuditDetail(event) {
 }
 async function loadConsole() {
   try {
-    const [status, providers, tools, sessions, diagnostics, controls, audit] = await Promise.all([
-      api('/status'), api('/providers'), api('/tools'), api('/sessions?limit=8'), api('/diagnostics'), api('/controls'), api(auditPath())
+    const [status, providers, tools, sessions, diagnostics, controls, audit, jobs] = await Promise.all([
+      api('/status'), api('/providers'), api('/tools'), api('/sessions?limit=8'), api('/diagnostics'), api('/controls'), api(auditPath()), api('/scheduler/jobs')
     ]);
     const s = status.data;
     setText('runtime-status', 'Runtime online');
@@ -197,6 +219,13 @@ async function loadConsole() {
     }));
     renderRows('controls', controlRows, 'No safe controls are available.');
     setText('controls-health', controlRows.length ? `${controlRows.length} targets` : 'Empty');
+    const jobRows = jobs.data.jobs.map(job => {
+      const state = job.enabled ? 'enabled' : 'paused';
+      const meta = [job.schedule, job.provider].filter(Boolean).join(' / ');
+      return `<div class="row"><strong>${esc(job.name || job.id)}</strong><div class="row-actions"><span class="${job.enabled ? 'ok' : 'warn'}">${esc(state)} &middot; ${esc(meta)}</span><button class="secondary danger job-remove" type="button" data-job-id="${esc(job.id)}" data-job-name="${esc(job.name || job.id)}">Remove</button></div></div>`;
+    });
+    renderRows('scheduler-jobs', jobRows, 'No scheduled jobs yet.');
+    setText('scheduler-health', jobRows.length ? `${jobRows.length} jobs` : 'Empty');
     latestAuditEvents = audit.data.events;
     const auditRows = latestAuditEvents.map(e => {
       const d = e.detail || {};
@@ -256,6 +285,98 @@ document.getElementById('controls').addEventListener('click', async event => {
     body: JSON.stringify({target, confirm: confirmation})
   });
   await loadConsole();
+});
+document.getElementById('scheduler-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const name = document.getElementById('job-name').value.trim();
+  const schedule = document.getElementById('job-schedule').value.trim();
+  const task = document.getElementById('job-task').value.trim();
+  const provider = document.getElementById('job-provider').value.trim();
+  const activeHours = document.getElementById('job-active-hours').value.trim();
+  if (!name || !schedule || !task) return;
+  try {
+    await api('/scheduler/jobs', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name, schedule, task, provider, active_hours: activeHours})
+    });
+    event.target.reset();
+    await loadConsole();
+  } catch (error) {
+    window.alert('Could not create job: ' + error.message);
+  }
+});
+document.getElementById('scheduler-jobs').addEventListener('click', async event => {
+  const button = event.target.closest('.job-remove');
+  if (!button || button.disabled) return;
+  const jobId = button.dataset.jobId;
+  const jobName = button.dataset.jobName || jobId;
+  if (!window.confirm(`Remove scheduled job: ${jobName}? This cannot be undone.`)) return;
+  button.disabled = true;
+  await api('/scheduler/jobs/' + encodeURIComponent(jobId), {
+    method: 'DELETE',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({confirm: 'remove-job:' + jobId})
+  });
+  await loadConsole();
+});
+function memoryRow(turn) {
+  const pinned = turn.pinned;
+  const meta = [turn.role, turn.provider, turn.timestamp].filter(Boolean).join(' &middot; ');
+  const preview = String(turn.content || '').slice(0, 160);
+  return `<div class="row"><strong>${pinned ? '<span class="pin-marker">&#9733;</span> ' : ''}${esc(preview)}</strong><div class="row-actions"><span>${meta}</span><button class="secondary memory-pin" type="button" data-turn-id="${esc(turn.id)}" data-pinned="${pinned ? '1' : '0'}">${pinned ? 'Unpin' : 'Pin'}</button><button class="secondary danger memory-delete" type="button" data-turn-id="${esc(turn.id)}">Delete</button></div></div>`;
+}
+async function runMemorySearch() {
+  const q = document.getElementById('memory-query').value.trim();
+  const sessionId = document.getElementById('memory-session').value.trim();
+  if (!q) {
+    renderRows('memory-results', [], 'Search memory to see results.');
+    setText('memory-health', 'Idle');
+    return;
+  }
+  const params = new URLSearchParams({q, limit: '15'});
+  if (sessionId) params.set('session_id', sessionId);
+  try {
+    const results = await api('/memory/search?' + params.toString());
+    const rows = results.data.results.map(memoryRow);
+    renderRows('memory-results', rows, 'No memory matches this search.');
+    setText('memory-health', `${rows.length} results`);
+  } catch (error) {
+    setText('memory-health', 'Error');
+  }
+}
+let memorySearchTimer = null;
+for (const id of ['memory-query', 'memory-session']) {
+  document.getElementById(id).addEventListener('input', () => {
+    clearTimeout(memorySearchTimer);
+    memorySearchTimer = setTimeout(runMemorySearch, 300);
+  });
+}
+document.getElementById('memory-results').addEventListener('click', async event => {
+  const pinButton = event.target.closest('.memory-pin');
+  const deleteButton = event.target.closest('.memory-delete');
+  if (pinButton && !pinButton.disabled) {
+    const turnId = pinButton.dataset.turnId;
+    const nextPinned = pinButton.dataset.pinned !== '1';
+    pinButton.disabled = true;
+    await api('/memory/turns/' + encodeURIComponent(turnId) + '/pin', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({pinned: nextPinned})
+    });
+    await runMemorySearch();
+    return;
+  }
+  if (deleteButton && !deleteButton.disabled) {
+    const turnId = deleteButton.dataset.turnId;
+    if (!window.confirm('Permanently delete this memory entry?')) return;
+    deleteButton.disabled = true;
+    await api('/memory/turns/' + encodeURIComponent(turnId), {
+      method: 'DELETE',
+      headers: {'Content-Type': 'application/json'}
+    });
+    await runMemorySearch();
+  }
 });
 let activeRunSource = null;
 function setRunStatus(text, cls) {
@@ -319,7 +440,9 @@ async function startRun(message) {
   source.addEventListener('run.complete', event => {
     const data = JSON.parse(event.data);
     setRunStatus('Complete', 'ok');
-    appendRunEvent('Run complete', '', 'complete');
+    const cost = data.cost && data.cost.total_cost_usd != null ? `$${Number(data.cost.total_cost_usd).toFixed(4)}` : null;
+    const summary = [data.provider ? `provider: ${data.provider}` : null, (data.tools_used || []).length ? `tools: ${data.tools_used.join(', ')}` : null, cost ? `cost: ${cost}` : null].filter(Boolean).join(' · ');
+    appendRunEvent('Run complete', summary, 'complete');
     document.getElementById('run-response').textContent = data.response || '(empty response)';
     setRunBusy(false);
     closeRunStream();

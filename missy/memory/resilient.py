@@ -119,6 +119,44 @@ class ResilientMemoryStore:
         except Exception as exc:
             self._on_failure(exc)
 
+    def delete_turn(self, turn_id: str) -> bool:
+        """Delete a single turn from the cache and the primary store.
+
+        Args:
+            turn_id: The turn's unique id.
+
+        Returns:
+            ``True`` if the primary store deleted a matching row.
+        """
+        with self._lock:
+            for turns in self._cache.values():
+                turns[:] = [t for t in turns if getattr(t, "id", None) != turn_id]
+        try:
+            result = self._primary.delete_turn(turn_id)
+            self._on_success()
+            return result
+        except Exception as exc:
+            self._on_failure(exc)
+            return False
+
+    def set_turn_pinned(self, turn_id: str, pinned: bool) -> bool:
+        """Forward a pin/unpin request to the primary store.
+
+        Args:
+            turn_id: The turn's unique id.
+            pinned: Whether the turn should be marked pinned.
+
+        Returns:
+            ``True`` if the primary store updated a matching row.
+        """
+        try:
+            result = self._primary.set_turn_pinned(turn_id, pinned)
+            self._on_success()
+            return result
+        except Exception as exc:
+            self._on_failure(exc)
+            return False
+
     def save_learning(self, learning) -> None:
         """Forward a learning object to the primary store.
 

@@ -1,6 +1,6 @@
 # BUILD_RESULTS
 
-- Timestamp: 2026-07-08 21:04:35
+- Timestamp: 2026-07-08 21:32:50
 - Branch: overhaul/web-tui-20260709-004527
 - Primary focus: complete web TUI and operator console overhaul
 
@@ -221,6 +221,7 @@ Python 3.12.3
 /home/missy/missy/.hypothesis/constants/3ae6d6513261837f
 /home/missy/missy/.hypothesis/constants/3b0f4b3bd536ec4e
 /home/missy/missy/.hypothesis/constants/3b2c21d3097eccb5
+/home/missy/missy/.hypothesis/constants/3c1b7ac4a37962c9
 /home/missy/missy/.hypothesis/constants/3c5b9bb9e86ed186
 /home/missy/missy/.hypothesis/constants/3d22539ae35a545a
 /home/missy/missy/.hypothesis/constants/3d81b2572ba6ceee
@@ -280,6 +281,7 @@ Python 3.12.3
 /home/missy/missy/.hypothesis/constants/536421268c7c2652
 /home/missy/missy/.hypothesis/constants/53ab92f2c1503919
 /home/missy/missy/.hypothesis/constants/53bc1fc9b135b044
+/home/missy/missy/.hypothesis/constants/53f6ea6cf3725f10
 /home/missy/missy/.hypothesis/constants/54e67cb4efeccb08
 /home/missy/missy/.hypothesis/constants/5519860d4817d286
 /home/missy/missy/.hypothesis/constants/559175e2d5866f01
@@ -355,6 +357,7 @@ Python 3.12.3
 /home/missy/missy/.hypothesis/constants/73cef8ac4ee05e91
 /home/missy/missy/.hypothesis/constants/73e197f4d4d3b47b
 /home/missy/missy/.hypothesis/constants/740d5b34a29cc934
+/home/missy/missy/.hypothesis/constants/742155dda9e5c449
 /home/missy/missy/.hypothesis/constants/7424ed19f578abec
 /home/missy/missy/.hypothesis/constants/751ad9de1f8afabe
 /home/missy/missy/.hypothesis/constants/75742b30ff49448e
@@ -488,6 +491,7 @@ Python 3.12.3
 /home/missy/missy/.hypothesis/constants/ac1cc46471857d3f
 /home/missy/missy/.hypothesis/constants/aced99b62366f66b
 /home/missy/missy/.hypothesis/constants/ad1d831d5779914c
+/home/missy/missy/.hypothesis/constants/ad92a8c50c2fd690
 /home/missy/missy/.hypothesis/constants/ade6c18c2aca5353
 /home/missy/missy/.hypothesis/constants/ae1b4f271e1fc982
 /home/missy/missy/.hypothesis/constants/ae564c250a7ddfba
@@ -596,6 +600,7 @@ Python 3.12.3
 /home/missy/missy/.hypothesis/constants/e57cacf60f282dd3
 /home/missy/missy/.hypothesis/constants/e5bcbd4cfd5d8b49
 /home/missy/missy/.hypothesis/constants/e5f1081c3efa6d00
+/home/missy/missy/.hypothesis/constants/e5fb0ea261f33337
 /home/missy/missy/.hypothesis/constants/e5fcb6605548192a
 /home/missy/missy/.hypothesis/constants/e6f8558c87eec4db
 /home/missy/missy/.hypothesis/constants/e755571a168f11fc
@@ -661,6 +666,7 @@ Python 3.12.3
 /home/missy/missy/.hypothesis/constants/fae517ec37ca4214
 /home/missy/missy/.hypothesis/constants/faefa9d8a6199b33
 /home/missy/missy/.hypothesis/constants/faf9f0301c4c949a
+/home/missy/missy/.hypothesis/constants/fb71ed0e32aa295a
 /home/missy/missy/.hypothesis/constants/fbcbf028b2c71df3
 /home/missy/missy/.hypothesis/constants/fbd864766cc77165
 /home/missy/missy/.hypothesis/constants/fc441bade08c1288
@@ -1061,6 +1067,7 @@ Python 3.12.3
 /home/missy/missy/tests/memory/test_store.py
 /home/missy/missy/tests/memory/test_synthesizer_edges.py
 /home/missy/missy/tests/memory/test_synthesizer.py
+/home/missy/missy/tests/memory/test_turn_pin_delete.py
 /home/missy/missy/tests/memory/test_vector_store_coverage.py
 /home/missy/missy/tests/memory/test_vector_store.py
 /home/missy/missy/tests/observability/__init__.py

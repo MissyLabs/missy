@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 _CONTROL_PROVIDER_SET_DEFAULT = "provider.set_default"
 _CONTROL_SCHEDULER_PAUSE = "scheduler.pause_job"
 _CONTROL_SCHEDULER_RESUME = "scheduler.resume_job"
+_CONTROL_SCHEDULER_REMOVE = "scheduler.remove_job"
 _SAFE_TARGET_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
 
 
@@ -25,6 +26,7 @@ def list_operator_controls(
     """Return the available operator controls and target state."""
     providers = _provider_targets(provider_registry)
     pause_targets, resume_targets = _scheduler_targets(scheduler)
+    remove_targets = _scheduler_remove_targets(scheduler)
     return {
         "controls": [
             {
@@ -57,6 +59,17 @@ def list_operator_controls(
                 "enabled": bool(scheduler is not None and resume_targets),
                 "targets": resume_targets,
             },
+            {
+                "id": _CONTROL_SCHEDULER_REMOVE,
+                "label": "Remove scheduled job",
+                "description": "Permanently delete a scheduled job.",
+                "subsystem": "scheduler",
+                "requires_confirmation": True,
+                "confirmation_template": "remove-job:{target}",
+                "destructive": True,
+                "enabled": bool(scheduler is not None and remove_targets),
+                "targets": remove_targets,
+            },
         ]
     }
 
@@ -78,6 +91,8 @@ def execute_operator_control(
         return _execute_provider_set_default(body, provider_registry=provider_registry)
     if control_id in {_CONTROL_SCHEDULER_PAUSE, _CONTROL_SCHEDULER_RESUME}:
         return _execute_scheduler_control(control_id, body, scheduler=scheduler)
+    if control_id == _CONTROL_SCHEDULER_REMOVE:
+        return _execute_scheduler_remove(body, scheduler=scheduler)
 
     detail = _audit_detail(control_id, "unknown", reason="unknown_control")
     return 404, {"message": "Unknown operator control"}, detail
@@ -243,6 +258,72 @@ def _execute_scheduler_control(
     )
 
 
+def _execute_scheduler_remove(
+    body: dict[str, Any],
+    *,
+    scheduler: SchedulerManager | None,
+) -> tuple[int, dict[str, Any], dict[str, Any]]:
+    control_id = _CONTROL_SCHEDULER_REMOVE
+    target = str(body.get("target") or "").strip()
+    detail = _audit_detail(control_id, target)
+    if scheduler is None:
+        detail["reason"] = "scheduler_unavailable"
+        return 503, {"message": "Scheduler is not attached"}, detail
+    if not _SAFE_TARGET_RE.fullmatch(target):
+        detail["reason"] = "invalid_target"
+        return 400, {"message": "Invalid scheduler target"}, detail
+
+    expected_confirmation = f"remove-job:{target}"
+    provided_confirmation = str(body.get("confirm") or "")
+    if provided_confirmation != expected_confirmation:
+        detail["reason"] = "confirmation_required"
+        detail["confirmation_template"] = "remove-job:{target}"
+        return (
+            409,
+            {
+                "message": "Explicit confirmation is required",
+                "confirmation": expected_confirmation,
+            },
+            detail,
+        )
+
+    try:
+        jobs = list(scheduler.list_jobs())
+    except Exception as exc:
+        detail["reason"] = "scheduler_list_failed"
+        detail["error"] = _safe_error(exc)
+        return 503, {"message": "Scheduler is unavailable"}, detail
+
+    job = next(
+        (candidate for candidate in jobs if str(getattr(candidate, "id", "")) == target), None
+    )
+    if job is None:
+        detail["reason"] = "unknown_job"
+        return 404, {"message": f"Scheduled job {target!r} is not registered"}, detail
+
+    job_name = str(getattr(job, "name", ""))
+    detail["name"] = job_name
+
+    try:
+        scheduler.remove_job(target)
+    except Exception as exc:
+        detail["reason"] = "scheduler_mutation_failed"
+        detail["error"] = _safe_error(exc)
+        return 409, {"message": _safe_error(exc)}, detail
+
+    detail["reason"] = "confirmed"
+    return (
+        200,
+        {
+            "control": control_id,
+            "target": target,
+            "name": job_name,
+            "removed": True,
+        },
+        detail,
+    )
+
+
 def _provider_targets(provider_registry: ProviderRegistry | None) -> list[dict[str, Any]]:
     if provider_registry is None:
         return []
@@ -321,6 +402,37 @@ def _scheduler_targets(
             }
         )
     return pause_targets, resume_targets
+
+
+def _scheduler_remove_targets(scheduler: SchedulerManager | None) -> list[dict[str, Any]]:
+    if scheduler is None:
+        return []
+    try:
+        jobs = list(scheduler.list_jobs())
+    except Exception:
+        return []
+    targets: list[dict[str, Any]] = []
+    for job in jobs:
+        job_id = str(getattr(job, "id", ""))
+        if not _SAFE_TARGET_RE.fullmatch(job_id):
+            continue
+        name = str(getattr(job, "name", "") or job_id)
+        schedule = str(getattr(job, "schedule", ""))
+        provider = str(getattr(job, "provider", ""))
+        targets.append(
+            {
+                "name": job_id,
+                "label": name,
+                "schedule": schedule,
+                "provider": provider,
+                "available": True,
+                "is_current": False,
+                "state": "enabled" if getattr(job, "enabled", False) else "paused",
+                "action_label": "Remove",
+                "confirmation": f"remove-job:{job_id}",
+            }
+        )
+    return targets
 
 
 def _audit_detail(control_id: str, target: str, **extra: Any) -> dict[str, Any]:
