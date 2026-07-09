@@ -444,6 +444,50 @@ class SQLiteMemoryStore:
         conn.execute("DELETE FROM turns WHERE session_id = ?", (session_id,))
         conn.commit()
 
+    def delete_turn(self, turn_id: str) -> bool:
+        """Delete a single conversation turn by id.
+
+        Args:
+            turn_id: The turn's unique id.
+
+        Returns:
+            ``True`` if a turn was deleted, ``False`` if no turn with that
+            id existed.
+        """
+        conn = self._conn()
+        cur = conn.execute("DELETE FROM turns WHERE id = ?", (turn_id,))
+        conn.commit()
+        return cur.rowcount > 0
+
+    def set_turn_pinned(self, turn_id: str, pinned: bool) -> bool:
+        """Set or clear the pinned flag on a turn's metadata.
+
+        Pinned turns are excluded from :meth:`cleanup` so an operator can
+        preserve specific memories past the normal retention window.
+
+        Args:
+            turn_id: The turn's unique id.
+            pinned: Whether the turn should be marked pinned.
+
+        Returns:
+            ``True`` if the turn exists and was updated, ``False`` otherwise.
+        """
+        conn = self._conn()
+        row = conn.execute("SELECT metadata FROM turns WHERE id = ?", (turn_id,)).fetchone()
+        if row is None:
+            return False
+        metadata = json.loads(row["metadata"] or "{}")
+        if pinned:
+            metadata["pinned"] = True
+        else:
+            metadata.pop("pinned", None)
+        conn.execute(
+            "UPDATE turns SET metadata = ? WHERE id = ?",
+            (json.dumps(metadata), turn_id),
+        )
+        conn.commit()
+        return True
+
     # ------------------------------------------------------------------
     # Read operations
     # ------------------------------------------------------------------
@@ -1003,6 +1047,9 @@ class SQLiteMemoryStore:
     def cleanup(self, older_than_days: int = 30) -> int:
         """Delete turns older than *older_than_days* days.
 
+        Turns pinned via :meth:`set_turn_pinned` are preserved regardless
+        of age.
+
         Args:
             older_than_days: Age threshold in days.
 
@@ -1011,7 +1058,11 @@ class SQLiteMemoryStore:
         """
         conn = self._conn()
         cutoff = (datetime.now(UTC) - timedelta(days=older_than_days)).isoformat()
-        cur = conn.execute("DELETE FROM turns WHERE timestamp < ?", (cutoff,))
+        cur = conn.execute(
+            "DELETE FROM turns WHERE timestamp < ? "
+            "AND COALESCE(json_extract(metadata, '$.pinned'), 0) != 1",
+            (cutoff,),
+        )
         conn.commit()
         return cur.rowcount
 

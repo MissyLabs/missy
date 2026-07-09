@@ -40,6 +40,12 @@ _STREAM_DONE = object()
 # rather than mirrored from the bus, so they are not included here.
 _RUN_TOPICS = ("agent.run.start", "tool.request", "tool.result")
 
+# Bus topic carrying the resolved provider, tools used, and cost summary for
+# a finished run. Subscribed separately from ``_RUN_TOPICS`` because its
+# payload is folded into the synthesized ``run.complete``/``run.error``
+# event rather than forwarded verbatim.
+_SUMMARY_TOPIC = "agent.run.complete"
+
 _EVENT_NAME_BY_TOPIC = {
     "agent.run.start": "run.start",
     "tool.request": "tool.request",
@@ -76,6 +82,9 @@ class RunHandle:
     response: str | None = None
     error: str | None = None
     finished_at: str | None = None
+    resolved_provider: str = ""
+    tools_used: list[str] = field(default_factory=list)
+    cost: dict[str, Any] = field(default_factory=dict)
     _queue: queue.Queue = field(default_factory=lambda: queue.Queue(maxsize=_MAX_QUEUE_EVENTS))
 
     def to_dict(self) -> dict[str, Any]:
@@ -89,6 +98,9 @@ class RunHandle:
             "finished_at": self.finished_at,
             "response": self.response,
             "error": self.error,
+            "resolved_provider": self.resolved_provider,
+            "tools_used": self.tools_used,
+            "cost": self.cost,
         }
 
     def push(self, event: dict[str, Any]) -> None:
@@ -170,6 +182,7 @@ class RunRegistry:
     def _execute(self, runtime: AgentRuntime, handle: RunHandle) -> None:
         bus = self._bus_factory()
         handler = None
+        summary_handler = None
         if bus is not None:
 
             def handler(msg: BusMessage, *, _handle: RunHandle = handle) -> None:
@@ -177,8 +190,16 @@ class RunRegistry:
                     return
                 self._on_bus_message(_handle, msg)
 
+            def summary_handler(msg: BusMessage, *, _handle: RunHandle = handle) -> None:
+                if msg.payload.get("session_id") != _handle.session_id:
+                    return
+                _handle.resolved_provider = str(msg.payload.get("provider") or "")
+                _handle.tools_used = list(msg.payload.get("tools_used") or [])
+                _handle.cost = redact_audit_value(dict(msg.payload.get("cost") or {}))
+
             for topic in _RUN_TOPICS:
                 bus.subscribe(topic, handler)
+            bus.subscribe(_SUMMARY_TOPIC, summary_handler)
 
         handle.status = "running"
         handle.push(
@@ -211,7 +232,13 @@ class RunRegistry:
             handle.push(
                 {
                     "event": "run.complete",
-                    "data": {"run_id": handle.run_id, "response": response},
+                    "data": {
+                        "run_id": handle.run_id,
+                        "response": response,
+                        "provider": handle.resolved_provider,
+                        "tools_used": handle.tools_used,
+                        "cost": handle.cost,
+                    },
                 }
             )
         finally:
@@ -219,6 +246,9 @@ class RunRegistry:
                 for topic in _RUN_TOPICS:
                     with contextlib.suppress(Exception):
                         bus.unsubscribe(topic, handler)
+            if bus is not None and summary_handler is not None:
+                with contextlib.suppress(Exception):
+                    bus.unsubscribe(_SUMMARY_TOPIC, summary_handler)
             handle.push({"event": "__done__", "data": {}})
             with contextlib.suppress(queue.Full):
                 handle._queue.put_nowait(_STREAM_DONE)
@@ -302,7 +332,13 @@ def _terminal_event(handle: RunHandle) -> dict[str, Any]:
         return {"event": "run.error", "data": {"run_id": handle.run_id, "error": handle.error}}
     return {
         "event": "run.complete",
-        "data": {"run_id": handle.run_id, "response": handle.response},
+        "data": {
+            "run_id": handle.run_id,
+            "response": handle.response,
+            "provider": handle.resolved_provider,
+            "tools_used": handle.tools_used,
+            "cost": handle.cost,
+        },
     }
 
 

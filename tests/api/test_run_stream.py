@@ -61,6 +61,19 @@ class FakeRuntime:
             self._gate.wait(timeout=2)
         if self._error is not None:
             raise self._error
+        self._bus.publish(
+            BusMessage(
+                topic="agent.run.complete",
+                payload={
+                    "session_id": session_id,
+                    "task_id": "task-1",
+                    "provider": "anthropic",
+                    "tools_used": ["shell_exec"],
+                    "cost": {"total_cost_usd": 0.0042},
+                },
+                source="agent",
+            )
+        )
         return self._response
 
 
@@ -113,6 +126,30 @@ class TestRunLifecycle:
         handle = registry.start(runtime=runtime, message="hi", session_id="s1")
         list(registry.stream(handle.run_id))
         assert handle.task_id == "task-1"
+
+    def test_run_complete_event_carries_provider_tools_and_cost(
+        self, registry: RunRegistry, bus: MessageBus
+    ) -> None:
+        runtime = FakeRuntime(bus, response="done")
+        handle = registry.start(runtime=runtime, message="hi", session_id="s1")
+        events = list(registry.stream(handle.run_id))
+        complete = next(e for e in events if e["event"] == "run.complete")
+        assert complete["data"]["provider"] == "anthropic"
+        assert complete["data"]["tools_used"] == ["shell_exec"]
+        assert complete["data"]["cost"] == {"total_cost_usd": 0.0042}
+        assert handle.to_dict()["resolved_provider"] == "anthropic"
+
+    def test_late_join_terminal_event_carries_summary_fields(
+        self, registry: RunRegistry, bus: MessageBus
+    ) -> None:
+        runtime = FakeRuntime(bus, response="done")
+        handle = registry.start(runtime=runtime, message="hi", session_id="s1")
+        list(registry.stream(handle.run_id))  # drain once
+
+        events = list(registry.stream(handle.run_id))  # late join / reconnect
+        assert events[-1]["event"] == "run.complete"
+        assert events[-1]["data"]["provider"] == "anthropic"
+        assert events[-1]["data"]["tools_used"] == ["shell_exec"]
 
     def test_events_for_other_sessions_are_not_leaked(
         self, registry: RunRegistry, bus: MessageBus

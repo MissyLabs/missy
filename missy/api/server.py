@@ -374,6 +374,13 @@ def _make_handler(
                 return self._handle_audit_events(params)
             if method == "GET" and path == f"{_API_PREFIX}/memory/search":
                 return self._handle_memory_search(params)
+            if method == "GET" and path == f"{_API_PREFIX}/scheduler/jobs":
+                return self._handle_list_scheduled_jobs()
+            if method == "POST" and path == f"{_API_PREFIX}/scheduler/jobs":
+                body = self._read_body()
+                if body is None:
+                    return ApiResponse.error("Invalid JSON body", 400)
+                return self._handle_create_scheduled_job(body)
 
             # Session collection
             if method == "POST" and path == f"{_API_PREFIX}/sessions":
@@ -417,6 +424,35 @@ def _make_handler(
                 if not control_id or "/" in control_id:
                     return ApiResponse.error("Not found", 404)
                 return self._handle_execute_control(control_id, body)
+
+            # Memory turn item routes — extract {id} segment
+            turns_prefix = f"{_API_PREFIX}/memory/turns/"
+            if path.startswith(turns_prefix):
+                rest = path[len(turns_prefix) :]
+                segments = rest.split("/", 1)
+                turn_id = segments[0]
+                sub = segments[1] if len(segments) > 1 else ""
+                if not turn_id:
+                    return ApiResponse.error("Not found", 404)
+                if method == "DELETE" and sub == "":
+                    return self._handle_delete_memory_turn(turn_id)
+                if method == "POST" and sub == "pin":
+                    body = self._read_body()
+                    if body is None:
+                        return ApiResponse.error("Invalid JSON body", 400)
+                    return self._handle_pin_memory_turn(turn_id, body)
+
+            # Scheduler job item routes — extract {id} segment
+            jobs_prefix = f"{_API_PREFIX}/scheduler/jobs/"
+            if path.startswith(jobs_prefix):
+                job_id = path[len(jobs_prefix) :]
+                if not job_id or "/" in job_id:
+                    return ApiResponse.error("Not found", 404)
+                if method == "DELETE":
+                    body = self._read_body() or {}
+                    return self._handle_execute_control(
+                        "scheduler.remove_job", {**body, "target": job_id}
+                    )
 
             # Session item routes — extract {id} segment
             prefix = f"{_API_PREFIX}/sessions/"
@@ -1092,10 +1128,12 @@ def _make_handler(
                 {
                     "turns": [
                         {
+                            "id": t.id,
                             "role": t.role,
                             "content": t.content,
                             "timestamp": t.timestamp,
                             "provider": t.provider,
+                            "pinned": bool(t.metadata.get("pinned")),
                         }
                         for t in turns
                     ]
@@ -1143,16 +1181,167 @@ def _make_handler(
                 {
                     "results": [
                         {
+                            "id": t.id,
                             "role": t.role,
                             "content": t.content,
                             "timestamp": t.timestamp,
                             "session_id": t.session_id,
                             "provider": t.provider,
+                            "pinned": bool(t.metadata.get("pinned")),
                         }
                         for t in turns
                     ]
                 }
             )
+
+        def _handle_delete_memory_turn(self, turn_id: str) -> tuple[int, dict]:
+            """DELETE /api/v1/memory/turns/{id} — permanently delete a turn."""
+            if memory_store is None:
+                return ApiResponse.error("Memory store unavailable", 503)
+            try:
+                deleted = memory_store.delete_turn(turn_id)
+            except Exception as exc:
+                logger.warning("Memory delete error: %s", exc)
+                return ApiResponse.error("Memory store unavailable", 503)
+            result = "allow" if deleted else "deny"
+            self._emit_web_audit(
+                event_type="web.memory",
+                result=result,
+                action="memory.delete_turn",
+                subsystem="memory",
+                severity="info" if deleted else "warning",
+                turn_id=turn_id,
+            )
+            if not deleted:
+                return ApiResponse.error(f"Turn '{turn_id}' not found", 404)
+            return ApiResponse.ok({"deleted": turn_id})
+
+        def _handle_pin_memory_turn(self, turn_id: str, body: dict) -> tuple[int, dict]:
+            """POST /api/v1/memory/turns/{id}/pin — pin or unpin a turn.
+
+            Request body fields:
+                pinned (bool, default True): Desired pinned state.
+            """
+            if memory_store is None:
+                return ApiResponse.error("Memory store unavailable", 503)
+            pinned = bool(body.get("pinned", True))
+            try:
+                updated = memory_store.set_turn_pinned(turn_id, pinned)
+            except Exception as exc:
+                logger.warning("Memory pin error: %s", exc)
+                return ApiResponse.error("Memory store unavailable", 503)
+            result = "allow" if updated else "deny"
+            self._emit_web_audit(
+                event_type="web.memory",
+                result=result,
+                action="memory.set_pinned",
+                subsystem="memory",
+                severity="info",
+                turn_id=turn_id,
+                pinned=pinned,
+            )
+            if not updated:
+                return ApiResponse.error(f"Turn '{turn_id}' not found", 404)
+            return ApiResponse.ok({"turn_id": turn_id, "pinned": pinned})
+
+        def _handle_list_scheduled_jobs(self) -> tuple[int, dict]:
+            """GET /api/v1/scheduler/jobs — list scheduled jobs in full detail."""
+            scheduler = getattr(runtime, "_scheduler", None) if runtime is not None else None
+            if scheduler is None:
+                return ApiResponse.ok({"jobs": []})
+            try:
+                jobs = list(scheduler.list_jobs())
+            except Exception as exc:
+                logger.warning("Scheduler list error: %s", exc)
+                return ApiResponse.error("Scheduler unavailable", 503)
+            return ApiResponse.ok(
+                {
+                    "jobs": [
+                        job.to_dict() if hasattr(job, "to_dict") else _job_fallback_dict(job)
+                        for job in jobs
+                    ]
+                }
+            )
+
+        def _handle_create_scheduled_job(self, body: dict) -> tuple[int, dict]:
+            """POST /api/v1/scheduler/jobs — create a new scheduled job.
+
+            Request body fields:
+                name (str, required): Human-readable job name.
+                schedule (str, required): Human-readable schedule string.
+                task (str, required): Prompt/task text run when the job fires.
+                provider (str, optional): AI provider name.
+                description (str, optional): Job description.
+                active_hours (str, optional): ``"HH:MM-HH:MM"`` active window.
+                timezone (str, optional): IANA timezone string.
+            """
+            scheduler = getattr(runtime, "_scheduler", None) if runtime is not None else None
+            if scheduler is None:
+                return ApiResponse.error("Scheduler unavailable", 503)
+
+            name = str(body.get("name") or "").strip()[:128]
+            schedule = str(body.get("schedule") or "").strip()[:256]
+            task = str(body.get("task") or "").strip()
+            provider = str(body.get("provider") or "anthropic").strip()[:64]
+            description = str(body.get("description") or "")[:512]
+            active_hours = str(body.get("active_hours") or "")[:32]
+            timezone = str(body.get("timezone") or "")[:64]
+
+            if not name or not schedule or not task:
+                self._emit_web_audit(
+                    event_type="web.scheduler",
+                    result="deny",
+                    action="scheduler.job.add",
+                    subsystem="scheduler",
+                    severity="warning",
+                    reason="missing_required_field",
+                )
+                return ApiResponse.error("name, schedule, and task are required", 400)
+
+            try:
+                job = scheduler.add_job(
+                    name,
+                    schedule,
+                    task,
+                    provider=provider,
+                    description=description,
+                    active_hours=active_hours,
+                    timezone=timezone,
+                )
+            except ValueError as exc:
+                self._emit_web_audit(
+                    event_type="web.scheduler",
+                    result="deny",
+                    action="scheduler.job.add",
+                    subsystem="scheduler",
+                    severity="warning",
+                    reason="invalid_schedule",
+                    error=str(exc)[:240],
+                )
+                return ApiResponse.error(str(exc), 400)
+            except Exception as exc:
+                logger.warning("Scheduler add_job error: %s", exc)
+                self._emit_web_audit(
+                    event_type="web.scheduler",
+                    result="error",
+                    action="scheduler.job.add",
+                    subsystem="scheduler",
+                    severity="warning",
+                    reason="scheduler_error",
+                )
+                return ApiResponse.error("Failed to create scheduled job", 503)
+
+            self._emit_web_audit(
+                event_type="web.scheduler",
+                result="allow",
+                action="scheduler.job.add",
+                subsystem="scheduler",
+                severity="info",
+                job_id=job.id,
+                name=name,
+                schedule=schedule,
+            )
+            return ApiResponse.created(job.to_dict() if hasattr(job, "to_dict") else {"id": job.id})
 
         def log_message(self, format: str, *args: object) -> None:  # type: ignore[override]
             logger.debug("api: " + format, *args)
@@ -1163,6 +1352,17 @@ def _make_handler(
 # ---------------------------------------------------------------------------
 # Stale-IP eviction helper (called under rate_lock)
 # ---------------------------------------------------------------------------
+
+
+def _job_fallback_dict(job: Any) -> dict[str, Any]:
+    """Best-effort serialization for job-like objects without ``to_dict``."""
+    return {
+        "id": str(getattr(job, "id", "")),
+        "name": str(getattr(job, "name", "")),
+        "schedule": str(getattr(job, "schedule", "")),
+        "provider": str(getattr(job, "provider", "")),
+        "enabled": bool(getattr(job, "enabled", False)),
+    }
 
 
 def _evict_stale(tracker: dict, cutoff: float) -> None:

@@ -667,7 +667,7 @@ dependencies on other `missy` modules.
 
 | Field | Value |
 |-------|-------|
-| **Purpose** | SQLite-backed memory with FTS5 full-text search at `~/.missy/memory.db`. |
+| **Purpose** | SQLite-backed memory with FTS5 full-text search at `~/.missy/memory.db`. `delete_turn()` permanently removes a single turn (and its FTS index entry); `set_turn_pinned()` sets/clears a `pinned` flag in the turn's `metadata` JSON blob (no schema migration) that `cleanup()` respects — pinned turns are exempt from age-based deletion. Both back the Web TUI memory browser's per-turn delete/pin controls. |
 | **Key exports** | `SQLiteMemoryStore` |
 | **Internal deps** | `missy.memory.store` |
 
@@ -731,15 +731,15 @@ dependencies on other `missy` modules.
 
 | Field | Value |
 |-------|-------|
-| **Purpose** | Agent-as-a-Service REST API and Web TUI operator console entrypoint. Loopback-only binding, API key + cookie-session auth, CSRF-protected mutations, rate limiting, secrets censoring. Uses `ThreadingHTTPServer` so long-lived SSE connections do not block other requests. |
+| **Purpose** | Agent-as-a-Service REST API and Web TUI operator console entrypoint. Loopback-only binding, API key + cookie-session auth, CSRF-protected mutations, rate limiting, secrets censoring. Uses `ThreadingHTTPServer` so long-lived SSE connections do not block other requests. Routes include session/run/chat/memory endpoints plus `GET/POST /api/v1/scheduler/jobs`, `DELETE /api/v1/scheduler/jobs/{id}` (thin alias for the `scheduler.remove_job` control), `DELETE /api/v1/memory/turns/{id}`, and `POST /api/v1/memory/turns/{id}/pin`. |
 | **Key exports** | `ApiConfig`, `ApiServer`, `ApiResponse` |
-| **Internal deps** | `missy.agent.runtime`, `missy.security.censor`, `missy.api.run_stream`, `missy.api.web_console`, `missy.api.web_sessions`, `missy.api.audit_browser`, `missy.api.diagnostics`, `missy.api.operator_controls` |
+| **Internal deps** | `missy.agent.runtime`, `missy.security.censor`, `missy.api.run_stream`, `missy.api.web_console`, `missy.api.web_sessions`, `missy.api.audit_browser`, `missy.api.diagnostics`, `missy.api.operator_controls`, `missy.scheduler.manager` |
 
 ### missy.api.run_stream
 
 | Field | Value |
 |-------|-------|
-| **Purpose** | Background agent-run execution with Server-Sent Events streaming for the "ask the bot and watch a run stream" operator workflow. Runs `AgentRuntime.run` on a daemon thread, mirrors `agent.run.start`/`tool.request`/`tool.result` bus events into a per-run queue, and enforces one in-flight run per session. Late-joining/reconnecting streams get a synthesized terminal event instead of hanging. |
+| **Purpose** | Background agent-run execution with Server-Sent Events streaming for the "ask the bot and watch a run stream" operator workflow. Runs `AgentRuntime.run` on a daemon thread, mirrors `agent.run.start`/`tool.request`/`tool.result` bus events into a per-run queue, and enforces one in-flight run per session. Late-joining/reconnecting streams get a synthesized terminal event instead of hanging. Also subscribes to `agent.run.complete` to fold the resolved provider, tools used, and cost summary into the terminal `run.complete` event/poll response. |
 | **Key exports** | `RunRegistry`, `RunHandle`, `RunConflictError`, `format_sse` |
 | **Internal deps** | `missy.api.audit_browser` (redaction), `missy.core.message_bus` |
 
@@ -747,7 +747,7 @@ dependencies on other `missy` modules.
 
 | Field | Value |
 |-------|-------|
-| **Purpose** | Server-rendered HTML/CSS/JS for the operator console: dashboard, run console (prompt + live SSE stream), audit browser, diagnostics, and safe controls. No frontend build step — plain HTML/CSS/vanilla JS served inline. |
+| **Purpose** | Server-rendered HTML/CSS/JS for the operator console: dashboard, run console (prompt + live SSE stream with provider/tools/cost summary), scheduled-jobs panel (list/create/remove), memory browser (search/pin/delete), audit browser, diagnostics, and safe controls. No frontend build step — plain HTML/CSS/vanilla JS served inline. |
 | **Key exports** | `render_console()`, `render_login()`, `render_message()`, `console_css()`, `console_script()` |
 | **Internal deps** | None (pure rendering; consumes only the CSRF token passed in) |
 
@@ -779,7 +779,7 @@ dependencies on other `missy` modules.
 
 | Field | Value |
 |-------|-------|
-| **Purpose** | Policy-shaped, confirmation-gated safe controls exposed to the console (set default provider, pause/resume scheduled jobs) with structured audit detail. |
+| **Purpose** | Policy-shaped, confirmation-gated safe controls exposed to the console (set default provider, pause/resume/remove scheduled jobs) with structured audit detail. |
 | **Key exports** | `list_operator_controls()`, `execute_operator_control()` |
 | **Internal deps** | `missy.api.audit_browser` |
 

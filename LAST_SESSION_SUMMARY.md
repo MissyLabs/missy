@@ -4,57 +4,60 @@ Date: 2026-07-09
 
 ## Changed
 
-- Added `missy/api/run_stream.py`: `RunRegistry`/`RunHandle` execute
-  `AgentRuntime.run()` on a background thread, mirror `agent.run.start` /
-  `tool.request` / `tool.result` message-bus events into a per-run queue
-  (strictly session-scoped, redacted via the existing audit redaction
-  helper), and enforce one in-flight run per session. Reconnecting after a
-  run finishes returns the terminal state immediately instead of hanging.
-- Added `POST /api/v1/runs`, `GET /api/v1/runs/{id}`,
-  `GET /api/v1/runs?session_id=`, and `GET /api/v1/runs/{id}/events` (SSE)
-  to `missy/api/server.py`. The SSE route reuses the standard auth and rate
-  limiting; a conflicting run-start (409) is recorded as a `web.run` audit
-  denial.
-- Swapped `HTTPServer` for `ThreadingHTTPServer` in `ApiServer` so a
-  long-lived SSE connection can't block other requests on the same process.
-- `AGENT_RUN_COMPLETE` bus events (`missy/agent/runtime.py`) now carry
-  `cost_detail` under a `cost` key, matching what the audit event already
-  recorded.
-- Added an "Ask Missy" run console panel to `missy/api/web_console.py`:
-  prompt box + live SSE-driven activity log (tool calls, completion,
-  errors) with accessible markup (`role="log"`, `aria-live="polite"`,
-  labeled controls, Enter/Shift+Enter handling).
-- Added 19 unit tests (`tests/api/test_run_stream.py`) and 16 integration
-  tests (`TestRuns` in `tests/api/test_server.py`).
-- Updated `docs/operations.md` (new "Web TUI / operator console" section)
-  and `docs/implementation/module-map.md` (the `missy.api` section was
-  stale — missing `web_console`, `web_sessions`, `audit_browser`,
-  `diagnostics`, `operator_controls` entirely; now documents all of them
-  plus the new `run_stream`).
-- Rewrote `OPENCLAW_GAP_ANALYSIS.md`, `AUDIT_SECURITY.md`,
-  `AUDIT_CONNECTIVITY.md`, and `TEST_EDGE_CASES.md` for the Web TUI focus
-  (they still described the prior OpenAI-provider-overhaul branch's work).
+- `missy/api/run_stream.py`: added a bus subscription on `agent.run.complete`
+  (`_SUMMARY_TOPIC`) that captures `resolved_provider`/`tools_used`/`cost`
+  onto the `RunHandle` and folds them into both the terminal SSE
+  `run.complete` event and `RunHandle.to_dict()` (so `GET /api/v1/runs/{id}`
+  also carries them). Confirmed no race with `runtime.run()`'s synchronous
+  `MessageBus.publish()`.
+- `missy/api/operator_controls.py`: added `scheduler.remove_job`, a third
+  confirmation-gated scheduler control (destructive-flagged) alongside
+  pause/resume.
+- `missy/api/server.py`: new routes `GET/POST /api/v1/scheduler/jobs`,
+  `DELETE /api/v1/scheduler/jobs/{id}` (delegates to `scheduler.remove_job`),
+  `DELETE /api/v1/memory/turns/{id}`, `POST /api/v1/memory/turns/{id}/pin`.
+  Memory search/history responses now include each turn's `id` and `pinned`.
+- `missy/memory/sqlite_store.py`: added `delete_turn()` and
+  `set_turn_pinned()` (flag lives in the existing `metadata` JSON blob, no
+  schema migration); `cleanup()` now exempts pinned turns via
+  `json_extract(metadata, '$.pinned')`.
+- `missy/memory/resilient.py`: `ResilientMemoryStore` delegates both new
+  methods, pruning its in-memory cache on delete even when the primary
+  store fails.
+- `missy/api/web_console.py`: new **Scheduled Jobs** panel (list/create/
+  remove) and **Memory Browser** panel (search/pin/delete); the run
+  console's completion handler now shows a provider/tools/cost summary
+  line.
+- Tests: +15 integration tests (`tests/api/test_server.py`), +2 unit tests
+  (`tests/api/test_run_stream.py`), +13 unit tests (new
+  `tests/memory/test_turn_pin_delete.py`).
+- Docs: `docs/operations.md` and `docs/implementation/module-map.md` updated
+  for the new routes/methods. `OPENCLAW_GAP_ANALYSIS.md`, `AUDIT_SECURITY.md`,
+  `AUDIT_CONNECTIVITY.md`, `TEST_EDGE_CASES.md` rewritten for this session's
+  changes (the security/connectivity audits are now hand-written summaries
+  of the *new* attack surface rather than stale grep dumps from an earlier
+  session).
 
 ## Verification
 
 ```text
-python3 -m pytest tests/api/test_run_stream.py -v
-19 passed
+python3 -m pytest tests/memory/test_turn_pin_delete.py -q
+13 passed
 ```
 
 ```text
-python3 -m pytest tests/api/test_server.py -k TestRuns -v
-15 passed
+python3 -m pytest tests/api/test_run_stream.py -q
+21 passed
 ```
 
 ```text
-python3 -m pytest tests/api/ -q
-122 passed
+python3 -m pytest tests/api/test_server.py -q
+118 passed
 ```
 
 ```text
-python3 -m pytest tests/agent/ -q
-4109 passed, 4 skipped
+python3 -m pytest tests/api/ tests/memory/ -q
+738 passed, 7 skipped
 ```
 
 ```text
@@ -63,27 +66,35 @@ All checks passed!
 ```
 
 ```text
-python3 -m ruff format --check <all touched files>
-All checks passed!
+python3 -m ruff format --check missy/ tests/
+733 files already formatted
 ```
+
+Also manually verified end-to-end against a live (non-mocked) `ApiServer`:
+login → CSRF → scheduler job create/list/remove (with/without confirmation)
+→ memory search/pin/delete → deletion confirmed via re-search; and
+separately verified the run cost/provider/tools_used enrichment through both
+the poll endpoint and the terminal SSE event.
 
 Full-repo `python3 -m pytest -q` was run before ending the session; see
 `TEST_RESULTS.md` for the exact count.
 
 ## Remains
 
-- Console doesn't yet render cost/model-routing/fallback detail per run
-  (the data already flows through the bus and SSE stream).
-- No scheduler jobs panel (create/remove) or memory browser panel yet —
-  these are the largest remaining "full bot-control coverage" gaps.
+- No dashboard-wide cost/usage panel (aggregate spend) — cost is now visible
+  per-run but not aggregated.
 - No command palette / global search / skip link across the console.
+- Safe controls cover providers, scheduler (pause/resume/remove), and now
+  memory turns, but not tools/skills/plugins/Discord/voice/vision/webhooks/
+  secrets/config.
 - No dashboard-wide offline/reconnecting banner (only the run console has
   explicit connection-lost handling).
-- Run history is in-memory only (matches the existing `_SessionRegistry`
-  pattern) — does not survive an `ApiServer` restart.
+- Run history is still in-memory only (matches the existing
+  `_SessionRegistry` pattern) — does not survive an `ApiServer` restart.
 
 ## First Next Step
 
-Render `cost` / `provider` / `tools_used` from the run stream in the
-console's run log (backend already emits it), then start the scheduler
-jobs panel to close the next-largest "full bot-control coverage" gap.
+Add a dashboard-wide cost/usage panel backed by
+`SQLiteMemoryStore.get_total_costs()`, then extend `operator_controls.py`
+with tool/skill enable-disable controls to keep closing the "full
+bot-control coverage" gap.

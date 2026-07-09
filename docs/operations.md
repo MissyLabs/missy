@@ -243,6 +243,34 @@ curl -N -H "X-API-Key: $MISSY_API_KEY" \
   http://127.0.0.1:8080/api/v1/runs/<run_id>/events   # text/event-stream
 ```
 
+Once a run completes, both the poll response (`GET /api/v1/runs/{id}`) and the
+terminal SSE `run.complete` event carry `resolved_provider`/`provider`,
+`tools_used`, and `cost` (the same summary already recorded on the
+`agent.run.complete` audit event), so the console's run log renders which
+provider actually served the request, which tools it called, and what it cost
+without a second request.
+
+The console's **Scheduled Jobs** panel covers the full job lifecycle:
+listing (`GET /api/v1/scheduler/jobs`), creation via a guarded form (`POST
+/api/v1/scheduler/jobs` — `name`, `schedule`, `task` required; `provider`,
+`description`, `active_hours`, `timezone` optional), and pause/resume/remove
+through the existing safe-controls confirmation flow (`scheduler.pause_job` /
+`scheduler.resume_job` / `scheduler.remove_job`, each requiring a
+`confirm: "<action>-job:<id>"` body field). `DELETE
+/api/v1/scheduler/jobs/{id}` is a thin alias for the `scheduler.remove_job`
+control so scripts can use a conventional REST verb while still going through
+the same confirmation and audit path as the console button.
+
+The **Memory Browser** panel searches conversation history
+(`GET /api/v1/memory/search?q=...&session_id=...`, same endpoint the
+dashboard already used) and adds per-turn retention controls:
+`POST /api/v1/memory/turns/{id}/pin` (body `{"pinned": true|false}`) marks a
+turn to survive `missy sessions cleanup` / the memory store's age-based
+`cleanup()`, and `DELETE /api/v1/memory/turns/{id}` permanently removes a
+single turn (and its full-text index entry). Both search results and session
+history responses now include each turn's `id` and `pinned` state so the UI
+can render pin/unpin and delete actions inline.
+
 ---
 
 ## 4. Monitoring and Logs

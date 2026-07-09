@@ -177,6 +177,10 @@ class TestOperatorConsole:
         assert 'id="audit-result"' in html
         assert 'id="controls"' in html
         assert "/api/v1' + path" in html
+        assert 'id="scheduler-jobs"' in html
+        assert 'id="scheduler-form"' in html
+        assert 'id="memory-query"' in html
+        assert 'id="memory-results"' in html
 
     def test_console_script_keeps_safe_client_side_escaping_and_control_post(self) -> None:
         script = console_script()
@@ -186,6 +190,22 @@ class TestOperatorConsole:
         assert "X-CSRF-Token" in script
         assert "data-control-label" in script
         assert "data-target-label" in script
+
+    def test_console_script_includes_scheduler_and_memory_wiring(self) -> None:
+        script = console_script()
+
+        assert "/scheduler/jobs" in script
+        assert "job-remove" in script
+        assert "remove-job:" in script
+        assert "/memory/turns/" in script
+        assert "memory-pin" in script
+        assert "memory-delete" in script
+
+    def test_console_script_renders_run_complete_summary(self) -> None:
+        script = console_script()
+
+        assert "data.tools_used" in script
+        assert "data.cost" in script
         assert "JSON.stringify({target, confirm: confirmation})" in script
 
     def test_root_redirects_to_login_without_browser_session(self) -> None:
@@ -1014,11 +1034,13 @@ class TestMemorySearch:
 
         # Build a mock ConversationTurn-like object.
         turn = MagicMock()
+        turn.id = "turn-1"
         turn.role = "user"
         turn.content = "test content"
         turn.timestamp = "2026-01-01T00:00:00"
         turn.session_id = "sess-1"
         turn.provider = "anthropic"
+        turn.metadata = {}
         mock_store.search.return_value = [turn]
 
         cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
@@ -1346,6 +1368,332 @@ class TestOperatorControls:
             events = audit.json()["data"]["events"]
             assert any(e["detail"]["action"] == "scheduler.pause_job" for e in events)
             assert any(e["detail"]["action"] == "scheduler.resume_job" for e in events)
+        finally:
+            srv.stop()
+
+    def test_controls_lists_scheduler_remove_targets(self) -> None:
+        port = _free_port()
+        scheduler = MagicMock()
+        scheduler.list_jobs.return_value = [
+            SimpleNamespace(
+                id="job-1",
+                name="Morning summary",
+                schedule="daily at 09:00",
+                provider="anthropic",
+                enabled=True,
+            )
+        ]
+        runtime = SimpleNamespace(_scheduler=scheduler)
+
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, runtime=runtime)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            resp = httpx.get(f"http://127.0.0.1:{port}/api/v1/controls", headers=HEADERS)
+            controls = {c["id"]: c for c in resp.json()["data"]["controls"]}
+            remove_control = controls["scheduler.remove_job"]
+            assert remove_control["destructive"] is True
+            targets = {t["name"]: t for t in remove_control["targets"]}
+            assert targets["job-1"]["confirmation"] == "remove-job:job-1"
+        finally:
+            srv.stop()
+
+    def test_remove_scheduler_job_requires_confirmation_and_audits_denial(self, tmp_path) -> None:
+        event_bus.clear()
+        init_audit_logger(str(tmp_path / "audit.jsonl"))
+        port = _free_port()
+        scheduler = MagicMock()
+        scheduler.list_jobs.return_value = [SimpleNamespace(id="job-1", name="Morning summary")]
+        runtime = SimpleNamespace(_scheduler=scheduler)
+
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, runtime=runtime)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            resp = httpx.post(
+                f"http://127.0.0.1:{port}/api/v1/controls/scheduler.remove_job",
+                json={"target": "job-1"},
+                headers=HEADERS,
+            )
+            assert resp.status_code == 409
+            scheduler.remove_job.assert_not_called()
+
+            audit = httpx.get(
+                f"http://127.0.0.1:{port}/api/v1/audit"
+                "?event_type=web.control&result=deny&subsystem=scheduler&limit=10",
+                headers=HEADERS,
+            )
+            events = audit.json()["data"]["events"]
+            assert any(
+                e["detail"]["action"] == "scheduler.remove_job"
+                and e["detail"]["reason"] == "confirmation_required"
+                for e in events
+            )
+        finally:
+            srv.stop()
+
+    def test_remove_scheduler_job_via_controls_endpoint_mutates_and_audits(self, tmp_path) -> None:
+        event_bus.clear()
+        init_audit_logger(str(tmp_path / "audit.jsonl"))
+        port = _free_port()
+        scheduler = MagicMock()
+        scheduler.list_jobs.return_value = [SimpleNamespace(id="job-1", name="Morning summary")]
+        runtime = SimpleNamespace(_scheduler=scheduler)
+
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, runtime=runtime)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            resp = httpx.post(
+                f"http://127.0.0.1:{port}/api/v1/controls/scheduler.remove_job",
+                json={"target": "job-1", "confirm": "remove-job:job-1"},
+                headers=HEADERS,
+            )
+            assert resp.status_code == 200
+            assert resp.json()["data"]["removed"] is True
+            scheduler.remove_job.assert_called_once_with("job-1")
+        finally:
+            srv.stop()
+
+    def test_delete_scheduler_job_route_delegates_to_remove_control(self) -> None:
+        port = _free_port()
+        scheduler = MagicMock()
+        scheduler.list_jobs.return_value = [SimpleNamespace(id="job-1", name="Morning summary")]
+        runtime = SimpleNamespace(_scheduler=scheduler)
+
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, runtime=runtime)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            resp = httpx.request(
+                "DELETE",
+                f"http://127.0.0.1:{port}/api/v1/scheduler/jobs/job-1",
+                json={"confirm": "remove-job:job-1"},
+                headers=HEADERS,
+            )
+            assert resp.status_code == 200
+            scheduler.remove_job.assert_called_once_with("job-1")
+        finally:
+            srv.stop()
+
+
+# ---------------------------------------------------------------------------
+# Scheduler jobs endpoint (list/create)
+# ---------------------------------------------------------------------------
+
+
+class TestSchedulerJobs:
+    def test_list_jobs_without_scheduler_returns_empty(self, client: httpx.Client) -> None:
+        resp = client.get("/scheduler/jobs")
+        assert resp.status_code == 200
+        assert resp.json()["data"]["jobs"] == []
+
+    def test_list_jobs_returns_full_detail(self) -> None:
+        from missy.scheduler.jobs import ScheduledJob
+
+        port = _free_port()
+        job = ScheduledJob(name="Morning summary", schedule="daily at 09:00", task="Summarize")
+        scheduler = MagicMock()
+        scheduler.list_jobs.return_value = [job]
+        runtime = SimpleNamespace(_scheduler=scheduler)
+
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, runtime=runtime)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            resp = httpx.get(f"http://127.0.0.1:{port}/api/v1/scheduler/jobs", headers=HEADERS)
+            assert resp.status_code == 200
+            jobs = resp.json()["data"]["jobs"]
+            assert len(jobs) == 1
+            assert jobs[0]["name"] == "Morning summary"
+            assert jobs[0]["schedule"] == "daily at 09:00"
+            assert jobs[0]["task"] == "Summarize"
+        finally:
+            srv.stop()
+
+    def test_create_job_requires_scheduler(self, client: httpx.Client) -> None:
+        resp = client.post(
+            "/scheduler/jobs",
+            json={"name": "Test", "schedule": "every 5 minutes", "task": "Do a thing"},
+        )
+        assert resp.status_code == 503
+
+    def test_create_job_requires_required_fields(self, tmp_path) -> None:
+        port = _free_port()
+        scheduler = MagicMock()
+        runtime = SimpleNamespace(_scheduler=scheduler)
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, runtime=runtime)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            resp = httpx.post(
+                f"http://127.0.0.1:{port}/api/v1/scheduler/jobs",
+                json={"name": "", "schedule": "", "task": ""},
+                headers=HEADERS,
+            )
+            assert resp.status_code == 400
+            scheduler.add_job.assert_not_called()
+        finally:
+            srv.stop()
+
+    def test_create_job_success_audits_allow(self, tmp_path) -> None:
+        from missy.scheduler.jobs import ScheduledJob
+
+        event_bus.clear()
+        init_audit_logger(str(tmp_path / "audit.jsonl"))
+        port = _free_port()
+        created = ScheduledJob(
+            name="Nightly backup", schedule="daily at 02:00", task="Back things up"
+        )
+        scheduler = MagicMock()
+        scheduler.add_job.return_value = created
+        runtime = SimpleNamespace(_scheduler=scheduler)
+
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, runtime=runtime)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            resp = httpx.post(
+                f"http://127.0.0.1:{port}/api/v1/scheduler/jobs",
+                json={
+                    "name": "Nightly backup",
+                    "schedule": "daily at 02:00",
+                    "task": "Back things up",
+                    "provider": "anthropic",
+                },
+                headers=HEADERS,
+            )
+            assert resp.status_code == 201
+            assert resp.json()["data"]["name"] == "Nightly backup"
+            scheduler.add_job.assert_called_once()
+
+            audit = httpx.get(
+                f"http://127.0.0.1:{port}/api/v1/audit"
+                "?event_type=web.scheduler&result=allow&subsystem=scheduler&limit=10",
+                headers=HEADERS,
+            )
+            events = audit.json()["data"]["events"]
+            assert any(e["detail"]["action"] == "scheduler.job.add" for e in events)
+        finally:
+            srv.stop()
+
+    def test_create_job_invalid_schedule_returns_400(self, tmp_path) -> None:
+        port = _free_port()
+        scheduler = MagicMock()
+        scheduler.add_job.side_effect = ValueError("bad schedule string")
+        runtime = SimpleNamespace(_scheduler=scheduler)
+
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, runtime=runtime)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            resp = httpx.post(
+                f"http://127.0.0.1:{port}/api/v1/scheduler/jobs",
+                json={"name": "Test", "schedule": "nonsense", "task": "Do a thing"},
+                headers=HEADERS,
+            )
+            assert resp.status_code == 400
+        finally:
+            srv.stop()
+
+
+# ---------------------------------------------------------------------------
+# Memory turn item routes (pin/delete)
+# ---------------------------------------------------------------------------
+
+
+class TestMemoryTurns:
+    def test_delete_turn_without_memory_store_returns_503(self, client: httpx.Client) -> None:
+        resp = client.delete("/memory/turns/turn-1")
+        assert resp.status_code == 503
+
+    def test_delete_turn_not_found_returns_404(self) -> None:
+        port = _free_port()
+        mock_store = MagicMock()
+        mock_store.delete_turn.return_value = False
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, memory_store=mock_store)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            resp = httpx.delete(
+                f"http://127.0.0.1:{port}/api/v1/memory/turns/turn-1", headers=HEADERS
+            )
+            assert resp.status_code == 404
+        finally:
+            srv.stop()
+
+    def test_delete_turn_success_audits_allow(self, tmp_path) -> None:
+        event_bus.clear()
+        init_audit_logger(str(tmp_path / "audit.jsonl"))
+        port = _free_port()
+        mock_store = MagicMock()
+        mock_store.delete_turn.return_value = True
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, memory_store=mock_store)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            resp = httpx.delete(
+                f"http://127.0.0.1:{port}/api/v1/memory/turns/turn-1", headers=HEADERS
+            )
+            assert resp.status_code == 200
+            assert resp.json()["data"]["deleted"] == "turn-1"
+            mock_store.delete_turn.assert_called_once_with("turn-1")
+
+            audit = httpx.get(
+                f"http://127.0.0.1:{port}/api/v1/audit"
+                "?event_type=web.memory&result=allow&subsystem=memory&limit=10",
+                headers=HEADERS,
+            )
+            events = audit.json()["data"]["events"]
+            assert any(e["detail"]["action"] == "memory.delete_turn" for e in events)
+        finally:
+            srv.stop()
+
+    def test_pin_turn_success(self) -> None:
+        port = _free_port()
+        mock_store = MagicMock()
+        mock_store.set_turn_pinned.return_value = True
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, memory_store=mock_store)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            resp = httpx.post(
+                f"http://127.0.0.1:{port}/api/v1/memory/turns/turn-1/pin",
+                json={"pinned": True},
+                headers=HEADERS,
+            )
+            assert resp.status_code == 200
+            assert resp.json()["data"] == {"turn_id": "turn-1", "pinned": True}
+            mock_store.set_turn_pinned.assert_called_once_with("turn-1", True)
+        finally:
+            srv.stop()
+
+    def test_unpin_turn_not_found_returns_404(self) -> None:
+        port = _free_port()
+        mock_store = MagicMock()
+        mock_store.set_turn_pinned.return_value = False
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, memory_store=mock_store)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            resp = httpx.post(
+                f"http://127.0.0.1:{port}/api/v1/memory/turns/turn-1/pin",
+                json={"pinned": False},
+                headers=HEADERS,
+            )
+            assert resp.status_code == 404
         finally:
             srv.stop()
 
