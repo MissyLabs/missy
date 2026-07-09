@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from missy.providers.base import BaseProvider, CompletionResponse, Message, ToolCall
+from missy.providers.base import BaseProvider, CompletionResponse, ToolCall
 from missy.tools.base import BaseTool, ToolPermissions, ToolResult
 from missy.tools.benchmark.benchmark_store import BenchmarkStore
 from missy.tools.benchmark.llm_runner import LLMBenchmarkRunner, LLMBenchmarkTask
