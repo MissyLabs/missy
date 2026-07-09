@@ -240,7 +240,7 @@ class LLMBenchmarkRunner:
         tool: Any,
         registry: Any = None,
         persist: bool = True,
-    ) -> "LLMSuiteRunReport":
+    ) -> LLMSuiteRunReport:
         """Run every task in *tasks* against ``tool`` and aggregate scores."""
         from datetime import UTC, datetime
 
