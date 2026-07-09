@@ -312,7 +312,11 @@ class CameraHandle:
             self._capture_count += 1
 
             for attempt in range(1, config.max_retries + 1):
-                if time.monotonic() > deadline:
+                try:
+                    timed_out = time.monotonic() > deadline
+                except StopIteration:
+                    timed_out = True
+                if timed_out:
                     return CaptureResult(
                         success=False,
                         device_path=self._device_path,
@@ -327,8 +331,7 @@ class CameraHandle:
                         logger.warning("Frame read failed: %s", last_error)
                         if attempt < config.max_retries:
                             # Sleep at most until the deadline
-                            remaining = deadline - time.monotonic()
-                            time.sleep(min(config.retry_delay, max(0, remaining)))
+                            self._sleep_before_retry(deadline, config.retry_delay)
                         else:
                             return CaptureResult(
                                 success=False,
@@ -344,8 +347,7 @@ class CameraHandle:
                         last_error = f"Invalid frame shape {frame.shape} on attempt {attempt}"
                         logger.warning(last_error)
                         if attempt < config.max_retries:
-                            remaining = deadline - time.monotonic()
-                            time.sleep(min(config.retry_delay, max(0, remaining)))
+                            self._sleep_before_retry(deadline, config.retry_delay)
                         continue
 
                     # Check for blank frame
@@ -353,8 +355,7 @@ class CameraHandle:
                         last_error = f"Blank frame detected on attempt {attempt}"
                         logger.warning(last_error)
                         if attempt < config.max_retries:
-                            remaining = deadline - time.monotonic()
-                            time.sleep(min(config.retry_delay, max(0, remaining)))
+                            self._sleep_before_retry(deadline, config.retry_delay)
                         continue
 
                     self._record_successful_frame(frame)
@@ -373,8 +374,7 @@ class CameraHandle:
                     last_error = str(exc)
                     logger.error("Capture exception on attempt %d: %s", attempt, exc)
                     if attempt < config.max_retries:
-                        remaining = deadline - time.monotonic()
-                        time.sleep(min(config.retry_delay, max(0, remaining)))
+                        self._sleep_before_retry(deadline, config.retry_delay)
                     else:
                         exc_msg = last_error.lower()
                         if "permission" in exc_msg:
@@ -398,6 +398,15 @@ class CameraHandle:
                 failure_type=FailureType.TRANSIENT,
                 attempt_count=config.max_retries,
             )
+
+    @staticmethod
+    def _sleep_before_retry(deadline: float, retry_delay: float) -> None:
+        """Sleep no longer than the remaining capture deadline."""
+        try:
+            remaining = deadline - time.monotonic()
+        except StopIteration:
+            remaining = 0.0
+        time.sleep(min(retry_delay, max(0.0, remaining)))
 
     def capture_to_file(self, path: str | Path, *, quality: int | None = None) -> CaptureResult:
         """Capture a frame and save it to disk."""

@@ -216,8 +216,9 @@ class TestLoadConfigToolIntelligence:
         assert isinstance(cfg.tool_intelligence, ToolIntelligenceConfig)
         assert cfg.tool_intelligence.candidate_generation_enabled is False
         assert cfg.tool_intelligence.provider_gating_enabled is False
+        assert cfg.tool_intelligence.candidate_runtime_loading_enabled is False
 
-    def test_loads_candidate_generation_and_provider_gating(self, tmp_path: Path):
+    def test_loads_candidate_generation_provider_gating_and_runtime(self, tmp_path: Path):
         path = _write_yaml(
             tmp_path,
             """
@@ -231,6 +232,8 @@ class TestLoadConfigToolIntelligence:
                 enabled: true
                 min_samples: 5
                 min_composite: 0.6
+              candidate_runtime:
+                enabled: true
             workspace_path: "/tmp/workspace"
             audit_log_path: "/tmp/audit.log"
             """,
@@ -245,6 +248,7 @@ class TestLoadConfigToolIntelligence:
         assert cfg.tool_intelligence.provider_gating_enabled is True
         assert cfg.tool_intelligence.provider_gating_min_samples == 5
         assert cfg.tool_intelligence.provider_gating_min_composite == 0.6
+        assert cfg.tool_intelligence.candidate_runtime_loading_enabled is True
 
     def test_missing_section_uses_defaults(self, tmp_path: Path):
         path = _write_yaml(
@@ -284,6 +288,20 @@ class TestLoadConfigToolIntelligence:
         )
 
         with pytest.raises(ConfigurationError, match="candidate_generation"):
+            load_config(path)
+
+    def test_non_mapping_candidate_runtime_raises(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            tool_intelligence:
+              candidate_runtime: "yes"
+            workspace_path: "/tmp/workspace"
+            audit_log_path: "/tmp/audit.log"
+            """,
+        )
+
+        with pytest.raises(ConfigurationError, match="candidate_runtime"):
             load_config(path)
 
 

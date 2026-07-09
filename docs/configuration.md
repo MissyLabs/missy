@@ -168,6 +168,36 @@ agents:
         deny: ["sessions_*"]
 ```
 
+## `tool_intelligence`
+
+Controls repeated-request tracking, candidate synthesis, provider benchmark
+gating, and candidate runtime loading. All mutating/execution-affecting
+features default to disabled.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `candidate_generation.enabled` | bool | `false` | Propose tool candidates from frequent request patterns. Candidates start as `proposed` and are not executable. |
+| `candidate_generation.min_pattern_count` | int | `3` | Minimum repeated requests before a pattern can be proposed as a candidate. |
+| `candidate_generation.allow_shell` | bool | `false` | Allow generated candidates to request shell permission. Approval and execution policy still apply. |
+| `candidate_generation.check_every_n_requests` | int | `5` | Throttle for pattern scans. |
+| `provider_gating.enabled` | bool | `false` | Hide weak tool/provider pairings from a turn based on benchmark evidence. |
+| `provider_gating.min_samples` | int | `3` | Minimum benchmark runs before provider gating trusts a score. |
+| `provider_gating.min_composite` | float | `0.4` | Composite score below which a provider is considered weak for a tool. |
+| `candidate_runtime.enabled` | bool | `false` | Register enabled candidates at runtime only when they have valid provenance, schema, provider flags, permissions, and explicit implementation metadata. |
+
+```yaml
+tool_intelligence:
+  candidate_generation:
+    enabled: true
+    min_pattern_count: 5
+  provider_gating:
+    enabled: true
+    min_samples: 3
+    min_composite: 0.55
+  candidate_runtime:
+    enabled: true
+```
+
 ---
 
 ## `scheduling`

@@ -158,6 +158,8 @@ class ToolCandidate:
         notes: Human-readable notes (denial reason, benchmark summary…).
         benchmark_scores: Per-provider :class:`BenchmarkSummary` instances.
         provider_enabled: Per-provider enablement flag based on benchmarks.
+        implementation: Explicit runtime binding metadata. Empty candidates
+            remain review metadata only and must not be loaded for execution.
         tags: Arbitrary string labels.
     """
 
@@ -177,6 +179,7 @@ class ToolCandidate:
     notes: str = ""
     benchmark_scores: list[BenchmarkSummary] = field(default_factory=list)
     provider_enabled: dict[str, bool] = field(default_factory=dict)
+    implementation: dict[str, Any] = field(default_factory=dict)
     tags: list[str] = field(default_factory=list)
 
     @classmethod
@@ -191,6 +194,7 @@ class ToolCandidate:
         examples: list[dict[str, Any]] | None = None,
         owner: str = "agent",
         tags: list[str] | None = None,
+        implementation: dict[str, Any] | None = None,
     ) -> ToolCandidate:
         now = datetime.now(UTC).isoformat()
         return cls(
@@ -206,6 +210,7 @@ class ToolCandidate:
             state=ToolLifecycleState.PROPOSED,
             created_at=now,
             updated_at=now,
+            implementation=dict(implementation or {}),
             tags=list(tags or []),
         )
 
@@ -227,6 +232,7 @@ class ToolCandidate:
             "notes": self.notes,
             "benchmark_scores": [b.to_dict() for b in self.benchmark_scores],
             "provider_enabled": self.provider_enabled,
+            "implementation": self.implementation,
             "tags": self.tags,
         }
 
@@ -251,6 +257,7 @@ class ToolCandidate:
             notes=row["notes"] or "",
             benchmark_scores=benchmark_scores,
             provider_enabled=json.loads(row["provider_enabled_json"] or "{}"),
+            implementation=json.loads(row["implementation_json"] or "{}"),
             tags=json.loads(row["tags_json"] or "[]"),
         )
 
@@ -283,8 +290,9 @@ class CandidateStore:
                         id, name, description, schema_json, permissions_json,
                         provenance, pattern_key, examples_json, version,
                         owner, state, created_at, updated_at, notes,
-                        benchmark_scores_json, provider_enabled_json, tags_json
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                        benchmark_scores_json, provider_enabled_json,
+                        implementation_json, tags_json
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     (
                         candidate.id,
@@ -303,6 +311,7 @@ class CandidateStore:
                         candidate.notes,
                         json.dumps([b.to_dict() for b in candidate.benchmark_scores]),
                         json.dumps(candidate.provider_enabled),
+                        json.dumps(candidate.implementation),
                         json.dumps(candidate.tags),
                     ),
                 )
@@ -617,6 +626,7 @@ class CandidateStore:
                         notes                TEXT NOT NULL DEFAULT '',
                         benchmark_scores_json TEXT NOT NULL DEFAULT '[]',
                         provider_enabled_json TEXT NOT NULL DEFAULT '{}',
+                        implementation_json  TEXT NOT NULL DEFAULT '{}',
                         tags_json            TEXT NOT NULL DEFAULT '[]'
                     );
 
@@ -626,6 +636,15 @@ class CandidateStore:
                         ON tool_candidates (name);
                     """
                 )
+                columns = {
+                    row["name"]
+                    for row in conn.execute("PRAGMA table_info(tool_candidates)").fetchall()
+                }
+                if "implementation_json" not in columns:
+                    conn.execute(
+                        "ALTER TABLE tool_candidates "
+                        "ADD COLUMN implementation_json TEXT NOT NULL DEFAULT '{}'"
+                    )
                 conn.commit()
             finally:
                 conn.close()

@@ -1248,6 +1248,7 @@ class AgentRuntime:
         """
         try:
             registry = get_tool_registry()
+            self._load_enabled_candidate_tools(registry)
             tool_names = [name for name in registry.list_tools() if registry.is_enabled(name)]
         except RuntimeError:
             return []
@@ -1274,6 +1275,28 @@ class AgentRuntime:
 
         tools_by_name = {name: registry.get(name) for name in tool_names}
         return [tool for name in allowed_names if (tool := tools_by_name.get(name)) is not None]
+
+    def _load_enabled_candidate_tools(self, registry: Any) -> None:
+        """Register enabled candidate tools when runtime loading is explicitly enabled."""
+        intel = getattr(self.config, "tool_intelligence", None)
+        if not bool(getattr(intel, "candidate_runtime_loading_enabled", False)):
+            return
+        if getattr(self, "_candidate_runtime_loaded", False):
+            return
+        try:
+            from missy.tools.intelligence import CandidateRuntimeLoader, get_candidate_store
+
+            report = CandidateRuntimeLoader(get_candidate_store(), registry).load_enabled(
+                self.config.provider
+            )
+            self._candidate_runtime_loaded = True
+            if report.skipped:
+                logger.info(
+                    "Candidate runtime loader skipped %d candidate(s).",
+                    len(report.skipped),
+                )
+        except Exception:
+            logger.debug("Candidate runtime loader failed; continuing with registered tools only.")
 
     def _apply_provider_gate(self, tool_names: list[str]) -> list[str]:
         """Filter *tool_names* through :class:`~missy.tools.intelligence.provider_gate.ToolProviderGate`.

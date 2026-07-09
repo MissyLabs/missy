@@ -4,27 +4,27 @@ Date: 2026-07-09
 
 ## Changed
 
-- Added Web/API candidate review endpoints:
-  `GET /api/v1/tool-candidates` and `GET /api/v1/tool-candidates/{id}`.
-- Added candidate safe controls:
-  `tool_candidate.import_benchmarks`, `tool_candidate.approve`,
-  `tool_candidate.enable`, and `tool_candidate.deny`.
-- Candidate controls reuse `CandidateStore` and
-  `CandidateBenchmarkReconciler`, require typed confirmations, and emit
-  structured `web.control` audit allow/deny events.
-- Candidate denial now requires an explicit review reason in the Web/API
-  control path.
-- API startup now attaches candidate and benchmark stores so the browser
-  console can surface eligible candidate controls through `GET /api/v1/controls`.
-- Updated operations docs and module map.
-- Added API tests for candidate list/show, control target discovery,
-  import/approve/enable, deny safeguards, and lifecycle-gate rejection.
+- Added an opt-in controlled runtime loader for enabled tool candidates.
+- Added persisted candidate `implementation` metadata with SQLite migration.
+- Added `CandidateRuntimeLoader` and `CandidateDelegatedTool`.
+- Runtime loading is gated by `tool_intelligence.candidate_runtime.enabled`.
+- The loader only registers enabled candidates for the active provider when
+  provenance, schema, permissions, provider flags, implementation type, and
+  target registration all validate.
+- The first supported implementation is a safe delegation wrapper:
+  `{"type": "delegated_tool", "tool": "<registered_tool>"}`.
+- Loader allow/deny outcomes emit structured candidate audit events.
+- Hardened `missy.vision.capture` retry deadline handling for exhausted mocked
+  clocks, fixing a late full-suite flake.
+- Updated configuration, operations, and module-map docs.
+- Added tests for loader allow/deny behavior, runtime opt-in wiring, config
+  parsing, and candidate-store implementation persistence.
 
 ## Verification
 
 ```text
-python3 -m pytest tests/api/test_server.py::TestOperatorControls tests/tools/test_benchmark_reconciler.py tests/tools/test_candidate_store.py tests/cli/test_tool_provider_cli.py -q
-73 passed
+python3 -m pytest tests/vision/test_frame_eviction_hardening.py::TestCaptureDeadlineAwareSleep tests/tools/test_candidate_loader.py tests/tools/test_candidate_store.py tests/agent/test_tool_intelligence_wiring.py tests/config/test_settings.py -q
+122 passed
 ```
 
 ```text
@@ -34,27 +34,28 @@ All checks passed!
 
 ```text
 python3 -m ruff format --check missy/ tests/
-743 files already formatted
+745 files already formatted
 ```
 
 ```text
 python3 -m pytest -q -o faulthandler_timeout=120
-20648 passed, 13 skipped in 423.79s (0:07:03)
+20656 passed, 13 skipped in 420.71s (0:07:00)
 ```
 
 ## Remains
 
-- Enabled candidates still need a controlled runtime loading path with
-  schema/provenance/policy/test gates.
+- Candidate implementation metadata needs operator-facing CLI/API review and
+  mutation controls.
+- Runtime loader supports only `delegated_tool`; additional adapters need
+  separate policy, sandboxing, provenance, test, and rollback gates.
 - Provider fallback recommendations exist in CLI/provider gate code but are
   not yet surfaced in runtime responses when a tool is gated off.
 - Candidate review can import schema-score aggregates, but provider-family
   schema compatibility reporting is still limited.
-- API controls still lack explicit `experimental` and `deprecated`
-  transitions.
+- API controls still lack explicit `experimental` and `deprecated` transitions.
 
 ## First Next Step
 
-Implement the controlled loader for enabled approved candidates, keeping it
-behind policy, provenance, schema, benchmark/provider-enable, test, and
-rollback gates.
+Add safe CLI/API/operator controls for setting candidate implementation
+metadata, starting with `delegated_tool`, with typed confirmations and audit
+events.

@@ -286,6 +286,26 @@ provider flags using conservative thresholds for sample count, composite score,
 safety, and schema adherence. It can move `proposed` or `experimental`
 candidates to `benchmarked`, but it never approves or enables a tool.
 
+Enabled candidates still load through a separate runtime gate. Set
+`tool_intelligence.candidate_runtime.enabled: true` to let
+`CandidateRuntimeLoader` register candidates for the active provider. The
+loader fails closed unless a candidate is `enabled`, has provenance, has a
+valid object schema, uses known permission keys, has the active provider set to
+`true` in `provider_enabled`, and carries explicit implementation metadata.
+The first supported implementation is a safe delegation to an existing
+registered tool:
+
+```json
+{
+  "type": "delegated_tool",
+  "tool": "calculator"
+}
+```
+
+The delegated target remains subject to normal `ToolRegistry` execution policy.
+Candidates without implementation metadata are skipped and audited as
+`tool.candidate.load_skipped`.
+
 The API exposes the same review surface for local operators:
 
 ```bash
