@@ -189,7 +189,7 @@ VoiceChannel (channels/voice/):
 
 **Config Plan (`missy/config/plan.py`)** — Automatic backups on config writes (max 5, pruned). `missy config rollback/diff/plan/backups` commands.
 
-**API Server (`missy/api/`)** — Agent-as-a-Service REST API (`missy api start`). Loopback-only binding by default, API key authentication, rate limiting, and automatic secrets censoring on responses.
+**API Server (`missy/api/`)** — Agent-as-a-Service REST API (`missy api start`). Loopback-only binding by default, API key authentication, rate limiting, and automatic secrets censoring on responses. Also serves the **Web TUI** (`missy/api/web_console.py`), a browser-based operator console (providers, tools, sessions, memory browser, audit trail, scheduler, live diagnostics, safe controls, and a streaming "Ask Missy" run console). `missy gateway start` launches the Web TUI automatically (disable via `api.enabled: false`); it is also reachable standalone via `missy api start`. Every provider/tool/session/memory/audit row is clickable and opens a shared detail Inspector panel (`missy/api/operator_controls.py` backs the safe-control actions).
 
 **Observability (`missy/observability/`)** — `AuditLogger` writes structured JSONL to `~/.missy/audit.jsonl`. `OtelExporter` sends traces/metrics to an OTLP endpoint when enabled.
 
@@ -207,6 +207,7 @@ VoiceChannel (channels/voice/):
 | Device registry | `~/.missy/devices.json` |
 | Vault key | `~/.missy/secrets/vault.key` |
 | Vault data | `~/.missy/secrets/vault.enc` |
+| Web TUI operator key | `~/.missy/secrets/web_console.key` (auto-generated on first `missy gateway start`) |
 | Agent identity | `~/.missy/identity.pem` |
 | Prompt patches | `~/.missy/patches.json` |
 | Playbook | `~/.missy/playbook.json` |
@@ -307,6 +308,15 @@ voice:
 discord:
   # See missy/channels/discord/config.py for full schema
 
+# Web TUI / REST API — auto-started by `missy gateway start` (read from raw
+# YAML, not a dataclass). api_key defaults to the persisted key at
+# ~/.missy/secrets/web_console.key when unset.
+api:
+  enabled: true
+  host: "127.0.0.1"
+  port: 8080
+  api_key: ""
+
 container:
   enabled: false
   image: "python:3.12-slim"
@@ -355,7 +365,7 @@ missy schedule remove JOB_ID        Remove a job
 missy audit security                Show recent security events (--limit)
 missy audit recent                  Show recent audit events (--limit, --category)
 
-missy gateway start                 Start the gateway server (--host, --port)
+missy gateway start                 Start the gateway server (--host, --port); also launches the Web TUI (see api: config)
 missy gateway status                Show gateway status
 
 missy discord status                Show Discord channel configuration

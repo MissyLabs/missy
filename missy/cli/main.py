@@ -311,6 +311,28 @@ def _agent_tool_policy_kwargs(
     }
 
 
+def _load_or_create_web_console_key() -> str:
+    """Load the persistent Web TUI operator key, generating one on first run.
+
+    Stored outside config.yaml (like the vault key) so the console has a
+    stable login credential across gateway restarts without requiring the
+    operator to configure one.
+    """
+    import secrets
+
+    key_path = Path("~/.missy/secrets/web_console.key").expanduser()
+    if key_path.exists():
+        existing = key_path.read_text(encoding="utf-8").strip()
+        if existing:
+            return existing
+
+    key_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    key = secrets.token_hex(32)
+    key_path.write_text(key, encoding="utf-8")
+    key_path.chmod(0o600)
+    return key
+
+
 def _print_error(message: str, hint: str | None = None) -> None:
     """Render a styled error panel to stderr."""
     body = message
@@ -2074,6 +2096,71 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
         console.print(f"[yellow]Screencast channel failed to start: {_sc_exc}[/]")
         logger.warning("Screencast channel startup error: %s", _sc_exc, exc_info=True)
 
+    # Start the Web TUI (operator console + REST API) if configured. Enabled
+    # by default so every gateway run exposes the console without extra setup.
+    api_server = None
+    try:
+        import yaml as _api_yaml
+
+        _cfg_file_api = Path(ctx.obj["config_path"]).expanduser()
+        _raw_cfg_api: dict[str, Any] = {}
+        if _cfg_file_api.exists():
+            with _cfg_file_api.open() as _fh_api:
+                _raw_cfg_api = _api_yaml.safe_load(_fh_api) or {}
+        _api_cfg = _raw_cfg_api.get("api", {})
+
+        if _api_cfg.get("enabled", True):
+            from missy.api.server import ApiConfig, ApiServer
+
+            try:
+                from missy.providers.registry import get_registry as _get_provider_registry
+
+                _api_provider_registry = _get_provider_registry()
+            except Exception:
+                _api_provider_registry = None
+
+            try:
+                from missy.tools.registry import get_tool_registry as _get_tool_registry
+
+                _api_tool_registry = _get_tool_registry()
+            except Exception:
+                _api_tool_registry = None
+
+            try:
+                from missy.memory.sqlite_store import SQLiteMemoryStore
+
+                _mem_db_path = str(Path(cfg.audit_log_path).expanduser().parent / "memory.db")
+                _api_memory_store = SQLiteMemoryStore(db_path=_mem_db_path)
+            except Exception as _api_mem_exc:
+                logger.debug("Web console memory store unavailable: %s", _api_mem_exc)
+                _api_memory_store = None
+
+            _api_key = str(_api_cfg.get("api_key") or "").strip()
+            if not _api_key:
+                _api_key = _load_or_create_web_console_key()
+
+            _api_host = _api_cfg.get("host", "127.0.0.1")
+            _api_port = int(_api_cfg.get("port", 8080))
+            _api_server_config = ApiConfig(host=_api_host, port=_api_port, api_key=_api_key)
+            api_server = ApiServer(
+                config=_api_server_config,
+                runtime=_agent,
+                memory_store=_api_memory_store,
+                provider_registry=_api_provider_registry,
+                tool_registry=_api_tool_registry,
+            )
+            api_server.start()
+            console.print(
+                f"[green]Web console started[/] on [bold]{api_server.url}[/]\n"
+                f"  [dim]Operator key: {_api_key} (also saved to "
+                "~/.missy/secrets/web_console.key)[/]"
+            )
+        else:
+            console.print("[dim]Web console disabled via config (api.enabled: false).[/]")
+    except Exception as _api_exc:
+        console.print(f"[yellow]Web console failed to start: {_api_exc}[/]")
+        logger.warning("Web console startup error: %s", _api_exc, exc_info=True)
+
     # Start Discord channel if configured.
     try:
         if cfg.discord and cfg.discord.enabled and cfg.discord.accounts:
@@ -2226,6 +2313,12 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                 console.print("[dim]Screencast channel stopped.[/]")
             except Exception as _sc_stop_exc:
                 logger.debug("screencast: stop error: %s", _sc_stop_exc)
+        if api_server is not None:
+            try:
+                api_server.stop()
+                console.print("[dim]Web console stopped.[/]")
+            except Exception as _api_stop_exc:
+                logger.debug("web console: stop error: %s", _api_stop_exc)
         if proactive_manager is not None:
             try:
                 proactive_manager.stop()
@@ -2265,6 +2358,27 @@ def gateway_status(ctx: click.Context) -> None:
 
     # CLI channel always available
     table.add_row("cli", Text("available", style="green"), "stdin/stdout")
+
+    # Web TUI (operator console + REST API) — started automatically by
+    # `missy gateway start` unless disabled via config.
+    import yaml as _status_yaml
+
+    _cfg_file_status = Path(ctx.obj["config_path"]).expanduser()
+    _raw_cfg_status: dict[str, Any] = {}
+    if _cfg_file_status.exists():
+        with _cfg_file_status.open() as _fh_status:
+            _raw_cfg_status = _status_yaml.safe_load(_fh_status) or {}
+    _api_status_cfg = _raw_cfg_status.get("api", {})
+    if _api_status_cfg.get("enabled", True):
+        _status_host = _api_status_cfg.get("host", "127.0.0.1")
+        _status_port = _api_status_cfg.get("port", 8080)
+        table.add_row(
+            "web",
+            Text("auto-starts with gateway", style="green"),
+            f"http://{_status_host}:{_status_port} (missy gateway start)",
+        )
+    else:
+        table.add_row("web", Text("disabled", style="dim"), "api.enabled: false in config")
 
     console.print(table)
 
