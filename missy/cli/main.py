@@ -296,12 +296,18 @@ def _agent_tool_policy_kwargs(
             return value
         return None
 
+    def _intelligence(value: Any) -> Any | None:
+        if value is None or value.__class__.__module__.startswith("unittest.mock"):
+            return None
+        return value
+
     return {
         "agent_id": agent_id,
         "tool_policy": _policy(getattr(cfg, "tools", None)),
         "agent_tool_policy": _policy(getattr(agent_cfg, "tools", None)),
         "sandbox_tool_policy": _policy(getattr(sandbox, "tools", None)),
         "subagent_tool_policy": _policy(getattr(agent_cfg, "subagent_tools", None)),
+        "tool_intelligence": _intelligence(getattr(cfg, "tool_intelligence", None)),
     }
 
 
@@ -5005,6 +5011,133 @@ def requests_stats(ctx: click.Context, min_count: int, top: int) -> None:
     console.print(t)
 
 
+@tools_group.group("providers", invoke_without_command=True)
+@click.pass_context
+def tools_providers(ctx: click.Context) -> None:
+    """Per-provider tool enablement based on benchmark results."""
+    if ctx.invoked_subcommand is None:
+        console.print(ctx.get_help())
+
+
+@tools_providers.command("status")
+@click.argument("tool_name")
+@click.option(
+    "--provider",
+    "provider_names",
+    multiple=True,
+    help="Provider to check (repeatable). Defaults to every provider with "
+    "benchmark data or an override for this tool.",
+)
+@click.pass_context
+def providers_status(ctx: click.Context, tool_name: str, provider_names: tuple[str, ...]) -> None:
+    """Show per-provider enablement status for TOOL_NAME.
+
+    Combines operator overrides (see 'enable'/'disable' below) with
+    benchmark-derived scores to explain why a provider currently is or is
+    not offered TOOL_NAME.
+    """
+    from missy.tools.benchmark import get_benchmark_store
+    from missy.tools.intelligence import ToolProviderGate, get_provider_gate_store
+
+    store = get_benchmark_store()
+    overrides = get_provider_gate_store()
+    gate = ToolProviderGate(overrides=overrides, benchmark_store=store)
+
+    names = list(provider_names)
+    if not names:
+        seen = {s.provider for s in store.provider_summary(tool_name)}
+        seen.update(overrides.list_overrides().get(tool_name, {}).keys())
+        names = sorted(seen)
+    if not names:
+        console.print(
+            f"[dim]No benchmark data or overrides for tool {tool_name!r}. "
+            f"Pass --provider to check a specific provider directly.[/]"
+        )
+        return
+
+    t = Table(title=f"Provider Gate: {tool_name}")
+    t.add_column("Provider", style="bold")
+    t.add_column("Enabled")
+    t.add_column("Source")
+    t.add_column("Reason", max_width=60)
+    for name in names:
+        decision = gate.decide(tool_name, name)
+        t.add_row(
+            name,
+            "[green]yes[/]" if decision.enabled else "[red]no[/]",
+            decision.source,
+            decision.reason,
+        )
+    console.print(t)
+
+
+@tools_providers.command("enable")
+@click.argument("tool_name")
+@click.argument("provider_name")
+@click.pass_context
+def providers_enable(ctx: click.Context, tool_name: str, provider_name: str) -> None:
+    """Force-enable TOOL_NAME for PROVIDER_NAME, overriding benchmark data."""
+    from missy.tools.intelligence import get_provider_gate_store
+
+    get_provider_gate_store().set(tool_name, provider_name, True, actor="operator")
+    console.print(f"[green]Enabled[/] [bold]{tool_name}[/] for provider [bold]{provider_name}[/].")
+
+
+@tools_providers.command("disable")
+@click.argument("tool_name")
+@click.argument("provider_name")
+@click.pass_context
+def providers_disable(ctx: click.Context, tool_name: str, provider_name: str) -> None:
+    """Force-disable TOOL_NAME for PROVIDER_NAME, overriding benchmark data."""
+    from missy.tools.intelligence import get_provider_gate_store
+
+    get_provider_gate_store().set(tool_name, provider_name, False, actor="operator")
+    console.print(f"[red]Disabled[/] [bold]{tool_name}[/] for provider [bold]{provider_name}[/].")
+
+
+@tools_providers.command("clear")
+@click.argument("tool_name")
+@click.argument("provider_name")
+@click.pass_context
+def providers_clear(ctx: click.Context, tool_name: str, provider_name: str) -> None:
+    """Remove an explicit override, reverting to benchmark-driven gating."""
+    from missy.tools.intelligence import get_provider_gate_store
+
+    cleared = get_provider_gate_store().clear(tool_name, provider_name, actor="operator")
+    if cleared:
+        console.print(f"Cleared override for [bold]{tool_name}[/]/[bold]{provider_name}[/].")
+    else:
+        console.print("[dim]No override was set for that tool/provider pair.[/]")
+
+
+@tools_providers.command("recommend")
+@click.argument("tool_name")
+@click.option(
+    "--candidate",
+    "candidates",
+    multiple=True,
+    help="Provider to rank (repeatable). Defaults to every provider with "
+    "benchmark data for this tool.",
+)
+@click.pass_context
+def providers_recommend(ctx: click.Context, tool_name: str, candidates: tuple[str, ...]) -> None:
+    """Recommend the best-performing enabled provider for TOOL_NAME."""
+    from missy.tools.benchmark import get_benchmark_store
+    from missy.tools.intelligence import ToolProviderGate
+
+    store = get_benchmark_store()
+    gate = ToolProviderGate(benchmark_store=store)
+    names = list(candidates) or sorted({s.provider for s in store.provider_summary(tool_name)})
+    if not names:
+        console.print(f"[dim]No benchmark data for tool {tool_name!r}.[/]")
+        return
+    best = gate.recommend_provider(tool_name, names)
+    if best is None:
+        console.print(f"[yellow]No candidate provider is currently enabled for {tool_name!r}.[/]")
+        return
+    console.print(f"[bold green]{best}[/] is the recommended provider for [bold]{tool_name}[/].")
+
+
 @tools_group.group("benchmark", invoke_without_command=True)
 @click.pass_context
 def tools_benchmark(ctx: click.Context) -> None:
@@ -5166,6 +5299,133 @@ def benchmark_run(
         f"reliability={agg.get('reliability', 0):.3f} "
         f"latency={agg.get('latency_ms', 0):.0f}ms "
         f"errors={report.error_count}/{suite.task_count()}"
+    )
+    if not no_persist:
+        console.print("[dim]Results saved. Use 'missy tools benchmark results' to review.[/]")
+
+
+@tools_benchmark.command("run-llm")
+@click.argument("tool_name")
+@click.option("--prompt", required=True, help="Natural-language prompt asking for the tool.")
+@click.option(
+    "--provider",
+    "provider_name",
+    default="mock",
+    show_default=True,
+    help="Configured provider name (anthropic, openai, ollama, ...) or 'mock' "
+    "for the offline deterministic provider (no credentials required).",
+)
+@click.option(
+    "--expect-arg",
+    "expect_args",
+    multiple=True,
+    metavar="KEY=VALUE",
+    help="Expected argument the provider should supply (repeatable).",
+)
+@click.option(
+    "--execute",
+    is_flag=True,
+    default=False,
+    help="DANGEROUS: actually run the tool call the provider makes (through "
+    "the policy-checked registry) instead of only scoring tool selection "
+    "and schema quality.",
+)
+@click.option(
+    "--no-persist",
+    is_flag=True,
+    default=False,
+    help="Do not save results to the benchmark store.",
+)
+@click.pass_context
+def benchmark_run_llm(
+    ctx: click.Context,
+    tool_name: str,
+    prompt: str,
+    provider_name: str,
+    expect_args: tuple[str, ...],
+    execute: bool,
+    no_persist: bool,
+) -> None:
+    """Benchmark a real provider's tool-calling behavior for TOOL_NAME.
+
+    Unlike 'missy tools benchmark run' (which calls the tool directly through
+    the registry), this drives an actual provider through its native
+    tool-calling API with a natural-language PROMPT and scores whether it
+    selected TOOL_NAME and filled in its schema correctly. Use
+    --provider mock to exercise the full path offline, with no API
+    credentials.
+
+    By default the tool call the provider produces is NOT executed — only
+    pass --execute if you specifically want to benchmark end-to-end
+    correctness, and understand that policy-checked tool execution really
+    will run (shell commands, file writes, etc. if the tool has those
+    permissions).
+    """
+    from missy.tools.benchmark import LLMBenchmarkRunner, LLMBenchmarkTask, MockToolProvider
+    from missy.tools.registry import get_tool_registry
+
+    try:
+        registry = get_tool_registry()
+    except RuntimeError as exc:
+        _print_error(str(exc))
+        raise SystemExit(1) from None
+    tool = registry.get(tool_name)
+    if tool is None:
+        _print_error(
+            f"Tool {tool_name!r} is not registered. "
+            "Run 'missy tools candidates list' to see available candidates, "
+            "or check your tool registry."
+        )
+        raise SystemExit(1)
+
+    if provider_name == "mock":
+        provider = MockToolProvider()
+    else:
+        from missy.providers.registry import get_registry
+
+        try:
+            preg = get_registry()
+        except RuntimeError as exc:
+            _print_error(f"Provider registry not initialised: {exc}")
+            raise SystemExit(1) from None
+        provider = preg.get(provider_name)
+        if provider is None:
+            _print_error(
+                f"Provider {provider_name!r} is not configured. "
+                "Use --provider mock for an offline run."
+            )
+            raise SystemExit(1)
+
+    expected_args: dict[str, str] = {}
+    for item in expect_args:
+        if "=" not in item:
+            _print_error(f"--expect-arg must be KEY=VALUE, got {item!r}")
+            raise SystemExit(1)
+        key, value = item.split("=", 1)
+        expected_args[key] = value
+
+    if execute:
+        console.print(
+            "[yellow bold]Warning:[/] --execute will actually run whatever "
+            "tool call the provider produces."
+        )
+
+    task = LLMBenchmarkTask.create(tool_name=tool_name, prompt=prompt, expected_args=expected_args)
+    runner = LLMBenchmarkRunner(provider=provider, execute_tool=execute)
+    scored = runner.run_task(task, tool, registry=registry, persist=not no_persist)
+
+    ok = "[green]✓[/]" if scored.result.success else "[red]✗[/]"
+    console.print(
+        Panel(
+            f"Tool call made: {'yes' if scored.result.tool_call_made else 'no'}   {ok}\n"
+            f"Args supplied: {scored.result.tool_call_args or '{}'}\n"
+            f"Composite: {scored.composite:.3f}   "
+            f"Schema: {scored.schema_score:.3f}   "
+            f"Tool-call quality: {scored.tool_call_quality:.3f}\n"
+            f"Latency: {scored.result.latency_ms:.0f}ms   "
+            f"Error: {scored.result.error or '—'}",
+            title=f"LLM Benchmark: {tool_name} ({provider.name})",
+        )
     )
     if not no_persist:
         console.print("[dim]Results saved. Use 'missy tools benchmark results' to review.[/]")

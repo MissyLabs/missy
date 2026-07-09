@@ -1,8 +1,8 @@
 # BUILD_RESULTS
 
-- Timestamp: 2026-07-08 22:15:24
-- Branch: overhaul/web-tui-20260709-004527
-- Primary focus: complete web TUI and operator console overhaul
+- Timestamp: 2026-07-09 11:13:48
+- Branch: overhaul/tools-20260709-145628
+- Primary focus: complete tool usage and tool intelligence overhaul
 
 ## Python
 Python 3.12.3
@@ -19,9 +19,11 @@ Python 3.12.3
 /home/missy/missy/build_web_tui_claude_loop.log
 /home/missy/missy/build_web_tui_codex_loop.log
 /home/missy/missy/CLAUDE.md
+/home/missy/missy/.claude/scheduled_tasks.lock
 /home/missy/missy/.claude/settings.local.json
 /home/missy/missy/config.yaml
 /home/missy/missy/conftest.py
+/home/missy/missy/.coverage
 /home/missy/missy/discord-configs.yaml
 /home/missy/missy/docs/architecture.md
 /home/missy/missy/docs/configuration.md
@@ -360,6 +362,7 @@ Python 3.12.3
 /home/missy/missy/.hypothesis/constants/740d5b34a29cc934
 /home/missy/missy/.hypothesis/constants/742155dda9e5c449
 /home/missy/missy/.hypothesis/constants/7424ed19f578abec
+/home/missy/missy/.hypothesis/constants/7486fe3bfd455c89
 /home/missy/missy/.hypothesis/constants/751ad9de1f8afabe
 /home/missy/missy/.hypothesis/constants/75742b30ff49448e
 /home/missy/missy/.hypothesis/constants/7648c0767c1712a6
@@ -943,6 +946,7 @@ Python 3.12.3
 /home/missy/missy/tests/agent/test_summarizer_proactive_edges.py
 /home/missy/missy/tests/agent/test_summarizer.py
 /home/missy/missy/tests/agent/test_token_budget_validation.py
+/home/missy/missy/tests/agent/test_tool_intelligence_wiring.py
 /home/missy/missy/tests/agent/test_trust_circuit_edges.py
 /home/missy/missy/tests/agent/test_watchdog.py
 /home/missy/missy/tests/agent/test_watchdog_ratelimiter_edges.py
@@ -1005,6 +1009,7 @@ Python 3.12.3
 /home/missy/missy/tests/cli/test_main.py
 /home/missy/missy/tests/cli/test_oauth_coverage.py
 /home/missy/missy/tests/cli/test_oauth_deep.py
+/home/missy/missy/tests/cli/test_tool_provider_cli.py
 /home/missy/missy/tests/cli/test_vision_cli_extended.py
 /home/missy/missy/tests/cli/test_vision_cli.py
 /home/missy/missy/tests/cli/test_wizard_auth.py
@@ -1210,7 +1215,10 @@ Python 3.12.3
 /home/missy/missy/tests/tools/test_incus_tools_coverage.py
 /home/missy/missy/tests/tools/test_incus_tools_extended.py
 /home/missy/missy/tests/tools/test_incus_tools.py
+/home/missy/missy/tests/tools/test_llm_runner.py
 /home/missy/missy/tests/tools/test_memory_tools.py
+/home/missy/missy/tests/tools/test_mock_provider.py
+/home/missy/missy/tests/tools/test_provider_gate.py
 /home/missy/missy/tests/tools/test_registry_extended.py
 /home/missy/missy/tests/tools/test_registry_hardening.py
 /home/missy/missy/tests/tools/test_registry_policy_edges.py

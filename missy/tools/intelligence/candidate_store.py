@@ -292,6 +292,32 @@ class CandidateStore:
             finally:
                 conn.close()
 
+    def get_by_pattern_key(self, pattern_key: str) -> ToolCandidate | None:
+        """Return the most-recently-updated candidate generated from *pattern_key*.
+
+        Used by automatic candidate generation to avoid proposing duplicate
+        candidates for a pattern that has already been synthesized.
+
+        Args:
+            pattern_key: Pattern hash from :class:`~.request_tracker.RequestTracker`.
+
+        Returns:
+            The matching :class:`ToolCandidate`, or ``None`` if not found.
+        """
+        if not pattern_key:
+            return None
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    "SELECT * FROM tool_candidates WHERE pattern_key = ? "
+                    "ORDER BY updated_at DESC LIMIT 1",
+                    (pattern_key,),
+                ).fetchone()
+                return ToolCandidate.from_row(row) if row else None
+            finally:
+                conn.close()
+
     def list_all(
         self,
         state: ToolLifecycleState | None = None,

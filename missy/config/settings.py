@@ -150,6 +150,46 @@ class AgentPolicyConfig:
     subagent_tools: ToolPolicyConfig = field(default_factory=ToolPolicyConfig)
 
 
+@dataclass
+class ToolIntelligenceConfig:
+    """Controls automatic tool-candidate synthesis and provider benchmark gating.
+
+    Both sub-features default to ``False`` (secure-by-default): the request
+    tracker always records turns for observability, but nothing acts on the
+    recorded patterns — and no tool is ever hidden from a provider based on
+    benchmark data — until an operator opts in.
+
+    Attributes:
+        candidate_generation_enabled: When ``True``, :class:`AgentRuntime`
+            periodically checks :class:`~missy.tools.intelligence.request_tracker.RequestTracker`
+            for high-frequency patterns and proposes :class:`~missy.tools.intelligence.candidate_store.ToolCandidate`
+            entries (always in ``proposed`` state — still requires operator
+            approval before use).
+        min_pattern_count: Minimum occurrences before a pattern is eligible
+            for candidate generation.
+        allow_shell: Whether generated candidates may request shell
+            permission (still requires explicit operator approval to enable).
+        check_every_n_requests: How often (in tracked requests) to scan for
+            new patterns. Keeps the check off the hot path of every turn.
+        provider_gating_enabled: When ``True``, :class:`AgentRuntime` excludes
+            tools from a provider's turn when benchmark data shows that
+            provider performs poorly on them (see
+            :mod:`missy.tools.intelligence.provider_gate`).
+        provider_gating_min_samples: Minimum benchmark runs for a (tool,
+            provider) pair before its score is used for gating decisions.
+        provider_gating_min_composite: Composite score threshold below which
+            a provider is considered "weak" for a tool.
+    """
+
+    candidate_generation_enabled: bool = False
+    min_pattern_count: int = 3
+    allow_shell: bool = False
+    check_every_n_requests: int = 5
+    provider_gating_enabled: bool = False
+    provider_gating_min_samples: int = 3
+    provider_gating_min_composite: float = 0.4
+
+
 # ---------------------------------------------------------------------------
 # Provider config
 # ---------------------------------------------------------------------------
@@ -365,6 +405,7 @@ class MissyConfig:
     config_version: int = 0  # schema version stamp (0 = pre-migration)
     tools: ToolPolicyConfig = field(default_factory=ToolPolicyConfig)
     agents: dict[str, AgentPolicyConfig] = field(default_factory=dict)
+    tool_intelligence: ToolIntelligenceConfig = field(default_factory=ToolIntelligenceConfig)
 
 
 # ---------------------------------------------------------------------------
@@ -499,6 +540,36 @@ def _parse_tool_policy(data: Any, *, context: str = "tools") -> ToolPolicyConfig
             context=f"{context}.byModel",
         ),
         groups=_parse_tool_groups(data.get("groups"), context=f"{context}.groups"),
+    )
+
+
+def _parse_tool_intelligence(data: Any) -> ToolIntelligenceConfig:
+    if data is None:
+        return ToolIntelligenceConfig()
+    if not isinstance(data, dict):
+        raise ConfigurationError(
+            f"tool_intelligence must be a mapping, got {type(data).__name__}."
+        )
+    candidate_gen = data.get("candidate_generation") or {}
+    if not isinstance(candidate_gen, dict):
+        raise ConfigurationError(
+            f"tool_intelligence.candidate_generation must be a mapping, "
+            f"got {type(candidate_gen).__name__}."
+        )
+    provider_gating = data.get("provider_gating") or {}
+    if not isinstance(provider_gating, dict):
+        raise ConfigurationError(
+            f"tool_intelligence.provider_gating must be a mapping, "
+            f"got {type(provider_gating).__name__}."
+        )
+    return ToolIntelligenceConfig(
+        candidate_generation_enabled=bool(candidate_gen.get("enabled", False)),
+        min_pattern_count=int(candidate_gen.get("min_pattern_count", 3)),
+        allow_shell=bool(candidate_gen.get("allow_shell", False)),
+        check_every_n_requests=int(candidate_gen.get("check_every_n_requests", 5)),
+        provider_gating_enabled=bool(provider_gating.get("enabled", False)),
+        provider_gating_min_samples=int(provider_gating.get("min_samples", 3)),
+        provider_gating_min_composite=float(provider_gating.get("min_composite", 0.4)),
     )
 
 
@@ -745,6 +816,7 @@ def load_config(path: str) -> MissyConfig:
             plugins=_parse_plugins(data.get("plugins") or {}),
             tools=_parse_tool_policy(data.get("tools"), context="tools"),
             agents=_parse_agents(data.get("agents")),
+            tool_intelligence=_parse_tool_intelligence(data.get("tool_intelligence")),
             providers=_parse_providers(data.get("providers") or {}),
             workspace_path=str(data.get("workspace_path", ".")),
             audit_log_path=str(data.get("audit_log_path", "~/.missy/audit.log")),

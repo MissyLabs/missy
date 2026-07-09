@@ -15,6 +15,7 @@ from missy.config.settings import (
     PluginPolicy,
     ProviderConfig,
     ShellPolicy,
+    ToolIntelligenceConfig,
     ToolPolicyConfig,
     get_default_config,
     load_config,
@@ -206,6 +207,83 @@ class TestLoadConfigToolPolicy:
         )
 
         with pytest.raises(ConfigurationError, match="tools.profile"):
+            load_config(path)
+
+
+class TestLoadConfigToolIntelligence:
+    def test_default_is_disabled(self):
+        cfg = get_default_config()
+        assert isinstance(cfg.tool_intelligence, ToolIntelligenceConfig)
+        assert cfg.tool_intelligence.candidate_generation_enabled is False
+        assert cfg.tool_intelligence.provider_gating_enabled is False
+
+    def test_loads_candidate_generation_and_provider_gating(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            tool_intelligence:
+              candidate_generation:
+                enabled: true
+                min_pattern_count: 7
+                allow_shell: true
+                check_every_n_requests: 2
+              provider_gating:
+                enabled: true
+                min_samples: 5
+                min_composite: 0.6
+            workspace_path: "/tmp/workspace"
+            audit_log_path: "/tmp/audit.log"
+            """,
+        )
+
+        cfg = load_config(path)
+
+        assert cfg.tool_intelligence.candidate_generation_enabled is True
+        assert cfg.tool_intelligence.min_pattern_count == 7
+        assert cfg.tool_intelligence.allow_shell is True
+        assert cfg.tool_intelligence.check_every_n_requests == 2
+        assert cfg.tool_intelligence.provider_gating_enabled is True
+        assert cfg.tool_intelligence.provider_gating_min_samples == 5
+        assert cfg.tool_intelligence.provider_gating_min_composite == 0.6
+
+    def test_missing_section_uses_defaults(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            workspace_path: "/tmp/workspace"
+            audit_log_path: "/tmp/audit.log"
+            """,
+        )
+
+        cfg = load_config(path)
+
+        assert cfg.tool_intelligence == ToolIntelligenceConfig()
+
+    def test_non_mapping_section_raises(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            tool_intelligence: "yes please"
+            workspace_path: "/tmp/workspace"
+            audit_log_path: "/tmp/audit.log"
+            """,
+        )
+
+        with pytest.raises(ConfigurationError, match="tool_intelligence"):
+            load_config(path)
+
+    def test_non_mapping_candidate_generation_raises(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            tool_intelligence:
+              candidate_generation: "yes"
+            workspace_path: "/tmp/workspace"
+            audit_log_path: "/tmp/audit.log"
+            """,
+        )
+
+        with pytest.raises(ConfigurationError, match="candidate_generation"):
             load_config(path)
 
 

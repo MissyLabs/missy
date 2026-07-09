@@ -21,18 +21,28 @@ from .candidate_store import (
     ToolLifecycleState,
     get_candidate_store,
 )
+from .provider_gate import (
+    GateDecision,
+    ProviderGateStore,
+    ToolProviderGate,
+    get_provider_gate_store,
+)
 from .request_tracker import RequestEvent, RequestPattern, RequestTracker, get_request_tracker
 
 __all__ = [
     "BenchmarkSummary",
     "CandidateGenerator",
     "CandidateStore",
+    "GateDecision",
     "GenerationResult",
+    "ProviderGateStore",
     "RequestEvent",
     "RequestPattern",
     "RequestTracker",
     "ToolCandidate",
     "ToolLifecycleState",
+    "ToolProviderGate",
     "get_candidate_store",
+    "get_provider_gate_store",
     "get_request_tracker",
 ]
