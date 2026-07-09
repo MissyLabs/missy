@@ -262,6 +262,7 @@ See the [full configuration reference](https://missylabs.github.io/configuration
 
 ```bash
 # Core
+missy init                          # Create default config at ~/.missy/config.yaml
 missy setup                         # Interactive setup wizard
 missy setup --no-prompt             # Non-interactive (--provider, --api-key-env, --model)
 missy ask PROMPT                    # Single-turn query (--provider, --session, --mode)
@@ -269,6 +270,7 @@ missy run                           # Interactive REPL (--provider, --mode)
 missy providers list                # List providers and availability
 missy providers switch NAME         # Hot-swap active provider
 missy doctor                        # System health check
+missy plugins                       # List plugins and their status
 
 # Scheduling
 missy schedule add --name NAME --schedule EXPR --task PROMPT
@@ -278,12 +280,18 @@ missy schedule list | pause | resume | remove
 missy audit recent                  # Recent events (--limit, --category)
 missy audit security                # Policy violations
 missy vault set|get|list|delete     # Encrypted secrets
+missy approvals list                # Pending human-in-the-loop approval requests
+missy patches list|approve|reject   # Self-tuning prompt patch review
 
 # Config management
 missy config backups                # List config backups
 missy config diff                   # Diff vs latest backup
 missy config rollback               # Restore from backup
+missy config plan                   # Show what changed since last backup
 missy presets list                  # Show built-in network presets
+
+# Gateway
+missy gateway start | status        # Standalone gateway server
 
 # Discord
 missy discord status | probe | register-commands | audit
@@ -363,20 +371,20 @@ ruff format missy/ tests/                             # Format
 
 ## Documentation
 
-**Full docs: [missylabs.github.io](https://missylabs.github.io)** — 80+ pages with dark mode, search, code tabs, and mermaid diagrams.
+**Full docs: [missylabs.github.io](https://missylabs.github.io)** — 99 pages with dark mode, search, code tabs, and mermaid diagrams.
 
 | Section | Pages | Covers |
 |---------|-------|--------|
 | [Getting Started](https://missylabs.github.io/getting-started/) | 5 | Install, quickstart, wizard, first conversation |
 | [Configuration](https://missylabs.github.io/configuration/) | 7 | Full YAML reference, network/fs/shell policy, presets, providers |
-| [Security](https://missylabs.github.io/security/) | 11 | Policy engine, gateway, sanitization, secrets, vault, drift, identity, trust, container, threat model |
-| [Architecture](https://missylabs.github.io/architecture/) | 10 | Runtime, context, circuit breaker, progress, playbook, sleep mode, synthesizer, attention, message bus |
-| [CLI Reference](https://missylabs.github.io/cli/) | 7 | Every command group |
-| [Channels](https://missylabs.github.io/channels/) | 7 | CLI, Discord, voice server/protocol/devices |
+| [Security](https://missylabs.github.io/security/) | 14 | Policy engine, gateway, sanitization, secrets, vault, drift, identity, trust, landlock, scanner, container, threat model |
+| [Architecture](https://missylabs.github.io/architecture/) | 22 | Runtime, context, circuit breaker, progress, playbook, sleep mode, synthesizer, attention, condensers, sleeptime, graph memory, message bus, vision, reliability, structured output, code evolution, summarizer, compaction, hatching, persona, behavior |
+| [CLI Reference](https://missylabs.github.io/cli/) | 20 | Every command group, including gateway, discord, approvals, patches, sandbox, sessions |
+| [Channels](https://missylabs.github.io/channels/) | 9 | CLI, Discord, voice server/protocol/devices, webhook, screencast |
 | [Providers](https://missylabs.github.io/providers/) | 5 | Anthropic, OpenAI, Ollama, runtime switching |
 | [Extending](https://missylabs.github.io/extending/) | 4 | Tools, plugins, MCP servers, SKILL.md |
 | [Missy Edge](https://missylabs.github.io/edge/) | 6 | Hardware, Pi setup, pairing, config, wake word |
-| [Operations](https://missylabs.github.io/operations/) | 4 | Backup/rollback, observability, troubleshooting |
+| [Operations](https://missylabs.github.io/operations/) | 6 | Backup/rollback, observability, REST API reference, operator console, troubleshooting |
 | [Leyline P2P](https://missylabs.github.io/leyline/) | 13 | P2P network, identity, consensus, service discovery, messaging |
 
 ### In-repo docs
