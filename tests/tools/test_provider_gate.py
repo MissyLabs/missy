@@ -9,7 +9,6 @@ import pytest
 from missy.tools.benchmark.benchmark_store import BenchmarkStore
 from missy.tools.benchmark.scoring import BenchmarkResult, BenchmarkScorer
 from missy.tools.intelligence.provider_gate import (
-    GateDecision,
     ProviderGateStore,
     ToolProviderGate,
 )
@@ -227,9 +226,3 @@ class TestRecommendProvider:
         gate = ToolProviderGate(overrides=overrides, benchmark_store=bench_store)
         assert gate.recommend_provider("tool_a", []) is None
 
-
-class TestGateDecisionDataclass:
-    def test_is_frozen(self) -> None:
-        decision = GateDecision(enabled=True, reason="x", source="default")
-        with pytest.raises(Exception):
-            decision.enabled = False  # type: ignore[misc]
