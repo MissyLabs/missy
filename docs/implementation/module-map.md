@@ -472,7 +472,7 @@ dependencies on other `missy` modules.
 | **Internal deps** | `missy.core.events`, `missy.tools.benchmark` |
 
 Candidate lifecycle transitions are enforced in `CandidateStore` so CLI,
-runtime automation, and future Web/API controls share the same gate:
+runtime automation, and Web/API controls share the same gate:
 `proposed -> experimental -> benchmarked -> approved -> enabled`; candidates
 may be denied to `disabled`, enabled tools may be rolled back to
 `deprecated`/`disabled`, and disabled candidates cannot be resurrected in
@@ -757,7 +757,7 @@ the candidate.
 
 | Field | Value |
 |-------|-------|
-| **Purpose** | Agent-as-a-Service REST API and Web TUI operator console entrypoint. Loopback-only binding, API key + cookie-session auth, CSRF-protected mutations, rate limiting, secrets censoring. Uses `ThreadingHTTPServer` so long-lived SSE connections do not block other requests. Routes include session/run/chat/memory endpoints plus `GET/POST /api/v1/scheduler/jobs`, `DELETE /api/v1/scheduler/jobs/{id}` (thin alias for the `scheduler.remove_job` control), `DELETE /api/v1/memory/turns/{id}`, and `POST /api/v1/memory/turns/{id}/pin`. |
+| **Purpose** | Agent-as-a-Service REST API and Web TUI operator console entrypoint. Loopback-only binding, API key + cookie-session auth, CSRF-protected mutations, rate limiting, secrets censoring. Uses `ThreadingHTTPServer` so long-lived SSE connections do not block other requests. Routes include session/run/chat/memory endpoints plus `GET /api/v1/tool-candidates`, `GET /api/v1/tool-candidates/{id}`, `GET/POST /api/v1/scheduler/jobs`, `DELETE /api/v1/scheduler/jobs/{id}` (thin alias for the `scheduler.remove_job` control), `DELETE /api/v1/memory/turns/{id}`, and `POST /api/v1/memory/turns/{id}/pin`. |
 | **Key exports** | `ApiConfig`, `ApiServer`, `ApiResponse` |
 | **Internal deps** | `missy.agent.runtime`, `missy.security.censor`, `missy.api.run_stream`, `missy.api.web_console`, `missy.api.web_sessions`, `missy.api.audit_browser`, `missy.api.diagnostics`, `missy.api.operator_controls`, `missy.scheduler.manager` |
 
@@ -805,9 +805,9 @@ the candidate.
 
 | Field | Value |
 |-------|-------|
-| **Purpose** | Policy-shaped, confirmation-gated safe controls exposed to the console (set default provider, pause/resume/remove scheduled jobs) with structured audit detail. |
+| **Purpose** | Policy-shaped, confirmation-gated safe controls exposed to the console (set default provider, pause/resume/remove scheduled jobs, import/approve/enable/deny tool candidates) with structured audit detail. Candidate controls delegate to `CandidateStore` and `CandidateBenchmarkReconciler` instead of duplicating lifecycle rules. |
 | **Key exports** | `list_operator_controls()`, `execute_operator_control()` |
-| **Internal deps** | `missy.api.audit_browser` |
+| **Internal deps** | `missy.api.audit_browser`, `missy.tools.intelligence`, `missy.tools.benchmark` |
 
 ---
 

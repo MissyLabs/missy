@@ -4,25 +4,27 @@ Date: 2026-07-09
 
 ## Changed
 
-- Added benchmark-to-candidate reconciliation via
-  `CandidateBenchmarkReconciler`.
-- Added `missy tools candidates import-benchmarks <candidate_id>` with
-  provider threshold options and a benchmark tool-name override.
-- Extended benchmark provider summaries with schema-score and tool-call quality
-  aggregates.
-- Reconciled benchmark imports now update candidate benchmark summaries,
-  provider-enabled flags, and audited review metadata without approving or
-  enabling a tool.
-- Fixed the CLI enable pre-check to require `approved`, matching the
-  store-level lifecycle gate.
+- Added Web/API candidate review endpoints:
+  `GET /api/v1/tool-candidates` and `GET /api/v1/tool-candidates/{id}`.
+- Added candidate safe controls:
+  `tool_candidate.import_benchmarks`, `tool_candidate.approve`,
+  `tool_candidate.enable`, and `tool_candidate.deny`.
+- Candidate controls reuse `CandidateStore` and
+  `CandidateBenchmarkReconciler`, require typed confirmations, and emit
+  structured `web.control` audit allow/deny events.
+- Candidate denial now requires an explicit review reason in the Web/API
+  control path.
+- API startup now attaches candidate and benchmark stores so the browser
+  console can surface eligible candidate controls through `GET /api/v1/controls`.
 - Updated operations docs and module map.
-- Added unit and CLI tests for benchmark import behavior and error paths.
+- Added API tests for candidate list/show, control target discovery,
+  import/approve/enable, deny safeguards, and lifecycle-gate rejection.
 
 ## Verification
 
 ```text
-python3 -m pytest tests/tools/test_benchmark_reconciler.py tests/tools/test_candidate_store.py tests/tools/test_benchmark.py tests/tools/test_provider_gate.py tests/cli/test_tool_provider_cli.py -q
-112 passed
+python3 -m pytest tests/api/test_server.py::TestOperatorControls tests/tools/test_benchmark_reconciler.py tests/tools/test_candidate_store.py tests/cli/test_tool_provider_cli.py -q
+73 passed
 ```
 
 ```text
@@ -36,23 +38,23 @@ python3 -m ruff format --check missy/ tests/
 ```
 
 ```text
-python3 -m pytest -q
-20643 passed, 13 skipped in 426.31s (0:07:06)
+python3 -m pytest -q -o faulthandler_timeout=120
+20648 passed, 13 skipped in 423.79s (0:07:03)
 ```
 
 ## Remains
 
-- Web/API operator controls do not yet expose candidate lifecycle actions or
-  benchmark import.
 - Enabled candidates still need a controlled runtime loading path with
   schema/provenance/policy/test gates.
 - Provider fallback recommendations exist in CLI/provider gate code but are
   not yet surfaced in runtime responses when a tool is gated off.
 - Candidate review can import schema-score aggregates, but provider-family
   schema compatibility reporting is still limited.
+- API controls still lack explicit `experimental` and `deprecated`
+  transitions.
 
 ## First Next Step
 
-Add Web/API candidate controls for list/show/import-benchmarks/approve/enable/
-deny, reusing `CandidateStore` and `CandidateBenchmarkReconciler` rather than
-duplicating lifecycle logic.
+Implement the controlled loader for enabled approved candidates, keeping it
+behind policy, provenance, schema, benchmark/provider-enable, test, and
+rollback gates.

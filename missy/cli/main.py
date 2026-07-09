@@ -4697,6 +4697,17 @@ def api_start(
         tool_reg = None
 
     try:
+        from missy.tools.benchmark import get_benchmark_store
+        from missy.tools.intelligence import get_candidate_store
+
+        candidate_store = get_candidate_store()
+        benchmark_store = get_benchmark_store()
+    except Exception as _tool_intel_exc:
+        logger.debug("Tool intelligence stores unavailable: %s", _tool_intel_exc)
+        candidate_store = None
+        benchmark_store = None
+
+    try:
         from missy.memory.sqlite_store import SQLiteMemoryStore
 
         db_path = str(
@@ -4718,6 +4729,8 @@ def api_start(
         memory_store=memory_store,
         provider_registry=registry,
         tool_registry=tool_reg,
+        candidate_store=candidate_store,
+        benchmark_store=benchmark_store,
     )
 
     try:

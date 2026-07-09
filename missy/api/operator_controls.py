@@ -10,23 +10,31 @@ from missy.api.audit_browser import redact_audit_value
 if TYPE_CHECKING:
     from missy.providers.registry import ProviderRegistry
     from missy.scheduler.manager import SchedulerManager
+    from missy.tools.benchmark.benchmark_store import BenchmarkStore
+    from missy.tools.intelligence.candidate_store import CandidateStore
 
 
 _CONTROL_PROVIDER_SET_DEFAULT = "provider.set_default"
 _CONTROL_SCHEDULER_PAUSE = "scheduler.pause_job"
 _CONTROL_SCHEDULER_RESUME = "scheduler.resume_job"
 _CONTROL_SCHEDULER_REMOVE = "scheduler.remove_job"
+_CONTROL_CANDIDATE_IMPORT_BENCHMARKS = "tool_candidate.import_benchmarks"
+_CONTROL_CANDIDATE_APPROVE = "tool_candidate.approve"
+_CONTROL_CANDIDATE_ENABLE = "tool_candidate.enable"
+_CONTROL_CANDIDATE_DENY = "tool_candidate.deny"
 _SAFE_TARGET_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
 
 
 def list_operator_controls(
     provider_registry: ProviderRegistry | None = None,
     scheduler: SchedulerManager | None = None,
+    candidate_store: CandidateStore | None = None,
 ) -> dict[str, Any]:
     """Return the available operator controls and target state."""
     providers = _provider_targets(provider_registry)
     pause_targets, resume_targets = _scheduler_targets(scheduler)
     remove_targets = _scheduler_remove_targets(scheduler)
+    candidate_targets = _candidate_targets(candidate_store)
     return {
         "controls": [
             {
@@ -70,6 +78,47 @@ def list_operator_controls(
                 "enabled": bool(scheduler is not None and remove_targets),
                 "targets": remove_targets,
             },
+            {
+                "id": _CONTROL_CANDIDATE_IMPORT_BENCHMARKS,
+                "label": "Import candidate benchmarks",
+                "description": "Copy stored benchmark summaries into a tool candidate review record.",
+                "subsystem": "tool_candidate",
+                "requires_confirmation": True,
+                "confirmation_template": "import-candidate-benchmarks:{target}",
+                "enabled": bool(candidate_store is not None and candidate_targets["benchmarkable"]),
+                "targets": candidate_targets["benchmarkable"],
+            },
+            {
+                "id": _CONTROL_CANDIDATE_APPROVE,
+                "label": "Approve tool candidate",
+                "description": "Approve a benchmarked candidate without enabling runtime use.",
+                "subsystem": "tool_candidate",
+                "requires_confirmation": True,
+                "confirmation_template": "approve-candidate:{target}",
+                "enabled": bool(candidate_store is not None and candidate_targets["approvable"]),
+                "targets": candidate_targets["approvable"],
+            },
+            {
+                "id": _CONTROL_CANDIDATE_ENABLE,
+                "label": "Enable tool candidate",
+                "description": "Enable an approved candidate for future controlled runtime loading.",
+                "subsystem": "tool_candidate",
+                "requires_confirmation": True,
+                "confirmation_template": "enable-candidate:{target}",
+                "enabled": bool(candidate_store is not None and candidate_targets["enableable"]),
+                "targets": candidate_targets["enableable"],
+            },
+            {
+                "id": _CONTROL_CANDIDATE_DENY,
+                "label": "Deny tool candidate",
+                "description": "Disable a candidate with an operator review reason.",
+                "subsystem": "tool_candidate",
+                "requires_confirmation": True,
+                "confirmation_template": "deny-candidate:{target}",
+                "destructive": True,
+                "enabled": bool(candidate_store is not None and candidate_targets["denyable"]),
+                "targets": candidate_targets["denyable"],
+            },
         ]
     }
 
@@ -80,6 +129,8 @@ def execute_operator_control(
     *,
     provider_registry: ProviderRegistry | None = None,
     scheduler: SchedulerManager | None = None,
+    candidate_store: CandidateStore | None = None,
+    benchmark_store: BenchmarkStore | None = None,
 ) -> tuple[int, dict[str, Any], dict[str, Any]]:
     """Execute a confirmed operator control.
 
@@ -93,6 +144,37 @@ def execute_operator_control(
         return _execute_scheduler_control(control_id, body, scheduler=scheduler)
     if control_id == _CONTROL_SCHEDULER_REMOVE:
         return _execute_scheduler_remove(body, scheduler=scheduler)
+    if control_id == _CONTROL_CANDIDATE_IMPORT_BENCHMARKS:
+        return _execute_candidate_import_benchmarks(
+            body,
+            candidate_store=candidate_store,
+            benchmark_store=benchmark_store,
+        )
+    if control_id == _CONTROL_CANDIDATE_APPROVE:
+        return _execute_candidate_transition(
+            control_id,
+            body,
+            candidate_store=candidate_store,
+            target_state_value="approved",
+            confirmation_prefix="approve-candidate",
+        )
+    if control_id == _CONTROL_CANDIDATE_ENABLE:
+        return _execute_candidate_transition(
+            control_id,
+            body,
+            candidate_store=candidate_store,
+            target_state_value="enabled",
+            confirmation_prefix="enable-candidate",
+        )
+    if control_id == _CONTROL_CANDIDATE_DENY:
+        return _execute_candidate_transition(
+            control_id,
+            body,
+            candidate_store=candidate_store,
+            target_state_value="disabled",
+            confirmation_prefix="deny-candidate",
+            require_notes=True,
+        )
 
     detail = _audit_detail(control_id, "unknown", reason="unknown_control")
     return 404, {"message": "Unknown operator control"}, detail
@@ -324,6 +406,184 @@ def _execute_scheduler_remove(
     )
 
 
+def _execute_candidate_import_benchmarks(
+    body: dict[str, Any],
+    *,
+    candidate_store: CandidateStore | None,
+    benchmark_store: BenchmarkStore | None,
+) -> tuple[int, dict[str, Any], dict[str, Any]]:
+    from missy.tools.intelligence import CandidateBenchmarkReconciler
+
+    control_id = _CONTROL_CANDIDATE_IMPORT_BENCHMARKS
+    target = str(body.get("target") or "").strip()
+    detail = _audit_detail(control_id, target)
+    if candidate_store is None:
+        detail["reason"] = "candidate_store_unavailable"
+        return 503, {"message": "Candidate store is not attached"}, detail
+    if benchmark_store is None:
+        detail["reason"] = "benchmark_store_unavailable"
+        return 503, {"message": "Benchmark store is not attached"}, detail
+    if not _SAFE_TARGET_RE.fullmatch(target):
+        detail["reason"] = "invalid_target"
+        return 400, {"message": "Invalid candidate target"}, detail
+
+    expected_confirmation = f"import-candidate-benchmarks:{target}"
+    provided_confirmation = str(body.get("confirm") or "")
+    if provided_confirmation != expected_confirmation:
+        detail["reason"] = "confirmation_required"
+        detail["confirmation_template"] = "import-candidate-benchmarks:{target}"
+        return (
+            409,
+            {
+                "message": "Explicit confirmation is required",
+                "confirmation": expected_confirmation,
+            },
+            detail,
+        )
+
+    try:
+        reconciler = CandidateBenchmarkReconciler(
+            candidate_store=candidate_store,
+            benchmark_store=benchmark_store,
+            min_samples=int(body.get("min_samples") or 3),
+            min_composite=float(body.get("min_composite") or 0.4),
+            min_safety=float(body.get("min_safety") or 1.0),
+            min_schema_score=float(body.get("min_schema_score") or 0.8),
+        )
+    except (TypeError, ValueError) as exc:
+        detail["reason"] = "invalid_threshold"
+        detail["error"] = _safe_error(exc)
+        return 400, {"message": "Invalid benchmark threshold"}, detail
+
+    try:
+        result = reconciler.reconcile_candidate(
+            target,
+            tool_name=str(body.get("tool_name") or "").strip() or None,
+            actor="operator",
+        )
+    except ValueError as exc:
+        detail["reason"] = "benchmark_data_missing"
+        detail["error"] = _safe_error(exc)
+        return 404, {"message": _safe_error(exc)}, detail
+    except Exception as exc:  # noqa: BLE001
+        detail["reason"] = "benchmark_import_failed"
+        detail["error"] = _safe_error(exc)
+        return 409, {"message": _safe_error(exc)}, detail
+
+    if result is None:
+        detail["reason"] = "unknown_candidate"
+        return 404, {"message": f"Candidate {target!r} not found"}, detail
+
+    candidate = result.candidate
+    decisions = [
+        {
+            "provider": d.provider,
+            "enabled": d.enabled,
+            "reason": d.reason,
+            "run_count": d.run_count,
+            "composite": d.summary.composite,
+        }
+        for d in result.decisions
+    ]
+    detail.update(
+        {
+            "reason": "confirmed",
+            "name": candidate.name,
+            "state": candidate.state.value,
+            "providers": decisions,
+        }
+    )
+    return (
+        200,
+        {
+            "control": control_id,
+            "target": target,
+            "candidate": candidate.to_dict(),
+            "decisions": decisions,
+        },
+        detail,
+    )
+
+
+def _execute_candidate_transition(
+    control_id: str,
+    body: dict[str, Any],
+    *,
+    candidate_store: CandidateStore | None,
+    target_state_value: str,
+    confirmation_prefix: str,
+    require_notes: bool = False,
+) -> tuple[int, dict[str, Any], dict[str, Any]]:
+    from missy.tools.intelligence import ToolLifecycleState
+
+    target = str(body.get("target") or "").strip()
+    detail = _audit_detail(control_id, target)
+    if candidate_store is None:
+        detail["reason"] = "candidate_store_unavailable"
+        return 503, {"message": "Candidate store is not attached"}, detail
+    if not _SAFE_TARGET_RE.fullmatch(target):
+        detail["reason"] = "invalid_target"
+        return 400, {"message": "Invalid candidate target"}, detail
+
+    expected_confirmation = f"{confirmation_prefix}:{target}"
+    provided_confirmation = str(body.get("confirm") or "")
+    if provided_confirmation != expected_confirmation:
+        detail["reason"] = "confirmation_required"
+        detail["confirmation_template"] = f"{confirmation_prefix}:{{target}}"
+        return (
+            409,
+            {
+                "message": "Explicit confirmation is required",
+                "confirmation": expected_confirmation,
+            },
+            detail,
+        )
+
+    notes = str(body.get("notes") or body.get("reason") or "").strip()
+    if require_notes and not notes:
+        detail["reason"] = "review_reason_required"
+        return 400, {"message": "A review reason is required"}, detail
+
+    try:
+        target_state = ToolLifecycleState(target_state_value)
+        updated = candidate_store.transition(
+            target,
+            target_state,
+            notes=notes,
+            actor="operator",
+        )
+    except ValueError as exc:
+        detail["reason"] = "invalid_lifecycle_transition"
+        detail["error"] = _safe_error(exc)
+        return 409, {"message": _safe_error(exc)}, detail
+    except Exception as exc:  # noqa: BLE001
+        detail["reason"] = "candidate_transition_failed"
+        detail["error"] = _safe_error(exc)
+        return 409, {"message": _safe_error(exc)}, detail
+
+    if updated is None:
+        detail["reason"] = "unknown_candidate"
+        return 404, {"message": f"Candidate {target!r} not found"}, detail
+
+    detail.update(
+        {
+            "reason": "confirmed",
+            "name": updated.name,
+            "state": updated.state.value,
+            "notes": notes,
+        }
+    )
+    return (
+        200,
+        {
+            "control": control_id,
+            "target": target,
+            "candidate": updated.to_dict(),
+        },
+        detail,
+    )
+
+
 def _provider_targets(provider_registry: ProviderRegistry | None) -> list[dict[str, Any]]:
     if provider_registry is None:
         return []
@@ -352,6 +612,60 @@ def _provider_targets(provider_registry: ProviderRegistry | None) -> list[dict[s
                 "confirmation": f"set-default:{name}",
             }
         )
+    return targets
+
+
+def _candidate_targets(candidate_store: CandidateStore | None) -> dict[str, list[dict[str, Any]]]:
+    if candidate_store is None:
+        return {"benchmarkable": [], "approvable": [], "enableable": [], "denyable": []}
+    try:
+        candidates = candidate_store.list_all(limit=200)
+    except Exception:
+        return {"benchmarkable": [], "approvable": [], "enableable": [], "denyable": []}
+
+    targets = {"benchmarkable": [], "approvable": [], "enableable": [], "denyable": []}
+    for candidate in candidates:
+        base = {
+            "name": candidate.id,
+            "label": candidate.name,
+            "candidate_name": candidate.name,
+            "state": candidate.state.value,
+            "owner": candidate.owner,
+            "available": True,
+            "is_current": False,
+        }
+        if candidate.state.value in {"proposed", "experimental"}:
+            targets["benchmarkable"].append(
+                {
+                    **base,
+                    "action_label": "Import",
+                    "confirmation": f"import-candidate-benchmarks:{candidate.id}",
+                }
+            )
+        if candidate.state.value == "benchmarked":
+            targets["approvable"].append(
+                {
+                    **base,
+                    "action_label": "Approve",
+                    "confirmation": f"approve-candidate:{candidate.id}",
+                }
+            )
+        if candidate.state.value == "approved":
+            targets["enableable"].append(
+                {
+                    **base,
+                    "action_label": "Enable",
+                    "confirmation": f"enable-candidate:{candidate.id}",
+                }
+            )
+        if candidate.state.value != "disabled":
+            targets["denyable"].append(
+                {
+                    **base,
+                    "action_label": "Deny",
+                    "confirmation": f"deny-candidate:{candidate.id}",
+                }
+            )
     return targets
 
 
@@ -441,6 +755,8 @@ def _audit_detail(control_id: str, target: str, **extra: Any) -> dict[str, Any]:
         subsystem = "provider"
     elif control_id.startswith("scheduler."):
         subsystem = "scheduler"
+    elif control_id.startswith("tool_candidate."):
+        subsystem = "tool_candidate"
     return redact_audit_value(
         {
             "subsystem": subsystem,

@@ -1,6 +1,6 @@
 # OpenClaw Gap Analysis
 
-Last updated: 2026-07-09 14:12 EDT
+Last updated: 2026-07-09 14:47 EDT
 
 ## Current Focus
 
@@ -21,11 +21,11 @@ diagnostics without bypassing policy.
 | Candidate storage metadata | in place | `CandidateStore` stores schema, permissions, provenance, examples, owner, version, lifecycle state, notes, benchmark summaries, provider flags, and tags. |
 | Candidate lifecycle enforcement | in place | Store-level transition matrix rejects skipped gates and disabled-candidate resurrection, with denied audit events. |
 | Benchmark harness | in place | Direct and LLM-mediated benchmark runners score correctness, latency, cost, reliability, safety, schema adherence, tool-call quality, and failure behavior. |
-| Benchmark-to-candidate reconciliation | improved this session | `CandidateBenchmarkReconciler` imports aggregate benchmark data into candidate summaries and provider flags without approving or enabling tools. |
+| Benchmark-to-candidate reconciliation | in place | `CandidateBenchmarkReconciler` imports aggregate benchmark data into candidate summaries and provider flags without approving or enabling tools. |
 | Provider-aware tool gating | in place | `ToolProviderGate` combines benchmark summaries and operator overrides. Runtime gating is opt-in. |
 | Provider fallback recommendation | partial | CLI can recommend the best enabled provider; runtime does not yet surface recommendations when a tool is gated off. |
-| CLI diagnostics | improved this session | Candidate list/show/import-benchmarks/approve/enable/deny, request stats, benchmark run/results/compare, provider status/enable/disable/clear/recommend. |
-| Web/API controls | not_started for candidates | Existing web controls cover other subsystems, but candidate lifecycle actions are CLI-only. |
+| CLI diagnostics | in place | Candidate list/show/import-benchmarks/approve/enable/deny, request stats, benchmark run/results/compare, provider status/enable/disable/clear/recommend. |
+| Web/API controls | improved this session | REST candidate list/show endpoints and safe controls for import-benchmarks/approve/enable/deny now reuse store-level gates and audit `web.control` events. |
 | Runtime loading of enabled candidates | not_started | Enabled candidates are persisted metadata; a controlled loader still needs schema/provenance/policy gates. |
 
 ## OpenClaw Pattern Status
@@ -33,18 +33,19 @@ diagnostics without bypassing policy.
 | ID | Pattern | Status | Notes |
 |---|---|---|---|
 | A1 | Streaming subscription state machine | in place | Existing run streaming remains separate from this session. |
-| A2 | Layered tool policy pipeline | hardened | Candidate lifecycle and benchmark reconciliation complement execution policy rather than replacing it. |
+| A2 | Layered tool policy pipeline | hardened | Candidate lifecycle and Web/API controls complement execution policy rather than replacing it. |
 | A3 | Mutation fingerprinting + sticky lastToolError | implemented | Unchanged this session. |
-| A11 | Raw diagnostics/audit trail | improved | Benchmark reconciliation emits explicit audit events and CLI-visible provider decisions. |
+| A11 | Raw diagnostics/audit trail | improved | Candidate Web/API controls emit explicit `web.control` allow/deny audit events. |
 | A12 | Transcript/tool-call repair | partial | Provider schema adapters and benchmark scoring exist; candidate schema compatibility reporting remains future work. |
 
 ## Recommended Next Slice
 
-1. Add Web/API candidate controls for list/show/import-benchmarks/approve/
-   enable/deny with shared store/reconciler logic and typed confirmations.
+1. Add controlled runtime loading for enabled candidates with schema,
+   permissions, provenance, tests, benchmark/provider-enable checks, and
+   rollback guardrails.
 2. Add candidate lifecycle commands/API for `experimental` and `deprecated`
    transitions where operator review needs those intermediate states.
-3. Add controlled runtime loading for enabled candidates with schema,
-   permissions, provenance, tests, and rollback checks.
-4. Surface provider fallback recommendations in runtime diagnostics when
+3. Surface provider fallback recommendations in runtime diagnostics when
    provider gating removes tools from a turn.
+4. Add richer schema-compatibility reporting per provider/tool family for
+   candidate review.
