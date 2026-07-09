@@ -257,9 +257,7 @@ def test_benchmark_run_llm_execute_warns() -> None:
     runner = CliRunner()
     with patch("missy.tools.registry.get_tool_registry") as mock_reg:
         mock_reg.return_value.get.return_value = tool
-        mock_reg.return_value.execute.return_value = MagicMock(
-            success=True, output=4, error=None
-        )
+        mock_reg.return_value.execute.return_value = MagicMock(success=True, output=4, error=None)
         result = runner.invoke(
             cli,
             [

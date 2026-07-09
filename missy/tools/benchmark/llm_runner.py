@@ -183,9 +183,7 @@ class LLMBenchmarkRunner:
 
         success = tool_call_made
         if tool_call_made and self._execute_tool:
-            success, actual_output, exec_error = _execute(
-                task.tool_name, tool_call_args, registry
-            )
+            success, actual_output, exec_error = _execute(task.tool_name, tool_call_args, registry)
             error = exec_error or error
         elif tool_call_made and task.expected_args:
             # Score argument correctness directly (no execution) by comparing
@@ -211,9 +209,7 @@ class LLMBenchmarkRunner:
             expected_output=expected_for_scoring,
             tool_call_made=tool_call_made,
             tool_call_args=tool_call_args,
-            schema_required_params=(
-                task.schema_required_params or list(task.expected_args.keys())
-            ),
+            schema_required_params=(task.schema_required_params or list(task.expected_args.keys())),
             safety_violation=safety_violation,
             error=error,
             metadata={"benchmark_kind": "llm", "executed": self._execute_tool},
@@ -297,9 +293,7 @@ def _normalise_args(args: dict[str, Any]) -> str:
     return ", ".join(f"{k}={args[k]}" for k in sorted(args))
 
 
-def _execute(
-    tool_name: str, args: dict[str, Any], registry: Any
-) -> tuple[bool, Any, str]:
+def _execute(tool_name: str, args: dict[str, Any], registry: Any) -> tuple[bool, Any, str]:
     """Execute *tool_name* with *args* through the registry. Never raises."""
     try:
         if registry is None:
