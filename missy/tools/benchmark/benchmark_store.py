@@ -43,6 +43,8 @@ class ProviderSummary:
         mean_cost_usd: Mean estimated cost.
         mean_reliability: Mean reliability score.
         mean_safety: Mean safety score.
+        mean_schema_score: Mean schema-adherence score.
+        mean_tool_call_quality: Mean tool-call quality score.
         last_run_at: ISO-8601 timestamp of the most recent run.
     """
 
@@ -55,6 +57,8 @@ class ProviderSummary:
     mean_cost_usd: float
     mean_reliability: float
     mean_safety: float
+    mean_schema_score: float
+    mean_tool_call_quality: float
     last_run_at: str
 
 
@@ -213,6 +217,8 @@ class BenchmarkStore:
                         AVG(cost_usd) AS mean_cost_usd,
                         AVG(reliability) AS mean_reliability,
                         AVG(safety) AS mean_safety,
+                        AVG(schema_score) AS mean_schema_score,
+                        AVG(tool_call_quality) AS mean_tool_call_quality,
                         MAX(recorded_at) AS last_run_at
                     FROM benchmark_results
                     WHERE tool_name = ?
@@ -234,6 +240,8 @@ class BenchmarkStore:
                 mean_cost_usd=round(r["mean_cost_usd"] or 0.0, 6),
                 mean_reliability=round(r["mean_reliability"] or 0.0, 4),
                 mean_safety=round(r["mean_safety"] or 0.0, 4),
+                mean_schema_score=round(r["mean_schema_score"] or 0.0, 4),
+                mean_tool_call_quality=round(r["mean_tool_call_quality"] or 0.0, 4),
                 last_run_at=r["last_run_at"] or "",
             )
             for r in rows
@@ -265,6 +273,8 @@ class BenchmarkStore:
                         AVG(cost_usd) AS mean_cost_usd,
                         AVG(reliability) AS mean_reliability,
                         AVG(safety) AS mean_safety,
+                        AVG(schema_score) AS mean_schema_score,
+                        AVG(tool_call_quality) AS mean_tool_call_quality,
                         MAX(recorded_at) AS last_run_at
                     FROM benchmark_results
                     GROUP BY tool_name, provider
@@ -284,6 +294,8 @@ class BenchmarkStore:
                 mean_cost_usd=round(r["mean_cost_usd"] or 0.0, 6),
                 mean_reliability=round(r["mean_reliability"] or 0.0, 4),
                 mean_safety=round(r["mean_safety"] or 0.0, 4),
+                mean_schema_score=round(r["mean_schema_score"] or 0.0, 4),
+                mean_tool_call_quality=round(r["mean_tool_call_quality"] or 0.0, 4),
                 last_run_at=r["last_run_at"] or "",
             )
             for r in rows

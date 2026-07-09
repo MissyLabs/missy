@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 from click.testing import CliRunner
 
 from missy.tools.benchmark.benchmark_store import BenchmarkStore
+from missy.tools.intelligence import CandidateStore, ToolCandidate
 from missy.tools.intelligence.provider_gate import ProviderGateStore
 
 # ---------------------------------------------------------------------------
@@ -28,6 +29,46 @@ def _make_mock_tool(name: str = "calculator") -> MagicMock:
         },
     }
     return tool
+
+
+def _save_cli_benchmark(bench_store: BenchmarkStore, tool_name: str, provider: str) -> None:
+    from missy.tools.benchmark.scoring import BenchmarkResult, BenchmarkScorer
+
+    scorer = BenchmarkScorer()
+    for _ in range(3):
+        bench_store.save(
+            scorer.score(
+                BenchmarkResult(
+                    task_id=f"{tool_name}-{provider}",
+                    tool_name=tool_name,
+                    provider=provider,
+                    success=True,
+                    latency_ms=5.0,
+                    cost_usd=0.0,
+                    actual_output="4",
+                    expected_output="4",
+                    tool_call_made=True,
+                    tool_call_args={"expression": "2+2"},
+                    schema_required_params=["expression"],
+                )
+            )
+        )
+
+
+def _make_candidate_store(tmp_path: Path, name: str = "calculator") -> tuple[CandidateStore, str]:
+    store = CandidateStore(db_path=tmp_path / "candidates.db")
+    candidate = ToolCandidate.create(
+        name=name,
+        description="calculator candidate",
+        schema={
+            "type": "object",
+            "properties": {"expression": {"type": "string"}},
+            "required": ["expression"],
+        },
+        provenance="cli test",
+    )
+    store.add(candidate)
+    return store, candidate.id
 
 
 def test_providers_status_no_data(tmp_path: Path) -> None:
@@ -174,6 +215,46 @@ def test_providers_recommend_picks_best(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert "anthropic" in result.output
+
+
+def test_candidates_import_benchmarks_updates_candidate(tmp_path: Path) -> None:
+    from missy.cli.main import cli
+
+    candidate_store, candidate_id = _make_candidate_store(tmp_path)
+    bench_store = BenchmarkStore(db_path=tmp_path / "bench.db")
+    _save_cli_benchmark(bench_store, "calculator", "mock")
+
+    runner = CliRunner()
+    with (
+        patch("missy.tools.intelligence.get_candidate_store", return_value=candidate_store),
+        patch("missy.tools.benchmark.get_benchmark_store", return_value=bench_store),
+    ):
+        result = runner.invoke(cli, ["tools", "candidates", "import-benchmarks", candidate_id])
+
+    assert result.exit_code == 0
+    assert "Imported Benchmarks" in result.output
+    assert "mock" in result.output
+    loaded = candidate_store.get(candidate_id)
+    assert loaded is not None
+    assert loaded.state.value == "benchmarked"
+    assert loaded.provider_enabled["mock"] is True
+
+
+def test_candidates_import_benchmarks_reports_missing_data(tmp_path: Path) -> None:
+    from missy.cli.main import cli
+
+    candidate_store, candidate_id = _make_candidate_store(tmp_path)
+    bench_store = BenchmarkStore(db_path=tmp_path / "bench.db")
+
+    runner = CliRunner()
+    with (
+        patch("missy.tools.intelligence.get_candidate_store", return_value=candidate_store),
+        patch("missy.tools.benchmark.get_benchmark_store", return_value=bench_store),
+    ):
+        result = runner.invoke(cli, ["tools", "candidates", "import-benchmarks", candidate_id])
+
+    assert result.exit_code != 0
+    assert "no benchmark summaries" in result.output
 
 
 # ---------------------------------------------------------------------------
