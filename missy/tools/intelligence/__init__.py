@@ -9,10 +9,16 @@ Public API
 - :class:`ToolCandidate` — a proposed or active structured tool.
 - :class:`ToolLifecycleState` — lifecycle state enum (proposed → enabled → disabled).
 - :class:`BenchmarkSummary` — per-provider benchmark outcome stored on a candidate.
+- :class:`CandidateBenchmarkReconciler` — import benchmark-store evidence into candidates.
 - :class:`CandidateGenerator` — generate candidates from patterns.
 - :class:`GenerationResult` — outcome of a generation attempt.
 """
 
+from .benchmark_reconciler import (
+    BenchmarkReconciliation,
+    CandidateBenchmarkReconciler,
+    ProviderBenchmarkDecision,
+)
 from .candidate_generator import CandidateGenerator, GenerationResult
 from .candidate_store import (
     BenchmarkSummary,
@@ -32,11 +38,14 @@ from .request_tracker import RequestEvent, RequestPattern, RequestTracker, get_r
 
 __all__ = [
     "BenchmarkSummary",
+    "BenchmarkReconciliation",
     "CandidateGenerator",
+    "CandidateBenchmarkReconciler",
     "CandidateStore",
     "GateDecision",
     "GenerationResult",
     "ProviderGateStore",
+    "ProviderBenchmarkDecision",
     "RequestEvent",
     "RequestPattern",
     "RequestTracker",

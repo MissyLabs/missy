@@ -274,10 +274,17 @@ Review and lifecycle commands:
 missy tools candidates list
 missy tools candidates show <candidate_id>
 missy tools benchmark run <tool_name>
+missy tools candidates import-benchmarks <candidate_id>
 missy tools candidates approve <candidate_id>
 missy tools candidates enable <candidate_id>
 missy tools candidates deny <candidate_id> --reason "unsafe permissions"
 ```
+
+`import-benchmarks` reads aggregate results from `~/.missy/benchmark_results.db`,
+stores provider summaries back on the candidate, and sets benchmark-derived
+provider flags using conservative thresholds for sample count, composite score,
+safety, and schema adherence. It can move `proposed` or `experimental`
+candidates to `benchmarked`, but it never approves or enables a tool.
 
 Provider-specific tool availability is controlled separately from execution
 policy. `ToolProviderGate` can hide a tool from a weak provider based on

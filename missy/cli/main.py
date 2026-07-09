@@ -5021,6 +5021,90 @@ def candidates_show(ctx: click.Context, candidate_id: str) -> None:
     console.print(f"[bold]Schema:[/]\n{_json.dumps(c.schema, indent=2)}")
 
 
+@tools_candidates.command("import-benchmarks")
+@click.argument("candidate_id")
+@click.option(
+    "--tool-name",
+    default=None,
+    help="Benchmark tool name to import. Defaults to the candidate name.",
+)
+@click.option("--min-samples", default=3, show_default=True, help="Minimum runs per provider.")
+@click.option(
+    "--min-composite",
+    default=0.4,
+    show_default=True,
+    help="Minimum mean composite score for provider enablement.",
+)
+@click.option(
+    "--min-safety",
+    default=1.0,
+    show_default=True,
+    help="Minimum mean safety score for provider enablement.",
+)
+@click.option(
+    "--min-schema-score",
+    default=0.8,
+    show_default=True,
+    help="Minimum mean schema-adherence score for provider enablement.",
+)
+@click.pass_context
+def candidates_import_benchmarks(
+    ctx: click.Context,
+    candidate_id: str,
+    tool_name: str | None,
+    min_samples: int,
+    min_composite: float,
+    min_safety: float,
+    min_schema_score: float,
+) -> None:
+    """Import stored benchmark summaries into a candidate review record."""
+    from missy.tools.benchmark import get_benchmark_store
+    from missy.tools.intelligence import CandidateBenchmarkReconciler, get_candidate_store
+
+    reconciler = CandidateBenchmarkReconciler(
+        candidate_store=get_candidate_store(),
+        benchmark_store=get_benchmark_store(),
+        min_samples=min_samples,
+        min_composite=min_composite,
+        min_safety=min_safety,
+        min_schema_score=min_schema_score,
+    )
+    try:
+        result = reconciler.reconcile_candidate(candidate_id, tool_name=tool_name, actor="operator")
+    except ValueError as exc:
+        _print_error(str(exc))
+        raise SystemExit(1) from None
+    if result is None:
+        _print_error(f"Candidate {candidate_id!r} not found.")
+        raise SystemExit(1)
+
+    c = result.candidate
+    t = Table(title=f"Imported Benchmarks: {c.name}")
+    t.add_column("Provider", style="bold")
+    t.add_column("Runs", justify="right")
+    t.add_column("Enabled")
+    t.add_column("Composite", justify="right")
+    t.add_column("Safety", justify="right")
+    t.add_column("Schema", justify="right")
+    t.add_column("Reason", max_width=54)
+    for decision in result.decisions:
+        s = decision.summary
+        t.add_row(
+            decision.provider,
+            str(decision.run_count),
+            "[green]yes[/]" if decision.enabled else "[red]no[/]",
+            f"{s.composite:.3f}",
+            f"{s.safety:.3f}",
+            f"{s.schema_score:.3f}",
+            decision.reason,
+        )
+    console.print(t)
+    console.print(
+        f"Candidate [bold]{c.name}[/] is now [bold]{c.state.value}[/]; "
+        "approval and enablement remain separate lifecycle actions."
+    )
+
+
 @tools_candidates.command("approve")
 @click.argument("candidate_id")
 @click.option("--notes", default="", help="Approval notes.")
@@ -5056,11 +5140,8 @@ def candidates_enable(ctx: click.Context, candidate_id: str, notes: str) -> None
     if c is None:
         _print_error(f"Candidate {candidate_id!r} not found.")
         raise SystemExit(1)
-    if c.state not in (ToolLifecycleState.APPROVED, ToolLifecycleState.BENCHMARKED):
-        _print_error(
-            f"Candidate must be in 'approved' or 'benchmarked' state to enable "
-            f"(current: {c.state.value})."
-        )
+    if c.state != ToolLifecycleState.APPROVED:
+        _print_error(f"Candidate must be in 'approved' state to enable (current: {c.state.value}).")
         raise SystemExit(1)
     try:
         updated = store.transition(

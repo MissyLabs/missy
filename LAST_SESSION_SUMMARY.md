@@ -4,31 +4,25 @@ Date: 2026-07-09
 
 ## Changed
 
-- Enforced tool-candidate lifecycle transitions in
-  `missy/tools/intelligence/candidate_store.py`.
-- Added public `is_valid_transition(current, new_state)` and exported it from
-  `missy.tools.intelligence`.
-- Invalid candidate transitions now raise `ValueError`, preserve the current
-  state, and emit `tool.candidate.transition_denied` with `result="deny"`.
-- `missy tools candidates approve|enable|deny` now report lifecycle errors
-  cleanly through the CLI.
-- Updated candidate-store tests for benchmark-before-approval and added edge
-  cases for rejected direct enable, rejected pre-benchmark approval, disabled
-  resurrection denial, deprecated rollback, no-op transitions, and transition
-  helper behavior.
-- Updated `docs/operations.md` and `docs/implementation/module-map.md` with
-  tool-intelligence lifecycle and provider-gate documentation.
+- Added benchmark-to-candidate reconciliation via
+  `CandidateBenchmarkReconciler`.
+- Added `missy tools candidates import-benchmarks <candidate_id>` with
+  provider threshold options and a benchmark tool-name override.
+- Extended benchmark provider summaries with schema-score and tool-call quality
+  aggregates.
+- Reconciled benchmark imports now update candidate benchmark summaries,
+  provider-enabled flags, and audited review metadata without approving or
+  enabling a tool.
+- Fixed the CLI enable pre-check to require `approved`, matching the
+  store-level lifecycle gate.
+- Updated operations docs and module map.
+- Added unit and CLI tests for benchmark import behavior and error paths.
 
 ## Verification
 
 ```text
-python3 -m pytest tests/tools/test_candidate_store.py tests/tools/test_candidate_generator.py tests/tools/test_request_tracker.py tests/tools/test_provider_gate.py tests/agent/test_tool_intelligence_wiring.py tests/agent/test_request_tracker_wiring.py tests/cli/test_tool_provider_cli.py tests/cli/test_benchmark_run_cmd.py -q
-157 passed
-```
-
-```text
-python3 -m pytest -q
-20636 passed, 13 skipped in 441.06s (0:07:21)
+python3 -m pytest tests/tools/test_benchmark_reconciler.py tests/tools/test_candidate_store.py tests/tools/test_benchmark.py tests/tools/test_provider_gate.py tests/cli/test_tool_provider_cli.py -q
+112 passed
 ```
 
 ```text
@@ -38,21 +32,27 @@ All checks passed!
 
 ```text
 python3 -m ruff format --check missy/ tests/
-741 files already formatted
+743 files already formatted
+```
+
+```text
+python3 -m pytest -q
+20643 passed, 13 skipped in 426.31s (0:07:06)
 ```
 
 ## Remains
 
-- Benchmark results are not yet automatically reconciled back into matching
-  `ToolCandidate` lifecycle records.
+- Web/API operator controls do not yet expose candidate lifecycle actions or
+  benchmark import.
 - Enabled candidates still need a controlled runtime loading path with
-  schema/provenance/policy gates.
-- Web/API operator controls do not yet expose candidate lifecycle actions.
+  schema/provenance/policy/test gates.
 - Provider fallback recommendations exist in CLI/provider gate code but are
   not yet surfaced in runtime responses when a tool is gated off.
+- Candidate review can import schema-score aggregates, but provider-family
+  schema compatibility reporting is still limited.
 
 ## First Next Step
 
-Build benchmark-to-candidate reconciliation so real benchmark data can move
-candidate records to `benchmarked`, persist provider enablement flags, and
-make approval decisions reviewable from CLI/API.
+Add Web/API candidate controls for list/show/import-benchmarks/approve/enable/
+deny, reusing `CandidateStore` and `CandidateBenchmarkReconciler` rather than
+duplicating lifecycle logic.

@@ -467,8 +467,8 @@ dependencies on other `missy` modules.
 
 | Field | Value |
 |-------|-------|
-| **Purpose** | Tool-intelligence control plane: records repeated request patterns, proposes structured tool candidates, persists lifecycle metadata, and gates provider-specific tool exposure from benchmark data. |
-| **Key exports** | `RequestTracker`, `RequestPattern`, `CandidateGenerator`, `CandidateStore`, `ToolCandidate`, `ToolLifecycleState`, `is_valid_transition`, `ToolProviderGate`, `ProviderGateStore` |
+| **Purpose** | Tool-intelligence control plane: records repeated request patterns, proposes structured tool candidates, persists lifecycle metadata, reconciles benchmark evidence into candidate review records, and gates provider-specific tool exposure from benchmark data. |
+| **Key exports** | `RequestTracker`, `RequestPattern`, `CandidateGenerator`, `CandidateStore`, `ToolCandidate`, `ToolLifecycleState`, `is_valid_transition`, `CandidateBenchmarkReconciler`, `ToolProviderGate`, `ProviderGateStore` |
 | **Internal deps** | `missy.core.events`, `missy.tools.benchmark` |
 
 Candidate lifecycle transitions are enforced in `CandidateStore` so CLI,
@@ -477,6 +477,9 @@ runtime automation, and future Web/API controls share the same gate:
 may be denied to `disabled`, enabled tools may be rolled back to
 `deprecated`/`disabled`, and disabled candidates cannot be resurrected in
 place. Invalid transition attempts emit `tool.candidate.transition_denied`.
+`CandidateBenchmarkReconciler` imports aggregate benchmark-store evidence into
+candidate benchmark summaries and provider flags without approving or enabling
+the candidate.
 
 ### missy.tools.benchmark
 
