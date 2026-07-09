@@ -870,7 +870,9 @@ def _make_handler(
                 sessions = ms.get_total_costs(limit=limit)
             except Exception as exc:
                 logger.warning("Cost summary error: %s", exc)
-            budget_cap = float(getattr(runtime.config, "max_spend_usd", 0.0) or 0.0) if runtime else 0.0
+            budget_cap = (
+                float(getattr(runtime.config, "max_spend_usd", 0.0) or 0.0) if runtime else 0.0
+            )
             return ApiResponse.ok(
                 {
                     "totals": totals,
