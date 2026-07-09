@@ -1,6 +1,6 @@
 # TEST_EDGE_CASES
 
-- Timestamp: 2026-07-08 21:58:59
+- Timestamp: 2026-07-08 22:06:56
 
 Current edge-case focus:
 - Web TUI auth/session handling cannot be bypassed
