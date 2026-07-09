@@ -1,9 +1,18 @@
 # Edge Node Client Specification
 
-**Version:** 1.0
+**Version:** 1.1
 **Status:** Draft
 **Target hardware:** Raspberry Pi 5 + ReSpeaker mic array + speaker
 **Companion project:** `missy-edge` (reference implementation)
+
+> **Authoritative protocol reference:** `missy-edge/docs/protocol.md` in
+> the companion repository is generated against the actual server
+> implementation (`missy/channels/voice/server.py`) and is kept current.
+> This document describes the intended design and hardware/deployment
+> considerations for edge nodes in general; for exact wire-protocol
+> details (message types, fields, close codes) prefer
+> `missy-edge/docs/protocol.md`. The terminology below has been updated
+> to match the real server protocol.
 
 ---
 
@@ -23,7 +32,7 @@ The preferred wake word engine is **openWakeWord** (Apache 2.0, <https://github.
 
 **Porcupine** (Picovoice) is an acceptable alternative for deployments where a commercial licence is available or a free-tier access key is sufficient. The interface is compatible; only the initialisation code differs. The remainder of this specification applies equally to both engines.
 
-After wake word detection, the node immediately activates the microphone capture pipeline and begins buffering audio. A short pre-trigger buffer of 0.3 seconds is retained in memory and prepended to the streamed audio so the server receives a clean start of the utterance, eliminating the hard onset typically caused by the detection latency. This buffer is discarded without transmission if no `stream_start` message is sent to the server within 500 milliseconds.
+After wake word detection, the node immediately activates the microphone capture pipeline and begins buffering audio. A short pre-trigger buffer of 0.3 seconds is retained in memory and prepended to the streamed audio so the server receives a clean start of the utterance, eliminating the hard onset typically caused by the detection latency. This buffer is discarded without transmission if no `audio_start` message is sent to the server within 500 milliseconds.
 
 ---
 
@@ -47,50 +56,55 @@ All control messages are JSON text frames. Audio data is transmitted as binary f
 
 #### `auth`
 
-Sent immediately after the WebSocket handshake completes. Must be the first message. If authentication fails, the server closes the connection with code 4001.
+Sent immediately after the WebSocket handshake completes. Must be `auth` or `pair_request` — any other first message, or no message within a 10-second timeout, causes the server to close the connection (close code `1008`). If authentication fails, the server responds with `auth_fail` and closes with code `1008` (see Section 4).
 
 ```json
 {
   "type": "auth",
   "node_id": "a3f8c2d1-9b4e-4f7a-8e6d-1c2b3d4e5f60",
-  "token": "msy_tok_v1_..."
+  "token": "HdK9x2mP..."
 }
 ```
 
 #### `pair_request`
 
-Sent by a node that has not yet been assigned a token. The server records the request and the administrator approves it via `missy devices pair`. After approval, the server sends a `pair_ack` containing the token; the client must persist this token locally and use it for all subsequent `auth` messages.
+Sent instead of `auth` by a node that has not yet been assigned a token or `node_id`. The **server** generates and assigns the `node_id` — it must not be supplied by the client. The server records the request, responds with `pair_pending` (see below), and closes the connection; the administrator approves the request out-of-band via `missy devices pair --node-id <id>`.
 
 ```json
 {
   "type": "pair_request",
-  "node_id": "a3f8c2d1-9b4e-4f7a-8e6d-1c2b3d4e5f60",
-  "name": "Living Room",
-  "room": "living_room"
+  "friendly_name": "Living Room Pi",
+  "room": "Living Room",
+  "hardware_profile": {
+    "platform": "aarch64",
+    "hostname": "missy-lr",
+    "os": "Linux"
+  }
 }
 ```
 
-#### `stream_start`
+`hardware_profile` is optional freeform device metadata. Do **not** include `node_id` in this message.
 
-Sent immediately before the first binary audio frame of an utterance. Signals the server to open a new STT session.
+#### `audio_start` (client)
+
+Sent immediately before the first binary audio frame of an utterance. Signals the server to open a new STT session. Audio is streamed as raw PCM (not WAV) in the client-to-server direction.
 
 ```json
 {
-  "type": "stream_start",
-  "node_id": "a3f8c2d1-9b4e-4f7a-8e6d-1c2b3d4e5f60",
-  "session_id": "sess_7f3a2b"
+  "type": "audio_start",
+  "sample_rate": 16000,
+  "channels": 1,
+  "format": "pcm_s16le"
 }
 ```
 
-#### `stream_end`
+#### `audio_end` (client)
 
 Sent after the final binary audio frame of the utterance. The server flushes the remaining audio through the STT pipeline and begins processing the transcript.
 
 ```json
 {
-  "type": "stream_end",
-  "node_id": "a3f8c2d1-9b4e-4f7a-8e6d-1c2b3d4e5f60",
-  "session_id": "sess_7f3a2b"
+  "type": "audio_end"
 }
 ```
 
@@ -126,70 +140,101 @@ Sent after the node finishes playing the TTS audio response. Allows the gateway 
 
 #### `auth_ok`
 
-Sent after a successful `auth` message. Includes the effective policy for this node.
+Sent after a successful `auth` message. Includes the server-confirmed `node_id` and the node's assigned room.
 
 ```json
 {
   "type": "auth_ok",
-  "policy": "full"
-}
-```
-
-#### `pair_ack`
-
-Sent after an administrator approves a pending pairing request. The token must be stored permanently on the device with file permissions `0600` or in the Pi's TPM if available.
-
-```json
-{
-  "type": "pair_ack",
   "node_id": "a3f8c2d1-9b4e-4f7a-8e6d-1c2b3d4e5f60",
-  "token": "msy_tok_v1_..."
+  "room": "Living Room"
 }
 ```
 
-#### `tts_audio`
+#### `auth_fail`
 
-Sent after the server completes TTS synthesis. The body is a JSON frame containing metadata; the raw audio binary follows as one or more consecutive binary WebSocket frames. The node must buffer all binary frames until `tts_end` is received before beginning playback.
+Sent when authentication fails. The server closes the connection (close code `1008`) immediately after sending this.
 
 ```json
 {
-  "type": "tts_audio",
-  "session_id": "sess_7f3a2b",
+  "type": "auth_fail",
+  "reason": "invalid credentials"
+}
+```
+
+Known reasons: `"invalid credentials"`, `"node is not yet approved"`, `"node not found after token verification"`.
+
+#### `pair_pending`
+
+Sent in response to `pair_request`, confirming the request was recorded and returning the **server-assigned** `node_id`. The server closes the connection after sending this; the device must persist the returned `node_id` and wait for out-of-band administrator approval before reconnecting with `auth`.
+
+```json
+{
+  "type": "pair_pending",
+  "node_id": "a3f8c2d1-9b4e-4f7a-8e6d-1c2b3d4e5f60"
+}
+```
+
+There is no `pair_ack` message and no token is ever sent over the WebSocket connection. The administrator runs `missy devices pair --node-id <id>` on the server host, which prints the token to the CLI. The token must be provisioned to the device out-of-band (e.g. writing it directly to the SD card, or via a one-time pairing QR code shown on a trusted screen) — see Section 6.
+
+#### `transcript` (optional)
+
+Sent only when the server has `debug_transcripts` enabled. Contains the STT result for the just-completed utterance.
+
+```json
+{
+  "type": "transcript",
+  "text": "What's the weather like today?",
+  "confidence": 0.95
+}
+```
+
+#### `response_text`
+
+The agent's text response. Always sent before any TTS audio.
+
+```json
+{
+  "type": "response_text",
+  "text": "It's currently 72 degrees and sunny."
+}
+```
+
+#### `audio_start` (server)
+
+Sent after the server completes TTS synthesis, signalling the start of the audio response. Binary WAV frames (not raw PCM) follow; the node must buffer all binary frames until `audio_end` is received before beginning playback, since the response is a single self-contained WAV file (with headers) split across frames.
+
+```json
+{
+  "type": "audio_start",
   "sample_rate": 22050,
-  "channels": 1,
-  "encoding": "pcm_s16le",
-  "total_bytes": 176400
+  "format": "wav"
 }
 ```
 
-#### `tts_end`
+#### `audio_end` (server)
 
-Signals that all binary audio frames for the current session have been sent. The node should begin playback immediately.
+Signals that all binary WAV frames for the current response have been sent. The node should begin playback immediately.
 
 ```json
 {
-  "type": "tts_end",
-  "session_id": "sess_7f3a2b"
+  "type": "audio_end"
 }
 ```
 
 #### `error`
 
-Sent when the server encounters an error processing the node's request. The `code` field identifies the error class; `message` is human-readable.
+Sent when the server encounters an error processing the node's request.
 
 ```json
 {
   "type": "error",
-  "code": "stt_failed",
-  "message": "Speech recognition produced no transcript."
+  "message": "Speech recognition failed"
 }
 ```
 
-Known error codes: `auth_failed`, `policy_denied`, `stt_failed`, `llm_error`, `tts_failed`, `session_not_found`.
-
 #### `muted`
 
-Sent when the administrator changes the node's policy to `muted`. The node should silence its speaker and cease sending `stream_start`/`stream_end` frames until a new `auth_ok` with a non-muted policy is received (which occurs on reconnection after a policy change).
+Sent when the administrator changes the node's policy to `muted`. The server closes the connection after sending this. The client should enter a dormant state, display the MUTED LED, and cease sending audio until it reconnects and receives a new `auth_ok`.
 
 ```json
 {
@@ -201,7 +246,7 @@ Sent when the administrator changes the node's policy to `muted`. The node shoul
 
 ## 4. Authentication
 
-Every paired edge node holds a unique bearer token issued by the gateway at pairing time. Tokens are opaque strings with the prefix `msy_tok_v1_` followed by 32 bytes of cryptographically random data encoded in URL-safe base64.
+Every paired edge node holds a unique bearer token issued at pairing time. Tokens are plaintext strings compared verbatim against the registry entry for the given `node_id` — there is no `msy_tok_v1_` prefix convention enforced by the server; treat the token as an opaque secret.
 
 On the edge node, the token must be stored in a file readable only by the process user:
 
@@ -211,7 +256,7 @@ On the edge node, the token must be stored in a file readable only by the proces
 
 If the Raspberry Pi 5's RP1 chip exposes a TPM 2.0 interface, the token should instead be sealed to the TPM using `tpm2-tools` to provide hardware-backed confidentiality.
 
-The token is included verbatim in every `auth` message. The server validates it against the registry entry for the given `node_id`. If the token is absent, expired (future feature), or mismatched, the server responds with an `error` frame with code `auth_failed` and closes the connection with WebSocket close code `4001`.
+The token is included verbatim in every `auth` message. The server validates it against the registry entry for the given `node_id`. If the token is absent, the node is not yet approved, or the token does not match, the server sends an `auth_fail` frame and closes the connection with WebSocket close code `1008` (not `4001`).
 
 Tokens are currently non-expiring. Token rotation is discussed in Section 11.
 
@@ -219,16 +264,16 @@ Tokens are currently non-expiring. Token rotation is discussed in Section 11.
 
 ## 5. Audio Format
 
-All audio streamed from the edge node to the server adheres to the following format:
+Audio streamed from the edge node to the server (client → server, via `audio_start`/binary frames/`audio_end`) is raw PCM:
 
 - **Encoding:** PCM signed 16-bit, little-endian (`pcm_s16le`)
 - **Sample rate:** 16 000 Hz
 - **Channels:** 1 (mono)
-- **Frame size:** 512 samples per binary WebSocket frame (32 ms at 16 kHz), yielding 1 024 bytes per frame
+- **Frame size:** typically 2 560 bytes per binary WebSocket frame (1 280 samples = 80 ms at 16 kHz). The server buffers up to 10 MB of accumulated audio per connection and will error out an utterance that exceeds this.
 
-Audio received from the server (TTS output) uses the same encoding but may use a different sample rate, as indicated by the `sample_rate` field in the `tts_audio` control message. The reference Piper TTS configuration produces 22 050 Hz audio; the edge node should resample or pass through as appropriate for the attached speaker.
+Audio received from the server (TTS output) is a **complete WAV file** (including headers), chunked across binary WebSocket frames (default 4096 bytes each) between the server's `audio_start` and `audio_end` messages — not a raw PCM stream. Concatenate all frames to reconstruct the WAV file before playback. Sample rate is indicated by the `sample_rate` field in the server's `audio_start` message; the reference Piper TTS configuration produces 22 050 Hz audio.
 
-**Maximum utterance duration:** 30 seconds. If a `stream_end` message has not been sent within 30 seconds of `stream_start`, the server will send an `error` frame with code `stt_failed` and discard the session. The client should handle this gracefully by resetting its microphone capture state.
+**Maximum utterance duration:** If an `audio_end` message has not been sent within a reasonable time of `audio_start`, the server will send an `error` frame and discard the session. The client should handle this gracefully by resetting its microphone capture state.
 
 ---
 
@@ -236,17 +281,17 @@ Audio received from the server (TTS output) uses the same encoding but may use a
 
 A factory-fresh edge node has no token and therefore cannot authenticate. Pairing must be completed before normal operation is possible.
 
-1. The node generates a random UUID as its `node_id` and persists it to `/etc/missy-edge/node_id` (created on first boot by the setup script).
-2. The node connects to the gateway WebSocket endpoint.
-3. Instead of an `auth` message, the node sends a `pair_request` message containing its `node_id`, a human-readable `name`, and a `room` identifier.
-4. The gateway records the request in the device registry with `paired: false` and holds the connection open.
-5. The administrator runs `missy devices pair` on the server host. The CLI lists pending nodes and prompts for confirmation. On approval, the gateway generates a token, updates the registry, and sends a `pair_ack` message to the still-open connection.
-6. The edge node receives `pair_ack`, writes the token to `/etc/missy-edge/token` with permissions `0600`, and disconnects cleanly.
-7. The node immediately reconnects and sends a normal `auth` message using the new token.
+1. The node connects to the gateway WebSocket endpoint with no persisted `node_id` or token.
+2. Instead of an `auth` message, the node sends a `pair_request` message containing a human-readable `friendly_name`, a `room` identifier, and optional `hardware_profile` metadata. **The node does not choose or send a `node_id`.**
+3. The gateway records the request in the device registry with `paired: false`, generates a `node_id`, and responds with `pair_pending` containing that `node_id`. The connection is then closed by the server.
+4. The edge node persists the server-assigned `node_id` to `/etc/missy-edge/node_id`.
+5. The administrator runs `missy devices pair --node-id <id>` on the server host. The CLI prints the generated token to the terminal — this is the only time it is shown.
+6. The administrator provisions the token to the device out-of-band (direct SD card write, secure copy, or a one-time QR code) and it is written to `/etc/missy-edge/token` with permissions `0600`.
+7. The node reconnects and sends a normal `auth` message using the new `node_id` and token.
 
-If the connection drops during step 4 before `pair_ack` is received, the node should reconnect and re-send `pair_request`. The gateway is idempotent: repeated `pair_request` messages from the same `node_id` do not create duplicate registry entries. Once the administrator approves, any subsequent reconnecting `pair_request` from that node_id will receive the already-generated token.
+The gateway is idempotent: repeated `pair_request` messages before approval do not create duplicate registry entries, and each such reconnect receives the same pending `node_id`.
 
-**Re-pairing:** If a token is lost (e.g., SD card corruption), the administrator must first remove the stale entry with `missy devices unpair <node_id>` and then run a fresh pairing flow from a node with a new `node_id`.
+**Re-pairing:** If a token is lost (e.g., SD card corruption), the administrator must first remove the stale entry with `missy devices unpair <node_id>` and then run a fresh pairing flow, which will be assigned a new `node_id`.
 
 ---
 
@@ -273,7 +318,7 @@ The edge node must implement exponential backoff with jitter for reconnection at
 - Jitter: ±20% of the computed wait value (uniform random)
 - After a successful connection and `auth_ok`, reset the backoff counter to zero
 
-Authentication failures (WebSocket close code `4001`) are treated separately. The node must not re-attempt authentication more than 5 times within any 60-second window. If this limit is reached, the node should enter a dormant state and log the failure prominently. This prevents token hammering and log flooding on the server.
+Authentication failures (WebSocket close code `1008`) are treated separately. The node must not re-attempt authentication more than 5 times within any 60-second window. If this limit is reached, the node should enter a dormant state and log the failure prominently. This prevents token hammering and log flooding on the server.
 
 Network errors (TCP reset, DNS failure, server unavailable) should trigger normal backoff without the authentication rate limit.
 
@@ -319,8 +364,8 @@ The companion repository should be named `missy-edge` and organised as a `system
 
 **TLS.** Plain WebSocket (`ws://`) is acceptable on a trusted LAN with no guest network. TLS (`wss://`) is strongly encouraged for any deployment where the LAN is shared with untrusted devices. A self-signed certificate is sufficient; the edge node must pin the certificate fingerprint or the CA certificate to prevent MITM attacks on the local network.
 
-**Token confidentiality.** Tokens must never be logged, included in error messages, or transmitted over unencrypted connections. The `missy devices pair` output warns that the token is shown only once; the administrator is responsible for conveying it to the node through a secure channel (e.g., provisioning the SD card directly, or using a one-time pairing QR code displayed on a trusted screen).
+**Token confidentiality.** Tokens are never sent over the WebSocket connection except in the client's own `auth` message — pairing approval delivers the token only via the `missy devices pair --node-id <id>` CLI output, not as a protocol message, so it cannot be intercepted mid-pairing on the wire. Tokens must never be logged or included in error messages. The administrator is responsible for conveying the CLI-printed token to the node through a secure out-of-band channel (e.g., provisioning the SD card directly, or using a one-time pairing QR code displayed on a trusted screen).
 
-**Token rotation.** The current implementation issues non-expiring tokens. A future release should add token expiry and a rotation mechanism: the server issues a new token during a `heartbeat_ack` response and the node replaces the stored token atomically. Until this is implemented, administrators should rotate tokens manually by unpairing and re-pairing any node suspected of token exposure.
+**Token rotation.** The current implementation issues non-expiring tokens. A future release should add token expiry and a rotation mechanism. Until this is implemented, administrators should rotate tokens manually by unpairing and re-pairing any node suspected of token exposure.
 
 **Microphone privacy.** Pre-trigger audio is never transmitted. The edge node should provide a physical mute button that disconnects microphone power at the hardware level for situations where the user requires a hard privacy guarantee. The gateway's `muted` policy mode provides a software-level mute but does not prevent audio capture on the node itself.

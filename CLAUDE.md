@@ -394,7 +394,6 @@ missy config rollback               Restore config from latest backup
 missy config plan                   Show what changed since last backup
 
 missy sandbox status                Show Docker container sandbox config and availability
-missy sandbox hatch                 Run hatching bootstrap in sandbox mode
 
 missy security scan                 Audit installation for security issues (permissions, config, secrets)
 

@@ -10,6 +10,7 @@ abstraction, configuration parsing, scheduling, plugins, and more.
 ```
 tests/
   agent/              Runtime, behavior, persona, hatching, attention, playbook, etc.
+  api/                Agent-as-a-Service REST API, auth, rate limiting, operator console
   channels/           CLI, Discord (Gateway + REST + voice/image), webhook, voice
   cli/                CLI commands, wizard, OAuth, auth flows
   config/             Config loading, validation, migration, hot-reload
@@ -27,6 +28,7 @@ tests/
   skills/             Skill discovery, SKILL.md parsing, search
   tools/              Built-in tools (file, shell, web, calculator, etc.)
   unit/               Focused unit tests, hardening, edge cases
+  vision/             Camera discovery, capture pipeline, scene memory, health monitor
 ```
 
 ---
@@ -86,7 +88,7 @@ pytest tests/ --cov=missy --cov-report=term-missing
 
 ### Current coverage target
 
-The project targets **85% code coverage** (currently at 85%+ with 11,900+ tests across 340+ test files).
+The project targets **90% code coverage** (`fail_under = 90` in `pyproject.toml`), with 20,000+ tests across 480+ test files.
 
 ---
 

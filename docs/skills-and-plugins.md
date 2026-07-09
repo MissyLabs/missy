@@ -132,6 +132,102 @@ registered programmatically at application startup.
 
 ---
 
+## SKILL.md Dynamic Skill Discovery
+
+### Overview
+
+Alongside the in-process `BaseSkill` mechanism above, Missy supports the
+open **SKILL.md** format for cross-agent portable skills — the same
+convention used by other agent frameworks (including this repo's own
+`.claude/skills/`-style directories).  `SkillDiscovery`
+(`missy/skills/discovery.py`) scans a directory tree for `SKILL.md` files
+and parses each into a `SkillManifest`.
+
+**Relationship to `BaseSkill`:** these are two independent mechanisms, not
+layers of the same system.  `BaseSkill` skills are trusted Python code
+registered with `SkillRegistry` and directly executable via
+`registry.execute(...)`.  `SkillDiscovery` only *discovers and parses*
+`SKILL.md` files — it currently has no wiring into `SkillRegistry` or the
+agent's tool-execution loop.  In practice, `SkillDiscovery` is used today
+by the `missy skills scan` CLI command to enumerate what SKILL.md-format
+skills are available on disk (e.g. as documentation/instructions an
+operator or agent can read), not as a code-execution path.
+
+### SKILL.md Format
+
+A SKILL.md file is Markdown with a YAML frontmatter block delimited by
+`---` lines, followed by free-form instructions in the body:
+
+```markdown
+---
+name: web-search
+description: Search the web using DuckDuckGo
+version: 1.0.0
+author: MissyLabs
+tools: [web_fetch]
+---
+
+# Instructions
+When the user asks to search the web...
+```
+
+| Frontmatter field | Required | Description |
+|---|---|---|
+| `name` | Yes | Short identifier for the skill. Parsing raises `ValueError` if missing. |
+| `description` | No | Human-readable one-line summary. |
+| `version` | No | Semantic version string. |
+| `author` | No | Author or organisation name. |
+| `tools` | No | List of tool names the skill expects to use. Accepts either a YAML inline list (`[a, b]`) or a comma-separated string. |
+
+The body (everything after the closing `---`) becomes
+`SkillManifest.instructions` — free-form markdown intended to be read by
+an agent or operator, not machine-executed.
+
+`SkillDiscovery` implements its own minimal YAML-subset parser for the
+frontmatter (`_parse_yaml`) so that PyYAML is not a hard dependency for
+this feature; it handles simple `key: value` pairs and inline lists only.
+
+### Directory Scanning
+
+```python
+from missy.skills.discovery import SkillDiscovery
+
+discovery = SkillDiscovery()
+manifests = discovery.scan_directory("~/.missy/skills")   # recursive rglob("SKILL.md")
+```
+
+- The default directory is `~/.missy/skills`
+  (`missy.skills.discovery.DEFAULT_SKILLS_DIR`).
+- Scanning is recursive (`Path.rglob("SKILL.md")`); any `SKILL.md` file
+  found at any depth under the given root is parsed.
+- Files that fail to parse (missing frontmatter, missing `name`) are
+  skipped with a logged warning rather than aborting the whole scan.
+- A non-existent directory returns an empty list rather than raising.
+
+### Fuzzy Search
+
+```python
+results = discovery.search("web", manifests)
+```
+
+`search(query, skills)` performs a case-insensitive substring match
+against `name` first, then `description`; skills with a name match are
+ranked ahead of description-only matches. An empty query returns all
+skills unchanged.
+
+### CLI: `missy skills scan`
+
+```bash
+missy skills scan                        # scans ~/.missy/skills
+missy skills scan --path ./my-skills     # scan an explicit directory
+```
+
+Lists every discovered SKILL.md file in a table (name, version, author,
+description, tools). This is purely a discovery/listing command — it does
+not register, enable, or execute anything.
+
+---
+
 ## Plugins
 
 ### Overview
