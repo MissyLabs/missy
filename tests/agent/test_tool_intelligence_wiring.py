@@ -193,9 +193,7 @@ class TestApplyProviderGate:
         )
         runtime = _make_runtime(provider="ollama", tool_intelligence=intel)
 
-        with patch(
-            "missy.tools.intelligence.ToolProviderGate", side_effect=RuntimeError("no db")
-        ):
+        with patch("missy.tools.intelligence.ToolProviderGate", side_effect=RuntimeError("no db")):
             result = runtime._apply_provider_gate(["calculator", "shell_exec"])
 
         assert result == ["calculator", "shell_exec"]
@@ -211,9 +209,7 @@ class TestApplyProviderGate:
         mock_gate = MagicMock()
         mock_gate.filter_tools.return_value = (["calculator"], {})
 
-        with patch(
-            "missy.tools.intelligence.ToolProviderGate", return_value=mock_gate
-        ) as mock_cls:
+        with patch("missy.tools.intelligence.ToolProviderGate", return_value=mock_gate) as mock_cls:
             runtime._apply_provider_gate(["calculator"])
             runtime._apply_provider_gate(["calculator"])
 

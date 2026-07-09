@@ -252,9 +252,7 @@ class ToolProviderGate:
                 )
         return allowed, denied
 
-    def recommend_provider(
-        self, tool_name: str, candidate_providers: list[str]
-    ) -> str | None:
+    def recommend_provider(self, tool_name: str, candidate_providers: list[str]) -> str | None:
         """Suggest the best-performing available provider for *tool_name*.
 
         Used as the "fallback behavior when a provider is weak" hook: when a

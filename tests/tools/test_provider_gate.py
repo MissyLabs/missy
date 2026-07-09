@@ -122,9 +122,7 @@ class TestToolProviderGateOverridePrecedence:
     ) -> None:
         _save_runs(bench_store, "tool_a", "anthropic", [0.0, 0.0, 0.0, 0.0])
         overrides.set("tool_a", "anthropic", True)
-        gate = ToolProviderGate(
-            overrides=overrides, benchmark_store=bench_store, min_composite=0.9
-        )
+        gate = ToolProviderGate(overrides=overrides, benchmark_store=bench_store, min_composite=0.9)
         decision = gate.decide("tool_a", "anthropic")
         assert decision.enabled is True
         assert decision.source == "override"
@@ -144,9 +142,7 @@ class TestToolProviderGateBenchmarkDriven:
         self, overrides: ProviderGateStore, bench_store: BenchmarkStore
     ) -> None:
         _save_runs(bench_store, "tool_a", "anthropic", [0.0])
-        gate = ToolProviderGate(
-            overrides=overrides, benchmark_store=bench_store, min_samples=3
-        )
+        gate = ToolProviderGate(overrides=overrides, benchmark_store=bench_store, min_samples=3)
         decision = gate.decide("tool_a", "anthropic")
         assert decision.enabled is True
         assert decision.source == "default"
@@ -225,4 +221,3 @@ class TestRecommendProvider:
     ) -> None:
         gate = ToolProviderGate(overrides=overrides, benchmark_store=bench_store)
         assert gate.recommend_provider("tool_a", []) is None
-

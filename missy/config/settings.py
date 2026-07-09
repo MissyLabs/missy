@@ -547,9 +547,7 @@ def _parse_tool_intelligence(data: Any) -> ToolIntelligenceConfig:
     if data is None:
         return ToolIntelligenceConfig()
     if not isinstance(data, dict):
-        raise ConfigurationError(
-            f"tool_intelligence must be a mapping, got {type(data).__name__}."
-        )
+        raise ConfigurationError(f"tool_intelligence must be a mapping, got {type(data).__name__}.")
     candidate_gen = data.get("candidate_generation") or {}
     if not isinstance(candidate_gen, dict):
         raise ConfigurationError(
