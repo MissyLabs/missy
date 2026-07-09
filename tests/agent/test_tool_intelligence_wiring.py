@@ -246,3 +246,48 @@ class TestGetToolsWithProviderGate:
             tools = runtime._get_tools()
 
         assert [t.name for t in tools] == ["calculator"]
+
+
+class TestCandidateRuntimeLoading:
+    def test_runtime_loader_disabled_by_default(self) -> None:
+        tool_reg = MagicMock()
+        tool_reg.list_tools.return_value = []
+        tool_reg.is_enabled.return_value = True
+
+        runtime = _make_runtime(provider="mock")
+
+        with (
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+            patch("missy.tools.intelligence.CandidateRuntimeLoader") as loader_cls,
+        ):
+            assert runtime._get_tools() == []
+
+        loader_cls.assert_not_called()
+
+    def test_runtime_loader_runs_once_when_enabled(self) -> None:
+        t_calc = MagicMock()
+        t_calc.name = "calculator"
+
+        tool_reg = MagicMock()
+        tool_reg.list_tools.return_value = ["calculator"]
+        tool_reg.is_enabled.return_value = True
+        tool_reg.get.return_value = t_calc
+
+        intel = SimpleNamespace(
+            candidate_runtime_loading_enabled=True,
+            provider_gating_enabled=False,
+            candidate_generation_enabled=False,
+        )
+        runtime = _make_runtime(provider="mock", tool_intelligence=intel)
+
+        mock_loader = MagicMock()
+        mock_loader.load_enabled.return_value = SimpleNamespace(loaded=[], skipped=[])
+        with (
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+            patch("missy.tools.intelligence.get_candidate_store", return_value=MagicMock()),
+            patch("missy.tools.intelligence.CandidateRuntimeLoader", return_value=mock_loader),
+        ):
+            runtime._get_tools()
+            runtime._get_tools()
+
+        mock_loader.load_enabled.assert_called_once_with("mock")

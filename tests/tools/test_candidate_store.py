@@ -39,10 +39,12 @@ class TestCandidateStoreAdd:
 
     def test_add_persists(self, store):
         c = _make_candidate()
+        c.implementation = {"type": "delegated_tool", "tool": "file_read"}
         store.add(c)
         loaded = store.get(c.id)
         assert loaded is not None
         assert loaded.name == c.name
+        assert loaded.implementation == {"type": "delegated_tool", "tool": "file_read"}
 
     def test_initial_state_is_proposed(self, store):
         c = _make_candidate()

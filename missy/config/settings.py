@@ -179,6 +179,10 @@ class ToolIntelligenceConfig:
             provider) pair before its score is used for gating decisions.
         provider_gating_min_composite: Composite score threshold below which
             a provider is considered "weak" for a tool.
+        candidate_runtime_loading_enabled: When ``True``, enabled candidates
+            with explicit implementation metadata may be registered at
+            runtime. Defaults to disabled so review approval stays separate
+            from execution exposure.
     """
 
     candidate_generation_enabled: bool = False
@@ -188,6 +192,7 @@ class ToolIntelligenceConfig:
     provider_gating_enabled: bool = False
     provider_gating_min_samples: int = 3
     provider_gating_min_composite: float = 0.4
+    candidate_runtime_loading_enabled: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -560,6 +565,12 @@ def _parse_tool_intelligence(data: Any) -> ToolIntelligenceConfig:
             f"tool_intelligence.provider_gating must be a mapping, "
             f"got {type(provider_gating).__name__}."
         )
+    candidate_runtime = data.get("candidate_runtime") or {}
+    if not isinstance(candidate_runtime, dict):
+        raise ConfigurationError(
+            f"tool_intelligence.candidate_runtime must be a mapping, "
+            f"got {type(candidate_runtime).__name__}."
+        )
     return ToolIntelligenceConfig(
         candidate_generation_enabled=bool(candidate_gen.get("enabled", False)),
         min_pattern_count=int(candidate_gen.get("min_pattern_count", 3)),
@@ -568,6 +579,7 @@ def _parse_tool_intelligence(data: Any) -> ToolIntelligenceConfig:
         provider_gating_enabled=bool(provider_gating.get("enabled", False)),
         provider_gating_min_samples=int(provider_gating.get("min_samples", 3)),
         provider_gating_min_composite=float(provider_gating.get("min_composite", 0.4)),
+        candidate_runtime_loading_enabled=bool(candidate_runtime.get("enabled", False)),
     )
 
 

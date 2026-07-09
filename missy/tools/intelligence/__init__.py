@@ -11,6 +11,7 @@ Public API
 - :class:`BenchmarkSummary` — per-provider benchmark outcome stored on a candidate.
 - :class:`CandidateBenchmarkReconciler` — import benchmark-store evidence into candidates.
 - :class:`CandidateGenerator` — generate candidates from patterns.
+- :class:`CandidateRuntimeLoader` — load enabled candidates with explicit implementations.
 - :class:`GenerationResult` — outcome of a generation attempt.
 """
 
@@ -20,6 +21,12 @@ from .benchmark_reconciler import (
     ProviderBenchmarkDecision,
 )
 from .candidate_generator import CandidateGenerator, GenerationResult
+from .candidate_loader import (
+    CandidateDelegatedTool,
+    CandidateLoadIssue,
+    CandidateLoadReport,
+    CandidateRuntimeLoader,
+)
 from .candidate_store import (
     BenchmarkSummary,
     CandidateStore,
@@ -40,6 +47,10 @@ __all__ = [
     "BenchmarkSummary",
     "BenchmarkReconciliation",
     "CandidateGenerator",
+    "CandidateDelegatedTool",
+    "CandidateLoadIssue",
+    "CandidateLoadReport",
+    "CandidateRuntimeLoader",
     "CandidateBenchmarkReconciler",
     "CandidateStore",
     "GateDecision",
