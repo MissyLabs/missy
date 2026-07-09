@@ -286,6 +286,38 @@ provider flags using conservative thresholds for sample count, composite score,
 safety, and schema adherence. It can move `proposed` or `experimental`
 candidates to `benchmarked`, but it never approves or enables a tool.
 
+The API exposes the same review surface for local operators:
+
+```bash
+curl -s -H "X-API-Key: $MISSY_API_KEY" \
+  http://127.0.0.1:8080/api/v1/tool-candidates
+curl -s -H "X-API-Key: $MISSY_API_KEY" \
+  http://127.0.0.1:8080/api/v1/tool-candidates/<candidate_id>
+```
+
+Candidate mutations go through the safe-controls endpoint and require typed
+confirmation, so Web/API callers use the same lifecycle gate and audit trail as
+the CLI:
+
+```bash
+curl -s -X POST http://127.0.0.1:8080/api/v1/controls/tool_candidate.import_benchmarks \
+  -H "X-API-Key: $MISSY_API_KEY" -H 'Content-Type: application/json' \
+  -d '{"target":"<candidate_id>","confirm":"import-candidate-benchmarks:<candidate_id>"}'
+curl -s -X POST http://127.0.0.1:8080/api/v1/controls/tool_candidate.approve \
+  -H "X-API-Key: $MISSY_API_KEY" -H 'Content-Type: application/json' \
+  -d '{"target":"<candidate_id>","confirm":"approve-candidate:<candidate_id>"}'
+curl -s -X POST http://127.0.0.1:8080/api/v1/controls/tool_candidate.enable \
+  -H "X-API-Key: $MISSY_API_KEY" -H 'Content-Type: application/json' \
+  -d '{"target":"<candidate_id>","confirm":"enable-candidate:<candidate_id>"}'
+curl -s -X POST http://127.0.0.1:8080/api/v1/controls/tool_candidate.deny \
+  -H "X-API-Key: $MISSY_API_KEY" -H 'Content-Type: application/json' \
+  -d '{"target":"<candidate_id>","confirm":"deny-candidate:<candidate_id>","reason":"unsafe permissions"}'
+```
+
+The browser console consumes `GET /api/v1/controls`, so eligible candidates
+appear as confirmation-gated operator controls without a separate lifecycle
+implementation.
+
 Provider-specific tool availability is controlled separately from execution
 policy. `ToolProviderGate` can hide a tool from a weak provider based on
 benchmark data, while explicit operator overrides remain auditable:

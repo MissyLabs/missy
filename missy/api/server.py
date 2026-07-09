@@ -52,6 +52,8 @@ if TYPE_CHECKING:
     from missy.agent.runtime import AgentRuntime
     from missy.memory.sqlite_store import SQLiteMemoryStore
     from missy.providers.registry import ProviderRegistry
+    from missy.tools.benchmark.benchmark_store import BenchmarkStore
+    from missy.tools.intelligence.candidate_store import CandidateStore
     from missy.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -208,6 +210,8 @@ def _make_handler(
     memory_store: SQLiteMemoryStore | None,
     provider_registry: ProviderRegistry | None,
     tool_registry: ToolRegistry | None,
+    candidate_store: CandidateStore | None,
+    benchmark_store: BenchmarkStore | None,
     run_registry: RunRegistry,
 ):
     """Return a configured :class:`BaseHTTPRequestHandler` subclass.
@@ -372,6 +376,8 @@ def _make_handler(
                 return self._handle_cost_summary(params)
             if method == "GET" and path == f"{_API_PREFIX}/controls":
                 return self._handle_list_controls()
+            if method == "GET" and path == f"{_API_PREFIX}/tool-candidates":
+                return self._handle_list_tool_candidates(params)
             if method == "GET" and path == f"{_API_PREFIX}/audit":
                 return self._handle_audit_events(params)
             if method == "GET" and path == f"{_API_PREFIX}/memory/search":
@@ -426,6 +432,14 @@ def _make_handler(
                 if not control_id or "/" in control_id:
                     return ApiResponse.error("Not found", 404)
                 return self._handle_execute_control(control_id, body)
+
+            candidates_prefix = f"{_API_PREFIX}/tool-candidates/"
+            if path.startswith(candidates_prefix):
+                candidate_id = path[len(candidates_prefix) :]
+                if not candidate_id or "/" in candidate_id:
+                    return ApiResponse.error("Not found", 404)
+                if method == "GET":
+                    return self._handle_get_tool_candidate(candidate_id)
 
             # Memory turn item routes — extract {id} segment
             turns_prefix = f"{_API_PREFIX}/memory/turns/"
@@ -887,6 +901,7 @@ def _make_handler(
                 list_operator_controls(
                     provider_registry=provider_registry,
                     scheduler=getattr(runtime, "_scheduler", None) if runtime is not None else None,
+                    candidate_store=candidate_store,
                 )
             )
 
@@ -897,6 +912,8 @@ def _make_handler(
                 body,
                 provider_registry=provider_registry,
                 scheduler=getattr(runtime, "_scheduler", None) if runtime is not None else None,
+                candidate_store=candidate_store,
+                benchmark_store=benchmark_store,
             )
             result = "allow" if status < 400 else "deny"
             severity = "info" if result == "allow" else "warning"
@@ -916,6 +933,43 @@ def _make_handler(
             if status >= 400:
                 return ApiResponse.error(str(data.get("message") or "Control denied"), status)
             return ApiResponse.ok(data)
+
+        def _handle_list_tool_candidates(self, params: dict) -> tuple[int, dict]:
+            """GET /api/v1/tool-candidates — list reviewable tool candidates."""
+            if candidate_store is None:
+                return ApiResponse.error("Candidate store is not attached", 503)
+            try:
+                from missy.tools.intelligence import ToolLifecycleState
+
+                state_param = str(params.get("state") or "").strip()
+                state = ToolLifecycleState(state_param) if state_param else None
+                owner = str(params.get("owner") or "").strip() or None
+                limit = max(1, min(int(params.get("limit", 100)), 500))
+                candidates = candidate_store.list_all(state=state, owner=owner, limit=limit)
+            except ValueError:
+                return ApiResponse.error("Invalid candidate state", 400)
+            except Exception as exc:
+                logger.warning("Tool candidate list error: %s", exc)
+                return ApiResponse.error("Candidate store is unavailable", 503)
+            return ApiResponse.ok(
+                {
+                    "candidates": [candidate.to_dict() for candidate in candidates],
+                    "count": len(candidates),
+                }
+            )
+
+        def _handle_get_tool_candidate(self, candidate_id: str) -> tuple[int, dict]:
+            """GET /api/v1/tool-candidates/{id} — show one candidate."""
+            if candidate_store is None:
+                return ApiResponse.error("Candidate store is not attached", 503)
+            try:
+                candidate = candidate_store.get(candidate_id)
+            except Exception as exc:
+                logger.warning("Tool candidate lookup error: %s", exc)
+                return ApiResponse.error("Candidate store is unavailable", 503)
+            if candidate is None:
+                return ApiResponse.error("Candidate not found", 404)
+            return ApiResponse.ok({"candidate": candidate.to_dict()})
 
         def _handle_chat(self, body: dict) -> tuple[int, dict]:
             """POST /api/v1/chat — send a message to the agent and get a reply.
@@ -1455,6 +1509,10 @@ class ApiServer:
             for the ``/providers`` and ``/status`` endpoints.
         tool_registry: Optional :class:`~missy.tools.registry.ToolRegistry` for
             the ``/tools`` endpoint.
+        candidate_store: Optional tool candidate lifecycle store for
+            ``/tool-candidates`` and candidate operator controls.
+        benchmark_store: Optional benchmark result store used by the candidate
+            benchmark-import operator control.
     """
 
     def __init__(
@@ -1464,12 +1522,16 @@ class ApiServer:
         memory_store: SQLiteMemoryStore | None = None,
         provider_registry: ProviderRegistry | None = None,
         tool_registry: ToolRegistry | None = None,
+        candidate_store: CandidateStore | None = None,
+        benchmark_store: BenchmarkStore | None = None,
     ) -> None:
         self.config = config
         self.runtime = runtime
         self.memory_store = memory_store
         self.provider_registry = provider_registry
         self.tool_registry = tool_registry
+        self.candidate_store = candidate_store
+        self.benchmark_store = benchmark_store
 
         self._session_registry = _SessionRegistry()
         self._web_sessions = WebSessionStore(config.web_session_ttl_seconds)
@@ -1520,6 +1582,8 @@ class ApiServer:
             memory_store=self.memory_store,
             provider_registry=self.provider_registry,
             tool_registry=self.tool_registry,
+            candidate_store=self.candidate_store,
+            benchmark_store=self.benchmark_store,
             run_registry=self._run_registry,
         )
 

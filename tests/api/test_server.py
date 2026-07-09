@@ -31,6 +31,14 @@ from missy.config.settings import NetworkPolicy, get_default_config
 from missy.core.events import AuditEvent, event_bus
 from missy.observability.audit_logger import init_audit_logger
 from missy.policy.engine import init_policy_engine
+from missy.tools.benchmark.benchmark_store import BenchmarkStore
+from missy.tools.benchmark.scoring import BenchmarkResult, BenchmarkScorer
+from missy.tools.intelligence import (
+    BenchmarkSummary,
+    CandidateStore,
+    ToolCandidate,
+    ToolLifecycleState,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -62,6 +70,48 @@ def _wait_for_server(url: str, timeout: float = 3.0) -> None:
 
 API_KEY = "test-api-key-abc123"
 HEADERS = {"X-API-Key": API_KEY}
+
+
+def _make_tool_candidate(name: str = "calculator_candidate") -> ToolCandidate:
+    return ToolCandidate.create(
+        name=name,
+        description="calculator candidate",
+        schema={
+            "type": "object",
+            "properties": {"expression": {"type": "string"}},
+            "required": ["expression"],
+        },
+        permissions={"network": False, "shell": False},
+        provenance="api test",
+    )
+
+
+def _save_candidate_benchmarks(
+    store: BenchmarkStore,
+    *,
+    tool_name: str = "calculator_candidate",
+    provider: str = "mock",
+    count: int = 3,
+) -> None:
+    scorer = BenchmarkScorer()
+    for _ in range(count):
+        store.save(
+            scorer.score(
+                BenchmarkResult(
+                    task_id=f"{tool_name}-{provider}",
+                    tool_name=tool_name,
+                    provider=provider,
+                    success=True,
+                    latency_ms=5.0,
+                    cost_usd=0.0,
+                    actual_output="4",
+                    expected_output="4",
+                    tool_call_made=True,
+                    tool_call_args={"expression": "2+2"},
+                    schema_required_params=["expression"],
+                )
+            )
+        )
 
 
 @pytest.fixture(scope="module")
@@ -1477,6 +1527,199 @@ class TestOperatorControls:
             )
             assert resp.status_code == 200
             scheduler.remove_job.assert_called_once_with("job-1")
+        finally:
+            srv.stop()
+
+    def test_tool_candidate_list_and_show_routes(self, tmp_path) -> None:
+        candidate_store = CandidateStore(db_path=tmp_path / "candidates.db")
+        candidate = candidate_store.add(_make_tool_candidate())
+        port = _free_port()
+
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, candidate_store=candidate_store)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            list_resp = httpx.get(
+                f"http://127.0.0.1:{port}/api/v1/tool-candidates",
+                headers=HEADERS,
+            )
+            assert list_resp.status_code == 200
+            candidates = list_resp.json()["data"]["candidates"]
+            assert candidates[0]["id"] == candidate.id
+            assert candidates[0]["state"] == "proposed"
+
+            show_resp = httpx.get(
+                f"http://127.0.0.1:{port}/api/v1/tool-candidates/{candidate.id}",
+                headers=HEADERS,
+            )
+            assert show_resp.status_code == 200
+            assert show_resp.json()["data"]["candidate"]["name"] == "calculator_candidate"
+        finally:
+            srv.stop()
+
+    def test_controls_list_tool_candidate_targets_by_lifecycle_state(self, tmp_path) -> None:
+        candidate_store = CandidateStore(db_path=tmp_path / "candidates.db")
+        proposed = candidate_store.add(_make_tool_candidate("proposed_candidate"))
+        benchmarked = candidate_store.add(_make_tool_candidate("benchmarked_candidate"))
+        candidate_store.update_benchmark(
+            benchmarked.id,
+            summary=BenchmarkSummary(
+                provider="mock",
+                correctness=1.0,
+                latency_ms=1.0,
+                cost_usd=0.0,
+                reliability=1.0,
+                safety=1.0,
+                schema_score=1.0,
+                composite=1.0,
+                run_at="now",
+            ),
+        )
+        port = _free_port()
+
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, candidate_store=candidate_store)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            resp = httpx.get(f"http://127.0.0.1:{port}/api/v1/controls", headers=HEADERS)
+            controls = {c["id"]: c for c in resp.json()["data"]["controls"]}
+
+            import_targets = {
+                target["name"] for target in controls["tool_candidate.import_benchmarks"]["targets"]
+            }
+            approve_targets = {
+                target["name"] for target in controls["tool_candidate.approve"]["targets"]
+            }
+            deny_targets = {target["name"] for target in controls["tool_candidate.deny"]["targets"]}
+
+            assert proposed.id in import_targets
+            assert benchmarked.id in approve_targets
+            assert {proposed.id, benchmarked.id}.issubset(deny_targets)
+        finally:
+            srv.stop()
+
+    def test_candidate_import_approve_enable_controls_mutate_and_audit(self, tmp_path) -> None:
+        event_bus.clear()
+        init_audit_logger(str(tmp_path / "audit.jsonl"))
+        candidate_store = CandidateStore(db_path=tmp_path / "candidates.db")
+        benchmark_store = BenchmarkStore(db_path=tmp_path / "benchmarks.db")
+        candidate = candidate_store.add(_make_tool_candidate())
+        _save_candidate_benchmarks(benchmark_store)
+        port = _free_port()
+
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(
+            config=cfg,
+            candidate_store=candidate_store,
+            benchmark_store=benchmark_store,
+        )
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            imported = httpx.post(
+                f"http://127.0.0.1:{port}/api/v1/controls/tool_candidate.import_benchmarks",
+                json={
+                    "target": candidate.id,
+                    "confirm": f"import-candidate-benchmarks:{candidate.id}",
+                },
+                headers=HEADERS,
+            )
+            assert imported.status_code == 200
+            assert imported.json()["data"]["candidate"]["state"] == "benchmarked"
+
+            approved = httpx.post(
+                f"http://127.0.0.1:{port}/api/v1/controls/tool_candidate.approve",
+                json={
+                    "target": candidate.id,
+                    "confirm": f"approve-candidate:{candidate.id}",
+                    "notes": "reviewed",
+                },
+                headers=HEADERS,
+            )
+            assert approved.status_code == 200
+            assert approved.json()["data"]["candidate"]["state"] == "approved"
+
+            enabled = httpx.post(
+                f"http://127.0.0.1:{port}/api/v1/controls/tool_candidate.enable",
+                json={
+                    "target": candidate.id,
+                    "confirm": f"enable-candidate:{candidate.id}",
+                },
+                headers=HEADERS,
+            )
+            assert enabled.status_code == 200
+            assert candidate_store.get(candidate.id).state == ToolLifecycleState.ENABLED
+
+            audit = httpx.get(
+                f"http://127.0.0.1:{port}/api/v1/audit"
+                "?event_type=web.control&result=allow&subsystem=tool_candidate&limit=10",
+                headers=HEADERS,
+            )
+            events = audit.json()["data"]["events"]
+            assert any(e["detail"]["action"] == "tool_candidate.import_benchmarks" for e in events)
+            assert any(e["detail"]["action"] == "tool_candidate.enable" for e in events)
+        finally:
+            srv.stop()
+
+    def test_candidate_deny_requires_confirmation_and_reason(self, tmp_path) -> None:
+        candidate_store = CandidateStore(db_path=tmp_path / "candidates.db")
+        candidate = candidate_store.add(_make_tool_candidate())
+        port = _free_port()
+
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, candidate_store=candidate_store)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            missing_confirm = httpx.post(
+                f"http://127.0.0.1:{port}/api/v1/controls/tool_candidate.deny",
+                json={"target": candidate.id, "reason": "unsafe"},
+                headers=HEADERS,
+            )
+            assert missing_confirm.status_code == 409
+            assert candidate_store.get(candidate.id).state == ToolLifecycleState.PROPOSED
+
+            missing_reason = httpx.post(
+                f"http://127.0.0.1:{port}/api/v1/controls/tool_candidate.deny",
+                json={"target": candidate.id, "confirm": f"deny-candidate:{candidate.id}"},
+                headers=HEADERS,
+            )
+            assert missing_reason.status_code == 400
+            assert candidate_store.get(candidate.id).state == ToolLifecycleState.PROPOSED
+
+            denied = httpx.post(
+                f"http://127.0.0.1:{port}/api/v1/controls/tool_candidate.deny",
+                json={
+                    "target": candidate.id,
+                    "confirm": f"deny-candidate:{candidate.id}",
+                    "reason": "unsafe permissions",
+                },
+                headers=HEADERS,
+            )
+            assert denied.status_code == 200
+            assert denied.json()["data"]["candidate"]["state"] == "disabled"
+        finally:
+            srv.stop()
+
+    def test_candidate_enable_rejects_skipped_lifecycle_gate(self, tmp_path) -> None:
+        candidate_store = CandidateStore(db_path=tmp_path / "candidates.db")
+        candidate = candidate_store.add(_make_tool_candidate())
+        port = _free_port()
+
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, candidate_store=candidate_store)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            resp = httpx.post(
+                f"http://127.0.0.1:{port}/api/v1/controls/tool_candidate.enable",
+                json={"target": candidate.id, "confirm": f"enable-candidate:{candidate.id}"},
+                headers=HEADERS,
+            )
+            assert resp.status_code == 409
+            assert candidate_store.get(candidate.id).state == ToolLifecycleState.PROPOSED
         finally:
             srv.stop()
 
