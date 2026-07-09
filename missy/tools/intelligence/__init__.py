@@ -20,6 +20,7 @@ from .candidate_store import (
     ToolCandidate,
     ToolLifecycleState,
     get_candidate_store,
+    is_valid_transition,
 )
 from .provider_gate import (
     GateDecision,
@@ -45,4 +46,5 @@ __all__ = [
     "get_candidate_store",
     "get_provider_gate_store",
     "get_request_tracker",
+    "is_valid_transition",
 ]

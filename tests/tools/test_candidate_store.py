@@ -11,6 +11,7 @@ from missy.tools.intelligence.candidate_store import (
     CandidateStore,
     ToolCandidate,
     ToolLifecycleState,
+    is_valid_transition,
 )
 
 
@@ -149,12 +150,14 @@ class TestTransition:
     def test_transition_updates_state(self, store):
         c = _make_candidate()
         store.add(c)
-        updated = store.transition(c.id, ToolLifecycleState.APPROVED)
-        assert updated.state == ToolLifecycleState.APPROVED
+        updated = store.transition(c.id, ToolLifecycleState.EXPERIMENTAL)
+        assert updated.state == ToolLifecycleState.EXPERIMENTAL
 
     def test_transition_persists(self, store):
         c = _make_candidate()
         store.add(c)
+        store.update_benchmark(c.id, BenchmarkSummary(provider="mock", composite=0.9))
+        store.transition(c.id, ToolLifecycleState.APPROVED)
         store.transition(c.id, ToolLifecycleState.ENABLED)
         loaded = store.get(c.id)
         assert loaded.state == ToolLifecycleState.ENABLED
@@ -169,6 +172,47 @@ class TestTransition:
     def test_transition_missing_returns_none(self, store):
         result = store.transition("ghost", ToolLifecycleState.APPROVED)
         assert result is None
+
+    def test_transition_rejects_skipping_benchmark_and_approval(self, store):
+        c = _make_candidate()
+        store.add(c)
+        with pytest.raises(ValueError, match="proposed -> enabled"):
+            store.transition(c.id, ToolLifecycleState.ENABLED, actor="operator")
+        loaded = store.get(c.id)
+        assert loaded.state == ToolLifecycleState.PROPOSED
+
+    def test_transition_rejects_approving_before_benchmark(self, store):
+        c = _make_candidate()
+        store.add(c)
+        with pytest.raises(ValueError, match="proposed -> approved"):
+            store.transition(c.id, ToolLifecycleState.APPROVED, actor="operator")
+        loaded = store.get(c.id)
+        assert loaded.state == ToolLifecycleState.PROPOSED
+
+    def test_transition_rejects_disabled_resurrection(self, store):
+        c = _make_candidate()
+        store.add(c)
+        store.transition(c.id, ToolLifecycleState.DISABLED, notes="unsafe")
+        with pytest.raises(ValueError, match="disabled -> experimental"):
+            store.transition(c.id, ToolLifecycleState.EXPERIMENTAL, actor="operator")
+
+    def test_deprecated_can_be_rolled_forward_or_disabled(self, store):
+        c = _make_candidate()
+        store.add(c)
+        store.update_benchmark(c.id, BenchmarkSummary(provider="mock", composite=0.9))
+        store.transition(c.id, ToolLifecycleState.APPROVED)
+        store.transition(c.id, ToolLifecycleState.ENABLED)
+        deprecated = store.transition(c.id, ToolLifecycleState.DEPRECATED)
+        assert deprecated.state == ToolLifecycleState.DEPRECATED
+        restored = store.transition(c.id, ToolLifecycleState.ENABLED)
+        assert restored.state == ToolLifecycleState.ENABLED
+
+    def test_noop_transition_is_allowed(self, store):
+        c = _make_candidate()
+        store.add(c)
+        updated = store.transition(c.id, ToolLifecycleState.PROPOSED, notes="reviewed")
+        assert updated.state == ToolLifecycleState.PROPOSED
+        assert updated.notes == "reviewed"
 
 
 class TestUpdateBenchmark:
@@ -256,3 +300,17 @@ class TestToolLifecycleState:
     def test_terminal_states(self):
         terminal = ToolLifecycleState.terminal_states()
         assert ToolLifecycleState.DISABLED in terminal
+
+
+class TestTransitionRules:
+    def test_valid_review_path(self):
+        assert is_valid_transition(ToolLifecycleState.PROPOSED, ToolLifecycleState.EXPERIMENTAL)
+        assert is_valid_transition(ToolLifecycleState.EXPERIMENTAL, ToolLifecycleState.BENCHMARKED)
+        assert is_valid_transition(ToolLifecycleState.BENCHMARKED, ToolLifecycleState.APPROVED)
+        assert is_valid_transition(ToolLifecycleState.APPROVED, ToolLifecycleState.ENABLED)
+
+    def test_invalid_direct_enable(self):
+        assert not is_valid_transition(ToolLifecycleState.PROPOSED, ToolLifecycleState.ENABLED)
+
+    def test_disabled_is_terminal(self):
+        assert not is_valid_transition(ToolLifecycleState.DISABLED, ToolLifecycleState.PROPOSED)

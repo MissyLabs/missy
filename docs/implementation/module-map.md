@@ -463,6 +463,29 @@ dependencies on other `missy` modules.
 | `code_evolve` | Self-code modification (with approval) |
 | `self_create_tool` | Dynamic tool creation in `~/.missy/custom-tools/` |
 
+### missy.tools.intelligence
+
+| Field | Value |
+|-------|-------|
+| **Purpose** | Tool-intelligence control plane: records repeated request patterns, proposes structured tool candidates, persists lifecycle metadata, and gates provider-specific tool exposure from benchmark data. |
+| **Key exports** | `RequestTracker`, `RequestPattern`, `CandidateGenerator`, `CandidateStore`, `ToolCandidate`, `ToolLifecycleState`, `is_valid_transition`, `ToolProviderGate`, `ProviderGateStore` |
+| **Internal deps** | `missy.core.events`, `missy.tools.benchmark` |
+
+Candidate lifecycle transitions are enforced in `CandidateStore` so CLI,
+runtime automation, and future Web/API controls share the same gate:
+`proposed -> experimental -> benchmarked -> approved -> enabled`; candidates
+may be denied to `disabled`, enabled tools may be rolled back to
+`deprecated`/`disabled`, and disabled candidates cannot be resurrected in
+place. Invalid transition attempts emit `tool.candidate.transition_denied`.
+
+### missy.tools.benchmark
+
+| Field | Value |
+|-------|-------|
+| **Purpose** | Direct and LLM-mediated benchmark harnesses for tool correctness, latency, cost, reliability, safety, schema adherence, tool-call quality, and failure behavior. |
+| **Key exports** | `BenchmarkRunner`, `LLMBenchmarkRunner`, `BenchmarkStore`, `BenchmarkScorer`, `MockToolProvider` |
+| **Internal deps** | `missy.tools.registry`, `missy.providers.registry`, `missy.tools.base` |
+
 ---
 
 ## missy.skills

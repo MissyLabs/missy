@@ -59,6 +59,52 @@ class ToolLifecycleState(enum.StrEnum):
         return (cls.DISABLED,)
 
 
+_ALLOWED_TRANSITIONS: dict[ToolLifecycleState, frozenset[ToolLifecycleState]] = {
+    ToolLifecycleState.PROPOSED: frozenset(
+        {
+            ToolLifecycleState.EXPERIMENTAL,
+            ToolLifecycleState.BENCHMARKED,
+            ToolLifecycleState.DISABLED,
+        }
+    ),
+    ToolLifecycleState.EXPERIMENTAL: frozenset(
+        {ToolLifecycleState.BENCHMARKED, ToolLifecycleState.DISABLED}
+    ),
+    ToolLifecycleState.BENCHMARKED: frozenset(
+        {ToolLifecycleState.APPROVED, ToolLifecycleState.DISABLED}
+    ),
+    ToolLifecycleState.APPROVED: frozenset(
+        {
+            ToolLifecycleState.ENABLED,
+            ToolLifecycleState.DEPRECATED,
+            ToolLifecycleState.DISABLED,
+        }
+    ),
+    ToolLifecycleState.ENABLED: frozenset(
+        {ToolLifecycleState.DEPRECATED, ToolLifecycleState.DISABLED}
+    ),
+    ToolLifecycleState.DEPRECATED: frozenset(
+        {ToolLifecycleState.DISABLED, ToolLifecycleState.ENABLED}
+    ),
+    ToolLifecycleState.DISABLED: frozenset(),
+}
+
+
+def is_valid_transition(
+    current: ToolLifecycleState,
+    new_state: ToolLifecycleState,
+) -> bool:
+    """Return whether a candidate may move from *current* to *new_state*.
+
+    The lifecycle is intentionally monotonic through review and benchmark
+    gates. Rollback remains possible via ``deprecated`` or ``disabled``, but
+    terminally disabled candidates cannot be resurrected in place.
+    """
+    if current == new_state:
+        return True
+    return new_state in _ALLOWED_TRANSITIONS[current]
+
+
 @dataclass
 class BenchmarkSummary:
     """Condensed benchmark outcome stored inline on a candidate."""
@@ -374,6 +420,11 @@ class CandidateStore:
 
         Returns:
             Updated :class:`ToolCandidate`, or ``None`` if not found.
+
+        Raises:
+            ValueError: If the requested transition would skip a lifecycle
+                gate, resurrect a disabled candidate, or otherwise violate
+                the documented candidate lifecycle.
         """
         now = datetime.now(UTC).isoformat()
         with self._lock:
@@ -384,6 +435,22 @@ class CandidateStore:
                 ).fetchone()
                 if not existing:
                     return None
+                old_state = ToolLifecycleState(existing["state"])
+                if not is_valid_transition(old_state, new_state):
+                    _emit_audit(
+                        "tool.candidate.transition_denied",
+                        {
+                            "id": candidate_id,
+                            "previous_state": old_state.value,
+                            "requested_state": new_state.value,
+                            "actor": actor,
+                            "notes": notes,
+                        },
+                        result="deny",
+                    )
+                    raise ValueError(
+                        f"invalid tool candidate transition: {old_state.value} -> {new_state.value}"
+                    )
                 conn.execute(
                     """
                     UPDATE tool_candidates
@@ -404,7 +471,7 @@ class CandidateStore:
             {
                 "id": candidate_id,
                 "name": candidate.name,
-                "previous_state": existing["state"],
+                "previous_state": old_state.value,
                 "actor": actor,
                 "notes": notes,
             },
@@ -586,7 +653,7 @@ def get_candidate_store(db_path: Path | str | None = None) -> CandidateStore:
 # ---------------------------------------------------------------------------
 
 
-def _emit_audit(event_type: str, detail: dict[str, Any]) -> None:
+def _emit_audit(event_type: str, detail: dict[str, Any], result: str = "allow") -> None:
     try:
         event_bus.publish(
             AuditEvent.now(
@@ -594,7 +661,7 @@ def _emit_audit(event_type: str, detail: dict[str, Any]) -> None:
                 task_id="",
                 event_type=event_type,
                 category="tool",
-                result="allow",
+                result=result,
                 detail=detail,
             )
         )
