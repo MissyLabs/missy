@@ -1,14 +1,14 @@
 # LOOP_INSTRUCTIONS
 
-Current time: 2026-07-08 14:43:10
-Controller: Codex
-Primary focus: complete OpenAI provider overhaul
-Branch: overhaul/openai-provider-20260708-172558
+Current time: 2026-07-08 20:45:28
+Controller: Claude
+Primary focus: complete web TUI and operator console overhaul
+Branch: overhaul/web-tui-20260709-004527
 
 Requirements:
 - Evolve the existing ~/missy repo.
-- Treat complete OpenAI provider overhaul as the current primary overhaul.
-- Keep the design flexible for future non-OpenAI-provider overhauls.
+- Treat complete web TUI and operator console overhaul as the current primary overhaul.
+- Keep the design flexible for future non-Web-TUI overhauls.
 - Update common artifacts only.
 - Run full pytest before ending.
 - Commit progress before ending.
