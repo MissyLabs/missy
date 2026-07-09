@@ -239,6 +239,56 @@ class BenchmarkStore:
             for r in rows
         ]
 
+    def all_provider_summaries(self) -> list[ProviderSummary]:
+        """Return per-(tool, provider) aggregate statistics for every tool.
+
+        Equivalent to calling :meth:`provider_summary` for every distinct
+        ``tool_name`` in a single query — used by provider-gating logic that
+        needs to evaluate every benchmarked tool at once.
+
+        Returns:
+            List of :class:`ProviderSummary`, one per (tool, provider) pair,
+            ordered by tool name then descending mean composite.
+        """
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT
+                        tool_name,
+                        provider,
+                        COUNT(*) AS run_count,
+                        AVG(composite) AS mean_composite,
+                        AVG(correctness) AS mean_correctness,
+                        AVG(latency_ms) AS mean_latency_ms,
+                        AVG(cost_usd) AS mean_cost_usd,
+                        AVG(reliability) AS mean_reliability,
+                        AVG(safety) AS mean_safety,
+                        MAX(recorded_at) AS last_run_at
+                    FROM benchmark_results
+                    GROUP BY tool_name, provider
+                    ORDER BY tool_name ASC, mean_composite DESC
+                    """
+                ).fetchall()
+            finally:
+                conn.close()
+        return [
+            ProviderSummary(
+                tool_name=r["tool_name"],
+                provider=r["provider"],
+                run_count=r["run_count"],
+                mean_composite=round(r["mean_composite"] or 0.0, 4),
+                mean_correctness=round(r["mean_correctness"] or 0.0, 4),
+                mean_latency_ms=round(r["mean_latency_ms"] or 0.0, 1),
+                mean_cost_usd=round(r["mean_cost_usd"] or 0.0, 6),
+                mean_reliability=round(r["mean_reliability"] or 0.0, 4),
+                mean_safety=round(r["mean_safety"] or 0.0, 4),
+                last_run_at=r["last_run_at"] or "",
+            )
+            for r in rows
+        ]
+
     def delete_before(self, before_iso: str) -> int:
         """Delete rows recorded before *before_iso*.  Returns deleted count."""
         with self._lock:

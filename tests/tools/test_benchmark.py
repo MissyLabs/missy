@@ -239,6 +239,34 @@ class TestBenchmarkStore:
         assert len(ids) == 5
         assert bench_store.count() == 5
 
+    def test_all_provider_summaries_empty_store(self, bench_store):
+        assert bench_store.all_provider_summaries() == []
+
+    def test_all_provider_summaries_covers_every_tool_and_provider(self, bench_store):
+        for _ in range(3):
+            bench_store.save(_make_scored("calc", "anthropic"))
+        bench_store.save(_make_scored("calc", "openai"))
+        bench_store.save(_make_scored("search", "anthropic"))
+
+        summaries = bench_store.all_provider_summaries()
+        pairs = {(s.tool_name, s.provider) for s in summaries}
+        assert pairs == {
+            ("calc", "anthropic"),
+            ("calc", "openai"),
+            ("search", "anthropic"),
+        }
+        calc_anthropic = next(
+            s for s in summaries if s.tool_name == "calc" and s.provider == "anthropic"
+        )
+        assert calc_anthropic.run_count == 3
+
+    def test_all_provider_summaries_matches_provider_summary(self, bench_store):
+        bench_store.save(_make_scored("calc", "anthropic"))
+        bench_store.save(_make_scored("calc", "openai"))
+        via_all = {s.provider: s.mean_composite for s in bench_store.all_provider_summaries()}
+        via_single = {s.provider: s.mean_composite for s in bench_store.provider_summary("calc")}
+        assert via_all == via_single
+
 
 # ---------------------------------------------------------------------------
 # BenchmarkTask / BenchmarkSuite

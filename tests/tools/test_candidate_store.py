@@ -71,6 +71,48 @@ class TestCandidateStoreGet:
         assert store.get_by_name("ghost") is None
 
 
+class TestCandidateStoreGetByPatternKey:
+    def test_returns_none_when_absent(self, store):
+        assert store.get_by_pattern_key("no-such-pattern") is None
+
+    def test_returns_none_for_empty_key(self, store):
+        assert store.get_by_pattern_key("") is None
+
+    def test_finds_candidate_by_pattern_key(self, store):
+        c = ToolCandidate.create(
+            name="pattern_tool",
+            description="from a pattern",
+            schema={"type": "object", "properties": {}, "required": []},
+            pattern_key="pattern-abc",
+        )
+        store.add(c)
+        found = store.get_by_pattern_key("pattern-abc")
+        assert found is not None
+        assert found.name == "pattern_tool"
+
+    def test_returns_most_recently_updated_for_duplicate_pattern(self, store):
+        first = ToolCandidate.create(
+            name="first_attempt",
+            description="d",
+            schema={"type": "object", "properties": {}, "required": []},
+            pattern_key="shared-pattern",
+        )
+        store.add(first)
+        second = ToolCandidate.create(
+            name="second_attempt",
+            description="d",
+            schema={"type": "object", "properties": {}, "required": []},
+            pattern_key="shared-pattern",
+        )
+        # Force a strictly later timestamp so ordering is deterministic even
+        # if both candidates are created within the same microsecond.
+        second.updated_at = first.updated_at + "1"
+        store.add(second)
+        found = store.get_by_pattern_key("shared-pattern")
+        assert found is not None
+        assert found.name == "second_attempt"
+
+
 class TestCandidateStoreListAll:
     def test_list_returns_all(self, store):
         store.add(_make_candidate("a"))

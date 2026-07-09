@@ -235,6 +235,7 @@ class AgentConfig:
     group_tool_policy: Any | None = None
     sandbox_tool_policy: Any | None = None
     subagent_tool_policy: Any | None = None
+    tool_intelligence: Any | None = None
 
 
 #: System prompt for Discord channel — no desktop/X11/browser references.
@@ -333,6 +334,9 @@ class AgentRuntime:
         self._message_bus = self._make_message_bus()
         # Request tracker for tool intelligence (graceful degradation)
         self._request_tracker = self._make_request_tracker()
+        self._candidate_generator = self._make_candidate_generator()
+        self._tracked_request_count = 0
+        self._provider_gate: Any = None
 
     # ------------------------------------------------------------------
     # Message bus helper
@@ -374,6 +378,30 @@ class AgentRuntime:
             logger.debug("RequestTracker not available; skipping request tracking.")
             return None
 
+    def _make_candidate_generator(self) -> Any:
+        """Return a CandidateGenerator configured from ``tool_intelligence``, or None.
+
+        Generation stays disabled (returns ``None``) unless the operator has
+        explicitly set ``tool_intelligence.candidate_generation.enabled: true``
+        in config — recording requests is always safe, but synthesizing tool
+        proposals from them is opt-in.
+        """
+        intel = getattr(self.config, "tool_intelligence", None)
+        enabled = bool(getattr(intel, "candidate_generation_enabled", False))
+        if not enabled:
+            return None
+        try:
+            from missy.tools.intelligence import CandidateGenerator
+
+            return CandidateGenerator(
+                tool_creation_enabled=True,
+                allow_shell=bool(getattr(intel, "allow_shell", False)),
+                owner=f"agent:{self.config.agent_id}",
+            )
+        except Exception:
+            logger.debug("CandidateGenerator not available; skipping auto-generation.")
+            return None
+
     def _track_request(
         self,
         user_input: str,
@@ -393,6 +421,40 @@ class AgentRuntime:
             )
         except Exception:
             logger.debug("RequestTracker.record() failed", exc_info=True)
+            return
+
+        self._tracked_request_count += 1
+        self._maybe_synthesize_candidates()
+
+    def _maybe_synthesize_candidates(self) -> None:
+        """Periodically scan for high-frequency patterns and propose candidates.
+
+        No-ops unless candidate generation is enabled in config. Runs at most
+        once every ``check_every_n_requests`` tracked turns to keep pattern
+        scanning off the hot path. Never raises — generation failures are
+        logged and swallowed so they cannot break the agent loop.
+        """
+        if self._candidate_generator is None or self._request_tracker is None:
+            return
+        intel = getattr(self.config, "tool_intelligence", None)
+        every_n = max(1, int(getattr(intel, "check_every_n_requests", 5)))
+        if self._tracked_request_count % every_n != 0:
+            return
+        min_count = max(1, int(getattr(intel, "min_pattern_count", 3)))
+
+        try:
+            from missy.tools.intelligence import get_candidate_store
+
+            store = get_candidate_store()
+            patterns = self._request_tracker.get_frequent_patterns(min_count=min_count)
+            for pattern in patterns:
+                if store.get_by_pattern_key(pattern.pattern_key) is not None:
+                    continue  # already proposed for this pattern
+                result = self._candidate_generator.generate_from_pattern(pattern)
+                if result.ok and result.candidate is not None:
+                    store.add(result.candidate)
+        except Exception:
+            logger.debug("Automatic candidate generation failed", exc_info=True)
 
     def switch_provider(self, name: str) -> None:
         """Switch the active provider at runtime.
@@ -1208,8 +1270,51 @@ class AgentRuntime:
         decision = resolve_tool_policy(tool_names, layers, groups=groups)
         self._last_tool_policy_decision = decision
 
+        allowed_names = self._apply_provider_gate(list(decision.tools))
+
         tools_by_name = {name: registry.get(name) for name in tool_names}
-        return [tool for name in decision.tools if (tool := tools_by_name.get(name)) is not None]
+        return [tool for name in allowed_names if (tool := tools_by_name.get(name)) is not None]
+
+    def _apply_provider_gate(self, tool_names: list[str]) -> list[str]:
+        """Filter *tool_names* through :class:`~missy.tools.intelligence.provider_gate.ToolProviderGate`.
+
+        No-ops (returns *tool_names* unchanged) unless
+        ``tool_intelligence.provider_gating.enabled`` is set in config — a
+        tool disappearing from a provider's turn based on benchmark data is
+        an opt-in behavior change, not a default one.
+        """
+        intel = getattr(self.config, "tool_intelligence", None)
+        if not bool(getattr(intel, "provider_gating_enabled", False)):
+            return tool_names
+        try:
+            gate = self._get_provider_gate()
+            allowed, denied = gate.filter_tools(tool_names, self.config.provider)
+            if denied:
+                logger.info(
+                    "Provider gate denied %d tool(s) for provider %r: %s",
+                    len(denied),
+                    self.config.provider,
+                    denied,
+                )
+            return allowed
+        except Exception:
+            logger.debug("Provider gate check failed; falling back to ungated tool list.")
+            return tool_names
+
+    def _get_provider_gate(self) -> Any:
+        """Lazily build and cache the :class:`ToolProviderGate` for this runtime."""
+        gate = getattr(self, "_provider_gate", None)
+        if gate is not None:
+            return gate
+        from missy.tools.intelligence import ToolProviderGate
+
+        intel = getattr(self.config, "tool_intelligence", None)
+        gate = ToolProviderGate(
+            min_samples=int(getattr(intel, "provider_gating_min_samples", 3)),
+            min_composite=float(getattr(intel, "provider_gating_min_composite", 0.4)),
+        )
+        self._provider_gate = gate
+        return gate
 
     #: Exception types considered transient and eligible for automatic retry.
     _TRANSIENT_ERRORS: tuple[type[Exception], ...] = ()

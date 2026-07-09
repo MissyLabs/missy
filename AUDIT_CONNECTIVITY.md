@@ -1,10 +1,9 @@
 # AUDIT_CONNECTIVITY
 
-- Timestamp: 2026-07-08 22:18:24
+- Timestamp: 2026-07-09 11:19:42
 
 Expected connectivity posture:
 - default-deny network where practical
 - exact provider endpoints
-- explicit local Web TUI bind address and origin policy
 - exact benchmark and provider endpoints
 - no unreviewed broad outbound access
