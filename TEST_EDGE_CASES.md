@@ -1,6 +1,6 @@
 # TEST_EDGE_CASES
 
-- Timestamp: 2026-07-09 14:47 EDT
+- Timestamp: 2026-07-09 14:56:24
 
 Current edge-case focus:
 - frequent-request detection without noisy false positives
@@ -12,7 +12,4 @@ Current edge-case focus:
 - unsafe or flaky tools are flagged or disabled per provider
 - tool schema incompatibilities are detected and reported
 - benchmark failures do not enable tools accidentally
-- Web/API candidate controls require typed confirmations
-- Web/API candidate denial requires an explicit review reason
-- Web/API candidate actions cannot skip `CandidateStore` lifecycle gates
 - future overhaul compatibility for Discord, scheduling, and provider routing
