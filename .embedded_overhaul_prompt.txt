@@ -25,102 +25,50 @@ MANDATORY START OF EACH SESSION
 
 CURRENT PRIMARY FOCUS
 
-complete web TUI and operator console overhaul.
+complete tool usage and tool intelligence overhaul.
 
-For the default Web TUI-focused run, this means a real, end-to-end overhaul of
-Missy's browser-based operator experience.
+For the default tool-focused run, this means a real, end-to-end overhaul of
+how Missy discovers, creates, stores, tests, benchmarks, routes, and enables
+tools.
 
-Build a full Web TUI / operator console that is intuitive, secure, clean,
-accessible, fluid, feature-rich, and visually polished. Pretty matters a lot:
-the UI should look and feel deliberate, modern, calm, and high quality. It must
-not feel like a debug page, an admin afterthought, or a pile of raw JSON.
+The system must learn from frequent user requests and repeated manual
+workflows. When a pattern is common enough and safe enough, Missy should be
+able to propose or create a structured tool candidate instead of repeatedly
+solving the same task ad hoc. Tool creation must be policy-gated, auditable,
+reviewable, testable, reversible, and never allowed to bypass security.
 
-The Web TUI should become the best way to control every meaningful aspect of
-the bot. Treat it as Missy's main operator control plane: fast, readable,
-responsive, keyboard-friendly, screen-reader-friendly, touch-friendly, and
-useful from the first screen.
+Required tool-intelligence capabilities include:
 
-Use OpenClaw and Odin (https://github.com/Calmingstorm/Odin) as product and
-operator-experience references where appropriate, but implement clean-room
-Python/Missy-native behavior. Do not copy upstream code. Extract useful
-patterns: control-plane ergonomics, live status, sessions, tool visibility,
-auditability, diagnostics, run history, and clear operator controls.
-
-Required Web TUI capabilities include:
-
-- secure local Web UI entrypoint with explicit authentication/session handling
-- polished dashboard for runtime status, providers, channels, tools, scheduler,
-  memory, security posture, cost/usage, queues, jobs, recent activity, errors,
-  and degraded subsystems
-- session/run viewer with streaming output, tool calls, errors, costs, model
-  routing, provider fallback, and resumable context
-- audit log browser with filters, severity, actor/source, subsystem, action,
-  allow/deny result, timestamps, and redacted sensitive values
-- pretty, dense, scannable tool/provider/security panels
-- diagnostics/doctor views for Discord, providers, scheduler, tools, memory,
-  gateway, policy, and network posture where supported
-- safe controls for enabling/disabling providers, tools, scheduled jobs,
-  channels, and experimental features
-- full bot-control workflows for providers, models, routing, auth profiles,
-  rate limits, budgets, sessions, memory, schedules, tools, skills, plugins,
-  generated tool candidates, Discord, voice, vision, webhooks, security policy,
-  audit retention, logs, config, secrets status, and runtime health
-- guided setup and repair flows for misconfigured providers, missing secrets,
-  failed Discord intents, blocked network endpoints, unavailable cameras,
-  disabled tools, broken schedules, and unsafe policy choices
-- command palette, global search, saved filters, breadcrumbs, deep links,
-  keyboard shortcuts, and consistent navigation
-- live updates where useful for runs, logs, queue depth, health, streaming
-  messages, job execution, and audit events without jarring layout shifts
-- responsive design for desktop and mobile without clipped text or broken
-  layouts
-- accessibility as a hard acceptance criterion: semantic HTML, labels,
-  landmarks, focus states, skip links, ARIA only where appropriate, keyboard
-  navigation, reduced-motion support, contrast-safe themes, no color-only
-  status communication, accessible tables, and screen-reader-friendly alerts
-- beautiful visual system: coherent spacing, typography, color, iconography,
-  density, light/dark themes if practical, polished cards/tables/forms/modals,
-  clear hierarchy, useful charts, and no awkward clipping or overlap
-- loading, empty, error, degraded, offline, reconnecting, unauthorized,
-  forbidden, and read-only states for every major view
-- clear destructive-action confirmations and undo/rollback paths where
-  practical
-- backend APIs that enforce auth, policy, redaction, CSRF protections where
-  relevant, rate limits where appropriate, and structured audit events
-- tests for security, routing, UI API behavior, audit filtering, redaction,
-  accessibility-critical markup, navigation, control-plane actions, and core
-  Web TUI workflows
-
-The UI should prioritize real workflows over marketing copy:
-
-- start/stop/restart runtime components
-- inspect and resume sessions
-- ask the bot and watch a run stream
-- inspect tool calls and provider routing decisions
-- review and approve generated tools
-- run provider/tool benchmarks
-- edit safe config fields through guarded forms
-- view secret presence without revealing secret values
-- manage schedules and recurring jobs
-- inspect memory and delete/pin entries where supported
-- manage Discord/channel routing and allowlists
-- view vision/audio device status
-- browse audits and export filtered logs
-- run doctor checks and apply safe suggested fixes
+- frequent-request and repeated-workflow detection
+- safe tool-candidate generation from observed requests
+- clean tool storage with metadata, provenance, permissions, schemas, tests,
+  examples, versions, ownership, and lifecycle state
+- clear separation between proposed, experimental, benchmarked, approved,
+  enabled, deprecated, and disabled tools
+- provider-aware tool schemas and compatibility metadata
+- benchmark suites that run tool tasks against providers such as OpenAI,
+  Ollama, Anthropic where present, and local/mock providers
+- benchmark scoring for correctness, latency, cost, reliability, safety,
+  schema adherence, tool-call quality, and failure behavior
+- provider-specific enablement flags based on benchmark results
+- fallback behavior when a provider is weak at a tool or tool family
+- CLI and diagnostics for listing candidates, reviewing tools, running
+  benchmarks, comparing providers, and enabling/disabling provider access
+- audit trails for tool synthesis, benchmark execution, approval, enablement,
+  denial, and rollback
 
 The overhaul should be architectural, not cosmetic. Prefer clear internal
 interfaces, explicit lifecycle management, robust error handling, policy-gated
 actions, structured audit events, and tests that prove behavior. If
 PRIMARY_FOCUS is changed for a later run, apply this same standard to that
-subsystem instead of forcing Web TUI work.
+subsystem instead of forcing tool work.
 
 FLEXIBLE NEXT-FOCUS DESIGN
 
-This loop is not only for Web TUI work. Keep the implementation and status
-tracking flexible enough that a later primary focus can replace the UI, such as:
+This loop is not only for tool intelligence. Keep the implementation and status
+tracking flexible enough that a later primary focus can replace tools, such as:
 
 - overhauling Discord integration
-- overhauling tool usage and automatic tool creation
 - overhauling task delegation to Ollama when a tool is tagged
 - provider/model routing
 - tool policy and approval pipelines
@@ -129,13 +77,13 @@ tracking flexible enough that a later primary focus can replace the UI, such as:
 - vision/audio workflows
 - gateway/control-plane reliability
 
-Do not hard-code Web TUI assumptions into unrelated subsystems unless the
-boundary is explicitly an API, view model, UI adapter, auth layer, or frontend
-asset.
+Do not hard-code tool-intelligence assumptions into unrelated subsystems unless
+the boundary is explicitly a tool registry, tool runtime, benchmark, or
+provider-routing adapter.
 
 SECONDARY OBJECTIVES
 
-Keep improving these while the Web TUI and operator console are primary:
+Keep improving these while tool usage and tool intelligence are primary:
 
 - OpenClaw-style operator ergonomics and parity
 - local-first secure runtime
@@ -143,11 +91,9 @@ Keep improving these while the Web TUI and operator console are primary:
 - scheduling and recurring tasks
 - memory and session resume
 - tools, skills, plugins, and policy gates
-- audit log browsing, filtering, and redaction
-- secure local web APIs and auth/session handling
-- polished operator workflows and visual design
-- accessibility, fluid interaction, and responsive layout
-- full bot-control coverage for every major subsystem
+- provider-specific tool routing and enablement
+- automatic tool synthesis from observed repeated work
+- tool benchmark and evaluation harnesses
 - CLI and diagnostics
 - hatching/persona/humanistic behavior
 - vision and audio-triggered workflows
@@ -178,18 +124,17 @@ primary overhaul.
 SECURITY REQUIREMENTS
 
 - Default-deny mindset for privileged actions.
-- Web TUI access, tool creation, tool execution, Discord, and scheduled
-  execution must be safe by default.
+- Tool creation, tool execution, Discord, and scheduled execution must be safe
+  by default.
 - Secrets must come from environment or protected local files and be redacted.
 - Network, filesystem, shell, plugin, provider, and Discord actions must go
   through policy where applicable.
 - Dangerous actions need approval or explicit policy.
 - Audit logs must record privileged actions and denials.
 - Defend against prompt injection, malicious generated tools, tool supply-chain
-  abuse, Web UI auth bypass, CSRF, XSS, data exfiltration, SSRF, scheduler
-  abuse, secrets leakage, Discord spoofing, bot loops, impersonation, unsafe
-  attachments, confused channel routing, benchmark gaming, and unsafe
-  provider-specific tool enablement.
+  abuse, data exfiltration, SSRF, scheduler abuse, secrets leakage, Discord
+  spoofing, bot loops, impersonation, unsafe attachments, confused channel
+  routing, benchmark gaming, and unsafe provider-specific tool enablement.
 
 ENGINEERING RULES
 
