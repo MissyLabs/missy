@@ -840,6 +840,35 @@ class SQLiteMemoryStore:
             for r in rows
         ]
 
+    def get_cost_totals(self) -> dict:
+        """Return dashboard-wide aggregate spend across every session.
+
+        Unlike :meth:`get_total_costs`, which returns a limited, per-session
+        breakdown, this aggregates the entire ``costs`` table in one query so
+        the operator console can show a true lifetime total regardless of how
+        many sessions have been recorded.
+
+        Returns:
+            Dict with ``call_count``, ``session_count``, ``total_prompt_tokens``,
+            ``total_completion_tokens``, and ``total_cost_usd``.
+        """
+        conn = self._conn()
+        row = conn.execute(
+            """SELECT COUNT(*) as call_count,
+                      COUNT(DISTINCT session_id) as session_count,
+                      COALESCE(SUM(prompt_tokens), 0) as total_prompt_tokens,
+                      COALESCE(SUM(completion_tokens), 0) as total_completion_tokens,
+                      COALESCE(SUM(cost_usd), 0.0) as total_cost_usd
+               FROM costs"""
+        ).fetchone()
+        return {
+            "call_count": row["call_count"],
+            "session_count": row["session_count"],
+            "total_prompt_tokens": row["total_prompt_tokens"],
+            "total_completion_tokens": row["total_completion_tokens"],
+            "total_cost_usd": row["total_cost_usd"],
+        }
+
     # ------------------------------------------------------------------
     # Summary DAG operations
     # ------------------------------------------------------------------

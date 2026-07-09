@@ -368,6 +368,8 @@ def _make_handler(
                 return self._handle_list_tools()
             if method == "GET" and path == f"{_API_PREFIX}/diagnostics":
                 return self._handle_diagnostics()
+            if method == "GET" and path == f"{_API_PREFIX}/costs/summary":
+                return self._handle_cost_summary(params)
             if method == "GET" and path == f"{_API_PREFIX}/controls":
                 return self._handle_list_controls()
             if method == "GET" and path == f"{_API_PREFIX}/audit":
@@ -820,6 +822,61 @@ def _make_handler(
                     provider_registry=provider_registry,
                     tool_registry=tool_registry,
                 )
+            )
+
+        def _handle_cost_summary(self, params: dict) -> tuple[int, dict]:
+            """GET /api/v1/costs/summary — dashboard-wide spend and usage.
+
+            Query params:
+                limit (int, optional, default 10): Number of top sessions
+                    (by most recent activity) to include in the breakdown.
+
+            Response data fields:
+                totals (dict): Aggregate call_count/session_count/token/cost
+                    totals across every recorded session.
+                sessions (list): Per-session cost breakdown, most recent first.
+                budget (dict): The configured ``max_spend_usd`` cap (0 means
+                    unlimited) plus whether it applies per-session.
+            """
+            ms = memory_store
+            if ms is None:
+                return ApiResponse.ok(
+                    {
+                        "totals": {
+                            "call_count": 0,
+                            "session_count": 0,
+                            "total_prompt_tokens": 0,
+                            "total_completion_tokens": 0,
+                            "total_cost_usd": 0.0,
+                        },
+                        "sessions": [],
+                        "budget": {"max_spend_usd": 0.0, "scope": "per_session"},
+                    }
+                )
+            try:
+                limit = max(1, min(int(params.get("limit", 10)), 100))
+            except (TypeError, ValueError):
+                limit = 10
+            totals = {
+                "call_count": 0,
+                "session_count": 0,
+                "total_prompt_tokens": 0,
+                "total_completion_tokens": 0,
+                "total_cost_usd": 0.0,
+            }
+            sessions: list = []
+            try:
+                totals = ms.get_cost_totals()
+                sessions = ms.get_total_costs(limit=limit)
+            except Exception as exc:
+                logger.warning("Cost summary error: %s", exc)
+            budget_cap = float(getattr(runtime.config, "max_spend_usd", 0.0) or 0.0) if runtime else 0.0
+            return ApiResponse.ok(
+                {
+                    "totals": totals,
+                    "sessions": sessions,
+                    "budget": {"max_spend_usd": budget_cap, "scope": "per_session"},
+                }
             )
 
         def _handle_list_controls(self) -> tuple[int, dict]:

@@ -1,6 +1,6 @@
 # AUDIT_SECURITY
 
-- Timestamp: 2026-07-08 21:40:04
+- Timestamp: 2026-07-08 21:51:07
 
 ## Expected common security and operations docs
 - present: README.md
@@ -10,6 +10,8 @@
 
 ## Security and Web TUI scan
 ```
+/home/missy/missy/HATCHING_LOG.md:35:- `initialize_config` — Config file creation or detection
+/home/missy/missy/HATCHING_LOG.md:36:- `verify_providers` — API key detection across providers
 /home/missy/missy/LAST_SESSION_SUMMARY.md:7:- `missy/api/run_stream.py`: added a bus subscription on `agent.run.complete`
 /home/missy/missy/LAST_SESSION_SUMMARY.md:8:  (`_SUMMARY_TOPIC`) that captures `resolved_provider`/`tools_used`/`cost`
 /home/missy/missy/LAST_SESSION_SUMMARY.md:13:- `missy/api/operator_controls.py`: added `scheduler.remove_job`, a third
@@ -36,19 +38,7 @@
 /home/missy/missy/LAST_SESSION_SUMMARY.md:98:`SQLiteMemoryStore.get_total_costs()`, then extend `operator_controls.py`
 /home/missy/missy/LAST_SESSION_SUMMARY.md:99:with tool/skill enable-disable controls to keep closing the "full
 /home/missy/missy/LAST_SESSION_SUMMARY.md:100:bot-control coverage" gap.
-/home/missy/missy/examples/systemd/README.md:8:## Prerequisites
-/home/missy/missy/examples/systemd/README.md:14:- A valid `config.yaml` must exist at `~/.missy/config.yaml` (or wherever
-/home/missy/missy/examples/systemd/README.md:16:- Any required API keys must be set as environment variables. You can use a
-/home/missy/missy/examples/systemd/README.md:43:the instance name becomes the `%i` substitution variable, which is used
-/home/missy/missy/examples/systemd/README.md:51:sudo systemctl enable --now missy-gateway@youruser
-/home/missy/missy/examples/systemd/README.md:54:This enables the service to start on boot and starts it immediately.
-/home/missy/missy/examples/systemd/README.md:76:If you change `config.yaml` or environment variables, restart the service:
-/home/missy/missy/examples/systemd/README.md:91:sudo systemctl disable missy-gateway@youruser
-/home/missy/missy/examples/systemd/README.md:102:| `NoNewPrivileges=true` | Prevents the process from gaining new privileges (e.g. via setuid). |
-/home/missy/missy/examples/systemd/README.md:106:| `ReadWritePaths=...` | Grants write access to `~/.missy` (for audit logs, jobs, memory) and `~/workspace` (for agent output). |
-/home/missy/missy/examples/systemd/README.md:120:- Check that `config.yaml` includes the required domains in `allowed_domains` or `allowed_hosts`.
-/home/missy/missy/examples/systemd/README.md:121:- Verify that API key environment variables are set in the service environment.
-/home/missy/missy/examples/systemd/README.md:124:- Check that `discord.enabled: true` is set in `config.yaml`.
+/home/missy/missy/conftest.py:1:# conftest.py — pytest configuration
 /home/missy/missy/HUMANIZE_STATUS.md:9:| A1 | Streaming subscription state machine | tested | Core module and focused tests added; lightly wired to `AgentRuntime.run_stream()`. Needs channel/tool-loop integration. |
 /home/missy/missy/HUMANIZE_STATUS.md:10:| A2 | Layered tool policy pipeline | hardened | `missy/policy/tool_policy_pipeline.py` is wired into `AgentRuntime._get_tools()` for runtime capability profiles and config-backed provider/global/agent/sandbox/subagent policy surfaces. Channel/group policy sources remain future hardening. |
 /home/missy/missy/HUMANIZE_STATUS.md:13:| A5 | Auth profile cooldown + fallback | not_started | Provider registry/rate limiter work remains. |
@@ -73,11 +63,93 @@
 /home/missy/missy/HUMANIZE_STATUS.md:55:1. Harden A1 by routing provider/tool-loop stream events through `AgentSubscription` where Missy's providers expose stream events, not only the simple `run_stream()` path.
 /home/missy/missy/HUMANIZE_STATUS.md:56:2. Add the A7 `BlockChunker` and connect it to A1 flush points so pre-tool text can be delivered through Discord/CLI/Web in order.
 /home/missy/missy/HUMANIZE_STATUS.md:58:4. Add channel/group policy sources on top of the A2 pipeline when Discord/CLI/Web channel identity context is available.
+/home/missy/missy/docs/architecture.md:10:Missy is a **security-first**, **local-first**, **multi-provider** AI agent
+/home/missy/missy/docs/architecture.md:11:platform.  It is designed to run entirely under the operator's control on a
+/home/missy/missy/docs/architecture.md:13:access, filesystem writes, shell execution, plugin loading -- is disabled by
+/home/missy/missy/docs/architecture.md:14:default and must be explicitly enabled through a YAML configuration file.
+/home/missy/missy/docs/architecture.md:22:   policy engine before any bytes leave the machine.
+/home/missy/missy/docs/architecture.md:23:3. **Audit everything** -- every policy decision, provider call, scheduler
+/home/missy/missy/docs/architecture.md:24:   execution, and plugin action is recorded as a structured JSONL event.
+/home/missy/missy/docs/architecture.md:33:  config/          YAML settings, hot-reload, migration, plan/rollback
+/home/missy/missy/docs/architecture.md:34:  policy/          Network, filesystem, shell, REST L7 policy engines + presets
+/home/missy/missy/docs/architecture.md:36:  agent/           Runtime, circuit breaker, context, playbook, consolidation,
+/home/missy/missy/docs/architecture.md:37:                   attention, progress, approval, persona, behavior, hatching,
+/home/missy/missy/docs/architecture.md:41:  providers/       BaseProvider ABC, Anthropic, OpenAI, Ollama, registry + rate limiter
+/home/missy/missy/docs/architecture.md:42:  tools/           Tool base class, registry, 18+ built-in tools
+/home/missy/missy/docs/architecture.md:43:  skills/          Skill registry + SKILL.md discovery
+/home/missy/missy/docs/architecture.md:44:  plugins/         Security-gated external plugin loader and base class
+/home/missy/missy/docs/architecture.md:45:  scheduler/       APScheduler integration, human schedule parsing, job persistence
+/home/missy/missy/docs/architecture.md:50:  channels/        CLI, Discord (Gateway + REST), webhooks, voice (WebSocket), screencast
+/home/missy/missy/docs/architecture.md:51:  vision/          Camera discovery, capture, analysis, scene memory, health monitoring
+/home/missy/missy/docs/architecture.md:62: 1. CLI (click)           Parse command-line arguments, resolve --config path
+/home/missy/missy/docs/architecture.md:64: 2. Config loader         Read YAML, auto-migrate if needed, build MissyConfig
+/home/missy/missy/docs/architecture.md:67: 3. Subsystem init        init_policy_engine(cfg)  -- network, filesystem, shell, REST L7
+/home/missy/missy/docs/architecture.md:68:        |                 init_audit_logger(cfg.audit_log_path) + AgentIdentity (Ed25519)
+/home/missy/missy/docs/architecture.md:69:        |                 init_registry(cfg) -- providers with rate limiter + fallback
+/home/missy/missy/docs/architecture.md:71:        |                 init_tool_registry() -- 18+ built-in tools + MCP servers
+/home/missy/missy/docs/architecture.md:78:        |                 Resolve provider (with fallback + circuit breaker)
+/home/missy/missy/docs/architecture.md:79:        |                 AttentionSystem extracts urgency/topics/focus
+/home/missy/missy/docs/architecture.md:80:        |                 ContextManager builds message list within token budget
+/home/missy/missy/docs/architecture.md:82:        |                 Playbook injects proven tool patterns
+/home/missy/missy/docs/architecture.md:85:        |                 All HTTP through PolicyHTTPClient -> policy + REST check
+/home/missy/missy/docs/architecture.md:93: 8. Post-processing       Learnings extracted from tool-augmented runs
+/home/missy/missy/docs/architecture.md:96:        |                 SecretCensor redacts secrets from output
+/home/missy/missy/docs/architecture.md:99:        |                 Events signed by AgentIdentity, appended to audit.jsonl
+/home/missy/missy/docs/architecture.md:136:|Sleep  | |Checkpoint  | |Circuit  | |Vision     |
+/home/missy/missy/docs/architecture.md:161:Every policy dataclass defaults to the most restrictive posture:
+/home/missy/missy/docs/architecture.md:163:- `NetworkPolicy.default_deny = True`
+/home/missy/missy/docs/architecture.md:164:- `ShellPolicy.enabled = False`
+/home/missy/missy/docs/architecture.md:165:- `PluginPolicy.enabled = False`
+/home/missy/missy/docs/architecture.md:168:An operator must explicitly add entries to allowlists before any capability is
+/home/missy/missy/docs/architecture.md:173:All outbound HTTP traffic -- whether initiated by a provider, a tool, a plugin,
+/home/missy/missy/docs/architecture.md:177:`get_policy_engine().check_network(host)`.  If the host is not on an allowlist,
+/home/missy/missy/docs/architecture.md:180:The Anthropic and OpenAI providers use their own SDKs for HTTP, but their API
+/home/missy/missy/docs/architecture.md:181:hosts must still appear in `network.allowed_hosts` for the initial policy check
+/home/missy/missy/docs/architecture.md:182:at the gateway layer.  The Ollama provider routes directly through
+/home/missy/missy/docs/architecture.md:191:- `session_id` / `task_id` (correlation)
+/home/missy/missy/docs/architecture.md:193:- `category` (one of: `network`, `filesystem`, `shell`, `plugin`, `scheduler`, `provider`, `security`, `agent`, `tool`, `mcp`, `vision`)
+/home/missy/missy/docs/architecture.md:194:- `result` (one of: `allow`, `deny`, `error`)
+/home/missy/missy/docs/architecture.md:196:- `policy_rule` (optional rule name)
+/home/missy/missy/docs/architecture.md:198:The `AuditLogger` (`missy/observability/audit_logger.py`) wraps the bus's
+/home/missy/missy/docs/architecture.md:200:audit log file.
+/home/missy/missy/docs/architecture.md:211:  +-> config/settings + config/migrate + config/hotreload + config/plan
+/home/missy/missy/docs/architecture.md:212:  +-> policy/engine
+/home/missy/missy/docs/architecture.md:213:  +-> observability/audit_logger + observability/otel
+/home/missy/missy/docs/architecture.md:214:  +-> providers/registry
+/home/missy/missy/docs/architecture.md:216:  +-> scheduler/manager
+/home/missy/missy/docs/architecture.md:217:  +-> plugins/loader
+/home/missy/missy/docs/architecture.md:226:  +-> providers/registry + providers/base
+/home/missy/missy/docs/architecture.md:227:  +-> core/session + core/events + core/message_bus
+/home/missy/missy/docs/architecture.md:228:  +-> tools/registry
+/home/missy/missy/docs/architecture.md:229:  +-> agent/attention + agent/context + agent/circuit_breaker
+/home/missy/missy/docs/architecture.md:232:  +-> agent/progress + agent/interactive_approval + agent/approval
+/home/missy/missy/docs/architecture.md:240:providers/registry
+/home/missy/missy/docs/architecture.md:241:  +-> providers/base
+/home/missy/missy/docs/architecture.md:242:  +-> providers/anthropic_provider + openai_provider + ollama_provider
+/home/missy/missy/docs/architecture.md:243:  +-> providers/rate_limiter
+/home/missy/missy/docs/architecture.md:244:  +-> config/settings
+/home/missy/missy/docs/architecture.md:247:  +-> policy/engine + policy/rest_policy
+/home/missy/missy/docs/architecture.md:248:  +-> agent/interactive_approval
+/home/missy/missy/docs/architecture.md:251:policy/engine
+/home/missy/missy/docs/architecture.md:252:  +-> policy/network + policy/filesystem + policy/shell + policy/rest_policy
+/home/missy/missy/docs/architecture.md:253:  +-> policy/presets
+/home/missy/missy/docs/architecture.md:254:  +-> config/settings
+/home/missy/missy/docs/architecture.md:259:  +-> tools/registry
+/home/missy/missy/docs/architecture.md:265:scheduler/manager
+/home/missy/missy/docs/architecture.md:266:  +-> scheduler/parser + scheduler/jobs
+/home/missy/missy/docs/architecture.md:271:  +-> providers/base (for image formatting)
+/home/missy/missy/docs/architecture.md:280:1. `load_config(path)` -- parse YAML into `MissyConfig`
+/home/missy/missy/docs/architecture.md:281:2. `init_policy_engine(cfg)` -- must come first; other subsystems depend on it
+/home/missy/missy/docs/architecture.md:282:3. `init_audit_logger(cfg.audit_log_path)` -- wraps the event bus
+/home/missy/missy/docs/architecture.md:283:4. `init_registry(cfg)` -- constructs provider instances
+/home/missy/missy/docs/architecture.md:300:| Policy engine | `init_policy_engine(cfg)` | `get_policy_engine()` |
+/home/missy/missy/docs/architecture.md:301:| Provider registry | `init_registry(cfg)` | `get_registry()` |
+/home/missy/missy/docs/architecture.md:302:| Audit logger | `init_audit_logger(path)` | `get_audit_logger()` |
+/home/missy/missy/docs/architecture.md:303:| Plugin loader | `init_plugin_loader(cfg)` | `get_plugin_loader()` |
+/home/missy/missy/docs/architecture.md:304:| Skill registry | `init_skill_registry()` | `get_skill_registry()` |
+/home/missy/missy/docs/architecture.md:305:| Tool registry | `init_tool_registry()` | `get_tool_registry()` |
 /home/missy/missy/install.sh:29:    echo "Error: Python 3.11+ is required." >&2
 /home/missy/missy/install.sh:37:    echo "Error: git is required." >&2
-/home/missy/missy/LOOP_HEALTH.md:5:- Branch: overhaul/web-tui-20260709-004527
-/home/missy/missy/LOOP_HEALTH.md:6:- Primary focus: complete web TUI and operator console overhaul
-/home/missy/missy/missy/tools/__init__.py:1:"""Missy tools framework — tool registry, base class, and built-in tools."""
 /home/missy/missy/README.md:5:Missy is a production-grade agentic platform that runs entirely on your hardware. Default-deny network, filesystem sandboxing, shell whitelisting, encrypted vault, and structured audit logging — every capability is locked down until you explicitly allow it. Connect any AI provider. Deploy voice nodes throughout your home. Automate with scheduled jobs. Extend with tools, skills, and plugins.
 /home/missy/missy/README.md:13:Most AI assistants trust the network, trust the model, and trust the plugins. Missy trusts nothing by default.
 /home/missy/missy/README.md:18:- **No plugins** unless you approve them individually
@@ -194,120 +266,48 @@
 /home/missy/missy/README.md:410:├── plugins/         Security-gated external plugin loader
 /home/missy/missy/README.md:411:├── tools/           Built-in tools + registry (18+ tools)
 /home/missy/missy/README.md:412:└── vision/          Camera discovery, capture, analysis, scene memory, health
-/home/missy/missy/CLAUDE.md:3:This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-/home/missy/missy/CLAUDE.md:7:**Missy** is a security-first, self-hosted local agentic AI assistant for Linux. Production-grade agent platform with strict security controls, policy enforcement, and full auditability. Python 3.11+.
-/home/missy/missy/CLAUDE.md:19:pip install -e ".[discord_voice]" # adds discord.py[voice] + voice recv; requires system ffmpeg
-/home/missy/missy/CLAUDE.md:23:python3 -m pytest tests/unit/test_policy_engine.py -v     # single file
-/home/missy/missy/CLAUDE.md:36:Secure-by-default: all capabilities (shell, plugins, network) are disabled until explicitly enabled in `~/.missy/config.yaml`.
-/home/missy/missy/CLAUDE.md:42:  → missy setup (wizard.py + oauth.py + anthropic_auth.py)
-/home/missy/missy/CLAUDE.md:43:  → Config migration (config/migrate.py) — auto-upgrades old configs to preset format
-/home/missy/missy/CLAUDE.md:44:  → load_config() (config/settings.py) + ConfigWatcher (config/hotreload.py)
-/home/missy/missy/CLAUDE.md:48:       ├─ PolicyEngine (policy/engine.py) + RestPolicy (policy/rest_policy.py)
-/home/missy/missy/CLAUDE.md:49:       ├─ AgentIdentity (security/identity.py) — Ed25519 keypair, signs audit events
-/home/missy/missy/CLAUDE.md:50:       ├─ TrustScorer (security/trust.py) — 0-1000 reliability tracking per tool/provider
-/home/missy/missy/CLAUDE.md:51:       ├─ CircuitBreaker (agent/circuit_breaker.py)
-/home/missy/missy/CLAUDE.md:57:       ├─ ProviderRegistry + ModelRouter (providers/registry.py)
-/home/missy/missy/CLAUDE.md:58:       ├─ RateLimiter (providers/rate_limiter.py)
-/home/missy/missy/CLAUDE.md:59:       ├─ PolicyHTTPClient (gateway/client.py) + InteractiveApproval (agent/interactive_approval.py)
-/home/missy/missy/CLAUDE.md:60:       ├─ ToolRegistry (tools/registry.py) + built-in tools
-/home/missy/missy/CLAUDE.md:62:       ├─ SkillDiscovery (skills/discovery.py) — SKILL.md dynamic skill loading
-/home/missy/missy/CLAUDE.md:68:       ├─ ApprovalGate (agent/approval.py)
-/home/missy/missy/CLAUDE.md:72:       ├─ CostTracker (agent/cost_tracker.py) — per-session spend monitoring + budget caps
-/home/missy/missy/CLAUDE.md:74:       ├─ FailureTracker (agent/failure_tracker.py) — per-tool failure counts + strategy rotation
-/home/missy/missy/CLAUDE.md:75:       ├─ Watchdog (agent/watchdog.py) — background subsystem health monitor
-/home/missy/missy/CLAUDE.md:77:       ├─ CodeEvolutionManager (agent/code_evolution.py) — self-evolving code with approval + git rollback
-/home/missy/missy/CLAUDE.md:78:       ├─ StructuredOutput (agent/structured_output.py) — Pydantic schema enforcement on LLM responses
-/home/missy/missy/CLAUDE.md:85:       ├─ SecurityScanner (security/scanner.py) — installation security auditing
-/home/missy/missy/CLAUDE.md:96:  → Browser-based screen capture with token auth + session management
-/home/missy/missy/CLAUDE.md:108:**Policy Engine (`missy/policy/`)** — Multi-layer enforcement facade:
-/home/missy/missy/CLAUDE.md:109:- `NetworkPolicyEngine`: CIDR blocks, domain suffix matching, per-category host allowlists (provider, tool, discord)
-/home/missy/missy/CLAUDE.md:110:- `FilesystemPolicyEngine`: Per-path read/write access control
-/home/missy/missy/CLAUDE.md:112:- `RestPolicy`: L7 HTTP method + path glob rules per host (e.g. allow GET /repos/**, deny DELETE /**)
-/home/missy/missy/CLAUDE.md:113:- Network presets (`missy/policy/presets.py`): `presets: ["anthropic", "github"]` auto-expands to correct hosts/domains/CIDRs
-/home/missy/missy/CLAUDE.md:115:**Gateway (`missy/gateway/client.py`)** — `PolicyHTTPClient` wraps httpx; single enforcement point for ALL outbound HTTP. Every request checked against network policy + REST policy before dispatch. `InteractiveApproval` TUI prompts operator on denied requests (y/n/a with session memory).
-/home/missy/missy/CLAUDE.md:117:**Providers (`missy/providers/`)** — `BaseProvider` defines the interface (`Message`, `CompletionResponse`, `ToolCall`, `ToolResult`). Implementations: `AnthropicProvider`, `OpenAIProvider`, `OllamaProvider`. `ProviderRegistry` handles resolution with fallback. `ProviderConfig` supports API key rotation (`api_keys` list), `fast_model`/`premium_model` tiers.
-/home/missy/missy/CLAUDE.md:121:- `DiscordChannel`: Full WebSocket Gateway API with access control (DM allowlist, guild/role policies), slash commands (`/ask`, `/status`, `/model`, `/help`)
-/home/missy/missy/CLAUDE.md:122:- `WebhookChannel`: HTTP webhook ingress
-/home/missy/missy/CLAUDE.md:123:- `ScreencastChannel`: Browser-based screen capture with token auth (`ScreencastTokenRegistry`) and session management (`SessionManager`)
-/home/missy/missy/CLAUDE.md:124:- `VoiceChannel`: WebSocket server (default port 8765) accepting connections from edge nodes (ReSpeaker, Raspberry Pi). Protocol: JSON control frames + binary PCM audio. Device pairing with PBKDF2-hashed tokens. Per-node policy modes: `full`, `safe-chat`, `muted`. STT via faster-whisper, TTS via piper binary.
-/home/missy/missy/CLAUDE.md:127:- `CircuitBreaker`: Closed/Open/HalfOpen state machine with exponential backoff (threshold=5, base_timeout=60s, max=300s)
-/home/missy/missy/CLAUDE.md:128:- `ContextManager`: Token budget (default 30k) with reserves for system prompt, tool definitions, memory fraction (15%), learnings fraction (5%). Prunes oldest history first.
-/home/missy/missy/CLAUDE.md:131:- `AttentionSystem`: 5 brain-inspired subsystems — `AlertingAttention` (urgency keywords), `OrientingAttention` (topic extraction), `SustainedAttention` (focus continuity), `SelectiveAttention` (context filtering), `ExecutiveAttention` (tool prioritization)
-/home/missy/missy/CLAUDE.md:132:- `Playbook`: Auto-captures successful tool patterns (task_type + tool_sequence hash), injects proven approaches into context, auto-promotes patterns with 3+ successes to skill proposals. JSON persistence at `~/.missy/playbook.json`.
-/home/missy/missy/CLAUDE.md:133:- `ProgressReporter`: Protocol with `NullReporter`, `AuditReporter`, `CLIReporter`. Called in tool loop for structured progress events.
-/home/missy/missy/CLAUDE.md:134:- `InteractiveApproval`: Real-time Rich TUI for policy-denied operations (y=allow once, n=deny, a=allow always). Session-scoped memory. Non-TTY auto-denies.
-/home/missy/missy/CLAUDE.md:135:- `DoneCriteria`: Generates verification prompts injected after each tool-call round
-/home/missy/missy/CLAUDE.md:136:- `Learnings`: Extracts task_type/outcome/lesson from tool-augmented runs, persisted in SQLite
-/home/missy/missy/CLAUDE.md:137:- `PromptPatchManager`: Self-tuning prompt patches with approval workflow (proposed/approved/rejected)
-/home/missy/missy/CLAUDE.md:139:- `ApprovalGate`: Human-in-the-loop approval for sensitive operations
-/home/missy/missy/CLAUDE.md:140:- `CostTracker`: Per-session cost tracking and budget enforcement (`max_spend_usd`). Raises `BudgetExceededError` when cap hit.
-/home/missy/missy/CLAUDE.md:141:- `Checkpoint`: WAL-mode SQLite checkpointing for task state. Enables `missy recover` to resume incomplete sessions.
-/home/missy/missy/CLAUDE.md:142:- `FailureTracker`: Per-tool consecutive failure counts. Injects strategy-rotation prompts after repeated failures.
-/home/missy/missy/CLAUDE.md:143:- `Watchdog`: Background health monitor for subsystems. Tracks `SubsystemHealth` status and reports degradation.
-/home/missy/missy/CLAUDE.md:145:- `CodeEvolutionManager`: Self-evolving code modification engine with approval workflow, git-backed rollback, and `missy evolve` CLI.
-/home/missy/missy/CLAUDE.md:146:- `StructuredOutput`: Pydantic model schema enforcement on LLM responses with automatic retry on validation failure.
-/home/missy/missy/CLAUDE.md:152:**MCP (`missy/mcp/`)** — `McpManager` manages MCP server connections. Config at `~/.missy/mcp.json`. Tools are namespaced as `server__tool`. Auto-restarts dead servers via `health_check()`. Digest pinning (`missy mcp pin`) records SHA-256 of tool manifests; mismatches refuse to load.
-/home/missy/missy/CLAUDE.md:154:**Skills (`missy/skills/`)** — `SkillDiscovery` scans directories for SKILL.md files (cross-agent portable skill format with YAML frontmatter). `missy skills scan` lists discovered skills. Fuzzy search by name/description.
-/home/missy/missy/CLAUDE.md:156:**Scheduler (`missy/scheduler/`)** — APScheduler-backed job management with JSON persistence at `~/.missy/jobs.json`. Parser converts human-friendly schedules to cron expressions.
-/home/missy/missy/CLAUDE.md:162:- `Vault`: ChaCha20-Poly1305 encrypted key-value store. Key file at `~/.missy/secrets/vault.key`, encrypted data at `~/.missy/secrets/vault.enc`. Supports `vault://KEY_NAME` references in config.
-/home/missy/missy/CLAUDE.md:163:- `AgentIdentity`: Ed25519 keypair at `~/.missy/identity.pem`. Signs audit events. JWK export.
-/home/missy/missy/CLAUDE.md:164:- `TrustScorer`: 0-1000 reliability tracking per tool/provider/MCP server. Success (+10), failure (-50), violation (-200). Warns below threshold.
-/home/missy/missy/CLAUDE.md:165:- `PromptDriftDetector`: SHA-256 hashes system prompts at start, verifies before each provider call. Emits `security.prompt_drift` audit event on tamper.
-/home/missy/missy/CLAUDE.md:166:- `ContainerSandbox`: Optional Docker-based isolation for tool execution. Per-session containers with `--network=none`, memory/CPU limits. Config: `container: { enabled: true }`.
-/home/missy/missy/CLAUDE.md:167:- `LandlockPolicy`: Linux Landlock LSM filesystem policy enforcement via ctypes syscalls. Kernel-level read/write path restrictions complementing userspace policy engine.
-/home/missy/missy/CLAUDE.md:168:- `SecurityScanner`: Installation security auditor (`missy security scan`). Checks file permissions, config hygiene, exposed secrets, and reports severity-ranked findings.
-/home/missy/missy/CLAUDE.md:176:- `AnalysisPromptBuilder`: Domain-specific prompts (puzzle board-state, painting coaching)
-/home/missy/missy/CLAUDE.md:177:- `VisionIntentClassifier`: Audio-triggered vision activation with configurable thresholds
-/home/missy/missy/CLAUDE.md:178:- `VisionDoctor`: Diagnostics (opencv, video group, devices, capture test, health)
-/home/missy/missy/CLAUDE.md:181:- Agent tools: `vision_capture`, `vision_burst`, `vision_analyze`, `vision_devices`, `vision_scene`
-/home/missy/missy/CLAUDE.md:184:**Memory (`missy/memory/`)** — `SQLiteMemoryStore` at `~/.missy/memory.db` with FTS5 search. Stores conversation turns and learnings. `cleanup()` removes turns older than N days. Optional `VectorMemoryStore` with FAISS semantic search (`pip install -e ".[vector]"`). `GraphMemoryStore` provides SQLite-backed entity-relationship graph memory with rule-based pattern matching for structured knowledge retrieval.
-/home/missy/missy/CLAUDE.md:188:**Config Migration (`missy/config/migrate.py`)** — Auto-migrates old configs on startup. Detects manual hosts matching presets, replaces with `presets: [...]`, stamps `config_version: 2`. Backs up before modifying. Idempotent.
-/home/missy/missy/CLAUDE.md:190:**Config Plan (`missy/config/plan.py`)** — Automatic backups on config writes (max 5, pruned). `missy config rollback/diff/plan/backups` commands.
-/home/missy/missy/CLAUDE.md:192:**API Server (`missy/api/`)** — Agent-as-a-Service REST API (`missy api start`). Loopback-only binding by default, API key authentication, rate limiting, and automatic secrets censoring on responses.
-/home/missy/missy/CLAUDE.md:194:**Observability (`missy/observability/`)** — `AuditLogger` writes structured JSONL to `~/.missy/audit.jsonl`. `OtelExporter` sends traces/metrics to an OTLP endpoint when enabled.
-/home/missy/missy/CLAUDE.md:200:| Config | `~/.missy/config.yaml` |
-/home/missy/missy/CLAUDE.md:201:| Config backups | `~/.missy/config.d/config.yaml.<timestamp>` |
-/home/missy/missy/CLAUDE.md:202:| Audit log | `~/.missy/audit.jsonl` |
-/home/missy/missy/CLAUDE.md:206:| MCP config | `~/.missy/mcp.json` |
-/home/missy/missy/CLAUDE.md:207:| Device registry | `~/.missy/devices.json` |
-/home/missy/missy/CLAUDE.md:215:| Persona audit log | `~/.missy/persona_audit.jsonl` |
-/home/missy/missy/CLAUDE.md:218:| Skills directory | `~/.missy/skills/` |
-/home/missy/missy/CLAUDE.md:228:config_version: 2                    # schema version (auto-migrated on startup)
-/home/missy/missy/CLAUDE.md:231:  default_deny: true
-/home/missy/missy/CLAUDE.md:233:    - anthropic
-/home/missy/missy/CLAUDE.md:238:  provider_allowed_hosts: []      # per-category overrides
-/home/missy/missy/CLAUDE.md:239:  tool_allowed_hosts: []
-/home/missy/missy/CLAUDE.md:241:  rest_policies:                  # L7 HTTP method + path controls
-/home/missy/missy/CLAUDE.md:249:      action: "deny"
-/home/missy/missy/CLAUDE.md:256:  enabled: false
-/home/missy/missy/CLAUDE.md:259:plugins:
-/home/missy/missy/CLAUDE.md:260:  enabled: false
-/home/missy/missy/CLAUDE.md:261:  allowed_plugins: []
-/home/missy/missy/CLAUDE.md:263:providers:
-/home/missy/missy/CLAUDE.md:264:  anthropic:
-/home/missy/missy/CLAUDE.md:265:    name: anthropic
-/home/missy/missy/CLAUDE.md:272:    enabled: true
-/home/missy/missy/CLAUDE.md:275:  enabled: true
-/home/missy/missy/CLAUDE.md:280:  enabled: false
-/home/missy/missy/CLAUDE.md:286:  otel_enabled: false
-/home/missy/missy/CLAUDE.md:293:  enabled: false
-/home/missy/missy/CLAUDE.md:308:  # See missy/channels/discord/config.py for full schema
-/home/missy/missy/CLAUDE.md:311:  enabled: false
-/home/missy/missy/CLAUDE.md:318:  enabled: true
-/home/missy/missy/CLAUDE.md:326:  scene_memory_max_sessions: 5
-/home/missy/missy/CLAUDE.md:329:audit_log_path: "~/.missy/audit.jsonl"
-/home/missy/missy/CLAUDE.md:330:max_spend_usd: 0.0                  # per-session budget cap; 0 = unlimited
-/home/missy/missy/CLAUDE.md:336:missy init                          Create default config at ~/.missy/config.yaml
-/home/missy/missy/CLAUDE.md:338:missy setup --no-prompt             Non-interactive setup (--provider, --api-key-env, --model)
-/home/missy/missy/CLAUDE.md:339:missy ask PROMPT                    Single-turn query (--provider, --session)
-/home/missy/missy/CLAUDE.md:340:missy run                           Interactive REPL session (--provider)
-/home/missy/missy/CLAUDE.md:341:missy providers list                List configured providers and availability
-/home/missy/missy/CLAUDE.md:342:missy providers switch NAME         Switch active provider at runtime
-/home/missy/missy/CLAUDE.md:343:missy skills                        List registered skills
-/home/missy/missy/CLAUDE.md:344:missy skills scan                   Scan for SKILL.md files (--path)
-/home/missy/missy/CLAUDE.md:345:missy presets list                  Show built-in network policy presets
-/home/missy/missy/CLAUDE.md:346:missy plugins                       List plugins and their status
-/home/missy/missy/CLAUDE.md:347:missy doctor                        System health check
-/home/missy/missy/CLAUDE.md:349:missy schedule add                  Add scheduled job (--name, --schedule, --task, --provider)
-/home/missy/missy/CLAUDE.md:355:missy audit security                Show recent security events (--limit)
+/home/missy/missy/docs/README.md:3:## User Guides
+/home/missy/missy/docs/README.md:5:| Guide | Description |
+/home/missy/missy/docs/README.md:8:| [Configuration](configuration.md) | Complete YAML reference with annotated examples |
+/home/missy/missy/docs/README.md:9:| [Providers](providers.md) | Anthropic, OpenAI, Ollama setup and API key management |
+/home/missy/missy/docs/README.md:10:| [Discord](discord.md) | Discord bot integration, access control, slash commands |
+/home/missy/missy/docs/README.md:11:| [Scheduler](scheduler.md) | Job scheduling with human-friendly syntax |
+/home/missy/missy/docs/README.md:12:| [Skills & Plugins](skills-and-plugins.md) | Extension system: tools, skills, plugins |
+/home/missy/missy/docs/README.md:17:| Guide | Description |
+/home/missy/missy/docs/README.md:20:| [Security](security.md) | Security policy, hardening guide, vulnerability reporting |
+/home/missy/missy/docs/README.md:23:| [Testing](testing.md) | Test suite layout, coverage, writing tests |
+/home/missy/missy/docs/README.md:27:| Guide | Description |
+/home/missy/missy/docs/README.md:29:| [Discord](discord.md) | Discord bot integration, access control, slash commands |
+/home/missy/missy/docs/README.md:38:| [Policy Engine](implementation/policy-engine.md) | `missy/policy/` |
+/home/missy/missy/docs/README.md:39:| [Provider Abstraction](implementation/provider-abstraction.md) | `missy/providers/` |
+/home/missy/missy/docs/README.md:42:| [Audit Events](implementation/audit-events.md) | `missy/observability/` |
+/home/missy/missy/docs/README.md:43:| [Persistence Schema](implementation/persistence-schema.md) | `missy/memory/`, `missy/scheduler/` |
+/home/missy/missy/docs/README.md:44:| [Scheduler Execution](implementation/scheduler-execution.md) | `missy/scheduler/` |
+/home/missy/missy/docs/README.md:46:| [Manifest Schema](implementation/manifest-schema.md) | Plugin/skill manifests |
+/home/missy/missy/LOOP_HEALTH.md:5:- Branch: overhaul/web-tui-20260709-004527
+/home/missy/missy/LOOP_HEALTH.md:6:- Primary focus: complete web TUI and operator console overhaul
+/home/missy/missy/HUMANIZE_TEST_PLAN.md:9:- Mock LLM/provider calls. Behavioral tests should assert prompt fragments, state transitions, audit entries, cooldown decisions, or emitted channel timing calls.
+/home/missy/missy/HUMANIZE_TEST_PLAN.md:10:- Keep security and reliability separate from style: humanistic behaviors must not bypass policy, mutate tool results, or hide errors.
+/home/missy/missy/HUMANIZE_TEST_PLAN.md:15:  - Delta streams and full-content resend reconciliation.
+/home/missy/missy/HUMANIZE_TEST_PLAN.md:20:  - Reasoning stream mode.
+/home/missy/missy/HUMANIZE_TEST_PLAN.md:22:  - Block flush at `text_end` and before tool execution.
+/home/missy/missy/HUMANIZE_TEST_PLAN.md:24:- A1 runtime coverage: `tests/agent/test_runtime_streaming.py`
+/home/missy/missy/HUMANIZE_TEST_PLAN.md:25:  - Existing streaming behavior still yields chunks.
+/home/missy/missy/HUMANIZE_TEST_PLAN.md:26:  - Split think tags are stripped in `AgentRuntime.run_stream()`.
+/home/missy/missy/HUMANIZE_TEST_PLAN.md:27:- A2 policy coverage: `tests/policy/test_tool_policy_pipeline.py`
+/home/missy/missy/HUMANIZE_TEST_PLAN.md:29:  - Glob allow rules and inline `-tool` deny syntax compose in one layer.
+/home/missy/missy/HUMANIZE_TEST_PLAN.md:30:  - `alsoAllow` can restore matching tools after a restrictive layer.
+/home/missy/missy/HUMANIZE_TEST_PLAN.md:31:  - Unknown plugin-only allowlists warn without hiding core tools.
+/home/missy/missy/HUMANIZE_TEST_PLAN.md:32:  - Standard profile → provider → global → agent → group → sandbox → subagent layer ordering records trace labels.
+/home/missy/missy/HUMANIZE_TEST_PLAN.md:33:  - Config-backed provider/global/agent/sandbox/subagent layers preserve ordering and source labels.
+/home/missy/missy/HUMANIZE_TEST_PLAN.md:34:  - Custom `tools.groups` definitions extend the built-in group map.
+/home/missy/missy/HUMANIZE_TEST_PLAN.md:36:- A2 config coverage: `tests/config/test_settings.py`
+/home/missy/missy/HUMANIZE_TEST_PLAN.md:37:  - `tools.*`, `tools.byProvider`, nested `byModel`, `tools.groups`, `agents.<id>.tools`, `agents.<id>.subagents.tools`, and `sandbox.tools` parse from YAML.
+/home/missy/missy/HUMANIZE_TEST_PLAN.md:38:  - Invalid tool profiles fail with a configuration error.
+/home/missy/missy/HUMANIZE_TEST_PLAN.md:39:- A2 runtime coverage: `tests/agent/test_runtime_streaming.py`
+/home/missy/missy/HUMANIZE_TEST_PLAN.md:40:  - `AgentRuntime._get_tools()` records a `ToolPolicyDecision` and filters `safe-chat` through the A2 profile layer.
+/home/missy/missy/HUMANIZE_TEST_PLAN.md:41:- A2 runtime coverage: `tests/agent/test_runtime_config_edges.py`
+/home/missy/missy/HUMANIZE_TEST_PLAN.md:42:  - `AgentRuntime._get_tools()` consumes config-backed global and agent policy surfaces.
+/home/missy/missy/HUMANIZE_TEST_PLAN.md:48:| H_A | Delay calculation respects length/complexity/mood/channel caps; quick/fast/asap bypasses long sleeps; channel typing indicator ordering is mocked. |
+/home/missy/missy/HUMANIZE_TEST_PLAN.md:54:| H_G | Apology appears for a tool failure once; gratitude and hedging do not duplicate in the same exchange. |
 ```
