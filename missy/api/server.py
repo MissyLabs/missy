@@ -36,13 +36,14 @@ import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from http import cookies
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlparse
 
 from missy.api.audit_browser import query_audit_events, redact_audit_value
 from missy.api.diagnostics import build_diagnostics
 from missy.api.operator_controls import execute_operator_control, list_operator_controls
+from missy.api.run_stream import RunConflictError, RunRegistry, format_sse
 from missy.api.web_console import render_console, render_login, render_message
 from missy.api.web_sessions import WebSession, WebSessionStore
 from missy.core.events import AuditEvent, event_bus
@@ -207,11 +208,12 @@ def _make_handler(
     memory_store: SQLiteMemoryStore | None,
     provider_registry: ProviderRegistry | None,
     tool_registry: ToolRegistry | None,
+    run_registry: RunRegistry,
 ):
     """Return a configured :class:`BaseHTTPRequestHandler` subclass.
 
     All dependencies are captured by closure so the handler class can be
-    instantiated by :class:`~http.server.HTTPServer` without arguments.
+    instantiated by :class:`~http.server.ThreadingHTTPServer` without arguments.
     """
 
     class ApiHandler(BaseHTTPRequestHandler):
@@ -257,6 +259,15 @@ def _make_handler(
 
             if api_config.web_ui_enabled and not path.startswith(_API_PREFIX):
                 self._route_web(method, path, params)
+                return
+
+            events_prefix = f"{_API_PREFIX}/runs/"
+            if method == "GET" and path.startswith(events_prefix) and path.endswith("/events"):
+                if self._authenticate() is None:
+                    self._send_json(*ApiResponse.error("Unauthorized", 401))
+                    return
+                run_id = path[len(events_prefix) : -len("/events")]
+                self._handle_run_events_stream(run_id)
                 return
 
             auth_kind = self._authenticate()
@@ -379,6 +390,23 @@ def _make_handler(
                 if body is None:
                     return ApiResponse.error("Invalid JSON body", 400)
                 return self._handle_chat(body)
+
+            # Streamed background runs
+            if method == "POST" and path == f"{_API_PREFIX}/runs":
+                body = self._read_body()
+                if body is None:
+                    return ApiResponse.error("Invalid JSON body", 400)
+                return self._handle_start_run(body)
+            if method == "GET" and path == f"{_API_PREFIX}/runs":
+                return self._handle_list_runs(params)
+
+            runs_prefix = f"{_API_PREFIX}/runs/"
+            if path.startswith(runs_prefix):
+                run_id = path[len(runs_prefix) :]
+                if not run_id or "/" in run_id:
+                    return ApiResponse.error("Not found", 404)
+                if method == "GET":
+                    return self._handle_get_run(run_id)
 
             controls_prefix = f"{_API_PREFIX}/controls/"
             if method == "POST" and path.startswith(controls_prefix):
@@ -861,6 +889,118 @@ def _make_handler(
                 }
             )
 
+        def _handle_start_run(self, body: dict) -> tuple[int, dict]:
+            """POST /api/v1/runs — start a background run streamed via SSE.
+
+            Request body fields:
+                message (str, required): The user message text.
+                session_id (str, optional): Existing session ID to continue.
+                provider (str, optional): Override the provider for this turn.
+
+            Response data fields mirror :meth:`RunHandle.to_dict`: ``run_id``,
+            ``session_id``, ``status``, and (once finished) ``response`` or
+            ``error``. Connect to ``GET /api/v1/runs/{run_id}/events`` to
+            watch progress live.
+            """
+            message = (body.get("message") or "").strip()
+            if not message:
+                return ApiResponse.error("'message' field is required and must be non-empty", 400)
+
+            if runtime is None:
+                return ApiResponse.error("Agent runtime is not configured", 503)
+
+            session_id: str | None = body.get("session_id") or None
+            provider_override: str | None = body.get("provider") or None
+
+            if session_id is None:
+                default_provider = (
+                    (provider_registry.get_default_name() if provider_registry is not None else "")
+                    or provider_override
+                    or runtime.config.provider
+                )
+                api_sess = session_registry.create(provider=default_provider)
+                session_id = api_sess.session_id
+                provider_name = default_provider
+            else:
+                api_sess = session_registry.get(session_id)
+                if api_sess is None:
+                    return ApiResponse.error(f"Session '{session_id}' not found", 404)
+                provider_name = provider_override or api_sess.provider or runtime.config.provider
+
+            if provider_override:
+                try:
+                    runtime.switch_provider(provider_override)
+                except Exception as exc:
+                    logger.debug("Could not switch provider to %r: %s", provider_override, exc)
+
+            try:
+                handle = run_registry.start(
+                    runtime=runtime,
+                    message=message,
+                    session_id=session_id,
+                    provider=provider_name,
+                )
+            except RunConflictError:
+                self._emit_web_audit(
+                    event_type="web.run",
+                    result="deny",
+                    action="run.start",
+                    subsystem="agent",
+                    severity="warning",
+                    session_id=session_id,
+                    reason="run_in_progress",
+                )
+                return ApiResponse.error(
+                    f"Session '{session_id}' already has a run in progress", 409
+                )
+
+            session_registry.touch(session_id, turn_increment=1)
+
+            return ApiResponse.ok(handle.to_dict(), status=202)
+
+        def _handle_list_runs(self, params: dict) -> tuple[int, dict]:
+            """GET /api/v1/runs?session_id=... — list recent runs for a session."""
+            session_id = str(params.get("session_id") or "").strip()
+            if not session_id:
+                return ApiResponse.error("Query parameter 'session_id' is required", 400)
+            try:
+                limit = max(1, min(int(params.get("limit", 20)), 100))
+            except (ValueError, TypeError):
+                limit = 20
+            return ApiResponse.ok({"runs": run_registry.list_for_session(session_id, limit=limit)})
+
+        def _handle_get_run(self, run_id: str) -> tuple[int, dict]:
+            """GET /api/v1/runs/{run_id} — poll a run's current status/result."""
+            handle = run_registry.get(run_id)
+            if handle is None:
+                return ApiResponse.error(f"Run '{run_id}' not found", 404)
+            return ApiResponse.ok(handle.to_dict())
+
+        def _handle_run_events_stream(self, run_id: str) -> None:
+            """GET /api/v1/runs/{run_id}/events — SSE stream of run progress.
+
+            Emits ``run.started``, ``run.start`` (bus-sourced), ``tool.request``,
+            ``tool.result``, and a terminal ``run.complete``/``run.error``
+            event. Late joiners (including reconnects after the run already
+            finished) receive a synthesized terminal event immediately rather
+            than hanging.
+            """
+            if not run_id or run_registry.get(run_id) is None:
+                self._send_json(*ApiResponse.error(f"Run '{run_id}' not found", 404))
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+            try:
+                for event in run_registry.stream(run_id):
+                    self.wfile.write(format_sse(event))
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                return
+
         def _handle_create_session(self, body: dict) -> tuple[int, dict]:
             """POST /api/v1/sessions — create a new API session.
 
@@ -1041,7 +1181,7 @@ class ApiServer:
 
     The server runs in a background daemon thread so it does not block the
     calling process.  All handler dependencies are injected via constructor
-    arguments and captured in a closure; the :class:`HTTPServer` never needs
+    arguments and captured in a closure; the :class:`ThreadingHTTPServer` never needs
     to be subclassed.
 
     Args:
@@ -1074,10 +1214,11 @@ class ApiServer:
 
         self._session_registry = _SessionRegistry()
         self._web_sessions = WebSessionStore(config.web_session_ttl_seconds)
+        self._run_registry = RunRegistry()
         self._rate_tracker: dict[str, list[float]] = {}
         self._rate_lock = threading.Lock()
 
-        self._server: HTTPServer | None = None
+        self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
     # ------------------------------------------------------------------
@@ -1120,9 +1261,10 @@ class ApiServer:
             memory_store=self.memory_store,
             provider_registry=self.provider_registry,
             tool_registry=self.tool_registry,
+            run_registry=self._run_registry,
         )
 
-        self._server = HTTPServer((self.config.host, self.config.port), handler_class)
+        self._server = ThreadingHTTPServer((self.config.host, self.config.port), handler_class)
         self._thread = threading.Thread(
             target=self._server.serve_forever,
             daemon=True,

@@ -687,6 +687,307 @@ class TestChat:
 
 
 # ---------------------------------------------------------------------------
+# Streamed background runs
+# ---------------------------------------------------------------------------
+
+
+class TestRuns:
+    def test_missing_message_returns_400(self, client: httpx.Client) -> None:
+        resp = client.post("/runs", json={})
+        assert resp.status_code == 400
+
+    def test_no_runtime_returns_503(self, client: httpx.Client) -> None:
+        resp = client.post("/runs", json={"message": "hello"})
+        assert resp.status_code == 503
+
+    def test_start_run_returns_202_with_pending_or_running_status(self) -> None:
+        port = _free_port()
+        mock_runtime = MagicMock()
+        mock_runtime.run.return_value = "42"
+        mock_runtime.config.provider = "mock"
+
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, runtime=mock_runtime)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            resp = httpx.post(
+                f"http://127.0.0.1:{port}/api/v1/runs",
+                json={"message": "what is 6*7"},
+                headers=HEADERS,
+            )
+            assert resp.status_code == 202
+            data = resp.json()["data"]
+            assert data["run_id"]
+            assert data["session_id"]
+            assert data["status"] in {"pending", "running", "complete"}
+        finally:
+            srv.stop()
+
+    def test_run_reaches_complete_status_via_polling(self) -> None:
+        port = _free_port()
+        mock_runtime = MagicMock()
+        mock_runtime.run.return_value = "the answer is 42"
+        mock_runtime.config.provider = "mock"
+
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, runtime=mock_runtime)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            base = f"http://127.0.0.1:{port}/api/v1"
+            start = httpx.post(base + "/runs", json={"message": "hi"}, headers=HEADERS)
+            run_id = start.json()["data"]["run_id"]
+
+            deadline = time.monotonic() + 3.0
+            status = None
+            while time.monotonic() < deadline:
+                poll = httpx.get(f"{base}/runs/{run_id}", headers=HEADERS)
+                assert poll.status_code == 200
+                status = poll.json()["data"]["status"]
+                if status == "complete":
+                    break
+                time.sleep(0.02)
+            assert status == "complete"
+            assert poll.json()["data"]["response"] == "the answer is 42"
+        finally:
+            srv.stop()
+
+    def test_get_unknown_run_returns_404(self, client: httpx.Client) -> None:
+        resp = client.get("/runs/does-not-exist")
+        assert resp.status_code == 404
+
+    def test_list_runs_requires_session_id(self, client: httpx.Client) -> None:
+        resp = client.get("/runs")
+        assert resp.status_code == 400
+
+    def test_list_runs_returns_runs_for_session(self) -> None:
+        port = _free_port()
+        mock_runtime = MagicMock()
+        mock_runtime.run.return_value = "ok"
+        mock_runtime.config.provider = "mock"
+
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, runtime=mock_runtime)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            base = f"http://127.0.0.1:{port}/api/v1"
+            start = httpx.post(base + "/runs", json={"message": "hi"}, headers=HEADERS)
+            session_id = start.json()["data"]["session_id"]
+            run_id = start.json()["data"]["run_id"]
+
+            deadline = time.monotonic() + 3.0
+            while time.monotonic() < deadline:
+                if (
+                    httpx.get(f"{base}/runs/{run_id}", headers=HEADERS).json()["data"]["status"]
+                    == "complete"
+                ):
+                    break
+                time.sleep(0.02)
+
+            listing = httpx.get(f"{base}/runs", params={"session_id": session_id}, headers=HEADERS)
+            assert listing.status_code == 200
+            runs = listing.json()["data"]["runs"]
+            assert any(r["run_id"] == run_id for r in runs)
+        finally:
+            srv.stop()
+
+    def test_events_stream_requires_auth(self) -> None:
+        port = _free_port()
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            resp = httpx.get(f"http://127.0.0.1:{port}/api/v1/runs/anything/events")
+            assert resp.status_code == 401
+        finally:
+            srv.stop()
+
+    def test_events_stream_unknown_run_returns_404(self, client: httpx.Client) -> None:
+        resp = client.get("/runs/does-not-exist/events")
+        assert resp.status_code == 404
+
+    def test_events_stream_delivers_started_and_complete(self) -> None:
+        port = _free_port()
+        mock_runtime = MagicMock()
+        mock_runtime.run.return_value = "streamed answer"
+        mock_runtime.config.provider = "mock"
+
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, runtime=mock_runtime)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            base = f"http://127.0.0.1:{port}/api/v1"
+            start = httpx.post(base + "/runs", json={"message": "hi"}, headers=HEADERS)
+            run_id = start.json()["data"]["run_id"]
+
+            body = ""
+            with httpx.stream(
+                "GET", f"{base}/runs/{run_id}/events", headers=HEADERS, timeout=5.0
+            ) as resp:
+                assert resp.status_code == 200
+                assert "text/event-stream" in resp.headers["content-type"]
+                for chunk in resp.iter_text():
+                    body += chunk
+                    if "run.complete" in body or "run.error" in body:
+                        break
+            assert "event: run.started" in body
+            assert "event: run.complete" in body
+            assert "streamed answer" in body
+        finally:
+            srv.stop()
+
+    def test_events_stream_late_join_after_completion_returns_immediately(self) -> None:
+        port = _free_port()
+        mock_runtime = MagicMock()
+        mock_runtime.run.return_value = "already done"
+        mock_runtime.config.provider = "mock"
+
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, runtime=mock_runtime)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            base = f"http://127.0.0.1:{port}/api/v1"
+            start = httpx.post(base + "/runs", json={"message": "hi"}, headers=HEADERS)
+            run_id = start.json()["data"]["run_id"]
+
+            # Drain the stream fully once so the run finishes.
+            with httpx.stream(
+                "GET", f"{base}/runs/{run_id}/events", headers=HEADERS, timeout=5.0
+            ) as resp:
+                for _ in resp.iter_text():
+                    pass
+
+            started = time.monotonic()
+            resp = httpx.get(f"{base}/runs/{run_id}/events", headers=HEADERS, timeout=5.0)
+            elapsed = time.monotonic() - started
+            assert resp.status_code == 200
+            assert "run.complete" in resp.text
+            assert elapsed < 3.0
+        finally:
+            srv.stop()
+
+    def test_run_error_reported_via_polling_and_stream(self) -> None:
+        port = _free_port()
+        mock_runtime = MagicMock()
+        mock_runtime.run.side_effect = RuntimeError("boom")
+        mock_runtime.config.provider = "mock"
+
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, runtime=mock_runtime)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            base = f"http://127.0.0.1:{port}/api/v1"
+            start = httpx.post(base + "/runs", json={"message": "trigger error"}, headers=HEADERS)
+            run_id = start.json()["data"]["run_id"]
+
+            deadline = time.monotonic() + 3.0
+            status = None
+            while time.monotonic() < deadline:
+                poll = httpx.get(f"{base}/runs/{run_id}", headers=HEADERS)
+                status = poll.json()["data"]["status"]
+                if status == "error":
+                    break
+                time.sleep(0.02)
+            assert status == "error"
+            assert "boom" in poll.json()["data"]["error"]
+        finally:
+            srv.stop()
+
+    def test_concurrent_run_on_same_session_returns_409_and_emits_audit(self, tmp_path) -> None:
+        init_audit_logger(str(tmp_path / "audit.jsonl"))
+        port = _free_port()
+        gate = threading.Event()
+        mock_runtime = MagicMock()
+
+        def slow_run(message, session_id=None):
+            gate.wait(timeout=2)
+            return "slow"
+
+        mock_runtime.run.side_effect = slow_run
+        mock_runtime.config.provider = "mock"
+
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, runtime=mock_runtime)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            base = f"http://127.0.0.1:{port}/api/v1"
+            first = httpx.post(base + "/runs", json={"message": "first"}, headers=HEADERS)
+            session_id = first.json()["data"]["session_id"]
+            time.sleep(0.05)
+            second = httpx.post(
+                base + "/runs",
+                json={"message": "second", "session_id": session_id},
+                headers=HEADERS,
+            )
+            assert second.status_code == 409
+
+            audit = httpx.get(f"{base}/audit?subsystem=agent&result=deny&limit=10", headers=HEADERS)
+            events = audit.json()["data"]["events"]
+            assert any(e["event_type"] == "web.run" for e in events)
+        finally:
+            gate.set()
+            srv.stop()
+
+    def test_unknown_session_id_returns_404(self) -> None:
+        port = _free_port()
+        mock_runtime = MagicMock()
+        mock_runtime.run.return_value = "reply"
+        mock_runtime.config.provider = "mock"
+
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, runtime=mock_runtime)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            resp = httpx.post(
+                f"http://127.0.0.1:{port}/api/v1/runs",
+                json={"message": "hi", "session_id": "no-such-session"},
+                headers=HEADERS,
+            )
+            assert resp.status_code == 404
+        finally:
+            srv.stop()
+
+    def test_browser_session_can_start_run_with_csrf(self) -> None:
+        port = _free_port()
+        mock_runtime = MagicMock()
+        mock_runtime.run.return_value = "web ui reply"
+        mock_runtime.config.provider = "mock"
+
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, runtime=mock_runtime)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/login")
+        try:
+            with httpx.Client(
+                base_url=f"http://127.0.0.1:{port}", follow_redirects=False
+            ) as browser:
+                browser.post("/login", data={"api_key": API_KEY})
+                denied = browser.post("/api/v1/runs", json={"message": "hi"})
+                assert denied.status_code == 403
+
+                console = browser.get("/")
+                csrf = console.text.split('data-csrf="', 1)[1].split('"', 1)[0]
+                allowed = browser.post(
+                    "/api/v1/runs", json={"message": "hi"}, headers={"X-CSRF-Token": csrf}
+                )
+                assert allowed.status_code == 202
+
+                run_id = allowed.json()["data"]["run_id"]
+                events_resp = browser.get(f"/api/v1/runs/{run_id}/events")
+                assert events_resp.status_code == 200
+        finally:
+            srv.stop()
+
+
+# ---------------------------------------------------------------------------
 # Memory search endpoint
 # ---------------------------------------------------------------------------
 

@@ -1,10 +1,10 @@
 # AUDIT_CONNECTIVITY
 
-- Timestamp: 2026-07-08 15:10:45
+- Timestamp: 2026-07-08 21:11:38
 
 Expected connectivity posture:
 - default-deny network where practical
-- exact OpenAI provider endpoints
+- exact provider endpoints
 - explicit local Web TUI bind address and origin policy
-- exact benchmark and non-OpenAI provider endpoints where enabled
+- exact benchmark and provider endpoints
 - no unreviewed broad outbound access

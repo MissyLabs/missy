@@ -619,6 +619,7 @@ class AgentRuntime:
                     "task_id": task_id,
                     "provider": provider.name,
                     "tools_used": all_tool_names_used,
+                    "cost": cost_detail,
                 },
             )
 

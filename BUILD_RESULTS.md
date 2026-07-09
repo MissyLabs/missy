@@ -1,8 +1,8 @@
 # BUILD_RESULTS
 
-- Timestamp: 2026-07-08 15:04:03
-- Branch: overhaul/openai-provider-20260708-172558
-- Primary focus: complete OpenAI provider overhaul
+- Timestamp: 2026-07-08 21:04:35
+- Branch: overhaul/web-tui-20260709-004527
+- Primary focus: complete web TUI and operator console overhaul
 
 ## Python
 Python 3.12.3
@@ -16,6 +16,7 @@ Python 3.12.3
 /home/missy/missy/BUILD_RESULTS.md
 /home/missy/missy/BUILD_STATUS.md
 /home/missy/missy/build_tools_claude_loop.log
+/home/missy/missy/build_web_tui_claude_loop.log
 /home/missy/missy/build_web_tui_codex_loop.log
 /home/missy/missy/CLAUDE.md
 /home/missy/missy/.claude/settings.local.json
@@ -150,6 +151,7 @@ Python 3.12.3
 /home/missy/missy/.hypothesis/constants/2176ede15b89838e
 /home/missy/missy/.hypothesis/constants/219d885747c7cdb1
 /home/missy/missy/.hypothesis/constants/22056134b24f9c59
+/home/missy/missy/.hypothesis/constants/224b2b2b86bee972
 /home/missy/missy/.hypothesis/constants/228ce66e144e210c
 /home/missy/missy/.hypothesis/constants/236b256f1cc95770
 /home/missy/missy/.hypothesis/constants/2431b37eb1dc1147
@@ -305,6 +307,7 @@ Python 3.12.3
 /home/missy/missy/.hypothesis/constants/5dd98a164720f0a9
 /home/missy/missy/.hypothesis/constants/5f7dee3ccc5b50b9
 /home/missy/missy/.hypothesis/constants/5fddc1d4ab65f094
+/home/missy/missy/.hypothesis/constants/6068de0cc15415ac
 /home/missy/missy/.hypothesis/constants/60c6e3ed5d8e91b0
 /home/missy/missy/.hypothesis/constants/6119f33d759a1add
 /home/missy/missy/.hypothesis/constants/61a9c729ceb72217
@@ -319,6 +322,7 @@ Python 3.12.3
 /home/missy/missy/.hypothesis/constants/66a01aaa2f82c4f0
 /home/missy/missy/.hypothesis/constants/67484683c50c0873
 /home/missy/missy/.hypothesis/constants/675c09b48f5c311a
+/home/missy/missy/.hypothesis/constants/67739471afdaa32b
 /home/missy/missy/.hypothesis/constants/67920e4d721feabe
 /home/missy/missy/.hypothesis/constants/6795acd58e4ca5e5
 /home/missy/missy/.hypothesis/constants/67b06e758296bc05
@@ -349,6 +353,7 @@ Python 3.12.3
 /home/missy/missy/.hypothesis/constants/72f93d8d6fd97205
 /home/missy/missy/.hypothesis/constants/7352e3d14f24a4b2
 /home/missy/missy/.hypothesis/constants/73cef8ac4ee05e91
+/home/missy/missy/.hypothesis/constants/73e197f4d4d3b47b
 /home/missy/missy/.hypothesis/constants/740d5b34a29cc934
 /home/missy/missy/.hypothesis/constants/7424ed19f578abec
 /home/missy/missy/.hypothesis/constants/751ad9de1f8afabe
@@ -712,6 +717,7 @@ Python 3.12.3
 /home/missy/missy/missy/api/diagnostics.py
 /home/missy/missy/missy/api/__init__.py
 /home/missy/missy/missy/api/operator_controls.py
+/home/missy/missy/missy/api/run_stream.py
 /home/missy/missy/missy/api/server.py
 /home/missy/missy/missy/api/web_console.py
 /home/missy/missy/missy/api/web_sessions.py
@@ -930,6 +936,7 @@ Python 3.12.3
 /home/missy/missy/tests/agent/test_watchdog.py
 /home/missy/missy/tests/agent/test_watchdog_ratelimiter_edges.py
 /home/missy/missy/tests/api/__init__.py
+/home/missy/missy/tests/api/test_run_stream.py
 /home/missy/missy/tests/api/test_server.py
 /home/missy/missy/tests/channels/__init__.py
 /home/missy/missy/tests/channels/test_channel_deep.py
