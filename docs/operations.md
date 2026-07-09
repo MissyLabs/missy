@@ -250,6 +250,46 @@ terminal SSE `run.complete` event carry `resolved_provider`/`provider`,
 provider actually served the request, which tools it called, and what it cost
 without a second request.
 
+### Tool intelligence operations
+
+Missy records completed turns in `RequestTracker` so repeated requests and
+manual workflows can be reviewed:
+
+```bash
+missy tools requests stats --min-count 3
+```
+
+Automatic tool-candidate synthesis is off by default. When
+`tool_intelligence.candidate_generation.enabled: true` is configured, the
+runtime periodically scans frequent patterns and stores proposed candidates in
+`~/.missy/tool_candidates.db`. Generated candidates are not executable by
+default. They must move through the audited lifecycle
+`proposed -> experimental -> benchmarked -> approved -> enabled`; invalid
+shortcuts such as `proposed -> enabled` are rejected by `CandidateStore` and
+emit `tool.candidate.transition_denied`.
+
+Review and lifecycle commands:
+
+```bash
+missy tools candidates list
+missy tools candidates show <candidate_id>
+missy tools benchmark run <tool_name>
+missy tools candidates approve <candidate_id>
+missy tools candidates enable <candidate_id>
+missy tools candidates deny <candidate_id> --reason "unsafe permissions"
+```
+
+Provider-specific tool availability is controlled separately from execution
+policy. `ToolProviderGate` can hide a tool from a weak provider based on
+benchmark data, while explicit operator overrides remain auditable:
+
+```bash
+missy tools providers status calculator --provider ollama
+missy tools providers disable shell_exec ollama
+missy tools providers clear shell_exec ollama
+missy tools providers recommend calculator
+```
+
 The console's **Scheduled Jobs** panel covers the full job lifecycle:
 listing (`GET /api/v1/scheduler/jobs`), creation via a guarded form (`POST
 /api/v1/scheduler/jobs` — `name`, `schedule`, `task` required; `provider`,

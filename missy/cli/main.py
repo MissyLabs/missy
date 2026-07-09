@@ -5026,13 +5026,17 @@ def candidates_show(ctx: click.Context, candidate_id: str) -> None:
 @click.option("--notes", default="", help="Approval notes.")
 @click.pass_context
 def candidates_approve(ctx: click.Context, candidate_id: str, notes: str) -> None:
-    """Approve a proposed tool candidate."""
+    """Approve a benchmarked tool candidate."""
     from missy.tools.intelligence import ToolLifecycleState, get_candidate_store
 
     store = get_candidate_store()
-    updated = store.transition(
-        candidate_id, ToolLifecycleState.APPROVED, notes=notes, actor="operator"
-    )
+    try:
+        updated = store.transition(
+            candidate_id, ToolLifecycleState.APPROVED, notes=notes, actor="operator"
+        )
+    except ValueError as exc:
+        _print_error(str(exc))
+        raise SystemExit(1) from None
     if updated is None:
         _print_error(f"Candidate {candidate_id!r} not found.")
         raise SystemExit(1)
@@ -5058,9 +5062,13 @@ def candidates_enable(ctx: click.Context, candidate_id: str, notes: str) -> None
             f"(current: {c.state.value})."
         )
         raise SystemExit(1)
-    updated = store.transition(
-        candidate_id, ToolLifecycleState.ENABLED, notes=notes, actor="operator"
-    )
+    try:
+        updated = store.transition(
+            candidate_id, ToolLifecycleState.ENABLED, notes=notes, actor="operator"
+        )
+    except ValueError as exc:
+        _print_error(str(exc))
+        raise SystemExit(1) from None
     console.print(f"[bright_green]Enabled[/] candidate [bold]{updated.name}[/]")
 
 
@@ -5073,9 +5081,13 @@ def candidates_deny(ctx: click.Context, candidate_id: str, reason: str) -> None:
     from missy.tools.intelligence import ToolLifecycleState, get_candidate_store
 
     store = get_candidate_store()
-    updated = store.transition(
-        candidate_id, ToolLifecycleState.DISABLED, notes=reason, actor="operator"
-    )
+    try:
+        updated = store.transition(
+            candidate_id, ToolLifecycleState.DISABLED, notes=reason, actor="operator"
+        )
+    except ValueError as exc:
+        _print_error(str(exc))
+        raise SystemExit(1) from None
     if updated is None:
         _print_error(f"Candidate {candidate_id!r} not found.")
         raise SystemExit(1)
