@@ -22,6 +22,7 @@ def console_css() -> str:
   --sans:ui-sans-serif,"Segoe UI",system-ui,-apple-system,BlinkMacSystemFont,sans-serif;
 }
 *{box-sizing:border-box}
+html,body{overflow-x:hidden}
 body{margin:0;min-height:100vh;background:
     radial-gradient(1100px 500px at 12% -8%,rgba(79,179,255,.05),transparent 60%),
     radial-gradient(900px 460px at 100% 0%,rgba(61,220,132,.04),transparent 55%),
@@ -57,36 +58,42 @@ button.danger:hover{background:#4a1818}
 .topbar{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:1rem clamp(1rem,4vw,2.5rem);border-bottom:1px solid var(--line);background:rgba(8,9,12,.9);backdrop-filter:blur(14px);position:sticky;top:0;z-index:20}
 .brand{display:flex;align-items:center;gap:.65rem}
 .brand-mark{width:2.1rem;height:2.1rem;display:grid;place-items:center;border-radius:3px;background:linear-gradient(160deg,#1f56c9,#123a8f);font-weight:900;font-family:var(--mono);font-size:.95rem;border:1px solid #2f6fe0}
-.console-shell{width:min(1280px,100%);margin:0 auto;padding:clamp(1rem,3vw,2rem)}
+.console-shell{width:100%;margin:0;padding:1.25rem clamp(1rem,2.4vw,2.5rem) 3rem}
 
-.hero{display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,540px);gap:1rem;align-items:stretch;margin-bottom:1rem}
+.hero{display:flex;flex-wrap:wrap;gap:1rem;align-items:stretch;margin-bottom:1rem}
+.hero-status{flex:1 1 360px;max-width:680px}
 .hero>div,.panel{background:linear-gradient(180deg,var(--panel-raised),var(--panel));border:1px solid var(--line);border-radius:3px;padding:1.1rem;position:relative}
 .hero>div::before,.panel::before{content:"";position:absolute;inset:0 0 auto 0;height:1px;background:linear-gradient(90deg,rgba(255,255,255,.08),transparent 60%)}
-.status-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.6rem}
-.status-grid article{background:var(--panel);border:1px solid var(--line);border-radius:3px;padding:.85rem}
+.status-grid{flex:2 1 480px;display:flex;flex-wrap:wrap;gap:.6rem}
+.status-grid article{flex:1 1 160px;background:var(--panel);border:1px solid var(--line);border-radius:3px;padding:.85rem}
 .status-grid .tile-head{display:flex;align-items:center;gap:.4rem;margin-bottom:.4rem}
 .status-grid span.value{display:block;font-family:var(--mono);font-size:1.6rem;font-weight:600}
 .status-grid p{color:var(--muted);font-size:.76rem;text-transform:uppercase;letter-spacing:.08em;font-family:var(--mono)}
 
-.panel-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem}
+.panel-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(400px,1fr));grid-auto-flow:dense;gap:1rem;align-items:start}
+.panel-grid .span-2{grid-column:span 2}
+@media (max-width:1100px){.panel-grid .span-2{grid-column:span 1}}
 .panel-head{display:flex;align-items:center;justify-content:space-between;gap:.75rem;margin-bottom:.75rem;padding-bottom:.6rem;border-bottom:1px solid var(--line-soft)}
 .panel-id{display:flex;align-items:center;gap:.55rem;min-width:0}
 .mod-code{font-family:var(--mono);font-size:.7rem;color:var(--muted-dim);letter-spacing:.06em;flex:none}
 .pill{border:1px solid var(--line);border-radius:2px;padding:.2rem .5rem;color:var(--muted);font-size:.72rem;font-family:var(--mono);white-space:nowrap}
 .pill.secure{color:var(--ok);border-color:#1d4a34}
 
-.list{display:grid;gap:0}
-.list-scroll{max-height:19rem;overflow-y:auto}
-.row{display:flex;align-items:center;justify-content:space-between;gap:1rem;border-top:1px solid var(--line-soft);padding:0}
+.list{display:grid;grid-template-columns:minmax(0,1fr);gap:0}
+.list-scroll{max-height:19rem;overflow-y:auto;overflow-x:hidden}
+.row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,230px);align-items:center;column-gap:1rem;border-top:1px solid var(--line-soft);padding:0}
 .row:first-child{border-top:0}
-.row-title{flex:1;min-width:0;text-align:left;background:transparent;border:0;border-radius:0;color:var(--text);padding:.62rem 0;font:inherit;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:.5rem}
+.row-title{min-width:0;text-align:left;background:transparent;border:0;border-radius:0;color:var(--text);padding:.62rem 0;font:inherit;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:.5rem}
 .row-title:hover,.row-title:focus-visible{color:var(--info)}
 .row-title strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
-.row-static{padding:.62rem 0;flex:1;min-width:0}
+.row-static{padding:.62rem 0;min-width:0}
 .row-static strong{font-weight:600}
-.row span.meta{color:var(--muted);font-size:.8rem;font-family:var(--mono);text-align:right}
-.row-actions{display:flex;align-items:center;justify-content:flex-end;gap:.5rem;flex-wrap:wrap;padding:.5rem 0}
-.row-actions span{text-align:left;font-family:var(--mono);font-size:.78rem}
+.row span.meta{color:var(--muted);font-size:.8rem;font-family:var(--mono);text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.row-stack{display:block;grid-template-columns:none;padding:.55rem 0}
+.row-stack .row-title{padding:0 0 .2rem}
+.row-stack .meta-line{display:block;color:var(--muted);font-size:.78rem;font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-left:1.2rem}
+.row-actions{display:flex;align-items:center;justify-content:flex-end;gap:.5rem;flex-wrap:wrap;padding:.5rem 0;min-width:0}
+.row-actions span{text-align:left;font-family:var(--mono);font-size:.78rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .ok{color:var(--ok)!important}.warn{color:var(--warn)!important}.crit{color:var(--crit)!important}
 .empty{border:1px dashed var(--line);border-radius:3px;color:var(--muted);padding:1rem;text-align:center;font-size:.85rem}
 
@@ -104,6 +111,7 @@ button.danger:hover{background:#4a1818}
 .detail{max-height:16rem;overflow:auto;margin:.75rem 0 0;border:1px solid var(--line);border-radius:3px;background:var(--void);color:var(--muted);padding:.75rem;white-space:pre-wrap;overflow-wrap:anywhere;font-family:var(--mono);font-size:.78rem}
 
 .run-console{margin-bottom:1rem}
+.run-help,.run-form,.run-log,.run-console .detail{max-width:1100px}
 .run-console textarea{width:100%;min-height:4.5rem;resize:vertical;border:1px solid var(--line);background:var(--panel);color:var(--text);border-radius:3px;padding:.7rem;font:inherit}
 .run-form-actions{display:flex;gap:.5rem;margin-top:.6rem}
 .run-log{display:grid;gap:.35rem;margin-top:.85rem;max-height:13rem;overflow:auto}
@@ -180,7 +188,7 @@ def render_console(*, csrf_token: str) -> str:
   </header>
   <main class="console-shell" data-csrf="{csrf}">
     <section class="hero">
-      <div>
+      <div class="hero-status">
         <p class="eyebrow">Runtime posture</p>
         <h2 id="runtime-status">Loading status...</h2>
         <p id="runtime-summary" class="muted">Checking providers, tools, sessions, and memory.</p>
@@ -212,9 +220,9 @@ def render_console(*, csrf_token: str) -> str:
       <article class="panel"><div class="panel-head"><div class="panel-id"><span class="mod-code">PRV&middot;01</span><h3>Providers</h3></div><span id="provider-health" class="pill">Loading</span></div><div id="providers" class="list list-scroll"></div></article>
       <article class="panel"><div class="panel-head"><div class="panel-id"><span class="mod-code">TL&middot;02</span><h3>Tools</h3></div><span id="tool-health" class="pill">Loading</span></div><div id="tools" class="list list-scroll"></div></article>
       <article class="panel"><div class="panel-head"><div class="panel-id"><span class="mod-code">SES&middot;03</span><h3>Sessions</h3></div><span class="pill">Recent</span></div><div id="sessions" class="list list-scroll"></div></article>
-      <article class="panel diagnostics-panel"><div class="panel-head"><div class="panel-id"><span class="mod-code">DIA&middot;04</span><h3>Diagnostics</h3></div><span id="diagnostics-health" class="pill">Loading</span></div><div id="diagnostics" class="list"></div></article>
+      <article class="panel diagnostics-panel span-2"><div class="panel-head"><div class="panel-id"><span class="mod-code">DIA&middot;04</span><h3>Diagnostics</h3></div><span id="diagnostics-health" class="pill">Loading</span></div><div id="diagnostics" class="list"></div></article>
       <article class="panel"><div class="panel-head"><div class="panel-id"><span class="mod-code">CTL&middot;05</span><h3>Controls</h3></div><span id="controls-health" class="pill">Loading</span></div><div id="controls" class="list"></div></article>
-      <article class="panel scheduler-panel"><div class="panel-head"><div class="panel-id"><span class="mod-code">SCH&middot;06</span><h3>Scheduled Jobs</h3></div><span id="scheduler-health" class="pill">Loading</span></div>
+      <article class="panel scheduler-panel span-2"><div class="panel-head"><div class="panel-id"><span class="mod-code">SCH&middot;06</span><h3>Scheduled Jobs</h3></div><span id="scheduler-health" class="pill">Loading</span></div>
         <div id="scheduler-jobs" class="list list-scroll"></div>
         <form id="scheduler-form" class="op-form" aria-label="Create a scheduled job">
           <input id="job-name" type="text" placeholder="Job name" aria-label="Job name" required>
@@ -234,7 +242,7 @@ def render_console(*, csrf_token: str) -> str:
         </div>
         <div id="memory-results" class="list list-scroll"><div class="empty">Search memory to see results.</div></div>
       </article>
-      <article class="panel audit-panel"><div class="panel-head"><div class="panel-id"><span class="mod-code">AUD&middot;08</span><h3>Audit Trail</h3></div><span id="audit-health" class="pill">Loading</span></div>
+      <article class="panel audit-panel span-2"><div class="panel-head"><div class="panel-id"><span class="mod-code">AUD&middot;08</span><h3>Audit Trail</h3></div><span id="audit-health" class="pill">Loading</span></div>
         <div class="filter-row" aria-label="Audit filters">
           <select id="audit-result" aria-label="Audit result"><option value="">All results</option><option value="deny">Denied</option><option value="allow">Allowed</option><option value="error">Errors</option></select>
           <select id="audit-severity" aria-label="Audit severity"><option value="">All severities</option><option value="critical">Critical</option><option value="warning">Warning</option><option value="info">Info</option></select>
@@ -250,10 +258,10 @@ def render_console(*, csrf_token: str) -> str:
         <pre id="audit-detail" class="detail" tabindex="0" aria-label="Selected audit event detail">Select an event to inspect details.</pre>
       </article>
       <article class="panel"><div class="panel-head"><div class="panel-id"><span class="mod-code">SEC&middot;09</span><h3>Security</h3></div><span class="pill secure">Local</span></div><div class="list">
-        <div class="row"><div class="row-static"><strong>Authentication</strong></div><span class="meta">Cookie session + API key</span></div>
-        <div class="row"><div class="row-static"><strong>CSRF</strong></div><span class="meta">Required for browser actions</span></div>
-        <div class="row"><div class="row-static"><strong>Headers</strong></div><span class="meta">CSP, no-store, frame deny</span></div>
-        <div class="row"><div class="row-static"><strong>Network</strong></div><span class="meta">Loopback by default</span></div>
+        <div class="row"><div class="row-static"><strong>Authentication</strong></div><span class="meta" title="Cookie session + API key">Cookie session + API key</span></div>
+        <div class="row"><div class="row-static"><strong>CSRF</strong></div><span class="meta" title="Required for browser actions">Required for browser actions</span></div>
+        <div class="row"><div class="row-static"><strong>Headers</strong></div><span class="meta" title="CSP, no-store, frame deny">CSP, no-store, frame deny</span></div>
+        <div class="row"><div class="row-static"><strong>Network</strong></div><span class="meta" title="Loopback by default">Loopback by default</span></div>
       </div></article>
     </section>
   </main>
@@ -382,7 +390,7 @@ async function loadConsole() {
     setText('provider-health', providerRows.length ? `${providerRows.length} ready` : 'Empty');
 
     latestTools = tools.data.tools;
-    const toolRows = latestTools.map((t, i) => `<div class="row"><button class="row-title" type="button" data-tool-index="${i}"><span class="led info" aria-hidden="true"></span><strong>${esc(t.name)}</strong></button><span class="meta">${esc((t.description || 'No description').slice(0, 48))}</span></div>`);
+    const toolRows = latestTools.map((t, i) => `<div class="row row-stack"><button class="row-title" type="button" data-tool-index="${i}"><span class="led info" aria-hidden="true"></span><strong>${esc(t.name)}</strong></button><span class="meta-line" title="${esc(t.description || 'No description')}">${esc(t.description || 'No description')}</span></div>`);
     renderRows('tools', toolRows, 'No tools registered.');
     setText('tool-health', `${latestTools.length} total`);
 
