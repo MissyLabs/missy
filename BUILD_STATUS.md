@@ -1,84 +1,126 @@
 # Build Status
 
-Last updated: 2026-07-08 15:03:20 EDT
+Last updated: 2026-07-09 00:55 EDT
 
 ## Current State
 
-Primary focus remains the OpenAI provider overhaul. The provider layer now has
-native OpenAI Responses execution for compatible text, vision, streaming, and
-structured-output requests, with Chat Completions retained for OpenAI-compatible
-`base_url` providers and tool transcripts.
+Primary focus switched this session to the **Web TUI / operator console
+overhaul** (branch `overhaul/web-tui-20260709-004527`). The console already
+had a working dashboard, audit browser, diagnostics, and a small set of
+safe operator controls from earlier sessions on this line of work
+(`missy/api/server.py`, `web_console.py`, `web_sessions.py`,
+`audit_browser.py`, `diagnostics.py`, `operator_controls.py`); the highest-
+value gap against the loop's required-capabilities list was the missing
+"ask the bot and watch a run stream" workflow — session/run viewer with
+streaming output, tool calls, and errors. This session built that.
 
-This session added provider diagnostics/doctor coverage:
+### What shipped this session
 
-- Added `BaseProvider.diagnostics()` as a provider-neutral, local-only,
-  redacted health hook.
-- Implemented OpenAI diagnostics for SDK/key source, endpoint host, network
-  policy posture, model selector state, timeout/rate-limit settings, and
-  supported capabilities.
-- Wired provider diagnostic checks into Web/API diagnostics and `missy doctor`.
-- Ensured OpenAI diagnostics avoid live API calls and do not expose API keys or
-  full secret-bearing `base_url` values.
-- Added focused provider/API/CLI tests and updated provider documentation.
+- **`missy/api/run_stream.py`** (new): `RunRegistry` executes
+  `AgentRuntime.run()` on a background daemon thread per request, mirrors
+  `agent.run.start` / `tool.request` / `tool.result` events from the
+  process-wide `MessageBus` into a per-run bounded queue (filtered strictly
+  by `session_id` so concurrent sessions never cross-contaminate each
+  other's stream), and enforces exactly one in-flight run per session.
+  Late-joining or reconnecting SSE clients get a synthesized terminal event
+  immediately instead of hanging. All event payloads (including free-text
+  exception messages) pass through the existing `redact_audit_value()`
+  secret-detector-backed redaction.
+- **`missy/api/server.py`**: new routes `POST /api/v1/runs` (202, starts a
+  background run), `GET /api/v1/runs/{id}` (poll status/result),
+  `GET /api/v1/runs?session_id=` (list run history for a session), and
+  `GET /api/v1/runs/{id}/events` (Server-Sent Events stream). The SSE route
+  is intercepted ahead of the generic JSON router (it writes raw
+  `text/event-stream` bytes) but still runs through the same
+  `_authenticate()` check and the same per-IP rate limiter as every other
+  route. `HTTPServer` was swapped for `ThreadingHTTPServer` so a long-lived
+  SSE connection cannot block other operators' requests (health checks,
+  audit queries, controls) on the same process.
+- **`missy/agent/runtime.py`**: `AGENT_RUN_COMPLETE` bus events now include
+  the same `cost_detail` summary already attached to the audit event, so
+  the run stream (and future UI) can surface per-run cost.
+- **`missy/api/web_console.py`**: new "Ask Missy" dashboard panel — a
+  prompt box that starts a run and renders it live via `EventSource`: tool
+  calls, completion, and errors stream into an accessible
+  (`role="log"`, `aria-live="polite"`) activity log, with the final response
+  shown separately. Enter submits, Shift+Enter inserts a newline, a "Stop
+  watching" control closes the stream without cancelling the run itself.
+- Tests: 19 new unit tests in `tests/api/test_run_stream.py` (lifecycle,
+  redaction, cross-session isolation, concurrency/409, late-join/reconnect,
+  no-message-bus fallback, SSE framing) and 16 new integration tests
+  (`TestRuns` in `tests/api/test_server.py`) covering auth, CSRF, polling,
+  listing, SSE delivery, error propagation, and audit emission on conflict.
+- Docs: `docs/operations.md` gained a "Web TUI / operator console" section
+  (`missy api start`, login/CSRF flow, the run console workflow, and `curl`
+  examples for the same API a script could drive); `docs/implementation/
+  module-map.md`'s `missy.api` section was brought up to date (it was
+  missing `web_console`, `web_sessions`, `audit_browser`, `diagnostics`,
+  `operator_controls` entirely, and now also documents `run_stream`).
 
 ## Completed Work
 
 | Area | Status | Notes |
 |---|---|---|
-| Provider interface compliance | improved | `BaseProvider` now exposes optional structured-output and diagnostics hooks. |
-| Secure credential loading | in place | OpenAI keys come from config/env; diagnostics report only source, never value. |
-| Network policy integration | improved | OpenAI diagnostics report local provider endpoint allowlist posture without DNS or network calls. |
-| Model selection | in place | `auto` resolves through model listing during real calls; diagnostics report configured/resolved state. |
-| Responses API path | in place | Native OpenAI text/vision/streaming/structured-output paths remain active. |
-| Chat compatibility | preserved | `base_url`, tool transcripts, and Chat structured outputs still use Chat Completions. |
-| Streaming reconciliation | in place | Responses delta/full-content reconciliation remains covered. |
-| Tool schema normalization | in place | OpenAI tool schemas delegate to provider schema adapter. |
-| Tool transcript repair | in place | Invalid/duplicate/orphaned tool turns are dropped before request and audited. |
-| Vision input support | in place | Safe image blocks are preserved and converted for Responses when eligible. |
-| Structured output | in place | OpenAI-native JSON Schema formatting is implemented for Responses and Chat compatibility. |
-| Diagnostics/doctor | improved | API diagnostics and CLI doctor now render provider-owned diagnostic checks. |
-| Auditability | partial | Provider invoke/error and transcript repair events exist; retry/fallback/cost events remain. |
-| Tests | improved | Focused diagnostics coverage added; full repository suite passes. |
+| Web UI entrypoint + auth/session/CSRF | in place (prior sessions) | Unchanged this session; new routes reuse it as-is. |
+| Dashboard (status/providers/tools/diagnostics/audit/controls) | in place (prior sessions) | Unchanged this session. |
+| Session/run viewer with streaming output, tool calls, errors | **new** | `POST /runs` + `GET /runs/{id}/events` (SSE) + console panel. |
+| Session/run history (resumable context) | **new** | `GET /runs?session_id=` lists prior runs per session. |
+| Run cost/model-routing surfaced end-to-end | partial | Cost now flows into the bus payload; console UI doesn't render it yet. |
+| Concurrency safety for the API server | improved | `ThreadingHTTPServer` swap; verified against full existing test suite. |
+| Redaction of run/tool event payloads | in place | Reuses `audit_browser.redact_audit_value()`. |
+| Audit trail for run conflicts | **new** | `web.run` / `deny` event on 409. |
+| Accessibility of the new panel | in place | Labeled controls, `role="log"`, keyboard submit, non-color-only status text. |
+| Tests | improved | +35 tests this session (19 unit + 16 integration); full existing suite re-verified green. |
 
 ## Current Architecture State
 
-- OpenAI-specific message normalization, transcript repair, Responses routing,
-  stream reconciliation, JSON Schema formatting, and local diagnostics remain
-  contained in `missy/providers/openai_provider.py`.
-- Provider-neutral diagnostics are exposed through `BaseProvider.diagnostics()`
-  and consumed by CLI/API surfaces without depending on OpenAI-specific types.
-- Diagnostics are intentionally local-only: they inspect configuration and
-  policy posture but do not list models, call OpenAI, or spend quota.
-- Existing unrelated `LOOP_INSTRUCTIONS.md` modification remains in the working
-  tree and was not touched.
+- `ApiServer` (`missy/api/server.py`) is the single process serving both the
+  JSON REST API and the server-rendered operator console, now on a
+  `ThreadingHTTPServer`.
+- `RunRegistry` (`missy/api/run_stream.py`) is a new, self-contained
+  in-process component: it owns no persistent state (in-memory only, capped
+  and TTL-pruned) and depends only on `AgentRuntime.run()` and the optional
+  process-wide `MessageBus` — it degrades gracefully (still runs the agent,
+  just without bus-sourced tool events) when no bus is initialized.
+- The run console's client-side code lives entirely in `web_console.py`'s
+  `console_script()` (vanilla JS, no build step), consistent with the rest
+  of the console.
 
 ## Tests
 
-- `python3 -m pytest tests/providers/test_openai_provider.py tests/api/test_server.py::TestDiagnostics::test_diagnostics_reports_redacted_operator_posture tests/cli/test_cli_commands.py::TestDoctor::test_doctor_shows_provider_not_available -q`: 39 passed.
-- `python3 -m pytest tests/providers -q`: 845 passed.
-- `python3 -m pytest tests/api/test_server.py tests/cli/test_cli_commands.py::TestDoctor tests/cli/test_cli_commands.py::TestDoctorBranches -q`: 97 passed.
-- `python3 -m ruff format --check .`: 731 files already formatted.
-- `python3 -m ruff check .`: passed.
-- `python3 -m pytest -q`: 20489 passed, 6 skipped, 3 warnings in 392.42s.
+- `python3 -m pytest tests/api/test_run_stream.py -v`: 19 passed.
+- `python3 -m pytest tests/api/test_server.py -k TestRuns -v`: 15 passed.
+- `python3 -m pytest tests/api/ -q`: 122 passed.
+- `python3 -m pytest tests/agent/ -q`: 4109 passed, 4 skipped.
+- `python3 -m ruff check missy/ tests/`: passed.
+- `python3 -m ruff format --check` on all touched files: passed.
+- Full-repo `python3 -m pytest -q`: see `TEST_RESULTS.md` for this session's
+  run (kicked off in the background; results recorded there once complete).
 
 ## Remaining Work
 
-1. Add native Responses tool/function calling once Missy's tool-loop transcript
-   model can preserve Responses output items safely.
-2. Add provider-native tool-call stream delta reconciliation and final response
-   validation for streamed tool workflows.
-3. Add embeddings support if vector-memory workflows need an external OpenAI
-   embedding backend.
-4. Extend diagnostics with optional explicit live probes for credentials/model
-   listing when the operator asks for them.
-5. Extend audit events for retry, rate-limit cooldown, usage/cost recording,
-   fallback, and provider-side validation denials.
+1. Render cost/model-routing/provider-fallback detail in the console's run
+   log (data already flows through the bus/SSE pipeline).
+2. Add a scheduler jobs panel (create/remove, not just pause/resume) and a
+   memory browser panel (search, pin/delete) — biggest remaining "full
+   bot-control coverage" gaps.
+3. Add a command palette / global search and a skip link for keyboard-first
+   navigation across the whole console, not just the run panel.
+4. Add dedicated offline/reconnecting banner state for the dashboard as a
+   whole (currently only the run console has explicit connection-lost
+   handling).
+5. Persist run history across `ApiServer` restarts if that turns out to
+   matter operationally (currently in-memory only, matching the existing
+   `_SessionRegistry`).
 
 ## Blockers
 
-- No code blocker for the next OpenAI provider slice.
+- None. The next slice (rendering cost/routing detail, or a scheduler/
+  memory panel) is additive and does not require new backend primitives
+  beyond what already exists.
 
 ## Next Actions
 
-Design the Responses tool/function-call transcript model, or add explicit
-opt-in live OpenAI diagnostic probes for model listing and credential checks.
+Render `cost`/`provider`/`tools_used` detail from the run stream in the
+console's run log, then start the scheduler jobs panel (list/create/remove)
+to close the largest remaining "full bot-control coverage" gap.

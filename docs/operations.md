@@ -201,6 +201,48 @@ missy logs path
 missy logs tail --limit 120
 ```
 
+### Web TUI / operator console
+
+```bash
+missy api start                   # loopback-only by default
+missy api start --host 127.0.0.1 --port 8080
+missy api status
+```
+
+`missy api start` serves both the JSON REST API (`/api/v1/*`) and the
+browser-based operator console (`/`) from the same `ApiServer`. Set
+`MISSY_API_KEY` (or `ApiConfig.api_key`) before starting — every request is
+rejected with `401` otherwise. Open `http://127.0.0.1:8080/` and sign in with
+the operator key to reach the console; the browser session is a signed,
+`HttpOnly`, `SameSite=Strict` cookie, and every unsafe (`POST`/`PUT`/`PATCH`/
+`DELETE`) request from the browser requires the console's per-session CSRF
+token (already wired into the console's own JavaScript).
+
+The console's **Ask Missy** panel is the primary "ask the bot and watch a run
+stream" workflow: submitting a message calls `POST /api/v1/runs`, which starts
+the run on a background thread and returns immediately with a `run_id`. The
+browser then opens `GET /api/v1/runs/{run_id}/events` as a Server-Sent Events
+stream and renders tool calls and the final response live, without blocking
+the HTTP connection that started the run. Reconnecting after a run has
+already finished (or a `GET /api/v1/runs/{run_id}` poll) returns the run's
+terminal state immediately instead of hanging. Only one run may be in flight
+per session at a time — a second `POST /api/v1/runs` against a busy session
+returns `409` and is recorded as a `web.run` audit denial.
+
+Both the run console and the dashboard's providers/tools/sessions/audit
+panels are read via the same JSON API, so any script can drive the agent the
+same way:
+
+```bash
+curl -s -X POST http://127.0.0.1:8080/api/v1/runs \
+  -H "X-API-Key: $MISSY_API_KEY" -H 'Content-Type: application/json' \
+  -d '{"message": "list the files in ~/workspace"}'
+# => {"status": "ok", "data": {"run_id": "...", "session_id": "...", "status": "pending", ...}}
+
+curl -N -H "X-API-Key: $MISSY_API_KEY" \
+  http://127.0.0.1:8080/api/v1/runs/<run_id>/events   # text/event-stream
+```
+
 ---
 
 ## 4. Monitoring and Logs

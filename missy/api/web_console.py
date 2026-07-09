@@ -19,6 +19,7 @@ button,.button-link{border:1px solid #3b82f6;background:#1d4ed8;color:white;bord
 .panel-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem}.panel-head{display:flex;align-items:center;justify-content:space-between;gap:.75rem;margin-bottom:.75rem}.pill{border:1px solid var(--line);border-radius:999px;padding:.25rem .55rem;color:var(--muted);font-size:.78rem}.pill.secure{color:var(--ok);border-color:#2f6f48}
 .list{display:grid;gap:.5rem}.row{display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;border-top:1px solid var(--line);padding:.7rem 0}.row:first-child{border-top:0}.row strong{min-width:0;overflow-wrap:anywhere}.row span{color:var(--muted);text-align:right;overflow-wrap:anywhere}.row-actions{display:flex;align-items:center;justify-content:flex-end;gap:.5rem;flex-wrap:wrap}.row-actions span{text-align:left}.ok{color:var(--ok)!important}.warn{color:var(--warn)!important}.empty{border:1px dashed var(--line);border-radius:8px;color:var(--muted);padding:1rem;text-align:center}
 .filter-row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.5rem;margin-bottom:.5rem}.filter-row select,.filter-row input{min-width:0;border:1px solid var(--line);background:#0f172a;color:var(--text);border-radius:8px;padding:.6rem}.diagnostics-panel .row span{font-size:.82rem}.diagnostics-panel em{display:block;color:var(--muted);font-style:normal;margin-top:.25rem}.audit-actions{display:flex;gap:.5rem;margin:.25rem 0 .5rem}.audit-actions button{padding:.45rem .7rem}.audit-actions button:disabled{opacity:.45;cursor:not-allowed}.audit-row{width:100%;background:transparent;border:0;border-top:1px solid var(--line);border-radius:0;color:var(--text);padding:.7rem 0;text-align:left}.audit-row:hover,.audit-row:focus{background:rgba(99,210,255,.08);outline:1px solid var(--line)}.audit-row span{font-size:.82rem}.detail{max-height:18rem;overflow:auto;margin:.75rem 0 0;border:1px solid var(--line);border-radius:8px;background:#0f172a;color:var(--muted);padding:.75rem;white-space:pre-wrap;overflow-wrap:anywhere}
+.run-console{margin-bottom:1rem}.run-console textarea{width:100%;min-height:4.5rem;resize:vertical;border:1px solid var(--line);background:#0f172a;color:var(--text);border-radius:8px;padding:.7rem;font:inherit}.run-form-actions{display:flex;gap:.5rem;margin-top:.6rem}.run-log{display:grid;gap:.4rem;margin-top:.85rem;max-height:14rem;overflow:auto}.run-log:empty{display:none}.run-log .run-event{border-left:3px solid var(--line);padding:.35rem .6rem;font-size:.82rem;color:var(--muted);background:#0f172a;border-radius:0 6px 6px 0}.run-log .run-event.tool{border-left-color:var(--accent)}.run-log .run-event.error{border-left-color:var(--bad);color:var(--bad)}.run-log .run-event.complete{border-left-color:var(--ok);color:var(--ok)}.run-console .detail{margin-top:.75rem}
 .login-body{display:grid;place-items:center;padding:1rem}.login-panel{width:min(440px,100%);background:rgba(18,26,46,.96);border:1px solid var(--line);border-radius:8px;padding:1.25rem;box-shadow:0 20px 60px rgba(0,0,0,.32)}.brand-mark{width:3rem;height:3rem;display:grid;place-items:center;border-radius:8px;background:#1d4ed8;font-weight:900;margin-bottom:1rem}.login-panel form{display:grid;gap:.75rem;margin-top:1rem}.login-panel label{font-weight:700}.login-panel input{width:100%;border:1px solid var(--line);background:#0f172a;color:var(--text);border-radius:8px;padding:.8rem}.error{color:var(--bad);margin-top:.75rem}
 @media (max-width:820px){.hero,.panel-grid{grid-template-columns:1fr}.status-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.topbar{position:static;align-items:flex-start}.row{display:grid}.row span{text-align:left}.row-actions{justify-content:flex-start}}
 @media (max-width:520px){.filter-row{grid-template-columns:1fr}}
@@ -54,6 +55,22 @@ def render_console(*, csrf_token: str) -> str:
         <article><span id="session-count">-</span><p>Sessions</p></article>
         <article><span id="memory-state">-</span><p>Memory</p></article>
       </div>
+    </section>
+    <section class="panel run-console" aria-labelledby="run-console-heading">
+      <div class="panel-head">
+        <h3 id="run-console-heading">Ask Missy</h3>
+        <span id="run-status" class="pill">Idle</span>
+      </div>
+      <p id="run-help" class="muted">Send a message and watch the run stream live: tool calls, completion, and errors.</p>
+      <form id="run-form">
+        <textarea id="run-input" aria-label="Message to send to the agent" aria-describedby="run-help" rows="2" placeholder="Ask the agent something..." required></textarea>
+        <div class="run-form-actions">
+          <button type="submit" id="run-submit">Send</button>
+          <button type="button" id="run-cancel" class="secondary" disabled>Stop watching</button>
+        </div>
+      </form>
+      <div id="run-log" class="run-log" role="log" aria-live="polite" aria-relevant="additions" aria-atomic="false" aria-label="Run activity"></div>
+      <pre id="run-response" class="detail" tabindex="0" aria-label="Latest agent response">No runs yet.</pre>
     </section>
     <section class="panel-grid">
       <article class="panel"><div class="panel-head"><h3>Providers</h3><span id="provider-health" class="pill">Loading</span></div><div id="providers" class="list"></div></article>
@@ -239,6 +256,109 @@ document.getElementById('controls').addEventListener('click', async event => {
     body: JSON.stringify({target, confirm: confirmation})
   });
   await loadConsole();
+});
+let activeRunSource = null;
+function setRunStatus(text, cls) {
+  const pill = document.getElementById('run-status');
+  pill.textContent = text;
+  pill.className = 'pill' + (cls ? ' ' + cls : '');
+}
+function appendRunEvent(label, detail, cls) {
+  const log = document.getElementById('run-log');
+  const row = document.createElement('div');
+  row.className = 'run-event' + (cls ? ' ' + cls : '');
+  row.textContent = detail ? `${label} — ${detail}` : label;
+  log.appendChild(row);
+  log.scrollTop = log.scrollHeight;
+}
+function closeRunStream() {
+  if (activeRunSource) {
+    activeRunSource.close();
+    activeRunSource = null;
+  }
+}
+function setRunBusy(busy) {
+  document.getElementById('run-submit').disabled = busy;
+  document.getElementById('run-cancel').disabled = !busy;
+}
+async function startRun(message) {
+  closeRunStream();
+  document.getElementById('run-log').innerHTML = '';
+  document.getElementById('run-response').textContent = 'Waiting for response...';
+  setRunStatus('Starting...', 'warn');
+  setRunBusy(true);
+  let started;
+  try {
+    started = await api('/runs', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({message})
+    });
+  } catch (error) {
+    setRunStatus('Failed to start', 'warn');
+    appendRunEvent('Error', error.message, 'error');
+    setRunBusy(false);
+    return;
+  }
+  const runId = started.data.run_id;
+  setRunStatus('Running', 'warn');
+  appendRunEvent('Run started', message);
+  const source = new EventSource('/api/v1/runs/' + encodeURIComponent(runId) + '/events');
+  activeRunSource = source;
+  source.addEventListener('run.start', () => {
+    appendRunEvent('Agent picked up the task');
+  });
+  source.addEventListener('tool.request', event => {
+    const data = JSON.parse(event.data);
+    appendRunEvent('Tool call', data.tool, 'tool');
+  });
+  source.addEventListener('tool.result', event => {
+    const data = JSON.parse(event.data);
+    appendRunEvent('Tool result', `${data.tool} ${data.is_error ? 'failed' : 'ok'}`, data.is_error ? 'error' : 'tool');
+  });
+  source.addEventListener('run.complete', event => {
+    const data = JSON.parse(event.data);
+    setRunStatus('Complete', 'ok');
+    appendRunEvent('Run complete', '', 'complete');
+    document.getElementById('run-response').textContent = data.response || '(empty response)';
+    setRunBusy(false);
+    closeRunStream();
+    loadConsole();
+  });
+  source.addEventListener('run.error', event => {
+    const data = JSON.parse(event.data);
+    setRunStatus('Error', 'warn');
+    appendRunEvent('Run failed', data.error, 'error');
+    document.getElementById('run-response').textContent = 'Run failed: ' + (data.error || 'unknown error');
+    setRunBusy(false);
+    closeRunStream();
+  });
+  source.onerror = () => {
+    if (!activeRunSource) return;
+    setRunStatus('Connection lost', 'warn');
+    appendRunEvent('Stream connection lost', '', 'error');
+    setRunBusy(false);
+    closeRunStream();
+  };
+}
+document.getElementById('run-form').addEventListener('submit', event => {
+  event.preventDefault();
+  const input = document.getElementById('run-input');
+  const message = input.value.trim();
+  if (!message) return;
+  startRun(message);
+  input.value = '';
+});
+document.getElementById('run-input').addEventListener('keydown', event => {
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    document.getElementById('run-form').requestSubmit();
+  }
+});
+document.getElementById('run-cancel').addEventListener('click', () => {
+  closeRunStream();
+  setRunStatus('Stopped watching', 'warn');
+  setRunBusy(false);
 });
 loadConsole();
 setInterval(loadConsole, 15000);

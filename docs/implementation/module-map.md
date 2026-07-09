@@ -731,9 +731,57 @@ dependencies on other `missy` modules.
 
 | Field | Value |
 |-------|-------|
-| **Purpose** | Agent-as-a-Service REST API. Loopback-only binding, API key auth, rate limiting, secrets censoring. |
-| **Key exports** | `ApiConfig`, `ApiServer` |
-| **Internal deps** | `missy.agent.runtime`, `missy.security.censor` |
+| **Purpose** | Agent-as-a-Service REST API and Web TUI operator console entrypoint. Loopback-only binding, API key + cookie-session auth, CSRF-protected mutations, rate limiting, secrets censoring. Uses `ThreadingHTTPServer` so long-lived SSE connections do not block other requests. |
+| **Key exports** | `ApiConfig`, `ApiServer`, `ApiResponse` |
+| **Internal deps** | `missy.agent.runtime`, `missy.security.censor`, `missy.api.run_stream`, `missy.api.web_console`, `missy.api.web_sessions`, `missy.api.audit_browser`, `missy.api.diagnostics`, `missy.api.operator_controls` |
+
+### missy.api.run_stream
+
+| Field | Value |
+|-------|-------|
+| **Purpose** | Background agent-run execution with Server-Sent Events streaming for the "ask the bot and watch a run stream" operator workflow. Runs `AgentRuntime.run` on a daemon thread, mirrors `agent.run.start`/`tool.request`/`tool.result` bus events into a per-run queue, and enforces one in-flight run per session. Late-joining/reconnecting streams get a synthesized terminal event instead of hanging. |
+| **Key exports** | `RunRegistry`, `RunHandle`, `RunConflictError`, `format_sse` |
+| **Internal deps** | `missy.api.audit_browser` (redaction), `missy.core.message_bus` |
+
+### missy.api.web_console
+
+| Field | Value |
+|-------|-------|
+| **Purpose** | Server-rendered HTML/CSS/JS for the operator console: dashboard, run console (prompt + live SSE stream), audit browser, diagnostics, and safe controls. No frontend build step — plain HTML/CSS/vanilla JS served inline. |
+| **Key exports** | `render_console()`, `render_login()`, `render_message()`, `console_css()`, `console_script()` |
+| **Internal deps** | None (pure rendering; consumes only the CSRF token passed in) |
+
+### missy.api.web_sessions
+
+| Field | Value |
+|-------|-------|
+| **Purpose** | In-memory, TTL-expiring browser session store backing cookie auth for the operator console. |
+| **Key exports** | `WebSession`, `WebSessionStore` |
+| **Internal deps** | None |
+
+### missy.api.audit_browser
+
+| Field | Value |
+|-------|-------|
+| **Purpose** | Query, filter, paginate, and redact audit events for the audit log browser (`GET /api/v1/audit`) and for redacting run/tool event payloads before they reach the browser. |
+| **Key exports** | `query_audit_events()`, `redact_audit_value()`, `audit_record_matches()`, `build_audit_facets()` |
+| **Internal deps** | `missy.core.events`, `missy.security.secrets` |
+
+### missy.api.diagnostics
+
+| Field | Value |
+|-------|-------|
+| **Purpose** | Builds the redacted operator diagnostics report (web entrypoint, providers, tools, memory, policy, gateway, Discord, scheduler, runtime) surfaced in the console and `missy doctor`. |
+| **Key exports** | `build_diagnostics()` |
+| **Internal deps** | `missy.api.audit_browser`, `missy.policy.engine`, `missy.policy.tool_policy_pipeline` |
+
+### missy.api.operator_controls
+
+| Field | Value |
+|-------|-------|
+| **Purpose** | Policy-shaped, confirmation-gated safe controls exposed to the console (set default provider, pause/resume scheduled jobs) with structured audit detail. |
+| **Key exports** | `list_operator_controls()`, `execute_operator_control()` |
+| **Internal deps** | `missy.api.audit_browser` |
 
 ---
 
