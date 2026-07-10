@@ -46,6 +46,143 @@ class TestStartRaisesSchedulerError:
 
 
 # ---------------------------------------------------------------------------
+# Availability hardening: one job with a bad schedule must not abort every
+# other job's registration, or the scheduler's own startup.
+# ---------------------------------------------------------------------------
+
+
+class TestStartIsolatesPerJobSchedulingFailures:
+    """Live-reproduced before this fix: a jobs.json with one valid and one
+    invalid-schedule job caused start() to raise SchedulerError before
+    scheduling *either* job, and self._scheduler.start() never even ran --
+    a single malformed job took down the entire scheduler subsystem."""
+
+    def _write_jobs(self, path: str, jobs: list[dict]) -> None:
+        Path(path).write_text(json.dumps(jobs))
+        Path(path).chmod(0o600)
+
+    def test_good_job_still_starts_when_a_sibling_job_has_a_bad_schedule(
+        self, tmp_jobs_file: str
+    ):
+        self._write_jobs(
+            tmp_jobs_file,
+            [
+                {
+                    "id": "good-job",
+                    "name": "good",
+                    "schedule": "every 5 minutes",
+                    "task": "say hi",
+                    "enabled": True,
+                    "provider": None,
+                    "capability_mode": "safe-chat",
+                },
+                {
+                    "id": "bad-job",
+                    "name": "bad",
+                    "schedule": "not a real schedule !!!",
+                    "task": "say hi",
+                    "enabled": True,
+                    "provider": None,
+                    "capability_mode": "safe-chat",
+                },
+            ],
+        )
+        mgr = SchedulerManager(jobs_file=tmp_jobs_file)
+        try:
+            mgr.start()  # must not raise
+            scheduled_ids = {j.id for j in mgr._scheduler.get_jobs()}
+            assert scheduled_ids == {"good-job"}
+            # The scheduler itself must have actually started -- not just
+            # the loop silently continuing past the failed job.
+            assert mgr._scheduler.running is True
+        finally:
+            with contextlib.suppress(Exception):
+                mgr.stop()
+
+    def test_malformed_job_remains_in_memory_for_inspection(self, tmp_jobs_file: str):
+        """The bad job isn't silently dropped from state entirely -- an
+        operator can still see it (e.g. via `missy schedule list`) and fix
+        or remove it -- only its APScheduler *registration* is skipped."""
+        self._write_jobs(
+            tmp_jobs_file,
+            [
+                {
+                    "id": "bad-job",
+                    "name": "bad",
+                    "schedule": "not a real schedule !!!",
+                    "task": "say hi",
+                    "enabled": True,
+                    "provider": None,
+                    "capability_mode": "safe-chat",
+                }
+            ],
+        )
+        mgr = SchedulerManager(jobs_file=tmp_jobs_file)
+        try:
+            mgr.start()
+            assert "bad-job" in mgr._jobs
+            assert mgr._scheduler.get_job("bad-job") is None
+        finally:
+            with contextlib.suppress(Exception):
+                mgr.stop()
+
+    def test_disabled_bad_job_does_not_even_attempt_registration(self, tmp_jobs_file: str):
+        self._write_jobs(
+            tmp_jobs_file,
+            [
+                {
+                    "id": "disabled-bad-job",
+                    "name": "bad",
+                    "schedule": "not a real schedule !!!",
+                    "task": "say hi",
+                    "enabled": False,
+                    "provider": None,
+                    "capability_mode": "safe-chat",
+                }
+            ],
+        )
+        mgr = SchedulerManager(jobs_file=tmp_jobs_file)
+        try:
+            mgr.start()  # must not raise -- disabled jobs are never scheduled
+        finally:
+            with contextlib.suppress(Exception):
+                mgr.stop()
+
+    def test_all_jobs_bad_still_starts_the_scheduler_with_zero_jobs(self, tmp_jobs_file: str):
+        self._write_jobs(
+            tmp_jobs_file,
+            [
+                {
+                    "id": "bad-1",
+                    "name": "bad1",
+                    "schedule": "garbage",
+                    "task": "x",
+                    "enabled": True,
+                    "provider": None,
+                    "capability_mode": "safe-chat",
+                },
+                {
+                    "id": "bad-2",
+                    "name": "bad2",
+                    "schedule": "also garbage",
+                    "task": "x",
+                    "enabled": True,
+                    "provider": None,
+                    "capability_mode": "safe-chat",
+                },
+            ],
+        )
+        mgr = SchedulerManager(jobs_file=tmp_jobs_file)
+        try:
+            mgr.start()
+            assert mgr._scheduler.running is True
+            assert mgr._scheduler.get_jobs() == []
+        finally:
+            with contextlib.suppress(Exception):
+                mgr.stop()
+
+
+# ---------------------------------------------------------------------------
 # Lines 167-170: add_job rolls back when _schedule_job raises SchedulerError
 # ---------------------------------------------------------------------------
 

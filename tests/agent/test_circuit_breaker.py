@@ -595,6 +595,72 @@ class TestThreadSafety:
         # the state is a valid CircuitState value.
         assert all(s in CircuitState for s in seen_states)
 
+    def test_half_open_allows_exactly_one_concurrent_probe(self):
+        """Availability hardening: HALF_OPEN must gate concurrent callers to
+        a single in-flight probe, not let every thread that observes the
+        HALF_OPEN state through. Live-reproduced before the fix: 5 threads
+        racing a freshly-recovered breaker all executed func() concurrently,
+        hammering the very backend the breaker exists to protect."""
+        breaker = _make_breaker(threshold=1, base_timeout=0.02)
+        _trip(breaker, n=1)
+        time.sleep(0.03)  # recovery timeout elapses -> next call() sees HALF_OPEN
+
+        executed = []
+        rejected = []
+        lock = threading.Lock()
+        barrier = threading.Barrier(6)
+
+        def probe():
+            barrier.wait()
+            try:
+                breaker.call(lambda: (time.sleep(0.05), _record(executed, lock)))
+            except MissyError:
+                with lock:
+                    rejected.append(1)
+
+        def _record(bucket, lock):
+            with lock:
+                bucket.append(1)
+
+        threads = [threading.Thread(target=probe) for _ in range(6)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(executed) == 1, f"expected exactly 1 probe to execute, got {len(executed)}"
+        assert len(rejected) == 5
+
+    def test_probe_in_flight_cleared_after_successful_probe(self):
+        """A completed successful probe must not leave the breaker
+        permanently rejecting further calls."""
+        breaker = _make_breaker(threshold=1, base_timeout=0.02)
+        _trip(breaker, n=1)
+        time.sleep(0.03)
+
+        assert breaker.call(lambda: "ok") == "ok"
+        assert breaker.state == CircuitState.CLOSED
+        # A second call must succeed normally -- not be rejected as if a
+        # stale probe were still "in flight".
+        assert breaker.call(lambda: "ok-again") == "ok-again"
+
+    def test_probe_in_flight_cleared_after_failed_probe(self):
+        """A failed probe must re-open the circuit cleanly, not leave
+        _probe_in_flight permanently set (which would make every future
+        recovery attempt spuriously rejected as "already in flight")."""
+        breaker = _make_breaker(threshold=1, base_timeout=0.01, max_timeout=0.05)
+        _trip(breaker, n=1)
+        time.sleep(0.02)
+
+        with contextlib.suppress(RuntimeError):
+            breaker.call(_raise)  # failed probe -> back to OPEN
+        assert breaker.state == CircuitState.OPEN
+
+        time.sleep(0.06)  # doubled recovery timeout elapses
+        # Must be allowed through as a fresh probe, not rejected due to a
+        # leftover "probe in flight" flag from the failed attempt above.
+        assert breaker.call(lambda: "recovered") == "recovered"
+
 
 # ---------------------------------------------------------------------------
 # CircuitState enum

@@ -8,7 +8,7 @@ import json
 import logging
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from missy.channels.base import BaseChannel, ChannelMessage
 
@@ -25,13 +25,48 @@ _RATE_LIMIT_REQUESTS = 60
 _RATE_LIMIT_WINDOW = 60  # seconds
 # Maximum tracked IPs before evicting the oldest entries.
 _MAX_TRACKED_IPS = 10_000
+# Availability hardening (replay protection): the signed payload is
+# `f"{timestamp}.{body}"`, not just `body` (mirrors Stripe/Slack webhook
+# signing) -- a bare-body signature never expires, so a captured valid
+# request (network sniff, log leak, compromised intermediary) could be
+# replayed indefinitely and still verify. Requests whose timestamp is
+# outside this window are rejected even with a mathematically valid
+# signature.
+_MAX_TIMESTAMP_SKEW_SECONDS = 300
+# Availability hardening: even inside the timestamp window, an *exact*
+# replay of a previously-accepted (timestamp, signature) pair is rejected
+# -- the timestamp window alone only bounds replay to 5 minutes, it
+# doesn't prevent it within that window.
+_SEEN_SIGNATURE_TTL_SECONDS = _MAX_TIMESTAMP_SKEW_SECONDS
+_MAX_TRACKED_SIGNATURES = 10_000
+# Availability hardening: bound how long the server will block on
+# accept()/header-read/body-read for a single connection, so a
+# slowloris-style client trickling bytes cannot hold a handler thread
+# (or, pre-ThreadingHTTPServer, the entire single-threaded server) open
+# indefinitely.
+_CONNECTION_TIMEOUT_SECONDS = 30
 
 
 class WebhookChannel(BaseChannel):
     """HTTP webhook channel that queues inbound POST requests as agent tasks.
 
-    Listens on a local HTTP port. Each POST to / with a JSON body
+    Listens on a local HTTP port (via a threaded server, so one slow
+    client cannot block others). Each POST to / with a JSON body
     ``{"prompt": "..."}`` creates a ChannelMessage.
+
+    When ``secret`` is configured, requests must carry both
+    ``X-Missy-Signature`` and ``X-Missy-Timestamp`` headers. The signature
+    is HMAC-SHA256 over ``f"{timestamp}.".encode() + body`` (Stripe/Slack-
+    style timestamp-bound signing), not over the bare body -- a
+    signature with no timestamp component never expires, so a captured
+    valid request could be replayed indefinitely and still verify. A
+    request whose ``X-Missy-Timestamp`` is more than 5 minutes from the
+    server's clock is rejected even with a mathematically valid
+    signature; a signature already seen within that window is rejected
+    as an exact replay even if the timestamp itself is still fresh. This
+    is a breaking change versus signing the bare body only -- existing
+    webhook senders must add the timestamp header and include it in what
+    they sign.
 
     Args:
         host: Bind address (default 127.0.0.1).
@@ -62,6 +97,34 @@ class WebhookChannel(BaseChannel):
         # Per-IP rate tracking: {ip: [timestamps]}
         self._rate_tracker: dict[str, list[float]] = {}
         self._rate_lock = threading.Lock()
+        # Availability hardening: {signature: expiry_monotonic_time} for
+        # exact-replay rejection within the timestamp window.
+        self._seen_signatures: dict[str, float] = {}
+        self._seen_signatures_lock = threading.Lock()
+
+    def _check_and_record_signature(self, signature: str) -> bool:
+        """Return True (accept) unless *signature* was already seen recently.
+
+        Records the signature either way (a rejected replay is also
+        recorded, so a fast repeated-replay attempt doesn't itself extend
+        the window via floods of new entries).
+        """
+        now = time.monotonic()
+        with self._seen_signatures_lock:
+            expiry = self._seen_signatures.get(signature)
+            if expiry is not None and expiry > now:
+                return False
+            self._seen_signatures[signature] = now + _SEEN_SIGNATURE_TTL_SECONDS
+            if len(self._seen_signatures) > _MAX_TRACKED_SIGNATURES:
+                self._evict_stale_signatures(now)
+            return True
+
+    def _evict_stale_signatures(self, now: float) -> None:
+        """Remove expired signature entries. Must be called while holding
+        ``_seen_signatures_lock``."""
+        stale = [sig for sig, expiry in self._seen_signatures.items() if expiry <= now]
+        for sig in stale:
+            del self._seen_signatures[sig]
 
     def _check_rate_limit(self, client_ip: str) -> bool:
         """Return True if the request is within rate limits."""
@@ -113,6 +176,10 @@ class WebhookChannel(BaseChannel):
         class Handler(BaseHTTPRequestHandler):
             server_version = "missy"
             sys_version = ""
+            # Availability hardening: bound per-connection blocking I/O
+            # (accept, header read, body read) so a slowloris-style client
+            # trickling bytes cannot hold a handler open indefinitely.
+            timeout = _CONNECTION_TIMEOUT_SECONDS
 
             def version_string(self) -> str:
                 return "missy"
@@ -180,14 +247,44 @@ class WebhookChannel(BaseChannel):
 
                 body = self.rfile.read(length)
 
-                # Validate HMAC if secret configured
+                # Validate HMAC if secret configured. Availability
+                # hardening: the signed payload is timestamp-bound
+                # ("{timestamp}.{body}", not just "body") and each
+                # accepted signature is tracked for a while, so a
+                # captured valid request cannot be replayed -- neither
+                # after the timestamp window expires, nor byte-for-byte
+                # again within it.
                 if channel_ref._secret:
                     sig = self.headers.get("X-Missy-Signature", "")
+                    ts_header = self.headers.get("X-Missy-Timestamp", "")
+                    try:
+                        ts = int(ts_header)
+                    except (TypeError, ValueError):
+                        self.send_response(401)
+                        self._send_security_headers()
+                        self.end_headers()
+                        return
+                    if abs(time.time() - ts) > _MAX_TIMESTAMP_SKEW_SECONDS:
+                        self.send_response(401)
+                        self._send_security_headers()
+                        self.end_headers()
+                        return
+                    signed_payload = f"{ts}.".encode() + body
                     expected = (
-                        "sha256=" + hmac.new(channel_ref._secret, body, hashlib.sha256).hexdigest()
+                        "sha256="
+                        + hmac.new(channel_ref._secret, signed_payload, hashlib.sha256).hexdigest()
                     )
                     if not hmac.compare_digest(sig, expected):
                         self.send_response(401)
+                        self._send_security_headers()
+                        self.end_headers()
+                        return
+                    if not channel_ref._check_and_record_signature(expected):
+                        logger.warning(
+                            "Webhook: rejected replayed request from %s (duplicate signature)",
+                            client_ip,
+                        )
+                        self.send_response(409)
                         self._send_security_headers()
                         self.end_headers()
                         return
@@ -251,7 +348,12 @@ class WebhookChannel(BaseChannel):
                 self.end_headers()
                 self.wfile.write(b'{"status": "queued"}')
 
-        self._server = HTTPServer((self._host, self._port), Handler)
+        # Availability hardening: ThreadingHTTPServer instead of a plain
+        # single-threaded HTTPServer, so one slow or malicious client
+        # cannot serialize/block every other webhook sender behind it.
+        # Every piece of shared state Handler touches (_queue,
+        # _rate_tracker, _seen_signatures) is already lock-protected.
+        self._server = ThreadingHTTPServer((self._host, self._port), Handler)
         self._thread = threading.Thread(
             target=self._server.serve_forever, daemon=True, name="missy-webhook"
         )

@@ -1,5 +1,90 @@
 # TEST_RESULTS
 
+## Run: 2026-07-11 08:20 UTC — validation-harness overhaul, availability hardening (9 secondary hazards, closes the security review's text entirely)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Scope: the security review's one remaining unnumbered bullet,
+  "harden secondary availability hazards" — 9 sub-items, none a
+  product-policy fork, each live-reproduced then fixed then
+  re-verified: CircuitBreaker half-open single-probe
+  (`missy/agent/circuit_breaker.py`), MCP RPC desync teardown
+  (`missy/mcp/client.py`), scheduler per-job isolation
+  (`missy/scheduler/manager.py`), webhook HMAC
+  replay/timestamp/concurrency (`missy/channels/webhook.py`), EventBus
+  history bound (`missy/core/events.py`), provider base_url
+  egress-widening audit event (`missy/providers/registry.py`), image
+  decompression-bomb pre-decode guard (`missy/vision/sources.py`),
+  audit log rotation+permissions (`missy/observability/audit_logger.py`),
+  git stash SHA-identity (`missy/agent/code_evolution.py`).
+- Command: `pytest tests/agent/test_circuit_breaker.py -q`
+- Result: passed (3 new tests in `TestThreadSafety`) — 5-real-thread
+  half-open race now shows exactly 1/5 executing (was 5/5 pre-fix).
+- Command: `pytest tests/mcp/test_mcp_client.py -q`
+- Result: passed (6 new tests in `TestMcpClientTimeoutTeardown`,
+  including one real-subprocess end-to-end case) —
+  `is_alive()` correctly `False` immediately after a timeout teardown.
+- Command: `pytest tests/scheduler/test_manager_coverage.py -q`
+- Result: passed (4 new tests in
+  `TestStartIsolatesPerJobSchedulingFailures`) — one malformed job no
+  longer aborts registration of other valid jobs.
+- Command: `pytest tests/channels/ -q`
+- Result: passed — new `TestHmacReplayProtection` (4 tests) and
+  `TestConcurrentRequests` classes; real before/after timing evidence:
+  a fast client blocked ~2.5s behind a slow concurrent one pre-fix,
+  ~0.3s post-fix (real `http.client` connections against a real
+  running server, not mocked). ~15 pre-existing tests across 4 files
+  updated for the `HTTPServer`→`ThreadingHTTPServer` rename and the
+  new `X-Missy-Timestamp` requirement.
+- Command: `pytest tests/core/test_events_deep.py -q`
+- Result: passed (5 new tests in `TestEventBusHistoryBound`) —
+  publishing 50,000 events retains exactly 10,000 (newest), was
+  unbounded (all 50,000 retained) pre-fix.
+- Command: `pytest tests/providers/test_registry_deep.py -q`
+- Result: passed (3 new tests) — `base_url` egress widening now emits
+  `provider.base_url_egress_widened` at `WARNING`, was silent `DEBUG`
+  pre-fix.
+- Command: `pytest tests/vision/test_source_validation.py -q`
+- Result: passed — new `TestFileSourceDecompressionBombGuard` (4
+  tests); a real 30000×30000 PNG (11MB on disk, ~2.5GB decoded)
+  rejected in ~0.03s pre-`cv2.imread()`, was 2.85s post-decode
+  warn-only (never actually rejected) pre-fix. 2 existing tests
+  renamed/rewritten from warn-and-succeed to `pytest.raises(ValueError)`.
+- Command: `pytest tests/observability/ -q`
+- Result: passed — new `TestRestrictivePermissions` (2 tests) and
+  `TestLogRotation` (5 tests); log file now created at `0o600` (was
+  `0o644` under a simulated `umask(0o022)` pre-fix); rotation/pruning
+  confirmed with an artificially tiny size threshold. 4 pre-existing
+  write-failure-simulation tests updated for the `Path.open()`→
+  `os.open()` write-mechanism change.
+- Command: `pytest tests/agent/test_code_evolution.py -q`
+- Result: passed — new
+  `test_apply_pops_correct_stash_despite_concurrent_unrelated_stash`
+  (real integration test through `apply()`, simulating a concurrent
+  unrelated stash push mid-flow) plus new `TestStashIdentity` class (4
+  unit tests). Live-reproduced in a disposable throwaway repo (not
+  this repo's real stashes) before fixing: a naive position-based
+  `git stash pop` restored the wrong (unrelated concurrent) stash's
+  content; the SHA-identity fix correctly finds and pops the original
+  stash regardless of stack position, leaving the unrelated stash
+  untouched.
+- Command: `pytest tests/agent/ -q`
+- Result: `4229 passed, 4 skipped` (consolidated check covering the
+  circuit-breaker and code-evolution sub-items together with the rest
+  of the agent subsystem; 4 skips pre-existing, unrelated).
+- Command: `pytest tests/ -q -o faulthandler_timeout=120`
+- Result: `3 failed, 21115 passed, 13 skipped in 533.81s (0:08:53)` —
+  up from 21071 (SR-1.9b's run), reflecting ~44 new/updated tests
+  across this checkpoint's 9 sub-items. The 3 failures are exactly the
+  same known pre-existing `CameraDiscovery` cache-TTL flakes (task
+  #11) confirmed unrelated in every previous checkpoint this session
+  (`tests/vision/test_discovery_capture_sysfs.py::TestCacheTTL::test_cache_valid_within_ttl`,
+  `tests/vision/test_discovery_edge_cases.py::TestPermissionDeniedOnDevice::test_device_that_does_not_exist_is_skipped`,
+  `tests/vision/test_discovery_edge_cases.py::TestRapidAddRemove::test_cached_results_returned_within_ttl`).
+  Zero regressions. **This closes the security review's text
+  entirely** — every numbered SR-x.y finding and its one remaining
+  unnumbered bullet are now both fully remediated; the review has no
+  open items left.
+
 ## Run: 2026-07-11 06:40 UTC — validation-harness overhaul, SR-1.9b (DNS-rebinding check/connect TOCTOU — pinned connections, closes the security review's numbered SR-x.y list entirely)
 
 - Branch: `overhaul/missy-validation-20260710-031406`

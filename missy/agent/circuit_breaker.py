@@ -64,6 +64,9 @@ class CircuitBreaker:
         self._last_failure_time: float = 0.0
         self._recovery_timeout: float = base_timeout
         self._lock = threading.Lock()
+        # Availability-hardening: True while exactly one HALF_OPEN probe
+        # call is in flight. See call()'s HALF_OPEN branch.
+        self._probe_in_flight = False
 
     @property
     def state(self) -> CircuitState:
@@ -99,16 +102,39 @@ class CircuitBreaker:
             Exception: Re-raises any exception raised by *func* after
                 recording the failure.
         """
-        # Atomically check-and-transition to prevent TOCTOU race where
-        # multiple threads could both see HALF_OPEN and all proceed to probe.
+        # Atomically check-and-transition to prevent TOCTOU races. This
+        # covers two distinct races, not just one:
+        #   1. OPEN -> HALF_OPEN: only the thread that observes the
+        #      recovery timeout has elapsed makes the transition.
+        #   2. Concurrent calls arriving *while already HALF_OPEN* (e.g.
+        #      one thread just transitioned it a moment ago): only one
+        #      such call may proceed as "the" probe. Every other
+        #      concurrent caller is rejected until that probe resolves --
+        #      HALF_OPEN means "allow a single probe call," not "allow
+        #      every call that happens to see this state." Without this,
+        #      an arbitrary number of threads can all slip through the
+        #      instant the state flips, hammering a backend that just
+        #      started recovering (confirmed via a live concurrency
+        #      reproduction: 5 threads racing a freshly-HALF_OPEN breaker
+        #      all executed func() before this fix).
         with self._lock:
             if self._state == CircuitState.OPEN:
                 if time.monotonic() - self._last_failure_time >= self._recovery_timeout:
                     self._state = CircuitState.HALF_OPEN
+                    self._probe_in_flight = True
                 else:
                     from missy.core.exceptions import MissyError
 
                     raise MissyError(f"Circuit breaker '{self.name}' is OPEN; skipping call")
+            elif self._state == CircuitState.HALF_OPEN:
+                if self._probe_in_flight:
+                    from missy.core.exceptions import MissyError
+
+                    raise MissyError(
+                        f"Circuit breaker '{self.name}' is HALF_OPEN; "
+                        "a probe call is already in flight"
+                    )
+                self._probe_in_flight = True
         try:
             result = func(*args, **kwargs)
             self._on_success()
@@ -123,6 +149,7 @@ class CircuitBreaker:
             self._failure_count = 0
             self._recovery_timeout = self._base_timeout
             self._state = CircuitState.CLOSED
+            self._probe_in_flight = False
 
     def _on_failure(self) -> None:
         """Record a failure; open the circuit when threshold is exceeded."""
@@ -133,5 +160,6 @@ class CircuitBreaker:
                 # Probe failed: back off further and re-open
                 self._recovery_timeout = min(self._recovery_timeout * 2, self._max_timeout)
                 self._state = CircuitState.OPEN
+                self._probe_in_flight = False
             elif self._failure_count >= self._threshold:
                 self._state = CircuitState.OPEN

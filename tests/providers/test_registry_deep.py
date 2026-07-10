@@ -466,6 +466,78 @@ class TestFromConfig:
         ProviderRegistry.from_config(config)
         assert "myhost.internal" in config.network.provider_allowed_hosts
 
+    def test_from_config_base_url_widening_emits_audit_event(self):
+        """Availability/transparency hardening: base_url auto-widening
+        the 'provider' egress allowlist must not be silent -- it's a
+        security-relevant policy mutation and needs a durable audit
+        trail, same as any other policy decision."""
+        from missy.core.events import event_bus
+
+        captured = []
+        event_bus.subscribe("provider.base_url_egress_widened", captured.append)
+        try:
+            config = _make_config(
+                providers={
+                    "custom": _make_provider_config(
+                        "ollama",
+                        model="llama3.2",
+                        base_url="http://audited-host.internal:11434",
+                    ),
+                }
+            )
+            ProviderRegistry.from_config(config)
+        finally:
+            event_bus.unsubscribe("provider.base_url_egress_widened", captured.append)
+
+        assert len(captured) == 1
+        event = captured[0]
+        assert event.category == "network"
+        assert event.result == "allow"
+        assert event.detail["host"] == "audited-host.internal"
+        assert event.detail["base_url"] == "http://audited-host.internal:11434"
+
+    def test_from_config_base_url_widening_logs_at_warning_not_debug(self, caplog):
+        """The old logger.debug() call was invisible at default log
+        levels -- an operator would never see their egress policy grew."""
+        import logging
+
+        config = _make_config(
+            providers={
+                "custom": _make_provider_config(
+                    "ollama",
+                    model="llama3.2",
+                    base_url="http://visible-host.internal:11434",
+                ),
+            }
+        )
+        with caplog.at_level(logging.WARNING, logger="missy.providers.registry"):
+            ProviderRegistry.from_config(config)
+        assert any("visible-host.internal" in r.message for r in caplog.records)
+
+    def test_from_config_no_duplicate_widening_events_for_already_allowed_host(self):
+        """A host already present in provider_allowed_hosts is not a
+        *new* widening -- no redundant audit event for it."""
+        from missy.core.events import event_bus
+
+        captured = []
+        event_bus.subscribe("provider.base_url_egress_widened", captured.append)
+        try:
+            config = _make_config(
+                providers={
+                    "custom": _make_provider_config(
+                        "ollama",
+                        model="llama3.2",
+                        base_url="http://already-allowed.internal:11434",
+                    ),
+                }
+            )
+            config.network.provider_allowed_hosts.append("already-allowed.internal")
+            ProviderRegistry.from_config(config)
+        finally:
+            event_bus.unsubscribe("provider.base_url_egress_widened", captured.append)
+
+        assert captured == []
+
     def test_from_config_does_not_duplicate_already_allowed_hosts(self):
         config = _make_config(
             providers={

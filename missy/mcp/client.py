@@ -113,8 +113,36 @@ class McpClient:
 
                 ready, _, _ = select.select([self._proc.stdout], [], [], timeout)
                 if not ready:
+                    # Availability hardening: the request line above was
+                    # already written and flushed to the server before this
+                    # timeout fires. If the server is merely slow (not
+                    # dead) and answers a moment later, that response is
+                    # still queued on stdout -- the *next* call's readline()
+                    # would silently consume it instead of its own
+                    # response, desynchronizing every subsequent call on
+                    # this connection from here on (each read would return
+                    # the *previous* call's answer, one request behind,
+                    # rather than raise cleanly every time). The response
+                    # ID mismatch check below only catches this after the
+                    # fact, for a call that otherwise would have succeeded.
+                    # There is no partial-recovery that's provably safe
+                    # here (we cannot distinguish "still queued, arriving
+                    # any moment" from "never coming"), so the only fix
+                    # that actually prevents desync is to stop trusting
+                    # this stdin/stdout pair at all: tear the subprocess
+                    # down now, inside the same lock, so no other caller
+                    # can read from it in this corrupted state. The next
+                    # attempt to use this client observes is_alive() ==
+                    # False and gets a clean, immediate failure instead of
+                    # a confusing stale-response ID mismatch. McpManager's
+                    # health_check()/restart_server() already exists for
+                    # exactly this "dead server" case and reconnects with a
+                    # fresh, correctly-aligned pipe pair.
+                    self._teardown_after_timeout()
                     raise TimeoutError(
-                        f"MCP server {self.name!r} did not respond within {timeout}s"
+                        f"MCP server {self.name!r} did not respond within {timeout}s "
+                        "(connection has been torn down to prevent response-stream "
+                        "desynchronization; it will be restarted on next health check)"
                     )
             except (TypeError, ValueError, AttributeError):
                 pass  # fileno not available (e.g. mock) — skip timeout guard
@@ -127,6 +155,29 @@ class McpClient:
         if resp_id is not None and resp_id != req_id:
             raise RuntimeError(f"MCP response ID mismatch: expected {req_id}, got {resp_id}")
         return resp
+
+    def _teardown_after_timeout(self) -> None:
+        """Forcibly kill the subprocess after an RPC timeout.
+
+        Called while already holding ``self._lock``. Uses ``kill()``
+        directly rather than ``disconnect()``'s graceful
+        ``terminate()``-then-``wait()`` sequence: the server already
+        failed to respond to a request within its timeout budget, so
+        waiting further for a graceful exit just delays the inevitable
+        and risks reading yet another stale/unexpected byte from the
+        same corrupted pipe before it closes.
+        """
+        if not self._proc:
+            return
+        with contextlib.suppress(Exception):
+            self._proc.kill()
+        with contextlib.suppress(Exception):
+            self._proc.wait(timeout=5)
+        for pipe in (self._proc.stdin, self._proc.stdout, self._proc.stderr):
+            if pipe:
+                with contextlib.suppress(OSError):
+                    pipe.close()
+        self._proc = None
 
     def _notify(self, method: str, params: Any = None) -> None:
         note = {"jsonrpc": "2.0", "method": method}

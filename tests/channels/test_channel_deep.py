@@ -992,15 +992,21 @@ class TestWebhookChannelReceive:
 
 
 class TestWebhookChannelAuth:
-    def _sign(self, secret: str, body: bytes) -> str:
-        return "sha256=" + _hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    def _sign(self, secret: str, body: bytes, ts: int) -> str:
+        payload = f"{ts}.".encode() + body
+        return "sha256=" + _hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
 
     def test_correct_signature_accepted(self) -> None:
         ch, port = _start_webhook(secret="my-secret")
         try:
             body = json.dumps({"prompt": "signed"}).encode()
-            sig = self._sign("my-secret", body)
-            resp = _post(port, body, extra_headers={"X-Missy-Signature": sig})
+            ts = int(time.time())
+            sig = self._sign("my-secret", body, ts)
+            resp = _post(
+                port,
+                body,
+                extra_headers={"X-Missy-Signature": sig, "X-Missy-Timestamp": str(ts)},
+            )
             assert resp.status == 202
         finally:
             ch.stop()

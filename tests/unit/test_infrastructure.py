@@ -131,7 +131,7 @@ class TestWebhookChannelStart:
         mock_thread = MagicMock()
 
         with (
-            patch("missy.channels.webhook.HTTPServer", return_value=mock_server) as mock_http,
+            patch("missy.channels.webhook.ThreadingHTTPServer", return_value=mock_server) as mock_http,
             patch("missy.channels.webhook.threading.Thread", return_value=mock_thread),
         ):
             ch.start()
@@ -158,7 +158,7 @@ class TestWebhookHandlerDoPost:
             return server
 
         with (
-            patch("missy.channels.webhook.HTTPServer", side_effect=fake_httpserver),
+            patch("missy.channels.webhook.ThreadingHTTPServer", side_effect=fake_httpserver),
             patch("missy.channels.webhook.threading.Thread"),
         ):
             channel.start()
@@ -243,8 +243,14 @@ class TestWebhookHandlerDoPost:
         secret = "topsecret"
         ch = WebhookChannel(secret=secret)
         body = json.dumps({"prompt": "authenticated"}).encode()
-        sig = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
-        headers = {"Content-Length": str(len(body)), "X-Missy-Signature": sig}
+        ts = int(time.time())
+        payload = f"{ts}.".encode() + body
+        sig = "sha256=" + hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
+        headers = {
+            "Content-Length": str(len(body)),
+            "X-Missy-Signature": sig,
+            "X-Missy-Timestamp": str(ts),
+        }
         handler, _, responses = self._make_handler(body, headers, ch)
         handler.do_POST()
         assert responses == [202]

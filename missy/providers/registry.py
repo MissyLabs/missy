@@ -19,6 +19,7 @@ Example::
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import threading
 from urllib.parse import urlparse
@@ -228,6 +229,24 @@ class ProviderRegistry:
         registry = cls()
         # Auto-populate provider_allowed_hosts from provider base_url entries
         # so users don't have to duplicate hosts in network policy manually.
+        #
+        # Availability/transparency hardening: this mutates the network
+        # policy's "provider" category egress allowlist -- a security-
+        # relevant action -- but previously did so completely silently
+        # (logger.debug() only, invisible at default log levels; no audit
+        # trail at all). An operator setting base_url for one provider
+        # (e.g. pointing to a self-hosted OpenAI-compatible endpoint)
+        # would never see that their policy's effective allowlist grew,
+        # and nothing in AUDIT_SECURITY.md's "structured audit events for
+        # privileged actions" guarantee covered this path. SSRF/DNS-
+        # rebinding via a maliciously-crafted base_url is already closed
+        # independently by SR-1.9a's rebinding check (every hostname
+        # match, including ones added here, still re-verifies the
+        # resolved IP isn't private/loopback/link-local before any
+        # request is allowed) and by NetworkPolicyEngine's own bare-IP
+        # path never consulting allowed_hosts at all -- this fix is about
+        # making the widening itself visible and auditable, not about an
+        # exploitable bypass.
         existing = {h.lower() for h in config.network.provider_allowed_hosts}
         for provider_config in config.providers.values():
             if provider_config.enabled and provider_config.base_url:
@@ -236,10 +255,31 @@ class ProviderRegistry:
                 if host and host.lower() not in existing:
                     config.network.provider_allowed_hosts.append(host)
                     existing.add(host.lower())
-                    logger.debug(
-                        "Auto-allowed provider host %r from base_url.",
+                    logger.warning(
+                        "Provider %r's base_url expanded the network policy's "
+                        "'provider' category egress allowlist to include %r. "
+                        "If this host is unexpected, check config.providers "
+                        "for a stray or malicious base_url.",
+                        provider_config.name,
                         host,
                     )
+                    with contextlib.suppress(Exception):
+                        from missy.core.events import AuditEvent, event_bus
+
+                        event_bus.publish(
+                            AuditEvent.now(
+                                session_id="",
+                                task_id="",
+                                event_type="provider.base_url_egress_widened",
+                                category="network",
+                                result="allow",
+                                detail={
+                                    "provider": provider_config.name,
+                                    "host": host,
+                                    "base_url": provider_config.base_url,
+                                },
+                            )
+                        )
 
         for key, provider_config in config.providers.items():
             if not provider_config.enabled:

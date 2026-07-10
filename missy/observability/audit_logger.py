@@ -22,8 +22,11 @@ Example::
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
+import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -88,6 +91,15 @@ class AuditLogger:
             to.  Defaults to the process-level :data:`event_bus` singleton.
     """
 
+    #: Availability hardening: rotate once the active log file reaches
+    #: this size, so a long-running daemon never fills the disk with a
+    #: single unbounded file. 50 MB keeps individual files easy to grep/
+    #: ship while still holding tens of thousands of events.
+    _MAX_LOG_SIZE_BYTES = 50 * 1024 * 1024
+    #: Maximum number of rotated (historical) log files retained. Older
+    #: rotations beyond this count are deleted, oldest first.
+    _MAX_ROTATED_FILES = 5
+
     def __init__(
         self,
         log_path: str = "~/.missy/audit.jsonl",
@@ -96,6 +108,20 @@ class AuditLogger:
     ) -> None:
         self.log_path = Path(log_path).expanduser()
         self.log_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        # Availability/confidentiality hardening: the audit log routinely
+        # contains operational detail (hostnames, file paths, prompts)
+        # that is not a "secret" per _redact_detail()'s pattern-based
+        # scan but is still not meant to be world/group-readable. Prior
+        # to this, the file was created via a plain append-mode open()
+        # with no explicit mode, so its permissions were whatever the
+        # process umask produced -- 0o644 (world-readable) under a
+        # common default umask of 022, confirmed live. chmod explicitly
+        # rather than relying on umask, so this holds regardless of the
+        # process's environment; also re-applied to a pre-existing file
+        # from an older Missy version that predates this fix.
+        if self.log_path.exists():
+            with contextlib.suppress(OSError):
+                os.chmod(self.log_path, 0o600)
         self._bus: EventBus = bus if bus is not None else event_bus
         # SR-1.1: an AgentIdentity to sign every persisted event with.
         # Direct construction defaults to unsigned (no implicit key I/O
@@ -184,8 +210,17 @@ class AuditLogger:
                 )
         try:
             line = json.dumps(record, default=str)
-            with self.log_path.open("a", encoding="utf-8") as fh:
-                fh.write(line + "\n")
+            self._rotate_if_needed()
+            # Availability hardening: os.open() with an explicit mode
+            # applies restrictive permissions atomically at file-creation
+            # time (no window where a newly-created log file is briefly
+            # world-readable before a follow-up chmod() call, unlike a
+            # plain open("a") + chmod() sequence).
+            fd = os.open(str(self.log_path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            try:
+                os.write(fd, (line + "\n").encode("utf-8"))
+            finally:
+                os.close(fd)
         except Exception as exc:
             _module_logger.error(
                 "AuditLogger: failed to write event %r to %s: %s",
@@ -193,6 +228,42 @@ class AuditLogger:
                 self.log_path,
                 exc,
             )
+
+    def _rotate_if_needed(self) -> None:
+        """Rotate the active log file once it exceeds ``_MAX_LOG_SIZE_BYTES``.
+
+        Availability hardening: Missy runs as a long-lived background
+        daemon; an audit log that only ever grows would eventually
+        exhaust disk space. Rotation renames the current file to a
+        timestamped ``.jsonl.<epoch>`` sibling (preserving its content
+        and 0600 permissions -- rename doesn't change the inode's mode)
+        and lets the next write create a fresh file. Rotated files
+        beyond ``_MAX_ROTATED_FILES`` are pruned, oldest first, rather
+        than kept forever -- this bounds disk usage while still
+        preserving recent history for investigation.
+        """
+        try:
+            if not self.log_path.exists():
+                return
+            if self.log_path.stat().st_size < self._MAX_LOG_SIZE_BYTES:
+                return
+            rotated_path = self.log_path.with_name(f"{self.log_path.name}.{int(time.time())}")
+            os.rename(self.log_path, rotated_path)
+            self._prune_rotated_logs()
+        except Exception:
+            _module_logger.warning("AuditLogger: log rotation failed", exc_info=True)
+
+    def _prune_rotated_logs(self) -> None:
+        """Delete the oldest rotated log files beyond ``_MAX_ROTATED_FILES``."""
+        pattern = f"{self.log_path.name}.*"
+        rotated = sorted(
+            self.log_path.parent.glob(pattern),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        for stale in rotated[self._MAX_ROTATED_FILES :]:
+            with contextlib.suppress(OSError):
+                stale.unlink()
 
     # ------------------------------------------------------------------
     # Read operations

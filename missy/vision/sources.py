@@ -49,6 +49,57 @@ def _get_cv2() -> Any:
     return _cv2
 
 
+class ImageTooLargeError(ValueError):
+    """Raised when an image's declared dimensions exceed the configured
+    maximum, detected before any full pixel decode was attempted."""
+
+
+def _peek_image_dimensions(path: str | Path) -> tuple[int, int] | None:
+    """Return an image's ``(width, height)`` from its header, without
+    decoding pixel data (decompression-bomb guard).
+
+    Uses ``PIL.Image.open()``, which is lazy -- it parses just enough of
+    the file (format signature + header fields) to know the declared
+    dimensions, and never decodes the actual pixel buffer unless
+    ``.load()``/``.convert()``/etc. is subsequently called, which this
+    function never does. This is orders of magnitude cheaper than a full
+    decode for a maliciously (or just accidentally) huge image.
+
+    Args:
+        path: Path to the image file.
+
+    Returns:
+        ``(width, height)`` if the header could be parsed, or ``None``
+        if PIL is unavailable or the file couldn't be opened -- callers
+        should treat ``None`` as "unknown," not "safe," and fall back to
+        a post-decode dimension check.
+
+    Raises:
+        ImageTooLargeError: When Pillow's own built-in decompression-
+            bomb guard (``Image.MAX_IMAGE_PIXELS``) trips during
+            ``Image.open()`` -- this is Pillow's authoritative signal
+            for exactly this attack and must not be silently folded
+            into the generic "couldn't determine, fall through" path,
+            or the file would proceed to the expensive OpenCV decode
+            this whole check exists to avoid.
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        return None
+
+    try:
+        with Image.open(path) as im:
+            return im.size
+    except Image.DecompressionBombError as exc:
+        raise ImageTooLargeError(
+            f"Image declares a pixel count Pillow's own decompression-bomb "
+            f"guard rejects: {exc}"
+        ) from exc
+    except Exception:
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Types
 # ---------------------------------------------------------------------------
@@ -235,6 +286,32 @@ class FileSource(ImageSource):
                 f"max {self.MAX_FILE_SIZE / 1024 / 1024:.0f} MB): {self._path}"
             )
 
+        # Availability hardening (decompression-bomb guard): a small
+        # on-disk file can still claim enormous pixel dimensions -- PNG's
+        # IHDR chunk allows up to 65535x65535, and highly repetitive
+        # (e.g. solid-color) pixel data compresses so well that a
+        # multi-gigabyte decoded bitmap can come from an on-disk file
+        # well under MAX_FILE_SIZE. cv2.imread() has no "read header
+        # only" mode -- it always decodes the *entire* pixel buffer, so
+        # checking img.shape *after* imread() (as this code did before)
+        # is too late: the expensive allocation and CPU work already
+        # happened. Live-reproduced: an 11 MB PNG claiming 30000x30000
+        # pixels decoded into a 2.5 GB in-memory array in ~2.8s via
+        # cv2.imread() alone, with MAX_DIMENSION only ever logged as a
+        # warning post-decode, never enforced. Peek the header-only
+        # dimensions via PIL's lazy Image.open() (does not decode pixel
+        # data until .load()/.convert(), so this check itself is cheap)
+        # and reject before cv2 ever touches the file.
+        declared = _peek_image_dimensions(self._path)
+        if declared is not None:
+            decl_w, decl_h = declared
+            if decl_w > self.MAX_DIMENSION or decl_h > self.MAX_DIMENSION:
+                raise ValueError(
+                    f"Image dimensions ({decl_w}x{decl_h}) exceed the maximum "
+                    f"allowed ({self.MAX_DIMENSION}x{self.MAX_DIMENSION}) -- "
+                    f"refusing to decode: {self._path}"
+                )
+
         try:
             img = cv2.imread(str(self._path))
         except Exception as exc:
@@ -242,16 +319,16 @@ class FileSource(ImageSource):
         if img is None:
             raise ValueError(f"Failed to decode image (unsupported format?): {self._path}")
 
-        # Validate dimensions
+        # Validate dimensions -- retained as a safety net for formats/
+        # cases the header peek above couldn't determine in advance
+        # (declared is None), not as the primary defense anymore.
         h, w = img.shape[:2]
         if h == 0 or w == 0:
             raise ValueError(f"Image has zero dimension ({w}x{h}): {self._path}")
         if h > self.MAX_DIMENSION or w > self.MAX_DIMENSION:
-            logger.warning(
-                "Image %s has large dimensions (%dx%d), may be slow to process",
-                self._path,
-                w,
-                h,
+            raise ValueError(
+                f"Image dimensions ({w}x{h}) exceed the maximum allowed "
+                f"({self.MAX_DIMENSION}x{self.MAX_DIMENSION}): {self._path}"
             )
 
         return ImageFrame(

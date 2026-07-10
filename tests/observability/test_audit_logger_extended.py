@@ -128,6 +128,169 @@ class TestInitialisationAndFileHandling:
 
 
 # ---------------------------------------------------------------------------
+# 1b. Availability hardening: restrictive permissions + rotation
+# ---------------------------------------------------------------------------
+
+
+class TestRestrictivePermissions:
+    """Live-reproduced before this fix: under a common default umask
+    (022), the audit log file -- which routinely contains operational
+    detail like hostnames, file paths, and prompts, even after secret
+    redaction -- was created world- and group-readable (0o644), because
+    the write path used a plain append-mode open() with no explicit
+    mode."""
+
+    def test_log_file_created_with_0600_regardless_of_umask(
+        self, log_path: Path, bus: EventBus
+    ):
+        import os
+        import stat
+
+        old_umask = os.umask(0o022)
+        try:
+            al = AuditLogger(log_path=str(log_path), bus=bus)
+            bus.publish(
+                AuditEvent.now(
+                    session_id="s", task_id="t", event_type="x", category="tool", result="allow"
+                )
+            )
+        finally:
+            os.umask(old_umask)
+
+        mode = stat.S_IMODE(log_path.stat().st_mode)
+        assert mode == 0o600
+        assert not (mode & stat.S_IROTH)
+        assert not (mode & stat.S_IRGRP)
+
+    def test_pre_existing_looser_permissions_are_tightened_on_construction(
+        self, log_path: Path, bus: EventBus
+    ):
+        """A log file left over from a Missy version predating this fix
+        (or corrupted permissions from any other cause) is re-secured the
+        next time AuditLogger is constructed against it, not left as-is
+        forever."""
+        import os
+        import stat
+
+        log_path.write_text('{"already": "here"}\n')
+        os.chmod(log_path, 0o644)
+        assert stat.S_IMODE(log_path.stat().st_mode) == 0o644
+
+        AuditLogger(log_path=str(log_path), bus=bus)
+
+        assert stat.S_IMODE(log_path.stat().st_mode) == 0o600
+
+
+class TestLogRotation:
+    """Missy runs as a long-lived background daemon -- an audit log that
+    only ever grows would eventually exhaust disk space. Live-verified:
+    with a tiny size threshold, publishing enough events produces
+    rotated, timestamped sibling files, each still 0600, with old
+    rotations pruned beyond the retention count."""
+
+    def test_rotation_creates_a_timestamped_sibling_file(self, log_path: Path, bus: EventBus):
+        al = AuditLogger(log_path=str(log_path), bus=bus)
+        al._MAX_LOG_SIZE_BYTES = 200
+
+        for i in range(50):
+            bus.publish(
+                AuditEvent.now(
+                    session_id="s",
+                    task_id="t",
+                    event_type=f"event.{i}",
+                    category="tool",
+                    result="allow",
+                )
+            )
+
+        rotated = list(log_path.parent.glob(f"{log_path.name}.*"))
+        assert len(rotated) >= 1
+        assert log_path.exists()
+
+    def test_rotated_files_retain_0600_permissions(self, log_path: Path, bus: EventBus):
+        import stat
+
+        al = AuditLogger(log_path=str(log_path), bus=bus)
+        al._MAX_LOG_SIZE_BYTES = 200
+
+        for i in range(50):
+            bus.publish(
+                AuditEvent.now(
+                    session_id="s",
+                    task_id="t",
+                    event_type=f"event.{i}",
+                    category="tool",
+                    result="allow",
+                )
+            )
+
+        rotated = list(log_path.parent.glob(f"{log_path.name}.*"))
+        assert rotated
+        for f in rotated:
+            assert stat.S_IMODE(f.stat().st_mode) == 0o600
+
+    def test_old_rotations_pruned_beyond_max_rotated_files(self, log_path: Path, bus: EventBus):
+        import time as _time
+
+        al = AuditLogger(log_path=str(log_path), bus=bus)
+        al._MAX_LOG_SIZE_BYTES = 100
+        al._MAX_ROTATED_FILES = 2
+
+        for i in range(200):
+            bus.publish(
+                AuditEvent.now(
+                    session_id="s",
+                    task_id="t",
+                    event_type=f"event.{i}",
+                    category="tool",
+                    result="allow",
+                )
+            )
+            if i % 20 == 0:
+                _time.sleep(0.002)  # ensure distinct rotation timestamps
+
+        rotated = list(log_path.parent.glob(f"{log_path.name}.*"))
+        assert len(rotated) <= al._MAX_ROTATED_FILES
+
+    def test_no_rotation_below_the_size_threshold(self, log_path: Path, bus: EventBus):
+        al = AuditLogger(log_path=str(log_path), bus=bus)
+        # Default threshold (50 MB) -- a handful of small events must
+        # never trigger rotation.
+        for i in range(5):
+            bus.publish(
+                AuditEvent.now(
+                    session_id="s",
+                    task_id="t",
+                    event_type=f"event.{i}",
+                    category="tool",
+                    result="allow",
+                )
+            )
+        rotated = list(log_path.parent.glob(f"{log_path.name}.*"))
+        assert rotated == []
+
+    def test_rotation_failure_does_not_prevent_the_event_from_being_lost_silently(
+        self, log_path: Path, bus: EventBus
+    ):
+        """If rotation itself fails (e.g. a permissions issue on the
+        directory), the write must still be attempted rather than the
+        whole _handle_event() call raising."""
+        al = AuditLogger(log_path=str(log_path), bus=bus)
+        al._MAX_LOG_SIZE_BYTES = 1  # force rotation attempt on every write
+
+        with patch("os.rename", side_effect=OSError("rotation failed")):
+            # Must not raise -- rotation failure is logged, not fatal.
+            bus.publish(
+                AuditEvent.now(
+                    session_id="s", task_id="t", event_type="x", category="tool", result="allow"
+                )
+            )
+        # The event must still have been written despite the rotation failure.
+        assert log_path.exists()
+        assert "\"event_type\": \"x\"" in log_path.read_text()
+
+
+# ---------------------------------------------------------------------------
 # 2. JSONL output format
 # ---------------------------------------------------------------------------
 
@@ -414,7 +577,7 @@ class TestMultipleLoggerStacking:
 class TestFileNotWritable:
     def test_write_failure_does_not_raise(self, audit_logger: AuditLogger, log_path: Path):
         """_handle_event swallows OSError so the caller is unaffected."""
-        with patch.object(Path, "open", side_effect=PermissionError("read-only fs")):
+        with patch("os.open", side_effect=PermissionError("read-only fs")):
             # Should not raise at all
             audit_logger._handle_event(
                 AuditEvent.now(
@@ -428,7 +591,7 @@ class TestFileNotWritable:
 
     def test_write_failure_logs_error_message(self, audit_logger: AuditLogger, log_path: Path):
         with (
-            patch.object(Path, "open", side_effect=PermissionError("denied")),
+            patch("os.open", side_effect=PermissionError("denied")),
             patch("missy.observability.audit_logger._module_logger") as mock_log,
         ):
             audit_logger._handle_event(

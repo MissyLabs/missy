@@ -79,8 +79,10 @@ class TestHandleEventWriteFailure:
         """IOError during file write is caught; no exception escapes."""
         al = AuditLogger(log_path=str(tmp_path / "audit.jsonl"), bus=bus)
 
-        # AuditLogger uses Path.open (pathlib), not builtins.open
-        with patch.object(Path, "open", side_effect=OSError("disk full")):
+        # AuditLogger writes via os.open()/os.write() (not Path.open/
+        # builtins.open) so it can apply restrictive 0600 permissions
+        # atomically at file-creation time.
+        with patch("os.open", side_effect=OSError("disk full")):
             # Should not raise
             al._handle_event(_make_event())
 
@@ -89,7 +91,7 @@ class TestHandleEventWriteFailure:
         al = AuditLogger(log_path=str(tmp_path / "audit.jsonl"), bus=bus)
 
         with (
-            patch.object(Path, "open", side_effect=OSError("no space")),
+            patch("os.open", side_effect=OSError("no space")),
             patch("missy.observability.audit_logger._module_logger") as mock_logger,
         ):
             al._handle_event(_make_event())

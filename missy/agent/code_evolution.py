@@ -275,16 +275,50 @@ class CodeEvolutionManager:
         result = self._git("status", "--porcelain", check=False)
         return bool(result.stdout.strip())
 
-    def _stash_if_dirty(self) -> bool:
-        """Stash uncommitted work. Returns True if a stash was created."""
+    def _stash_if_dirty(self) -> str | None:
+        """Stash uncommitted work.
+
+        Returns the stash's commit SHA -- its stable identity, independent
+        of its position on the stash stack -- if a stash was created, else
+        None.
+        """
         if self._has_uncommitted_changes():
             self._git("stash", "push", "-m", "missy-evolve: safety stash")
-            return True
-        return False
+            result = self._git("rev-parse", "stash@{0}", check=False)
+            sha = result.stdout.strip()
+            return sha or None
+        return None
 
-    def _stash_pop(self) -> None:
-        """Restore stashed work (best-effort)."""
-        self._git("stash", "pop", check=False)
+    def _stash_pop(self, stash_sha: str | None) -> None:
+        """Restore the stash identified by ``stash_sha`` (best-effort).
+
+        ``git stash pop`` with no argument always pops ``stash@{0}``, the
+        top of the stack by *position*. If another process pushes a stash
+        between our push and pop (this repo routinely has unrelated stashes
+        from other sessions/branches on its stack), a bare pop would
+        restore the wrong one -- and if its content conflicts with the
+        current working tree, leave conflict markers mixed into someone
+        else's in-progress work. We instead resolve our stash's current
+        stack position by SHA immediately before popping.
+        """
+        if not stash_sha:
+            return
+        result = self._git("stash", "list", "--format=%H %gd", check=False)
+        ref = None
+        for line in result.stdout.splitlines():
+            parts = line.split(maxsplit=1)
+            if len(parts) == 2 and parts[0] == stash_sha:
+                ref = parts[1]
+                break
+        if ref is None:
+            logger.warning(
+                "code_evolution: could not find our safety stash (%s) on "
+                "the stash stack -- leaving it untouched rather than "
+                "guessing and possibly popping unrelated work.",
+                stash_sha[:12],
+            )
+            return
+        self._git("stash", "pop", ref, check=False)
 
     # ------------------------------------------------------------------
     # Proposal lifecycle
@@ -627,8 +661,7 @@ class CodeEvolutionManager:
                 "test_output": str(exc),
             }
         finally:
-            if stashed:
-                self._stash_pop()
+            self._stash_pop(stashed)
 
     def rollback(self, proposal_id: str) -> dict[str, Any]:
         """Revert a previously applied evolution via ``git revert``.

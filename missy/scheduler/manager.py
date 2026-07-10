@@ -62,20 +62,54 @@ class SchedulerManager:
             SchedulerError: When the scheduler fails to start.
         """
         self._load_jobs()
+        # Availability hardening: _load_jobs() already isolates malformed
+        # *dict records* (skips them individually, logs a warning). But a
+        # record that parses into a well-formed ScheduledJob can still have
+        # a schedule string that only fails later, at APScheduler
+        # registration time (invalid cron, unparseable interval, etc.) --
+        # _schedule_job() correctly raises SchedulerError for that one job,
+        # but without per-job isolation here, that single exception would
+        # propagate out of this loop and abort every other job's
+        # registration too, and the self._scheduler.start() call below
+        # would never even run -- one malformed job's schedule would take
+        # down the entire scheduler, not just itself. Live-reproduced: a
+        # jobs.json with one valid and one invalid-schedule job caused
+        # start() to raise before scheduling either.
+        skipped: list[str] = []
         for job in self._jobs.values():
-            if job.enabled:
+            if not job.enabled:
+                continue
+            try:
                 self._schedule_job(job)
+            except Exception as exc:
+                skipped.append(job.id)
+                logger.error(
+                    "Skipping job %r (%r) -- failed to register with the "
+                    "scheduler: %s",
+                    job.id,
+                    job.name,
+                    exc,
+                )
+                self._emit_event(
+                    event_type="scheduler.job_registration_failed",
+                    result="error",
+                    detail={"job_id": job.id, "job_name": job.name, "error": str(exc)},
+                )
 
         try:
             self._scheduler.start()
         except Exception as exc:
             raise SchedulerError(f"Failed to start background scheduler: {exc}") from exc
 
-        logger.info("SchedulerManager started with %d job(s).", len(self._jobs))
+        logger.info(
+            "SchedulerManager started with %d job(s)%s.",
+            len(self._jobs) - len(skipped),
+            f" ({len(skipped)} skipped due to registration failure)" if skipped else "",
+        )
         self._emit_event(
             event_type="scheduler.start",
             result="allow",
-            detail={"job_count": len(self._jobs)},
+            detail={"job_count": len(self._jobs) - len(skipped), "skipped_job_ids": skipped},
         )
 
     def stop(self) -> None:

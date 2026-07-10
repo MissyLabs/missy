@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (37 checkpoints this session, full suite green after every one)
+## Changed (38 checkpoints this session, full suite green after every one)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -1092,21 +1092,190 @@ records (intentional trade-off — the whole point is connecting to the
 *one* address that was actually checked). Unix domain sockets pass
 through unpinned (unused by `PolicyHTTPClient`, no DNS component).
 
+### Availability hardening — 9 secondary hazards remediated (thirty-second checkpoint this session, closes the "harden secondary availability hazards" bullet)
+
+The security review's numbered SR-x.y list closed entirely with
+SR-1.9b; this checkpoint worked through the review's one remaining
+unnumbered bullet — 9 mechanical availability/robustness hazards, none
+a product-policy fork. Each was live-reproduced before fixing (real
+threads, real subprocesses, real sockets, real files — not mocks) and
+re-verified after. All 9:
+
+1. **CircuitBreaker half-open allowed unlimited concurrent probes.**
+   `missy/agent/circuit_breaker.py`: `HALF_OPEN` state let every
+   concurrent caller through as a "probe" rather than exactly one,
+   defeating the point of a recovery probe. Reproduced with 5 real
+   threads racing a freshly-`HALF_OPEN` breaker: 5/5 executed
+   concurrently before the fix. Fixed with a `_probe_in_flight` flag
+   checked/set inside the existing lock; `_on_success()`/`_on_failure()`
+   clear it. Re-verified: 1/5 executes, the other 4 rejected. 3 new
+   tests in `tests/agent/test_circuit_breaker.py`.
+2. **MCP RPC response-stream desync after a timeout.** `missy/mcp/client.py`:
+   `_rpc()` raised `TimeoutError` on a slow response but left the
+   subprocess and its stdout pipe alive — the *next* call could read
+   the stale, now-arriving response from the timed-out call, matching
+   the wrong request ID. Reproduced with a real Python subprocess
+   acting as a slow-but-alive MCP server: `is_alive()` stayed `True`
+   and the following call got an ID-mismatch error from the stale
+   response. Fixed with `_teardown_after_timeout()` — kills the
+   subprocess, closes all three pipes, clears `self._proc` — called
+   before the `TimeoutError` is raised. Re-verified: `is_alive()` is
+   `False` afterward, the next call gets a clean "not connected" error
+   instead of silent corruption. 6 new tests including one
+   real-subprocess end-to-end case.
+3. **One malformed scheduled job aborted the entire scheduler
+   startup.** `missy/scheduler/manager.py`: `start()` iterated every
+   job and let `_schedule_job()`'s exception propagate uncaught — one
+   corrupt/invalid record in `jobs.json` prevented every *other*, valid
+   job from ever being scheduled on that and every subsequent restart.
+   Reproduced with a real `jobs.json` containing one valid and one
+   invalid-schedule job: `start()` raised, the valid job never ran.
+   Fixed with a per-job `try/except` isolating each registration
+   failure, a new `scheduler.job_registration_failed` audit event per
+   skipped job, and a corrected startup log/event reporting the actual
+   scheduled count. Re-verified: the valid job runs, the bad one is
+   skipped and audited. 4 new tests.
+4. **Webhook channel: no replay protection, no request timestamp, and
+   one slow client could block every other client.** `missy/channels/webhook.py`:
+   HMAC verification signed only the raw body — an intercepted, valid
+   request could be replayed indefinitely with no detectable
+   staleness; the plain `http.server.HTTPServer` handles connections
+   serially, so one slow/trickling client stalled all others. Fixed:
+   signed payload is now `f"{ts}."encode() + body`, requiring a new
+   `X-Missy-Timestamp` header validated against a 300s skew window; a
+   TTL-bounded `_seen_signatures` dict rejects exact replays with 409;
+   swapped `HTTPServer` for `ThreadingHTTPServer` with a 30s
+   per-connection timeout. Live-reproduced serialization with real
+   `http.client` connections against a real running server:
+   pre-fix, a fast client waited ~2.5s behind a slow one; post-fix,
+   ~0.3s — a rigorous before/after timing test, not just an assertion.
+   New `TestHmacReplayProtection` (4 tests) and `TestConcurrentRequests`
+   classes; ~15 pre-existing tests across 4 files updated for the
+   `ThreadingHTTPServer` rename and new timestamp requirement (not
+   weakened — same assertions, updated construction).
+5. **EventBus in-memory history grew without bound.** `missy/core/events.py`:
+   `self._log` was a plain `list`, appended to on every published
+   event for the process's entire lifetime — an unbounded memory leak
+   in any long-running `missy gateway start` process. Reproduced:
+   publishing 50,000 events retained all 50,000. Fixed: `self._log` is
+   now a `collections.deque(maxlen=10_000)`. Re-verified: capped at
+   10,000, oldest evicted first, subscribers still fire for every
+   event regardless of the cap, `clear()` unaffected. 5 new tests.
+6. **Provider `base_url` silently widened network egress with no
+   audit trail.** `missy/providers/registry.py`: `from_config()` added
+   any provider's configured `base_url` host to
+   `provider_allowed_hosts` at `DEBUG` log level with no audit event —
+   a stray or malicious `base_url` (e.g. `169.254.169.254`, cloud
+   metadata) expanded the egress allowlist invisibly to anyone not
+   reading debug logs. Investigated the actual exploitability first:
+   confirmed via SR-1.9b's now-live pinning that a bare-IP target
+   already bypasses `allowed_hosts` entirely (only CIDR rules apply),
+   so this is a silent-policy-widening problem, not a live SSRF path —
+   narrowing the fix to match the real risk. Fixed: now logs at
+   `WARNING` and emits a new `provider.base_url_egress_widened` audit
+   event (host, provider name, full `base_url`) on every widening. 3
+   new tests confirming the event fires, the log level, and that an
+   already-allowed host doesn't re-fire.
+7. **Image decode had no dimension cap before OpenCV, only after.**
+   `missy/vision/sources.py`: `FileSource.acquire()` only checked
+   decoded dimensions *after* `cv2.imread()` had already fully decoded
+   the pixel buffer into memory, and even then only `logger.warning()`'d
+   rather than rejecting — a maliciously crafted image with a huge
+   declared resolution (a "decompression bomb") could exhaust memory or
+   burn CPU before any check ran at all. Live-reproduced with a real
+   30000×30000 solid-color PNG (11MB on disk, ~2.5GB decoded): rejection
+   only happened after 2.85s of full `cv2.imread()` decode, via the
+   post-decode warning path that didn't even reject. Fixed: new
+   `_peek_image_dimensions()` uses PIL's lazy `Image.open()` (parses
+   the header only) to check declared dimensions *before* handing the
+   file to OpenCV, catching Pillow's own built-in
+   `Image.DecompressionBombError` and re-raising as a new
+   `ImageTooLargeError`; the post-decode check was also strengthened
+   from advisory-only `logger.warning()` to a hard `raise ValueError`.
+   Re-verified: the same 30000×30000 PNG is now rejected in ~0.03s,
+   ~100x faster, never reaching `cv2.imread()`. Existing
+   warn-and-succeed tests rewritten to assert rejection (the old
+   behavior was itself the bug); 4 new tests for the pre-decode
+   decompression-bomb guard.
+8. **Audit log was world-readable and grew without bound or
+   rotation.** `missy/observability/audit_logger.py`: the log file was
+   created via `Path.open("a")`, inheriting the process umask (commonly
+   0o644, world-readable) with no explicit permission enforcement, and
+   had no size cap or rotation — every audit event, including redacted
+   security-sensitive detail, accumulated in one ever-growing file
+   readable by any local user. Reproduced under a simulated `umask(0o022)`:
+   file created at 0o644. Fixed: write path switched from
+   `Path.open()`/`builtins.open()` to `os.open(path, O_WRONLY|O_CREAT|O_APPEND, 0o600)`
+   for atomic restrictive-permission file creation; `__init__` also
+   chmods a pre-existing file to 0600; new `_rotate_if_needed()` renames
+   the log to a timestamped file once it exceeds 50MB, and
+   `_prune_rotated_logs()` deletes rotated files beyond the newest 5.
+   Re-verified: 0600 on creation and on rotation; rotation/pruning
+   confirmed with an artificially tiny size threshold. 2 new
+   `TestRestrictivePermissions` tests and 5 new `TestLogRotation` tests;
+   4 pre-existing write-failure-simulation tests across 2 files updated
+   from `patch.object(Path, "open", ...)` to `patch("os.open", ...)`
+   since the write mechanism itself changed.
+9. **Git safety-stash was restored by stack position, not identity.**
+   `missy/agent/code_evolution.py`: `_stash_if_dirty()`/`_stash_pop()`
+   used bare `git stash push`/`git stash pop` with no ref — `pop` with
+   no argument always targets `stash@{0}`, the top of the stack by
+   *position*. If any other process pushed a stash between this code's
+   push and pop — and this repo's own `git stash list` shows 4 real,
+   unrelated, pre-existing stashes from other sessions/branches on the
+   stack right now, confirming this is not theoretical — a bare pop
+   would restore the *wrong* stash, and a content conflict would leave
+   conflict markers mixed into someone else's in-progress work. Fixed:
+   `_stash_if_dirty()` now returns the pushed stash's commit SHA (via
+   `git rev-parse stash@{0}` immediately after the push) instead of a
+   bare `bool`; `_stash_pop(stash_sha)` re-resolves that SHA's *current*
+   stack position via `git stash list --format="%H %gd"` immediately
+   before popping, and logs a warning and leaves the stack untouched if
+   the SHA can't be found (never guesses). Live-reproduced in a
+   disposable throwaway repo (never touching this repo's real stashes):
+   pushed a stash, simulated a concurrent unrelated stash landing on
+   top, confirmed a naive `git stash pop` restores the *wrong* content;
+   with the fix, the correct stash is found and popped by SHA
+   regardless of stack position, and the unrelated stash is left
+   untouched. New `test_apply_pops_correct_stash_despite_concurrent_unrelated_stash`
+   integration test plus a new `TestStashIdentity` class (4 unit tests)
+   in `tests/agent/test_code_evolution.py`; all pre-existing
+   `_stash_if_dirty`/`_stash_pop` mocks across 3 other test files
+   already returned/expected falsy values, so no changes needed there.
+
+**Residual risk, called out explicitly:** none of these 9 fixes are
+product-policy forks — all are "make the mechanism match its own
+already-intended contract," so there was nothing to ask the operator
+about. The webhook timestamp requirement is a breaking protocol change
+for any existing webhook sender (documented in the class docstring).
+The audit-log 0600 permission change means an existing world-readable
+log file gets tightened to owner-only on next write after upgrade —
+expected and desired, not called out as a trade-off. Full detail
+(reachability analysis, before/after reproduction evidence, exact code
+diffs) for every one of these 9 in `AUDIT_SECURITY.md`'s new
+"Availability hardening" section.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-3 failed, 21071 passed, 13 skipped in 507.26s (0:08:27)
+3 failed, 21115 passed, 13 skipped in 533.81s (0:08:53)
 ```
 
 The 3 failures are exactly the known pre-existing `CameraDiscovery`
-cache-TTL flakes (task #11), confirmed unrelated via `git stash` in
-earlier checkpoints and reproduced again here unchanged. Zero
-regressions from SR-1.9b or any checkpoint this session. **This closes
-the security review's entire numbered SR-x.y list** — §1 through §4
-are all now fully closed; only the "harden secondary availability
-hazards" bullet (unnumbered) remains open in the security review's
-text.
+cache-TTL flakes (task #11) — same 3 test node IDs as every previous
+checkpoint this session
+(`tests/vision/test_discovery_capture_sysfs.py::TestCacheTTL::test_cache_valid_within_ttl`,
+`tests/vision/test_discovery_edge_cases.py::TestPermissionDeniedOnDevice::test_device_that_does_not_exist_is_skipped`,
+`tests/vision/test_discovery_edge_cases.py::TestRapidAddRemove::test_cached_results_returned_within_ttl`),
+confirmed unrelated via `git stash` in earlier checkpoints and
+reproduced again here unchanged. Passed count is up from 21071
+(SR-1.9b's run) to 21115, reflecting this checkpoint's ~44 new/updated
+tests. Zero regressions from this checkpoint or any prior one this
+session. **This closes both the security review's entire numbered
+SR-x.y list and its one remaining unnumbered "harden secondary
+availability hazards" bullet — the security review's text has no open
+items left.**
 
 Full detail in `BUILD_STATUS.md`, `AUDIT_SECURITY.md`, and
 `TEST_RESULTS.md` — each has one dated entry per checkpoint this
@@ -1135,9 +1304,17 @@ three files above.)
   new `missy audit verify` CLI command) and SR-1.9b (policy-validated
   DNS resolutions are now pinned to the actual connection via a custom
   `httpcore` network backend, closing the check-time/connect-time
-  TOCTOU window — `missy/gateway/pinned_transport.py`, new). Only the
+  TOCTOU window — `missy/gateway/pinned_transport.py`, new). **The
   "harden secondary availability hazards" bullet (unnumbered, not a
-  finding ID) remains open in the security review's text.
+  finding ID) is also now fully closed** — all 9 sub-items fixed this
+  session's thirty-second checkpoint (CircuitBreaker half-open
+  single-probe, MCP RPC desync teardown, scheduler per-job isolation,
+  webhook HMAC replay/timestamp/concurrency, EventBus history bound,
+  provider base_url egress-widening audit event, image
+  decompression-bomb pre-decode guard, audit log rotation+permissions,
+  git stash SHA-identity). **The security review's text — every
+  numbered finding and its one unnumbered bullet — has no open items
+  left.**
 - **SR-1.7's launcher sub-finding** remains open — `find`/`xargs`/
   `bash`/`sudo` etc. are allowlist-able with only a warning, and
   nested shell commands inside a launcher's quoted arguments are
@@ -1218,108 +1395,51 @@ rather than code-level reasoning about what *should* happen.
 
 ## First Next Step
 
+**The security review's text — every numbered SR-x.y finding and its
+one unnumbered "harden secondary availability hazards" bullet — is now
+fully closed with no open items.** §1–§4 closed across this session's
+first 31 checkpoints (full detail in each of those checkpoints' entries
+above and in `AUDIT_SECURITY.md`); the availability-hardening bullet's
+9 sub-items closed in this session's thirty-second checkpoint
+(CircuitBreaker half-open single-probe, MCP RPC desync teardown,
+scheduler per-job isolation, webhook HMAC replay/timestamp/concurrency,
+EventBus history bound, provider base_url egress-widening audit event,
+image decompression-bomb pre-decode guard, audit log
+rotation+permissions, git stash SHA-identity — see that checkpoint's
+full write-up above).
+
 If a way to safely exercise a real or scripted acpx delegate call
-becomes available, prioritize FX-A bullet 6 — it unblocks re-validating
-everything else. Otherwise, **§2 and §3 of the security review are now
-both fully closed**, with zero open sub-findings in either (SR-2.1:
-scheduled jobs default to `capability_mode="safe-chat"`; SR-2.2: a real
-`ApprovalGate` is wired into `ProactiveManager` and the Web API server;
-SR-3.4's cross-session-aggregation sub-finding is fixed — `CostTracker`
-is now per-session-keyed), and **§4 is now fully closed with all eight
-items fixed**: SR-4.4 —
-`_tool_loop()` rejects a "done" claim made immediately after an
-unresolved tool error, up to 2 retries; SR-4.5 — `self_create_tool` no
-longer claims written scripts are "created"/"registered" as usable
-tools (operator-confirmed: kept proposal-only — the one item this
-session where the operator chose the *smaller*, document-only path);
-SR-4.3 — `AgentRuntime.resume_checkpoint()`/`missy recover --resume ID`
-now actually continue an interrupted task from saved conversation
-state; SR-4.2 — `SubAgentRunner`/`delegate_task` wired into production
-with real concurrency, shared-runtime budget aggregation, and a
-`MAX_SUB_AGENT_DEPTH` recursion bound; SR-4.7 — MCP tools are now
-runtime-callable via `McpToolWrapper`, with `McpManager.call_tool()`
-re-verifying the pinned digest and enforcing annotation-driven approval
-before every call; SR-4.1 — `_record_learnings()` now actually persists
-extracted learnings (was silently discarding them after extraction),
-and `SleeptimeWorker` is wired into production exactly as its own
-module docstring documented (operator-confirmed: enabled by default,
-matching its own class default, unlike SR-4.5's opt-out choice); SR-4.6
-— `OtelExporter.subscribe()`'s always-`TypeError`'ing call to
-`event_bus.subscribe()` (silently caught) meant OTLP export received
-zero events in every configuration ever, regardless of collector
-reachability — fixed by wrapping `event_bus.publish` directly (mirroring
-`AuditLogger`'s already-established pattern), plus redaction before
-export and failure-count surfacing; SR-4.8 — `AgentRuntime._call_provider_with_fallback()`
-now wraps every provider call with per-provider `CircuitBreaker`
-cooldown tracking, one automatic key-rotation retry on auth failures,
-and budget-gated cross-provider fallback with a full redacted audit
-trail, closing the gap between `ProviderRegistry.rotate_key()`/
-`_get_provider()`'s previously static, start-of-run-only check and the
-mid-run recovery CLAUDE.md always implied existed; SR-1.1 —
-`AuditLogger._handle_event()` (the one place every event reaches disk)
-now signs the complete canonical record as a top-level
-`identity_signature` field instead of the old 3-field signature
-embedded inside mutable `detail`, with a real `verify_audit_log()` and
-new `missy audit verify` CLI command closing the "nothing ever
-verifies it" gap the review demonstrated with a live PoC (edit a
-`deny` to `allow`, read it back clean) that this checkpoint reproduced
-and then closed.
-SR-1.9b — `NetworkPolicyEngine.check_host_resolved()` returns the IP
-SR-1.9a's rebinding check validated, instead of discarding it, and
-`missy/gateway/pinned_transport.py`'s custom `httpcore` network backend
-binds the actual TCP connection to that exact IP, closing the
-check-time/connect-time DNS-rebinding TOCTOU the review described.
-Live-verified with a real socket server and real `getaddrinfo`
-call-tracking that the target hostname resolves exactly once, never
-again at connect time, and that a direct simulation of the review's
-rebinding attack cannot reach the "rebound" address.
-**This closes the security review's entire numbered SR-x.y list** —
-§1 through §4 are all now fully closed. Only the "harden secondary
-availability hazards" bullet (unnumbered, not a finding ID) remains
-open in the security review's text, alongside the full 89-case
-tool-specific validation backlog and the broader untouched "Product
-Goal" surface — the natural next continuation now that every numbered
-security finding is closed. Given how the last several checkpoints
-went (SR-3.3 and SR-3.5 were both flagged "likely already fixed" and
-both turned out to hide live, confirmed, previously-undetected bugs;
-SR-2.1, SR-2.2, the SR-3.4 residual, and most SR-4.x fixes this session
-turned out to have a second layer beyond the obvious fix — SR-2.1's
-fail-closed legacy-record handling, SR-2.2's entirely-unwired
-`ApprovalGate` requiring new REST endpoints, the SR-3.4 residual's
-25-test mechanical-vs-intentional update split, SR-4.4's
-fingerprint-history design discarded after live testing, SR-4.5/SR-4.2/
-SR-4.7/SR-4.1(part 2) all turning out to be genuine product-policy
-forks requiring explicit operator input rather than obvious "just fix
-it" bugs (four separate times this session, each with a materially
-different answer — SR-4.5 chose the conservative/smaller path, the
-other three chose to build the real feature), SR-4.7's fix surfacing 2
-pre-existing tests accidentally exercising a non-default `McpManager`
-code path purely because manual `__new__()` construction never set an
-attribute the real `__init__` would have, SR-4.1's sub-finding 1 being
-a completely uneventful one-line mechanical fix sitting right next to
-sub-finding 2's genuine design question in the same review item, SR-4.6
-being the session's cleanest counter-example — a purely mechanical fix
-with zero product-policy ambiguity, yet still hiding a *second*
-pre-existing bug (`init_otel()`'s disabled-stub `AttributeError` crash,
-with 2 tests that had literally encoded that crash as correct behavior)
-found only by tracing the fix through to its test coverage), keep
-applying the same discipline to whatever's picked up next: read the
-actual current code, trace actual runtime call paths, specifically
+becomes available, prioritize FX-A bullet 6 ("prove end to end that
+representative filesystem, shell, browser, X11, AT-SPI, vision, audio,
+Discord upload, memory, self_create_tool, and code_evolve requests
+produce the expected registry, policy, and audit events") — it unblocks
+re-validating everything else with real evidence rather than
+code-level reasoning about what *should* happen. Otherwise, the natural
+next continuation is **task #10, the full 89-case tool-specific
+validation backlog (FS-001 through DISC-CMD-008)** — not re-run against
+current code at all this session, and now that every security finding
+is closed, the largest remaining block of unverified surface area.
+Alternatively pick up one of the concrete scoped tasks (#11 vision
+`CameraDiscovery` cache-TTL flake, #12 Discord pairing approval
+endpoint, #15 `allowed_roles` enforcement, #16 disposable
+browser-test environment, #17 acpx process-group cleanup), all
+self-contained and not requiring a live delegate. A Web TUI browser
+page for the `/api/v1/approvals` endpoints is also a reasonable,
+self-contained follow-up (the REST layer is done and tested; only the
+browser UI is missing).
+
+Given how consistently this session's checkpoints turned out to hide a
+second layer beyond the obvious fix (SR-3.3/SR-3.5's "likely already
+fixed" flags hiding live bugs, four separate genuine product-policy
+forks each needing explicit operator input, SR-4.6's clean mechanical
+fix still hiding a second pre-existing bug, this checkpoint's own
+provider-base_url sub-item narrowing from "exploitable SSRF" to
+"silent policy widening" only after checking actual reachability
+first), keep applying the same discipline to whatever's picked up
+next: read the actual current code, trace actual runtime call paths,
 check whether any existing test exercises the *real* production
-dispatch/entry point rather than just the unit under test in isolation,
-live-reproduce before declaring anything fixed, broken, or
-not-applicable, verify test-suite health empirically before finalizing
-any change that adds new background threads/processes/connections (as
-done for SR-4.1's `SleeptimeWorker` thread-per-instance change), and
-ask before implementing whenever a finding turns out to be a genuine
-product-policy fork rather than a mechanical bug — but don't assume the
-answer will always be "build the real feature": SR-4.5 is the
-counter-example, and the deciding factor each time was whether the
-fix would expand the set of code genuinely executable through the
-agent, not merely whether the review offered a "document the
-limitation" escape hatch. Alternatively pick up one of the concrete
-scoped tasks above (#11, #12, #15, #16, #17), all self-contained and
-not requiring a live delegate. A Web TUI browser page for the new
-`/api/v1/approvals` endpoints is also a reasonable, self-contained
-follow-up (the REST layer is done and tested; only the browser UI is
-missing).
+dispatch/entry point rather than just the unit under test in
+isolation, live-reproduce before declaring anything fixed or broken,
+verify test-suite health empirically, and ask before implementing
+whenever something turns out to be a genuine product-policy fork
+rather than a mechanical bug.

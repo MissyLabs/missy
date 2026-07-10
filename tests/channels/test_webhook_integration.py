@@ -344,21 +344,32 @@ class TestQueueOverflow:
 
 
 class TestHmacSignature:
-    """Requests must pass HMAC validation when a secret is configured."""
+    """Requests must pass HMAC validation when a secret is configured.
 
-    def _sign(self, secret: str, body: bytes) -> str:
+    SR-availability-hardening: signing is timestamp-bound
+    ("{timestamp}.{body}", not bare body) -- see TestHmacReplayProtection
+    below for the replay-specific coverage this change exists for.
+    """
+
+    def _sign(self, secret: str, body: bytes, ts: int) -> str:
         import hashlib
         import hmac as _hmac
 
-        return "sha256=" + _hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+        payload = f"{ts}.".encode() + body
+        return "sha256=" + _hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
 
     def test_valid_signature_accepted(self):
         port = _free_port()
         secret = "s3cr3t"
         with _running_channel(port=port, secret=secret):
             body = json.dumps({"prompt": "signed"}).encode()
-            sig = self._sign(secret, body)
-            resp = _post(port, body, headers={"X-Missy-Signature": sig})
+            ts = int(time.time())
+            sig = self._sign(secret, body, ts)
+            resp = _post(
+                port,
+                body,
+                headers={"X-Missy-Signature": sig, "X-Missy-Timestamp": str(ts)},
+            )
             assert resp.status == 202
 
     def test_missing_signature_returns_401(self):
@@ -367,20 +378,193 @@ class TestHmacSignature:
             resp = _json_post(port, {"prompt": "unsigned"})
             assert resp.status == 401
 
+    def test_missing_timestamp_returns_401_even_with_valid_signature_shape(self):
+        port = _free_port()
+        secret = "s3cr3t"
+        with _running_channel(port=port, secret=secret):
+            body = json.dumps({"prompt": "no timestamp"}).encode()
+            # Sign as if timestamp were an empty string -- still must be
+            # rejected, since the header itself is required and unparseable.
+            sig = self._sign(secret, body, 0)
+            resp = _post(port, body, headers={"X-Missy-Signature": sig})
+            assert resp.status == 401
+
     def test_wrong_signature_returns_401(self):
         port = _free_port()
         with _running_channel(port=port, secret="s3cr3t"):
             body = json.dumps({"prompt": "tampered"}).encode()
-            resp = _post(port, body, headers={"X-Missy-Signature": "sha256=deadbeef"})
+            ts = int(time.time())
+            resp = _post(
+                port,
+                body,
+                headers={"X-Missy-Signature": "sha256=deadbeef", "X-Missy-Timestamp": str(ts)},
+            )
+            assert resp.status == 401
+
+    def test_non_integer_timestamp_returns_401(self):
+        port = _free_port()
+        secret = "s3cr3t"
+        with _running_channel(port=port, secret=secret):
+            body = json.dumps({"prompt": "bad ts"}).encode()
+            resp = _post(
+                port,
+                body,
+                headers={
+                    "X-Missy-Signature": "sha256=irrelevant",
+                    "X-Missy-Timestamp": "not-a-number",
+                },
+            )
             assert resp.status == 401
 
     def test_no_secret_configured_ignores_signature_header(self):
-        """When no secret is set, any (or no) signature header is accepted."""
+        """When no secret is set, any (or no) signature/timestamp header is accepted."""
         port = _free_port()
         with _running_channel(port=port):  # no secret
             body = json.dumps({"prompt": "no secret needed"}).encode()
             resp = _post(port, body, headers={"X-Missy-Signature": "sha256=whatever"})
             assert resp.status == 202
+
+
+class TestHmacReplayProtection:
+    """Availability hardening: a captured valid signed request must not be
+    replayable, neither after its timestamp window expires nor
+    byte-for-byte within it. Live-reproduced before this fix: the old
+    scheme signed the bare body with no timestamp/nonce component at
+    all, so a captured (sig, body) pair verified successfully forever,
+    any number of times."""
+
+    def _sign(self, secret: str, body: bytes, ts: int) -> str:
+        import hashlib
+        import hmac as _hmac
+
+        payload = f"{ts}.".encode() + body
+        return "sha256=" + _hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
+
+    def test_exact_replay_of_a_valid_request_is_rejected(self):
+        port = _free_port()
+        secret = "s3cr3t"
+        with _running_channel(port=port, secret=secret):
+            body = json.dumps({"prompt": "replay me"}).encode()
+            ts = int(time.time())
+            headers = {
+                "X-Missy-Signature": self._sign(secret, body, ts),
+                "X-Missy-Timestamp": str(ts),
+            }
+            first = _post(port, body, headers=headers)
+            assert first.status == 202
+            second = _post(port, body, headers=headers)
+            assert second.status == 409
+
+    def test_stale_timestamp_beyond_skew_window_is_rejected(self):
+        port = _free_port()
+        secret = "s3cr3t"
+        with _running_channel(port=port, secret=secret):
+            body = json.dumps({"prompt": "old"}).encode()
+            ts = int(time.time()) - 600  # 10 minutes old, beyond the 5-minute window
+            headers = {
+                "X-Missy-Signature": self._sign(secret, body, ts),
+                "X-Missy-Timestamp": str(ts),
+            }
+            resp = _post(port, body, headers=headers)
+            assert resp.status == 401
+
+    def test_future_timestamp_beyond_skew_window_is_rejected(self):
+        port = _free_port()
+        secret = "s3cr3t"
+        with _running_channel(port=port, secret=secret):
+            body = json.dumps({"prompt": "future"}).encode()
+            ts = int(time.time()) + 600
+            headers = {
+                "X-Missy-Signature": self._sign(secret, body, ts),
+                "X-Missy-Timestamp": str(ts),
+            }
+            resp = _post(port, body, headers=headers)
+            assert resp.status == 401
+
+    def test_different_bodies_with_the_same_timestamp_are_not_confused(self):
+        """Replay detection is keyed on the signature (which covers the
+        body), not just the timestamp -- two distinct legitimate requests
+        arriving in the same second must both succeed."""
+        port = _free_port()
+        secret = "s3cr3t"
+        with _running_channel(port=port, secret=secret):
+            ts = int(time.time())
+            body_a = json.dumps({"prompt": "request A"}).encode()
+            body_b = json.dumps({"prompt": "request B"}).encode()
+            resp_a = _post(
+                port,
+                body_a,
+                headers={
+                    "X-Missy-Signature": self._sign(secret, body_a, ts),
+                    "X-Missy-Timestamp": str(ts),
+                },
+            )
+            resp_b = _post(
+                port,
+                body_b,
+                headers={
+                    "X-Missy-Signature": self._sign(secret, body_b, ts),
+                    "X-Missy-Timestamp": str(ts),
+                },
+            )
+            assert resp_a.status == 202
+            assert resp_b.status == 202
+
+
+class TestConcurrentRequests:
+    """Availability hardening: one slow client must not serialize/block
+    every other webhook sender behind it. Live-reproduced before this
+    fix (single-threaded http.server.HTTPServer): a fast client's request
+    took ~2.5s to complete, blocked behind an unrelated slow client's
+    trickled body, instead of ~0.3s."""
+
+    def test_fast_request_is_not_blocked_by_a_slow_concurrent_one(self):
+        import threading
+
+        port = _free_port()
+        with _running_channel(port=port):
+            start = time.monotonic()
+            results: dict[str, float] = {}
+
+            def slow_client():
+                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+                body = json.dumps({"prompt": "slow"}).encode()
+                conn.putrequest("POST", "/")
+                conn.putheader("Content-Type", "application/json")
+                conn.putheader("Content-Length", str(len(body)))
+                conn.endheaders()
+                for b in body:
+                    conn.send(bytes([b]))
+                    time.sleep(0.1)
+                resp = conn.getresponse()
+                results["slow"] = time.monotonic() - start
+                resp.read()
+                conn.close()
+
+            def fast_client():
+                time.sleep(0.2)  # ensure slow client is already mid-request
+                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+                body = json.dumps({"prompt": "fast"}).encode()
+                conn.request(
+                    "POST", "/", body=body, headers={"Content-Type": "application/json"}
+                )
+                resp = conn.getresponse()
+                results["fast"] = time.monotonic() - start
+                resp.read()
+                conn.close()
+
+            t1 = threading.Thread(target=slow_client)
+            t2 = threading.Thread(target=fast_client)
+            t1.start()
+            t2.start()
+            t1.join(timeout=10)
+            t2.join(timeout=10)
+
+            assert "fast" in results and "slow" in results
+            # The fast request must complete well before the slow one,
+            # not be serialized behind it.
+            assert results["fast"] < results["slow"]
+            assert results["fast"] < 1.0
 
 
 class TestServerLifecycle:

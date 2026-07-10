@@ -2883,6 +2883,437 @@ requirement — do not overwrite, append new entries as work continues.
   `PolicyHTTPClient` never uses UDS and there is no hostname/DNS
   component to that path at all.
 
+### Availability hardening — 9 secondary hazards from the security review's unnumbered "harden secondary availability hazards" bullet
+
+- **Status: fixed, all 9 sub-items. This closes the security review's
+  entire text** — every numbered SR-x.y finding (closed with SR-1.9b
+  above) and this one remaining unnumbered bullet are now both fully
+  remediated, with no open items left in `~/Missy-security-review.md`.
+- Unlike the numbered SR-x.y findings, none of these 9 are
+  authorization/policy-bypass vulnerabilities — they are availability,
+  robustness, and audit-integrity hazards: things that degrade,
+  corrupt, or silently misbehave under real-world conditions (crashes,
+  concurrency, resource exhaustion, disk growth) rather than grant
+  unauthorized access. Each was live-reproduced against real
+  threads/subprocesses/sockets/files before being fixed, and
+  re-verified after, matching this session's established discipline.
+
+**1. `CircuitBreaker` half-open state allowed unlimited concurrent
+probes (`missy/agent/circuit_breaker.py`)**
+
+- Reachability: `call()`'s `HALF_OPEN` branch let every concurrent
+  caller through as a "probe" simultaneously — the entire point of a
+  half-open state (send exactly one test call before trusting recovery)
+  was defeated under concurrent load, since a failing downstream
+  service could receive N concurrent probe calls instead of 1,
+  potentially re-triggering the same failure that opened the breaker
+  and delaying real recovery detection.
+- Live-reproduced: 5 real `threading.Thread`s racing a freshly
+  transitioned `HALF_OPEN` breaker — 5/5 executed concurrently before
+  the fix.
+- Fix: new `self._probe_in_flight` flag, checked and set inside the
+  existing lock in the `HALF_OPEN` branch of `call()`; a second
+  concurrent caller is rejected with a clear `MissyError` instead of
+  proceeding. `_on_success()`/`_on_failure()` both clear the flag when
+  transitioning out of `HALF_OPEN`.
+- Re-verified: same 5-thread race now shows exactly 1/5 executes, the
+  other 4 rejected immediately.
+- Verification: `tests/agent/test_circuit_breaker.py::TestThreadSafety`
+  — 3 new tests (`test_half_open_allows_exactly_one_concurrent_probe`,
+  `test_probe_in_flight_cleared_after_successful_probe`,
+  `test_probe_in_flight_cleared_after_failed_probe`).
+
+**2. MCP RPC response-stream desync after a timeout (`missy/mcp/client.py`)**
+
+- Reachability: `_rpc()` raised `TimeoutError` on a slow response but
+  left the subprocess and its stdout pipe fully alive — a response
+  that eventually did arrive (just late) would be read by the *next*
+  `_rpc()` call, which would see a mismatched response ID and either
+  silently misattribute the stale response or throw a confusing error,
+  with the underlying process never actually being recycled.
+- Live-reproduced with a real Python subprocess acting as a
+  slow-but-not-dead MCP server: after the client's `_rpc()` timed out,
+  `is_alive()` still returned `True`, and the following call received
+  a stale-response ID-mismatch error rather than a clean failure.
+- Fix: new `_teardown_after_timeout()` — kills the subprocess (`kill()`,
+  not graceful `terminate()`, since a hung process may not respond to
+  SIGTERM), waits up to 5s, closes stdin/stdout/stderr, clears
+  `self._proc`, all wrapped in `contextlib.suppress(Exception)`. Called
+  before the `TimeoutError` is raised, so by the time the caller sees
+  the exception the connection is already fully torn down.
+- Re-verified: same slow-server reproduction now shows `is_alive()`
+  returns `False` immediately after the timeout, and the next call gets
+  a clean "not connected" error instead of a desynced response.
+- Verification: `tests/mcp/test_mcp_client.py::TestMcpClientTimeoutTeardown`
+  — 6 tests, including one real-subprocess end-to-end case.
+
+**3. One malformed scheduled job aborted the entire scheduler startup
+(`missy/scheduler/manager.py`)**
+
+- Reachability: `SchedulerManager.start()` iterated every persisted job
+  in `jobs.json` and called `self._schedule_job(job)` with no
+  exception isolation — a single corrupted or otherwise
+  invalid-schedule record (e.g. hand-edited config, a partially-written
+  file from a crash mid-save, a schema change between versions) raised
+  uncaught, which meant *no* job got scheduled, including every other
+  valid one, on that and every subsequent restart until the bad record
+  was manually removed.
+- Live-reproduced with a real `jobs.json` containing one valid job and
+  one with an invalid schedule expression: `start()` raised, and the
+  valid job never got scheduled.
+- Fix: per-job `try/except` around `self._schedule_job(job)` inside the
+  loop; a failure is logged, the job ID added to a `skipped` list, and
+  a new `scheduler.job_registration_failed` audit event emitted
+  (job_id, job_name, error) — the loop continues to the next job
+  instead of aborting. The final startup log/audit event now reports
+  the real scheduled count (`len(self._jobs) - len(skipped)`) and lists
+  `skipped_job_ids`.
+- Re-verified: same reproduction now shows the valid job scheduled and
+  running normally; the bad job is skipped with a logged error and
+  audit event, not silently dropped.
+- Verification: `tests/scheduler/test_manager_coverage.py::TestStartIsolatesPerJobSchedulingFailures`
+  — 4 new tests.
+
+**4. Webhook channel: no replay protection, no request freshness check,
+and one slow client could stall every other client (`missy/channels/webhook.py`)**
+
+- Reachability, two independent issues: (a) HMAC verification signed
+  only the raw request body with no timestamp or nonce component — an
+  intercepted, validly-signed request (e.g. captured from network
+  traffic, a proxy log, or a compromised downstream system) could be
+  replayed an unlimited number of times with no way for the server to
+  detect staleness, since the signature over identical bytes is
+  identical forever. (b) the channel used the stdlib's plain
+  `http.server.HTTPServer`, which handles connections **serially** on
+  a single thread — one slow, trickling, or intentionally
+  slow-drip client (malicious or just a flaky network) blocked every
+  other legitimate webhook sender behind it, an availability hazard
+  with no attacker sophistication required.
+- Live-reproduced: (a) conceptually confirmed an identical
+  valid-signature request is accepted on repeat with the pre-fix code
+  (no freshness/dedup mechanism existed to reject it). (b) rigorous
+  before/after timing test using real `http.client` connections
+  against a real running server: a fast client's request took ~2.5s
+  when queued behind a slow, deliberately-trickling concurrent request
+  before the fix.
+- Fix: the HMAC-signed payload changed from bare `body` to
+  `f"{ts}.".encode() + body`, requiring a new `X-Missy-Timestamp`
+  request header; requests with a timestamp more than
+  `_MAX_TIMESTAMP_SKEW_SECONDS = 300` seconds from the server's clock
+  (past or future) are rejected with 401, as are requests missing the
+  header or with a non-integer value. A TTL-bounded `_seen_signatures`
+  dict (protected by a lock, capped at `_MAX_TRACKED_SIGNATURES =
+  10_000` with stale-entry eviction) rejects an exact-signature replay
+  within the TTL window with 409. `HTTPServer` was swapped for
+  `ThreadingHTTPServer` (one thread per connection) with a
+  `Handler.timeout = 30` second per-connection cap, so a slow client
+  can no longer block others.
+- Re-verified: the same fast-vs-slow-client timing test now shows the
+  fast client completing in ~0.3s regardless of the slow client's
+  progress; an exact-duplicate valid request is rejected with 409 on
+  the second delivery; a request outside the timestamp skew window is
+  rejected with 401 even with an otherwise-valid signature.
+- Verification: `tests/channels/test_webhook_integration.py` —
+  `TestHmacSignature` updated for the new timestamp-inclusive
+  signature, plus new `test_missing_timestamp_returns_401_even_with_valid_signature_shape`
+  and `test_non_integer_timestamp_returns_401`; new
+  `TestHmacReplayProtection` (4 tests) and `TestConcurrentRequests`
+  (`test_fast_request_is_not_blocked_by_a_slow_concurrent_one`, with
+  real before/after timing evidence) classes. ~15 pre-existing tests
+  across `tests/channels/test_channel_deep.py`,
+  `tests/security/test_secrets_policy_gateway_webhook_edges.py`,
+  `tests/security/test_file_tool_gateway_shell_webhook_hardening.py`,
+  `tests/unit/test_remaining_coverage_gaps.py`,
+  `tests/unit/test_infrastructure.py` updated for the
+  `HTTPServer`→`ThreadingHTTPServer` rename and the new timestamp
+  requirement in HMAC-signing helpers — mechanical updates to
+  construction/mocking, not weakened assertions.
+- **Breaking change, called out explicitly:** any existing external
+  webhook sender must add the `X-Missy-Timestamp` header and include it
+  in its HMAC computation, or every request will be rejected with 401
+  after this change ships. Documented in the class docstring.
+
+**5. `EventBus` in-memory event history grew without bound (`missy/core/events.py`)**
+
+- Reachability: `EventBus._log` was a plain Python `list`, appended to
+  on every single published event for the entire lifetime of the
+  process — in a long-running `missy gateway start` deployment (the
+  intended production usage pattern), this is an unbounded memory leak
+  that grows for as long as the process runs, eventually exhausting
+  available memory.
+- Live-reproduced: publishing 50,000 synthetic events to a real
+  `EventBus` instance retained all 50,000 in `_log`.
+- Fix: `self._log` is now a `collections.deque(maxlen=self._MAX_LOG_SIZE)`
+  with `_MAX_LOG_SIZE = 10_000` — a bounded ring buffer; oldest entries
+  are evicted automatically as new ones arrive past the cap.
+- Re-verified: same 50,000-event reproduction now shows exactly 10,000
+  retained, with the oldest 40,000 evicted (confirmed the *newest*
+  10,000 are the ones retained, not an arbitrary subset); subscribers
+  still fire correctly for every event regardless of eventual eviction
+  from history; `clear()` still works as before.
+- Verification: `tests/core/test_events_deep.py::TestEventBusHistoryBound`
+  — 5 new tests (cap enforcement, `get_events()` reflects the cap,
+  oldest-evicted-first ordering, subscribers still fire for evicted
+  events, `clear()` still works).
+
+**6. Provider `base_url` silently widened network egress allowlisting
+with no audit trail (`missy/providers/registry.py`)**
+
+- Reachability: `ProviderRegistry.from_config()`'s block that
+  auto-expands `network.provider_allowed_hosts` to include a
+  configured provider's `base_url` host logged the widening at `DEBUG`
+  level only, with no audit event emitted — an operator who
+  misconfigures (or an attacker who manages to inject) a `base_url`
+  pointing at an unexpected host (the review's example:
+  `169.254.169.254`, the cloud-metadata address) would have the
+  network policy's egress allowlist silently widened to include it,
+  visible only to someone specifically tailing debug-level logs.
+- Investigated actual exploitability before fixing, rather than
+  assuming the review's framing: confirmed via SR-1.9b's now-live
+  DNS-rebinding/pinning defenses that a bare-IP target like
+  `169.254.169.254` already bypasses `allowed_hosts` matching entirely
+  (only CIDR-based rules apply to bare IPs) — so widening
+  `provider_allowed_hosts` to include that IP-as-a-string has **zero**
+  practical effect on what actually gets through the policy engine.
+  This narrows the real problem from "exploitable SSRF via base_url"
+  (already independently closed by SR-1.9a/1.9b) to "silent, unaudited
+  policy widening" — informing a proportionate fix rather than
+  redundant SSRF hardening that would duplicate already-shipped
+  defenses.
+- Fix: the widening now logs at `WARNING` (was `DEBUG`) with an
+  explicit message pointing at the specific provider config to check,
+  and emits a new `provider.base_url_egress_widened` audit event
+  (`provider` name, `host`, full `base_url`) via `event_bus`, wrapped
+  in `contextlib.suppress(Exception)` so a widening-event emission
+  failure can never block provider registry construction itself.
+- Re-verified: constructing a registry from a config with a
+  provider's `base_url` set to a new host now emits exactly one
+  `provider.base_url_egress_widened` audit event and one `WARNING`-level
+  log line; an already-allowlisted host does not re-emit on a second
+  construction.
+- Verification: `tests/providers/test_registry_deep.py` — 3 new tests
+  (`test_from_config_base_url_widening_emits_audit_event`,
+  `test_from_config_base_url_widening_logs_at_warning_not_debug`,
+  `test_from_config_no_duplicate_widening_events_for_already_allowed_host`).
+
+**7. Image decode had no dimension cap before OpenCV, only an
+advisory one after (`missy/vision/sources.py`)**
+
+- Reachability: `FileSource.acquire()` only inspected the decoded
+  image's dimensions *after* `cv2.imread()` had already fully decoded
+  the entire pixel buffer into memory — and even then, the check only
+  called `logger.warning()` rather than rejecting the oversized image,
+  so it was advisory-only and never actually prevented anything. A
+  maliciously crafted or corrupted image file with a huge declared
+  resolution (a classic "decompression bomb": a small file on disk that
+  decodes to gigabytes in memory) could exhaust memory or burn
+  significant CPU before any check ran, and even after decoding,
+  nothing stopped it from being used.
+- Live-reproduced with a real, non-synthetic 30000×30000-pixel
+  solid-color PNG (11MB on disk, ~2.5GB once decoded): pre-fix,
+  rejection only happened after 2.85 seconds of full `cv2.imread()`
+  decode via the post-decode path — and that path only warned, never
+  actually raised, so the oversized image would have been used anyway.
+- Fix, two layers: (a) new `_peek_image_dimensions()` uses PIL/Pillow's
+  lazy `Image.open()` — which parses only the file header, not the
+  pixel buffer, until `.load()`/`.convert()` is called — to read the
+  declared dimensions *before* handing the file to OpenCV at all; if
+  declared dimensions exceed `FileSource.MAX_DIMENSION`, raises before
+  `cv2.imread()` is ever called. This function also specifically
+  catches Pillow's own built-in `Image.DecompressionBombError` (Pillow
+  ships a `MAX_IMAGE_PIXELS` guard of its own, ~178.9M pixels by
+  default) and re-raises it as a new `ImageTooLargeError(ValueError)`,
+  rather than letting a broad `except Exception` swallow it and fall
+  through to the slow post-decode path (an earlier draft of this fix
+  had exactly that bug — caught and corrected during this checkpoint's
+  own live verification, see below). (b) the existing post-decode
+  dimension check was strengthened from `logger.warning()` (advisory,
+  never blocked anything) to `raise ValueError(...)` (a hard rejection)
+  as a second-layer safety net for any image whose header
+  under-declares its true dimensions.
+- Self-correction during verification: the first implementation of
+  `_peek_image_dimensions()` had a single broad `except Exception:
+  return None` around both the PIL import and the `Image.open()` call,
+  which meant a Pillow-detected decompression bomb was caught by that
+  same broad handler and treated as "unknown, fall through to the slow
+  post-decode path" — defeating the entire point of the fast pre-check.
+  Live-verification against the real 30000×30000 PNG caught this: the
+  first-draft fix still took 2.85s (still hitting `cv2.imread()`).
+  Restructured into two separate `try/except` blocks — one for the PIL
+  import (`except ImportError: return None`), a second for
+  `Image.open()` specifically catching `Image.DecompressionBombError`
+  and re-raising as `ImageTooLargeError`, letting only genuinely
+  different failures (corrupt file, unsupported format) fall through
+  to the slow path.
+- Re-verified after the correction: the same 30000×30000 PNG is now
+  rejected in ~0.03 seconds — roughly 100x faster — and `cv2.imread()`
+  is never called at all (confirmed via
+  `mock_cv2_fn.return_value.imread.assert_not_called()`, not the
+  broader and misleading `mock_cv2_fn.assert_not_called()`, since
+  `_get_cv2()` itself is always called early in `acquire()` regardless
+  of whether decode is actually reached — a distinction that mattered
+  for writing a correct assertion).
+- Verification: `tests/vision/test_source_validation.py` —
+  `test_warns_on_oversized_dimensions`/`test_warns_on_oversized_height`
+  renamed and rewritten to
+  `test_rejects_oversized_width_post_decode_safety_net`/
+  `test_rejects_oversized_height_post_decode_safety_net` (now assert
+  `pytest.raises(ValueError)` instead of the old warn-and-succeed
+  behavior — the old behavior was itself the bug, not a valid
+  contract to preserve); new `TestFileSourceDecompressionBombGuard`
+  class (4 tests) for the pre-decode guard.
+
+**8. Audit log was created world-readable and grew without bound or
+rotation (`missy/observability/audit_logger.py`)**
+
+- Reachability: the audit log file was created via `Path.open("a")`
+  (or, in earlier code, `builtins.open()`), which creates the file
+  with permissions governed entirely by the process's umask — commonly
+  `0o022`, yielding `0o644` (world-readable) — with no explicit
+  restriction ever applied. Since the audit log's own SR-1.10 fix
+  (earlier this session) specifically redacts secrets before writing
+  but every *other* event field (hostnames, user actions, policy
+  decisions, tool arguments, timestamps) is written in full, a
+  world-readable audit log on a multi-user system leaks a detailed
+  activity trail to any local user. Separately, the log had no size
+  cap or rotation mechanism at all — in a long-running deployment, the
+  single JSONL file grows forever, eventually exhausting disk space.
+- Live-reproduced: under a simulated `umask(0o022)` (the common Linux
+  default), a fresh `AuditLogger` instance created its log file at
+  `0o644`, world-readable.
+- Fix, two independent hardenings: (a) the write path changed from
+  `Path.open("a")`/`builtins.open()` to
+  `os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)` +
+  `os.write()`/`os.close()`, so the file is created with restrictive
+  owner-only permissions **atomically** at creation time, not as a
+  separate `chmod` call after the fact (which would leave a brief
+  window where the file exists at the umask-derived permissions);
+  `__init__` also explicitly `os.chmod()`s a pre-existing log file to
+  `0o600` on startup, covering upgrades from an older version that
+  already created a world-readable file. (b) new
+  `_MAX_LOG_SIZE_BYTES = 50 * 1024 * 1024` (50MB) and
+  `_MAX_ROTATED_FILES = 5`; a new `_rotate_if_needed()` (called before
+  every write) renames the log to a timestamped
+  `<path>.<epoch>` file once it exceeds the size cap and starts a fresh
+  log, then calls a new `_prune_rotated_logs()` which globs existing
+  rotated files, sorts by modification time, and deletes any beyond
+  the newest 5.
+- Re-verified: same `umask(0o022)` reproduction now creates the file at
+  `0o600`; an existing world-readable file present before `__init__`
+  runs is chmod'd to `0o600` on construction; rotation confirmed with
+  an artificially tiny size threshold — the log rotates to a
+  timestamped file, a fresh log starts, and rotated files beyond the
+  cap of 5 are pruned (oldest first); rotated files are confirmed to
+  also carry `0o600` permissions, not inheriting the umask.
+- Verification: `tests/observability/test_audit_logger_extended.py` —
+  new `TestRestrictivePermissions` (2 tests) and `TestLogRotation` (5
+  tests) classes. 4 pre-existing tests across
+  `tests/observability/test_audit_logger_coverage.py` and
+  `test_audit_logger_extended.py` that simulated write failures via
+  `patch.object(Path, "open", side_effect=OSError(...))` updated to
+  `patch("os.open", side_effect=...)`, since the write mechanism itself
+  changed from `Path.open()` to `os.open()` — the same failure-injection
+  intent, updated to match the new implementation, not a weakened
+  assertion.
+
+**9. Git safety-stash was restored by stack position, not identity
+(`missy/agent/code_evolution.py`)**
+
+- Reachability: `_stash_if_dirty()`/`_stash_pop()` — the mechanism
+  `CodeEvolutionManager.apply()` uses to preserve an operator's
+  uncommitted work before patching files and running tests — used bare
+  `git stash push`/`git stash pop` with no ref argument. `git stash
+  pop` with no argument always operates on `stash@{0}`, the top of the
+  stash stack **by position**, not by any identity tied to the specific
+  stash this code itself pushed. If any other process, session, or
+  branch pushes a stash onto the same repository's stack between this
+  code's push and its own pop — entirely plausible in a repo under
+  active multi-session use — the position-based pop would restore the
+  *wrong* stash, and if that unrelated stash's content conflicts with
+  the current working tree, `git stash pop` leaves conflict markers
+  mixed directly into someone else's in-progress, unrelated work.
+  Confirmed this is not a theoretical scenario: a read-only `git stash
+  list` against this very repository, at the time of this checkpoint,
+  showed 4 real, pre-existing, unrelated stashes already on the stack
+  from other sessions/branches (`WIP on master: af6c459 ...`, `WIP on
+  overhaul/discord-20260707-215326: ...`, and two more) — never
+  touched, read-only inspection only, consistent with this session's
+  discipline of never modifying state outside its own scope.
+- Live-reproduced in a disposable, throwaway git repository (never
+  touching this repository's real stash stack): pushed a stash via the
+  pre-fix code, then simulated a concurrent/interleaved unrelated
+  stash push (a second commit plus a second `git stash push` on top),
+  then ran the pre-fix bare `git stash pop` — confirmed it restored the
+  *unrelated* stash's content (`other.txt` appeared in the working
+  tree) while the original stashed change (`file.txt`'s modification)
+  remained stranded on the stack.
+- Fix: `_stash_if_dirty()` now returns the pushed stash's commit SHA
+  (captured via `git rev-parse stash@{0}` immediately after the `git
+  stash push`, while it's still guaranteed to be at position 0) instead
+  of a bare `bool` — the SHA is a stable identity independent of the
+  stash's later position on the stack. `_stash_pop(stash_sha)` re-reads
+  `git stash list --format="%H %gd"` immediately before popping,
+  matches the recorded SHA against the current list to find that exact
+  stash's *current* `stash@{N}` ref (which may have shifted if other
+  stashes were pushed in the interim), and pops using that specific
+  ref. If the SHA can't be found on the stack at all (an even more
+  unusual edge case — e.g. the stash was manually dropped by an
+  operator), the code logs a warning and leaves the stack untouched
+  entirely rather than guessing and risking popping unrelated content.
+  The two caller sites in `apply()` were updated to thread the SHA
+  through instead of a bool.
+- Re-verified: the same disposable-repo reproduction, run again against
+  the fixed code, now correctly finds and pops the *original* stash by
+  SHA regardless of the unrelated stash's position on top of it — the
+  original file's modification is restored correctly, and the
+  unrelated concurrent stash is left completely untouched on the stack
+  (confirmed via `git stash list` showing it still present, and
+  confirming its file never appeared in the working tree).
+- Verification: `tests/agent/test_code_evolution.py` — new
+  `test_apply_pops_correct_stash_despite_concurrent_unrelated_stash`
+  (full integration test through the real `apply()` method, with a
+  monkeypatched `_stash_if_dirty` that pushes a real concurrent
+  unrelated stash mid-flow to simulate the interleaving) plus a new
+  `TestStashIdentity` class (4 unit tests: returns `None` when clean,
+  returns a full 40-character commit SHA when dirty, `_stash_pop(None)`
+  is a no-op, `_stash_pop()` with an unresolvable SHA leaves the stack
+  untouched). All pre-existing `_stash_if_dirty`/`_stash_pop` mocks
+  across `tests/security/test_self_create_tool_expanded_blocklist.py`,
+  `tests/security/test_discord_attachment_codeevolution_filewrite_security.py`,
+  and `tests/agent/test_code_evolution_coverage.py` already
+  returned/expected falsy values (`False`), which remain falsy and
+  therefore still correct under the new `str | None` return type — no
+  changes needed in those files.
+
+- **Overall verification for this checkpoint:**
+  `tests/agent/test_circuit_breaker.py`,
+  `tests/mcp/test_mcp_client.py`, `tests/scheduler/test_manager_coverage.py`,
+  `tests/channels/`, `tests/core/test_events_deep.py`,
+  `tests/providers/test_registry_deep.py`, `tests/vision/`,
+  `tests/observability/`, and `tests/agent/test_code_evolution.py` all
+  pass individually per sub-item as each was completed; the full
+  `tests/agent/` directory (which includes `test_code_evolution.py`,
+  the last sub-item's tests) passed 4229/4229 (4 pre-existing,
+  unrelated skips) as a consolidated check. Full suite:
+  `python3 -m pytest tests/ -q -o faulthandler_timeout=120` →
+  `3 failed, 21115 passed, 13 skipped in 533.81s (0:08:53)` — the 3
+  failures are exactly the same known pre-existing `CameraDiscovery`
+  cache-TTL flakes (task #11) confirmed unrelated in every previous
+  checkpoint this session; passed count up from 21071 (SR-1.9b's run)
+  to 21115, reflecting ~44 new/updated tests across this checkpoint's 9
+  sub-items. Zero regressions.
+- **Residual risk, called out explicitly:** none of these 9 fixes
+  required a product-policy decision — all are cases of "make the
+  mechanism actually deliver on its own already-intended contract," so
+  there was no operator question to ask, unlike several of the SR-4.x
+  findings earlier this session. The webhook timestamp requirement
+  (sub-item 4) is a breaking protocol change for any existing external
+  webhook sender. The audit-log permission tightening (sub-item 8)
+  means an existing world-readable log file becomes owner-only-readable
+  on next write after upgrade — an intentional hardening, not a
+  regression to flag. The `httpcore` private-import-path residual risk
+  noted in SR-1.9b's section above is unrelated to this checkpoint.
+
 ---
 
 - Timestamp: 2026-07-09 15:35:26 (raw grep-scan dump below, preserved

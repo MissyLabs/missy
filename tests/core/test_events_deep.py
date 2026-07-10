@@ -376,6 +376,60 @@ class TestEventBusPublish:
 
 
 # ---------------------------------------------------------------------------
+# EventBus — in-memory history is bounded (availability hardening)
+# ---------------------------------------------------------------------------
+
+
+class TestEventBusHistoryBound:
+    """The in-memory log must not grow without bound -- Missy runs as a
+    long-lived background daemon (scheduler, SleeptimeWorker, Discord,
+    webhook, etc.), so an unbounded list of every event ever published is
+    a real memory-exhaustion hazard, not a theoretical one. Live-
+    reproduced before this fix: publishing 50,000 events left exactly
+    50,000 AuditEvent objects retained in memory forever."""
+
+    def test_log_size_is_capped_at_max_log_size(self) -> None:
+        bus = EventBus()
+        for i in range(EventBus._MAX_LOG_SIZE + 500):
+            bus.publish(_make_event(event_type=f"cap.event.{i}"))
+        assert len(bus._log) == EventBus._MAX_LOG_SIZE
+
+    def test_get_events_reflects_the_cap(self) -> None:
+        bus = EventBus()
+        for i in range(EventBus._MAX_LOG_SIZE + 500):
+            bus.publish(_make_event(event_type=f"cap.event.{i}"))
+        assert len(bus.get_events()) == EventBus._MAX_LOG_SIZE
+
+    def test_cap_evicts_oldest_first_keeps_most_recent(self) -> None:
+        bus = EventBus()
+        total = EventBus._MAX_LOG_SIZE + 500
+        for i in range(total):
+            bus.publish(_make_event(event_type=f"cap.event.{i}"))
+        events = bus.get_events()
+        # The first 500 events must have been evicted; the log must hold
+        # exactly the most recent _MAX_LOG_SIZE events, oldest-first.
+        assert events[0].event_type == "cap.event.500"
+        assert events[-1].event_type == f"cap.event.{total - 1}"
+
+    def test_subscribers_still_fire_for_evicted_events(self) -> None:
+        """Eviction only affects the in-memory query snapshot -- every
+        event must still have reached its subscribers (e.g. AuditLogger's
+        publish-wrapping) at publish time, before it ages out of _log."""
+        bus = EventBus()
+        seen: list[str] = []
+        bus.subscribe("cap.sub.event", lambda e: seen.append(e.event_type))
+        for i in range(EventBus._MAX_LOG_SIZE + 500):
+            bus.publish(_make_event(event_type="cap.sub.event"))
+        assert len(seen) == EventBus._MAX_LOG_SIZE + 500
+
+    def test_clear_still_empties_the_bounded_log(self) -> None:
+        bus = EventBus()
+        bus.publish(_make_event(event_type="cap.clear.event"))
+        bus.clear()
+        assert bus.get_events() == []
+
+
+# ---------------------------------------------------------------------------
 # EventBus — get_events filtering
 # ---------------------------------------------------------------------------
 

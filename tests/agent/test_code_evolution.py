@@ -346,6 +346,109 @@ class TestApply:
         with pytest.raises(ValueError, match="not found"):
             mgr.apply("nope1234")
 
+    def test_apply_pops_correct_stash_despite_concurrent_unrelated_stash(self, mgr, tmp_repo):
+        """A stash pushed by another process/session between our push and
+        pop must not be disturbed, and our own safety stash must still be
+        restored correctly (SHA-identity lookup, not position-based
+        stash@{0})."""
+        # Make uncommitted changes to an unrelated file -- this is what
+        # apply() will stash.
+        (tmp_repo / "missy" / "__init__.py").write_text("# dirty\n")
+        prop = mgr.propose(
+            title="T",
+            description="D",
+            file_path="missy/example.py",
+            original_code="return 'hello'",
+            proposed_code="return 'hi'",
+        )
+        mgr.approve(prop.id)
+
+        real_stash_if_dirty = mgr._stash_if_dirty
+
+        def stash_then_simulate_concurrent_push():
+            sha = real_stash_if_dirty()
+            # Simulate a concurrent/interleaved stash from an unrelated
+            # process landing on top of ours before we pop.
+            subprocess.run(
+                ["git", "commit", "--allow-empty", "-m", "unrelated concurrent commit"],
+                cwd=str(tmp_repo),
+                capture_output=True,
+                check=True,
+            )
+            (tmp_repo / "concurrent.txt").write_text("unrelated concurrent work\n")
+            subprocess.run(
+                ["git", "add", "concurrent.txt"], cwd=str(tmp_repo), capture_output=True, check=True
+            )
+            subprocess.run(
+                ["git", "stash", "push", "-m", "unrelated-concurrent-stash"],
+                cwd=str(tmp_repo),
+                capture_output=True,
+                check=True,
+            )
+            return sha
+
+        mgr._stash_if_dirty = stash_then_simulate_concurrent_push
+        try:
+            result = mgr.apply(prop.id)
+        finally:
+            mgr._stash_if_dirty = real_stash_if_dirty
+
+        assert result["success"]
+        # Our stashed dirty change was restored correctly.
+        content = (tmp_repo / "missy" / "__init__.py").read_text()
+        assert "# dirty" in content
+        # The unrelated concurrent stash was left untouched on the stack --
+        # not popped, not merged, not corrupted.
+        stash_list = subprocess.run(
+            ["git", "stash", "list"], cwd=str(tmp_repo), capture_output=True, text=True
+        ).stdout
+        assert "unrelated-concurrent-stash" in stash_list
+        # The unrelated stash's content was never applied to the working tree.
+        assert not (tmp_repo / "concurrent.txt").exists()
+
+        # Clean up the unrelated stash left on the stack by this test.
+        subprocess.run(["git", "stash", "drop"], cwd=str(tmp_repo), capture_output=True, check=True)
+
+
+class TestStashIdentity:
+    """Unit coverage for the SHA-identity-based stash helpers."""
+
+    def test_stash_if_dirty_returns_none_when_clean(self, mgr):
+        assert mgr._stash_if_dirty() is None
+
+    def test_stash_if_dirty_returns_commit_sha(self, mgr, tmp_repo):
+        (tmp_repo / "missy" / "__init__.py").write_text("# dirty\n")
+        sha = mgr._stash_if_dirty()
+        assert sha
+        assert len(sha) == 40  # full git commit SHA
+        # Working tree should be clean again after the stash push.
+        status = subprocess.run(
+            ["git", "status", "--porcelain"], cwd=str(tmp_repo), capture_output=True, text=True
+        ).stdout
+        assert status.strip() == ""
+        mgr._stash_pop(sha)
+
+    def test_stash_pop_with_none_is_a_no_op(self, mgr, tmp_repo):
+        # Should not raise and should not touch any existing stash.
+        mgr._stash_pop(None)
+
+    def test_stash_pop_with_unknown_sha_leaves_stack_untouched(self, mgr, tmp_repo):
+        (tmp_repo / "missy" / "__init__.py").write_text("# dirty\n")
+        subprocess.run(
+            ["git", "stash", "push", "-m", "real stash"], cwd=str(tmp_repo), capture_output=True, check=True
+        )
+        before = subprocess.run(
+            ["git", "stash", "list"], cwd=str(tmp_repo), capture_output=True, text=True
+        ).stdout
+
+        mgr._stash_pop("0" * 40)  # SHA that doesn't exist on the stack
+
+        after = subprocess.run(
+            ["git", "stash", "list"], cwd=str(tmp_repo), capture_output=True, text=True
+        ).stdout
+        assert before == after
+        subprocess.run(["git", "stash", "drop"], cwd=str(tmp_repo), capture_output=True, check=True)
+
 
 # ---------------------------------------------------------------------------
 # CodeEvolutionManager — rollback

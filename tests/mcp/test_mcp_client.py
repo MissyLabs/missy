@@ -124,6 +124,130 @@ class TestMcpClientRpc:
             c._rpc("test")
 
 
+class TestMcpClientTimeoutTeardown:
+    """Availability hardening: an RPC timeout must tear the connection down
+    immediately, not leave a stale unread response sitting on stdout to
+    desynchronize (and silently corrupt) the next, otherwise-unrelated
+    call. Live-reproduced against a real slow-but-not-dead subprocess
+    before this fix: the second call received the first call's
+    now-arrived response and raised a confusing ID-mismatch error instead
+    of getting its own response."""
+
+    def _make_connected_client(self):
+        c = McpClient(name="test", command="echo")
+        mock_proc = MagicMock()
+        mock_proc.stdin = MagicMock()
+        mock_proc.stdout = MagicMock()
+        mock_proc.poll.return_value = None
+        c._proc = mock_proc
+        return c
+
+    def test_timeout_tears_down_the_subprocess(self):
+        c = self._make_connected_client()
+        proc = c._proc
+        with (
+            patch("select.select", return_value=([], [], [])),
+            pytest.raises(TimeoutError, match="did not respond within"),
+        ):
+            c._rpc("slow_method", timeout=0.01)
+        proc.kill.assert_called_once()
+        assert c._proc is None
+
+    def test_is_alive_false_after_timeout(self):
+        c = self._make_connected_client()
+        with patch("select.select", return_value=([], [], [])), pytest.raises(TimeoutError):
+            c._rpc("slow_method", timeout=0.01)
+        assert c.is_alive() is False
+
+    def test_subsequent_call_after_timeout_fails_cleanly_not_desynced(self):
+        """The whole point of tearing down: the next call must fail with
+        a clear "not connected" error, never read a stale response and
+        raise (or worse, silently accept) a mismatched one."""
+        c = self._make_connected_client()
+        with patch("select.select", return_value=([], [], [])), pytest.raises(TimeoutError):
+            c._rpc("slow_method", timeout=0.01)
+
+        with pytest.raises(RuntimeError, match="not connected"):
+            c._rpc("tools/list")
+
+    def test_timeout_teardown_closes_pipes(self):
+        c = self._make_connected_client()
+        proc = c._proc
+        with patch("select.select", return_value=([], [], [])), pytest.raises(TimeoutError):
+            c._rpc("slow_method", timeout=0.01)
+        proc.stdin.close.assert_called_once()
+        proc.stdout.close.assert_called_once()
+        proc.stderr.close.assert_called_once()
+
+    def test_kill_exception_during_teardown_does_not_mask_timeout_error(self):
+        """If kill() itself raises (e.g. process already reaped), the
+        caller must still see the TimeoutError, not an unrelated crash."""
+        c = self._make_connected_client()
+        c._proc.kill.side_effect = ProcessLookupError("already dead")
+        with patch("select.select", return_value=([], [], [])), pytest.raises(TimeoutError):
+            c._rpc("slow_method", timeout=0.01)
+        assert c._proc is None
+
+    def test_real_slow_server_timeout_does_not_desync_next_real_call(self, tmp_path):
+        """End-to-end with a real subprocess (not mocks): a server that
+        answers *after* the client's timeout must not corrupt the next
+        call's response."""
+        import textwrap
+
+        server_script = tmp_path / "fake_mcp_server.py"
+        server_script.write_text(
+            textwrap.dedent(
+                """
+                import sys, json, time
+
+                def send(obj):
+                    sys.stdout.write(json.dumps(obj) + "\\n")
+                    sys.stdout.flush()
+
+                while True:
+                    line = sys.stdin.readline()
+                    if not line:
+                        break
+                    req = json.loads(line)
+                    method = req.get("method")
+                    req_id = req.get("id")
+                    if method == "slow_call":
+                        time.sleep(0.3)
+                        send({"jsonrpc": "2.0", "id": req_id, "result": {"ok": "slow"}})
+                    else:
+                        send({"jsonrpc": "2.0", "id": req_id, "result": {"ok": True}})
+                """
+            )
+        )
+        c = McpClient(name="real-fake", command=f"python3 {server_script}")
+        c._proc = subprocess.Popen(
+            ["python3", str(server_script)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        try:
+            with pytest.raises(TimeoutError):
+                c._rpc("slow_call", timeout=0.1)
+            assert c.is_alive() is False
+
+            # A brand-new connection for the "next call" -- the whole
+            # point is that the OLD one is gone, not reusable in a
+            # corrupted state.
+            c._proc = subprocess.Popen(
+                ["python3", str(server_script)],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            resp = c._rpc("tools/list", timeout=2.0)
+            assert resp["result"] == {"ok": True}
+        finally:
+            if c._proc is not None:
+                c._proc.kill()
+                c._proc.wait(timeout=5)
+
+
 class TestMcpClientNotify:
     def test_notify_writes_without_id(self):
         c = McpClient(name="test", command="echo")
