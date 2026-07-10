@@ -1,5 +1,25 @@
 # TEST_RESULTS
 
+## Run: 2026-07-10 06:00 UTC — validation-harness overhaul, FX-D (structural boundary + fail-closed)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Added explicit `_CURRENT_TURN_BOUNDARY` marker line inserted by
+  `_build_prompt()` before the final message; `complete()`/
+  `complete_with_tools()` now raise `ProviderError` instead of silently
+  returning an empty response when a leaked transcript marker strips
+  away the entire delegate output.
+- Command: `pytest tests/providers/test_acpx_provider.py -q`
+- Result: `136 passed` (was 120 before this checkpoint; +16 net new
+  tests across boundary placement/tracking, quoted-text safety,
+  multiline/long-history, malicious-history-instruction confinement,
+  DISC-CMD-006 + report-followup end-to-end with both defenses active,
+  and fail-closed/partial-leak behavior)
+- Command: `pytest tests/ -q -o faulthandler_timeout=120` with the 3
+  known pre-existing vision failures deselected
+- Result: `20703 passed, 13 skipped, 3 deselected in 456.40s (0:07:36)`
+
+---
+
 ## Run: 2026-07-10 05:10 UTC — validation-harness overhaul, FX-E + SR-1.2/1.3 (critical)
 
 - Branch: `overhaul/missy-validation-20260710-031406`

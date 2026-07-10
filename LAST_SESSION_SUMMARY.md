@@ -37,12 +37,30 @@ Draft PR: https://github.com/MissyLabs/missy/pull/31
    event instead of calling `mgr.approve()`. The legitimate path (`missy
    evolve approve/apply/rollback` CLI, requiring a real terminal session
    on the host) is untouched.
+5. **SR-1.12 (critical)**: auditing for the same bug class found an even
+   more directly exploitable instance in Discord's DM pairing flow —
+   `!pair accept <target_id>` was processed with zero check on who sent
+   it, letting any unpaired stranger self-approve their own pairing with
+   two DM messages. Closed: in-band accept/deny commands are now
+   unconditionally refused and audited; `accept_pair()`/`deny_pair()`
+   remain the only legitimate path (not yet wired to an authenticated
+   operator surface — tracked as follow-up, task #12).
+6. **FX-D**: added an explicit structural boundary marker to the
+   flattened acpx prompt (previously only described in prose) so the
+   delegate cannot mistake prior history/tool-results for something it
+   should keep responding to. Made `complete()`/`complete_with_tools()`
+   fail closed (raise `ProviderError`) rather than silently returning an
+   empty "successful" response when a leaked transcript marker strips
+   away the entire delegate output. ~20 new regression tests covering
+   boundary tracking, quoted transcript safety, long history, malicious
+   history instructions, and full DISC-CMD-006 + report-followup
+   end-to-end reproductions.
 
 ## Verification
 
 ```text
-python3 -m pytest tests/tools/ tests/agent/ tests/channels/ tests/security/ -q
-9530 passed, 6 skipped
+python3 -m pytest tests/providers/test_acpx_provider.py -q
+136 passed
 ```
 
 ```text
@@ -50,39 +68,39 @@ python3 -m pytest tests/ -q -o faulthandler_timeout=120 \
   --deselect tests/vision/test_discovery_capture_sysfs.py::TestCacheTTL::test_cache_valid_within_ttl \
   --deselect tests/vision/test_discovery_edge_cases.py::TestPermissionDeniedOnDevice::test_device_that_does_not_exist_is_skipped \
   --deselect tests/vision/test_discovery_edge_cases.py::TestRapidAddRemove::test_cached_results_returned_within_ttl
-20686 passed, 13 skipped, 3 deselected in 447.60s (0:07:27)
+20703 passed, 13 skipped, 3 deselected in 456.40s (0:07:36)
 ```
 
-Full detail in `BUILD_STATUS.md` and `TEST_RESULTS.md`.
+Full detail in `BUILD_STATUS.md`, `AUDIT_SECURITY.md`, and
+`TEST_RESULTS.md`.
 
 ## Remains
 
 - FX-A bullet 6: live end-to-end proof across tool categories (not yet
   attempted).
 - FX-B loose ends (see prior session summary, preserved in git history).
-- SR-1.2/1.3 is **not fully solved** — this session closed the two live
-  bypass paths (agent tool, Discord reactions) but
-  `CodeEvolutionManager.approve()`/`apply()`/`rollback()` still perform
-  zero authentication themselves. A genuinely "unforgeable,
-  proposal-bound, expiring approval artifact" and disposable-sandbox
-  validation before promotion are still missing. The CLI's terminal
-  session is the only real trust boundary today.
-- FX-C, FX-D (remaining, beyond what the FX-A envelope covers), FX-F,
-  FX-G not yet started.
-- SR-1.1, SR-1.4 through SR-4.8 not yet started.
+- SR-1.2/1.3 and SR-1.12 are **not fully solved** — both fixes close live
+  bypass paths but neither is the complete remediation the security
+  review asks for. `CodeEvolutionManager.approve()`/`apply()`/
+  `rollback()` still perform zero authentication themselves (CLI
+  terminal session is the only real trust boundary). Discord pairing has
+  no working approval path at all right now (task #12).
+- FX-C, FX-F, FX-G not yet started.
+- SR-1.1, SR-1.4 through SR-1.11, SR-1.13, SR-2.x through SR-4.x not yet
+  started.
 - Full 89-case tool-specific validation backlog not yet re-run.
 - Pre-existing vision `CameraDiscovery` cache-TTL flake (3 tests,
   tracked separately, unrelated to this session).
 
 ## First Next Step
 
-Given the severity of what FX-E investigation turned up, do a focused
-sweep of the remaining SR-1.x findings for the same class of bug
-(unauthenticated privileged action reachable from the agent's own tool
-loop or from an unauthenticated channel like Discord) before moving on
-to FX-C/F/G — SR-1.5 (Incus policy composition), SR-1.6 (browser network
-enforcement), SR-1.12 (Discord pairing self-approval — the pairing
-handler's "admin only — simplified" comment in `channel.py` is worth
-checking immediately, it may have the identical flaw), and SR-1.13
-(uniform Discord ingress authorization) are the most likely candidates
-based on this session's findings.
+Continue the SR-1.x sweep for the same bug class (unauthenticated
+privileged action reachable from the agent's own tool loop or an
+unauthenticated channel) — SR-1.5 (Incus policy composition), SR-1.6
+(browser network enforcement), and SR-1.13 (uniform Discord ingress
+authorization) are the most likely remaining candidates given this
+session's findings (two independent instances of the identical pattern
+already found and fixed). Alternatively, wire the Discord pairing
+approval endpoint (task #12) to restore working pairing functionality,
+or move to FX-C (grounding factual state claims in fresh tool evidence)
+per the prompt's stated dependency order.

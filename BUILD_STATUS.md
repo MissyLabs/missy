@@ -1,6 +1,6 @@
 # Build Status
 
-Last updated: 2026-07-10 05:10 UTC
+Last updated: 2026-07-10 06:00 UTC
 
 ## Current Workstream: Validation-Harness Overhaul
 
@@ -286,6 +286,56 @@ Tracked as remaining SR-1.2/1.3 work.
 
 Rerun per prompt.md: `SELF-002` (rerun after FX-A too, per the FX-A
 rerun list) should be re-validated against this fix.
+
+### Completed This Session, continued: FX-D (current-turn structural boundary + fail-closed leaked-marker handling)
+
+`missy/providers/acpx_provider.py::_build_prompt()` now inserts an
+explicit, literal boundary line
+(`[missy-acpx-envelope/1] === CURRENT REQUEST (respond only to what
+follows) ===`) immediately before the final (current-turn) message in
+every flattened multi-message prompt. Previously the envelope only
+*described* this rule in prose ("respond only to the current request");
+there was no structural marker in the prompt itself distinguishing
+"here is what happened before" from "here is what you must respond to
+now" — which is exactly what let the delegate treat the whole flattened
+transcript as an invitation to keep writing (the DISC-CMD-006 failure).
+The same constant is referenced by both `_build_prompt()` (which inserts
+it) and the envelope preamble (which explains it), so they cannot drift
+apart. Verified the marker tracks whatever message is actually last
+across growing tool-loop rounds, long history (100+ prior turns), and
+that it does not interfere with legitimate user text that happens to
+quote a prior `[Assistant]:` snippet (the leaked-marker defense only
+ever runs on the *delegate's output*, never on constructed prompt input).
+
+Also hardened both `complete()` and `complete_with_tools()` to **fail
+closed** (raise `ProviderError`) when stripping a leaked transcript
+marker leaves nothing legitimate behind — previously an entirely
+fabricated response would silently become an empty
+`CompletionResponse(content="", finish_reason="stop")`, which could look
+like a valid terse answer to the runtime rather than the anomaly it is.
+A partial leak (real content survives after stripping) still returns
+normally.
+
+Added ~20 new tests in `tests/providers/test_acpx_provider.py` covering:
+boundary placement and tracking across rounds, quoted transcript text in
+legitimate user input, multiline and long-history requests, malicious
+history instructions (structurally confined before the boundary,
+verified positionally), full DISC-CMD-006 and a second
+report-then-fake-followup scenario with both defenses active together,
+and the new fail-closed behavior (plus a control test confirming partial
+leaks do *not* fail closed).
+
+Not addressed this session (out of scope for a code fix): FX-D bullet 3
+("never accept a model's self-authored scorecard... as validation
+evidence") is a validation-methodology principle for how the harness
+itself should score runs, not something enforceable in the provider
+code path — reflected in how this session's own test assertions verify
+actual behavior rather than trusting embedded pass/fail text.
+
+Rerun per prompt.md: both `DISC-CMD-006` continuity and report-followup
+scenarios have unit-level reproductions now passing; live harness
+re-validation against a real delegate is still open (see FX-A residual
+work).
 
 ### Known Pre-Existing Failure (not caused by this session)
 
