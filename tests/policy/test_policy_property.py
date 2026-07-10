@@ -651,15 +651,16 @@ class TestShellAllowedCommands:
             engine.check_command(other)
 
     @given(cmd=_safe_word)
-    def test_empty_allowed_commands_permits_all(self, cmd: str) -> None:
-        """An empty allowed_commands list with shell enabled acts as allow-all.
-
-        The code documents this as intentional: when ``enabled`` is ``True``
-        and ``allowed_commands`` is empty, no restriction is applied.  This
-        test fixes the behaviour so any inadvertent change is detected.
+    def test_empty_allowed_commands_denies_all(self, cmd: str) -> None:
+        """SR-1.8: an empty allowed_commands list with shell enabled must
+        deny every command, matching ShellPolicy.allowed_commands's own
+        documented contract ("An empty list means no commands are allowed
+        even when enabled is True"). Configuration ambiguity must never
+        become allow-all.
         """
         engine = _make_shell_engine(enabled=True, allowed_commands=[])
-        assert engine.check_command(cmd) is True
+        with pytest.raises(PolicyViolationError):
+            engine.check_command(cmd)
 
     @given(
         cmd=_safe_word,

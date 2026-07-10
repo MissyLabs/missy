@@ -93,10 +93,25 @@ class ShellPolicyEngine:
             )
 
         # Step 3 – allow-list check.
-        # Empty allowed_commands means allow-all (shell is unrestricted when enabled).
+        # SR-1.8: enabled=True with an empty allowed_commands list must deny
+        # ALL commands, matching ShellPolicy.allowed_commands's own
+        # documented contract ("An empty list means no commands are allowed
+        # even when enabled is True"). Configuration ambiguity must never
+        # become allow-all -- a previous version of this engine inverted
+        # that contract and treated an empty list as unrestricted shell
+        # access whenever enabled=True, which is exactly backwards.
         if not self._policy.allowed_commands:
-            self._emit_event(command, "allow", "*", session_id, task_id)
-            return True
+            self._emit_event(command, "deny", "empty_allowlist", session_id, task_id)
+            raise PolicyViolationError(
+                "Shell command denied: allowed_commands is empty.",
+                category="shell",
+                detail=(
+                    "ShellPolicy.enabled is True but allowed_commands is empty -- "
+                    "per policy, an empty allowlist denies all commands rather than "
+                    "permitting them. Configure allowed_commands explicitly to permit "
+                    "specific programs."
+                ),
+            )
 
         # Every program in a compound command must be allowed.
         for program in programs:

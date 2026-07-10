@@ -1005,11 +1005,19 @@ audit_log_path: "/tmp/audit.log"
         assert new_engine.check_network("extra.example.com") is True
 
     def test_shell_policy_enabled_flag_controls_execution(self, tmp_path: Path) -> None:
+        config = _make_config(shell_enabled=True, shell_commands=["ls"], workspace=str(tmp_path))
+        engine = PolicyEngine(config)
+
+        assert engine.check_shell("ls -la") is True
+
+    def test_shell_policy_empty_allowlist_denies_even_when_enabled(self, tmp_path: Path) -> None:
+        # SR-1.8: enabled=True with an empty allowed_commands list must deny
+        # all commands -- configuration ambiguity must never become allow-all.
         config = _make_config(shell_enabled=True, workspace=str(tmp_path))
         engine = PolicyEngine(config)
 
-        # Empty allowed_commands with enabled=True means allow-all.
-        assert engine.check_shell("ls -la") is True
+        with pytest.raises(PolicyViolationError):
+            engine.check_shell("ls -la")
 
     def test_filesystem_policy_write_path_enforced(self, tmp_path: Path) -> None:
         config = _make_config(workspace=str(tmp_path))

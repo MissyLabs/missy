@@ -103,10 +103,13 @@ class TestShellPolicyAdvancedEdges:
         with pytest.raises(PolicyViolationError, match="disabled"):
             engine.check_command("ls")
 
-    def test_unrestricted_mode(self):
+    def test_empty_allowlist_denies_even_when_enabled(self):
+        # SR-1.8: an empty allowlist must deny all commands, never act as
+        # "unrestricted mode" -- configuration ambiguity must never become
+        # allow-all.
         engine = self._make_engine([])
-        result = engine.check_command("any_command --with-args")
-        assert result is True
+        with pytest.raises(PolicyViolationError):
+            engine.check_command("any_command --with-args")
 
     def test_path_qualified_command(self):
         engine = self._make_engine(["/usr/bin/git"])
