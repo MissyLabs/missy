@@ -1094,6 +1094,22 @@ class TestDelegationEnvelope:
         assert "self-authored score" in prompt
 
     @patch("missy.providers.acpx_provider.subprocess.run")
+    def test_envelope_forbids_fabricating_structured_data(self, mock_run):
+        # FX-C: the validation harness observed an invented "lo" network
+        # and an incorrect bridge address reported for real Incus tool
+        # output. The envelope must explicitly forbid padding/altering
+        # structured tool results.
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout=json.dumps({"type": "text_delta", "delta": "ok"}) + "\n", stderr=""
+        )
+        p = AcpxProvider(_make_config())
+        p.complete_with_tools([Message(role="user", content="hi")], [_make_mock_tool()])
+
+        prompt = mock_run.call_args[0][0][-1]
+        assert "never add" in prompt.lower() or "never invent" in prompt.lower()
+        assert "fresh tool observation" in prompt
+
+    @patch("missy.providers.acpx_provider.subprocess.run")
     def test_envelope_incorporates_caller_system_text(self, mock_run):
         mock_run.return_value = MagicMock(
             returncode=0, stdout=json.dumps({"type": "text_delta", "delta": "ok"}) + "\n", stderr=""

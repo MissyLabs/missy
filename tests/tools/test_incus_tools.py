@@ -843,3 +843,139 @@ class TestAllToolsCommon:
     def test_name_starts_with_incus(self, tool_cls: type) -> None:
         tool = tool_cls()
         assert tool.name.startswith("incus_")
+
+
+# ---------------------------------------------------------------------------
+# FX-C: structured Incus list/network output must be preserved exactly
+# through response construction -- the validation harness observed a run
+# where Incus was reported as having an invented "lo" network and an
+# incorrect bridge address. The tool layer itself must be a deterministic
+# passthrough of real `incus ... --format json` output (no LLM-based
+# resummarization at this layer) so any downstream fabrication is
+# unambiguously a delegate/model behavior issue, not a tool-layer one.
+# ---------------------------------------------------------------------------
+
+
+class TestIncusListExactRowPreservation:
+    """incus_list: the parsed JSON returned as tool output must be the
+    exact same rows/fields the `incus` binary produced -- no rows added,
+    removed, or fields altered."""
+
+    @patch("missy.tools.builtin.incus_tools.subprocess.run")
+    def test_multi_instance_payload_passes_through_unmodified(self, mock_run: MagicMock) -> None:
+        payload = [
+            {
+                "name": "web-01",
+                "status": "Running",
+                "type": "container",
+                "state": {"network": {"eth0": {"addresses": [{"address": "10.0.0.5"}]}}},
+            },
+            {
+                "name": "db-01",
+                "status": "Stopped",
+                "type": "virtual-machine",
+                "state": None,
+            },
+        ]
+        mock_run.return_value = _json_proc(payload)
+        tool = IncusListTool()
+        result = tool.execute()
+
+        assert result.success
+        assert result.output == payload
+        assert len(result.output) == 2
+        assert result.output[0]["name"] == "web-01"
+        assert result.output[1]["name"] == "db-01"
+
+    @patch("missy.tools.builtin.incus_tools.subprocess.run")
+    def test_empty_list_stays_empty_not_padded(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = _json_proc([])
+        tool = IncusListTool()
+        result = tool.execute()
+
+        assert result.success
+        assert result.output == []
+
+    @patch("missy.tools.builtin.incus_tools.subprocess.run")
+    def test_no_extra_fields_are_synthesized(self, mock_run: MagicMock) -> None:
+        # A minimal, realistic row with only a few fields -- the tool must
+        # not add fields (e.g. a fabricated IP) that weren't in the real
+        # incus output.
+        payload = [{"name": "sparse-instance", "status": "Running"}]
+        mock_run.return_value = _json_proc(payload)
+        tool = IncusListTool()
+        result = tool.execute()
+
+        assert result.output == payload
+        assert set(result.output[0].keys()) == {"name", "status"}
+
+
+class TestIncusNetworkListExactRowPreservation:
+    """incus_network(action='list'): same exact-passthrough guarantee for
+    network definitions, including addresses -- the harness's specific
+    observed failure was an invented 'lo' network and a wrong bridge
+    address."""
+
+    @patch("missy.tools.builtin.incus_tools.subprocess.run")
+    def test_real_bridge_network_payload_passes_through_unmodified(
+        self, mock_run: MagicMock
+    ) -> None:
+        payload = [
+            {
+                "name": "incusbr0",
+                "type": "bridge",
+                "config": {"ipv4.address": "10.153.226.1/24"},
+                "managed": True,
+            },
+        ]
+        mock_run.return_value = _json_proc(payload)
+        tool = IncusNetworkTool()
+        result = tool.execute(action="list")
+
+        assert result.success
+        assert result.output == payload
+        # Exactly one network -- no "lo" or any other network fabricated.
+        assert len(result.output) == 1
+        assert result.output[0]["name"] == "incusbr0"
+        assert result.output[0]["config"]["ipv4.address"] == "10.153.226.1/24"
+
+    @patch("missy.tools.builtin.incus_tools.subprocess.run")
+    def test_no_loopback_network_invented_when_absent_from_real_output(
+        self, mock_run: MagicMock
+    ) -> None:
+        # Real `incus network list` output containing no "lo" entry.
+        payload = [{"name": "incusbr0", "type": "bridge", "config": {}}]
+        mock_run.return_value = _json_proc(payload)
+        tool = IncusNetworkTool()
+        result = tool.execute(action="list")
+
+        names = [n["name"] for n in result.output]
+        assert "lo" not in names
+
+    @patch("missy.tools.builtin.incus_tools.subprocess.run")
+    def test_bridge_address_field_is_exact_string_not_reformatted(
+        self, mock_run: MagicMock
+    ) -> None:
+        payload = [
+            {"name": "incusbr0", "type": "bridge", "config": {"ipv4.address": "192.0.2.1/24"}}
+        ]
+        mock_run.return_value = _json_proc(payload)
+        tool = IncusNetworkTool()
+        result = tool.execute(action="list")
+
+        assert result.output[0]["config"]["ipv4.address"] == "192.0.2.1/24"
+
+    @patch("missy.tools.builtin.incus_tools.subprocess.run")
+    def test_network_show_returns_raw_command_output_not_reparsed(
+        self, mock_run: MagicMock
+    ) -> None:
+        # `incus network show <name>` has no --format json flag (YAML by
+        # default) -- confirm the tool sends the plain "show" command and
+        # doesn't attempt to reshape the output.
+        mock_run.return_value = _make_proc(stdout="name: incusbr0\ntype: bridge\n")
+        tool = IncusNetworkTool()
+        result = tool.execute(action="show", name="incusbr0")
+
+        cmd = mock_run.call_args[0][0]
+        assert cmd == ["incus", "network", "show", "incusbr0"]
+        assert result.output == "name: incusbr0\ntype: bridge\n"

@@ -1,5 +1,32 @@
 # TEST_RESULTS
 
+## Run: 2026-07-10 07:40 UTC — validation-harness overhaul, FX-C (grounding factual state claims)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Memory ID lookups: added exception-vs-not-found distinction in
+  `memory_describe`/`memory_expand` (4 call sites).
+- Incus tools: confirmed and locked in with tests that `incus_list`/
+  `incus_network(list)` are exact deterministic JSON passthroughs (no
+  tool-layer fabrication possible).
+- Added envelope rule 6 (`missy/providers/acpx_provider.py`) forbidding
+  the delegate from padding/altering structured tool results.
+- Command: `pytest tests/tools/ tests/memory/ -q`
+- Result: `2059 passed, 9 skipped`
+- Command: `pytest tests/providers/test_acpx_provider.py -q`
+- Result: `137 passed`
+- Command: `pytest tests/ -q -o faulthandler_timeout=120` with the 3
+  known pre-existing vision failures deselected
+- Result: `20742 passed, 13 skipped, 3 deselected in 448.39s (0:07:28)`
+- New tests: 10 in `tests/tools/test_incus_tools.py`
+  (`TestIncusListExactRowPreservation`,
+  `TestIncusNetworkListExactRowPreservation`), 8 in
+  `tests/tools/test_memory_tools.py`
+  (`TestMemoryDescribeExceptionVsNotFound`,
+  `TestMemoryExpandExceptionVsNotFound`), 1 in
+  `tests/providers/test_acpx_provider.py`.
+
+---
+
 ## Run: 2026-07-10 07:00 UTC — validation-harness overhaul, SR-1.13 (Discord ingress authorization, 2 critical findings)
 
 - Branch: `overhaul/missy-validation-20260710-031406`

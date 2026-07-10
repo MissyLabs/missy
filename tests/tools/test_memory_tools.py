@@ -199,3 +199,81 @@ class TestMemoryExpandTool:
         tool = MemoryExpandTool()
         result = tool.execute(item_id="sum_anything", _memory_store=memory_store)
         assert not result.success
+
+
+# ---------------------------------------------------------------------------
+# FX-C: a failed lookup must yield an explicit unverified/error response,
+# never a confident "does not exist" claim. The validation harness observed
+# false claims that known sum_*/ref_* IDs did not exist. A store exception
+# (DB locked, I/O error, etc.) and a genuine "no such row" must be
+# distinguishable in the returned error text -- both are errors, but only
+# the second is a real non-existence claim.
+# ---------------------------------------------------------------------------
+
+
+class _RaisingStore:
+    """A minimal store stub whose lookups always raise, simulating a
+    transient failure (e.g. a locked database) rather than a missing row."""
+
+    def get_summary_by_id(self, _summary_id):
+        raise RuntimeError("database is locked")
+
+    def get_large_content(self, _content_id):
+        raise RuntimeError("database is locked")
+
+
+class TestMemoryDescribeExceptionVsNotFound:
+    def test_genuine_missing_summary_says_not_found(self, memory_store):
+        tool = MemoryDescribeTool()
+        result = tool.execute(item_id="sum_genuinely_absent", _memory_store=memory_store)
+        assert not result.success
+        assert "not found" in result.error
+        assert "internal error" not in result.error
+
+    def test_lookup_exception_does_not_claim_not_found(self):
+        tool = MemoryDescribeTool()
+        result = tool.execute(item_id="sum_whatever", _memory_store=_RaisingStore())
+        assert not result.success
+        assert "not found" not in result.error
+        assert "internal error" in result.error
+        assert "unverified" in result.error
+
+    def test_lookup_exception_for_large_content_does_not_claim_not_found(self):
+        tool = MemoryDescribeTool()
+        result = tool.execute(item_id="ref_whatever", _memory_store=_RaisingStore())
+        assert not result.success
+        assert "not found" not in result.error
+        assert "internal error" in result.error
+
+    def test_existing_summary_content_matches_exactly_what_was_stored(self, populated_store):
+        # Grounding check: the described content must be the literal
+        # stored content, not a paraphrase or reconstruction.
+        store, sum_id, _ = populated_store
+        tool = MemoryDescribeTool()
+        result = tool.execute(item_id=sum_id, _memory_store=store)
+        assert result.success
+        assert "Discussion about kubernetes deployment issues" in result.output
+
+
+class TestMemoryExpandExceptionVsNotFound:
+    def test_genuine_missing_summary_says_not_found(self, memory_store):
+        tool = MemoryExpandTool()
+        result = tool.execute(item_id="sum_genuinely_absent", _memory_store=memory_store)
+        assert not result.success
+        assert "not found" in result.error
+        assert "internal error" not in result.error
+
+    def test_lookup_exception_does_not_claim_not_found(self):
+        tool = MemoryExpandTool()
+        result = tool.execute(item_id="sum_whatever", _memory_store=_RaisingStore())
+        assert not result.success
+        assert "not found" not in result.error
+        assert "internal error" in result.error
+        assert "unverified" in result.error
+
+    def test_lookup_exception_for_large_content_does_not_claim_not_found(self):
+        tool = MemoryExpandTool()
+        result = tool.execute(item_id="ref_whatever", _memory_store=_RaisingStore())
+        assert not result.success
+        assert "not found" not in result.error
+        assert "internal error" in result.error

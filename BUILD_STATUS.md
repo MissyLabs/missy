@@ -1,6 +1,6 @@
 # Build Status
 
-Last updated: 2026-07-10 07:00 UTC
+Last updated: 2026-07-10 07:40 UTC
 
 ## Current Workstream: Validation-Harness Overhaul
 
@@ -393,6 +393,60 @@ payload, a larger change deferred to a follow-up session.
 
 Full detail and residual risk for all four SR-1.x findings this session
 (SR-1.2/1.3, SR-1.12, SR-1.13 ×2) is in `AUDIT_SECURITY.md`.
+
+### Completed This Session, continued: FX-C (grounding factual state claims)
+
+Audited the memory-ID lookup and Incus structured-output paths named in
+FX-C against the actual current code (post-FX-B fix):
+
+- **Memory ID lookups already route through the real SQLite backend**
+  (thanks to the FX-B fix earlier this session) and already distinguish
+  a genuinely missing ID from a tool-unavailable state via explicit
+  `_err(...)` returns. What was missing: `memory_describe`/
+  `memory_expand` didn't distinguish a **lookup exception** (DB locked,
+  I/O error) from a **genuine "not found."** Both previously surfaced
+  through the same code path, but an exception's text wasn't
+  differentiated from the "not found" claim, risking exactly the harness
+  observation ("false claims that known sum_*/ref_* IDs did not exist").
+  Fixed: all four lookup call sites in `missy/tools/builtin/memory_tools.py`
+  now catch exceptions separately and return an explicit
+  "lookup failed... does not mean the ID does not exist... unverified"
+  message, never conflated with the not-found case. 8 new tests in
+  `tests/tools/test_memory_tools.py` (using a store stub that always
+  raises) confirm the two error shapes are textually distinguishable,
+  plus a grounding test confirming described content matches exactly
+  what was stored.
+- **Incus list/network tool output was already a deterministic JSON
+  passthrough** — `_run_incus()` parses `--format json` output directly
+  into the `ToolResult`, with no LLM-based resummarization at the tool
+  layer. Added 10 regression tests in `tests/tools/test_incus_tools.py`
+  proving exact row/field preservation for `incus_list` and
+  `incus_network(action='list')` (including a test asserting no
+  fabricated "lo" network appears when absent from real output, and
+  that bridge address strings pass through unaltered) — this confirms
+  the validation harness's observed "invented lo network and incorrect
+  bridge address" was a **delegate/model behavior issue, not a tool-layer
+  bug** (the tool already hands the model correct data).
+- Since the fabrication happens at the model layer, the fix is a new
+  explicit instruction (rule 6) in the acpx delegation envelope
+  (`missy/providers/acpx_provider.py`): never add a row/field that
+  "would typically be there," never invent a value, never claim
+  existence/change/disappearance without a fresh in-task tool
+  observation. New test confirms the rule renders in the actual prompt
+  sent to the delegate.
+
+Not addressed this session (larger, separate scope): FX-C's first bullet
+("extend done-criteria and runtime verification to cover material
+mid-task state claims") overlaps SR-4.4 (done-criteria verification is
+currently a static prompt instruction, not wired to an actual
+verification engine) — deferred as a larger workstream rather than
+folded into this checkpoint.
+
+Rerun per prompt.md: `MEM-002`, `MEM-003` now have direct unit coverage
+for the exact failure modes described; `INCUS-006`, `INCUS-010` have
+direct unit coverage proving the tool layer doesn't fabricate — live
+harness re-validation of all four is still open (needs a real/scripted
+delegate invocation, same blocker as FX-A bullet 6).
 
 ### Known Pre-Existing Failure (not caused by this session)
 

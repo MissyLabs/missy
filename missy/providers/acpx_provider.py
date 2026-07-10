@@ -231,7 +231,16 @@ Rules:
 5. Never fabricate, anticipate, or continue the conversation with
    additional "[User]:" or "[Assistant]:" turns, simulated follow-up
    requests, or a self-authored score/verdict/pass-fail summary. Produce
-   exactly one response to the current request and stop."""
+   exactly one response to the current request and stop.
+6. When a tool result contains structured or tabular data (lists of
+   files, instances, networks, memory records, etc.), report only the
+   rows, fields, and values actually present in that result. Never add
+   a row that "would typically be there" (e.g. a loopback network that
+   wasn't in the actual output), never invent or guess a value (e.g. an
+   IP address or ID), and never state that something exists, changed,
+   or disappeared without a fresh tool observation from THIS task
+   confirming it. If you are not sure, say so explicitly instead of
+   filling the gap with a plausible-sounding answer."""
 
 
 def _render_delegation_envelope(system: str, tool_instructions: str) -> str:
