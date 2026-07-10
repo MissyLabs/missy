@@ -67,17 +67,20 @@ def _strip_leading_politeness(text: str) -> str:
 
 
 _TRAILING_CLAUSE_RE = re.compile(
-    r"\s+(?:and|then|so|please|,)\b.*$",
+    r"\s*,\s*.*$|\s+(?:and|then|so|please)\b.*$",
     re.I,
 )
 
 
 def _normalise_channel_target(raw_target: str) -> tuple[str | None, int | None] | None:
-    target = raw_target.strip(" .")
+    target = raw_target.strip(" .,")
     # Drop a trailing conversational clause (e.g. "the General voice channel
-    # and report your voice status" -> "the General voice channel") so a
-    # verbose, natural request doesn't get treated as a literal channel name.
-    target = _TRAILING_CLAUSE_RE.sub("", target).strip(" .")
+    # and report your voice status" or "the General voice channel, then say
+    # hi" -> "the General voice channel") so a verbose, natural request
+    # doesn't get treated as a literal channel name. The comma branch has no
+    # leading \s+ requirement because commas are usually attached directly
+    # to the preceding word (e.g. "channel, then ...").
+    target = _TRAILING_CLAUSE_RE.sub("", target).strip(" .,")
     target = re.sub(r"^(?:the|a|an)\s+", "", target, flags=re.I)
     target = re.sub(r"^(?:my|current|my current|this)\s+", "", target, flags=re.I)
     target = re.sub(r"\s+(?:voice\s+channel|voice\s+room|voice)$", "", target, flags=re.I)
