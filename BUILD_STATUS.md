@@ -1,6 +1,6 @@
 # Build Status
 
-Last updated: 2026-07-10 12:55 UTC
+Last updated: 2026-07-10 13:35 UTC
 
 ## Current Workstream: Validation-Harness Overhaul
 
@@ -763,6 +763,59 @@ warning, and nested shell commands inside a launcher's quoted arguments
 being structurally invisible to any static command-string parser — is a
 separate product-policy question, not addressed here) in
 `AUDIT_SECURITY.md`'s new `### SR-1.7` section.
+
+### Completed This Session, continued: SR-1.10 (audit sink wrote secrets to disk unredacted — eleventh critical finding)
+
+Every audit event's `detail` dict was serialized to
+`~/.missy/audit.jsonl` completely verbatim, with no redaction of any
+kind, regardless of which subsystem published it. `api/audit_browser.py`
+only redacts when *rendering* events for the Web TUI — a cosmetic
+display-time filter that cannot undo what's already on disk, exactly
+the review's point ("a storage leak the viewer can't repair").
+Live-reproduced: publishing an audit event with a realistic
+Anthropic-shaped bearer token in a header, an AWS presigned-URL
+signature in an error string, and a Google-API-key-shaped value in a
+URL query string resulted in **all three appearing in plaintext** in
+the on-disk JSONL file.
+
+Fixed: added `_redact_detail()` (`missy/observability/audit_logger.py`),
+a small recursive walker applying the existing
+`missy.security.censor.censor_response()` to every string leaf of a
+`detail` structure, wired into `AuditLogger._handle_event()` — the
+single choke point every published event passes through before being
+written — so this covers every publisher uniformly. Also added the two
+token-shape patterns the review named as gaps in the same breath as
+this finding: `bearer_token`, `basic_auth_header`, and
+`aws_presigned_signature` (`SecretsDetector.SECRET_PATTERNS`, 50→53).
+Live-verified the three-secret reproduction above now redacts all three
+on disk; confirmed a correctly-shaped Google API key is caught by its
+existing content-shape pattern regardless of context. 6 new tests in
+`tests/observability/test_audit_logger.py`; 2 pre-existing tests
+hardcoding the pattern count updated from 50 to 53.
+
+This is the eleventh independent, confirmed critical finding this
+session.
+
+**Unrelated pre-existing flake noticed during this checkpoint's full
+suite run (not caused by any of today's changes):**
+`tests/security/test_property_based_fuzz.py::TestNetworkPolicyEngineFuzz::test_check_host_never_crashes_on_arbitrary_unicode`
+intermittently fails with `hypothesis.errors.DeadlineExceeded` — it has
+no `deadline=None` and no DNS mock, so an occasional slow live
+`socket.getaddrinfo()` call trips Hypothesis's default 200ms deadline.
+Confirmed via `git show HEAD~5` that this test file is unmodified by
+any commit this session and always uses empty `allowed_hosts`/
+`allowed_domains` (so it never touches SR-1.9a's changed code paths,
+which only affect the `allowed_hosts`/`allowed_domains` match steps) —
+re-running it in isolation reproduces the same intermittent pass/fail
+pattern regardless of branch state. Not fixed this session (same
+category as the already-tracked vision `CameraDiscovery` flake, task
+#11); the full-suite run for this checkpoint passed clean on the
+following attempt.
+
+Full detail and residual risk (only the two explicitly-named token
+shapes were closed; a general "any query param literally named
+`key`/`token` is a secret" pattern was deliberately not added due to
+false-positive risk) in `AUDIT_SECURITY.md`'s new `### SR-1.10` section.
 
 ### Known Pre-Existing Failure (not caused by this session)
 

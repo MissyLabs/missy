@@ -97,8 +97,9 @@ class TestSession26InjectionPatterns:
         assert len(InputSanitizer.INJECTION_PATTERNS) == 98
 
     def test_total_secret_pattern_count(self) -> None:
-        """Should have 50 secret patterns after session 26 additions."""
-        assert len(SecretsDetector.SECRET_PATTERNS) == 50
+        """Should have 53 secret patterns after SR-1.10 additions
+        (bearer_token, basic_auth_header, aws_presigned_signature)."""
+        assert len(SecretsDetector.SECRET_PATTERNS) == 53
 
 
 # ---------------------------------------------------------------------------

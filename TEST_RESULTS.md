@@ -1,5 +1,42 @@
 # TEST_RESULTS
 
+## Run: 2026-07-10 13:35 UTC — validation-harness overhaul, SR-1.10 (audit sink wrote secrets to disk unredacted)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Finding: `AuditLogger._handle_event()` wrote every event's `detail`
+  dict to `~/.missy/audit.jsonl` completely verbatim, with no redaction
+  of any kind. `api/audit_browser.py` only redacts at display time — a
+  cosmetic filter that can't undo what's already on disk.
+- Live reproduction: publishing an audit event with a bearer token, an
+  AWS presigned-URL signature, and a Google-API-key-shaped URL query
+  value resulted in all three appearing in plaintext in the on-disk
+  JSONL file. Confirmed fixed: all three now redact to `[REDACTED]`.
+- Fix: `_redact_detail()` recursively applies
+  `missy.security.censor.censor_response()` to every string leaf of
+  `detail`, wired into `AuditLogger._handle_event()`. Added
+  `bearer_token`, `basic_auth_header`, `aws_presigned_signature`
+  patterns to `SecretsDetector.SECRET_PATTERNS` (50→53) — the two token
+  shapes the review named explicitly.
+- Command: `pytest tests/observability/test_audit_logger.py -q`
+- Result: `25 passed` (6 new tests in `TestHandleEventRedactsSecrets`)
+- Command: `pytest tests/observability/ tests/security/ tests/tools/ tests/agent/ tests/gateway/ tests/api/ -q`
+- Result: `8293 passed, 6 skipped` (one intermittent, pre-existing,
+  unrelated Hypothesis-deadline flake in
+  `test_property_based_fuzz.py::TestNetworkPolicyEngineFuzz::test_check_host_never_crashes_on_arbitrary_unicode`
+  observed on the first attempt — confirmed via `git show HEAD~5` that
+  this test file predates this session's changes entirely and always
+  uses empty network allowlists, so it never touches any code this
+  session modified; re-run passed clean)
+- Command: `pytest tests/ -q -o faulthandler_timeout=120` with the 3
+  known pre-existing vision failures deselected
+- Result: `20838 passed, 13 skipped, 3 deselected in 491.43s (0:08:11)`
+  — 6 more passing than the prior (SR-1.7) checkpoint's 20832, matching
+  the tests added this checkpoint exactly (3 pre-existing tests that
+  hardcoded the total pattern count were updated in place, not added);
+  no regressions.
+
+---
+
 ## Run: 2026-07-10 12:55 UTC — validation-harness overhaul, SR-1.7 (shell redirection bypassed filesystem policy)
 
 - Branch: `overhaul/missy-validation-20260710-031406`

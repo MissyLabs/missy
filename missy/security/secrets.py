@@ -83,6 +83,16 @@ class SecretsDetector:
         "postmark_token": r"(?i)postmark[_\s]*(?:server[_\s]*)?token[\"'\s:=]+[a-f0-9\-]{36}",
         "render_key": r"rnd_[A-Za-z0-9]{32,}",
         "fly_token": r"FlyV1\s+[A-Za-z0-9_\-]{40,}",
+        # SR-1.10 additions: token shapes named by the security review as
+        # gaps in this list specifically ("the secrets.py censor also
+        # lacks an Authorization: Bearer/Basic pattern") plus the other
+        # concrete leak vector it names (AWS presigned-URL query-string
+        # signatures) -- both appear routinely in audit-logged request
+        # URLs/headers and errors, not just in structured credential
+        # fields the other patterns above are shaped around.
+        "bearer_token": r"(?i)bearer\s+[A-Za-z0-9_\-\.]{16,}",
+        "basic_auth_header": r"(?i)authorization:\s*basic\s+[A-Za-z0-9+/]{16,}={0,2}",
+        "aws_presigned_signature": r"(?i)X-Amz-Signature=[a-f0-9]{16,}",
     }
 
     def __init__(self) -> None:

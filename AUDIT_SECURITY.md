@@ -645,6 +645,70 @@ requirement — do not overwrite, append new entries as work continues.
   invocation — correctly so, since Incus never uses `shell=True` and
   therefore has no shell-redirection attack surface of this kind at all.
 
+### SR-1.10 — Audit sink wrote secrets to disk unredacted
+
+- **Status: fixed** for the core architectural defect (redaction
+  happening at display time only, never before persistence) plus the
+  two specific token-shape gaps the review named by name in the same
+  sentence it raised this finding.
+- **Reachability found:** live and confirmed — every audit event's
+  `detail` dict was serialized to `~/.missy/audit.jsonl` completely
+  verbatim, with no redaction of any kind, regardless of which
+  subsystem published it (policy engines, the HTTP gateway, providers,
+  tools). `api/audit_browser.py` only redacts when *rendering* events
+  for the Web TUI — a purely cosmetic filter that cannot undo what has
+  already been written to the persistent JSONL file, which is the
+  review's core point ("a storage leak the viewer can't repair").
+  Live-reproduced: publishing an audit event with a realistic
+  Anthropic-shaped bearer token in a header, an AWS presigned-URL
+  signature in an error string, and a Google-API-key-shaped value in a
+  URL query string resulted in **all three appearing in plaintext** in
+  the on-disk JSONL file, exactly as constructed, with zero redaction.
+- **Remediation evidence:** added `_redact_detail()`
+  (`missy/observability/audit_logger.py`), a small recursive walker
+  that applies the existing `missy.security.censor.censor_response()`
+  (backed by `SecretsDetector`) to every string leaf of a `detail`
+  dict/list/tuple structure, preserving shape; wired into
+  `AuditLogger._handle_event()` — the single choke point every
+  published `AuditEvent` passes through before being written to disk —
+  so this covers every publisher uniformly rather than requiring each
+  one to remember to redact its own `detail` (one existing call site,
+  `ToolRegistry._emit_event`, already redacted its own message
+  independently; that becomes redundant-but-harmless double redaction,
+  not a conflict). Also added the two token-shape patterns the review
+  named as gaps in the same breath as this finding
+  (`SecretsDetector.SECRET_PATTERNS`): `bearer_token`
+  (`Bearer <token>`, matched wherever it appears — header line or
+  JSON-serialized value, not just after a literal `Authorization:`
+  prefix), `basic_auth_header` (`Authorization: Basic <base64>`), and
+  `aws_presigned_signature` (`X-Amz-Signature=<hex>`, the specific AWS
+  SigV4 presigned-URL leak vector named in the finding). Live-verified
+  the exact three-secret reproduction above now redacts all three to
+  `[REDACTED]` on disk; confirmed the correctly-shaped Google API key
+  is caught by its existing content-shape pattern (`gcp_key`)
+  regardless of surrounding context, since that pattern (like most of
+  the ~50 others) matches the secret's own shape rather than requiring
+  a specific delimiter/prefix. 6 new tests in
+  `tests/observability/test_audit_logger.py::TestHandleEventRedactsSecrets`;
+  2 pre-existing tests that hardcoded the total pattern count updated
+  from 50 to 53.
+- **Residual risk:** the review explicitly hedged that "individual
+  token-shape gaps" should be "verified... before asserting each" —
+  this checkpoint closed the two gaps named explicitly, not a general
+  audit of every possible secret shape. A generic "URL query parameter
+  literally named `key`/`token`/`secret` is always a credential"
+  pattern was deliberately NOT added — it would have unacceptable
+  false-positive risk against ordinary non-secret query parameters
+  (e.g. a genuine sort/cache key), so a bare `?key=<opaque-string>`
+  with no recognizable provider-specific shape can still be logged
+  unredacted; only recognized credential *shapes* (GCP/AWS/Anthropic/
+  OpenAI/GitHub/etc. key formats, JWTs, bearer/basic auth headers, AWS
+  presigned signatures) are caught. Redaction happens only at the audit
+  sink — any other place `detail`-shaped data might be persisted (e.g.
+  a future export/backup feature) would need to apply the same
+  `_redact_detail()` helper independently; it is not itself
+  automatically inherited by new persistence paths.
+
 ---
 
 - Timestamp: 2026-07-09 15:35:26 (raw grep-scan dump below, preserved

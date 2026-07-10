@@ -101,6 +101,90 @@ class TestHandleEvent:
         assert len(received) == 1
 
 
+# ---------------------------------------------------------------------------
+# SR-1.10: audit events must be redacted before being persisted to disk --
+# previously event.detail was written verbatim, so query-string secrets in
+# logged URLs, Authorization headers, and raw provider/gateway error text
+# were stored in plaintext forever (display-time-only redaction elsewhere
+# in the codebase can't repair what's already on disk).
+# ---------------------------------------------------------------------------
+class TestHandleEventRedactsSecrets:
+    def test_bearer_token_in_detail_is_redacted_on_disk(
+        self, audit_logger: AuditLogger, bus: EventBus, log_path: str
+    ):
+        _publish(
+            bus,
+            "provider.request",
+            "network",
+            "allow",
+            headers={"Authorization": "Bearer sk-ant-abcdefghijklmnopqrstuvwx"},
+        )
+        raw = Path(log_path).read_text()
+        assert "sk-ant-abcdefghijklmnopqrstuvwx" not in raw
+        record = json.loads(raw.strip())
+        assert record["detail"]["headers"]["Authorization"] == "[REDACTED]"
+
+    def test_aws_presigned_signature_in_detail_is_redacted_on_disk(
+        self, audit_logger: AuditLogger, bus: EventBus, log_path: str
+    ):
+        _publish(
+            bus,
+            "gateway.error",
+            "network",
+            "error",
+            error="upstream 500: X-Amz-Signature=deadbeefdeadbeefdeadbeefdeadbeef failed",
+        )
+        raw = Path(log_path).read_text()
+        assert "deadbeefdeadbeefdeadbeefdeadbeef" not in raw
+        record = json.loads(raw.strip())
+        assert "[REDACTED]" in record["detail"]["error"]
+
+    def test_api_key_shaped_value_in_url_query_string_is_redacted(
+        self, audit_logger: AuditLogger, bus: EventBus, log_path: str
+    ):
+        _publish(
+            bus,
+            "provider.request",
+            "network",
+            "allow",
+            url="https://api.example.com/v1/models?key=AIzaSyAbCdEfGhIjKlMnOpQrStUvWxYz0123456",
+        )
+        raw = Path(log_path).read_text()
+        assert "AIzaSyAbCdEfGhIjKlMnOpQrStUvWxYz0123456" not in raw
+        record = json.loads(raw.strip())
+        assert record["detail"]["url"] == "https://api.example.com/v1/models?key=[REDACTED]"
+
+    def test_redaction_applies_inside_nested_lists(
+        self, audit_logger: AuditLogger, bus: EventBus, log_path: str
+    ):
+        _publish(
+            bus,
+            "batch.request",
+            "network",
+            "allow",
+            errors=["ok", "Bearer sk-ant-abcdefghijklmnopqrstuvwx failed"],
+        )
+        record = json.loads(Path(log_path).read_text().strip())
+        assert record["detail"]["errors"][0] == "ok"
+        assert "sk-ant-" not in record["detail"]["errors"][1]
+
+    def test_non_string_detail_values_pass_through_unchanged(
+        self, audit_logger: AuditLogger, bus: EventBus, log_path: str
+    ):
+        _publish(bus, "fs.read", "filesystem", "allow", size=1234, ok=True, tag=None)
+        record = json.loads(Path(log_path).read_text().strip())
+        assert record["detail"]["size"] == 1234
+        assert record["detail"]["ok"] is True
+        assert record["detail"]["tag"] is None
+
+    def test_detail_without_secrets_is_unaffected(
+        self, audit_logger: AuditLogger, bus: EventBus, log_path: str
+    ):
+        _publish(bus, "fs.read", "filesystem", "allow", path="/tmp/x.txt")
+        record = json.loads(Path(log_path).read_text().strip())
+        assert record["detail"]["path"] == "/tmp/x.txt"
+
+
 class TestGetRecentEvents:
     def test_returns_empty_when_file_missing(self, bus: EventBus, tmp_path: Path):
         al = AuditLogger(log_path=str(tmp_path / "missing.jsonl"), bus=bus)

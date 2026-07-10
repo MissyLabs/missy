@@ -28,8 +28,45 @@ from pathlib import Path
 from typing import Any
 
 from missy.core.events import AuditEvent, EventBus, event_bus
+from missy.security.censor import censor_response
 
 _module_logger = logging.getLogger(__name__)
+
+
+def _redact_detail(value: Any) -> Any:
+    """Recursively redact secret-shaped substrings within *value*.
+
+    SR-1.10: audit events were persisted to disk verbatim with no
+    redaction of any kind -- full egress URLs with query-string secrets
+    (e.g. ``?key=...``, AWS presigned ``X-Amz-Signature=...``) and raw
+    provider/gateway exception text are logged on every allowed request.
+    ``api/audit_browser.py`` only redacts at *display* time, which
+    cannot repair what has already been written to the JSONL file --
+    the redaction has to happen before the write, at the one place every
+    published :class:`~missy.core.events.AuditEvent` passes through
+    (here), rather than requiring every individual publisher (policy
+    engines, the HTTP gateway, tools, providers) to remember to redact
+    its own ``detail`` dict.
+
+    Args:
+        value: Any JSON-serialisable value — typically an
+            :attr:`AuditEvent.detail` dict, which may nest further
+            dicts/lists of strings.
+
+    Returns:
+        A structurally identical value with every string leaf passed
+        through :func:`~missy.security.censor.censor_response`.
+        Non-string, non-container values (numbers, bools, ``None``) are
+        returned unchanged.
+    """
+    if isinstance(value, str):
+        return censor_response(value)
+    if isinstance(value, dict):
+        return {k: _redact_detail(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        redacted = [_redact_detail(v) for v in value]
+        return tuple(redacted) if isinstance(value, tuple) else redacted
+    return value
 
 
 class AuditLogger:
@@ -111,7 +148,7 @@ class AuditLogger:
             "event_type": event.event_type,
             "category": event.category,
             "result": event.result,
-            "detail": event.detail,
+            "detail": _redact_detail(event.detail),
             "policy_rule": event.policy_rule,
         }
         try:
