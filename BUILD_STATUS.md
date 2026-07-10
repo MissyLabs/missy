@@ -1,6 +1,6 @@
 # Build Status
 
-Last updated: 2026-07-11 00:10 UTC
+Last updated: 2026-07-11 01:45 UTC
 
 ## Current Workstream: Validation-Harness Overhaul
 
@@ -1586,6 +1586,107 @@ This is the twenty-sixth independent, confirmed finding/change this
 session. Full detail in `AUDIT_SECURITY.md`'s new `### SR-4.5 (SR-4.7)`
 section.
 
+### Completed This Session, continued: SR-4.1 — learnings extracted but never persisted; SleeptimeWorker fully built but never instantiated (twenty-seventh finding, sixth §4 item)
+
+Two independent sub-findings under one review item.
+
+**Sub-finding 1 (mechanical bug, fixed directly):**
+`_record_learnings()` extracted a real `TaskLearning` record every
+completed tool-augmented run but only `logger.debug()`d it, never
+calling the already-implemented `self._memory_store.save_learning()` —
+the `learnings` table was permanently empty in production despite the
+retrieval half (`get_learnings(limit=5)` context injection) always
+working correctly. `CLAUDE.md`'s own claim "persisted in SQLite" was
+false. Fixed with one added call, guarded by `is not None` and the
+existing broad exception handler (persistence failure is best-effort,
+must not crash a completed run). Live-verified end-to-end: a real
+`AgentRuntime.run()` + real `SQLiteMemoryStore` now shows
+`get_learnings()` returning the real lesson immediately after the run.
+
+**Sub-finding 2 (product-policy decision, asked and confirmed):**
+`SleeptimeWorker` (background daemon thread — summarizes idle
+conversations via LLM, extracts learnings) had zero production
+construction sites despite its own module docstring documenting the
+exact `AgentRuntime` integration needed. Asked whether to wire it
+opt-in-off-by-default, wire it exactly as documented (its own
+`SleeptimeConfig.enabled=True` default), or leave unwired and
+document the gap, since it makes background LLM calls consuming budget
+and processes conversation content without explicit per-turn user
+action. **Operator chose: wire it in exactly as documented, enabled by
+default.** Fixed: added `_make_sleeptime_worker()` (graceful
+degradation), constructing+starting the worker in `__init__`;
+`record_activity()` calls at the top of `run()`, `run_stream()`, and
+`resume_checkpoint()` (every real activity entry point); a new
+`AgentRuntime.shutdown()` method to stop it cleanly. Live-verified: a
+fresh runtime starts a real `missy-sleeptime` daemon thread;
+`shutdown()` stops it; the worker shares the runtime's real
+`_memory_store`, not a disconnected copy. Verified test-suite impact
+before finalizing: `tests/agent/` (4,199 tests, heaviest
+`AgentRuntime()` construction) ran in 35.88s, all passing — the
+worker's 60s wake interval and 300s idle threshold both sit far outside
+any single test's runtime, so tests incur only thread creation/teardown
+overhead, never real processing.
+
+12 new tests across 2 files. Fixed 1 pre-existing test whose manual
+`AgentRuntime.__new__()` construction needed the new `_sleeptime`
+attribute set.
+`tests/agent/`+`tests/cli/`+`tests/unit/`+`tests/memory/`+
+`tests/security/`+`tests/mcp/`+`tests/tools/`+`tests/integration/`+
+`tests/scheduler/` (12,908 tests) pass with no regressions — the one
+observed failure is the already-documented pre-existing Hypothesis
+deadline flake, unrelated.
+
+Residual risk: enabling `SleeptimeWorker` by default means real,
+periodic, un-prompted LLM API costs for deployments with idle sessions
+— the explicit, operator-confirmed trade-off of this choice, called out
+here for release notes. No per-deployment retention/privacy policy hook
+exists yet beyond `SleeptimeConfig`'s existing tuning knobs; audit
+events already existed pre-checkpoint (`sleeptime.cycle.*` on the
+message bus).
+
+This is the twenty-seventh independent, confirmed finding/change this
+session. Full detail in `AUDIT_SECURITY.md`'s new `### SR-4.6 (SR-4.1)`
+section.
+
+### Follow-up correction within the SR-4.1 checkpoint: sleeptime thread accumulation across the full test suite
+
+The `tests/agent/`-only verification (35.88s, no symptoms) done before
+finalizing SR-4.1 was not representative of the full suite. Running the
+complete suite with the wiring in place caused real resource
+accumulation: 96+ live `missy-sleeptime` daemon threads piled up
+(confirmed via a live full-suite run that tripped pytest's per-test
+`faulthandler_timeout=120` and left the process crawling at ~27% CPU),
+because the great majority of tests across the suite construct
+`AgentRuntime()` without ever calling the new `shutdown()` — expected,
+since `shutdown()` didn't exist before this checkpoint so no existing
+test could reference it.
+
+This was new evidence the operator's original "enabled by default"
+answer didn't have visibility into (the earlier question covered
+background-LLM-cost/privacy trade-offs, not test-suite thread
+lifecycle), so it was surfaced back explicitly rather than silently
+patched over or silently reverted. Asked whether to add a test-only
+autouse fixture that stops each test's worker(s) (keeping the
+production default unchanged) or revisit the default given this
+concrete cost evidence. **Operator chose: keep the production default,
+fix the test suite.**
+
+Fixed: added a repo-root `conftest.py` autouse fixture
+(`_stop_sleeptime_workers_after_test`) that wraps
+`AgentRuntime._make_sleeptime_worker` for each test, recording every
+real worker constructed, and calls `worker.stop(timeout=1.0)` on each
+in teardown — production code and the real `start()` call are
+untouched, so tests that specifically assert the thread is alive during
+the test still see a genuine live thread; the fixture only intervenes
+at teardown. Live-verified via a real 50×`AgentRuntime()`-construction
+test with no explicit shutdown, followed by a separate assertion
+confirming zero `missy-sleeptime` threads remained afterward — both
+pass. Re-ran the suite that previously piled up threads and tripped the
+timeout: `12,909 passed, 1 failed (pre-existing Hypothesis deadline
+flake), 13 skipped in 196.91s` — no timeout, no accumulation, no
+slowdown. Added 2 permanent regression tests to `TestSleeptimeWiring`
+as a standing guard against this recurring.
+
 ### Known Pre-Existing Failure (not caused by this session)
 
 `tests/vision/test_discovery_capture_sysfs.py::TestCacheTTL::test_cache_valid_within_ttl`
@@ -1602,17 +1703,17 @@ scoped to FX-A / voice-command work.
 FX-A through FX-G are all complete (see task list). §2 (Unattended-
 Execution Hazards) and §3 (Data Integrity, Availability, And Cost) are
 now both fully closed — SR-3.4's cross-session-aggregation sub-finding
-is fixed. §4 has five items fixed (SR-4.4 done-criteria verification;
+is fixed. §4 has six items fixed (SR-4.4 done-criteria verification;
 SR-4.5 self_create_tool honesty; SR-4.3 checkpoint resume; SR-4.2
-sub-agent delegation; SR-4.7 MCP tool execution). Current remaining
-priority order:
+sub-agent delegation; SR-4.7 MCP tool execution; SR-4.1 long-term
+memory). Current remaining priority order:
 
 1. SR-1.1 (audit event signing — larger cross-cutting change) and
    SR-1.9b (DNS TOCTOU — needs connecting to a pinned policy-verified IP
    rather than re-resolving at connect time).
-2. SR-4.1, SR-4.6, SR-4.8 (remaining dead/unwired features: long-term
-   memory, OTLP export, provider rotation/fallback claims — SR-4.2,
-   SR-4.3, SR-4.4, SR-4.5, and SR-4.7 are now fixed, see above).
+2. SR-4.6, SR-4.8 (remaining dead/unwired features: OTLP export,
+   provider rotation/fallback claims — SR-4.1, SR-4.2, SR-4.3, SR-4.4,
+   SR-4.5, and SR-4.7 are now fixed, see above).
 3. The "harden secondary availability hazards" bullet (circuit-breaker
    half-open single-probe, MCP RPC desync, malformed scheduler record
    isolation, webhook HMAC replay protection, EventBus history bound,

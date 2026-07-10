@@ -1,5 +1,62 @@
 # TEST_RESULTS
 
+## Run: 2026-07-11 01:10 UTC — validation-harness overhaul, SR-4.1 (learnings persistence fix + SleeptimeWorker wired into production)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Finding 1: `_record_learnings()` extracted a real `TaskLearning` but
+  only logged it, never calling the existing `save_learning()` — the
+  `learnings` table was permanently empty.
+- Finding 2: `SleeptimeWorker` (background daemon summarizing idle
+  conversations) had zero production construction sites despite its
+  own module docstring documenting the exact integration needed.
+- Fix: added the missing `save_learning()` call; added
+  `AgentRuntime._make_sleeptime_worker()` (constructs+starts in
+  `__init__`, matching `SleeptimeConfig.enabled=True`), `record_activity()`
+  calls in `run()`/`run_stream()`/`resume_checkpoint()`, and a new
+  `AgentRuntime.shutdown()` to stop it cleanly.
+- Command: `pytest tests/agent/test_coverage_gaps.py -k RecordLearnings
+  tests/agent/test_runtime_deep.py -k TestSleeptimeWiring -v`
+- Result: `12 passed` (4 in `TestRuntimeRecordLearnings`, 8 in
+  `TestSleeptimeWiring`)
+- Command: `time pytest tests/agent/ -q -o faulthandler_timeout=120`
+  (verifying real-thread-per-AgentRuntime doesn't destabilize the suite)
+- Result: `4199 passed, 4 skipped in 35.88s` — no slowdown or
+  thread-exhaustion symptoms
+- Command: `pytest tests/agent/ tests/cli/ tests/unit/ tests/memory/
+  tests/security/ tests/mcp/ tests/tools/ tests/integration/
+  tests/scheduler/ -q -o faulthandler_timeout=120`
+- Result: `1 failed, 12907 passed, 13 skipped` — the 1 failure is the
+  already-documented pre-existing Hypothesis deadline flake
+  (`test_check_host_never_crashes_on_arbitrary_unicode`), unrelated
+- Command: `pytest tests/ -q -o faulthandler_timeout=120`
+- Result: **Follow-up correction found here, before finalizing:** this
+  full-suite run tripped the 120s per-test faulthandler timeout with
+  96+ live `missy-sleeptime` daemon threads accumulated (confirmed via
+  `ps`/thread-count inspection while the run was live) — the
+  `tests/agent/`-only check above was not representative of the full
+  suite's `AgentRuntime()` construction volume. Killed the run. Asked
+  the operator: add a test-only autouse fixture to stop each test's
+  worker(s), or revisit the enabled-by-default production default.
+  **Operator chose: keep the production default, fix the test suite.**
+  Added `conftest.py` (repo root) autouse fixture
+  `_stop_sleeptime_workers_after_test` (wraps
+  `AgentRuntime._make_sleeptime_worker`, tracks constructed workers,
+  calls `.stop(timeout=1.0)` on each in teardown; production `start()`
+  untouched). Added 2 permanent regression tests to
+  `TestSleeptimeWiring` guarding against recurrence.
+- Command (re-run after the fixture fix): `pytest tests/agent/ tests/cli/
+  tests/unit/ tests/memory/ tests/security/ tests/mcp/ tests/tools/
+  tests/integration/ tests/scheduler/ -q -o faulthandler_timeout=120`
+- Result: `1 failed, 12909 passed, 13 skipped in 196.91s (0:03:16)` — no
+  timeout, no thread accumulation; the 1 failure is the already-
+  documented pre-existing Hypothesis deadline flake, unrelated.
+- Command: `pytest tests/ -q -o faulthandler_timeout=120`
+- Result: `3 failed, 20989 passed, 13 skipped in 471.49s (0:07:51)` —
+  up from 20975, only the 3 known pre-existing `CameraDiscovery`
+  cache-TTL flakes failing, zero regressions; no timeout, no thread
+  accumulation at full suite scale, confirming the `conftest.py` fixture
+  fix works end-to-end.
+
 ## Run: 2026-07-11 00:10 UTC — validation-harness overhaul, SR-4.7 (MCP tool execution wired into production with full enforcement)
 
 - Branch: `overhaul/missy-validation-20260710-031406`

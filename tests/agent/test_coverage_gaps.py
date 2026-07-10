@@ -1273,6 +1273,77 @@ class TestRuntimeRecordLearnings:
             with patch("missy.agent.learnings.extract_learnings", return_value=mock_learning):
                 runtime._record_learnings(["shell_exec"], "done", "run ls")
 
+    def test_record_learnings_persists_to_memory_store(self):
+        """SR-4.1: extraction alone is not enough -- the extracted
+        TaskLearning must actually be persisted via save_learning(), not
+        just logged and discarded."""
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        provider = _make_provider()
+        reg = _make_registry({"fake": provider})
+
+        mock_learning = MagicMock()
+        mock_learning.task_type = "shell"
+        mock_learning.outcome = "success"
+        mock_learning.lesson = "ls works"
+
+        with patch("missy.agent.runtime.get_registry", return_value=reg):
+            runtime = AgentRuntime(AgentConfig(provider="fake"))
+            runtime._memory_store = MagicMock()
+            with patch("missy.agent.learnings.extract_learnings", return_value=mock_learning):
+                runtime._record_learnings(["shell_exec"], "done", "run ls")
+
+        runtime._memory_store.save_learning.assert_called_once_with(mock_learning)
+
+    def test_record_learnings_no_memory_store_does_not_raise(self):
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        provider = _make_provider()
+        reg = _make_registry({"fake": provider})
+
+        with patch("missy.agent.runtime.get_registry", return_value=reg):
+            runtime = AgentRuntime(AgentConfig(provider="fake"))
+            runtime._memory_store = None
+            # Should not raise.
+            runtime._record_learnings(["shell_exec"], "done", "run ls")
+
+    def test_record_learnings_save_failure_does_not_raise(self):
+        """A broken memory store must not crash the run -- persistence is
+        best-effort, matching the existing extraction error handling."""
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        provider = _make_provider()
+        reg = _make_registry({"fake": provider})
+
+        with patch("missy.agent.runtime.get_registry", return_value=reg):
+            runtime = AgentRuntime(AgentConfig(provider="fake"))
+            runtime._memory_store = MagicMock()
+            runtime._memory_store.save_learning.side_effect = RuntimeError("disk full")
+            # Should not raise.
+            runtime._record_learnings(["shell_exec"], "done", "run ls")
+
+    def test_record_learnings_end_to_end_via_real_sqlite_store(self, tmp_path):
+        """Live-reproduction of the fix: a real SQLiteMemoryStore must
+        actually contain the learning afterward, and get_learnings() (the
+        context-injection read path) must be able to retrieve it."""
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+        from missy.memory.sqlite_store import SQLiteMemoryStore
+
+        provider = _make_provider()
+        reg = _make_registry({"fake": provider})
+        store = SQLiteMemoryStore(db_path=str(tmp_path / "memory.db"))
+
+        with patch("missy.agent.runtime.get_registry", return_value=reg):
+            runtime = AgentRuntime(AgentConfig(provider="fake"))
+            runtime._memory_store = store
+            runtime._record_learnings(
+                ["shell_exec"], "Successfully ran the command.", "run ls"
+            )
+
+        lessons = store.get_learnings(limit=5)
+        assert len(lessons) == 1
+        assert "shell" in lessons[0]
+
 
 class TestRuntimeAcquireRateLimit:
     """Tests for _acquire_rate_limit (lines 1088-1095)."""

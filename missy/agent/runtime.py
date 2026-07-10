@@ -405,6 +405,14 @@ class AgentRuntime:
         # them into the real ToolRegistry each turn so dispatch goes
         # through the same reference monitor as every built-in tool.
         self._mcp_manager = self._make_mcp_manager()
+        # SR-4.1: sleeptime worker (graceful degradation) -- background
+        # daemon thread that summarises idle conversations and extracts
+        # learnings during agent idle periods. Wired in exactly as its
+        # own module docstring documents: constructed+started here,
+        # record_activity() called at the top of every run() (below), and
+        # stopped via AgentRuntime.shutdown(). Uses SleeptimeConfig's own
+        # default (enabled=True) rather than overriding it off.
+        self._sleeptime = self._make_sleeptime_worker()
         # Attention system (Feature B: brain-inspired attention subsystems)
         self._attention = self._make_attention_system()
         # Persona and behavior layer (humanistic response shaping)
@@ -605,6 +613,12 @@ class AgentRuntime:
         """
         if not user_input or not user_input.strip():
             raise ValueError("user_input must be a non-empty string")
+
+        # SR-4.1: reset the sleeptime worker's idle timer on every real
+        # user interaction so it never processes memory concurrently with
+        # an active run.
+        if self._sleeptime is not None:
+            self._sleeptime.record_activity()
 
         # Sanitize user input: truncate oversized payloads and detect
         # prompt injection patterns *before* the input reaches the LLM.
@@ -822,6 +836,11 @@ class AgentRuntime:
         """
         if not user_input or not user_input.strip():
             raise ValueError("user_input must be a non-empty string")
+
+        # SR-4.1: same idle-timer reset as run() -- this path can bypass
+        # run() entirely (single-turn streaming), so it needs its own call.
+        if self._sleeptime is not None:
+            self._sleeptime.record_activity()
 
         # Sanitize user input before processing (same as run())
         if self._sanitizer is not None:
@@ -2135,7 +2154,16 @@ class AgentRuntime:
         final_response: str,
         prompt: str,
     ) -> None:
-        """Extract and log learnings from a completed tool-augmented run.
+        """Extract and persist learnings from a completed tool-augmented run.
+
+        SR-4.1: previously extracted a real
+        :class:`~missy.agent.learnings.TaskLearning` and only logged it
+        at DEBUG level, never calling
+        :meth:`~missy.memory.sqlite_store.SQLiteMemoryStore.save_learning`
+        -- the ``learnings`` table was permanently empty in production,
+        so :meth:`_build_context_messages`'s ``get_learnings(limit=5)``
+        context injection had nothing to inject, ever, despite the
+        retrieval half of this feature always having worked correctly.
 
         Args:
             tool_names_used: All tool names invoked during the run.
@@ -2156,8 +2184,10 @@ class AgentRuntime:
                 learning.outcome,
                 learning.lesson,
             )
+            if self._memory_store is not None:
+                self._memory_store.save_learning(learning)
         except Exception as exc:
-            logger.debug("Failed to extract learnings: %s", exc)
+            logger.debug("Failed to extract/persist learnings: %s", exc)
 
     def _analyze_for_evolution(
         self,
@@ -2513,6 +2543,31 @@ class AgentRuntime:
             logger.debug("McpManager unavailable; continuing without MCP tools", exc_info=True)
             return None
 
+    def _make_sleeptime_worker(self) -> Any:
+        """Create and start a :class:`~missy.agent.sleeptime.SleeptimeWorker`.
+
+        Returns:
+            A started :class:`SleeptimeWorker`, or ``None`` when the
+            module is unavailable. Construction never fails the whole
+            runtime -- background memory processing is a best-effort
+            enhancement, not a required subsystem.
+        """
+        try:
+            from missy.agent.sleeptime import SleeptimeWorker
+
+            try:
+                provider_registry = get_registry()
+            except Exception:
+                provider_registry = None
+            worker = SleeptimeWorker(
+                memory_store=self._memory_store, provider_registry=provider_registry
+            )
+            worker.start()
+            return worker
+        except Exception:
+            logger.debug("SleeptimeWorker unavailable; continuing without it", exc_info=True)
+            return None
+
     @staticmethod
     def _make_drift_detector() -> Any:
         """Create a :class:`~missy.security.drift.PromptDriftDetector`.
@@ -2643,6 +2698,21 @@ class AgentRuntime:
         """
         return list(self._pending_recovery)
 
+    def shutdown(self) -> None:
+        """Stop background subsystems this runtime owns.
+
+        SR-4.1: primarily stops the :class:`~missy.agent.sleeptime.SleeptimeWorker`
+        daemon thread. Safe to call multiple times or when a subsystem was
+        never constructed (graceful degradation). Callers that own an
+        ``AgentRuntime`` for the lifetime of a long-running process (e.g.
+        ``missy gateway start``) should call this on clean shutdown; a
+        short-lived process (e.g. ``missy ask``) does not need to, since
+        the worker is a daemon thread that dies with the process anyway.
+        """
+        if self._sleeptime is not None:
+            with contextlib.suppress(Exception):
+                self._sleeptime.stop()
+
     def resume_checkpoint(self, checkpoint_id: str) -> str:
         """Resume an interrupted task from a persisted checkpoint (SR-4.3).
 
@@ -2680,6 +2750,10 @@ class AgentRuntime:
             CheckpointManager as _CheckpointManager,
             validate_loop_messages,
         )
+
+        # SR-4.1: resuming is real agent activity.
+        if self._sleeptime is not None:
+            self._sleeptime.record_activity()
 
         cm = _CheckpointManager()
         checkpoint = cm.get(checkpoint_id)

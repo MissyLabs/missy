@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (32 checkpoints this session, full suite green after every one)
+## Changed (33 checkpoints this session, full suite green after every one)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -610,11 +610,148 @@ rather than left implicit. No MCP-specific rate limit or per-server
 budget cap exists beyond the calling session's ordinary budget and
 `health_check()`'s dead-server restart.
 
+### SR-4.1 (sixth §4 item, twenty-seventh finding this session)
+
+Two independent sub-findings under one review item.
+
+**Sub-finding 1 (mechanical bug, fixed directly, no product-policy
+question involved):** `_record_learnings()` extracted a real
+`TaskLearning` record from every completed tool-augmented run but only
+passed it to `logger.debug(...)` and discarded it — it never called
+`self._memory_store.save_learning(learning)`, despite that method
+existing, fully implemented, and already used correctly by the
+*retrieval* half of the same feature
+(`_build_context_messages()`'s `get_learnings(limit=5)` call). The
+`learnings` table was permanently empty in production, in every
+configuration, regardless of how many tool-augmented tasks completed —
+`CLAUDE.md`'s own claim "persisted in SQLite" was false for the
+persisted half specifically. Live-reproduced through a real
+`AgentRuntime.run()` with a real `SQLiteMemoryStore`: a completed
+tool-augmented run left `get_learnings(limit=5)` empty. Fixed with the
+one missing call, guarded by `is not None` and the existing broad
+exception handler (persistence failure is best-effort, must not crash a
+completed run). Live re-verified: `get_learnings(limit=5)` now returns
+the real persisted lesson string immediately after the run.
+
+**Sub-finding 2 (product-policy decision, asked and confirmed with the
+operator):** `grep -rln "SleeptimeWorker" missy/` matched only
+`missy/agent/sleeptime.py` itself — a fully-built, already-tested (688
+pre-existing lines in `tests/agent/test_sleeptime.py`) background
+daemon thread with zero production construction sites anywhere. Its own
+module docstring literally documents the exact three-point
+`AgentRuntime` integration needed (construct+start in `__init__`,
+`record_activity()` at the top of `run()`, `stop()` on cleanup) — none
+of which existed. Asked whether to wire it opt-in-off-by-default, wire
+it exactly as documented (matching `SleeptimeConfig.enabled=True`, its
+own class default), or leave it unwired and document the limitation,
+since the worker makes background LLM calls (consuming budget) and
+processes conversation content without an explicit per-turn user
+action — a genuine privacy/cost design question, not a mechanical bug.
+**Operator chose: wire it in exactly as documented, enabled by
+default.** Fixed: added `AgentRuntime._make_sleeptime_worker()`
+(graceful-degradation pattern matching `_make_mcp_manager()`),
+constructing `SleeptimeWorker(memory_store=self._memory_store,
+provider_registry=<live registry or None>)` and calling `.start()` in
+`__init__`. Added `record_activity()` calls at the top of `run()`,
+`run_stream()` (which can bypass `run()` entirely via its single-turn
+streaming path), and `resume_checkpoint()` — every real entry point
+representing genuine agent activity. Added a new `AgentRuntime.shutdown()`
+method (didn't exist before) that stops the worker cleanly, useful for
+long-running processes (`missy gateway start`), not strictly required
+for short-lived ones (`missy ask`) since the daemon thread dies with
+the process regardless.
+
+Live-verified: a fresh `AgentRuntime()` genuinely starts a live
+`missy-sleeptime` daemon thread; `shutdown()` stops it (confirmed via
+`Thread.is_alive()` before/after); the worker's `_memory_store` is
+confirmed to be the exact same object as the runtime's own
+`_memory_store`, not a disconnected copy. Verified the wiring does not
+destabilise the test suite before finalizing: a real `AgentRuntime()`
+now starts one real OS thread per instantiation (previously zero), so
+`tests/agent/` (4,199 tests, the directory that constructs
+`AgentRuntime` most heavily) was timed and run in full — 35.88s, all
+passing, no thread-exhaustion or slowdown symptoms (the worker's first
+wake is 60s away and real processing only triggers after 300s of idle,
+both far outside any single test's runtime, so essentially no test ever
+reaches the worker's actual processing code path — only cheap thread
+creation/teardown overhead is incurred). Corrected `CLAUDE.md`'s
+`SleeptimeWorker` entry (was a generic feature description ambiguous
+about wiring status; now states the concrete construction/activity/
+shutdown integration and defaults).
+
+12 new/updated regression tests:
+`tests/agent/test_coverage_gaps.py::TestRuntimeRecordLearnings` (4 new
+tests) and `tests/agent/test_runtime_deep.py::TestSleeptimeWiring` (8
+new tests). Fixed 1 pre-existing test whose manual
+`AgentRuntime.__new__()` construction hadn't set the new `_sleeptime`
+attribute `run_stream()` now reads.
+`tests/agent/`+`tests/cli/`+`tests/unit/`+`tests/memory/`+
+`tests/security/`+`tests/mcp/`+`tests/tools/`+`tests/integration/`+
+`tests/scheduler/` (12,908 tests) pass with no regressions — the one
+observed failure is the already-documented, pre-existing Hypothesis
+deadline flake (`test_check_host_never_crashes_on_arbitrary_unicode`),
+confirmed unrelated to this session's changes in an earlier checkpoint.
+
+**Residual risk, called out explicitly:** enabling `SleeptimeWorker` by
+default means real, periodic, un-prompted LLM API costs for any
+deployment with idle sessions containing enough unsummarised turns —
+the explicit, operator-confirmed trade-off of this checkpoint's choice,
+not hidden, should be mentioned in release notes alongside SR-2.1/
+SR-2.2's existing behavior-change notes if this branch ships. No
+per-deployment retention/privacy policy hook exists yet beyond
+`SleeptimeConfig`'s existing tuning knobs (`idle_threshold_seconds`,
+`min_unprocessed_turns`, `batch_size`, `use_llm_summarization`) — the
+review's phrasing calls for "policy, privacy, retention, and audit
+controls," and only "audit" (existing `sleeptime.cycle.*` message-bus
+events) was already present before this checkpoint.
+
+### Follow-up correction within the SR-4.1 checkpoint: sleeptime thread accumulation across the full test suite
+
+The `tests/agent/`-only verification above (35.88s, no symptoms) turned
+out not to be representative of the full suite. Running the complete
+suite with the wiring in place caused real resource accumulation: 96+
+live `missy-sleeptime` daemon threads piled up, confirmed via a live
+full-suite run that tripped pytest's per-test `faulthandler_timeout=120`
+and left the process crawling at ~27% CPU rather than progressing
+normally — because the great majority of tests across the suite
+construct `AgentRuntime()` without ever calling the new `shutdown()`,
+entirely expected since `shutdown()` didn't exist before this
+checkpoint so no existing test could have been written to call it.
+
+This was new evidence the operator's original "enabled by default"
+answer didn't have visibility into — the question asked beforehand
+covered background-LLM-cost/privacy trade-offs, not test-suite thread
+lifecycle — so it was surfaced back explicitly rather than silently
+patched over or silently reverted. Asked whether to add a test-only
+autouse fixture that stops each test's worker(s), keeping the
+production default unchanged, or revisit the default given this
+concrete cost evidence. **Operator chose: keep the production default,
+fix the test suite.**
+
+Fixed: added a repo-root `conftest.py` autouse fixture
+(`_stop_sleeptime_workers_after_test`) that wraps
+`AgentRuntime._make_sleeptime_worker` for the duration of each test,
+recording every real worker it constructs, and calls
+`worker.stop(timeout=1.0)` on each in teardown — production code and
+the real `start()` call are completely untouched, so tests that
+specifically assert the thread is alive during the test (e.g.
+`test_sleeptime_worker_constructed_and_started`) still see a genuine
+live thread; the fixture only intervenes at teardown. Live-verified via
+a real 50×`AgentRuntime()`-construction test with no explicit
+`shutdown()` calls, followed by a separate assertion test confirming
+zero `missy-sleeptime` threads remained afterward — both pass. Re-ran
+the suite that previously piled up threads and tripped the timeout:
+`12,909 passed, 1 failed (the pre-existing, already-documented
+Hypothesis deadline flake), 13 skipped in 196.91s` — no timeout, no
+thread accumulation, no slowdown. Added 2 permanent regression tests to
+`TestSleeptimeWiring` as a standing guard against this specific failure
+mode recurring.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-3 failed, 20975 passed, 13 skipped in 461.01s (0:07:41)
+3 failed, 20989 passed, 13 skipped in 471.49s (0:07:51)
 ```
 
 The 3 failures are exactly the known pre-existing `CameraDiscovery`
@@ -645,17 +782,17 @@ three files above.)
   SR-1.9a, SR-1.10, SR-1.11, SR-1.12, SR-1.13, SR-2.1, SR-2.2, SR-2.3,
   SR-2.4, SR-3.1 (substantially via FX-B), SR-3.2, SR-3.3, SR-3.4
   (including its cross-session-aggregation sub-finding), SR-3.5, SR-4.4,
-  SR-4.5, SR-4.3, SR-4.2, SR-4.7 — **§2 and §3 are now both fully closed,
-  with no open sub-findings in either; §4 has five items fixed (SR-4.4
-  done-criteria verification, SR-4.5 self_create_tool honesty, SR-4.3
-  checkpoint resume, SR-4.2 sub-agent delegation, SR-4.7 MCP tool
-  execution).** Remaining: SR-1.1 (audit signing — larger cross-cutting
-  change), SR-1.9b (DNS TOCTOU, substantially harder — needs connecting
-  to a pinned policy-verified IP rather than re-resolving at connect
-  time), SR-4.1, SR-4.6, SR-4.8 (remaining dead/unwired features, 3
-  sub-items) — this is the natural next large area now that §1
-  (partially), §2 (fully), §3
-  (fully), and five of §4's items are closed.
+  SR-4.5, SR-4.3, SR-4.2, SR-4.7, SR-4.1 — **§2 and §3 are now both fully
+  closed, with no open sub-findings in either; §4 has six items fixed
+  (SR-4.4 done-criteria verification, SR-4.5 self_create_tool honesty,
+  SR-4.3 checkpoint resume, SR-4.2 sub-agent delegation, SR-4.7 MCP tool
+  execution, SR-4.1 long-term memory).** Remaining: SR-1.1 (audit
+  signing — larger cross-cutting change), SR-1.9b (DNS TOCTOU,
+  substantially harder — needs connecting to a pinned policy-verified IP
+  rather than re-resolving at connect time), SR-4.6, SR-4.8 (remaining
+  dead/unwired features, 2 sub-items) — this is the natural next large
+  area now that §1 (partially), §2 (fully), §3
+  (fully), and six of §4's items are closed.
 - **SR-1.7's launcher sub-finding** remains open — `find`/`xargs`/
   `bash`/`sudo` etc. are allowlist-able with only a warning, and
   nested shell commands inside a launcher's quoted arguments are
@@ -743,65 +880,65 @@ both fully closed**, with zero open sub-findings in either (SR-2.1:
 scheduled jobs default to `capability_mode="safe-chat"`; SR-2.2: a real
 `ApprovalGate` is wired into `ProactiveManager` and the Web API server;
 SR-3.4's cross-session-aggregation sub-finding is fixed — `CostTracker`
-is now per-session-keyed), and **§4 has five items fixed**: SR-4.4 —
+is now per-session-keyed), and **§4 has six items fixed**: SR-4.4 —
 `_tool_loop()` rejects a "done" claim made immediately after an
-unresolved tool error, up to 2 retries, with
-`agent.done_criteria.rejected`/`.unverified` audit events; SR-4.5 —
-`self_create_tool` no longer claims written scripts are
-"created"/"registered" as usable tools (operator-confirmed: kept
-proposal-only rather than building dynamic loading — the one item this
+unresolved tool error, up to 2 retries; SR-4.5 — `self_create_tool` no
+longer claims written scripts are "created"/"registered" as usable
+tools (operator-confirmed: kept proposal-only — the one item this
 session where the operator chose the *smaller*, document-only path);
-SR-4.3 — `AgentRuntime.resume_checkpoint()` and `missy recover --resume
-ID` now actually continue an interrupted task from its saved
-conversation state, fail-closed on not-found/not-RUNNING/corrupted
-checkpoints; SR-4.2 — `SubAgentRunner`/`delegate_task` are now wired
-into production with real concurrency (`ThreadPoolExecutor`, not the
-previously-fake semaphore), shared-runtime budget aggregation, and a
+SR-4.3 — `AgentRuntime.resume_checkpoint()`/`missy recover --resume ID`
+now actually continue an interrupted task from saved conversation
+state; SR-4.2 — `SubAgentRunner`/`delegate_task` wired into production
+with real concurrency, shared-runtime budget aggregation, and a
 `MAX_SUB_AGENT_DEPTH` recursion bound; SR-4.7 — MCP tools are now
-runtime-callable, registered into the real `ToolRegistry` via
-`McpToolWrapper`, with `McpManager.call_tool()` re-verifying the pinned
-digest and enforcing annotation-driven approval immediately before
-every call, not only at connect time. SR-1.1 (audit signing) is now the
-largest remaining §1 item; the remaining §4 items (SR-4.1 long-term
-memory, SR-4.6 OTLP export, SR-4.8 provider rotation/fallback claims —
-3 sub-items) are the next natural continuation, each individually
-scoped and independently checkpointable like SR-4.2/SR-4.3/SR-4.4/
-SR-4.5/SR-4.7 were. Given how the last several checkpoints went (SR-3.3
-and SR-3.5 were both flagged "likely already fixed" and both turned out
-to hide live, confirmed, previously-undetected bugs; SR-2.1, SR-2.2,
-the SR-3.4 residual, SR-4.4, SR-4.5, SR-4.3, SR-4.2, and SR-4.7 all
+runtime-callable via `McpToolWrapper`, with `McpManager.call_tool()`
+re-verifying the pinned digest and enforcing annotation-driven approval
+before every call; SR-4.1 — `_record_learnings()` now actually persists
+extracted learnings (was silently discarding them after extraction),
+and `SleeptimeWorker` is wired into production exactly as its own
+module docstring documented (operator-confirmed: enabled by default,
+matching its own class default, unlike SR-4.5's opt-out choice).
+SR-1.1 (audit signing) is now the largest remaining §1 item; the
+remaining §4 items (SR-4.6 OTLP export, SR-4.8 provider
+rotation/fallback claims — 2 sub-items) are the next natural
+continuation, each individually scoped and independently
+checkpointable like the six above were. Given how the last several
+checkpoints went (SR-3.3 and SR-3.5 were both flagged "likely already
+fixed" and both turned out to hide live, confirmed,
+previously-undetected bugs; SR-2.1, SR-2.2, the SR-3.4 residual, and
+every SR-4.x fix this session (SR-4.1 through SR-4.5, SR-4.7) all
 turned out to have a second layer beyond the obvious fix — SR-2.1's
 fail-closed legacy-record handling, SR-2.2's entirely-unwired
 `ApprovalGate` requiring new REST endpoints, the SR-3.4 residual's
-25-test mechanical-vs-intentional update split across 9 files, SR-4.4's
-fingerprint-history design discarded mid-implementation after live
-testing revealed a false-positive staleness bug, SR-4.5 turning out to
-be a genuine product-policy fork requiring explicit operator input
-rather than an obvious "just fix it" bug, SR-4.3 requiring a genuine
-idempotency argument before it was safe to build resume at all, SR-4.2
-requiring an explicit (not threadlocal/contextvar) depth-parameter
-design specifically because the new concurrency it introduced would
-have silently broken an implicit propagation approach, SR-4.7's fix
-surfacing that 2 pre-existing tests were accidentally exercising a
-non-default `McpManager` code path purely because their manual
-`__new__()` construction never set an attribute the real `__init__`
-would have), keep applying the same discipline to whatever's picked up
-next: read the actual current code, trace actual runtime call paths,
-specifically check whether any existing test exercises the *real*
-production dispatch/entry point rather than just the unit under test in
-isolation, live-reproduce before declaring anything fixed, broken, or
-not-applicable, and ask before implementing whenever a finding turns
-out to be a genuine product-policy fork rather than a mechanical bug
-(SR-4.3/SR-4.2/SR-4.7 vs. SR-4.5 remain a useful contrast: all four
-offered a review-sanctioned "or just document the limitation" escape
-hatch, but only SR-4.5's alternative would have actually expanded the
-security surface if built — the operator judged SR-4.7's MCP servers,
-being explicitly operator-configured and digest-pinnable, to sit closer
-to SR-4.2/SR-4.3's "safe to build" side than to SR-4.5's "agent-authored
-code" side, even though MCP tool execution is itself dispatching
-third-party code). Alternatively pick up one of the concrete scoped
-tasks above (#11, #12, #15, #16, #17), all self-contained and not
-requiring a live delegate. A Web TUI browser page for the new
+25-test mechanical-vs-intentional update split, SR-4.4's
+fingerprint-history design discarded after live testing, SR-4.5/SR-4.2/
+SR-4.7/SR-4.1(part 2) all turning out to be genuine product-policy
+forks requiring explicit operator input rather than obvious "just fix
+it" bugs (four separate times this session, each with a materially
+different answer — SR-4.5 chose the conservative/smaller path, the
+other three chose to build the real feature), SR-4.7's fix surfacing 2
+pre-existing tests accidentally exercising a non-default `McpManager`
+code path purely because manual `__new__()` construction never set an
+attribute the real `__init__` would have, SR-4.1's sub-finding 1 being
+a completely uneventful one-line mechanical fix sitting right next to
+sub-finding 2's genuine design question in the same review item), keep
+applying the same discipline to whatever's picked up next: read the
+actual current code, trace actual runtime call paths, specifically
+check whether any existing test exercises the *real* production
+dispatch/entry point rather than just the unit under test in isolation,
+live-reproduce before declaring anything fixed, broken, or
+not-applicable, verify test-suite health empirically before finalizing
+any change that adds new background threads/processes/connections (as
+done for SR-4.1's `SleeptimeWorker` thread-per-instance change), and
+ask before implementing whenever a finding turns out to be a genuine
+product-policy fork rather than a mechanical bug — but don't assume the
+answer will always be "build the real feature": SR-4.5 is the
+counter-example, and the deciding factor each time was whether the
+fix would expand the set of code genuinely executable through the
+agent, not merely whether the review offered a "document the
+limitation" escape hatch. Alternatively pick up one of the concrete
+scoped tasks above (#11, #12, #15, #16, #17), all self-contained and
+not requiring a live delegate. A Web TUI browser page for the new
 `/api/v1/approvals` endpoints is also a reasonable, self-contained
 follow-up (the REST layer is done and tested; only the browser UI is
 missing).

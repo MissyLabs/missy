@@ -222,6 +222,7 @@ class TestStreamingFallbackLogging:
         rt._session_mgr = MagicMock()
         rt._session_mgr.get_active_session.return_value = MagicMock(id="test-sid")
         rt._cost_tracking_enabled = False
+        rt._sleeptime = None  # SR-4.1: run_stream() now reads this
         rt.config = MagicMock()
         rt.config.max_iterations = 1
 

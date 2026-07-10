@@ -2032,3 +2032,125 @@ class TestMcpToolDispatch:
         assert result.is_error
         assert "DENIED" in result.content
         client.call_tool.assert_not_called()
+
+
+class TestSleeptimeWiring:
+    """SR-4.1: SleeptimeWorker is constructed+started at __init__ time
+    exactly as its own module docstring documents (operator-confirmed:
+    enabled by default, matching SleeptimeConfig.enabled=True), with
+    record_activity() called on every real entry point and a real
+    shutdown() path to stop the daemon thread."""
+
+    def _make_runtime(self):
+        provider = _make_provider()
+        registry = _make_registry({"fake": provider})
+        with patch("missy.agent.runtime.get_registry", return_value=registry):
+            rt = AgentRuntime(AgentConfig(provider="fake"))
+        return rt, provider
+
+    def _registry_patch(self, provider):
+        registry = _make_registry({"fake": provider})
+        return patch("missy.agent.runtime.get_registry", return_value=registry)
+
+    def test_sleeptime_worker_constructed_and_started(self):
+        rt, _ = self._make_runtime()
+        try:
+            assert rt._sleeptime is not None
+            assert rt._sleeptime._thread is not None
+            assert rt._sleeptime._thread.is_alive()
+        finally:
+            rt.shutdown()
+
+    def test_shutdown_stops_the_worker_thread(self):
+        rt, _ = self._make_runtime()
+        thread = rt._sleeptime._thread
+        rt.shutdown()
+        assert not thread.is_alive()
+
+    def test_shutdown_is_idempotent(self):
+        rt, _ = self._make_runtime()
+        rt.shutdown()
+        rt.shutdown()  # must not raise
+
+    def test_shutdown_with_no_sleeptime_worker_does_not_raise(self):
+        rt, _ = self._make_runtime()
+        rt._sleeptime = None
+        rt.shutdown()  # must not raise
+
+    def test_run_records_activity_on_the_worker(self):
+        rt, provider = self._make_runtime()
+        try:
+            rt._sleeptime = MagicMock()
+            with self._registry_patch(provider):
+                rt.run("hello")
+            rt._sleeptime.record_activity.assert_called_once()
+        finally:
+            rt.shutdown()
+
+    def test_run_with_no_sleeptime_worker_does_not_raise(self):
+        rt, provider = self._make_runtime()
+        try:
+            rt._sleeptime = None
+            with self._registry_patch(provider):
+                result = rt.run("hello")
+            assert result  # ran normally without a sleeptime worker
+        finally:
+            rt.shutdown()
+
+    def test_resume_checkpoint_records_activity_on_the_worker(self, monkeypatch, tmp_path):
+        from missy.agent.checkpoint import CheckpointManager
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        provider = _make_provider(reply="done")
+        provider.complete_with_tools.return_value = _make_stop_response("done")
+        registry = _make_registry({"fake": provider})
+
+        cm = CheckpointManager()
+        cid = cm.create("sess-1", "task-1", "prompt")
+        cm.update(cid, [{"role": "user", "content": "prompt"}], [], iteration=0)
+
+        with patch("missy.agent.runtime.get_registry", return_value=registry):
+            rt = AgentRuntime(AgentConfig(provider="fake"))
+            try:
+                rt._sleeptime = MagicMock()
+                rt.resume_checkpoint(cid)
+                rt._sleeptime.record_activity.assert_called_once()
+            finally:
+                rt.shutdown()
+
+    def test_sleeptime_worker_wired_to_the_real_memory_store(self):
+        """The worker must share the runtime's actual memory_store, not a
+        separate/disconnected one -- otherwise it would summarise/extract
+        against the wrong (or no) data."""
+        rt, _ = self._make_runtime()
+        try:
+            assert rt._sleeptime._memory_store is rt._memory_store
+        finally:
+            rt.shutdown()
+
+    def test_conftest_fixture_prevents_thread_accumulation_across_tests(self):
+        """Regression guard for the real thread-leak this checkpoint's
+        wiring caused across the full suite (96+ live `missy-sleeptime`
+        threads piled up and tripped pytest's per-test faulthandler
+        timeout, confirmed via a real full-suite run). The root
+        conftest.py's autouse `_stop_sleeptime_workers_after_test`
+        fixture is what stops each worker once its owning test ends --
+        this test constructs several runtimes *without* calling
+        shutdown() itself (simulating the common case of a test author
+        forgetting to), relying entirely on the fixture, then a
+        follow-up assertion (in the next test below) confirms no thread
+        survived into a new test."""
+        for _ in range(10):
+            rt, _ = self._make_runtime()
+            # Deliberately no rt.shutdown() here -- the conftest fixture
+            # must clean this up, not this test.
+
+    def test_no_sleeptime_threads_leaked_from_previous_test(self):
+        """Must run after the un-shutdown-ed construction above (pytest
+        preserves declaration order within a class by default) --
+        confirms the conftest fixture actually stopped every thread that
+        test started, not just the ones this file explicitly shuts down."""
+        import threading
+
+        leaked = [t for t in threading.enumerate() if t.name == "missy-sleeptime"]
+        assert leaked == [], f"{len(leaked)} sleeptime thread(s) leaked across tests"

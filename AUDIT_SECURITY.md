@@ -2086,6 +2086,164 @@ requirement — do not overwrite, append new entries as work continues.
   restart) — a future session could add one if MCP servers turn out to
   be a common source of runaway calls.
 
+### SR-4.6 (SR-4.1) — learnings were extracted but never persisted; SleeptimeWorker was fully built but never instantiated
+
+- **Status: fixed.** Sixth §4 item, two independent sub-findings under
+  one review item.
+- **Sub-finding 1 (mechanical bug, fixed directly, no product-policy
+  question involved):** `AgentRuntime._record_learnings()` called the
+  real `extract_learnings()` function, producing a genuine
+  `TaskLearning` record every time a tool-augmented run completed, but
+  then only passed it to `logger.debug(...)` and discarded it — it
+  never called `self._memory_store.save_learning(learning)`, despite
+  that method existing, fully implemented, and already used correctly
+  by the *retrieval* half of the same feature
+  (`_build_context_messages()`'s `get_learnings(limit=5)` call, which
+  injects recent learnings into context). The `learnings` SQLite table
+  was therefore permanently empty in production, in every
+  configuration, regardless of how many tool-augmented tasks completed
+  — `CLAUDE.md`'s own claim "`Learnings`: Extracts task_type/outcome/
+  lesson from tool-augmented runs, **persisted in SQLite**" was false
+  for the persisted half specifically. Live-reproduced end-to-end
+  through the real `AgentRuntime.run()` with a real `SQLiteMemoryStore`:
+  a completed tool-augmented run left `get_learnings(limit=5)` empty.
+  Fixed: added the missing `self._memory_store.save_learning(learning)`
+  call (guarded by `self._memory_store is not None`, and by the
+  existing broad `except Exception` — persistence failure is best-effort
+  and must not crash a completed run, matching the extraction call's
+  own error-handling posture). Live re-verified: the same reproduction
+  now shows `get_learnings(limit=5)` returning the real persisted
+  lesson string immediately after the run completes.
+- **Sub-finding 2 (product-policy decision, asked and confirmed with
+  the operator):** `grep -rln "SleeptimeWorker" missy/` matched only
+  `missy/agent/sleeptime.py` itself — a fully-built, tested (688
+  pre-existing lines in `tests/agent/test_sleeptime.py`) background
+  daemon thread with zero production construction sites anywhere. Its
+  own module docstring literally documents the exact three-point
+  `AgentRuntime` integration needed (construct+start in `__init__`,
+  `record_activity()` at the top of `run()`, `stop()` on cleanup) — none
+  of which existed. Asked whether to wire it in opt-in-off-by-default,
+  wire it in exactly as documented (matching `SleeptimeConfig.enabled=True`,
+  its own class default), or leave it unwired and document the
+  limitation, since the worker makes background LLM calls (consuming
+  budget) and processes conversation content without an explicit
+  per-turn user action — a genuine privacy/cost design question, not a
+  mechanical bug. **Operator chose: wire it in exactly as documented,
+  enabled by default.** Fixed: added `AgentRuntime._make_sleeptime_worker()`
+  (graceful-degradation pattern matching `_make_mcp_manager()` etc.),
+  constructing `SleeptimeWorker(memory_store=self._memory_store,
+  provider_registry=<live registry or None>)` and calling `.start()` in
+  `__init__`. Added `record_activity()` calls at the top of `run()`,
+  `run_stream()` (which can bypass `run()` entirely via its single-turn
+  streaming path), and `resume_checkpoint()` — every real entry point
+  that represents genuine agent activity, so the worker never processes
+  memory concurrently with an active run. Added a new
+  `AgentRuntime.shutdown()` method (didn't exist before) that stops the
+  worker cleanly; documented as needed for long-running processes
+  (`missy gateway start`) but not strictly required for short-lived ones
+  (`missy ask`), since the worker is a daemon thread that dies with the
+  process regardless. Live-verified: a fresh `AgentRuntime()` genuinely
+  starts a live `missy-sleeptime` daemon thread; `shutdown()` stops it
+  (confirmed via `Thread.is_alive()` before/after); the worker's
+  `_memory_store` is confirmed to be the exact same object as the
+  runtime's own `_memory_store`, not a disconnected copy. Verified the
+  wiring does not destabilise the test suite before finalizing: a real
+  `AgentRuntime()` now starts one real OS thread per instantiation
+  (previously zero), so `tests/agent/` (4,199 tests, the directory that
+  constructs `AgentRuntime` most heavily) was timed and run in full —
+  35.88s, all passing, no thread-exhaustion or slowdown symptoms
+  observed (the worker's first wake is 60s away and real processing only
+  triggers after 300s of idle, both far outside any single test's
+  runtime, so essentially no test ever reaches the worker's actual
+  processing code path — only cheap thread creation/teardown overhead is
+  incurred). Corrected `CLAUDE.md`'s `SleeptimeWorker` entry (was a
+  generic feature description that read as ambiguous about wiring
+  status; now states the concrete construction/activity/shutdown
+  integration and defaults).
+- **Remediation evidence, test counts:** 12 new/updated regression
+  tests — `tests/agent/test_coverage_gaps.py::TestRuntimeRecordLearnings`
+  (4 new tests: persists-to-memory-store, no-memory-store-does-not-raise,
+  save-failure-does-not-raise, end-to-end-via-real-SQLiteMemoryStore) and
+  `tests/agent/test_runtime_deep.py::TestSleeptimeWiring` (8 new tests:
+  constructed-and-started, shutdown-stops-thread, shutdown-idempotent,
+  shutdown-with-no-worker, run()-records-activity, run()-without-worker,
+  resume_checkpoint()-records-activity, worker-shares-real-memory-store).
+  Fixed 1 pre-existing test
+  (`tests/unit/test_gateway_timeout_url_validation.py::TestStreamingFallbackLogging::test_streaming_failure_logged`)
+  whose manual `AgentRuntime.__new__()` construction hadn't set the new
+  `_sleeptime` attribute `run_stream()` now reads.
+  `tests/agent/`+`tests/cli/`+`tests/unit/`+`tests/memory/`+
+  `tests/security/`+`tests/mcp/`+`tests/tools/`+`tests/integration/`+
+  `tests/scheduler/` (12,908 tests) pass with no regressions — the one
+  failure observed
+  (`tests/security/test_property_based_fuzz.py::TestNetworkPolicyEngineFuzz::test_check_host_never_crashes_on_arbitrary_unicode`)
+  is the pre-existing, already-documented intermittent Hypothesis
+  deadline flake (unmocked live DNS resolution occasionally exceeding
+  the 200ms default deadline), confirmed unrelated to this session's
+  changes in an earlier checkpoint.
+- **Residual risk:** `SleeptimeWorker`'s summarization step calls an LLM
+  provider when `use_llm_summarization=True` (its own default) and a
+  provider is reachable — meaning enabling it (now the default) means
+  Missy will incur real, periodic, un-prompted API costs for any
+  deployment with idle sessions containing enough unsummarised turns.
+  This is the explicit, operator-confirmed trade-off of choosing "wire
+  it in exactly as documented, enabled by default" over the opt-in
+  alternative — called out here, not hidden, and should be mentioned in
+  release notes if this branch ships, alongside SR-2.1/SR-2.2's
+  existing behavior-change notes. No per-deployment retention/privacy
+  policy hook exists yet for what the worker is allowed to summarize
+  (e.g. excluding sessions flagged sensitive) — the review's phrasing
+  explicitly calls for "policy, privacy, retention, and audit controls,"
+  and only the "audit" piece (the worker already publishes
+  `sleeptime.cycle.start`/`.complete`/`.error` events to the message bus)
+  was already present before this checkpoint; policy/privacy/retention
+  controls beyond the existing `SleeptimeConfig` tuning knobs
+  (`idle_threshold_seconds`, `min_unprocessed_turns`, `batch_size`,
+  `use_llm_summarization`) remain a follow-up if finer-grained control
+  is needed.
+- **Follow-up correction discovered within this same checkpoint, before
+  finalizing:** the `tests/agent/`-only verification above (35.88s, no
+  symptoms) was not representative of the full suite. Running the
+  *complete* test suite with the wiring in place caused real resource
+  accumulation: 96+ live `missy-sleeptime` daemon threads piled up
+  (confirmed via a live full-suite run that tripped pytest's per-test
+  `faulthandler_timeout=120` and left the process crawling at ~27% CPU
+  rather than progressing normally) because the great majority of tests
+  across the suite construct `AgentRuntime()` without ever calling the
+  new `shutdown()` — entirely expected given `shutdown()` didn't exist
+  before this checkpoint, so no existing test could have been written to
+  call it. This was new evidence the operator's original "enabled by
+  default" decision didn't have visibility into (the question asked
+  beforehand covered background-LLM-cost/privacy trade-offs, not
+  test-suite thread lifecycle), so it was surfaced back explicitly
+  rather than silently patched over or silently reverted. Asked whether
+  to (a) add a test-only autouse fixture that stops each test's
+  worker(s) after the test, keeping the production default unchanged,
+  or (b) revisit the default and make it opt-in given this concrete
+  cost evidence. **Operator chose (a): keep the production default,
+  fix the test suite.** Added a `conftest.py` (repo root) autouse
+  fixture `_stop_sleeptime_workers_after_test` that wraps
+  `AgentRuntime._make_sleeptime_worker` for the duration of each test,
+  recording every real worker it constructs, and calls
+  `worker.stop(timeout=1.0)` on each in teardown — production code and
+  the real `start()` call are completely untouched (tests that
+  specifically assert the thread is alive, e.g.
+  `TestSleeptimeWiring::test_sleeptime_worker_constructed_and_started`,
+  still see a genuine live thread *during* the test; the fixture only
+  intervenes at teardown). Live-verified via a real 50×
+  `AgentRuntime()`-construction test with no explicit `shutdown()`
+  calls, followed by a separate assertion test confirming zero
+  `missy-sleeptime` threads remained afterward — both pass. Re-ran the
+  full non-`tests/vision/` suite that previously piled up threads and
+  tripped the timeout: `12,909 passed, 1 failed (the pre-existing,
+  already-documented Hypothesis deadline flake), 13 skipped in 196.91s`
+  — no timeout, no thread accumulation, no slowdown. Added 2 permanent
+  regression tests to `TestSleeptimeWiring`
+  (`test_conftest_fixture_prevents_thread_accumulation_across_tests`,
+  `test_no_sleeptime_threads_leaked_from_previous_test`) as a standing
+  guard against this specific failure mode recurring if the fixture is
+  ever accidentally removed or the wrapped method's name changes.
+
 ---
 
 - Timestamp: 2026-07-09 15:35:26 (raw grep-scan dump below, preserved
