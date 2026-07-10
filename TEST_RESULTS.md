@@ -1,5 +1,40 @@
 # TEST_RESULTS
 
+## Run: 2026-07-10 14:40 UTC — validation-harness overhaul, SR-2.4 (heredoc rewrite wrote model code to disk before policy approval)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Finding: `_rewrite_heredoc_command()` wrote a model-supplied heredoc
+  body to a real temp file *before* the shell policy check, which only
+  happens later inside `registry.execute()`. No interpreter allowlist
+  check existed in this function at all.
+- Live reproduction: calling it with a heredoc body reading
+  `SUPER_SECRET_TOKEN` from the environment wrote the full script to
+  `/tmp/missy_heredoc_*.py` unconditionally, regardless of whether
+  `"python3"` would ever be permitted to execute. Confirmed fixed: with
+  `"python3"` not allowlisted, zero new files appear on disk at any
+  point (verified via before/after glob of `/tmp/missy_heredoc_*`).
+- Fix: the interpreter is checked against the real shell policy (reusing
+  SR-1.7's uniform check) before anything is written; on denial or an
+  uninitialised policy engine, the original heredoc-laden command is
+  returned unmodified and denied normally by `registry.execute()`. The
+  temp file path is now returned to the caller, which wraps the
+  tool-dispatch retry loop in a `try/finally` that unconditionally
+  deletes it once the tool call finishes — closing the related "never
+  deleted, may hold secrets" defect.
+- Command: `pytest tests/agent/test_runtime_config_edges.py -q`
+- Result: `97 passed` (3 new tests in
+  `TestRewriteHeredocCommandPolicyGate`; ~20 pre-existing tests updated
+  for the new `(tool_args, tmppath)` return signature)
+- Command: `pytest tests/agent/ tests/tools/ tests/policy/ tests/security/ tests/integration/ -q`
+- Result: `8864 passed, 6 skipped`
+- Command: `pytest tests/ -q -o faulthandler_timeout=120` with the 3
+  known pre-existing vision failures deselected
+- Result: `20847 passed, 13 skipped, 3 deselected in 443.13s (0:07:23)`
+  — 3 more passing than the prior (SR-1.11) checkpoint's 20844, matching
+  the tests added this checkpoint exactly; no regressions.
+
+---
+
 ## Run: 2026-07-10 14:05 UTC — validation-harness overhaul, SR-1.11 (MCP manifest digest pinning self-destructs on reconnect)
 
 - Branch: `overhaul/missy-validation-20260710-031406`

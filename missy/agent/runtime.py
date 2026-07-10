@@ -87,7 +87,11 @@ def _fingerprint_tc(name: str, arguments: dict) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 
-def _rewrite_heredoc_command(tool_args: dict) -> dict:
+def _rewrite_heredoc_command(
+    tool_args: dict,
+    session_id: str = "",
+    task_id: str = "",
+) -> tuple[dict, str | None]:
     """Rewrite shell commands containing heredocs to use temp files.
 
     Many external models (e.g. GPT-5.2 via Codex) generate heredoc-style
@@ -96,8 +100,25 @@ def _rewrite_heredoc_command(tool_args: dict) -> dict:
     extracting the heredoc body into a temporary file and replacing the
     command with one that executes the file directly.
 
+    SR-2.4: the interpreter is checked against the shell policy *before*
+    anything is written to disk. Writing the model-supplied body first and
+    only finding out afterward that the command would have been denied
+    violates "denied operations have no side effects" — the file would
+    already exist (potentially holding secrets the model was manipulated
+    into embedding) regardless of the eventual policy outcome. If the
+    interpreter isn't permitted (or the policy engine isn't initialised,
+    which fails closed the same way the registry itself does), this
+    returns *tool_args* unmodified so the original heredoc-laden command
+    reaches :meth:`~missy.tools.registry.ToolRegistry.execute` and is
+    denied there normally — with zero disk footprint.
+
     Only rewrites when ``<<`` is detected.  Returns *tool_args* unmodified
     otherwise.
+
+    Returns:
+        A ``(tool_args, tmppath)`` tuple. ``tmppath`` is the path of the
+        temp file created (the caller is responsible for deleting it once
+        the tool call completes), or ``None`` when no file was written.
     """
     import os
     import re
@@ -105,7 +126,7 @@ def _rewrite_heredoc_command(tool_args: dict) -> dict:
 
     command = tool_args.get("command", "")
     if "<<" not in command:
-        return tool_args
+        return tool_args, None
 
     # Match patterns like:  python3 - <<'DELIM'\n...\nDELIM
     # or:                   python3 - <<"DELIM"\n...\nDELIM
@@ -128,10 +149,31 @@ def _rewrite_heredoc_command(tool_args: dict) -> dict:
             "Heredoc detected but pattern did not match; passing through: %s",
             command[:120],
         )
-        return tool_args
+        return tool_args, None
 
     interpreter = m.group(1)
     body = m.group(3)
+
+    # SR-2.4: verify the interpreter itself would be permitted before
+    # writing anything. The rewritten command is always exactly
+    # "{interpreter} {tmppath}" with no redirection, so checking the
+    # interpreter alone is equivalent to checking the full rewritten
+    # command would pass.
+    from missy.core.exceptions import PolicyViolationError
+    from missy.policy.engine import get_policy_engine
+
+    try:
+        engine = get_policy_engine()
+        engine.check_shell(interpreter, session_id=session_id, task_id=task_id)
+    except (PolicyViolationError, RuntimeError) as exc:
+        logger.info(
+            "Heredoc rewrite skipped — interpreter %r not permitted by shell "
+            "policy: %s. Original command will be evaluated (and denied) "
+            "as-is with no file written.",
+            interpreter,
+            exc,
+        )
+        return tool_args, None
 
     # Determine file extension from interpreter name
     ext_map = {
@@ -148,7 +190,8 @@ def _rewrite_heredoc_command(tool_args: dict) -> dict:
     base = os.path.basename(interpreter)
     ext = ext_map.get(base, ".tmp")
 
-    # Write body to a temp file (not auto-deleted so the shell can read it)
+    # Write body to a temp file. The caller deletes it once the tool call
+    # completes (success or failure) — see the shell_exec dispatch site.
     fd, tmppath = tempfile.mkstemp(suffix=ext, prefix="missy_heredoc_")
     try:
         os.write(fd, body.encode("utf-8"))
@@ -164,7 +207,7 @@ def _rewrite_heredoc_command(tool_args: dict) -> dict:
 
     rewritten = dict(tool_args)
     rewritten["command"] = new_command
-    return rewritten
+    return rewritten, tmppath
 
 
 # Threshold (chars) above which tool results are stored separately and replaced
@@ -1435,77 +1478,93 @@ class AgentRuntime:
 
         # Rewrite heredoc-style shell commands to temp files so they pass
         # the shell policy (which blocks << as a subshell marker).
+        heredoc_tmppath: str | None = None
         if tool_call.name == "shell_exec" and "command" in tool_args:
-            tool_args = _rewrite_heredoc_command(tool_args)
+            tool_args, heredoc_tmppath = _rewrite_heredoc_command(
+                tool_args, session_id=session_id, task_id=task_id
+            )
 
-        last_exc: Exception | None = None
-        for attempt in range(_MAX_TOOL_RETRIES + 1):
-            try:
-                result = registry.execute(
-                    tool_call.name,
-                    session_id=session_id,
-                    task_id=task_id,
-                    **tool_args,
-                )
-                content = str(result.output) if result.output is not None else ""
-                return ToolResult(
-                    tool_call_id=tool_call.id,
-                    name=tool_call.name,
-                    content=content if result.success else (result.error or "Tool failed"),
-                    is_error=not result.success,
-                )
-            except KeyError as exc:
-                logger.warning("Tool %r not found in registry: %s", tool_call.name, exc)
-                return ToolResult(
-                    tool_call_id=tool_call.id,
-                    name=tool_call.name,
-                    content=f"Tool not found: {tool_call.name}",
-                    is_error=True,
-                )
-            except RuntimeError as exc:
-                logger.warning("Tool registry not available: %s", exc)
-                return ToolResult(
-                    tool_call_id=tool_call.id,
-                    name=tool_call.name,
-                    content="Tool registry not initialised.",
-                    is_error=True,
-                )
-            except AgentRuntime._TRANSIENT_ERRORS as exc:
-                last_exc = exc
-                if attempt < _MAX_TOOL_RETRIES:
-                    delay = _RETRY_BASE_DELAY * (2**attempt)
-                    logger.warning(
-                        "Transient error executing tool %r (attempt %d/%d), retrying in %.1fs: %s",
+        try:
+            last_exc: Exception | None = None
+            for attempt in range(_MAX_TOOL_RETRIES + 1):
+                try:
+                    result = registry.execute(
                         tool_call.name,
-                        attempt + 1,
-                        _MAX_TOOL_RETRIES + 1,
-                        delay,
-                        exc,
+                        session_id=session_id,
+                        task_id=task_id,
+                        **tool_args,
                     )
-                    time.sleep(delay)
-                else:
-                    logger.warning(
-                        "Tool %r failed after %d attempts: %s",
-                        tool_call.name,
-                        _MAX_TOOL_RETRIES + 1,
-                        exc,
+                    content = str(result.output) if result.output is not None else ""
+                    return ToolResult(
+                        tool_call_id=tool_call.id,
+                        name=tool_call.name,
+                        content=content if result.success else (result.error or "Tool failed"),
+                        is_error=not result.success,
                     )
-            except Exception:
-                logger.exception("Unexpected error executing tool %r", tool_call.name)
-                return ToolResult(
-                    tool_call_id=tool_call.id,
-                    name=tool_call.name,
-                    content="Tool execution failed due to an internal error.",
-                    is_error=True,
-                )
+                except KeyError as exc:
+                    logger.warning("Tool %r not found in registry: %s", tool_call.name, exc)
+                    return ToolResult(
+                        tool_call_id=tool_call.id,
+                        name=tool_call.name,
+                        content=f"Tool not found: {tool_call.name}",
+                        is_error=True,
+                    )
+                except RuntimeError as exc:
+                    logger.warning("Tool registry not available: %s", exc)
+                    return ToolResult(
+                        tool_call_id=tool_call.id,
+                        name=tool_call.name,
+                        content="Tool registry not initialised.",
+                        is_error=True,
+                    )
+                except AgentRuntime._TRANSIENT_ERRORS as exc:
+                    last_exc = exc
+                    if attempt < _MAX_TOOL_RETRIES:
+                        delay = _RETRY_BASE_DELAY * (2**attempt)
+                        logger.warning(
+                            "Transient error executing tool %r (attempt %d/%d), "
+                            "retrying in %.1fs: %s",
+                            tool_call.name,
+                            attempt + 1,
+                            _MAX_TOOL_RETRIES + 1,
+                            delay,
+                            exc,
+                        )
+                        time.sleep(delay)
+                    else:
+                        logger.warning(
+                            "Tool %r failed after %d attempts: %s",
+                            tool_call.name,
+                            _MAX_TOOL_RETRIES + 1,
+                            exc,
+                        )
+                except Exception:
+                    logger.exception("Unexpected error executing tool %r", tool_call.name)
+                    return ToolResult(
+                        tool_call_id=tool_call.id,
+                        name=tool_call.name,
+                        content="Tool execution failed due to an internal error.",
+                        is_error=True,
+                    )
 
-        # All retries exhausted for transient error.
-        return ToolResult(
-            tool_call_id=tool_call.id,
-            name=tool_call.name,
-            content=f"Tool failed after {_MAX_TOOL_RETRIES + 1} attempts: {last_exc}",
-            is_error=True,
-        )
+            # All retries exhausted for transient error.
+            return ToolResult(
+                tool_call_id=tool_call.id,
+                name=tool_call.name,
+                content=f"Tool failed after {_MAX_TOOL_RETRIES + 1} attempts: {last_exc}",
+                is_error=True,
+            )
+        finally:
+            # SR-2.4: a heredoc temp file is a purely internal implementation
+            # detail with no reason to persist once the tool call has
+            # finished (success, failure, or retries exhausted) — leaving it
+            # on disk indefinitely risks exposing whatever the model wrote
+            # into it (potentially secrets) to any other local process/user.
+            if heredoc_tmppath is not None:
+                import os as _os
+
+                with contextlib.suppress(OSError):
+                    _os.unlink(heredoc_tmppath)
 
     # ------------------------------------------------------------------
     # Context / memory helpers

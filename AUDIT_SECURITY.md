@@ -762,6 +762,65 @@ requirement — do not overwrite, append new entries as work continues.
   checks on load) — this fix only changes which fields are included in
   the rewritten entries, not the write mechanism itself.
 
+### SR-2.4 — Heredoc rewrite wrote model code to disk before policy approval
+
+- **Status: fixed.** First finding addressed from the review's §2
+  (unattended-execution hazards) rather than §1.
+- **Reachability found:** live and directly exploitable, no policy
+  misconfiguration needed — this affects every `shell_exec` call whose
+  command contains a heredoc, unconditionally. `_rewrite_heredoc_command()`
+  (`missy/agent/runtime.py`) extracted a heredoc body from a model-supplied
+  `shell_exec` command and wrote it to a real temp file
+  (`tempfile.mkstemp(prefix="missy_heredoc_")`) at the call site — *before*
+  the shell policy check, which only happens later inside
+  `registry.execute()` → `ToolRegistry._check_permissions()` →
+  `ShellPolicyEngine.check_command()`. Live-reproduced: with the shell
+  policy engine never even consulted (no `interpreter` allowlist check of
+  any kind existed in this function), calling it with
+  `command="python3 - <<'PY'\nimport os\nprint(os.environ.get('SUPER_SECRET_TOKEN'))\nPY"`
+  wrote the full script — including the secret-reading logic — to
+  `/tmp/missy_heredoc_*.py` unconditionally, regardless of whether
+  `"python3"` was ever going to be permitted to execute at all. The file
+  was also never deleted after use, regardless of outcome — a second,
+  related defect the review names in the same finding ("a persistent
+  temp file that may hold secrets").
+- **Remediation evidence:** `_rewrite_heredoc_command()` now checks the
+  interpreter against the real shell policy (`PolicyEngine.check_shell()`,
+  reusing SR-1.7's uniform redirect-aware check — though the rewritten
+  command is always exactly `"{interpreter} {tmppath}"` with no
+  redirection, so this reduces to a plain program-name check) *before*
+  writing anything to disk. If the interpreter isn't permitted, or the
+  policy engine isn't initialised (treated the same as a policy engine
+  being initialised-but-denying, matching the registry's own existing
+  fail-closed posture), the function returns the *original* heredoc-laden
+  command unmodified — it then reaches `registry.execute()` and is denied
+  there normally (via the existing `<<` subshell-marker rejection), with
+  zero disk footprint. When the interpreter *is* permitted, the function
+  now also returns the temp file's path; the call site
+  (`AgentRuntime`'s tool-dispatch loop) wraps the whole retry loop in a
+  `try/finally` that unconditionally deletes the temp file once the tool
+  call finishes, regardless of success, failure, or retries exhausted —
+  closing the "never deleted" defect too. Live-verified the exact
+  `SUPER_SECRET_TOKEN`-reading reproduction above: with `"python3"` not in
+  `allowed_commands`, **zero new files appear on disk** at any point
+  (confirmed via a before/after glob of `/tmp/missy_heredoc_*`), whereas
+  the identical call previously always wrote the file regardless of
+  policy. 4 new tests in
+  `tests/agent/test_runtime_config_edges.py::TestRewriteHeredocCommandPolicyGate`;
+  all ~20 pre-existing heredoc-rewrite tests updated for the new
+  `(tool_args, tmppath)` return signature and given a real, permissive
+  policy engine fixture so they continue to exercise genuine rewrite
+  behavior rather than silently degrading to passthrough.
+- **Residual risk:** this closes the specific mechanism named by the
+  review (heredoc rewriting in `shell_exec`); it does not add a general
+  "no tool may write to disk before its own policy check passes"
+  invariant enforced at the framework level — any *other* tool that
+  writes an intermediate file before calling `registry.execute()` would
+  need the same pattern applied independently. No other such call site
+  was found in this codebase during this checkpoint, but a full audit
+  for the same "write-then-check" ordering across all built-in tools was
+  not performed.
+
 ---
 
 - Timestamp: 2026-07-09 15:35:26 (raw grep-scan dump below, preserved

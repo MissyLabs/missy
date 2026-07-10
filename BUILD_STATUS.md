@@ -1,6 +1,6 @@
 # Build Status
 
-Last updated: 2026-07-10 14:05 UTC
+Last updated: 2026-07-10 14:40 UTC
 
 ## Current Workstream: Validation-Harness Overhaul
 
@@ -853,6 +853,46 @@ Full detail and residual risk (the digest itself still only covers
 tool `name`+`description`, not `inputSchema`/annotations — a separate,
 narrower gap this checkpoint does not address) in
 `AUDIT_SECURITY.md`'s new `### SR-1.11` section.
+
+### Completed This Session, continued: SR-2.4 (heredoc rewrite wrote model code to disk before policy approval — thirteenth critical finding, first §2 item)
+
+First finding addressed from the review's §2 (unattended-execution
+hazards). `_rewrite_heredoc_command()` (`missy/agent/runtime.py`)
+extracted a heredoc body from a model-supplied `shell_exec` command and
+wrote it to a real temp file — *before* the shell policy check, which
+only happens later inside `registry.execute()`. No interpreter
+allowlist check of any kind existed in this function. Live-reproduced:
+calling it with a heredoc body reading `SUPER_SECRET_TOKEN` from the
+environment wrote the full script to `/tmp/missy_heredoc_*.py`
+unconditionally, regardless of whether `"python3"` would ever be
+permitted to execute. The file was also never deleted after use — a
+related defect the review names in the same finding.
+
+Fixed: the interpreter is now checked against the real shell policy
+(reusing SR-1.7's uniform check) *before* anything is written. If
+denied (or the policy engine isn't initialised), the function returns
+the original heredoc-laden command unmodified, which then reaches
+`registry.execute()` and is denied there normally — zero disk
+footprint. When permitted, the temp file path is now returned to the
+caller, which wraps the tool-dispatch retry loop in a `try/finally`
+that unconditionally deletes it once the tool call finishes (success,
+failure, or retries exhausted). Live-verified the exact
+`SUPER_SECRET_TOKEN` reproduction: with `"python3"` not allowlisted,
+zero new files appear on disk at any point.
+
+4 new tests in
+`tests/agent/test_runtime_config_edges.py::TestRewriteHeredocCommandPolicyGate`;
+~20 pre-existing heredoc-rewrite tests updated for the new
+`(tool_args, tmppath)` return signature and given a real policy-engine
+fixture so they continue to exercise genuine rewrite behavior.
+
+This is the thirteenth independent, confirmed critical finding this
+session.
+
+Full detail and residual risk (this closes the specific mechanism
+named by the review; a full audit for the same "write-then-check"
+ordering across all other built-in tools was not performed) in
+`AUDIT_SECURITY.md`'s new `### SR-2.4` section.
 
 ### Known Pre-Existing Failure (not caused by this session)
 
