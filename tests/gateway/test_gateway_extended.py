@@ -926,15 +926,15 @@ class TestThreadSafetyHTTPClient:
 
 class TestRateLimitingIntegration:
     """The gateway delegates to the policy engine; rate limiting can be expressed
-    as a PolicyViolationError from check_network.  Verify that PolicyHTTPClient
-    handles this correctly."""
+    as a PolicyViolationError from check_network_resolved.  Verify that
+    PolicyHTTPClient handles this correctly."""
 
     def test_rate_limited_host_raises_policy_violation(self) -> None:
-        """When check_network raises (simulating rate-limit enforcement), the
-        request is blocked and no httpx call is made."""
+        """When check_network_resolved raises (simulating rate-limit
+        enforcement), the request is blocked and no httpx call is made."""
         with patch("missy.gateway.client.get_policy_engine") as mock_get_engine:
             mock_engine = MagicMock()
-            mock_engine.check_network.side_effect = PolicyViolationError(
+            mock_engine.check_network_resolved.side_effect = PolicyViolationError(
                 "Rate limit exceeded for api.example.com",
                 category="network",
                 detail="Too many requests per minute",
@@ -954,7 +954,7 @@ class TestRateLimitingIntegration:
         network_request audit event."""
         with patch("missy.gateway.client.get_policy_engine") as mock_get_engine:
             mock_engine = MagicMock()
-            mock_engine.check_network.side_effect = PolicyViolationError(
+            mock_engine.check_network_resolved.side_effect = PolicyViolationError(
                 "Rate limited", category="network", detail="quota exceeded"
             )
             mock_get_engine.return_value = mock_engine
@@ -966,9 +966,11 @@ class TestRateLimitingIntegration:
         assert event_bus.get_events(event_type="network_request") == []
 
     def test_policy_engine_check_network_called_once_per_request(self) -> None:
-        """check_network is called exactly once per HTTP method invocation."""
+        """check_network_resolved is called exactly once per HTTP method
+        invocation."""
         with patch("missy.gateway.client.get_policy_engine") as mock_get_engine:
             mock_engine = MagicMock()
+            mock_engine.check_network_resolved.return_value = (True, "93.184.216.34")
             mock_get_engine.return_value = mock_engine
             mock_resp = _mock_response(200)
             with patch.object(httpx.Client, "get", return_value=mock_resp):
@@ -976,7 +978,7 @@ class TestRateLimitingIntegration:
             with patch.object(httpx.Client, "get", return_value=mock_resp):
                 PolicyHTTPClient().get("https://api.example.com/two")
 
-        assert mock_engine.check_network.call_count == 2
+        assert mock_engine.check_network_resolved.call_count == 2
 
 
 # ===========================================================================

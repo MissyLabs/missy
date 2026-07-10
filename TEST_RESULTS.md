@@ -1,5 +1,54 @@
 # TEST_RESULTS
 
+## Run: 2026-07-11 06:40 UTC — validation-harness overhaul, SR-1.9b (DNS-rebinding check/connect TOCTOU — pinned connections, closes the security review's numbered SR-x.y list entirely)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Finding: `NetworkPolicyEngine.check_host()` validated a DNS
+  resolution (including SR-1.9a's rebinding check) and then discarded
+  it; `PolicyHTTPClient._check_url()`'s subsequent `httpx` dispatch let
+  `httpcore` perform an independent, second DNS resolution when
+  actually connecting. A low-TTL record can return a different address
+  between the two — a textbook check-then-use TOCTOU.
+- Fix: new `missy/gateway/pinned_transport.py`
+  (`PinnedHTTPTransport`/`PinnedAsyncHTTPTransport`, custom `httpcore`
+  network backend) binds the policy-validated IP to the actual
+  connection via a `contextvars.ContextVar`-scoped pin set by
+  `_check_url()` immediately before dispatch; new
+  `NetworkPolicyEngine.check_host_resolved()`/
+  `PolicyEngine.check_network_resolved()` return the validated IP
+  instead of discarding it. Fails closed on an unpinned host.
+  `default_deny=False` mode pins `None` (no DNS lookup, matching an
+  established tested property); the interactive-approval override path
+  best-effort pins so it doesn't fail closed.
+- Command: `pytest tests/gateway/test_pinned_transport.py -q`
+- Result: `8 passed` — real `HTTPServer` + real `socket.getaddrinfo`
+  call tracking, proving the target hostname resolves exactly once (at
+  policy-check time) and the connection reuses that IP rather than
+  re-resolving; a direct simulation of the review's rebinding attack
+  (second resolution would point at an unreachable RFC 5737 address)
+  still succeeds; fail-closed confirmed sync and async; operator
+  override still connects.
+- Command: `pytest tests/policy/test_network.py -q`
+- Result: `55 passed` (9 new `TestCheckHostResolved` tests)
+- Command: `pytest tests/gateway/ tests/policy/ -q -o faulthandler_timeout=120`
+- Result: `1041 passed` — fixed ~44 pre-existing tests across 6 files
+  that mocked the policy engine and asserted on the old `check_network`
+  call specifically (mechanical rename to `check_network_resolved` +
+  `(True, ip)` tuple return, not new test logic); also caught and fixed
+  a real behavioral regression in this checkpoint's own first pass —
+  `default_deny=False` mode must never trigger DNS resolution
+  (established, separately-tested property) — corrected before
+  finalizing.
+- Command: `pytest tests/integration/ tests/security/test_security_hardening_gateway_mcp.py tests/providers/test_policy_http.py tests/tools/ tests/unit/test_policy_gateway_edges.py tests/unit/test_incus_tools_coverage_gaps.py tests/policy/test_engine.py -q -o faulthandler_timeout=120`
+- Result: `616 passed` (broader sweep of every other file referencing
+  `check_network`)
+- Command: `pytest tests/ -q -o faulthandler_timeout=120`
+- Result: `3 failed, 21071 passed, 13 skipped in 507.26s (0:08:27)` —
+  up from 21055, only the 3 known pre-existing `CameraDiscovery`
+  cache-TTL flakes failing, zero regressions from this checkpoint's
+  changes. **This closes the security review's numbered SR-x.y list
+  entirely** — SR-1.9b was the last remaining item.
+
 ## Run: 2026-07-11 05:10 UTC — validation-harness overhaul, SR-1.1 (audit event signing — real signature + verification, closes §1 except SR-1.9b)
 
 - Branch: `overhaul/missy-validation-20260710-031406`

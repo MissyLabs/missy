@@ -523,7 +523,7 @@ class TestRESTPolicyEnforcement:
     @patch("missy.gateway.client.get_policy_engine")
     def test_rest_policy_deny_raises(self, mock_get_engine: MagicMock) -> None:
         mock_engine = MagicMock()
-        mock_engine.check_network.return_value = True
+        mock_engine.check_network_resolved.return_value = (True, "93.184.216.34")
         mock_engine.rest_policy.check.return_value = "deny"
         mock_get_engine.return_value = mock_engine
 
@@ -534,7 +534,7 @@ class TestRESTPolicyEnforcement:
     @patch("missy.gateway.client.get_policy_engine")
     def test_rest_policy_allow_does_not_raise(self, mock_get_engine: MagicMock) -> None:
         mock_engine = MagicMock()
-        mock_engine.check_network.return_value = True
+        mock_engine.check_network_resolved.return_value = (True, "93.184.216.34")
         mock_engine.rest_policy.check.return_value = "allow"
         mock_get_engine.return_value = mock_engine
 
@@ -545,7 +545,7 @@ class TestRESTPolicyEnforcement:
     @patch("missy.gateway.client.get_policy_engine")
     def test_no_rest_policy_attribute_does_not_raise(self, mock_get_engine: MagicMock) -> None:
         mock_engine = MagicMock()
-        mock_engine.check_network.return_value = True
+        mock_engine.check_network_resolved.return_value = (True, "93.184.216.34")
         mock_engine.rest_policy = None
         mock_get_engine.return_value = mock_engine
 
@@ -557,7 +557,7 @@ class TestRESTPolicyEnforcement:
     def test_rest_policy_exception_denies_request(self, mock_get_engine: MagicMock) -> None:
         """Non-PolicyViolationError from REST policy check denies request (fail-closed)."""
         mock_engine = MagicMock()
-        mock_engine.check_network.return_value = True
+        mock_engine.check_network_resolved.return_value = (True, "93.184.216.34")
         mock_engine.rest_policy.check.side_effect = RuntimeError("parser broken")
         mock_get_engine.return_value = mock_engine
 
@@ -571,7 +571,7 @@ class TestRESTPolicyEnforcement:
         self, mock_get_engine: MagicMock
     ) -> None:
         mock_engine = MagicMock()
-        mock_engine.check_network.return_value = True
+        mock_engine.check_network_resolved.return_value = (True, "93.184.216.34")
         mock_engine.rest_policy.check.return_value = "deny"
         mock_get_engine.return_value = mock_engine
 
@@ -587,7 +587,7 @@ class TestRESTPolicyEnforcement:
     def test_no_method_skips_rest_policy(self, mock_get_engine: MagicMock) -> None:
         """When method is empty string, REST policy check is bypassed."""
         mock_engine = MagicMock()
-        mock_engine.check_network.return_value = True
+        mock_engine.check_network_resolved.return_value = (True, "93.184.216.34")
         mock_get_engine.return_value = mock_engine
 
         client = PolicyHTTPClient()
@@ -1046,18 +1046,19 @@ class TestInteractiveApprovalFlow:
 
 
 class TestCategoryForwarding:
-    """The category param is forwarded to get_policy_engine().check_network()."""
+    """The category param is forwarded to get_policy_engine().check_network_resolved()."""
 
     @pytest.mark.parametrize("category", ["provider", "tool", "discord", ""])
     def test_category_forwarded_on_sync_get(self, category: str) -> None:
         client = PolicyHTTPClient(category=category)
         with patch("missy.gateway.client.get_policy_engine") as mock_get_engine:
             mock_engine = MagicMock()
+            mock_engine.check_network_resolved.return_value = (True, "93.184.216.34")
             mock_get_engine.return_value = mock_engine
             mock_resp = _mock_response(200)
             with patch.object(httpx.Client, "get", return_value=mock_resp):
                 client.get("https://api.example.com/")
-        mock_engine.check_network.assert_called_once_with(
+        mock_engine.check_network_resolved.assert_called_once_with(
             "api.example.com", "", "", category=category
         )
 
@@ -1065,23 +1066,27 @@ class TestCategoryForwarding:
         client = PolicyHTTPClient(category="discord")
         with patch("missy.gateway.client.get_policy_engine") as mock_get_engine:
             mock_engine = MagicMock()
+            mock_engine.check_network_resolved.return_value = (True, "93.184.216.34")
             mock_get_engine.return_value = mock_engine
             mock_resp = _mock_response(200)
             with patch.object(
                 httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=mock_resp
             ):
                 await client.apost("https://discord.com/api/webhooks/x")
-        mock_engine.check_network.assert_called_once_with("discord.com", "", "", category="discord")
+        mock_engine.check_network_resolved.assert_called_once_with(
+            "discord.com", "", "", category="discord"
+        )
 
     def test_session_and_task_forwarded_to_policy_engine(self) -> None:
         client = PolicyHTTPClient(session_id="sess-xyz", task_id="task-abc")
         with patch("missy.gateway.client.get_policy_engine") as mock_get_engine:
             mock_engine = MagicMock()
+            mock_engine.check_network_resolved.return_value = (True, "93.184.216.34")
             mock_get_engine.return_value = mock_engine
             mock_resp = _mock_response(200)
             with patch.object(httpx.Client, "get", return_value=mock_resp):
                 client.get("https://api.example.com/")
-        mock_engine.check_network.assert_called_once_with(
+        mock_engine.check_network_resolved.assert_called_once_with(
             "api.example.com", "sess-xyz", "task-abc", category=""
         )
 

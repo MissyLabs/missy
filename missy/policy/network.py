@@ -93,6 +93,43 @@ class NetworkPolicyEngine:
             PolicyViolationError: When the host is denied by policy.
             ValueError: When *host* is ``None`` or an empty string.
         """
+        allowed, _ip = self.check_host_resolved(
+            host, session_id=session_id, task_id=task_id, category=category
+        )
+        return allowed
+
+    def check_host_resolved(
+        self,
+        host: str,
+        session_id: str = "",
+        task_id: str = "",
+        category: str = "",
+    ) -> tuple[bool, str | None]:
+        """Like :meth:`check_host`, but also returns the validated IP.
+
+        SR-1.9b: ``check_host`` alone tells a caller *that* a host is
+        allowed, but the IP it validated is discarded — if the caller
+        then makes its own, independent DNS resolution to actually
+        connect (as ``httpx``/``httpcore`` does by default), a low-TTL
+        DNS record can return a different address between the check and
+        the connect (DNS rebinding), silently bypassing every check this
+        method just performed. Callers that go on to make the actual
+        connection (:class:`~missy.gateway.client.PolicyHTTPClient`)
+        must use the returned IP to pin that connection, not re-resolve.
+
+        Returns:
+            ``(True, ip)`` when allowed and a concrete IP was resolved
+            and validated; ``(True, None)`` only in ``default_deny=False``
+            mode, which never performs DNS resolution at all (an
+            established, deliberately-tested property of that mode) and
+            so has nothing to pin -- but also has no security boundary
+            to protect, since everything is already allowed. Raises on
+            denial, same as :meth:`check_host`.
+
+        Raises:
+            PolicyViolationError: When the host is denied by policy.
+            ValueError: When *host* is ``None`` or an empty string.
+        """
         if not host:
             raise ValueError("host must be a non-empty string")
 
@@ -100,17 +137,26 @@ class NetworkPolicyEngine:
         # [::1] that arrive from URL parsers.
         host = host.strip("[]").lower()
 
-        # Step 1 – default-allow mode bypasses all remaining checks.
+        # Step 1 – default-allow mode bypasses all remaining checks,
+        # including DNS resolution (an established, deliberately-tested
+        # property: default_deny=False must never trigger a DNS lookup,
+        # e.g. for pure offline/local-only setups). No security boundary
+        # exists to protect in this mode, so there is nothing to pin the
+        # connection against -- the transport falls back to normal,
+        # unpinned resolution for this one request (see
+        # missy.gateway.pinned_transport: a ``None`` pin is treated as
+        # "resolve normally," not "deny").
         if not self._policy.default_deny:
             self._emit_event(host, "allow", "default_allow", session_id, task_id)
-            return True
+            return True, None
 
-        # Step 2 – bare IP: check CIDR lists only (no DNS).
+        # Step 2 – bare IP: check CIDR lists only (no DNS) — the "resolved"
+        # IP is simply the literal itself.
         if self._is_ip(host):
             rule = self._check_cidr(host)
             if rule:
                 self._emit_event(host, "allow", rule, session_id, task_id)
-                return True
+                return True, host
             # IP not in any CIDR – deny immediately without DNS.
             self._emit_event(host, "deny", None, session_id, task_id)
             raise PolicyViolationError(
@@ -131,17 +177,17 @@ class NetworkPolicyEngine:
         # same as trusting whatever IP it happens to resolve to right now.
         rule = self._check_exact_host(host, category=category)
         if rule:
-            self._resolve_and_check_rebinding(host, session_id, task_id)
+            resolved = self._resolve_and_check_rebinding(host, session_id, task_id)
             self._emit_event(host, "allow", rule, session_id, task_id)
-            return True
+            return True, (resolved[0][0] if resolved else None)
 
         # Step 4 – wildcard / suffix domain match. Same SR-1.9a rebinding
         # check as step 3.
         rule = self._check_domain(host)
         if rule:
-            self._resolve_and_check_rebinding(host, session_id, task_id)
+            resolved = self._resolve_and_check_rebinding(host, session_id, task_id)
             self._emit_event(host, "allow", rule, session_id, task_id)
-            return True
+            return True, (resolved[0][0] if resolved else None)
 
         # Step 5 – DNS resolution + CIDR re-check for hostnames not matched
         # by name at all.
@@ -152,7 +198,7 @@ class NetworkPolicyEngine:
                     rule = self._check_cidr(ip_str)
                     if rule:
                         self._emit_event(host, "allow", rule, session_id, task_id)
-                        return True
+                        return True, ip_str
         except PolicyViolationError:
             raise
 
@@ -166,6 +212,37 @@ class NetworkPolicyEngine:
                 "or allowed_cidrs entry."
             ),
         )
+
+    @staticmethod
+    def _resolve_best_effort(
+        host: str,
+    ) -> list[tuple[str, ipaddress.IPv4Address | ipaddress.IPv6Address]]:
+        """Resolve *host* with no rebinding/CIDR checks.
+
+        Used both for ``default_deny=False`` mode (no security boundary
+        to enforce, but still worth pinning to *some* validated-at-
+        lookup-time address) and by :mod:`missy.gateway.client`'s
+        interactive-approval override path (an explicit human override
+        of a policy denial still needs a best-effort pin so the
+        connection doesn't fail closed against the SR-1.9b transport).
+        """
+        try:
+            infos = socket.getaddrinfo(host, None)
+        except OSError:
+            return []
+        seen_ips: set[str] = set()
+        resolved: list[tuple[str, ipaddress.IPv4Address | ipaddress.IPv6Address]] = []
+        for info in infos:
+            ip_str = info[4][0]
+            if ip_str in seen_ips:
+                continue
+            seen_ips.add(ip_str)
+            try:
+                addr = ipaddress.ip_address(ip_str)
+            except ValueError:
+                continue
+            resolved.append((ip_str, addr))
+        return resolved
 
     # ------------------------------------------------------------------
     # Private helpers

@@ -102,7 +102,7 @@ class TestInteractiveApproval:
     @patch("missy.gateway.client._interactive_approval", None)
     @patch("missy.gateway.client.get_policy_engine")
     def test_no_approval_instance_raises(self, mock_engine):
-        mock_engine.return_value.check_network.side_effect = PolicyViolationError(
+        mock_engine.return_value.check_network_resolved.side_effect = PolicyViolationError(
             "denied", category="network", detail="blocked host"
         )
         client = PolicyHTTPClient(timeout=5)
@@ -111,7 +111,7 @@ class TestInteractiveApproval:
 
     @patch("missy.gateway.client.get_policy_engine")
     def test_policy_allows_no_error(self, mock_engine):
-        mock_engine.return_value.check_network.return_value = None
+        mock_engine.return_value.check_network_resolved.return_value = (True, "93.184.216.34")
         client = PolicyHTTPClient(timeout=5)
         # Should not raise
         client._check_url("https://allowed.example.com", method="GET")

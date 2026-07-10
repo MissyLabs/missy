@@ -1923,6 +1923,77 @@ session, and closes section 1 of the security review except for
 SR-1.9b (DNS TOCTOU) — the last remaining numbered SR-x.y item. Full
 detail in `AUDIT_SECURITY.md`'s new `### SR-1.1` section.
 
+### Completed This Session, continued: SR-1.9b — DNS-rebinding check/connect TOCTOU: policy validated a resolution then discarded it, the actual connection re-resolved independently (thirty-first finding, closes the security review's numbered SR-x.y list entirely)
+
+Reachability: SR-1.9a (earlier this session) made every hostname match
+verify the resolved IP isn't private/rebound, but `check_host()` only
+ever returned `True`/raised — the validated IP was computed and
+discarded. `PolicyHTTPClient._check_url()` called this check, then
+handed the URL to `httpx`, which lets `httpcore` do its own,
+completely independent DNS resolution when it actually connects. A
+low-TTL record can return a different address between the two calls —
+public at check time, `169.254.169.254` or internal at connect time.
+Confirmed via code inspection: `httpx.HTTPTransport` builds
+`httpcore.ConnectionPool()` with no way to inject the validated IP,
+and the default backends resolve the raw hostname fresh on every
+`connect_tcp()` call.
+
+Fixed: new `missy/gateway/pinned_transport.py` binds the validated IP
+to the actual connection. `NetworkPolicyEngine.check_host_resolved()`
+(new method) returns the concrete IP alongside allow/deny;
+`PolicyEngine.check_network_resolved()` delegates to it;
+`_check_url()` pins the result via a `contextvars.ContextVar` (correct
+per-thread and per-async-task isolation) right before dispatch.
+`PinnedHTTPTransport`/`PinnedAsyncHTTPTransport` replace the
+transport's `httpcore.ConnectionPool` with one using a custom
+`network_backend` that substitutes the pinned IP at `connect_tcp()`
+time — TLS SNI/cert verification and the `Host` header are unaffected
+since `httpcore` builds those from the original hostname/request URL
+independently of what the socket actually connects to. Fails closed:
+an unpinned host raises `ConnectError` rather than falling back to
+unvalidated resolution. `default_deny=False` mode (an established,
+tested no-DNS-lookup property) pins `None`, meaning "connect normally,
+no boundary to enforce" — this was a real regression caught by an
+existing test during this checkpoint's own verification and corrected
+before finalizing. The interactive-approval override path does a
+best-effort pin of its own so an explicit human override doesn't fail
+closed against the new transport.
+
+Live-verified with real sockets (not mocks): a real `HTTPServer` +
+monkeypatched `socket.getaddrinfo` proving the target hostname
+resolves exactly once (at check time), never again at connect time;
+a direct simulation of the review's attack (hostname resolves to the
+real server first, to an unreachable RFC 5737 test address on any
+second call) still succeeds; fail-closed confirmed both sync and
+async; operator-override path still connects.
+
+New `tests/gateway/test_pinned_transport.py` (8 tests) and 9 new tests
+in `tests/policy/test_network.py`. Fixed ~44 pre-existing tests across
+6 files that mocked the policy engine and asserted on the old
+`check_network` call — mechanical rename to `check_network_resolved`
+plus a `(True, ip)` tuple return value, not new test logic.
+`tests/gateway/`+`tests/policy/` (1,041 tests) and a broader sweep of
+every other `check_network`-referencing file (616 tests) pass with no
+regressions. Full suite: 3 failed (pre-existing `CameraDiscovery`
+flakes, unrelated), 21,071 passed (up from 21,055), 13 skipped in
+507.26s. Zero regressions.
+
+Residual risk: relies on `httpcore`'s private `_backends` import
+paths since there's no public API for substituting the default
+network backend into `httpx.HTTPTransport` — inherent to the fix, not
+a shortcut, but a future `httpcore` release could break it (would fail
+loudly, not silently reopen the gap). Pinning forgoes DNS
+round-robin load-balancing (intentional trade-off). Unix domain
+sockets pass through unpinned (unused by `PolicyHTTPClient`, no DNS
+component).
+
+**This closes the security review's numbered SR-x.y list entirely —
+SR-1.9b was the last remaining item.** Only the "harden secondary
+availability hazards" bullet remains as unfinished security-review
+text (not a numbered finding). This is the thirty-first independent,
+confirmed finding/change this session. Full detail in
+`AUDIT_SECURITY.md`'s new `### SR-1.9b` section.
+
 ### Known Pre-Existing Failure (not caused by this session)
 
 `tests/vision/test_discovery_capture_sysfs.py::TestCacheTTL::test_cache_valid_within_ttl`
@@ -1936,31 +2007,33 @@ scoped to FX-A / voice-command work.
 
 ### Remaining Work (priority order per prompt.md)
 
-FX-A through FX-G are all complete (see task list). §2 (Unattended-
-Execution Hazards), §3 (Data Integrity, Availability, And Cost), and
-§4 ("Advertised But Unwired Features") are now **all fully closed** —
-§4's eight items: SR-4.4 done-criteria verification; SR-4.5
-self_create_tool honesty; SR-4.3 checkpoint resume; SR-4.2 sub-agent
-delegation; SR-4.7 MCP tool execution; SR-4.1 long-term memory; SR-4.6
-OTLP export; SR-4.8 provider rotation/fallback. §1 now closed except
-SR-1.9b (SR-1.1 audit signing is fixed this session). Current
-remaining priority order:
+FX-A through FX-G are all complete (see task list). **The security
+review's entire numbered SR-x.y list (§1 through §4) is now fully
+closed.** §2 (Unattended-Execution Hazards), §3 (Data Integrity,
+Availability, And Cost), and §4 ("Advertised But Unwired Features")
+closed earlier this session — §4's eight items: SR-4.4 done-criteria
+verification; SR-4.5 self_create_tool honesty; SR-4.3 checkpoint
+resume; SR-4.2 sub-agent delegation; SR-4.7 MCP tool execution; SR-4.1
+long-term memory; SR-4.6 OTLP export; SR-4.8 provider
+rotation/fallback. §1 closes with this session's final two items:
+SR-1.1 (audit signing) and SR-1.9b (DNS TOCTOU — policy-validated
+resolutions are now pinned to the actual connection, closing the
+check/connect TOCTOU window). Current remaining priority order:
 
-1. SR-1.9b (DNS TOCTOU — the last remaining numbered SR-x.y item;
-   needs connecting to a pinned policy-verified IP rather than
-   re-resolving at connect time, harder than SR-1.9a's fix).
-2. The "harden secondary availability hazards" bullet (circuit-breaker
+1. The "harden secondary availability hazards" bullet (circuit-breaker
    half-open single-probe, MCP RPC desync, malformed scheduler record
    isolation, webhook HMAC replay protection, EventBus history bound,
    provider base_url egress widening, image decompression-bomb cap,
-   audit log rotation, git safety-stash ownership).
-3. Full 89-case tool-specific validation backlog (FS-001–DISC-CMD-008),
+   audit log rotation, git safety-stash ownership) — the only
+   unfinished item left in the security review's text that isn't a
+   numbered SR-x.y finding.
+2. Full 89-case tool-specific validation backlog (FS-001–DISC-CMD-008),
    not yet re-run against current code at all this session.
-4. Broader untouched "Product Goal" surface from prompt.md (providers,
+3. Broader untouched "Product Goal" surface from prompt.md (providers,
    tool intelligence, Discord/channels, scheduler/memory/sessions,
    hatching/persona, vision/audio/multimodal, Web TUI, OpenClaw-style
    architecture, CLI/operations).
-5. Smaller tracked follow-ups: pre-existing vision `CameraDiscovery`
+4. Smaller tracked follow-ups: pre-existing vision `CameraDiscovery`
    cache-TTL flake (3 tests, tracked above); Discord pairing approval
    endpoint (SR-1.12's fix removed the vulnerable path but no working
    approval surface exists now); `allowed_roles` Discord guild-policy

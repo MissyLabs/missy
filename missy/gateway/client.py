@@ -329,12 +329,23 @@ class PolicyHTTPClient:
                 "Ensure the URL includes a scheme (e.g. https://)."
             )
         try:
-            get_policy_engine().check_network(
+            # SR-1.9b: check_network_resolved() returns the exact IP this
+            # check validated (not just True/False), and pin_host() binds
+            # it to the actual connection the client is about to make.
+            # Without this, the validated IP is discarded and httpx/
+            # httpcore re-resolve independently at connect time -- a
+            # classic check-then-use DNS-rebinding TOCTOU, even after
+            # SR-1.9a closed the "allowlisted names skip the IP check
+            # entirely" gap earlier this session.
+            _allowed, resolved_ip = get_policy_engine().check_network_resolved(
                 host,
                 self.session_id,
                 self.task_id,
                 category=self.category,
             )
+            from missy.gateway.pinned_transport import pin_host
+
+            pin_host(host, resolved_ip)
         except PolicyViolationError:
             # If an interactive approval instance is available, prompt the
             # operator before raising.  An "allow always" decision is
@@ -349,6 +360,22 @@ class PolicyHTTPClient:
                         "Operator approved denied network request to %s",
                         host,
                     )
+                    # SR-1.9b: the policy check above raised before ever
+                    # resolving/pinning an IP (that's what "denied" means
+                    # here) -- an explicit human override doesn't get the
+                    # policy-validated pin, but must still get *some* pin
+                    # (even a best-effort one) so the transport doesn't
+                    # fail-closed on a legitimately operator-approved
+                    # request. Resolution failure here just means normal,
+                    # unpinned connection behavior for this one request.
+                    from missy.gateway.pinned_transport import pin_host
+                    from missy.policy.network import NetworkPolicyEngine
+
+                    try:
+                        resolved = NetworkPolicyEngine._resolve_best_effort(host)
+                    except Exception:
+                        resolved = []
+                    pin_host(host, resolved[0][0] if resolved else None)
                     return  # skip the rest — operator override
             raise
 
@@ -420,20 +447,29 @@ class PolicyHTTPClient:
     def _get_sync_client(self) -> httpx.Client:
         """Return the shared synchronous client, creating it on first call."""
         if self._sync_client is None:
+            # SR-1.9b: an explicit transport= is required for the pinned
+            # backend to take effect -- passing limits=/timeout= directly
+            # to httpx.Client() only affects the *default* transport it
+            # would otherwise build internally, and is ignored once a
+            # transport is supplied explicitly.
+            from missy.gateway.pinned_transport import PinnedHTTPTransport
+
             self._sync_client = httpx.Client(
                 timeout=self.timeout,
                 follow_redirects=False,
-                limits=self._POOL_LIMITS,
+                transport=PinnedHTTPTransport(limits=self._POOL_LIMITS),
             )
         return self._sync_client
 
     def _get_async_client(self) -> httpx.AsyncClient:
         """Return the shared async client, creating it on first call."""
         if self._async_client is None:
+            from missy.gateway.pinned_transport import PinnedAsyncHTTPTransport
+
             self._async_client = httpx.AsyncClient(
                 timeout=self.timeout,
                 follow_redirects=False,
-                limits=self._POOL_LIMITS,
+                transport=PinnedAsyncHTTPTransport(limits=self._POOL_LIMITS),
             )
         return self._async_client
 

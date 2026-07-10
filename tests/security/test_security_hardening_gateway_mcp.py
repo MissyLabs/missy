@@ -56,9 +56,9 @@ class TestGatewayUrlSchemeRestriction:
     def _check(self, url: str) -> None:
         """Call _check_url directly, bypassing the real policy engine."""
         client = self._client()
-        # We patch check_network so scheme-valid URLs don't hit a real engine.
+        # We patch check_network_resolved so scheme-valid URLs don't hit a real engine.
         with patch("missy.gateway.client.get_policy_engine") as mock_engine:
-            mock_engine.return_value.check_network.return_value = None
+            mock_engine.return_value.check_network_resolved.return_value = (True, "93.184.216.34")
             client._check_url(url)
 
     def test_file_scheme_raises_value_error(self):
@@ -84,14 +84,14 @@ class TestGatewayUrlSchemeRestriction:
     def test_http_scheme_passes_scheme_check(self):
         """http:// must not raise a scheme error (policy check may still run)."""
         with patch("missy.gateway.client.get_policy_engine") as mock_engine:
-            mock_engine.return_value.check_network.return_value = None
+            mock_engine.return_value.check_network_resolved.return_value = (True, "93.184.216.34")
             # Should not raise ValueError for scheme
             self._check("http://example.com")
 
     def test_https_scheme_passes_scheme_check(self):
         """https:// must not raise a scheme error."""
         with patch("missy.gateway.client.get_policy_engine") as mock_engine:
-            mock_engine.return_value.check_network.return_value = None
+            mock_engine.return_value.check_network_resolved.return_value = (True, "93.184.216.34")
             self._check("https://example.com")
 
     def test_error_message_includes_scheme_name(self):

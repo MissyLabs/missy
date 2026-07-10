@@ -2732,6 +2732,157 @@ requirement — do not overwrite, append new entries as work continues.
   follow-up matching the same gap noted for SR-4.6's OTLP export
   status.
 
+### SR-1.9b — Policy validated a DNS resolution and then discarded it; the actual connection re-resolved independently (check-then-connect TOCTOU)
+
+- **Status: fixed. This closes the security review's numbered SR-x.y
+  list entirely** — SR-1.9b was the last remaining item after SR-1.1
+  closed earlier this session.
+- **Reachability found and live-reproduced:** SR-1.9a (earlier this
+  session) fixed `NetworkPolicyEngine.check_host()`'s "an allowlisted
+  hostname skips the DNS-rebinding IP check entirely" gap — every
+  hostname match now resolves via `socket.getaddrinfo()` and denies if
+  any resolved address is private/loopback/link-local and not
+  explicitly allowed. But `check_host()` only ever returned `True` or
+  raised — the validated IP itself was computed and then thrown away.
+  `PolicyHTTPClient._check_url()` called this check, then separately
+  handed the URL to `httpx`, which lets `httpcore` perform its *own*,
+  completely independent DNS resolution when it actually opens the
+  socket. Between the two resolutions, a low-TTL DNS record — whether
+  attacker-controlled or just a normally-expiring cache entry — can
+  return a different address: a public IP at check time, then
+  `169.254.169.254` (cloud metadata) or an internal address at connect
+  time. This is a textbook check-then-use TOCTOU, and no amount of
+  making the *check* more careful closes it on its own — the
+  *validated resolution* has to be what the connection actually uses.
+  Confirmed via direct code inspection that `httpx.HTTPTransport`
+  builds `httpcore.ConnectionPool()` with no way to inject the
+  policy-validated IP, and that `httpcore`'s default `SyncBackend.
+  connect_tcp()`/`AnyIOBackend.connect_tcp()` call
+  `socket.create_connection()`/`anyio.connect_tcp()` with the raw
+  hostname, resolving it fresh every time — the two DNS lookups
+  (policy check, then actual connect) are structurally guaranteed to
+  be independent with the pre-existing code.
+- **Fix:** new `missy/gateway/pinned_transport.py` — a per-request
+  pinning mechanism binding the policy-validated IP to the actual TCP
+  connection, closing the gap at the layer where it actually exists
+  (the connection, not the check):
+  - `NetworkPolicyEngine.check_host_resolved()` (new method,
+    `missy/policy/network.py`) does everything `check_host()` already
+    did, but also returns the concrete validated IP alongside the
+    `True`/raise result — `check_host()` itself is unchanged (a thin
+    wrapper now), preserving every existing caller's behavior and
+    return type exactly.
+  - `PolicyEngine.check_network_resolved()` (new facade method,
+    `missy/policy/engine.py`) delegates to it, mirroring the existing
+    `check_network()`/`check_host()` delegation pattern.
+  - `PolicyHTTPClient._check_url()` now calls
+    `check_network_resolved()` and immediately `pin_host(host, ip)`s
+    the result via a `contextvars.ContextVar`-backed pin store —
+    correctly isolated per thread *and* per async task (unlike a
+    thread-local, which async tasks sharing a thread would corrupt),
+    set right before the same call stack's `httpx` dispatch.
+  - `PinnedHTTPTransport`/`PinnedAsyncHTTPTransport` (subclasses of
+    `httpx.HTTPTransport`/`AsyncHTTPTransport`) replace the
+    transport's internal `httpcore.ConnectionPool` with one configured
+    with a custom `network_backend` — `_PinnedSyncBackend`/
+    `_PinnedAsyncBackend` — whose `connect_tcp(host, port, ...)`
+    substitutes the pinned IP for `host` before delegating to the real
+    backend (`httpcore._backends.sync.SyncBackend`/
+    `httpcore._backends.auto.AutoBackend`). TLS SNI and certificate
+    verification are unaffected: `httpcore` passes the *original*
+    hostname as `server_hostname` for the TLS handshake independently
+    of what address the socket actually connects to, and the `Host`
+    header is built from the request URL, never from the transport
+    layer — confirmed by reading `httpcore`'s connection-pool internals
+    directly rather than assuming.
+  - **Fail-closed by design:** if `connect_tcp()` is ever asked to
+    connect to a hostname with no pin recorded at all, it raises
+    `httpcore.ConnectError` immediately rather than silently falling
+    back to an unvalidated resolution — this would only happen if
+    `_check_url()` were bypassed somewhere, and the transport refuses
+    to guess in that case.
+  - **`default_deny=False` mode** (an established, separately-tested
+    property: this mode must never trigger a DNS lookup at all, e.g.
+    for offline/local-only setups) pins `None` rather than resolving —
+    the transport treats a `None` pin as "no security boundary to
+    enforce here, connect normally." This was a real behavioral
+    regression caught by an existing test
+    (`test_no_dns_lookup_in_default_allow_mode`) during this
+    checkpoint's own verification and corrected before finalizing.
+  - **The interactive-approval override path** (an operator explicitly
+    approving a policy-denied request) raises *before* any IP is ever
+    resolved — it now does a best-effort resolution-and-pin of its own
+    (reusing `NetworkPolicyEngine._resolve_best_effort()`, shared with
+    the `default_deny=False` code path) so an explicit human override
+    doesn't fail closed against the new transport; resolution failure
+    there just falls back to `None` (normal, unpinned connection) for
+    that one explicitly-approved request.
+- **Live verification (real sockets, real DNS-call tracking, not
+  mocks):** spun up a real `http.server.HTTPServer` and made real
+  requests through `PolicyHTTPClient` against it. (1) A bare-IP target
+  connects successfully end-to-end. (2) For a hostname target,
+  monkeypatched `socket.getaddrinfo` to raise if the target hostname
+  were ever resolved a *second* time — the request succeeded and
+  `getaddrinfo("pinned-test-host", ...)` was confirmed called
+  **exactly once** (at policy-check time), proving the actual
+  connection reused the validated IP rather than re-resolving. (3)
+  Directly simulated the review's attack scenario: a hostname
+  monkeypatched to resolve to the real (harmless) server on the first
+  call and to a guaranteed-unreachable `TEST-NET-1` address
+  (`192.0.2.1`, RFC 5737) on any second call — the request still
+  succeeded, proving the connection never took the "rebound" path.
+  (4) Confirmed fail-closed: constructing `PinnedHTTPTransport()`
+  directly and making a request to an unpinned host raises
+  `httpx.ConnectError` with a clear message, both sync and async. (5)
+  Confirmed the async transport independently resolves exactly once
+  too. (6) Confirmed the operator-override path still connects
+  successfully (best-effort pin, not a hard fail).
+- **Verification:** new `tests/gateway/test_pinned_transport.py` (8
+  tests: bare-IP connection, single-resolution proof, simulated
+  rebinding-attack proof, fail-closed sync/async, pinned-connects
+  test, async single-resolution proof, operator-override pinning) and
+  9 new tests in `tests/policy/test_network.py`
+  (`TestCheckHostResolved`: bare IP, exact-host match, domain match,
+  CIDR fallback, `default_deny=False` no-DNS-lookup property, denial
+  passthrough, rebinding-denial passthrough, agreement with
+  `check_host()`). Fixed ~44 pre-existing tests across
+  `tests/gateway/test_client_construction_edges.py`,
+  `test_client_deep.py`, `test_gateway_coverage.py`,
+  `test_gateway_error_paths.py`, `test_gateway_extended.py`, and
+  `tests/security/test_security_hardening_gateway_mcp.py` that mocked
+  the policy engine and asserted on the old `check_network` call
+  specifically — mechanical updates (rename to `check_network_resolved`,
+  configure a `(True, ip)` tuple return value instead of a bare
+  boolean/`None`) reflecting the intentional call-site change, not
+  new test logic. `tests/gateway/`+`tests/policy/` (1,041 tests) and a
+  broader sweep of every other file referencing `check_network`
+  (`tests/integration/`, `tests/security/`, `tests/providers/`,
+  `tests/tools/`, `tests/unit/` — 616 tests) pass with no regressions.
+  Full suite: 3 failed (pre-existing `CameraDiscovery` cache-TTL
+  flakes, task #11, unrelated), 21071 passed (up from 21055), 13
+  skipped in 507.26s. Zero regressions.
+- **Residual risk, called out explicitly:** the pinning mechanism
+  relies on `httpcore._backends.sync.SyncBackend`/
+  `httpcore._backends.auto.AutoBackend` (private, underscore-prefixed
+  import paths) since `httpcore`/`httpx` expose no public API for
+  substituting the default network backend into `httpx.HTTPTransport`
+  specifically — this is inherent to the fix (there is no supported
+  public extension point for this), not a shortcut, but it does mean
+  a future `httpcore` release restructuring its backend module layout
+  could break `PinnedHTTPTransport`/`PinnedAsyncHTTPTransport` without
+  a deprecation warning; the fail-closed behavior means such a
+  breakage would surface as every `PolicyHTTPClient` request failing
+  loudly, not as a silent reopening of the TOCTOU gap. Pinning to a
+  single specific address (the first the check validated) forgoes any
+  load-balancing benefit across multiple A/AAAA records for a
+  round-robin-DNS host — an intentional, expected trade-off: the
+  entire point is to guarantee the connection goes to the *one*
+  address that was actually checked, not "one of the addresses that
+  passed policy at some point." Unix domain socket connections
+  (`connect_unix_socket`) are passed through unpinned, since
+  `PolicyHTTPClient` never uses UDS and there is no hostname/DNS
+  component to that path at all.
+
 ---
 
 - Timestamp: 2026-07-09 15:35:26 (raw grep-scan dump below, preserved

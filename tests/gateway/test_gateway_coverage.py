@@ -306,11 +306,12 @@ class TestCategoryForwarding:
         client = PolicyHTTPClient(category="provider")
         with patch("missy.gateway.client.get_policy_engine") as mock_get_engine:
             mock_engine = MagicMock()
+            mock_engine.check_network_resolved.return_value = (True, "93.184.216.34")
             mock_get_engine.return_value = mock_engine
             mock_resp = _mock_response(200)
             with patch.object(httpx.Client, "get", return_value=mock_resp):
                 client.get("https://api.example.com/")
-        mock_engine.check_network.assert_called_once_with(
+        mock_engine.check_network_resolved.assert_called_once_with(
             "api.example.com", "", "", category="provider"
         )
 
@@ -318,11 +319,12 @@ class TestCategoryForwarding:
         client = PolicyHTTPClient(category="tool")
         with patch("missy.gateway.client.get_policy_engine") as mock_get_engine:
             mock_engine = MagicMock()
+            mock_engine.check_network_resolved.return_value = (True, "93.184.216.34")
             mock_get_engine.return_value = mock_engine
             mock_resp = _mock_response(200)
             with patch.object(httpx.Client, "put", return_value=mock_resp):
                 client.put("https://api.example.com/resource/1")
-        mock_engine.check_network.assert_called_once_with(
+        mock_engine.check_network_resolved.assert_called_once_with(
             "api.example.com", "", "", category="tool"
         )
 
@@ -330,23 +332,27 @@ class TestCategoryForwarding:
         client = PolicyHTTPClient(category="discord")
         with patch("missy.gateway.client.get_policy_engine") as mock_get_engine:
             mock_engine = MagicMock()
+            mock_engine.check_network_resolved.return_value = (True, "93.184.216.34")
             mock_get_engine.return_value = mock_engine
             mock_resp = _mock_response(200)
             with patch.object(
                 httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=mock_resp
             ):
                 await client.apost("https://discord.com/api/webhooks/x")
-        mock_engine.check_network.assert_called_once_with("discord.com", "", "", category="discord")
+        mock_engine.check_network_resolved.assert_called_once_with(
+            "discord.com", "", "", category="discord"
+        )
 
     def test_empty_category_forwarded_by_default(self) -> None:
         client = PolicyHTTPClient()
         with patch("missy.gateway.client.get_policy_engine") as mock_get_engine:
             mock_engine = MagicMock()
+            mock_engine.check_network_resolved.return_value = (True, "93.184.216.34")
             mock_get_engine.return_value = mock_engine
             mock_resp = _mock_response(200)
             with patch.object(httpx.Client, "get", return_value=mock_resp):
                 client.get("https://api.example.com/")
-        _, _, call_kwargs = mock_engine.check_network.mock_calls[0]
+        _, _, call_kwargs = mock_engine.check_network_resolved.mock_calls[0]
         assert call_kwargs.get("category", "") == ""
 
 

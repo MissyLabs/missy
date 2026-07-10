@@ -82,6 +82,28 @@ class PolicyEngine:
             category=category,
         )
 
+    def check_network_resolved(
+        self,
+        host: str,
+        session_id: str = "",
+        task_id: str = "",
+        category: str = "",
+    ) -> tuple[bool, str | None]:
+        """Like :meth:`check_network`, but also returns the validated IP.
+
+        SR-1.9b: delegates to :meth:`NetworkPolicyEngine.check_host_resolved`
+        so callers that actually open the connection
+        (:class:`~missy.gateway.client.PolicyHTTPClient`) can pin it to
+        the exact address this check validated, closing the
+        check-time/connect-time DNS-rebinding TOCTOU window.
+        """
+        return self.network.check_host_resolved(
+            host,
+            session_id=session_id,
+            task_id=task_id,
+            category=category,
+        )
+
     def check_write(
         self,
         path: str | Path,
