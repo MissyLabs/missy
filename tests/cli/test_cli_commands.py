@@ -739,11 +739,47 @@ class TestLogs:
 
 
 class TestSessionsCleanup:
+    def test_sessions_cleanup_actually_deletes_from_real_store(self, runner: CliRunner, tmp_path):
+        """SR-3.5 regression: `missy sessions cleanup` previously always
+        no-op'd (it constructed the legacy JSON MemoryStore, which has no
+        cleanup() method, so a hasattr() guard silently skipped deletion
+        on every invocation). This test uses a real SQLiteMemoryStore
+        against a real temp DB and confirms an old turn is actually
+        removed and a recent turn is preserved -- not just that a mock's
+        .cleanup() was called.
+        """
+        from missy.memory.sqlite_store import ConversationTurn, SQLiteMemoryStore
+
+        db_path = str(tmp_path / "memory.db")
+        store = SQLiteMemoryStore(db_path)
+        old_turn = ConversationTurn.new("sess1", "user", "old message")
+        old_turn.timestamp = "2020-01-01T00:00:00"
+        store.add_turn(old_turn)
+        store.add_turn(ConversationTurn.new("sess1", "user", "recent message"))
+
+        cfg_path = _write_temp_config()
+        with (
+            _SubsystemsPatch(),
+            patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=store),
+        ):
+            result = runner.invoke(
+                cli, ["--config", cfg_path, "sessions", "cleanup", "--older-than", "30"]
+            )
+
+        assert result.exit_code == 0
+        assert "1" in result.output
+        remaining = store.get_session_turns("sess1", limit=10)
+        assert len(remaining) == 1
+        assert remaining[0].content == "recent message"
+
     def test_sessions_cleanup_exits_zero(self, runner: CliRunner):
         cfg_path = _write_temp_config()
         mock_store = MagicMock()
         mock_store.cleanup.return_value = 0
-        with _SubsystemsPatch(), patch("missy.memory.store.MemoryStore", return_value=mock_store):
+        with (
+            _SubsystemsPatch(),
+            patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store),
+        ):
             result = runner.invoke(cli, ["--config", cfg_path, "sessions", "cleanup"])
         assert result.exit_code == 0
 
@@ -751,14 +787,20 @@ class TestSessionsCleanup:
         cfg_path = _write_temp_config()
         mock_store = MagicMock()
         mock_store.cleanup.return_value = 42
-        with _SubsystemsPatch(), patch("missy.memory.store.MemoryStore", return_value=mock_store):
+        with (
+            _SubsystemsPatch(),
+            patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store),
+        ):
             result = runner.invoke(cli, ["--config", cfg_path, "sessions", "cleanup"])
         assert "42" in result.output
 
     def test_sessions_cleanup_dry_run_does_not_delete(self, runner: CliRunner):
         cfg_path = _write_temp_config()
         mock_store = MagicMock()
-        with _SubsystemsPatch(), patch("missy.memory.store.MemoryStore", return_value=mock_store):
+        with (
+            _SubsystemsPatch(),
+            patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store),
+        ):
             result = runner.invoke(
                 cli,
                 ["--config", cfg_path, "sessions", "cleanup", "--dry-run"],
@@ -771,7 +813,10 @@ class TestSessionsCleanup:
         cfg_path = _write_temp_config()
         mock_store = MagicMock()
         mock_store.cleanup.return_value = 0
-        with _SubsystemsPatch(), patch("missy.memory.store.MemoryStore", return_value=mock_store):
+        with (
+            _SubsystemsPatch(),
+            patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store),
+        ):
             runner.invoke(
                 cli,
                 [

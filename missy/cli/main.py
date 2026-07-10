@@ -2866,18 +2866,20 @@ def sessions() -> None:
 @click.pass_context
 def sessions_cleanup(ctx: click.Context, older_than: int, dry_run: bool) -> None:
     """Delete old conversation history from the memory store."""
-    from missy.memory.store import MemoryStore
+    # SR-3.1/3.5: this previously constructed the legacy JSON MemoryStore,
+    # which has no cleanup() method -- the hasattr guard always evaluated
+    # False, so this command silently no-op'd on every invocation while
+    # printing a message recommending SQLiteMemoryStore, the very store
+    # `sessions list` (a few lines below) already uses correctly.
+    from missy.memory.sqlite_store import SQLiteMemoryStore
 
     _load_subsystems(ctx.obj["config_path"])
-    store = MemoryStore()
+    store = SQLiteMemoryStore()
     if dry_run:
         console.print(f"[dim]Dry run: would delete turns older than {older_than} days.[/]")
         return
-    if hasattr(store, "cleanup"):
-        removed = store.cleanup(older_than_days=older_than)
-        _print_success(f"Removed {removed} conversation turn(s) older than {older_than} days.")
-    else:
-        console.print("[dim]Memory store does not support cleanup (use SQLiteMemoryStore).[/]")
+    removed = store.cleanup(older_than_days=older_than)
+    _print_success(f"Removed {removed} conversation turn(s) older than {older_than} days.")
 
 
 @sessions.command("list")

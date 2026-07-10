@@ -1137,6 +1137,117 @@ requirement — do not overwrite, append new entries as work continues.
   `tool.execute(...)` call — this exact gap is what hid both stacked
   bugs here for however long they existed.
 
+### SR-3.5 — Non-atomic JSON store writes: unreachable from production, but 3 real "wrong backend" bugs found along the way
+
+- **Status: fixed / confirmed no longer applicable**, with a caveat: the
+  literal question the review's text asks ("remove non-atomic full-file
+  memory rewrites from production paths") turned out to already be true
+  — but verifying that turned up three unrelated, live, confirmed bugs
+  in code paths still referencing the legacy JSON store, all now fixed.
+- **Investigation:** `missy.memory.store.MemoryStore._save()` does an
+  unconditional `Path.write_text()` over the whole file — no temp-file +
+  atomic rename, no fsync, no inter-process locking — exactly the
+  pattern the review flags. The question was whether any production
+  code path still reaches it. Grepped every `MemoryStore(` construction
+  site in `missy/` (excluding the class definition and other classes'
+  names): exactly 3 call sites —
+  `missy/skills/builtin/summarize_session.py`,
+  `missy/scheduler/manager.py::cleanup_memory()`, and
+  `missy/cli/main.py::sessions_cleanup()`. Traced each one's actual
+  usage of the constructed store: none of them ever call a write method
+  (`add_turn`/`clear_session`/`compact_session`/`save_learning`) — two
+  only call `get_session_turns()` (read-only) or a `cleanup()` guarded
+  by `hasattr(store, "cleanup")`, and `MemoryStore` has **no** `cleanup`
+  method at all, so that guard is always `False`. Confirmed via
+  `MemoryStore.__init__` that merely constructing the class only calls
+  `_load()` (read), never `_save()`. Conclusion: `_save()`'s non-atomic
+  write path was **not reachable from any production code path** even
+  before this checkpoint — the literal SR-3.5 ask checks out.
+- **What the investigation actually found (three live bugs, same root
+  cause as FX-B: a code path never updated to point at the production
+  SQLite backend):**
+  1. `summarize_session.py`'s `SummarizeSessionSkill` read from
+     `MemoryStore()` (the legacy JSON store) instead of
+     `SQLiteMemoryStore()` (the production backend since FX-B). Since
+     FX-B, real conversation turns are written to SQLite, not the JSON
+     file — so this skill always returned "(no turns recorded for this
+     session)" regardless of how much real history existed. Live-verified:
+     constructed a real `SQLiteMemoryStore` with 2 real turns, invoked the
+     skill (patched to hit the stale JSON path), got "(no turns recorded
+     for this session)" back.
+  2. `scheduler/manager.py::cleanup_memory()` and
+     `cli/main.py::sessions_cleanup()` (a documented CLI command,
+     `missy sessions cleanup`, listed in this project's CLI reference)
+     both constructed `MemoryStore()` and guarded the call with
+     `hasattr(store, "cleanup")`. Since that method doesn't exist on
+     `MemoryStore`, both always silently no-op'd — the scheduled cleanup
+     job always "succeeded" having deleted nothing, and the CLI command
+     always printed "Memory store does not support cleanup (use
+     SQLiteMemoryStore)" even though `SQLiteMemoryStore` — which does
+     support `cleanup()` — was already imported and used two commands
+     later in the very same file (`sessions_list`). Live-verified via
+     `hasattr(MemoryStore(...), "cleanup") == False` vs.
+     `hasattr(SQLiteMemoryStore(...), "cleanup") == True`.
+  - Root cause of non-detection (same class of bug-masking as SR-3.2's
+    `MagicMock()`-without-`spec` issue, different mechanism): every
+    existing test for these three call sites patched
+    `missy.memory.store.MemoryStore` with a bare `MagicMock()` — which,
+    critically, auto-vivifies a `.cleanup` attribute that the real
+    `MemoryStore` class doesn't have, so `hasattr(mock_store, "cleanup")`
+    was always `True` in tests while always `False` against the real
+    class in production. One test
+    (`TestSessionsCleanupNoMethod::test_sessions_cleanup_store_without_cleanup_method`
+    and its two scheduler-test siblings) even explicitly constructed a
+    `MagicMock(spec=[])` to simulate the "no cleanup method" case and
+    asserted the CLI's "does not support cleanup" message appeared —
+    correctly modeling the bug's symptom as expected, permanent
+    behavior, rather than a defect to fix.
+- **Remediation evidence:** switched all three call sites to
+  `SQLiteMemoryStore()`. Fixed `summarize_session.py`'s `_format_turns()`
+  helper, which assumed `turn.timestamp` was a `datetime` object
+  (matching the legacy store's `ConversationTurn`) and called
+  `.isoformat()` on it — `SQLiteMemoryStore.ConversationTurn.timestamp`
+  is an ISO-8601 `str`, so this would have crashed with
+  `AttributeError: 'str' object has no attribute 'isoformat'` immediately
+  after the backend switch; changed to `timestamp[:19]` string slicing,
+  matching the pattern already used elsewhere in the codebase (e.g.
+  `Summarizer._format_turns()`). Removed the now-dead `hasattr(store,
+  "cleanup")` guards entirely from both `cleanup_memory()` and
+  `sessions_cleanup()` since `SQLiteMemoryStore.cleanup()` always exists.
+  Deleted the 3 tests that explicitly encoded the "no cleanup method"
+  symptom as correct behavior (the code branch they tested no longer
+  exists) and updated every other affected test's patch target from
+  `missy.memory.store.MemoryStore` to
+  `missy.memory.sqlite_store.SQLiteMemoryStore`. Added 3 new regression
+  tests using a **real** `SQLiteMemoryStore` against a real temp-file
+  DB (not mocks) for each of the three fixed call sites, confirming
+  actual data is retrieved/deleted, not just that a mock method was
+  called: `tests/skills/test_builtin_skills.py::test_reads_real_turns_from_sqlite_backend`,
+  `tests/scheduler/test_manager_coverage.py::test_cleanup_memory_actually_deletes_from_real_store`,
+  `tests/cli/test_cli_commands.py::test_sessions_cleanup_actually_deletes_from_real_store`.
+  Also corrected `missy/memory/__init__.py`'s public-API docstring,
+  which called the legacy `MemoryStore` "the default" — it has not been
+  the default since FX-B and is not constructed by any production code
+  path as of this checkpoint. `tests/agent/` + `tests/tools/` +
+  `tests/cli/` + `tests/scheduler/` + `tests/skills/` + `tests/unit/` +
+  `tests/memory/` (10,050 tests) pass with no regressions; full suite
+  20,870 passed (net zero change from SR-3.3's checkpoint — 3 obsolete
+  tests removed, 3 new live regression tests added), only the 3 known
+  pre-existing vision flakes failing.
+- **Residual risk:** `MemoryStore`/`missy/memory/store.py` itself is
+  unchanged and still exists as a public, documented, zero-dependency
+  option (per its own docstring) for embedders who don't want a SQLite
+  dependency — its non-atomic `_save()` is still exactly as non-atomic
+  as before. That's fine as long as nothing in Missy's own production
+  code path constructs it, which is now confirmed and enforced by the
+  new live-store regression tests (they'll fail loudly if a future
+  change reintroduces a `MemoryStore()` construction at any of these
+  three call sites). If a future feature deliberately wants the JSON
+  store's zero-dependency property for some new production path, this
+  checkpoint's finding means that path would need its own atomicity
+  fix (temp-file + atomic rename + fsync + locking) before shipping,
+  not that the class itself is safe to reach for casually now.
+
 ---
 
 - Timestamp: 2026-07-09 15:35:26 (raw grep-scan dump below, preserved

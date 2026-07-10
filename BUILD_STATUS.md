@@ -1,6 +1,6 @@
 # Build Status
 
-Last updated: 2026-07-10 17:05 UTC
+Last updated: 2026-07-10 17:45 UTC
 
 ## Current Workstream: Validation-Harness Overhaul
 
@@ -1068,6 +1068,63 @@ pre-existing vision flakes failing.
 This is the seventeenth independent, confirmed critical finding this
 session. Full detail in `AUDIT_SECURITY.md`'s new `### SR-3.3` section.
 
+### Completed This Session, continued: SR-3.5 (non-atomic JSON writes confirmed unreachable; three "wrong backend" bugs found along the way — eighteenth finding)
+
+Fourth §3 item, closing out §3 entirely. The literal SR-3.5 ask —
+"remove non-atomic full-file memory rewrites from production paths" —
+turned out to already be true: `MemoryStore._save()` (an unconditional
+`write_text()` over the whole file, no atomic rename/fsync/locking) has
+exactly 3 production construction sites, and none of them ever call a
+write method. But verifying that (rather than trusting the "likely
+already resolved" flag, per the discipline SR-3.3's checkpoint
+established) turned up three unrelated, live, confirmed bugs in those
+same three call sites — all sharing FX-B's root cause: a code path
+never updated to point at the production SQLite backend.
+
+1. `summarize_session.py`'s built-in skill read from the legacy JSON
+   `MemoryStore` instead of `SQLiteMemoryStore` — since FX-B moved real
+   conversation writes to SQLite, this skill always returned "no turns
+   recorded" regardless of actual session history. Live-verified with a
+   real `SQLiteMemoryStore` containing real turns.
+2. `scheduler/manager.py::cleanup_memory()` and the documented CLI
+   command `missy sessions cleanup` both guarded their cleanup call with
+   `hasattr(store, "cleanup")` against `MemoryStore()`, which has no
+   `cleanup` method — both always silently no-op'd, in every
+   configuration, forever. The CLI even printed "use SQLiteMemoryStore"
+   as its failure message while sitting right next to another command in
+   the same file that already imports and correctly uses
+   `SQLiteMemoryStore`.
+
+Root cause of non-detection: every test for these three call sites
+patched `MemoryStore` with a bare `MagicMock()`, which auto-vivifies a
+`.cleanup` attribute the real class doesn't have — `hasattr()` was
+always `True` in tests, always `False` in production. One test suite
+even explicitly encoded the bug's symptom (`MagicMock(spec=[])`
+simulating "no cleanup method", asserting the CLI's broken message
+appeared) as correct, expected behavior.
+
+Fixed: switched all three call sites to `SQLiteMemoryStore()`; fixed
+`summarize_session.py`'s `_format_turns()` (assumed a `datetime`
+object matching the old store, crashes on the new store's `str`
+timestamp — changed to `[:19]` slicing); removed the now-dead
+`hasattr` guards entirely. Deleted 3 tests that encoded the old broken
+behavior as correct; updated remaining tests' patch targets. Added 3
+new regression tests using a **real** `SQLiteMemoryStore` (not mocks)
+per fixed call site, confirming actual data is retrieved/deleted.
+Corrected `missy/memory/__init__.py`'s docstring, which still called
+the legacy store "the default." `tests/agent/`+`tests/tools/`+
+`tests/cli/`+`tests/scheduler/`+`tests/skills/`+`tests/unit/`+
+`tests/memory/` (10,050 tests) pass with no regressions; full suite
+20,870 passed (net zero vs. the SR-3.3 checkpoint — 3 obsolete tests
+removed, 3 new live-store tests added), only the 3 known pre-existing
+vision flakes failing.
+
+This is the eighteenth independent, confirmed critical finding this
+session, and closes out §3 (Data Integrity, Availability, And Cost) of
+the security review entirely except for SR-3.4's separate
+cross-session-aggregation sub-finding. Full detail in
+`AUDIT_SECURITY.md`'s new `### SR-3.5` section.
+
 ### Known Pre-Existing Failure (not caused by this session)
 
 `tests/vision/test_discovery_capture_sysfs.py::TestCacheTTL::test_cache_valid_within_ttl`
@@ -1081,43 +1138,41 @@ scoped to FX-A / voice-command work.
 
 ### Remaining Work (priority order per prompt.md)
 
-FX-A through FX-G are all complete (see task list). SR-1.2 through
-SR-3.4, SR-3.2, and SR-3.3 are fixed/closed; current remaining priority
+FX-A through FX-G are all complete (see task list). §3 (Data Integrity,
+Availability, And Cost) is now fully closed except SR-3.4's separate
+cross-session-aggregation sub-finding. Current remaining priority
 order:
 
-1. SR-3.5 (atomic concurrent persistence) — flagged as
-   likely-already-resolved-by-FX-B; needs the same "verify against
-   current code" checkpoint SR-3.2/SR-3.3 both just got rather than
-   assumed new work. (Note: SR-3.3's checkpoint turned out to
-   contradict its own "likely already resolved" flag — verify, don't
-   assume, applies equally to SR-3.5.)
-2. SR-2.1 (least-privilege scheduled jobs) / SR-2.2 (safe proactive
+1. SR-2.1 (least-privilege scheduled jobs) / SR-2.2 (safe proactive
    triggers, needs real `ApprovalGate` wiring) — product-policy default
    questions.
-3. SR-1.1 (audit event signing — larger cross-cutting change) and
+2. SR-1.1 (audit event signing — larger cross-cutting change) and
    SR-1.9b (DNS TOCTOU — needs connecting to a pinned policy-verified IP
    rather than re-resolving at connect time).
-4. SR-4.1 through SR-4.8 (dead/unwired features: long-term memory,
+3. SR-4.1 through SR-4.8 (dead/unwired features: long-term memory,
    sub-agents, checkpoint recovery, done-criteria verification,
    custom-tool loading, OTLP export, MCP execution/approval, provider
    rotation/fallback claims).
-5. The "harden secondary availability hazards" bullet (circuit-breaker
+4. The "harden secondary availability hazards" bullet (circuit-breaker
    half-open single-probe, MCP RPC desync, malformed scheduler record
    isolation, webhook HMAC replay protection, EventBus history bound,
    provider base_url egress widening, image decompression-bomb cap,
    audit log rotation, git safety-stash ownership).
-6. Full 89-case tool-specific validation backlog (FS-001–DISC-CMD-008),
+5. Full 89-case tool-specific validation backlog (FS-001–DISC-CMD-008),
    not yet re-run against current code at all this session.
-7. Broader untouched "Product Goal" surface from prompt.md (providers,
+6. Broader untouched "Product Goal" surface from prompt.md (providers,
    tool intelligence, Discord/channels, scheduler/memory/sessions,
    hatching/persona, vision/audio/multimodal, Web TUI, OpenClaw-style
    architecture, CLI/operations).
-8. Smaller tracked follow-ups: pre-existing vision `CameraDiscovery`
+7. Smaller tracked follow-ups: pre-existing vision `CameraDiscovery`
    cache-TTL flake (3 tests, tracked above); Discord pairing approval
    endpoint (SR-1.12's fix removed the vulnerable path but no working
    approval surface exists now); `allowed_roles` Discord guild-policy
    field never enforced; FX-F bullet 2/4 disposable browser-test
-   environment; FX-G residual acpx process-group timeout kill.
+   environment; FX-G residual acpx process-group timeout kill;
+   SR-3.4's cross-session-aggregation sub-finding (a shared Discord/API
+   runtime's `CostTracker` never resets between logically distinct
+   sessions).
 
 ### Blockers
 

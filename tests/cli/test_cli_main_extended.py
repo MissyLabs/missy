@@ -1319,31 +1319,6 @@ class TestRecoverBranches:
 
 
 # ---------------------------------------------------------------------------
-# sessions cleanup: no cleanup method (line 1931)
-# ---------------------------------------------------------------------------
-
-
-class TestSessionsCleanupNoMethod:
-    def test_sessions_cleanup_store_without_cleanup_method(self, runner: CliRunner):
-        cfg_path = _cfg_path()
-        try:
-            mock_store = MagicMock(spec=[])  # spec=[] means no methods at all
-
-            with (
-                patch("missy.cli.main._load_subsystems", return_value=_make_mock_config()),
-                patch("missy.memory.store.MemoryStore", return_value=mock_store),
-            ):
-                result = runner.invoke(cli, ["--config", cfg_path, "sessions", "cleanup"])
-        finally:
-            import os
-
-            os.unlink(cfg_path)
-
-        assert result.exit_code == 0
-        assert "does not support" in result.output or "sqlite" in result.output.lower()
-
-
-# ---------------------------------------------------------------------------
 # sessions rename (lines 1986-1995)
 # ---------------------------------------------------------------------------
 

@@ -644,27 +644,20 @@ class TestManagerErrorHandling:
 
 
 class TestManagerCleanupMemory:
-    """cleanup_memory delegates correctly and handles errors gracefully."""
-
-    def test_returns_zero_when_store_has_no_cleanup(self, mgr: SchedulerManager) -> None:
-        mock_store = MagicMock(spec=[])  # no attributes
-        fake_module = MagicMock()
-        fake_module.MemoryStore.return_value = mock_store
-        with patch.dict("sys.modules", {"missy.memory.store": fake_module}):
-            result = mgr.cleanup_memory()
-        assert result == 0
+    """cleanup_memory delegates to SQLiteMemoryStore (the production memory
+    backend since FX-B) and handles errors gracefully. Previously delegated
+    to the legacy JSON MemoryStore, which has no cleanup() method at all.
+    """
 
     def test_returns_count_from_store_cleanup(self, mgr: SchedulerManager) -> None:
         mock_store = MagicMock()
         mock_store.cleanup.return_value = 17
-        fake_module = MagicMock()
-        fake_module.MemoryStore.return_value = mock_store
-        with patch.dict("sys.modules", {"missy.memory.store": fake_module}):
+        with patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store):
             result = mgr.cleanup_memory(older_than_days=7)
         assert result == 17
 
     def test_returns_zero_on_import_exception(self, mgr: SchedulerManager) -> None:
-        with patch.dict("sys.modules", {"missy.memory.store": None}):
+        with patch.dict("sys.modules", {"missy.memory.sqlite_store": None}):
             result = mgr.cleanup_memory()
         assert result == 0
 

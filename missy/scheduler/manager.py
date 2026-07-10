@@ -302,25 +302,27 @@ class SchedulerManager:
     def cleanup_memory(self, older_than_days: int = 30) -> int:
         """Delete conversation history older than *older_than_days* days.
 
-        Delegates to :class:`~missy.memory.store.MemoryStore` when it exposes
-        a ``cleanup`` method.  Errors are logged as warnings and the method
-        always returns without raising.
+        Delegates to :class:`~missy.memory.sqlite_store.SQLiteMemoryStore`
+        (the production memory backend). Errors are logged as warnings and
+        the method always returns without raising.
 
         Args:
             older_than_days: Threshold in days.  Records older than this are
                 removed.
 
         Returns:
-            The number of records removed, or ``0`` if the store does not
-            support cleanup or an error occurs.
+            The number of records removed, or ``0`` if an error occurs.
         """
         try:
-            from missy.memory.store import MemoryStore
+            # SR-3.1/3.5: this previously constructed the legacy JSON
+            # MemoryStore, which has no cleanup() method at all -- the
+            # hasattr guard below always evaluated False, so this method
+            # silently no-op'd and returned 0 regardless of what older_than_days
+            # requested, on every call, in every configuration.
+            from missy.memory.sqlite_store import SQLiteMemoryStore
 
-            store = MemoryStore()
-            if hasattr(store, "cleanup"):
-                return store.cleanup(older_than_days=older_than_days)
-            return 0
+            store = SQLiteMemoryStore()
+            return store.cleanup(older_than_days=older_than_days)
         except Exception as exc:
             logger.warning("Memory cleanup failed: %s", exc)
             return 0

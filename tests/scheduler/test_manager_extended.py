@@ -207,7 +207,7 @@ class TestCleanupMemory:
 
     def test_cleanup_memory_exception_returns_zero(self, started_manager: SchedulerManager):
         """cleanup_memory returns 0 on exception."""
-        with patch.dict("sys.modules", {"missy.memory.store": None}):
+        with patch.dict("sys.modules", {"missy.memory.sqlite_store": None}):
             result = started_manager.cleanup_memory()
             assert result == 0
 

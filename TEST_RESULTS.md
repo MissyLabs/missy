@@ -1,5 +1,52 @@
 # TEST_RESULTS
 
+## Run: 2026-07-10 17:45 UTC — validation-harness overhaul, SR-3.5 (non-atomic JSON writes confirmed unreachable; 3 wrong-backend bugs found and fixed)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Investigation: confirmed `MemoryStore._save()`'s non-atomic full-file
+  write is genuinely unreachable from production — its 3 construction
+  sites never call a write method. But that investigation found 3 live
+  bugs: `summarize_session.py` skill and both `cleanup_memory()`
+  (scheduler) / `sessions_cleanup` (CLI) referenced the legacy JSON
+  `MemoryStore` instead of the production `SQLiteMemoryStore`, so the
+  skill always returned "no turns recorded" and both cleanup paths
+  always silently no-op'd (the `hasattr(store, "cleanup")` guard was
+  always `False` against the real `MemoryStore`, which has no such
+  method).
+- Root cause of non-detection: every affected test patched
+  `missy.memory.store.MemoryStore` with a bare `MagicMock()`, which
+  auto-vivifies a `.cleanup` attribute the real class lacks — tests saw
+  `hasattr() == True` while production saw `False`.
+- Fix: switched all 3 call sites to `SQLiteMemoryStore()`; fixed
+  `summarize_session.py`'s `_format_turns()` (assumed `datetime`,
+  crashes on the new store's `str` timestamp — now uses `[:19]`
+  slicing); removed the dead `hasattr` guards. Deleted 3 tests that
+  encoded the old broken behavior as correct; updated remaining tests'
+  patch targets to `missy.memory.sqlite_store.SQLiteMemoryStore`.
+- Command: `pytest tests/skills/test_builtin_skills.py
+  tests/cli/test_cli_commands.py tests/cli/test_cli_main_extended.py
+  tests/scheduler/test_manager_coverage.py
+  tests/scheduler/test_manager_extended.py
+  tests/scheduler/test_scheduler_extended.py
+  tests/unit/test_scheduler_memory_edges.py -q`
+- Result: `548 passed`
+- Command: `pytest tests/agent/ tests/tools/ tests/cli/
+  tests/scheduler/ tests/skills/ tests/unit/ tests/memory/ -q
+  -o faulthandler_timeout=120`
+- Result: `10050 passed, 13 skipped` (up from 10047 — 3 new live-store
+  regression tests: `test_reads_real_turns_from_sqlite_backend`,
+  `test_cleanup_memory_actually_deletes_from_real_store`,
+  `test_sessions_cleanup_actually_deletes_from_real_store`, each using
+  a real `SQLiteMemoryStore` against a real temp DB, not mocks) — no
+  regressions.
+- Command: `pytest tests/ -q -o faulthandler_timeout=120`
+- Result: `3 failed, 20870 passed, 13 skipped in 440.33s (0:07:20)` —
+  net zero change from the prior (SR-3.3) checkpoint's 20870 (3
+  obsolete tests removed that encoded the old broken behavior as
+  correct, 3 new live-store regression tests added). The 3 failures
+  are the same known pre-existing `CameraDiscovery` cache-TTL flakes
+  (task #11), unrelated to this checkpoint's changes.
+
 ## Run: 2026-07-10 17:05 UTC — validation-harness overhaul, SR-3.3 (memory_search/memory_describe/memory_expand completely non-functional in production)
 
 - Branch: `overhaul/missy-validation-20260710-031406`
