@@ -1,5 +1,54 @@
 # TEST_RESULTS
 
+## Run: 2026-07-11 03:50 UTC — validation-harness overhaul, SR-4.8 (provider rotation/fallback wired into production runtime — final §4 item)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Finding: `ProviderRegistry.rotate_key()` and `ModelRouter` had zero
+  production call sites (unit-tested in isolation only).
+  `AgentRuntime._get_provider()`'s only fallback is a static,
+  start-of-run-only `is_available()` check — a provider that fails
+  mid-run (expired key, 429, transient 500) propagates straight out of
+  `_tool_loop()` with zero retry, zero rotation, zero cross-provider
+  fallback, and zero audit event.
+- Fix: new `missy/providers/health.py` (`classify_provider_error()`)
+  and `ProviderRegistry.key_for()`; new
+  `AgentRuntime._call_provider_with_fallback()` wraps every
+  `_single_turn()`/`_tool_loop()` provider call with a per-provider-name
+  `CircuitBreaker`, one `rotate_key()` retry for auth failures with 2+
+  keys, budget-gated cross-provider fallback ordered by tool
+  compatibility, per-candidate message reformatting, and redacted
+  `agent.provider.{call_failed,key_rotated,fallback}` audit events.
+- Command: `pytest tests/providers/test_provider_health.py -q`
+- Result: `13 passed`
+- Command: `pytest tests/providers/test_registry_deep.py -k KeyFor -q`
+- Result: `4 passed`
+- Command: `pytest tests/agent/test_provider_fallback.py -q`
+- Result: `12 passed` — real `BaseProvider` subclasses (not mocks) in a
+  real `ProviderRegistry`: key rotation retries/skips correctly by
+  failure class; cross-provider fallback preserves transcript format
+  and never forwards the primary's model id; tool-capable candidates
+  preferred, degraded flag set when none exist; budget exhaustion
+  blocks the fallback attempt entirely; a provider with an `OPEN`
+  breaker is excluded from candidates; all-candidates-exhausted
+  re-raises; a fabricated secret in a provider error message is
+  redacted before reaching a real `AuditLogger`'s JSONL file; SR-2.3
+  tool-policy dispatch is unaffected by a mid-loop provider swap.
+- Command: `pytest tests/agent/ tests/providers/ -q -o faulthandler_timeout=120`
+- Result: `5128 passed, 4 skipped` — one pre-existing bug found and
+  fixed while wiring the new method into `_tool_loop()`: an
+  unconditional `get_registry()` call at the top of
+  `_call_provider_with_fallback()` broke 3 tests that never initialize
+  a registry on the pure-success path (`test_mutation_fingerprint.py`)
+  — fixed by resolving the registry lazily, only on the failure branch.
+- Command: `pytest tests/cli/ tests/api/ tests/integration/ tests/scheduler/ tests/mcp/ -q -o faulthandler_timeout=120`
+- Result: `2463 passed`
+- Command: `pytest tests/ -q -o faulthandler_timeout=120`
+- Result: `3 failed, 21032 passed, 13 skipped in 496.77s (0:08:16)` — up
+  from 21003, only the 3 known pre-existing `CameraDiscovery` cache-TTL
+  flakes failing, zero regressions from this checkpoint's changes. This
+  closes section 4 ("Advertised But Unwired Features") of the security
+  review entirely — all eight SR-4.x items are now fixed.
+
 ## Run: 2026-07-11 02:30 UTC — validation-harness overhaul, SR-4.6 (OTLP export event subscription fixed + redaction + failure surfacing)
 
 - Branch: `overhaul/missy-validation-20260710-031406`

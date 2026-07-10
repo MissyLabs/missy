@@ -368,6 +368,12 @@ class AgentRuntime:
         self._session_mgr = SessionManager()
         # Circuit breaker per runtime instance (keyed to provider name)
         self._circuit_breaker = self._make_circuit_breaker(config.provider)
+        # SR-4.8: one CircuitBreaker per *fallback* provider name, lazily
+        # created. Kept separate from self._circuit_breaker (which tracks
+        # only the configured primary) so a failure on one fallback
+        # candidate's breaker never affects another candidate's, or the
+        # primary's, half-open/backoff state.
+        self._fallback_breakers: dict[str, Any] = {}
         # Rate limiter for API calls
         self._rate_limiter = self._make_rate_limiter()
         # Lazy-loaded subsystems
@@ -1080,14 +1086,6 @@ class AgentRuntime:
                 # is what the post-call-only check below could never do.
                 self._check_budget(session_id=session_id, task_id=task_id)
 
-                if getattr(provider, "accepts_message_dicts", False) is True:
-                    provider_messages = self._dicts_to_native_messages(system_prompt, loop_messages)
-                else:
-                    provider_messages = self._dicts_to_messages(system_prompt, loop_messages)
-
-                # Rate limit before calling provider
-                self._acquire_rate_limit()
-
                 # Verify system prompt integrity before each provider call
                 if self._drift_detector is not None and not self._drift_detector.verify(
                     "system_prompt", system_prompt
@@ -1115,11 +1113,30 @@ class AgentRuntime:
                     )
                     return fallback.content, tool_names_used
 
-                response: CompletionResponse = self._circuit_breaker.call(
-                    provider.complete_with_tools,
-                    provider_messages,
-                    tools,
-                    system_prompt,
+                # SR-4.8: built fresh per candidate provider so message
+                # formatting matches whichever provider actually serves the
+                # call, including a fallback with a different
+                # accepts_message_dicts convention than `provider`.
+                def _make_complete_with_tools_call(target: Any) -> Any:
+                    if getattr(target, "accepts_message_dicts", False) is True:
+                        target_messages = self._dicts_to_native_messages(
+                            system_prompt, loop_messages
+                        )
+                    else:
+                        target_messages = self._dicts_to_messages(system_prompt, loop_messages)
+
+                    def _call() -> CompletionResponse:
+                        self._acquire_rate_limit()
+                        return target.complete_with_tools(target_messages, tools, system_prompt)
+
+                    return _call
+
+                response, provider = self._call_provider_with_fallback(
+                    provider,
+                    _make_complete_with_tools_call,
+                    session_id=session_id,
+                    task_id=task_id,
+                    requires_tools=True,
                 )
 
                 # Record cost and enforce budget
@@ -1443,21 +1460,35 @@ class AgentRuntime:
         self._check_budget(session_id=session_id, task_id=task_id)
 
         msg_objects = self._dicts_to_messages(system_prompt, messages)
-        complete_kwargs: dict = {
-            "session_id": session_id,
-            "task_id": task_id,
-            "temperature": self.config.temperature,
-        }
-        if self.config.model:
-            complete_kwargs["model"] = self.config.model
+        primary_name = provider.name
 
-        # Rate limit before calling provider
-        self._acquire_rate_limit()
+        # SR-4.8: model/tool compatibility across a fallback transition --
+        # self.config.model names a model on the *originally configured*
+        # provider (e.g. an Anthropic model id) and must never be forwarded
+        # to an unrelated fallback provider. Only the originally-resolved
+        # provider gets the explicit override; any fallback candidate uses
+        # its own configured default model instead.
+        def _make_complete_call(target: Any) -> Any:
+            complete_kwargs: dict = {
+                "session_id": session_id,
+                "task_id": task_id,
+                "temperature": self.config.temperature,
+            }
+            if target.name == primary_name and self.config.model:
+                complete_kwargs["model"] = self.config.model
 
-        result = self._circuit_breaker.call(
-            provider.complete,
-            msg_objects,
-            **complete_kwargs,
+            def _call() -> CompletionResponse:
+                self._acquire_rate_limit()
+                return target.complete(msg_objects, **complete_kwargs)
+
+            return _call
+
+        result, _provider_used = self._call_provider_with_fallback(
+            provider,
+            _make_complete_call,
+            session_id=session_id,
+            task_id=task_id,
+            requires_tools=False,
         )
         self._record_cost(result, session_id=session_id)
         self._check_budget(session_id=session_id, task_id=task_id)
@@ -2989,6 +3020,186 @@ class AgentRuntime:
             "Ensure at least one provider is initialised and its API key is set."
         )
 
+    def _get_breaker_for(self, provider_name: str) -> Any:
+        """Return the :class:`CircuitBreaker` tracking *provider_name*.
+
+        The configured primary provider keeps using ``self._circuit_breaker``
+        (unchanged behavior, and what existing tests swap directly);
+        every other provider name gets its own lazily-created breaker in
+        ``self._fallback_breakers`` so cooldown/half-open state is tracked
+        independently per candidate.
+
+        Args:
+            provider_name: Registry key or ``.name`` of the provider.
+
+        Returns:
+            A :class:`~missy.agent.circuit_breaker.CircuitBreaker`-like object.
+        """
+        if provider_name == self.config.provider:
+            return self._circuit_breaker
+        breaker = self._fallback_breakers.get(provider_name)
+        if breaker is None:
+            breaker = self._make_circuit_breaker(provider_name)
+            self._fallback_breakers[provider_name] = breaker
+        return breaker
+
+    def _call_provider_with_fallback(
+        self,
+        provider: Any,
+        call_factory: Any,
+        *,
+        session_id: str,
+        task_id: str,
+        requires_tools: bool = False,
+    ) -> tuple[Any, Any]:
+        """Execute a provider call with automatic key rotation and fallback.
+
+        SR-4.8: ``ProviderConfig.api_keys`` rotation and cross-provider
+        fallback were both documented capabilities with either zero
+        production call sites (:meth:`~.registry.ProviderRegistry.rotate_key`)
+        or a static, start-of-run-only check
+        (:meth:`AgentRuntime._get_provider`). This is the real, mid-call
+        version: on a provider failure it classifies the error, retries
+        once on a rotated API key for auth failures, then -- if that also
+        fails or wasn't applicable -- selects a healthy, budget-eligible,
+        ideally tool-capable fallback provider (gated by that provider's
+        own :class:`~missy.agent.circuit_breaker.CircuitBreaker`, mirroring
+        the half-open probe pattern used for the primary provider) and
+        retries the call there. Every transition (rotation or fallback) is
+        recorded as a redacted audit event before it happens.
+
+        Args:
+            provider: The first provider to try.
+            call_factory: Given a provider instance, returns a zero-arg
+                callable that performs the actual ``complete``/
+                ``complete_with_tools`` call against *that* provider --
+                built fresh per-candidate so message formatting matches
+                each provider's ``accepts_message_dicts`` convention
+                (transcript integrity across the transition).
+            session_id: For budget checks and audit events.
+            task_id: For audit events.
+            requires_tools: When ``True``, fallback candidates that
+                override ``complete_with_tools`` are preferred over ones
+                that only inherit the base class's tool-less default.
+
+        Returns:
+            A ``(response, provider_used)`` tuple.
+
+        Raises:
+            ProviderError: When the primary call and every eligible
+                fallback candidate all fail.
+        """
+        from missy.agent.circuit_breaker import CircuitState
+        from missy.providers.base import BaseProvider
+        from missy.providers.health import classify_provider_error
+
+        def _attempt(target: Any) -> Any:
+            breaker = self._get_breaker_for(target.name)
+            return breaker.call(call_factory(target))
+
+        try:
+            return _attempt(provider), provider
+        except ProviderError as exc:
+            # Registry only needed on the failure path (key rotation /
+            # fallback candidate selection) -- resolved lazily so the
+            # common success path never requires get_registry() to have
+            # been initialised.
+            registry = get_registry()
+            failure_class = classify_provider_error(exc)
+            self._emit_event(
+                session_id=session_id,
+                task_id=task_id,
+                event_type="agent.provider.call_failed",
+                result="error",
+                detail={
+                    "provider": provider.name,
+                    "failure_class": str(failure_class),
+                    "error": str(exc),
+                },
+            )
+
+            # Retry-eligibility: an auth failure with more than one
+            # configured API key is worth one immediate retry on the next
+            # key before treating the whole provider as down. Rate limits
+            # and timeouts are never fixed by rotating credentials.
+            registry_key = registry.key_for(provider) or provider.name
+            config = registry._provider_configs.get(registry_key)
+            if failure_class == "auth" and config is not None and len(config.api_keys) > 1:
+                registry.rotate_key(registry_key)
+                self._emit_event(
+                    session_id=session_id,
+                    task_id=task_id,
+                    event_type="agent.provider.key_rotated",
+                    result="allow",
+                    detail={"provider": provider.name, "reason": str(failure_class)},
+                )
+                try:
+                    return _attempt(provider), provider
+                except ProviderError as exc2:
+                    self._emit_event(
+                        session_id=session_id,
+                        task_id=task_id,
+                        event_type="agent.provider.call_failed",
+                        result="error",
+                        detail={
+                            "provider": provider.name,
+                            "failure_class": str(classify_provider_error(exc2)),
+                            "error": str(exc2),
+                            "after_key_rotation": True,
+                        },
+                    )
+
+            # Budget must still allow another (potentially billed) call
+            # before spending it on a fallback provider.
+            self._check_budget(session_id=session_id, task_id=task_id)
+
+            candidates = [
+                p
+                for p in registry.get_available()
+                if p.name != provider.name
+                and self._get_breaker_for(p.name).state != CircuitState.OPEN
+            ]
+
+            def _is_tool_capable(p: Any) -> bool:
+                return type(p).complete_with_tools is not BaseProvider.complete_with_tools
+
+            if requires_tools:
+                candidates.sort(key=lambda p: not _is_tool_capable(p))
+
+            last_exc: Exception = exc
+            for fallback in candidates:
+                degraded = requires_tools and not _is_tool_capable(fallback)
+                self._emit_event(
+                    session_id=session_id,
+                    task_id=task_id,
+                    event_type="agent.provider.fallback",
+                    result="allow",
+                    detail={
+                        "from_provider": provider.name,
+                        "to_provider": fallback.name,
+                        "reason": str(failure_class),
+                        "tool_compatibility_degraded": degraded,
+                    },
+                )
+                try:
+                    return _attempt(fallback), fallback
+                except ProviderError as exc3:
+                    last_exc = exc3
+                    self._emit_event(
+                        session_id=session_id,
+                        task_id=task_id,
+                        event_type="agent.provider.call_failed",
+                        result="error",
+                        detail={
+                            "provider": fallback.name,
+                            "failure_class": str(classify_provider_error(exc3)),
+                            "error": str(exc3),
+                        },
+                    )
+                    continue
+
+            raise last_exc
+
     def _build_messages(self, user_input: str) -> list[Message]:
         """Construct the message list to send to the provider.
 
@@ -3057,6 +3268,11 @@ class AgentRuntime:
 
 class _NoOpCircuitBreaker:
     """Passthrough stub used when the circuit_breaker module is unavailable."""
+
+    # Always reports CLOSED so SR-4.8's fallback candidate filter
+    # (`breaker.state != CircuitState.OPEN`) never excludes a provider
+    # just because the real circuit_breaker module failed to import.
+    state = "closed"
 
     def call(self, func: Any, *args: Any, **kwargs: Any) -> Any:
         return func(*args, **kwargs)

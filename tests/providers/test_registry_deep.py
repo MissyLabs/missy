@@ -366,6 +366,41 @@ class TestRotateKey:
 
 
 # ===========================================================================
+# ProviderRegistry – key_for (SR-4.8)
+# ===========================================================================
+
+
+class TestKeyFor:
+    def test_key_for_returns_registration_key(self):
+        registry = ProviderRegistry()
+        provider = _make_provider("anthropic")
+        registry.register("anthropic_primary", provider)
+        assert registry.key_for(provider) == "anthropic_primary"
+
+    def test_key_for_returns_none_for_unregistered_provider(self):
+        registry = ProviderRegistry()
+        provider = _make_provider("anthropic")
+        assert registry.key_for(provider) is None
+
+    def test_key_for_uses_identity_not_equality(self):
+        """Two distinct provider instances with equal attributes must not alias."""
+        registry = ProviderRegistry()
+        registered = _make_provider("dup")
+        other = _make_provider("dup")
+        registry.register("dup", registered)
+        assert registry.key_for(other) is None
+        assert registry.key_for(registered) == "dup"
+
+    def test_key_for_differs_from_provider_name_when_aliased(self):
+        """Registry key need not match the provider's own .name attribute."""
+        registry = ProviderRegistry()
+        provider = _make_provider("anthropic")
+        registry.register("my_alias", provider)
+        assert registry.key_for(provider) == "my_alias"
+        assert registry.key_for(provider) != provider.name
+
+
+# ===========================================================================
 # ProviderRegistry – from_config
 # ===========================================================================
 

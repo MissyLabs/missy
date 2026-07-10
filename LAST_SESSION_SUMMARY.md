@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (34 checkpoints this session, full suite green after every one)
+## Changed (35 checkpoints this session, full suite green after every one)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -849,17 +849,126 @@ output. No `missy doctor` check currently surfaces
 `export_failure_count`/`is_enabled` for OTLP specifically — a
 reasonable, small follow-up.
 
+### SR-4.8 (eighth and final §4 item, twenty-ninth finding this session — closes section 4 of the security review entirely)
+
+Operator-confirmed scope was the largest of three options offered:
+build the full production mechanism (per-provider cooldown/retry-
+eligibility state, budget-gated and tool-compatibility-ordered
+fallback selection, complete redacted audit trail) rather than a
+smaller bounded retry-once fix or a documentation-only correction.
+
+Three independent gaps, each live-reproduced against real classes
+before any fix: (1) `ProviderRegistry.rotate_key()` (round-robin
+`api_keys` rotation) had zero production call sites anywhere — not in
+`AgentRuntime`, not in any CLI command, not in the scheduler —despite
+extensive isolated unit-test coverage; (2) `ModelRouter`/
+`score_complexity()`/`select_model()` (fast/primary/premium tier
+routing) likewise had zero production callers; `fast_model`/
+`premium_model` config fields are consumed directly by
+`SleeptimeWorker._llm_summarize()`, bypassing `ModelRouter` entirely —
+the tier-selection *config surface* partially works but the *routing
+engine* CLAUDE.md described does not exist in the runtime path; (3)
+`AgentRuntime._get_provider()`'s only fallback is a static,
+start-of-run-only `is_available()` check (SDK installed + key present
+— a purely local check, never a live probe) run once per
+`run()`/`run_stream()` call. Live-reproduced: a provider that passes
+this check but then raises `ProviderError` on the actual
+`complete_with_tools()` call propagates straight out of
+`_tool_loop()`'s blanket exception handler with zero retry, zero key
+rotation, zero cross-provider fallback, and zero audit event, despite a
+second healthy, fully-configured provider sitting in the same
+registry — the resolved `provider` object is a single loop-local
+variable reused for every iteration with no re-resolution path once
+the loop starts.
+
+Fixed: new `missy/providers/health.py` (`classify_provider_error()` —
+auth/rate_limit/timeout/unknown from a `ProviderError`'s message text,
+reusing the vocabulary every built-in provider already raises
+consistently) and `ProviderRegistry.key_for()` (reverse-looks-up a
+provider instance's registry key by identity, since `.name` need not
+match the registration key). New
+`AgentRuntime._call_provider_with_fallback()` is the chokepoint both
+`_single_turn()` and `_tool_loop()`'s main iteration now route every
+provider call through: each provider name gets its own `CircuitBreaker`
+(`_get_breaker_for()`, independent of the primary's existing
+`self._circuit_breaker` so tests that swap it directly keep working) —
+cooldown/half-open state tracked per candidate, not globally; an
+auth-classified failure with 2+ configured keys triggers exactly one
+`rotate_key()` retry on the same provider (live-verified to actually
+flip the provider's real `_api_key`/`api_key` attribute, and confirmed
+skipped for rate_limit/timeout since rotating credentials can't fix
+either); a pre-flight `_check_budget()` gates the fallback attempt
+itself (reuses SR-3.4's per-session `CostTracker`); fallback candidates
+are filtered by cooldown eligibility (breaker not `OPEN`) and, when the
+call requires tool-calling, sorted to prefer a candidate overriding
+`complete_with_tools` over one that only inherits the base class's
+tool-less default, flagging `tool_compatibility_degraded: true` in the
+audit event when no tool-capable candidate exists; each candidate's
+message list is rebuilt fresh per *its own* `accepts_message_dicts`
+convention rather than reused from the original provider (transcript
+integrity, live-verified: `list[dict]` vs. `list[Message]` depending on
+target, with semantic content preserved); `self.config.model` (a model
+id on the originally configured provider) is never forwarded to a
+fallback candidate, which always uses its own configured default
+instead (live-verified `received_model is None`); every transition —
+`agent.provider.call_failed`/`.key_rotated`/`.fallback` — is a redacted
+audit event via the existing `_emit_event()` → `event_bus.publish()` →
+`AuditLogger._redact_detail()` pipeline (same mechanism as
+SR-1.10/SR-4.6, reused rather than reimplemented, live-verified
+end-to-end through a real `AuditLogger` writing to a temp JSONL file: a
+fabricated secret-shaped string in a provider's error message never
+reached disk unredacted); a tool call proposed by a fallback provider
+mid-loop is still gated by SR-2.3's `allowed_tool_names` check at
+dispatch time, live-verified unaffected by which provider proposed the
+call; when every candidate fails, the last real exception is re-raised
+(fails closed, matching `_get_provider()`'s existing doctrine).
+
+New `tests/providers/test_provider_health.py` (13 tests), 4 new tests
+in `tests/providers/test_registry_deep.py` (`key_for()`), and new
+`tests/agent/test_provider_fallback.py` (12 tests) against real
+`BaseProvider` subclasses (not `MagicMock(spec=...)`) registered in a
+real `ProviderRegistry`. One pre-existing bug found and fixed while
+wiring the new method into `_tool_loop()`: an unconditional
+`get_registry()` call at the top of `_call_provider_with_fallback()`
+broke 3 existing tests in `test_mutation_fingerprint.py` that never
+initialize a registry on the pure-success path — fixed by resolving
+the registry lazily, only inside the failure branch (same "MagicMock
+bypasses real `__init__`-shaped assumptions" root-cause family found
+repeatedly this session, though here it was the new code's own
+unconditional dependency that was wrong, not a test's mock). `tests/agent/`+`tests/providers/`
+(5,128 tests) and `tests/cli/`+`tests/api/`+`tests/integration/`+
+`tests/scheduler/`+`tests/mcp/` (2,463 tests) pass with no regressions.
+Corrected `CLAUDE.md`'s Providers section and
+`docs/implementation/module-map.md`'s `missy.providers.registry`/
+`missy.agent.runtime` entries; added a `missy.providers.health` entry.
+
+**Residual risk, called out explicitly:** `ModelRouter` remains
+intentionally unwired dead code — this checkpoint was scoped to
+rotation/fallback per the review's literal text, not to building the
+complexity-based tier-routing engine, a materially different feature
+(choosing a cheaper model proactively vs. recovering from a failed
+one) and not part of the operator's chosen scope. Per-provider
+`CircuitBreaker` cooldown timers use the same fixed threshold/backoff
+defaults as the primary's breaker, not yet tunable per-provider via
+config. Rate-limit failures never trigger key rotation by design
+(rotating credentials cannot fix a rate limit); a provider with a
+genuinely per-key (not per-account) rate limit would benefit from
+rotation there too, deliberately not implemented since no built-in
+provider documents that behavior.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-3 failed, 21003 passed, 13 skipped in 499.80s (0:08:19)
+3 failed, 21032 passed, 13 skipped in 496.77s (0:08:16)
 ```
 
 The 3 failures are exactly the known pre-existing `CameraDiscovery`
 cache-TTL flakes (task #11), confirmed unrelated via `git stash` in
 earlier checkpoints and reproduced again here unchanged. Zero
-regressions from SR-4.6 or any checkpoint this session.
+regressions from SR-4.8 or any checkpoint this session. This closes
+section 4 ("Advertised But Unwired Features") of the security review
+entirely — all eight SR-4.x items are now fixed.
 
 Full detail in `BUILD_STATUS.md`, `AUDIT_SECURITY.md`, and
 `TEST_RESULTS.md` — each has one dated entry per checkpoint this
@@ -874,18 +983,19 @@ three files above.)
   SR-1.9a, SR-1.10, SR-1.11, SR-1.12, SR-1.13, SR-2.1, SR-2.2, SR-2.3,
   SR-2.4, SR-3.1 (substantially via FX-B), SR-3.2, SR-3.3, SR-3.4
   (including its cross-session-aggregation sub-finding), SR-3.5, SR-4.4,
-  SR-4.5, SR-4.3, SR-4.2, SR-4.7, SR-4.1, SR-4.6 — **§2 and §3 are now
-  both fully closed, with no open sub-findings in either; §4 has seven
+  SR-4.5, SR-4.3, SR-4.2, SR-4.7, SR-4.1, SR-4.6, SR-4.8 — **§2, §3, and
+  §4 are now all fully closed, with no open sub-findings in any of
+  them.** §4 ("Advertised But Unwired Features") closed with all eight
   items fixed (SR-4.4 done-criteria verification, SR-4.5
   self_create_tool honesty, SR-4.3 checkpoint resume, SR-4.2 sub-agent
   delegation, SR-4.7 MCP tool execution, SR-4.1 long-term memory, SR-4.6
-  OTLP export).** Remaining: SR-1.1 (audit signing — larger
-  cross-cutting change), SR-1.9b (DNS TOCTOU, substantially harder —
-  needs connecting to a pinned policy-verified IP rather than
-  re-resolving at connect time), SR-4.8 (the sole remaining §4 item:
-  provider rotation/fallback claims) — this is the natural next large
-  area now that §1 (partially), §2 (fully), §3
-  (fully), and seven of §4's items are closed.
+  OTLP export, SR-4.8 provider rotation/fallback). Remaining: SR-1.1
+  (audit signing — larger cross-cutting change), SR-1.9b (DNS TOCTOU,
+  substantially harder — needs connecting to a pinned policy-verified
+  IP rather than re-resolving at connect time) — this is the natural
+  next area now that §2, §3, and §4 are fully closed and only §1's
+  two hardest items plus the "harden secondary availability hazards"
+  bullet remain in the security review proper.
 - **SR-1.7's launcher sub-finding** remains open — `find`/`xargs`/
   `bash`/`sudo` etc. are allowlist-able with only a warning, and
   nested shell commands inside a launcher's quoted arguments are
@@ -973,7 +1083,8 @@ both fully closed**, with zero open sub-findings in either (SR-2.1:
 scheduled jobs default to `capability_mode="safe-chat"`; SR-2.2: a real
 `ApprovalGate` is wired into `ProactiveManager` and the Web API server;
 SR-3.4's cross-session-aggregation sub-finding is fixed — `CostTracker`
-is now per-session-keyed), and **§4 has seven items fixed**: SR-4.4 —
+is now per-session-keyed), and **§4 is now fully closed with all eight
+items fixed**: SR-4.4 —
 `_tool_loop()` rejects a "done" claim made immediately after an
 unresolved tool error, up to 2 retries; SR-4.5 — `self_create_tool` no
 longer claims written scripts are "created"/"registered" as usable
@@ -996,10 +1107,18 @@ matching its own class default, unlike SR-4.5's opt-out choice); SR-4.6
 zero events in every configuration ever, regardless of collector
 reachability — fixed by wrapping `event_bus.publish` directly (mirroring
 `AuditLogger`'s already-established pattern), plus redaction before
-export and failure-count surfacing.
-SR-1.1 (audit signing) is now the largest remaining §1 item; SR-4.8
-(provider rotation/fallback claims) is the sole remaining §4 item and
-the next natural continuation. Given how the last several checkpoints
+export and failure-count surfacing; SR-4.8 — `AgentRuntime._call_provider_with_fallback()`
+now wraps every provider call with per-provider `CircuitBreaker`
+cooldown tracking, one automatic key-rotation retry on auth failures,
+and budget-gated cross-provider fallback with a full redacted audit
+trail, closing the gap between `ProviderRegistry.rotate_key()`/
+`_get_provider()`'s previously static, start-of-run-only check and the
+mid-run recovery CLAUDE.md always implied existed.
+SR-1.1 (audit signing) and SR-1.9b (DNS TOCTOU) are now the only two
+open items in the security review's numbered SR-x.y list (plus the
+"harden secondary availability hazards" bullet) — the natural next
+continuation now that §2, §3, and §4 are all fully closed. Given how
+the last several checkpoints
 went (SR-3.3 and SR-3.5 were both flagged "likely already fixed" and
 both turned out to hide live, confirmed, previously-undetected bugs;
 SR-2.1, SR-2.2, the SR-3.4 residual, and most SR-4.x fixes this session

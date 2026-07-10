@@ -1753,6 +1753,88 @@ This is the twenty-eighth independent, confirmed finding/change this
 session. Full detail in `AUDIT_SECURITY.md`'s new `### SR-4.7 (SR-4.6)`
 section.
 
+### Completed This Session, continued: SR-4.8 — provider rotation/fallback were config-documented with zero production call sites or a static, start-of-run-only check (twenty-ninth finding, eighth and final §4 item)
+
+Largest single §4 change this session — operator-confirmed scope was
+"full production fallback" (per-provider `CircuitBreaker` cooldown
+state, budget-gated and tool-compatibility-ordered candidate selection,
+full audit trail), not a smaller bounded fix.
+
+Reachability: `ProviderRegistry.rotate_key()` had zero production call
+sites anywhere (extensively unit-tested in isolation only).
+`ModelRouter`/`score_complexity()`/`select_model()` likewise had zero
+production callers — `fast_model`/`premium_model` are consumed directly
+by `SleeptimeWorker._llm_summarize()`, bypassing `ModelRouter` entirely.
+`AgentRuntime._get_provider()`'s only fallback is a static,
+start-of-run-only `is_available()` check (SDK installed + key present,
+never a live probe); live-reproduced: a provider passing that check but
+then raising `ProviderError` on the actual call propagates straight out
+of `_tool_loop()`'s blanket exception handler with zero retry, zero key
+rotation, zero cross-provider fallback, and zero audit event, despite a
+second healthy provider sitting in the same registry.
+
+Fixed: new `missy/providers/health.py` (`classify_provider_error()` —
+auth/rate_limit/timeout/unknown from `ProviderError` message text,
+reusing the vocabulary every built-in provider already raises
+consistently) and `ProviderRegistry.key_for()` (reverse-lookup a
+provider's registry key by identity). New
+`AgentRuntime._call_provider_with_fallback()` is the chokepoint both
+`_single_turn()` and `_tool_loop()`'s main iteration route every call
+through: per-provider-name `CircuitBreaker` (`_get_breaker_for()`,
+independent of the primary's existing breaker so current tests keep
+working); one `rotate_key()` retry on the same provider for
+auth-classified failures with 2+ configured keys (live-verified to
+actually flip the real `_api_key`/`api_key` attribute, and live-verified
+to be skipped for rate_limit/timeout since rotation can't fix those);
+pre-flight `_check_budget()` gating the fallback attempt itself (reuses
+SR-3.4's per-session `CostTracker`); fallback candidates filtered by
+cooldown eligibility (breaker not `OPEN`) and, when tools are required,
+sorted to prefer a candidate overriding `complete_with_tools` (flagging
+`tool_compatibility_degraded: true` in the audit event when none
+exist); messages rebuilt per-candidate's own `accepts_message_dicts`
+convention (transcript integrity, live-verified: `list[dict]` vs.
+`list[Message]` depending on target); `self.config.model` never
+forwarded to a fallback (live-verified `received_model is None`);
+SR-2.3's `allowed_tool_names` dispatch gate live-verified unaffected by
+a mid-loop provider swap; every transition is a redacted
+`agent.provider.{call_failed,key_rotated,fallback}` audit event
+(reuses `AuditLogger`'s existing `_redact_detail()` pipeline, same as
+SR-1.10/SR-4.6 — live-verified end-to-end through a real `AuditLogger`
+writing to a temp file, a fabricated secret in an error message never
+reached disk); all candidates exhausted re-raises the last real
+exception (fail closed).
+
+New `tests/providers/test_provider_health.py` (13 tests), 4 new tests in
+`tests/providers/test_registry_deep.py` (`key_for()`), new
+`tests/agent/test_provider_fallback.py` (12 tests) against real
+`BaseProvider` subclasses (not mocks) in a real `ProviderRegistry`.
+`tests/agent/`+`tests/providers/` (5,128 tests) and
+`tests/cli/`+`tests/api/`+`tests/integration/`+`tests/scheduler/`+
+`tests/mcp/` (2,463 tests) pass with no regressions. One pre-existing
+bug found and fixed along the way while wiring `_call_provider_with_fallback()`
+into `_tool_loop()`: an unconditional `get_registry()` call at the top
+of the new method broke 3 existing tests that never initialize a
+registry on the pure-success path — fixed by resolving the registry
+lazily, only inside the failure branch. Full suite result recorded in
+`TEST_RESULTS.md`. Corrected `CLAUDE.md`'s Providers section and
+`docs/implementation/module-map.md`'s `missy.providers.registry`/
+`missy.agent.runtime` entries; added a `missy.providers.health` entry.
+
+Residual risk: `ModelRouter` remains intentionally unwired dead code —
+scoped out per the operator's chosen scope (rotation/fallback, not
+proactive cost-tier routing, which is a materially different feature).
+Per-provider `CircuitBreaker` cooldown timers use the same fixed
+threshold/backoff defaults as the primary's breaker, not yet tunable
+per-provider via config. Rate-limit failures never trigger key rotation
+by design; a provider with a genuinely per-key (not per-account) rate
+limit would benefit from rotation there too, deliberately not
+implemented since no built-in provider documents that behavior.
+
+This is the twenty-ninth independent, confirmed finding/change this
+session, and closes section 4 ("Advertised But Unwired Features") of
+the security review entirely — all eight SR-4.x items are now fixed.
+Full detail in `AUDIT_SECURITY.md`'s new `### SR-4.8` section.
+
 ### Known Pre-Existing Failure (not caused by this session)
 
 `tests/vision/test_discovery_capture_sysfs.py::TestCacheTTL::test_cache_valid_within_ttl`
@@ -1769,36 +1851,36 @@ scoped to FX-A / voice-command work.
 FX-A through FX-G are all complete (see task list). §2 (Unattended-
 Execution Hazards) and §3 (Data Integrity, Availability, And Cost) are
 now both fully closed — SR-3.4's cross-session-aggregation sub-finding
-is fixed. §4 has seven items fixed (SR-4.4 done-criteria verification;
+is fixed. §4 ("Advertised But Unwired Features") is now **fully
+closed** — all eight items fixed (SR-4.4 done-criteria verification;
 SR-4.5 self_create_tool honesty; SR-4.3 checkpoint resume; SR-4.2
 sub-agent delegation; SR-4.7 MCP tool execution; SR-4.1 long-term
-memory; SR-4.6 OTLP export). Current remaining priority order:
+memory; SR-4.6 OTLP export; SR-4.8 provider rotation/fallback). Current
+remaining priority order:
 
 1. SR-1.1 (audit event signing — larger cross-cutting change) and
    SR-1.9b (DNS TOCTOU — needs connecting to a pinned policy-verified IP
    rather than re-resolving at connect time).
-2. SR-4.8 (last remaining dead/unwired feature: provider rotation/
-   fallback claims — SR-4.1 through SR-4.7 are all now fixed, see
-   above).
-3. The "harden secondary availability hazards" bullet (circuit-breaker
+2. The "harden secondary availability hazards" bullet (circuit-breaker
    half-open single-probe, MCP RPC desync, malformed scheduler record
    isolation, webhook HMAC replay protection, EventBus history bound,
    provider base_url egress widening, image decompression-bomb cap,
    audit log rotation, git safety-stash ownership).
-4. Full 89-case tool-specific validation backlog (FS-001–DISC-CMD-008),
+3. Full 89-case tool-specific validation backlog (FS-001–DISC-CMD-008),
    not yet re-run against current code at all this session.
-5. Broader untouched "Product Goal" surface from prompt.md (providers,
+4. Broader untouched "Product Goal" surface from prompt.md (providers,
    tool intelligence, Discord/channels, scheduler/memory/sessions,
    hatching/persona, vision/audio/multimodal, Web TUI, OpenClaw-style
    architecture, CLI/operations).
-6. Smaller tracked follow-ups: pre-existing vision `CameraDiscovery`
+5. Smaller tracked follow-ups: pre-existing vision `CameraDiscovery`
    cache-TTL flake (3 tests, tracked above); Discord pairing approval
    endpoint (SR-1.12's fix removed the vulnerable path but no working
    approval surface exists now); `allowed_roles` Discord guild-policy
    field never enforced; FX-F bullet 2/4 disposable browser-test
    environment; FX-G residual acpx process-group timeout kill; a Web
    TUI browser page for approvals (SR-2.2's REST endpoints are real and
-   authenticated but have no browser UI yet).
+   authenticated but have no browser UI yet); per-provider tunable
+   CircuitBreaker cooldown config (SR-4.8 residual).
 
 ### Blockers
 

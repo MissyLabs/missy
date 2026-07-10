@@ -188,9 +188,17 @@ dependencies on other `missy` modules.
 
 | Field | Value |
 |-------|-------|
-| **Purpose** | Singleton registry mapping provider name strings to live `BaseProvider` instances. Factory method builds a registry from `MissyConfig`. Supports fallback, hot-swap, and model tier routing (fast/premium). |
+| **Purpose** | Singleton registry mapping provider name strings to live `BaseProvider` instances. Factory method builds a registry from `MissyConfig`. `rotate_key()`/`get_available()`/`key_for()` are real dispatch-time mechanisms called by `AgentRuntime._call_provider_with_fallback()` (SR-4.8) on a mid-run provider failure, not just at startup. `ModelRouter` (fast/primary/premium tier selection) remains unwired -- nothing in `AgentRuntime` calls `score_complexity()`/`select_model()`. |
 | **Key exports** | `ProviderRegistry`, `ModelRouter`, `init_registry()`, `get_registry()` |
 | **Internal deps** | `missy.config.settings`, `missy.providers.anthropic_provider`, `missy.providers.openai_provider`, `missy.providers.ollama_provider`, `missy.providers.base`, `missy.providers.rate_limiter` |
+
+### missy.providers.health
+
+| Field | Value |
+|-------|-------|
+| **Purpose** | SR-4.8: classifies a `ProviderError`'s root cause (auth / rate_limit / timeout / unknown) from its message text, using the wording every built-in provider already raises consistently. Drives `AgentRuntime`'s decision to retry on a rotated key (auth only) vs. fall over to a different provider. |
+| **Key exports** | `classify_provider_error()`, `ProviderFailureClass` |
+| **Internal deps** | None |
 
 ### missy.providers.rate_limiter
 
@@ -208,9 +216,9 @@ dependencies on other `missy` modules.
 
 | Field | Value |
 |-------|-------|
-| **Purpose** | Top-level agent orchestrator: resolves a provider, builds messages, calls the provider, and returns the model reply. |
+| **Purpose** | Top-level agent orchestrator: resolves a provider, builds messages, calls the provider, and returns the model reply. `_call_provider_with_fallback()` (SR-4.8) wraps every provider call made by `_single_turn()`/`_tool_loop()` with per-provider-name `CircuitBreaker` cooldown tracking, one auto-retry on a rotated `ProviderConfig.api_keys` entry for auth failures, and cross-provider fallback (budget-gated, tool-capability-ordered, never forwarding the failed provider's `model` string) with a redacted `agent.provider.*` audit event per transition. |
 | **Key exports** | `AgentRuntime`, `AgentConfig` (dataclass) |
-| **Internal deps** | `missy.core.events` (`AuditEvent`, `event_bus`), `missy.core.exceptions` (`ProviderError`), `missy.core.session` (`Session`, `SessionManager`), `missy.providers.base` (`Message`, `CompletionResponse`), `missy.providers.registry` (`get_registry`), `missy.tools.registry` (`get_tool_registry`) |
+| **Internal deps** | `missy.core.events` (`AuditEvent`, `event_bus`), `missy.core.exceptions` (`ProviderError`), `missy.core.session` (`Session`, `SessionManager`), `missy.providers.base` (`Message`, `CompletionResponse`), `missy.providers.registry` (`get_registry`), `missy.providers.health` (`classify_provider_error`), `missy.agent.circuit_breaker` (`CircuitBreaker`, `CircuitState`), `missy.tools.registry` (`get_tool_registry`) |
 
 ### missy.agent.circuit_breaker
 

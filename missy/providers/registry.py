@@ -156,6 +156,26 @@ class ProviderRegistry:
         """
         return self._providers.get(name)
 
+    def key_for(self, provider: BaseProvider) -> str | None:
+        """Return the registry key *provider* was registered under, or ``None``.
+
+        Used by callers that only hold a provider instance (e.g. selected
+        via :meth:`get_available`) but need the registry key to call
+        :meth:`rotate_key`, since a provider's registry key need not match
+        its class-level ``name`` attribute.
+
+        Args:
+            provider: A provider instance previously passed to :meth:`register`.
+
+        Returns:
+            The registry key, or ``None`` if *provider* is not registered
+            (identity comparison, not equality).
+        """
+        for key, registered in self._providers.items():
+            if registered is provider:
+                return key
+        return None
+
     def list_providers(self) -> list[str]:
         """Return a sorted list of all registered provider names.
 

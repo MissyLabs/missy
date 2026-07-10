@@ -2383,6 +2383,167 @@ requirement — do not overwrite, append new entries as work continues.
   surface); wiring those properties into `missy doctor`'s existing
   output would be a reasonable, small follow-up.
 
+### SR-4.8 — Provider rotation/fallback were config-documented capabilities with either zero production call sites or a static, start-of-run-only check
+
+- **Status: fixed.** Eighth and final §4 item — closes section 4
+  ("Advertised But Unwired Features") of the security review entirely.
+  Operator-confirmed scope: build the full production mechanism
+  (cooldown/retry-eligibility state via per-provider `CircuitBreaker`
+  instances, budget-gated and tool-compatibility-ordered fallback
+  candidate selection, and a complete redacted audit trail) rather than
+  a smaller bounded fix or documentation-only correction — this closes
+  the gap most completely of the three options the operator was
+  offered, at the cost of being the largest single §4 change this
+  session.
+- **Reachability found and live-reproduced:** three independent gaps,
+  each confirmed against real (non-mocked) classes before any fix:
+  1. `ProviderRegistry.rotate_key()` (round-robin `api_keys` rotation)
+     had **zero production call sites** anywhere in the codebase — not
+     in `AgentRuntime`, not in any CLI command, not in the scheduler.
+     It was extensively unit-tested in isolation (`tests/providers/
+     test_registry_deep.py`, `tests/unit/test_learnings_providers_edges.py`,
+     etc.) but never invoked by anything a real deployment would run.
+  2. `ModelRouter`/`score_complexity()`/`select_model()` (fast/primary/
+     premium tier routing by prompt complexity) likewise had zero
+     production callers — confirmed via a full-repo grep outside its own
+     module and test files. `fast_model`/`premium_model` config fields
+     are consumed directly by `SleeptimeWorker._llm_summarize()`
+     (`missy/agent/sleeptime.py`), bypassing `ModelRouter` entirely, so
+     the tier-selection *config surface* partially works but the
+     *routing engine* CLAUDE.md described does not exist in the runtime
+     path.
+  3. `AgentRuntime._get_provider()`'s "automatic fallback" (the only
+     other fallback-shaped code in the runtime) is a **static,
+     start-of-run-only check**: it resolves the configured provider
+     once per `run()`/`run_stream()` call, and only falls back to
+     `registry.get_available()[0]` if `provider.is_available()` (SDK
+     installed + API key present — a purely local check, never a live
+     reachability probe) is `False` *before the first call is even
+     made*. Live-reproduced: a provider that passes this static check
+     but then raises `ProviderError` on the actual `complete_with_tools()`
+     call (simulating an expired key, a 429, or a transient 500)
+     propagates straight out of `_tool_loop()`'s blanket `except
+     Exception` handler with **zero retry, zero key rotation, zero
+     cross-provider fallback, and zero audit event** — the entire task
+     fails despite a second, healthy, fully-configured provider sitting
+     in the same registry. The resolved `provider` object is a single
+     loop-local variable reused for every iteration of `_tool_loop()`
+     and for `_single_turn()`, with no re-resolution path at all once
+     the loop starts.
+- **Fix:** `missy/providers/health.py` (new) —
+  `classify_provider_error()` distinguishes `auth`/`rate_limit`/
+  `timeout`/`unknown` from a `ProviderError`'s message text, reusing
+  the message vocabulary every built-in provider (Anthropic, OpenAI)
+  already raises consistently ("authentication failed", "rate
+  limit(ed)", "timed out") rather than requiring a new structured error
+  code. `ProviderRegistry.key_for()` (new) reverse-looks-up a provider
+  instance's registry key by identity, since a provider's `.name`
+  class attribute need not match the key it was registered under.
+  `AgentRuntime._call_provider_with_fallback()` (new) is the single
+  chokepoint both `_single_turn()` and `_tool_loop()`'s main iteration
+  now route every provider call through:
+  - Each provider name gets its own `CircuitBreaker`
+    (`AgentRuntime._get_breaker_for()`), independent of the primary's
+    existing `self._circuit_breaker` (unchanged, so existing tests that
+    swap it directly keep working) — cooldown/half-open state is
+    tracked per candidate, not globally.
+  - An `auth`-classified failure with `len(config.api_keys) > 1`
+    triggers exactly one `rotate_key()` retry on the *same* provider
+    before falling over — confirmed live to actually flip the
+    provider's real `_api_key`/`api_key` attribute (not just call
+    `rotate_key()` and ignore the result), and confirmed to be skipped
+    entirely for `rate_limit`/`timeout`/`unknown` failures, since
+    rotating credentials cannot fix any of those.
+  - A pre-flight `_check_budget()` call gates the fallback attempt
+    itself, reusing SR-3.4's existing per-session `CostTracker` — an
+    exhausted budget raises `BudgetExceededError` before any fallback
+    candidate is even tried, not after spending further billed calls
+    on one.
+  - Fallback candidates are filtered to `get_available()` minus the
+    failed provider, minus any candidate whose own `CircuitBreaker` is
+    already `OPEN` (still cooling down from an earlier failure), then —
+    when the call requires tool-calling — sorted to prefer a candidate
+    that overrides `complete_with_tools` over one that only inherits
+    `BaseProvider`'s default degrade-to-`complete()` implementation; if
+    no tool-capable candidate exists, the audit event records
+    `tool_compatibility_degraded: true` so the operator can see
+    capability was honestly lost, rather than silently downgrading.
+  - The fallback provider's message list is rebuilt fresh
+    (`_dicts_to_native_messages` vs. `_dicts_to_messages`, matching
+    *that* candidate's own `accepts_message_dicts` convention) rather
+    than reusing whatever was built for the original provider —
+    transcript integrity across the transition, live-verified: a
+    fallback provider with `accepts_message_dicts=True` receives
+    `list[dict]` while the primary (without that flag) would have
+    received `list[Message]`, and the semantic content (e.g. the exact
+    user text) is preserved through the reformat.
+  - `self.config.model` (a model id on the *originally configured*
+    provider) is only forwarded to that same provider; a fallback
+    candidate always uses its own configured default model instead —
+    live-verified via `received_model is None` on the fallback,
+    preventing the fallback API from being asked for a model name it
+    has never heard of.
+  - Every transition — `agent.provider.call_failed`,
+    `agent.provider.key_rotated`, `agent.provider.fallback` — is a
+    redacted audit event via the existing `_emit_event()` →
+    `event_bus.publish()` → `AuditLogger`'s `_redact_detail()` pipeline
+    (same mechanism as SR-1.10/SR-4.6, reused rather than
+    reimplemented) — live-verified end-to-end through a real
+    `AuditLogger` writing to a temp JSONL file: a fabricated
+    secret-shaped string embedded in a provider's error message never
+    reached disk unredacted.
+  - Tool dispatch after a mid-loop provider swap is unaffected: a tool
+    call proposed by a *fallback* provider still goes through SR-2.3's
+    existing `allowed_tool_names` gate at `_execute_tool()` dispatch
+    time, live-verified with a fallback provider engineered to request
+    a tool name outside the turn's allowed set — denied identically to
+    a request from the originally configured provider, since dispatch
+    never looks at which provider proposed the call.
+  - When every candidate (primary, post-rotation retry, and all
+    fallbacks) fails, the last real exception is re-raised — fails
+    closed, matching the existing "no providers available" doctrine in
+    `_get_provider()` rather than fabricating a success.
+- **Verification:** new `tests/providers/test_provider_health.py` (13
+  tests, `classify_provider_error()` against every marker + case-
+  sensitivity + precedence), 4 new tests in
+  `tests/providers/test_registry_deep.py` (`key_for()`), and new
+  `tests/agent/test_provider_fallback.py` (12 tests) against real
+  `BaseProvider` subclasses (not `MagicMock(spec=...)`) registered in a
+  real `ProviderRegistry` — covering key rotation (retries + skips
+  correctly by failure class), cross-provider fallback (model
+  isolation, transcript reformatting), tool-compatibility ordering
+  (including the degraded-audit-event case), budget gating, cooldown/
+  circuit-breaker eligibility exclusion, all-candidates-exhausted
+  fail-closed behavior, end-to-end audit redaction through a real
+  `AuditLogger`, and SR-2.3 tool-policy preservation across a mid-loop
+  swap. `tests/agent/` + `tests/providers/` (5,128 tests) and
+  `tests/cli/` + `tests/api/` + `tests/integration/` +
+  `tests/scheduler/` + `tests/mcp/` (2,463 tests) pass with no
+  regressions. Full suite result recorded in `TEST_RESULTS.md`.
+- **Residual risk:** `ModelRouter`/`score_complexity()`/`select_model()`
+  remain intentionally unwired dead code — this checkpoint was scoped
+  to rotation/fallback (the literal SR-4.8 review text: "Trace
+  API-key/profile rotation and cross-provider fallback"), not to
+  building the complexity-based tier-routing engine, which is a
+  materially different feature (choosing a *cheaper* model
+  proactively, not recovering from a *failed* one) and was not part of
+  the operator's chosen scope. `CLAUDE.md` and
+  `docs/implementation/module-map.md` now say so explicitly rather than
+  implying it works. The per-provider `CircuitBreaker` cooldown timers
+  use the same fixed threshold/backoff defaults as the primary's
+  breaker (`threshold=5, base_timeout=60s, max=300s` from
+  `missy/agent/circuit_breaker.py`) — not yet tunable per-provider via
+  config, a reasonable small follow-up if operators want, e.g., a
+  faster cooldown for a known-flaky self-hosted Ollama endpoint than
+  for a paid cloud provider. Rate-limit-classified failures never
+  trigger key rotation by design (rotating credentials cannot fix a
+  rate limit), but a provider with a *per-key* rate limit (rather than
+  a per-account one) would actually benefit from rotation on
+  `rate_limit` too — deliberately not implemented, since none of the
+  built-in providers document per-key rate limits and doing so
+  speculatively would be unverifiable without a live account
+  exhibiting that behavior.
+
 ---
 
 - Timestamp: 2026-07-09 15:35:26 (raw grep-scan dump below, preserved
