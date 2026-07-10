@@ -308,9 +308,7 @@ class TestTrailingClauseAndPunctuation:
         assert intent.channel_name == "General"
 
     def test_join_with_trailing_conversational_clause(self):
-        intent = parse_voice_intent(
-            "join the General voice channel and report your voice status"
-        )
+        intent = parse_voice_intent("join the General voice channel and report your voice status")
         assert intent is not None
         assert intent.action == "join"
         # The trailing "and report your voice status" clause must not leak
@@ -318,9 +316,7 @@ class TestTrailingClauseAndPunctuation:
         assert intent.channel_name == "General"
 
     def test_join_with_trailing_clause_and_punctuation(self):
-        intent = parse_voice_intent(
-            "join the General voice channel, then say hello in voice."
-        )
+        intent = parse_voice_intent("join the General voice channel, then say hello in voice.")
         assert intent is not None
         assert intent.action == "join"
         assert intent.channel_name == "General"
@@ -349,9 +345,7 @@ class TestTrailingClauseAndPunctuation:
         assert intent is None
 
     def test_say_does_not_capture_trailing_status_request(self):
-        intent = parse_voice_intent(
-            "say hello world in the voice channel, then tell me the status"
-        )
+        intent = parse_voice_intent("say hello world in the voice channel, then tell me the status")
         assert intent is None
 
     def test_combined_status_say_leave_phrasing_not_misparsed(self):

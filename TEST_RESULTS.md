@@ -1,5 +1,41 @@
 # TEST_RESULTS
 
+## Run: 2026-07-10 03:xx UTC — validation-harness overhaul, FX-A slice 1
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Command: `pytest tests/channels/discord/test_voice_commands.py tests/providers/test_acpx_provider.py -q`
+- Result: `157 passed`
+- Command: `pytest tests/providers/ tests/agent/ -q`
+- Result: `4995 passed, 4 skipped in 78.27s`
+- Command: `pytest -q -o faulthandler_timeout=120` (full suite)
+- Result: `20692 passed, 3 failed, 13 skipped in 490.29s (0:08:10)`
+  - Failures: `tests/vision/test_discovery_capture_sysfs.py::TestCacheTTL::test_cache_valid_within_ttl`,
+    `tests/vision/test_discovery_edge_cases.py::TestPermissionDeniedOnDevice::test_device_that_does_not_exist_is_skipped`,
+    `tests/vision/test_discovery_edge_cases.py::TestRapidAddRemove::test_cached_results_returned_within_ttl`.
+    Confirmed pre-existing via `git stash` (fail identically on the
+    pre-session tree); `CameraDiscovery` cache-TTL logic bug, unrelated
+    to acpx/voice changes. Not fixed this session — tracked as a
+    follow-up so this checkpoint's commits stay scoped.
+- `ruff check` / `ruff format --check` on touched files: all clean.
+- Live smoke test against the real installed `acpx@0.3.1` binary
+  (`--version`/`--help` only, no LLM calls): `is_available() == True`,
+  isolated sandbox cwd created at `~/.missy/acpx_sandbox` (mode 0700).
+  Constructed argv verified with a hostile
+  `base_url="--approve-all --cwd /evil --verbose"` config: only
+  `--verbose` reached the subprocess; forced `--allowed-tools ""` /
+  `--non-interactive-permissions deny` / `--cwd
+  ~/.missy/acpx_sandbox` were present and last-wins.
+
+**Baseline preserved below.** The 2026-07-09/10 validation-harness run
+found 43/89 tool-specific validation cases failing (see `~/fixes.md`,
+`BUILD_STATUS.md`); this run does not yet re-exercise that harness
+(requires live delegate invocation) — it is unit/integration coverage
+for the FX-A code change only.
+
+---
+
+## Run: 2026-07-09 15:28:21 (prior workstream: tool intelligence overhaul)
+
 - Timestamp: 2026-07-09 15:28:21
 - Command: pytest -q
 
