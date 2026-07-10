@@ -269,6 +269,7 @@ class TestProactiveTemplateSafety:
             prompt_template=template,
             cooldown_seconds=0,
             interval_seconds=9999,
+            requires_confirmation=False,
         )
 
     def test_format_attack_does_not_leak_class_info(self):

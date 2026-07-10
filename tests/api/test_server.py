@@ -2375,3 +2375,155 @@ class TestApiServerLifecycle:
         cfg = ApiConfig(host="127.0.0.1", port=9999, api_key="k")
         srv = ApiServer(config=cfg)
         assert srv.url == "http://127.0.0.1:9999"
+
+
+# ---------------------------------------------------------------------------
+# SR-2.2: /approvals endpoints backed by a real ApprovalGate
+# ---------------------------------------------------------------------------
+
+
+class TestApprovalsEndpoints:
+    """A real ApprovalGate wired into a real running ApiServer -- this is
+    the actual mechanism SR-2.2 introduces for an operator (a separate
+    `missy` CLI invocation) to see and resolve pending approval requests
+    from the in-process gateway that created them.
+    """
+
+    def test_approvals_requires_auth(self, base_url: str) -> None:
+        resp = httpx.get(f"{base_url}/approvals")
+        assert resp.status_code == 401
+
+    def test_list_approvals_empty_when_no_gate_attached(self, base_url: str) -> None:
+        resp = httpx.get(f"{base_url}/approvals", headers=HEADERS)
+        assert resp.status_code == 200
+        assert resp.json()["data"] == {"approvals": [], "count": 0}
+
+    def test_resolve_approval_without_gate_returns_503(self, base_url: str) -> None:
+        resp = httpx.post(f"{base_url}/approvals/whatever/approve", headers=HEADERS)
+        assert resp.status_code == 503
+
+    def _start_server_with_gate(self):
+        from missy.agent.approval import ApprovalGate
+
+        port = _free_port()
+        gate = ApprovalGate(default_timeout=5.0)
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, approval_gate=gate)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        return srv, gate, f"http://127.0.0.1:{port}/api/v1"
+
+    def test_list_pending_approval_via_api(self) -> None:
+        srv, gate, url = self._start_server_with_gate()
+        try:
+            pending_thread = threading.Thread(
+                target=lambda: gate.request("delete /tmp/work", reason="cleanup", risk="high"),
+                daemon=True,
+            )
+            pending_thread.start()
+
+            deadline = time.monotonic() + 2.0
+            approvals: list = []
+            while time.monotonic() < deadline:
+                resp = httpx.get(f"{url}/approvals", headers=HEADERS)
+                approvals = resp.json()["data"]["approvals"]
+                if approvals:
+                    break
+                time.sleep(0.02)
+
+            assert len(approvals) == 1
+            assert approvals[0]["action"] == "delete /tmp/work"
+            assert approvals[0]["reason"] == "cleanup"
+
+            # Clean up: approve directly on the gate so the background
+            # thread doesn't hang the test on timeout.
+            gate.approve_by_id(approvals[0]["id"])
+            pending_thread.join(timeout=2.0)
+        finally:
+            srv.stop()
+
+    def test_approve_via_api_unblocks_waiting_caller(self) -> None:
+        srv, gate, url = self._start_server_with_gate()
+        try:
+            result: dict = {}
+
+            def do_request():
+                try:
+                    gate.request("risky action")
+                    result["approved"] = True
+                except Exception as exc:  # noqa: BLE001
+                    result["error"] = str(exc)
+
+            t = threading.Thread(target=do_request, daemon=True)
+            t.start()
+
+            deadline = time.monotonic() + 2.0
+            approval_id = None
+            while time.monotonic() < deadline:
+                resp = httpx.get(f"{url}/approvals", headers=HEADERS)
+                pending = resp.json()["data"]["approvals"]
+                if pending:
+                    approval_id = pending[0]["id"]
+                    break
+                time.sleep(0.02)
+            assert approval_id is not None
+
+            resp = httpx.post(f"{url}/approvals/{approval_id}/approve", headers=HEADERS)
+            assert resp.status_code == 200
+            assert resp.json()["data"]["resolved"] == "approved"
+
+            t.join(timeout=2.0)
+            assert result.get("approved") is True
+        finally:
+            srv.stop()
+
+    def test_deny_via_api_raises_denied_for_waiting_caller(self) -> None:
+        srv, gate, url = self._start_server_with_gate()
+        try:
+            result: dict = {}
+
+            def do_request():
+                try:
+                    gate.request("risky action")
+                    result["approved"] = True
+                except Exception as exc:  # noqa: BLE001
+                    result["error"] = type(exc).__name__
+
+            t = threading.Thread(target=do_request, daemon=True)
+            t.start()
+
+            deadline = time.monotonic() + 2.0
+            approval_id = None
+            while time.monotonic() < deadline:
+                resp = httpx.get(f"{url}/approvals", headers=HEADERS)
+                pending = resp.json()["data"]["approvals"]
+                if pending:
+                    approval_id = pending[0]["id"]
+                    break
+                time.sleep(0.02)
+            assert approval_id is not None
+
+            resp = httpx.post(f"{url}/approvals/{approval_id}/deny", headers=HEADERS)
+            assert resp.status_code == 200
+            assert resp.json()["data"]["resolved"] == "denied"
+
+            t.join(timeout=2.0)
+            assert result.get("error") == "ApprovalDenied"
+        finally:
+            srv.stop()
+
+    def test_resolve_unknown_approval_id_returns_404(self) -> None:
+        srv, gate, url = self._start_server_with_gate()
+        try:
+            resp = httpx.post(f"{url}/approvals/does-not-exist/approve", headers=HEADERS)
+            assert resp.status_code == 404
+        finally:
+            srv.stop()
+
+    def test_resolve_approval_invalid_sub_action_returns_404(self) -> None:
+        srv, gate, url = self._start_server_with_gate()
+        try:
+            resp = httpx.post(f"{url}/approvals/some-id/not-a-real-action", headers=HEADERS)
+            assert resp.status_code == 404
+        finally:
+            srv.stop()

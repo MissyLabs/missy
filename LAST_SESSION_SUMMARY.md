@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (25 checkpoints this session, full suite green after every one)
+## Changed (26 checkpoints this session, full suite green after every one)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -41,7 +41,9 @@ Found via the same systematic audit against `~/Missy-security-review.md`. Five a
 16. **SR-3.3 (third §3 item)**: started as a "verify before fixing" checkpoint (flagged as possibly already resolved by FX-B) but found something worse than the review's text anticipated — two independent stacked bugs meant `memory_search`/`memory_describe`/`memory_expand` had never worked in production, in any configuration, for any call. Bug 1: none of the three tools declared the `permissions: ToolPermissions` attribute `ToolRegistry._check_permissions()` requires (they carried vestigial, unused attributes instead) — every dispatch through the real registry crashed with `AttributeError` before the tool's own logic ran. Bug 2: even with that fixed, `AgentRuntime._execute_tool()` never injected the `_memory_store`/`_session_id` kwargs these tools read — dispatch would still return "Memory store is not available." Root cause of non-detection: every existing test called `tool.execute(_memory_store=store, ...)` directly, bypassing both bugs — no test had ever dispatched these tools through the real registry or runtime. Severity: `_intercept_large_content()` explicitly promises the model "Use memory_search or memory_expand to retrieve full content" after every large-tool-output truncation — a promise the runtime could never keep. Live-reproduced end-to-end via the real `AgentRuntime._execute_tool()` method: `memory_expand` on a real stored record returned `is_error=True`, "Tool execution failed due to an internal error." Confirmed via `git stash` on the pre-fix tree. Fixed: added `permissions = ToolPermissions()` to all three tools; added a `_MEMORY_RETRIEVAL_TOOL_NAMES` injection block in `_execute_tool()` mirroring the existing SR-2.4 heredoc special-case pattern, supplying `_memory_store`/`_session_id` for these three tool names only. Live re-verified all three tools now work, and `memory_search` correctly defaults to the calling session only (not all sessions) when the model omits `session_id`, while still honoring an explicit override for intentional cross-session lookups (documented, opt-in, not a leak). 10 new regression tests across two files, including dispatch through both the real `ToolRegistry` and the real `AgentRuntime._execute_tool()`.
 17. **SR-3.5 (fourth §3 item, this checkpoint, closes §3)**: another "verify before fixing" checkpoint — this time the literal ask ("remove non-atomic full-file memory rewrites from production paths") turned out to already be true (`MemoryStore._save()`'s non-atomic write has 3 production construction sites, none of which ever call a write method), but the investigation found 3 unrelated, live, confirmed bugs at those same 3 call sites, all sharing FX-B's root cause. Bug 1: `summarize_session.py`'s built-in skill read from the legacy JSON `MemoryStore` instead of the production `SQLiteMemoryStore` — since FX-B moved real writes to SQLite, this always returned "no turns recorded" regardless of actual history. Bug 2: `scheduler/manager.py::cleanup_memory()` and the documented CLI command `missy sessions cleanup` both guarded their cleanup call with `hasattr(store, "cleanup")` against `MemoryStore()`, which has no such method — both always silently no-op'd, forever, in every configuration; the CLI even printed "use SQLiteMemoryStore" while a different command in the same file already correctly used it. Root cause of non-detection: every affected test patched `MemoryStore` with a bare `MagicMock()`, which auto-vivifies `.cleanup` — `hasattr()` was always `True` in tests, always `False` in production; one test suite even explicitly encoded the bug's symptom as correct, expected behavior. Fixed: switched all 3 call sites to `SQLiteMemoryStore()`; fixed `summarize_session.py`'s `_format_turns()` (assumed a `datetime` object matching the old store, crashes on the new store's `str` timestamp — now uses `[:19]` slicing matching the pattern used elsewhere in the codebase); removed the dead `hasattr` guards entirely. Deleted 3 tests that encoded the old broken behavior as correct; updated remaining tests' patch targets. Added 3 new regression tests using a **real** `SQLiteMemoryStore` against a real temp DB (not mocks) per fixed call site, confirming actual data is retrieved/deleted. Corrected a stale "the default" claim in `missy/memory/__init__.py`'s docstring.
 
-### First product-policy decision this session: SR-2.1 (scheduled jobs' default capability_mode)
+### Two product-policy decisions this session: SR-2.1 and SR-2.2 (closes §2 of the security review)
+
+#### SR-2.1 (scheduled jobs' default capability_mode)
 
 Unlike every finding above, SR-2.1 was not a mechanical bug — it's a
 genuine product-policy default-value question the review itself framed
@@ -81,11 +83,80 @@ exists yet to change an existing job in place). This is a deliberate,
 confirmed trade-off, not an oversight — should be called out in release
 notes if this branch ships.
 
+#### SR-2.2 (proactive trigger confirmation gating — closes §2)
+
+Second and final §2 question, operator-confirmed: **proactive triggers
+should default to requiring confirmation, with a real `ApprovalGate`
+wired in** (not auto-run-by-default-with-better-auditing, not
+disable-proactive-by-default — both alternatives were explicitly
+declined).
+
+Reachability, two independent gaps sharing SR-2.1's exact root pattern
+(mechanism existed, was disconnected from production): (1)
+`ProactiveTrigger.requires_confirmation` and its config-schema
+equivalent (`ProactiveTriggerConfig`, both the dataclass default and
+the raw-YAML parse default) all defaulted to `False` — the gating logic
+in `_fire_trigger()` was already correctly implemented and fail-closed
+(denies with `reason: "no_approval_gate"` when required but no gate is
+attached), but no trigger ever reached that check by default. (2)
+`ApprovalGate` (`missy/agent/approval.py`) was a fully real, tested
+class with **zero** production construction sites anywhere in the
+codebase (`grep -rn "ApprovalGate(" missy/` matched only its own
+docstring example) — `ProactiveManager` was constructed in `cli/main.py`'s
+`gateway start` with no `approval_gate` argument at all. Separately,
+the existing `missy approvals list` CLI command was a **hardcoded dead
+stub** that always printed "No active gateway session" regardless of
+whether one existed — approval state lives in-process inside the
+`missy gateway start` process, and a fresh CLI invocation is a separate
+process with no way to reach that in-memory state directly.
+
+Fixed: flipped both `requires_confirmation` defaults to `True`.
+Constructed a real, process-shared `ApprovalGate` in `cli/main.py`'s
+`gateway start` (before both the `ProactiveManager` and Web API server
+construction sites), wired into both. Added
+`ApprovalGate.approve_by_id()`/`.deny_by_id()` for clean REST semantics
+alongside the existing free-text `handle_response()`. Added 3 new
+authenticated REST endpoints on the already-running Web API server
+(`GET /api/v1/approvals`, `POST .../approve`, `POST .../deny`, following
+the exact routing/auth pattern already used for `/controls`) — this is
+the actual mechanism making cross-process approval possible. Rewrote
+`missy approvals list` (previously the dead stub) and added `missy
+approvals approve/deny ID`, making real authenticated HTTP calls
+against these endpoints, reading the persisted web-console key the same
+way other CLI commands already do. Live-verified end-to-end via real
+HTTP requests against a real running `ApiServer` with a real
+`ApprovalGate`: a request blocked in a background thread on
+`gate.request(...)` appears via the list endpoint, and the
+approve/deny endpoints genuinely unblock/deny it. Separately
+live-verified the `cli/main.py` wiring itself by patching
+`ProactiveManager` to capture its constructor kwargs during a real
+`gateway start` invocation and asserting `approval_gate` is a genuine
+`ApprovalGate` instance, not `None`.
+
+Fixed 23 pre-existing tests across 6 files whose real purpose was
+testing cooldown/template-rendering/callback-firing logic (not
+confirmation gating itself) and implicitly relied on the old `False`
+default to reach the callback at all — added `requires_confirmation=False`
+to those constructions/shared test factories; the small number of
+tests genuinely *about* confirmation gating already passed `True`
+explicitly and were unaffected. 30+ new/updated regression tests
+overall.
+
+**Residual risk, called out explicitly:** no Web TUI browser page
+exists yet for approvals — the REST endpoints are real and
+authenticated, but an operator currently uses the CLI or a raw HTTP
+client rather than clicking through the browser console (out of scope
+for "wire a real ApprovalGate," not "build a full approval UI"). Same
+existing-deployment behavior-change trade-off as SR-2.1 (mitigated the
+same way: explicit `requires_confirmation: false` per trigger in
+config to opt back into auto-run) — should be called out in release
+notes alongside SR-2.1's note if this branch ships.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-3 failed, 20880 passed, 13 skipped in 458.82s (0:07:38)
+3 failed, 20893 passed, 13 skipped in 450.66s (0:07:30)
 ```
 
 The 3 failures are exactly the known pre-existing `CameraDiscovery`
@@ -103,20 +174,18 @@ three files above.)
 
 - **#9** SR-1.x through SR-4.x security review remediation — this
   session covered SR-1.2/1.3, SR-1.4, SR-1.5, SR-1.6, SR-1.7, SR-1.8,
-  SR-1.9a, SR-1.10, SR-1.11, SR-1.12, SR-1.13, SR-2.1, SR-2.3, SR-2.4,
-  SR-3.2, SR-3.3, SR-3.4, SR-3.5 (plus SR-3.1 substantially via FX-B —
-  §3 is now fully closed except SR-3.4's cross-session-aggregation
-  sub-finding). Remaining: SR-1.1 (audit signing — larger cross-cutting
-  change), SR-1.9b (DNS TOCTOU, substantially harder — needs connecting
-  to a pinned policy-verified IP rather than re-resolving at connect
-  time), **SR-2.2** (safe proactive triggers — the operator has already
-  confirmed the direction: wire a real `ApprovalGate`, default to
-  requiring confirmation before a proactive trigger acts; not yet
-  implemented, this is the natural next checkpoint), the
-  cross-session-aggregation sub-finding of SR-3.4 (a shared Discord/API
-  runtime's `CostTracker` never resets between logically distinct
-  sessions — separate from the ordering fix already landed), SR-4.x
-  (dead/unwired features).
+  SR-1.9a, SR-1.10, SR-1.11, SR-1.12, SR-1.13, SR-2.1, SR-2.2, SR-2.3,
+  SR-2.4, SR-3.2, SR-3.3, SR-3.4, SR-3.5 (plus SR-3.1 substantially via
+  FX-B — §2 and §3 are now both fully closed except SR-3.4's
+  cross-session-aggregation sub-finding). Remaining: SR-1.1 (audit
+  signing — larger cross-cutting change), SR-1.9b (DNS TOCTOU,
+  substantially harder — needs connecting to a pinned policy-verified IP
+  rather than re-resolving at connect time), the cross-session-aggregation
+  sub-finding of SR-3.4 (a shared Discord/API runtime's `CostTracker`
+  never resets between logically distinct sessions — separate from the
+  ordering fix already landed), SR-4.x (dead/unwired features) — this
+  is the natural next area now that §1 (partially), §2 (fully), and §3
+  (mostly) are closed.
 - **SR-1.7's launcher sub-finding** remains open — `find`/`xargs`/
   `bash`/`sudo` etc. are allowlist-able with only a warning, and
   nested shell commands inside a launcher's quoted arguments are
@@ -199,34 +268,28 @@ rather than code-level reasoning about what *should* happen.
 
 If a way to safely exercise a real or scripted acpx delegate call
 becomes available, prioritize FX-A bullet 6 — it unblocks re-validating
-everything else. Otherwise, continue §2: SR-2.1 is done (scheduled jobs
-now default to `capability_mode="safe-chat"`, operator-confirmed).
-**SR-2.2 is the immediate next item and the operator has already
-answered the product-policy question for it**: wire a real
-`ApprovalGate` for `ProactiveManager` triggers, defaulting to requiring
-confirmation before a proactive/autonomous action executes (as opposed
-to keeping auto-run-by-default with better auditing, or disabling
-proactive triggers by default — both alternatives were explicitly
-declined). This needs: (1) finding where `ProactiveManager` triggers
-currently fire unconditionally (`missy/agent/proactive.py`), (2)
-finding whether `ApprovalGate` (`missy/agent/approval.py`) has a real,
-usable implementation already or is itself another "advertised but
-unwired" piece per SR-4.x's pattern, (3) wiring the gate into the
-trigger-fire path with a sensible default (a CLI/Web TUI prompt, or an
-audit-then-defer mechanism if no synchronous human-in-the-loop channel
-exists at fire time — proactive triggers fire from a background
-thread/timer, not a foreground interactive session, so "prompt and
-block" may not be directly applicable the way it is for e.g. Discord
-approval flows; this needs investigation, not an assumption). After
-SR-2.2, SR-1.1 (audit signing) remains the largest §1 item; §4
-(dead/unwired features) follows after §1. Given how §3's checkpoints
+everything else. Otherwise, **§2 is now fully closed** (SR-2.1:
+scheduled jobs default to `capability_mode="safe-chat"`; SR-2.2: a real
+`ApprovalGate` is wired into `ProactiveManager` and the Web API server,
+`requires_confirmation` defaults to `True`, both operator-confirmed).
+SR-1.1 (audit signing) is now the largest remaining §1 item; §4
+(dead/unwired features — SR-4.1 through SR-4.8) is the next natural
+large area, and the cross-session-aggregation sub-finding of SR-3.4
+(`CostTracker` never resets between logically distinct sessions in a
+shared Discord/API runtime) is a smaller, self-contained §3 leftover
+worth picking up on its own. Given how the last several checkpoints
 went (SR-3.3 and SR-3.5 were both flagged "likely already fixed" and
-both turned out to hide live, confirmed, previously-undetected bugs),
-keep applying the same discipline to whatever's picked up: read the
-actual current code, trace actual runtime call paths, specifically
+both turned out to hide live, confirmed, previously-undetected bugs;
+SR-2.1 and SR-2.2 both turned out to have a second layer beyond the
+obvious default-value fix — SR-2.1's fail-closed legacy-record handling,
+SR-2.2's entirely-unwired `ApprovalGate` requiring new REST endpoints),
+keep applying the same discipline to whatever's picked up next: read
+the actual current code, trace actual runtime call paths, specifically
 check whether any existing test exercises the *real* production
 dispatch/entry point rather than just the unit under test in isolation,
 and live-reproduce before declaring anything fixed, broken, or
 not-applicable. Alternatively pick up one of the concrete scoped tasks
 above (#11, #12, #15, #16, #17), all self-contained and not requiring a
-live delegate.
+live delegate. A Web TUI browser page for the new `/api/v1/approvals`
+endpoints is also a reasonable, self-contained follow-up (the REST
+layer is done and tested; only the browser UI is missing).

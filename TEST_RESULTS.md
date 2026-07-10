@@ -1,5 +1,53 @@
 # TEST_RESULTS
 
+## Run: 2026-07-10 19:10 UTC — validation-harness overhaul, SR-2.2 (real ApprovalGate wired for proactive triggers; requires_confirmation defaults to True)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Product-policy decision confirmed with operator before implementing:
+  proactive triggers should default to requiring confirmation via a
+  real ApprovalGate, not auto-run or be disabled outright.
+- Finding: `ProactiveTrigger.requires_confirmation` and its config
+  schema equivalent both defaulted to `False`; `ApprovalGate` had zero
+  production construction sites anywhere in the codebase (only its own
+  docstring example); `ProactiveManager` was constructed with no
+  `approval_gate` argument; `missy approvals list` was a hardcoded dead
+  stub.
+- Fix: flipped both `requires_confirmation` defaults to `True`.
+  Constructed a real, process-shared `ApprovalGate` in `cli/main.py`'s
+  `gateway start`, wired into both `ProactiveManager` and the Web API
+  server. Added `ApprovalGate.approve_by_id()`/`.deny_by_id()`. Added 3
+  new REST endpoints (`GET /api/v1/approvals`, `POST .../approve`,
+  `POST .../deny`) on the Web API server. Rewrote `missy approvals
+  list` and added `missy approvals approve/deny ID` to make real
+  authenticated HTTP calls against these endpoints.
+- Command: `pytest tests/agent/test_approval_gate.py
+  tests/api/test_server.py::TestApprovalsEndpoints
+  tests/cli/test_cli_main_gaps.py::TestGatewayStartProactiveApprovalGateWiring -v`
+- Result: `30 passed`
+- Fixture fallout (expected): 23 pre-existing tests across 6 files
+  (`tests/agent/test_proactive.py`,
+  `tests/agent/test_proactive_coverage.py`,
+  `tests/agent/test_proactive_gaps.py`,
+  `tests/agent/test_proactive_checkpoint_cost_edges.py`,
+  `tests/agent/test_summarizer_proactive_edges.py`,
+  `tests/security/test_shell_fts5_proactive_scheduler_hardening.py`,
+  `tests/unit/test_remaining_gaps.py`) relied on the old implicit
+  `requires_confirmation=False` default to test cooldown/template/
+  callback logic unrelated to confirmation itself — fixed by adding
+  `requires_confirmation=False` explicitly to those constructions.
+- Command: `pytest tests/agent/ tests/api/ tests/cli/ tests/config/
+  tests/scheduler/ tests/security/ tests/unit/ -q
+  -o faulthandler_timeout=120`
+- Result: all pass except 14 confirmed pre-existing, unrelated
+  test-order-dependent flakes in `tests/agent/test_runtime.py`
+  (reproduced identically via `git stash` against the pre-fix tree —
+  same failure signature, same test IDs, unrelated to this checkpoint)
+- Command: `pytest tests/ -q -o faulthandler_timeout=120`
+- Result: `3 failed, 20893 passed, 13 skipped in 450.66s (0:07:30)` —
+  up from 20880 (13 new tests net), only the 3 known pre-existing
+  `CameraDiscovery` cache-TTL flakes failing, unrelated to this
+  checkpoint's changes.
+
 ## Run: 2026-07-10 18:20 UTC — validation-harness overhaul, SR-2.1 (scheduled jobs default to safe-chat capability_mode, not full)
 
 - Branch: `overhaul/missy-validation-20260710-031406`

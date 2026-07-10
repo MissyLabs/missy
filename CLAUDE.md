@@ -141,7 +141,7 @@ VoiceChannel (channels/voice/):
 - `Checkpoint`: WAL-mode SQLite checkpointing for task state. Enables `missy recover` to resume incomplete sessions.
 - `FailureTracker`: Per-tool consecutive failure counts. Injects strategy-rotation prompts after repeated failures.
 - `Watchdog`: Background health monitor for subsystems. Tracks `SubsystemHealth` status and reports degradation.
-- `ProactiveManager`: Autonomous task initiation via file-change watchers, disk/load threshold triggers, and schedule-based triggers.
+- `ProactiveManager`: Autonomous task initiation via file-change watchers, disk/load threshold triggers, and schedule-based triggers. Each trigger's `requires_confirmation` defaults to `True` — an unattended trigger gates through a real `ApprovalGate` (`agent/approval.py`) before its agent callback runs, unless a specific trigger opts out. `missy gateway start` constructs and wires a shared `ApprovalGate` into both `ProactiveManager` and the Web API server; `missy approvals list/approve/deny` operate on it via the API's `/api/v1/approvals` endpoints (approval state lives in-process inside the running gateway, so a separate CLI invocation can only reach it over HTTP).
 - `CodeEvolutionManager`: Self-evolving code modification engine with approval workflow, git-backed rollback, and `missy evolve` CLI.
 - `StructuredOutput`: Pydantic model schema enforcement on LLM responses with automatic retry on validation failure.
 - `SleeptimeWorker`: Background memory processing during idle periods — consolidates, indexes, and prunes memories (inspired by Letta sleeptime computing).
@@ -378,7 +378,9 @@ missy vault get KEY                 Retrieve a secret
 missy vault list                    List stored key names
 missy vault delete KEY              Delete a secret
 
-missy approvals list                List pending approval requests
+missy approvals list                List pending approval requests from a running gateway (--host, --port, --api-key)
+missy approvals approve ID          Approve a pending request by ID
+missy approvals deny ID             Deny a pending request by ID
 
 missy patches list                  List prompt patches
 missy patches approve PATCH_ID      Approve a proposed patch

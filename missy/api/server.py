@@ -213,6 +213,7 @@ def _make_handler(
     candidate_store: CandidateStore | None,
     benchmark_store: BenchmarkStore | None,
     run_registry: RunRegistry,
+    approval_gate: Any | None = None,
 ):
     """Return a configured :class:`BaseHTTPRequestHandler` subclass.
 
@@ -376,6 +377,8 @@ def _make_handler(
                 return self._handle_cost_summary(params)
             if method == "GET" and path == f"{_API_PREFIX}/controls":
                 return self._handle_list_controls()
+            if method == "GET" and path == f"{_API_PREFIX}/approvals":
+                return self._handle_list_approvals()
             if method == "GET" and path == f"{_API_PREFIX}/tool-candidates":
                 return self._handle_list_tool_candidates(params)
             if method == "GET" and path == f"{_API_PREFIX}/audit":
@@ -432,6 +435,21 @@ def _make_handler(
                 if not control_id or "/" in control_id:
                     return ApiResponse.error("Not found", 404)
                 return self._handle_execute_control(control_id, body)
+
+            # Approval item routes — extract {id}/approve or {id}/deny
+            approvals_prefix = f"{_API_PREFIX}/approvals/"
+            if method == "POST" and path.startswith(approvals_prefix):
+                rest = path[len(approvals_prefix) :]
+                segments = rest.split("/", 1)
+                approval_id = segments[0]
+                sub = segments[1] if len(segments) > 1 else ""
+                if not approval_id:
+                    return ApiResponse.error("Not found", 404)
+                if sub == "approve":
+                    return self._handle_resolve_approval(approval_id, approve=True)
+                if sub == "deny":
+                    return self._handle_resolve_approval(approval_id, approve=False)
+                return ApiResponse.error("Not found", 404)
 
             candidates_prefix = f"{_API_PREFIX}/tool-candidates/"
             if path.startswith(candidates_prefix):
@@ -933,6 +951,46 @@ def _make_handler(
             if status >= 400:
                 return ApiResponse.error(str(data.get("message") or "Control denied"), status)
             return ApiResponse.ok(data)
+
+        def _handle_list_approvals(self) -> tuple[int, dict]:
+            """GET /api/v1/approvals — list pending approval requests.
+
+            SR-2.2: this is the real, in-process view of whatever
+            ApprovalGate the gateway was started with (e.g. proactive
+            triggers with requires_confirmation=True gate through it).
+            A separate `missy` CLI invocation cannot see this state
+            directly since it runs as its own process; this endpoint is
+            the actual mechanism for an operator to inspect and resolve
+            pending requests while the gateway is running.
+            """
+            if approval_gate is None:
+                return ApiResponse.ok({"approvals": [], "count": 0})
+            pending = approval_gate.list_pending()
+            return ApiResponse.ok({"approvals": pending, "count": len(pending)})
+
+        def _handle_resolve_approval(self, approval_id: str, *, approve: bool) -> tuple[int, dict]:
+            """POST /api/v1/approvals/{id}/approve or /deny."""
+            if approval_gate is None:
+                return ApiResponse.error("No approval gate attached to this server", 503)
+            resolver = approval_gate.approve_by_id if approve else approval_gate.deny_by_id
+            resolved = resolver(approval_id)
+            if not resolved:
+                return ApiResponse.error(
+                    f"No pending approval with id {approval_id!r} (already resolved, "
+                    "timed out, or never existed).",
+                    404,
+                )
+            self._emit_web_audit(
+                event_type="web.approval",
+                result="allow" if approve else "deny",
+                action="approve" if approve else "deny",
+                subsystem="approval_gate",
+                severity="info",
+                approval_id=approval_id,
+            )
+            return ApiResponse.ok(
+                {"id": approval_id, "resolved": "approved" if approve else "denied"}
+            )
 
         def _handle_list_tool_candidates(self, params: dict) -> tuple[int, dict]:
             """GET /api/v1/tool-candidates — list reviewable tool candidates."""
@@ -1524,6 +1582,7 @@ class ApiServer:
         tool_registry: ToolRegistry | None = None,
         candidate_store: CandidateStore | None = None,
         benchmark_store: BenchmarkStore | None = None,
+        approval_gate: Any | None = None,
     ) -> None:
         self.config = config
         self.runtime = runtime
@@ -1532,6 +1591,7 @@ class ApiServer:
         self.tool_registry = tool_registry
         self.candidate_store = candidate_store
         self.benchmark_store = benchmark_store
+        self.approval_gate = approval_gate
 
         self._session_registry = _SessionRegistry()
         self._web_sessions = WebSessionStore(config.web_session_ttl_seconds)
@@ -1585,6 +1645,7 @@ class ApiServer:
             candidate_store=self.candidate_store,
             benchmark_store=self.benchmark_store,
             run_registry=self._run_registry,
+            approval_gate=self.approval_gate,
         )
 
         self._server = ThreadingHTTPServer((self.config.host, self.config.port), handler_class)

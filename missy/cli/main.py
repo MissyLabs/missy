@@ -1973,6 +1973,20 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
     signal.signal(signal.SIGINT, _stop)
     signal.signal(signal.SIGTERM, _stop)
 
+    # SR-2.2: shared ApprovalGate for the whole gateway process. Proactive
+    # triggers gate through it (requires_confirmation defaults to True);
+    # the Web API's /approvals endpoints (below) let an operator actually
+    # respond to a pending request from another process, since this
+    # gateway process's in-memory approval state is otherwise unreachable
+    # from a separate `missy` CLI invocation.
+    from missy.agent.approval import ApprovalGate
+
+    def _approval_send(msg: str) -> None:
+        console.print(f"[yellow]{msg}[/]")
+        logger.info("Approval request: %s", msg)
+
+    approval_gate = ApprovalGate(send_fn=_approval_send)
+
     # Start proactive manager if configured.
     proactive_manager = None
     try:
@@ -2024,6 +2038,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
             proactive_manager = ProactiveManager(
                 triggers=triggers,
                 agent_callback=_proactive_callback,
+                approval_gate=approval_gate,
             )
             proactive_manager.start()
             console.print(f"[green]Proactive manager started[/] ({len(triggers)} trigger(s))")
@@ -2175,6 +2190,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                 memory_store=_api_memory_store,
                 provider_registry=_api_provider_registry,
                 tool_registry=_api_tool_registry,
+                approval_gate=approval_gate,
             )
             api_server.start()
             console.print(
@@ -2983,13 +2999,142 @@ def approvals() -> None:
     """Approval gate management."""
 
 
+_APPROVALS_HOST_OPTION = click.option(
+    "--host", default="127.0.0.1", show_default=True, help="Gateway API host."
+)
+_APPROVALS_PORT_OPTION = click.option(
+    "--port", default=8080, type=int, show_default=True, help="Gateway API port."
+)
+_APPROVALS_API_KEY_OPTION = click.option(
+    "--api-key",
+    envvar="MISSY_API_KEY",
+    default="",
+    help="API key for authentication (falls back to ~/.missy/secrets/web_console.key).",
+)
+
+
+def _resolve_approvals_api_key(api_key: str) -> str:
+    if api_key:
+        return api_key
+    try:
+        key_path = Path("~/.missy/secrets/web_console.key").expanduser()
+        if key_path.exists():
+            return key_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        pass
+    return ""
+
+
 @approvals.command("list")
-@click.pass_context
-def approvals_list(ctx: click.Context) -> None:
-    """List pending approval requests (for the current gateway session)."""
-    console.print(
-        "[dim]No active gateway session; approvals are processed during missy gateway start.[/]"
-    )
+@_APPROVALS_HOST_OPTION
+@_APPROVALS_PORT_OPTION
+@_APPROVALS_API_KEY_OPTION
+def approvals_list(host: str, port: int, api_key: str) -> None:
+    """List pending approval requests from a running `missy gateway start` session.
+
+    SR-2.2: approval state lives in-process inside the running gateway
+    (proactive triggers with requires_confirmation=True gate through an
+    ApprovalGate there); this CLI command is a separate process and can
+    only see that state via the gateway's own Web API.
+    """
+    import httpx
+
+    resolved_key = _resolve_approvals_api_key(api_key)
+    url = f"http://{host}:{port}/api/v1/approvals"
+    headers = {"X-API-Key": resolved_key} if resolved_key else {}
+
+    try:
+        resp = httpx.get(url, headers=headers, timeout=3.0)
+    except httpx.ConnectError:
+        console.print(
+            f"[dim]No active gateway session at [bold]http://{host}:{port}[/] — "
+            "approvals are only processed while `missy gateway start` is running.[/]"
+        )
+        return
+    except Exception as exc:
+        _print_error(f"Could not reach gateway API: {exc}")
+        return
+
+    if resp.status_code == 401:
+        _print_error(
+            "Authentication required.",
+            hint="Pass --api-key or ensure ~/.missy/secrets/web_console.key is readable.",
+        )
+        return
+    if resp.status_code != 200:
+        _print_error(f"Gateway API responded with HTTP {resp.status_code}.")
+        return
+
+    approvals_data = resp.json().get("data", {}).get("approvals", [])
+    if not approvals_data:
+        console.print("[dim]No pending approval requests.[/]")
+        return
+
+    table = Table(title="Pending Approvals", show_lines=True)
+    table.add_column("ID", style="bold")
+    table.add_column("Action")
+    table.add_column("Reason")
+    for item in approvals_data:
+        table.add_row(item.get("id", ""), item.get("action", ""), item.get("reason", ""))
+    console.print(table)
+
+
+def _resolve_approval(
+    host: str, port: int, api_key: str, approval_id: str, *, approve: bool
+) -> None:
+    import httpx
+
+    resolved_key = _resolve_approvals_api_key(api_key)
+    verb = "approve" if approve else "deny"
+    url = f"http://{host}:{port}/api/v1/approvals/{approval_id}/{verb}"
+    headers = {"X-API-Key": resolved_key} if resolved_key else {}
+
+    try:
+        resp = httpx.post(url, headers=headers, timeout=3.0)
+    except httpx.ConnectError:
+        _print_error(
+            f"No active gateway session at http://{host}:{port}.",
+            hint="Approvals are only processed while `missy gateway start` is running.",
+        )
+        sys.exit(1)
+    except Exception as exc:
+        _print_error(f"Could not reach gateway API: {exc}")
+        sys.exit(1)
+
+    if resp.status_code == 200:
+        _print_success(f"Request {approval_id!r} {verb}d.")
+    elif resp.status_code == 404:
+        _print_error(f"No pending approval with id {approval_id!r}.")
+        sys.exit(1)
+    elif resp.status_code == 401:
+        _print_error(
+            "Authentication required.",
+            hint="Pass --api-key or ensure ~/.missy/secrets/web_console.key is readable.",
+        )
+        sys.exit(1)
+    else:
+        _print_error(f"Gateway API responded with HTTP {resp.status_code}.")
+        sys.exit(1)
+
+
+@approvals.command("approve")
+@click.argument("approval_id")
+@_APPROVALS_HOST_OPTION
+@_APPROVALS_PORT_OPTION
+@_APPROVALS_API_KEY_OPTION
+def approvals_approve(approval_id: str, host: str, port: int, api_key: str) -> None:
+    """Approve a pending request by ID (see `missy approvals list`)."""
+    _resolve_approval(host, port, api_key, approval_id, approve=True)
+
+
+@approvals.command("deny")
+@click.argument("approval_id")
+@_APPROVALS_HOST_OPTION
+@_APPROVALS_PORT_OPTION
+@_APPROVALS_API_KEY_OPTION
+def approvals_deny(approval_id: str, host: str, port: int, api_key: str) -> None:
+    """Deny a pending request by ID (see `missy approvals list`)."""
+    _resolve_approval(host, port, api_key, approval_id, approve=False)
 
 
 # ---------------------------------------------------------------------------

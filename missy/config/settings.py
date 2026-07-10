@@ -344,7 +344,12 @@ class ProactiveTriggerConfig:
     name: str
     trigger_type: str
     enabled: bool = True
-    requires_confirmation: bool = False
+    # SR-2.2: default to requiring human confirmation before an
+    # unattended proactive trigger's agent callback executes. Explicit
+    # opt-out (requires_confirmation: false) is available per trigger for
+    # operators who have reviewed a specific trigger and want it to
+    # auto-run.
+    requires_confirmation: bool = True
     prompt_template: str = ""
     watch_path: str = ""
     watch_patterns: list = field(default_factory=list)
@@ -721,7 +726,7 @@ def _parse_proactive_trigger(raw: Any) -> ProactiveTriggerConfig:
         name=str(name),
         trigger_type=str(trigger_type),
         enabled=bool(raw.get("enabled", True)),
-        requires_confirmation=bool(raw.get("requires_confirmation", False)),
+        requires_confirmation=bool(raw.get("requires_confirmation", True)),
         prompt_template=str(raw.get("prompt_template", "")),
         watch_path=str(raw.get("watch_path", "")),
         watch_patterns=list(raw.get("watch_patterns", [])),

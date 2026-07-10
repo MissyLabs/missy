@@ -77,9 +77,12 @@ class ProactiveTrigger:
         trigger_type: One of ``"file_change"``, ``"disk_threshold"``,
             ``"load_threshold"``, or ``"schedule"``.
         enabled: When ``False`` the trigger is skipped entirely.
-        requires_confirmation: When ``True``, the trigger is gated through
-            an :class:`~missy.agent.approval.ApprovalGate` before the
-            agent callback is invoked.
+        requires_confirmation: When ``True`` (the default, SR-2.2), the
+            trigger is gated through an
+            :class:`~missy.agent.approval.ApprovalGate` before the agent
+            callback is invoked -- an unattended proactive action must
+            not run without a human confirming it unless a specific
+            trigger has been deliberately opted out.
         prompt_template: Template string for the synthetic prompt.  Supports
             ``{trigger_name}``, ``{trigger_type}``, and ``{timestamp}``
             substitution variables.
@@ -102,7 +105,7 @@ class ProactiveTrigger:
     name: str
     trigger_type: str
     enabled: bool = True
-    requires_confirmation: bool = False
+    requires_confirmation: bool = True
     prompt_template: str = ""
     # file_change options
     watch_path: str = ""

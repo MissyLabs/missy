@@ -769,6 +769,7 @@ class TestProactiveThresholdLoop:
             disk_threshold_pct=1.0,  # will exceed 1%
             cooldown_seconds=0,
             interval_seconds=5,
+            requires_confirmation=False,
         )
         mgr = ProactiveManager(triggers=[trigger], agent_callback=cb)
 
@@ -803,6 +804,7 @@ class TestProactiveThresholdLoop:
             load_threshold=0.001,  # nearly zero — will always exceed
             cooldown_seconds=0,
             interval_seconds=5,
+            requires_confirmation=False,
         )
         mgr = ProactiveManager(triggers=[trigger], agent_callback=cb)
 
@@ -849,6 +851,7 @@ class TestProactiveScheduleLoop:
             trigger_type="schedule",
             interval_seconds=5,
             cooldown_seconds=0,
+            requires_confirmation=False,
         )
         mgr = ProactiveManager(triggers=[trigger], agent_callback=cb)
 

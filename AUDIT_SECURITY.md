@@ -1315,6 +1315,114 @@ requirement — do not overwrite, append new entries as work continues.
   remaining item in this pair; not yet implemented as of this
   checkpoint.
 
+### SR-2.2 — Proactive triggers had no confirmation gate wired; ApprovalGate itself was never constructed anywhere in production
+
+- **Status: fixed.** Product-policy decision requested and confirmed
+  with the operator before implementing: proactive triggers should
+  default to requiring confirmation, with a real `ApprovalGate` wired
+  into the running gateway rather than either auto-running by default
+  or being disabled outright.
+- **Reachability found (two independent gaps, same root pattern as
+  SR-2.1 — the mechanism existed but was disconnected from production):**
+  1. `ProactiveTrigger.requires_confirmation` (`missy/agent/proactive.py`)
+     defaulted to `False`, and the config-schema equivalent
+     (`ProactiveTriggerConfig.requires_confirmation`,
+     `missy/config/settings.py`, both the dataclass default and the
+     raw-YAML parse default) also defaulted to `False` — so even though
+     `ProactiveManager._fire_trigger()`'s gating logic itself was
+     already correctly implemented and fail-closed (denies with
+     `reason: "no_approval_gate"` when `requires_confirmation=True` but
+     no gate is attached), no trigger ever reached that check by
+     default; every proactive action auto-ran without any confirmation
+     opportunity.
+  2. `ApprovalGate` (`missy/agent/approval.py`) was a fully real,
+     functional, already-tested class — but `grep -rn "ApprovalGate("
+     missy/` found **zero** production construction sites; the only
+     match was the class's own docstring example. Its
+     `handle_response()` entry point (designed for free-text chat
+     command parsing, e.g. "approve abc123") was likewise never called
+     from anywhere. `ProactiveManager` was constructed in
+     `cli/main.py`'s `gateway start` command with no `approval_gate`
+     argument at all — so even a hypothetical `requires_confirmation=True`
+     trigger would always hit the fail-closed "no gate" deny path, never
+     an actual approval opportunity. Separately, the existing `missy
+     approvals list` CLI command was a **hardcoded dead stub** —
+     `console.print("No active gateway session...")` unconditionally,
+     regardless of whether a gateway was actually running, because
+     approval state lives in-process inside the `missy gateway start`
+     process and a fresh `missy approvals list` invocation is a
+     separate process with no way to reach that in-memory state.
+- **Remediation evidence:** flipped both defaults to `True`
+  (`ProactiveTrigger.requires_confirmation` and both the
+  `ProactiveTriggerConfig` dataclass default / raw-YAML parse default)
+  — an unattended proactive action now requires confirmation unless a
+  specific trigger deliberately opts out. Constructed a real,
+  process-shared `ApprovalGate` in `cli/main.py`'s `gateway start`
+  command (before both the `ProactiveManager` and Web API server
+  construction sites) with a working `send_fn` that prints to console
+  and logs at info level; wired it into both
+  `ProactiveManager(approval_gate=...)` and
+  `ApiServer(approval_gate=...)` so both consumers share one gate
+  instance. Added `ApprovalGate.approve_by_id(id)`/`.deny_by_id(id)`
+  methods (clean REST semantics — returns `bool` rather than requiring
+  free-text command parsing) alongside the existing `handle_response()`.
+  Added three new authenticated REST endpoints on the already-running
+  Web API server (`missy/api/server.py`, following the exact routing/
+  auth pattern already used for `/controls` and `/scheduler/jobs`):
+  `GET /api/v1/approvals` (list pending), `POST
+  /api/v1/approvals/{id}/approve`, `POST /api/v1/approvals/{id}/deny`
+  — this is the actual mechanism that makes cross-process approval
+  possible, since the gateway's in-memory `ApprovalGate` state is
+  otherwise unreachable from a separate CLI invocation. Rewrote `missy
+  approvals list` (previously the hardcoded dead stub) plus new `missy
+  approvals approve/deny ID` commands to make real authenticated HTTP
+  calls against this endpoint, reading the persisted
+  `~/.missy/secrets/web_console.key` the same way other CLI commands
+  already do, with graceful `ConnectError` handling when no gateway is
+  running (falls back to essentially the old stub message, but now
+  correctly conditional on actual reachability rather than always
+  printed). Live-verified end-to-end via real HTTP requests against a
+  real running `ApiServer` with a real `ApprovalGate`: a request blocked
+  in a background thread on `gate.request(...)` appears via `GET
+  /approvals`, and `POST .../approve` genuinely unblocks it (confirmed
+  the waiting thread's exception/success state changes accordingly);
+  same for deny. Live-verified the `cli/main.py` wiring itself: patched
+  `ProactiveManager` to capture its constructor kwargs during a real
+  `gateway start` invocation and asserted `approval_gate` is a genuine
+  `ApprovalGate` instance, not `None` or a mock.
+- **Test-fixture fallout (expected, not a regression):** the default
+  flip broke 23 pre-existing tests across 6 files whose actual purpose
+  was testing cooldown/template-rendering/callback-firing logic, not
+  confirmation gating itself — they constructed `ProactiveTrigger`
+  without setting `requires_confirmation` and implicitly relied on the
+  old `False` default to reach the callback at all. Fixed by adding
+  `requires_confirmation=False` to the affected constructions/shared
+  test factories (the small number of tests that are genuinely *about*
+  confirmation gating already explicitly passed
+  `requires_confirmation=True` and were unaffected by the default
+  flip). 30+ new/updated regression tests overall:
+  `tests/agent/test_approval_gate.py` (4 new — `approve_by_id`/
+  `deny_by_id` happy-path and unknown-id-returns-False cases),
+  `tests/api/test_server.py::TestApprovalsEndpoints` (8 new, real HTTP
+  against a real server+gate), `tests/cli/test_cli_main_gaps.py` (1 new
+  — real `gateway start` wiring assertion). `tests/agent/`+`tests/api/`+
+  `tests/cli/`+`tests/config/`+`tests/scheduler/`+
+  `tests/security/`+`tests/unit/` all pass with no regressions beyond
+  the expected fixture updates; full suite 20,893 passed (up from
+  20,880), only the 3 known pre-existing vision flakes failing.
+- **Residual risk:** no Web TUI browser page exists yet for
+  approvals — the REST endpoints are real and authenticated, but an
+  operator must currently use `missy approvals list/approve/deny` (or a
+  raw HTTP client) rather than clicking through the browser console;
+  building that page is a reasonable follow-up but out of scope for
+  this checkpoint (which was specifically "wire a real ApprovalGate,"
+  not "build a full approval UI"). Also a behavior change for existing
+  deployments with proactive triggers already configured and relying on
+  implicit auto-run (same category of trade-off as SR-2.1, same
+  mitigation: explicit `requires_confirmation: false` per trigger in
+  YAML config to opt back into auto-run) — should be called out in
+  release notes alongside SR-2.1's note if this branch ships.
+
 ---
 
 - Timestamp: 2026-07-09 15:35:26 (raw grep-scan dump below, preserved

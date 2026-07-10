@@ -282,6 +282,7 @@ class TestProactiveEdgeCases:
             trigger_type="schedule",
             cooldown_seconds=60,
             prompt_template="fired",
+            requires_confirmation=False,
         )
         mgr = ProactiveManager(triggers=[trigger], agent_callback=callback)
         mgr._fire_trigger(trigger)
@@ -299,6 +300,7 @@ class TestProactiveEdgeCases:
             trigger_type="schedule",
             cooldown_seconds=0,
             prompt_template="go",
+            requires_confirmation=False,
         )
         mgr = ProactiveManager(triggers=[trigger], agent_callback=callback)
         mgr._fire_trigger(trigger)
@@ -314,6 +316,7 @@ class TestProactiveEdgeCases:
             name="defaults",
             trigger_type="schedule",
             prompt_template="",
+            requires_confirmation=False,
         )
         mgr = ProactiveManager(triggers=[trigger], agent_callback=callback)
         mgr._fire_trigger(trigger)
@@ -330,6 +333,7 @@ class TestProactiveEdgeCases:
             name="fmt",
             trigger_type="load_threshold",
             prompt_template="Trigger {trigger_name} of type {trigger_type} at {timestamp}",
+            requires_confirmation=False,
         )
         mgr = ProactiveManager(triggers=[trigger], agent_callback=callback)
         mgr._fire_trigger(trigger)
@@ -347,6 +351,7 @@ class TestProactiveEdgeCases:
             name="tmpl",
             trigger_type="disk_threshold",
             prompt_template="Alert: ${trigger_name} (${trigger_type})",
+            requires_confirmation=False,
         )
         mgr = ProactiveManager(triggers=[trigger], agent_callback=callback)
         mgr._fire_trigger(trigger)
@@ -363,6 +368,7 @@ class TestProactiveEdgeCases:
             name="unknown",
             trigger_type="schedule",
             prompt_template="Value: ${unknown_var} and ${trigger_name}",
+            requires_confirmation=False,
         )
         mgr = ProactiveManager(triggers=[trigger], agent_callback=callback)
         mgr._fire_trigger(trigger)
@@ -586,6 +592,7 @@ class TestProactiveEdgeCases:
             trigger_type="schedule",
             cooldown_seconds=0,
             prompt_template="test",
+            requires_confirmation=False,
         )
         mgr = ProactiveManager(triggers=[trigger], agent_callback=counting_callback)
 

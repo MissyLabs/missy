@@ -35,6 +35,11 @@ def _simple_trigger(name: str = "t1", **kwargs) -> ProactiveTrigger:
         "interval_seconds": 1,
         "cooldown_seconds": 0,
         "prompt_template": "ping from {trigger_name}",
+        # SR-2.2 flipped the class default to True; most tests here are
+        # about cooldown/callback/template behavior, not confirmation
+        # gating itself, so keep the old effective default here and let
+        # the confirmation-specific tests opt in explicitly.
+        "requires_confirmation": False,
     }
     defaults.update(kwargs)
     return ProactiveTrigger(name=name, **defaults)
@@ -224,6 +229,7 @@ class TestThresholdLogic:
             disk_threshold_pct=40.0,
             cooldown_seconds=0,
             interval_seconds=1,
+            requires_confirmation=False,
         )
         mgr = self._manager(t, counter)
 
@@ -248,6 +254,7 @@ class TestThresholdLogic:
             load_threshold=0.1,  # Very low — easily exceeded
             cooldown_seconds=0,
             interval_seconds=1,
+            requires_confirmation=False,
         )
         mgr = self._manager(t, counter)
 

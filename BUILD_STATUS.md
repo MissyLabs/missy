@@ -1,6 +1,6 @@
 # Build Status
 
-Last updated: 2026-07-10 18:20 UTC
+Last updated: 2026-07-10 19:10 UTC
 
 ## Current Workstream: Validation-Harness Overhaul
 
@@ -1167,6 +1167,61 @@ confirmation gating) remains open.
 This is the nineteenth independent, confirmed finding/change this
 session. Full detail in `AUDIT_SECURITY.md`'s new `### SR-2.1` section.
 
+### Completed This Session, continued: SR-2.2 (proactive triggers had no confirmation gate wired; ApprovalGate never constructed anywhere in production — closes §2, twentieth finding)
+
+Second and final §2 item, operator-confirmed: proactive triggers
+should default to requiring confirmation, with a real `ApprovalGate`
+wired in rather than auto-running or being disabled by default.
+
+Two independent gaps, same shape as SR-2.1 (mechanism existed, was
+disconnected from production): (1) `ProactiveTrigger.requires_confirmation`
+and its config-schema equivalent both defaulted to `False` — the
+gating logic in `_fire_trigger()` was already correctly implemented
+and fail-closed, but no trigger ever reached it by default. (2)
+`ApprovalGate` was a fully real, tested class with **zero** production
+construction sites anywhere (`grep -rn "ApprovalGate(" missy/` matched
+only its own docstring) — `ProactiveManager` was constructed with no
+`approval_gate` argument at all, and the existing `missy approvals
+list` CLI command was a hardcoded dead stub that always printed "No
+active gateway session" regardless of whether one existed, since
+approval state lives in-process and a fresh CLI invocation is a
+separate process.
+
+Fixed: flipped both `requires_confirmation` defaults to `True`.
+Constructed a real, process-shared `ApprovalGate` in `cli/main.py`'s
+`gateway start` command, wired into both `ProactiveManager` and the
+Web API server. Added `ApprovalGate.approve_by_id()`/`.deny_by_id()`
+for clean REST semantics. Added 3 new authenticated REST endpoints
+(`GET /api/v1/approvals`, `POST .../approve`, `POST .../deny`) on the
+already-running Web API server — the actual mechanism making
+cross-process approval possible. Rewrote `missy approvals list`
+(previously a dead stub) plus new `missy approvals approve/deny ID`
+to make real authenticated HTTP calls against these endpoints.
+Live-verified end-to-end: a request blocked on `gate.request(...)` in
+a background thread appears via the list endpoint, and the approve/deny
+endpoints genuinely unblock/deny it; separately verified the
+`gateway start` → `ProactiveManager` wiring passes a real `ApprovalGate`
+instance, not `None`.
+
+Fixed 23 pre-existing tests across 6 files whose real purpose was
+testing cooldown/template/callback logic (not confirmation itself) and
+implicitly relied on the old `False` default — added
+`requires_confirmation=False` to those constructions; tests genuinely
+about confirmation gating already passed `True` explicitly and were
+unaffected. 30+ new/updated regression tests. Full suite: 20,893
+passed (up from 20,880), only the 3 known pre-existing vision flakes
+failing.
+
+Residual risk called out explicitly: no Web TUI browser page for
+approvals yet (REST-only, out of scope for "wire a real ApprovalGate");
+same existing-deployment behavior-change trade-off as SR-2.1 (mitigated
+the same way — explicit per-trigger opt-out in config).
+
+This is the twentieth independent, confirmed finding/change this
+session, and closes §2 (Unattended-Execution Hazards) of the security
+review entirely. Full detail in `AUDIT_SECURITY.md`'s new `### SR-2.2`
+section.
+
 ### Known Pre-Existing Failure (not caused by this session)
 
 `tests/vision/test_discovery_capture_sysfs.py::TestCacheTTL::test_cache_valid_within_ttl`
@@ -1180,34 +1235,30 @@ scoped to FX-A / voice-command work.
 
 ### Remaining Work (priority order per prompt.md)
 
-FX-A through FX-G are all complete (see task list). §3 (Data Integrity,
-Availability, And Cost) is now fully closed except SR-3.4's separate
-cross-session-aggregation sub-finding. Current remaining priority
-order:
+FX-A through FX-G are all complete (see task list). §2 (Unattended-
+Execution Hazards) and §3 (Data Integrity, Availability, And Cost) are
+now fully closed, except SR-3.4's separate cross-session-aggregation
+sub-finding. Current remaining priority order:
 
-1. SR-2.2 (safe proactive triggers, needs real `ApprovalGate` wiring)
-   — the remaining §2 product-policy question; operator confirmed
-   "wire a real ApprovalGate, default to requiring confirmation" as
-   the direction.
-2. SR-1.1 (audit event signing — larger cross-cutting change) and
+1. SR-1.1 (audit event signing — larger cross-cutting change) and
    SR-1.9b (DNS TOCTOU — needs connecting to a pinned policy-verified IP
    rather than re-resolving at connect time).
-3. SR-4.1 through SR-4.8 (dead/unwired features: long-term memory,
+2. SR-4.1 through SR-4.8 (dead/unwired features: long-term memory,
    sub-agents, checkpoint recovery, done-criteria verification,
    custom-tool loading, OTLP export, MCP execution/approval, provider
    rotation/fallback claims).
-4. The "harden secondary availability hazards" bullet (circuit-breaker
+3. The "harden secondary availability hazards" bullet (circuit-breaker
    half-open single-probe, MCP RPC desync, malformed scheduler record
    isolation, webhook HMAC replay protection, EventBus history bound,
    provider base_url egress widening, image decompression-bomb cap,
    audit log rotation, git safety-stash ownership).
-5. Full 89-case tool-specific validation backlog (FS-001–DISC-CMD-008),
+4. Full 89-case tool-specific validation backlog (FS-001–DISC-CMD-008),
    not yet re-run against current code at all this session.
-6. Broader untouched "Product Goal" surface from prompt.md (providers,
+5. Broader untouched "Product Goal" surface from prompt.md (providers,
    tool intelligence, Discord/channels, scheduler/memory/sessions,
    hatching/persona, vision/audio/multimodal, Web TUI, OpenClaw-style
    architecture, CLI/operations).
-7. Smaller tracked follow-ups: pre-existing vision `CameraDiscovery`
+6. Smaller tracked follow-ups: pre-existing vision `CameraDiscovery`
    cache-TTL flake (3 tests, tracked above); Discord pairing approval
    endpoint (SR-1.12's fix removed the vulnerable path but no working
    approval surface exists now); `allowed_roles` Discord guild-policy
@@ -1215,7 +1266,8 @@ order:
    environment; FX-G residual acpx process-group timeout kill;
    SR-3.4's cross-session-aggregation sub-finding (a shared Discord/API
    runtime's `CostTracker` never resets between logically distinct
-   sessions).
+   sessions); a Web TUI browser page for approvals (SR-2.2's REST
+   endpoints are real and authenticated but have no browser UI yet).
 
 ### Blockers
 

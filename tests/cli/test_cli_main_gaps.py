@@ -319,6 +319,66 @@ class TestGatewayStartVoiceStopException:
 # ---------------------------------------------------------------------------
 
 
+class TestGatewayStartProactiveApprovalGateWiring:
+    def test_proactive_manager_receives_real_approval_gate(self, runner: CliRunner):
+        """SR-2.2 regression: `missy gateway start` must construct a real
+        ApprovalGate and pass it to ProactiveManager, not leave
+        approval_gate unset (None) -- a trigger with
+        requires_confirmation=True (the new default) would otherwise
+        always be denied with "no_approval_gate" rather than actually
+        offering an operator the chance to approve it.
+        """
+        import os
+
+        from missy.agent.approval import ApprovalGate
+
+        cfg_path = _cfg_path()
+        try:
+            mock_config = _make_mock_config()
+            mock_config.discord = None
+            mock_config.providers = {}
+
+            proactive_cfg = MagicMock()
+            proactive_cfg.enabled = True
+            proactive_cfg.triggers = [MagicMock()]
+            mock_config.proactive = proactive_cfg
+
+            captured_kwargs = {}
+
+            def _capture_proactive_manager(**kwargs):
+                captured_kwargs.update(kwargs)
+                return MagicMock()
+
+            call_count = [0]
+
+            def fake_sleep(t):
+                call_count[0] += 1
+                if call_count[0] >= 1:
+                    os.kill(os.getpid(), signal.SIGTERM)
+
+            with (
+                patch("missy.cli.main._load_subsystems", return_value=mock_config),
+                patch("missy.agent.runtime.AgentRuntime"),
+                patch("missy.agent.runtime.AgentConfig"),
+                patch(
+                    "missy.agent.proactive.ProactiveManager",
+                    side_effect=_capture_proactive_manager,
+                ),
+                patch("missy.agent.proactive.ProactiveTrigger"),
+                patch("time.sleep", side_effect=fake_sleep),
+                patch("yaml.safe_load", return_value={}),
+            ):
+                result = runner.invoke(cli, ["--config", cfg_path, "gateway", "start"])
+
+            assert result.exit_code == 0
+            assert "approval_gate" in captured_kwargs
+            assert isinstance(captured_kwargs["approval_gate"], ApprovalGate)
+        finally:
+            import os as _os
+
+            _os.unlink(cfg_path)
+
+
 class TestGatewayStartProactiveStopException:
     def test_proactive_stop_exception_swallowed(self, runner: CliRunner):
         """When proactive_manager.stop() raises, gateway should still exit cleanly."""
