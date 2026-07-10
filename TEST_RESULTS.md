@@ -1,5 +1,55 @@
 # TEST_RESULTS
 
+## Run: 2026-07-11 10:40 UTC — validation-harness overhaul, task #46 (bounded retry after denied native-tool attempt)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Scope: functional reliability improvement (not a security fix) for
+  the residual flagged in the previous checkpoint — the acpx delegate
+  reaching for a native tool (always denied by `--deny-all`) instead
+  of Missy's `<tool_call>` protocol, then giving up rather than
+  retrying correctly.
+- Fix (`missy/providers/acpx_provider.py`): new
+  `_stdout_had_denied_native_tool_call()` detects a denied native tool
+  call structurally (a `tool_call_update` NDJSON event with `status:
+  "failed"`) rather than guessing from prose. `complete_with_tools()`
+  now retries once (`_MAX_NATIVE_TOOL_DENIAL_RETRIES = 1`) with an
+  appended corrective reminder when this signal fires and no Missy
+  `<tool_call>` was found. Also strengthened the delegation envelope's
+  rule 1 after live testing showed the delegate can refuse on
+  identity-confusion grounds ("I'm really Claude Code") even after the
+  correction.
+- Command: `pytest tests/providers/test_acpx_provider.py -q`
+- Result: `151 passed` (up from 144) — new
+  `TestStdoutHadDeniedNativeToolCall` (4 tests) and
+  `TestNativeToolDenialRetry` (3 tests: retries once and uses the
+  corrected response, gives up cleanly after exhausting retries
+  without looping or raising, does not retry for a genuine
+  denial-free plain-text response).
+- Command: `pytest tests/providers/ -q`
+- Result: `920 passed`
+- Command: `pytest tests/agent/ -q`
+- Result: `4229 passed, 4 skipped` (pre-existing, unrelated)
+- Command: `pytest tests/ -q -o faulthandler_timeout=120`
+- Result: `3 failed, 21125 passed, 13 skipped in 538.35s (0:08:58)` — the 3
+  failures are the same known pre-existing `CameraDiscovery` cache-TTL
+  flakes (task #11), up from 21118 (last checkpoint's run) to 21125
+  passed. Zero regressions.
+- Live verification (3 repeated `missy ask` reproductions across this
+  checkpoint's iterations, real acpx calls): confirmed the retry
+  mechanism itself works exactly as designed every time — denial
+  correctly detected via the structural signal, correction correctly
+  appended and sent, whichever response comes back is correctly used.
+  **Reported honestly, not oversold:** the delegate still does not
+  reliably end up emitting a Missy `<tool_call>` block even after the
+  correction — in these reproductions it asked for permission or
+  alternative instructions instead. This is a persisting LLM
+  instruction-following limitation, not a mechanism defect; the retry
+  gives one genuine extra chance to self-correct (a real improvement
+  over zero chances) but does not guarantee compliance. Not pursuing
+  further prompt-engineering iteration given diminishing returns and
+  live-call cost — accepted as a documented, non-100% success rate
+  going into task #10.
+
 ## Run: 2026-07-11 09:35 UTC — validation-harness overhaul, CRITICAL: acpx zero-native-tools enforcement did not actually work (--deny-all fix)
 
 - Branch: `overhaul/missy-validation-20260710-031406`

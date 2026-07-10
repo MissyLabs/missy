@@ -986,6 +986,145 @@ class TestCompleteWithTools:
 
 
 # ===========================================================================
+# FX-A residual (task #46): bounded retry after a denied native tool call
+# ===========================================================================
+
+
+def _denied_tool_call_ndjson(*text_chunks: str) -> str:
+    """Build NDJSON simulating a denied native-tool attempt.
+
+    A ``tool_call_update`` event with ``status: "failed"`` (exactly what
+    ``--deny-all`` produces for a rejected native tool call), followed by
+    the delegate's own ``agent_message_chunk`` text.
+    """
+    lines = [
+        json.dumps(
+            {
+                "method": "session/update",
+                "params": {
+                    "update": {
+                        "sessionUpdate": "tool_call_update",
+                        "status": "failed",
+                        "rawOutput": "User refused permission to run tool",
+                    }
+                },
+            }
+        )
+    ]
+    for text in text_chunks:
+        lines.append(
+            json.dumps(
+                {
+                    "method": "session/update",
+                    "params": {
+                        "update": {
+                            "sessionUpdate": "agent_message_chunk",
+                            "content": {"text": text},
+                        }
+                    },
+                }
+            )
+        )
+    return "\n".join(lines) + "\n"
+
+
+class TestStdoutHadDeniedNativeToolCall:
+    def test_detects_failed_tool_call_update(self):
+        stdout = _denied_tool_call_ndjson("I cannot access that file.")
+        assert AcpxProvider._stdout_had_denied_native_tool_call(stdout) is True
+
+    def test_plain_text_response_not_detected(self):
+        stdout = json.dumps({"type": "text_delta", "delta": "Just an answer."}) + "\n"
+        assert AcpxProvider._stdout_had_denied_native_tool_call(stdout) is False
+
+    def test_successful_tool_call_update_not_detected(self):
+        stdout = (
+            json.dumps(
+                {
+                    "method": "session/update",
+                    "params": {
+                        "update": {"sessionUpdate": "tool_call_update", "status": "completed"}
+                    },
+                }
+            )
+            + "\n"
+        )
+        assert AcpxProvider._stdout_had_denied_native_tool_call(stdout) is False
+
+    def test_malformed_json_lines_ignored(self):
+        assert AcpxProvider._stdout_had_denied_native_tool_call("not json\n{also not json") is False
+
+
+class TestNativeToolDenialRetry:
+    @patch("missy.providers.acpx_provider.subprocess.run")
+    def test_retries_once_after_denied_native_tool_and_uses_second_response(self, mock_run):
+        # First call: delegate tries a native tool, gets denied, gives up.
+        # Second call (after the correction is appended): delegate
+        # correctly emits a Missy <tool_call> block.
+        first_stdout = _denied_tool_call_ndjson(
+            "The user denied the Read tool. I cannot access the file."
+        )
+        second_response = (
+            '<tool_call>\n{"name": "calculator", "arguments": {"expression": "2+2"}}\n</tool_call>'
+        )
+        second_stdout = json.dumps({"type": "text_delta", "delta": second_response}) + "\n"
+        mock_run.side_effect = [
+            MagicMock(returncode=5, stdout=first_stdout, stderr=""),
+            MagicMock(returncode=0, stdout=second_stdout, stderr=""),
+        ]
+        p = AcpxProvider(_make_config())
+        resp = p.complete_with_tools(
+            [Message(role="user", content="what is 2+2?")], [_make_mock_tool()]
+        )
+
+        assert mock_run.call_count == 2
+        assert resp.finish_reason == "tool_calls"
+        assert len(resp.tool_calls) == 1
+        # The retry prompt must include the corrective reminder.
+        second_call_cmd = mock_run.call_args_list[1][0][0]
+        second_prompt = second_call_cmd[-1]
+        assert "was just attempted and denied" in second_prompt
+
+    @patch("missy.providers.acpx_provider.subprocess.run")
+    def test_gives_up_after_max_retries_and_returns_final_text(self, mock_run):
+        # Every attempt denies a native tool and never emits a Missy
+        # tool_call -- must not retry forever; must still return the
+        # last response's text rather than raising or looping.
+        stdout = _denied_tool_call_ndjson("I still cannot access that file.")
+        mock_run.return_value = MagicMock(returncode=5, stdout=stdout, stderr="")
+        p = AcpxProvider(_make_config())
+
+        resp = p.complete_with_tools(
+            [Message(role="user", content="read a file")], [_make_mock_tool()]
+        )
+
+        # _MAX_NATIVE_TOOL_DENIAL_RETRIES = 1 -> exactly 2 total attempts.
+        assert mock_run.call_count == 2
+        assert resp.finish_reason == "stop"
+        assert "I still cannot access that file." in resp.content
+
+    @patch("missy.providers.acpx_provider.subprocess.run")
+    def test_no_retry_for_genuine_plain_text_response(self, mock_run):
+        # No denied-tool-call signal at all -- a real plain-text answer
+        # that never touched any tool. Must not trigger a retry.
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=json.dumps({"type": "text_delta", "delta": "The capital is Paris."}) + "\n",
+            stderr="",
+        )
+        p = AcpxProvider(_make_config())
+
+        resp = p.complete_with_tools(
+            [Message(role="user", content="what is the capital of France?")],
+            [_make_mock_tool()],
+        )
+
+        assert mock_run.call_count == 1
+        assert resp.finish_reason == "stop"
+        assert resp.content == "The capital is Paris."
+
+
+# ===========================================================================
 # get_tool_schema
 # ===========================================================================
 

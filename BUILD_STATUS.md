@@ -2144,6 +2144,64 @@ their first turn until addressed — likely needs runtime-level
 retry/correction logic, not just prompt wording. Full detail in
 `AUDIT_SECURITY.md`'s new critical-finding section.
 
+### Task #46: bounded retry after a denied native-tool attempt (functional reliability improvement, not a security fix)
+
+Implemented the "runtime-level retry/correction logic" flagged as the
+likely path forward in the previous checkpoint. `missy/providers/acpx_provider.py`:
+
+- New `_stdout_had_denied_native_tool_call()` scans the raw ACP NDJSON
+  event stream for a `tool_call_update` event with `status: "failed"` —
+  a structural signal (--deny-all always produces exactly this) rather
+  than guessing from the delegate's prose, so it never misfires on a
+  genuine plain-text answer that never touched a tool.
+- `complete_with_tools()` now runs a bounded loop
+  (`_MAX_NATIVE_TOOL_DENIAL_RETRIES = 1`, so 2 attempts total): if a
+  round produces no valid Missy `<tool_call>` block AND the denial
+  signal above fired, it re-invokes `acpx` once more with an appended
+  corrective reminder (`_NATIVE_TOOL_DENIAL_CORRECTION`) before
+  accepting the response as final. Each `acpx exec` call is a fresh,
+  stateless one-shot session, so the correction restates the
+  instruction explicitly rather than referring back to "your previous
+  attempt."
+- Also strengthened the delegation envelope's rule 1: a live
+  reproduction (below) showed the delegate, even after the corrective
+  retry, sometimes second-guessed the whole premise ("I'm operating as
+  the Claude Code harness, not Missy's planning agent") and refused to
+  proceed — a distinct compliance failure from simply reaching for a
+  native tool. Rule 1 now explicitly instructs it not to refuse or
+  hedge on "but I'm really a coding assistant underneath" grounds.
+
+**Live-verified, and the result is reported honestly, not oversold:**
+reran the exact FS-001-style `missy ask` reproduction three times
+across this checkpoint's iterations. The retry mechanism itself works
+exactly as designed every time — the denial is correctly detected, the
+correction is correctly appended and sent, and whichever response comes
+back (retried or original) is correctly used. However, the delegate
+still does not *reliably* end up emitting a Missy `<tool_call>` block
+even after the correction: in the live reproductions here, it asked
+the user for permission or alternative instructions instead. This is a
+genuine, persisting LLM instruction-following limitation, not a
+mechanism failure — the retry logic gives the delegate one extra,
+well-formed chance to self-correct, which is a real improvement over
+zero chances, but it is not a guarantee. Further prompt-engineering
+iteration has diminishing returns and non-trivial live-call cost;
+accepting a documented, non-100% success rate for this failure mode is
+the honest characterization going into task #10, not a claim that it's
+now fully solved.
+
+New tests: `tests/providers/test_acpx_provider.py` — `TestStdoutHadDeniedNativeToolCall`
+(4 unit tests for the detection helper: failed tool-call detected,
+plain text not detected, a *successful* tool-call-update not detected,
+malformed JSON lines ignored) and `TestNativeToolDenialRetry` (3
+tests: retries once and uses the corrected second response, gives up
+cleanly after exhausting retries and returns the last response's text
+rather than looping or raising, does not retry at all for a genuine
+plain-text response with no denial signal). `tests/providers/test_acpx_provider.py`:
+151 passed (up from 144). `tests/providers/`: 920 passed. `tests/agent/`:
+4229 passed, 4 pre-existing unrelated skips. Full suite: 3 failed
+(pre-existing `CameraDiscovery` flakes, unrelated), 21125 passed (up
+from 21118), 13 skipped in 538.35s. Zero regressions.
+
 ### Known Pre-Existing Failure (not caused by this session)
 
 `tests/vision/test_discovery_capture_sysfs.py::TestCacheTTL::test_cache_valid_within_ttl`

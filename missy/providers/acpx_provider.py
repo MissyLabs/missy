@@ -259,8 +259,13 @@ terminal tools of your own -- they are disabled for this invocation
 (--allowed-tools "").
 
 Rules:
-1. Never claim to be Claude Code, Codex, or any other identity. You are
-   acting as Missy.
+1. Never claim to be Claude Code, Codex, or any other identity, and
+   never refuse or hedge on the grounds that you're "really" running
+   inside a coding-assistant harness underneath. That underlying harness
+   is an implementation detail of how you're being delegated to, not a
+   reason to decline: for the purposes of this request, act as Missy's
+   planning component and use the <tool_call> protocol below directly,
+   without first explaining or second-guessing the delegation.
 2. Never claim a Missy tool is unavailable without first checking the
    tool list below.
 3. The only way to take action is the <tool_call> protocol described
@@ -363,6 +368,27 @@ _MAX_TOOL_CALLS_PER_RESPONSE = 20
 # Maximum character length for the tool instruction block.  If the full
 # schema rendering exceeds this, tools are presented in compact mode.
 _MAX_TOOL_INSTRUCTIONS_CHARS = 12_000
+
+# FX-A residual (task #46): how many times complete_with_tools() will
+# re-prompt with an explicit correction after the delegate reaches for a
+# native tool (always denied by --deny-all) instead of Missy's own
+# <tool_call> protocol. Bounded to avoid an unbounded retry loop driving
+# up cost/latency if the delegate keeps making the same mistake.
+_MAX_NATIVE_TOOL_DENIAL_RETRIES = 1
+
+# Appended to the prompt for the one corrective retry above. Each acpx
+# "exec" call is a fresh, stateless one-shot session (no memory of the
+# prior attempt within the same invocation), so the correction has to
+# restate the instruction explicitly rather than referring back to
+# "your previous attempt" in a way the delegate could actually recall.
+_NATIVE_TOOL_DENIAL_CORRECTION = (
+    "[System reminder]: A native tool call was just attempted and denied, "
+    "as it always will be -- that is not a transient error, do not retry "
+    "any native tool (Read, Write, Edit, Bash, Glob, Grep, WebFetch, or "
+    "any similar tool of your own). Respond now using ONLY the "
+    "<tool_call> XML protocol described above for the equivalent Missy "
+    "tool, or a plain text answer if no tool is actually needed."
+)
 
 
 def _generate_tool_call_id(name: str, index: int, text_hash: str) -> str:
@@ -901,7 +927,7 @@ class AcpxProvider(BaseProvider):
 
         prompt = self._build_prompt(messages)
 
-        content = self._run_acpx(
+        content, _raw_stdout = self._run_acpx(
             prompt,
             session_id=session_id,
             task_id=task_id,
@@ -1020,32 +1046,71 @@ class AcpxProvider(BaseProvider):
         else:
             augmented_messages.insert(0, Message(role="system", content=augmented_system))
 
-        prompt = self._build_prompt(augmented_messages)
+        current_prompt = self._build_prompt(augmented_messages)
 
-        # Run ACPX with zero native tools and fail-closed permissions
-        raw_content = self._run_acpx(prompt)
+        # Run ACPX with zero native tools and fail-closed permissions.
+        # Bounded retry (FX-A residual): despite the delegation envelope
+        # instructing the delegate to use Missy's own <tool_call>
+        # protocol instead of any native tool, it frequently still
+        # reaches for a native tool first (Read/Glob/Bash/etc.) -- which
+        # --deny-all unconditionally denies -- and then gives up rather
+        # than retrying with the structured protocol as instructed. A
+        # denied native-tool attempt is detected directly from the ACP
+        # event stream (see _stdout_had_denied_native_tool_call), not by
+        # guessing from prose, so this never fires for a genuine
+        # plain-text answer that never touched a tool. One corrective
+        # re-prompt is attempted before accepting the response as final.
+        tool_calls: list = []
+        remaining_text = ""
+        raw_content = ""
+        for attempt in range(_MAX_NATIVE_TOOL_DENIAL_RETRIES + 1):
+            raw_content, acpx_raw_stdout = self._run_acpx(current_prompt)
 
-        # Defensively cut off any fabricated transcript continuation
-        # before parsing tool calls, so a leaked "[Assistant]:" marker
-        # can't smuggle a bogus second round of tool calls past validation.
-        raw_content, leaked = _strip_leaked_transcript_markers(raw_content)
-        if leaked:
-            logger.warning("ACPX response contained a leaked transcript marker; truncated (FX-D)")
-            self._emit_event("", "", "deny", "leaked transcript marker stripped from response")
-            if not raw_content.strip():
-                # FX-D: fail closed rather than silently returning an empty
-                # "successful" response when the entire delegate output was
-                # a fabricated transcript continuation with no legitimate
-                # content before it.
-                self._emit_event("", "", "error", "response was entirely a fabricated transcript")
-                raise ProviderError(
-                    "acpx delegate response contained only a fabricated transcript "
-                    "continuation (leaked [User]:/[Assistant]: marker) with no "
-                    "legitimate content before it"
+            # Defensively cut off any fabricated transcript continuation
+            # before parsing tool calls, so a leaked "[Assistant]:" marker
+            # can't smuggle a bogus second round of tool calls past validation.
+            raw_content, leaked = _strip_leaked_transcript_markers(raw_content)
+            if leaked:
+                logger.warning(
+                    "ACPX response contained a leaked transcript marker; truncated (FX-D)"
                 )
+                self._emit_event("", "", "deny", "leaked transcript marker stripped from response")
+                if not raw_content.strip():
+                    # FX-D: fail closed rather than silently returning an empty
+                    # "successful" response when the entire delegate output was
+                    # a fabricated transcript continuation with no legitimate
+                    # content before it.
+                    self._emit_event(
+                        "", "", "error", "response was entirely a fabricated transcript"
+                    )
+                    raise ProviderError(
+                        "acpx delegate response contained only a fabricated transcript "
+                        "continuation (leaked [User]:/[Assistant]: marker) with no "
+                        "legitimate content before it"
+                    )
 
-        # Parse tool calls from response
-        tool_calls, remaining_text = _parse_tool_calls_from_text(raw_content)
+            # Parse tool calls from response
+            tool_calls, remaining_text = _parse_tool_calls_from_text(raw_content)
+
+            if tool_calls:
+                break
+            if attempt >= _MAX_NATIVE_TOOL_DENIAL_RETRIES:
+                break
+            if not self._stdout_had_denied_native_tool_call(acpx_raw_stdout):
+                # No Missy tool call, but also no evidence the delegate
+                # ever tried a native tool -- a genuine plain-text
+                # answer, not worth retrying.
+                break
+
+            logger.warning(
+                "acpx delegate attempted a native tool (denied by --deny-all) "
+                "instead of Missy's <tool_call> protocol; retrying once with "
+                "an explicit correction."
+            )
+            self._emit_event(
+                "", "", "deny", "native tool call denied; retrying with correction"
+            )
+            current_prompt = current_prompt + "\n\n" + _NATIVE_TOOL_DENIAL_CORRECTION
 
         if tool_calls:
             # Validate against available tools
@@ -1161,15 +1226,15 @@ class AcpxProvider(BaseProvider):
         session_id: str = "",
         task_id: str = "",
         cwd: str | None = None,
-    ) -> str:
+    ) -> tuple[str, str]:
         """Execute the acpx binary and return the parsed output text.
 
         Every invocation is forced to zero native tools
         (``--allowed-tools ""``) and fail-closed permission handling
-        (``--non-interactive-permissions deny``) per FX-A -- there is no
-        parameter to opt out of this from a caller. The subprocess always
-        runs in an isolated working directory (see ``_isolated_cwd``)
-        unless the caller explicitly supplies one.
+        (``--non-interactive-permissions deny``, ``--deny-all``) per
+        FX-A -- there is no parameter to opt out of this from a caller.
+        The subprocess always runs in an isolated working directory (see
+        ``_isolated_cwd``) unless the caller explicitly supplies one.
 
         Args:
             prompt: The flattened prompt string.
@@ -1179,7 +1244,11 @@ class AcpxProvider(BaseProvider):
                 to the isolated acpx sandbox directory.
 
         Returns:
-            The extracted text content from the NDJSON output.
+            A 2-tuple of ``(extracted text from the NDJSON output, raw
+            stdout)``. The raw stdout lets callers (see
+            ``complete_with_tools``) inspect the full ACP event stream
+            for signals -- such as a denied native-tool call -- that
+            don't survive text extraction.
 
         Raises:
             ProviderError: On subprocess failure.
@@ -1255,12 +1324,12 @@ class AcpxProvider(BaseProvider):
                     f"completion successful despite exit {result.returncode} "
                     "(native tool permission denied, recovered agent text)",
                 )
-                return recovered
+                return recovered, result.stdout
             stderr = result.stderr.strip()[:500]
             self._emit_event(session_id, task_id, "error", f"exit {result.returncode}: {stderr}")
             raise ProviderError(f"acpx exited with code {result.returncode}: {stderr}")
 
-        return self._parse_ndjson_output(result.stdout)
+        return self._parse_ndjson_output(result.stdout), result.stdout
 
     def _isolated_cwd(self) -> str:
         """Return a persistent, isolated working directory for acpx.
@@ -1355,6 +1424,46 @@ class AcpxProvider(BaseProvider):
             return stdout.strip()
 
         return ""
+
+    @staticmethod
+    def _stdout_had_denied_native_tool_call(stdout: str) -> bool:
+        """Detect whether the delegate attempted a native tool this turn.
+
+        With ``--deny-all`` (see ``_ZERO_NATIVE_TOOLS_FLAGS``) every
+        native-tool permission request is unconditionally rejected, which
+        surfaces in the ACP NDJSON stream as a ``tool_call_update`` event
+        with ``status: "failed"`` (Missy's own ``<tool_call>`` protocol
+        never produces these -- it's plain text inside
+        ``agent_message_chunk``, not a native ACP tool call). This is a
+        much more reliable signal than pattern-matching the delegate's
+        prose for words like "denied" or "permission".
+
+        Used by :meth:`complete_with_tools` to decide whether a
+        no-Missy-tool-call response is worth one corrective retry (the
+        delegate reached for a native tool instead of Missy's protocol,
+        as instructed, and gave up after being denied) versus a genuine
+        plain-text answer that never touched a tool at all.
+
+        Args:
+            stdout: Raw NDJSON output from an ``acpx`` invocation.
+
+        Returns:
+            ``True`` if at least one native tool call was denied.
+        """
+        for line in stdout.strip().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("method") != "session/update":
+                continue
+            update = event.get("params", {}).get("update", {})
+            if update.get("sessionUpdate") == "tool_call_update" and update.get("status") == "failed":
+                return True
+        return False
 
     @staticmethod
     def _extract_text_from_event(event: dict) -> str:
