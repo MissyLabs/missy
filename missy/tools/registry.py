@@ -268,32 +268,61 @@ class ToolRegistry:
             for host in perms.allowed_hosts:
                 engine.check_network(host, session_id=session_id, task_id=task_id)
 
+        # SR-1.4/SR-1.5: a tool that overrides resolve_filesystem_targets /
+        # resolve_shell_command is declaring the real operation it performs,
+        # rather than relying on the registry's generic kwarg-name heuristic
+        # (which several first-party tools' actual kwargs don't match, so the
+        # heuristic silently skips enforcement instead of failing closed).
+        _kw = kwargs or {}
+        resolves_fs_targets = (
+            type(tool).resolve_filesystem_targets is not BaseTool.resolve_filesystem_targets
+        )
+        resolved_read_paths: list[str] = []
+        resolved_write_paths: list[str] = []
+        if resolves_fs_targets and (perms.filesystem_read or perms.filesystem_write):
+            resolved_read_paths, resolved_write_paths = tool.resolve_filesystem_targets(_kw)
+
         if perms.filesystem_read:
             # Check statically declared allowed_paths …
             for path in perms.allowed_paths:
                 engine.check_read(path, session_id=session_id, task_id=task_id)
             # … and the actual path from tool kwargs (H2 fix: enforce policy
             # on the real target path, not just the tool's static declarations).
-            # Check multiple common path parameter names for defense-in-depth.
-            _kw = kwargs or {}
-            for path_key in ("path", "file_path", "target", "destination"):
-                actual_path = _kw.get(path_key)
-                if actual_path:
-                    engine.check_read(actual_path, session_id=session_id, task_id=task_id)
+            if resolves_fs_targets:
+                for path in resolved_read_paths:
+                    engine.check_read(path, session_id=session_id, task_id=task_id)
+            else:
+                # Generic heuristic for tools without an explicit resolver:
+                # check common path parameter names for defense-in-depth.
+                for path_key in ("path", "file_path", "target", "destination"):
+                    actual_path = _kw.get(path_key)
+                    if actual_path:
+                        engine.check_read(actual_path, session_id=session_id, task_id=task_id)
 
         if perms.filesystem_write:
             for path in perms.allowed_paths:
                 engine.check_write(path, session_id=session_id, task_id=task_id)
-            _kw = kwargs or {}
-            for path_key in ("path", "file_path", "target", "destination"):
-                actual_path = _kw.get(path_key)
-                if actual_path:
-                    engine.check_write(actual_path, session_id=session_id, task_id=task_id)
+            if resolves_fs_targets:
+                for path in resolved_write_paths:
+                    engine.check_write(path, session_id=session_id, task_id=task_id)
+            else:
+                for path_key in ("path", "file_path", "target", "destination"):
+                    actual_path = _kw.get(path_key)
+                    if actual_path:
+                        engine.check_write(actual_path, session_id=session_id, task_id=task_id)
 
         if perms.shell:
-            # Pass the actual command so the policy engine can check it.
-            command = (kwargs or {}).get("command", "shell")
-            # Incus tools may pass command as a list; convert to string for policy check.
+            if type(tool).resolve_shell_command is not BaseTool.resolve_shell_command:
+                # Tool declares the real host command it invokes — use that
+                # instead of guessing from a generic "command" kwarg that may
+                # not exist, or may refer to something other than the host
+                # program actually executed (e.g. a sandboxed guest command).
+                resolved_command = tool.resolve_shell_command(_kw)
+                command = resolved_command if resolved_command is not None else "shell"
+            else:
+                # Pass the actual command so the policy engine can check it.
+                command = _kw.get("command", "shell")
+            # Some tools may pass command as a list; convert to string for policy check.
             if isinstance(command, list):
                 command = " ".join(str(c) for c in command)
             engine.check_shell(command, session_id=session_id, task_id=task_id)

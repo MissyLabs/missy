@@ -1,5 +1,41 @@
 # TEST_RESULTS
 
+## Run: 2026-07-10 10:05 UTC — validation-harness overhaul, SR-1.5 (Incus declaration/dispatch mismatch)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Finding: `ToolRegistry._check_permissions()` derived the checked shell
+  command from `kwargs.get("command", "shell")`; 14 of 15 Incus tools
+  have no `command` kwarg (checked the meaningless literal `"shell"`
+  instead of the real `incus` binary), and `incus_exec`'s `command`
+  kwarg names the guest command, not the host binary. `incus_file`
+  declared `shell=True` only, so its `host_path` was never checked
+  against the filesystem policy.
+- Live reproduction (real registry+policy+subprocess stack, not mocks):
+  `ShellPolicy(enabled=True, allowed_commands=["bash"])` →
+  `incus_exec(instance="victim-container", command="bash")` **passed
+  policy** and executed `["incus", "exec", "victim-container", "--",
+  "bash", "-c", "bash"]` on the host — `incus` was never allowlisted.
+  Confirmed fixed: same call now denied with `"'incus' is not in the
+  allowed commands list"`.
+- Fix: added `BaseTool.resolve_shell_command()` /
+  `resolve_filesystem_targets()` hooks; registry uses them when a tool
+  overrides either, falling back to the exact prior heuristic otherwise
+  (verified: zero behavior change for tools that don't opt in). All 15
+  Incus tool classes declare the real host command (`"incus"`);
+  `IncusFileTool` now declares filesystem permissions and resolves
+  `host_path` to the correct read/write direction.
+- Command: `pytest tests/tools/ tests/policy/ -q`
+- Result: `2105 passed, 2 skipped` (15 new tests: 4 in
+  `test_registry_hardening.py`, 11 in `test_incus_tools.py` — see
+  `AUDIT_SECURITY.md`'s `### SR-1.5` section for the full breakdown)
+- Command: `pytest tests/ -q -o faulthandler_timeout=120` with the 3
+  known pre-existing vision failures deselected
+- Result: `20770 passed, 13 skipped, 3 deselected in 448.20s (0:07:28)`
+  — 15 more passing than the prior (SR-1.8) checkpoint's 20755, matching
+  the tests added this checkpoint; no regressions.
+
+---
+
 ## Run: 2026-07-10 09:10 UTC — validation-harness overhaul, SR-1.8 (shell default-deny — critical)
 
 - Branch: `overhaul/missy-validation-20260710-031406`

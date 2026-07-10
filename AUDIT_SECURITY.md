@@ -245,6 +245,104 @@ requirement — do not overwrite, append new entries as work continues.
     independently re-audited for authorization-bypass potential beyond
     that.
 
+### SR-1.5 — Incus tools' declaration/dispatch mismatch bypasses shell + filesystem policy
+
+- **Status: fixed** for the specific mismatches the review identified
+  (`incus_exec` checking the guest command instead of the host binary;
+  every other Incus tool's shell permission being checked against a
+  meaningless dummy string; `incus_file`'s `host_path` never being
+  checked against the filesystem policy at all). The underlying
+  architectural gap the review calls out in "The architectural finding"
+  (`registry.py`'s permission check is a parameter-name heuristic that
+  first-party tools can silently slip past) is addressed generally, not
+  just patched per-tool — see remediation evidence.
+- **Reachability found:** live and directly exploitable, demonstrated
+  against the real `ToolRegistry` + `PolicyEngine` stack (not just
+  unit-level mocks):
+  1. Every Incus tool declared `ToolPermissions(shell=True)` with no
+     `command` kwarg (except `incus_exec`), so
+     `registry._check_permissions()` derived the checked command from
+     `kwargs.get("command", "shell")` — the literal string `"shell"`.
+     Reproduced: with `ShellPolicy(enabled=True, allowed_commands=["git"])`,
+     `incus_instance_action(action="delete", ...)` was policy-checked
+     against `"shell"`, not `"incus"` — the registry was trusting tool
+     metadata (`shell=True`) that didn't match the actual operation
+     performed (`subprocess.run(["incus", ...])`), exactly as the review
+     states. (Whether this was independently exploitable as an
+     *allow-all* depended on the SR-1.8 empty-allowlist bug fixed
+     earlier this session — before that fix, an operator's empty
+     `allowed_commands` list, believing it meant deny-all, let every
+     Incus tool run unconditionally via this same dummy-string path.
+     SR-1.8 alone closed that specific combination; SR-1.5 closes the
+     mismatch itself, which has an independently exploitable instance
+     below.)
+  2. **`incus_exec` checked the wrong target entirely — not merely a
+     dummy string.** Its `command` kwarg names the command run *inside
+     the guest instance*, but the policy check used that same kwarg to
+     gate the *host* operation. Reproduced end-to-end: with
+     `ShellPolicy(enabled=True, allowed_commands=["bash"])` — an
+     operator's plausible intent being "the agent may run bash scripts
+     inside sandboxed guests only" — calling
+     `incus_exec(instance="victim-container", command="bash")` **passed
+     policy** (only a launcher-command warning was logged) and the real
+     host subprocess `["incus", "exec", "victim-container", "--", "bash",
+     "-c", "bash"]` executed. The host `incus` binary was invoked despite
+     never being in `allowed_commands` at all — a full policy bypass, not
+     merely a permissive default.
+  3. `incus_file` declared `shell=True` only; `filesystem_read`/
+     `filesystem_write` were never declared, so its `host_path` kwarg
+     (arbitrary host read for `push`, arbitrary host write for `pull`)
+     was never checked against `FilesystemPolicy.allowed_read_paths`/
+     `allowed_write_paths` at all, regardless of configuration.
+- **Remediation evidence:** added two optional hook methods to
+  `BaseTool` (`missy/tools/base.py`) —
+  `resolve_shell_command(kwargs) -> str | list[str] | None` and
+  `resolve_filesystem_targets(kwargs) -> tuple[list[str], list[str]]` —
+  that let a tool declare the *real* host command/paths an invocation
+  will touch instead of relying on the registry's generic kwarg-name
+  heuristic. `ToolRegistry._check_permissions()`
+  (`missy/tools/registry.py`) now checks whether a tool overrides either
+  hook (`type(tool).resolve_x is not BaseTool.resolve_x`) and, if so,
+  uses the resolved value exclusively — including failing closed (an
+  unresolvable dummy target that matches no real allowlist entry) when
+  the resolver returns `None` for a given call, rather than silently
+  trusting an arbitrary kwarg. Tools that don't override either hook get
+  byte-for-byte the same behavior as before (verified: full `tests/`
+  suite green with zero changes needed to any tool other than the ones
+  migrated below). `missy/tools/builtin/incus_tools.py`: added
+  `_IncusHostCommandMixin.resolve_shell_command()` returning the literal
+  `"incus"` (the one true host binary every Incus tool invokes via
+  `_run_incus()`), applied to all 15 Incus tool classes; `IncusFileTool`
+  now declares `filesystem_read=True, filesystem_write=True` and
+  overrides `resolve_filesystem_targets()` to check `host_path` as a
+  read for `push`, a write for `pull`, or both for an unrecognized
+  action (fail-safe — `execute()` rejects invalid actions on its own
+  regardless). Live-verified against the real registry+policy+subprocess
+  stack, before and after, for both the `incus_exec` guest/host
+  confusion and the `incus_file` unchecked-path cases (results included
+  in the session commit message). New tests:
+  `tests/tools/test_registry_hardening.py::TestPermissionChecking` gained
+  4 new cases proving the generic hooks are honored, ignored-by-default
+  for non-overriding tools, and fail closed on `None`; new classes
+  `TestSR15ShellPolicyGatesRealHostCommand` (5 tests, including the
+  `incus_exec` host-vs-guest reproduction) and
+  `TestSR15IncusFileFilesystemEnforcement` (6 tests) in
+  `tests/tools/test_incus_tools.py` (15 new tests total this
+  checkpoint).
+- **Residual risk:** the registry-level hook mechanism is now available
+  but has only been adopted by Incus tools this session. SR-1.4 (the
+  same `vision_capture`/`incus_file`-style parameter-name heuristic gap
+  in tools beyond Incus) and SR-1.6 (Playwright browser navigation
+  bypassing `PolicyHTTPClient`/the network gateway entirely — a
+  different, non-shell mechanism, not addressed by this fix) remain
+  open; `vision_capture`'s `source`/`save_path` kwargs still go
+  unchecked by the filesystem policy engine via the legacy heuristic
+  path. The shell allow-list itself is still program-name-only (SR-1.7,
+  separate finding, not addressed here) — allowlisting `"incus"` grants
+  every Incus subcommand uniformly, matching the existing granularity of
+  every other shell-gated tool in this codebase, not a regression
+  specific to this fix.
+
 ---
 
 - Timestamp: 2026-07-09 15:35:26 (raw grep-scan dump below, preserved

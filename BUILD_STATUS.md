@@ -1,6 +1,6 @@
 # Build Status
 
-Last updated: 2026-07-10 09:10 UTC
+Last updated: 2026-07-10 10:05 UTC
 
 ## Current Workstream: Validation-Harness Overhaul
 
@@ -570,6 +570,45 @@ This is the fifth independent, confirmed critical finding this session
 from the same systematic audit pattern (unauthenticated/unrestricted
 action reachable due to a fail-open default), after SR-1.2/1.3, SR-1.12,
 and SR-1.13 (×2).
+
+### Completed This Session, continued: SR-1.5 (Incus tools' declaration/dispatch mismatch)
+
+Fixed the review's "architectural finding" pattern for `missy/tools/builtin/incus_tools.py`:
+`ToolRegistry._check_permissions()` derived the checked shell command from
+`kwargs.get("command", "shell")`, but 14 of 15 Incus tools have no
+`command` kwarg at all (so the meaningless literal `"shell"` was checked
+instead of the real `incus` binary every one of them invokes), and
+`incus_exec` *does* have a `command` kwarg — except it names the command
+run inside the sandboxed guest, not the host `incus` binary actually
+executed. Live-reproduced the worst case end-to-end against the real
+registry+policy+subprocess stack: with `allowed_commands=["bash"]`
+(an operator's plausible intent — "the agent may run bash scripts inside
+sandboxed guests only") — `incus_exec(instance=..., command="bash")`
+**passed policy** and the real host command
+`["incus", "exec", "victim-container", "--", "bash", "-c", "bash"]`
+executed, despite `incus` never being in the allowlist. Separately,
+`incus_file` declared `shell=True` only, so its `host_path` kwarg
+(arbitrary host read on push / write on pull) was never checked against
+the filesystem policy at all.
+
+Fixed generally, not just per-tool: added two optional hook methods to
+`BaseTool` (`resolve_shell_command`, `resolve_filesystem_targets`) that
+let a tool declare the real host command/paths it touches; the registry
+now uses them when a tool overrides either (failing closed if a resolver
+returns "no target" for a given call, rather than trusting an unrelated
+kwarg), and falls back to the exact prior heuristic, byte-for-byte, for
+every tool that doesn't override them — verified via the full suite
+being green with zero changes needed anywhere except the migrated tools.
+All 15 Incus tool classes now declare `resolve_shell_command() -> "incus"`;
+`IncusFileTool` now declares filesystem permissions and resolves
+`host_path` to the correct read/write direction from its `action` kwarg.
+15 new tests across `tests/tools/test_registry_hardening.py` (generic
+hook behavior) and `tests/tools/test_incus_tools.py` (Incus-specific,
+including the live `incus_exec` host/guest-confusion reproduction and
+`incus_file` path-enforcement cases).
+
+Full detail, live-verification transcripts, and residual risk in
+`AUDIT_SECURITY.md`'s new `### SR-1.5` section.
 
 ### Known Pre-Existing Failure (not caused by this session)
 

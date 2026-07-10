@@ -21,6 +21,24 @@ _MAX_OUTPUT_BYTES = 65_536
 _DEFAULT_TIMEOUT = 60
 _MAX_TIMEOUT = 600
 _SHELL_PERMS = ToolPermissions(shell=True)
+_FILE_PERMS = ToolPermissions(shell=True, filesystem_read=True, filesystem_write=True)
+
+
+class _IncusHostCommandMixin:
+    """Declares the real host command every Incus tool invokes.
+
+    SR-1.5: every Incus tool declares ``shell=True`` but the registry's
+    default policy check derives the checked command from a generic
+    ``command`` kwarg. Most of these tools have no such kwarg (so the
+    registry falls back to checking the meaningless literal ``"shell"``),
+    and ``incus_exec`` *does* have a ``command`` kwarg but it names the
+    command run inside the guest, not the ``incus`` binary actually
+    executed on the host. Every one of these tools always runs ``incus ...``
+    via :func:`_run_incus`, so that is the one true host command to check.
+    """
+
+    def resolve_shell_command(self, kwargs: dict[str, Any]) -> str:
+        return "incus"
 
 
 def _run_incus(
@@ -75,7 +93,7 @@ def _run_incus(
 # ---------------------------------------------------------------------------
 # 1. List instances
 # ---------------------------------------------------------------------------
-class IncusListTool(BaseTool):
+class IncusListTool(_IncusHostCommandMixin, BaseTool):
     """List Incus instances (containers and VMs)."""
 
     name = "incus_list"
@@ -132,7 +150,7 @@ class IncusListTool(BaseTool):
 # ---------------------------------------------------------------------------
 # 2. Launch instance
 # ---------------------------------------------------------------------------
-class IncusLaunchTool(BaseTool):
+class IncusLaunchTool(_IncusHostCommandMixin, BaseTool):
     """Launch a new Incus container or VM."""
 
     name = "incus_launch"
@@ -227,7 +245,7 @@ class IncusLaunchTool(BaseTool):
 # ---------------------------------------------------------------------------
 # 3. Instance lifecycle actions
 # ---------------------------------------------------------------------------
-class IncusInstanceActionTool(BaseTool):
+class IncusInstanceActionTool(_IncusHostCommandMixin, BaseTool):
     """Start, stop, restart, pause, delete, or rename an instance."""
 
     name = "incus_instance_action"
@@ -314,7 +332,7 @@ class IncusInstanceActionTool(BaseTool):
 # ---------------------------------------------------------------------------
 # 4. Instance info
 # ---------------------------------------------------------------------------
-class IncusInfoTool(BaseTool):
+class IncusInfoTool(_IncusHostCommandMixin, BaseTool):
     """Get detailed information about an Incus instance."""
 
     name = "incus_info"
@@ -367,7 +385,7 @@ class IncusInfoTool(BaseTool):
 # ---------------------------------------------------------------------------
 # 5. Execute command in instance
 # ---------------------------------------------------------------------------
-class IncusExecTool(BaseTool):
+class IncusExecTool(_IncusHostCommandMixin, BaseTool):
     """Execute a command inside an Incus instance."""
 
     name = "incus_exec"
@@ -464,7 +482,7 @@ class IncusExecTool(BaseTool):
 # ---------------------------------------------------------------------------
 # 6. File transfer
 # ---------------------------------------------------------------------------
-class IncusFileTool(BaseTool):
+class IncusFileTool(_IncusHostCommandMixin, BaseTool):
     """Push or pull files between the host and an Incus instance."""
 
     name = "incus_file"
@@ -473,7 +491,26 @@ class IncusFileTool(BaseTool):
         "push: host → instance, pull: instance → host. "
         "Paths use 'instance/path' format for the instance side."
     )
-    permissions = _SHELL_PERMS
+    permissions = _FILE_PERMS
+
+    def resolve_filesystem_targets(self, kwargs: dict[str, Any]) -> tuple[list[str], list[str]]:
+        """SR-1.5: this tool reads/writes ``host_path`` — declare it.
+
+        ``push`` reads ``host_path`` (uploaded to the instance); ``pull``
+        writes ``host_path`` (downloaded from the instance). For a
+        missing/unrecognized action, check both directions rather than
+        silently skipping enforcement — :meth:`execute` rejects invalid
+        actions on its own before either check's outcome matters.
+        """
+        host_path = kwargs.get("host_path")
+        if not host_path:
+            return ([], [])
+        action = str(kwargs.get("action", "")).lower()
+        if action == "push":
+            return ([host_path], [])
+        if action == "pull":
+            return ([], [host_path])
+        return ([host_path], [host_path])
 
     def execute(
         self,
@@ -557,7 +594,7 @@ class IncusFileTool(BaseTool):
 # ---------------------------------------------------------------------------
 # 7. Snapshots
 # ---------------------------------------------------------------------------
-class IncusSnapshotTool(BaseTool):
+class IncusSnapshotTool(_IncusHostCommandMixin, BaseTool):
     """Manage Incus instance snapshots."""
 
     name = "incus_snapshot"
@@ -664,7 +701,7 @@ class IncusSnapshotTool(BaseTool):
 # ---------------------------------------------------------------------------
 # 8. Instance config
 # ---------------------------------------------------------------------------
-class IncusConfigTool(BaseTool):
+class IncusConfigTool(_IncusHostCommandMixin, BaseTool):
     """Get or set Incus instance configuration."""
 
     name = "incus_config"
@@ -765,7 +802,7 @@ class IncusConfigTool(BaseTool):
 # ---------------------------------------------------------------------------
 # 9. Image management
 # ---------------------------------------------------------------------------
-class IncusImageTool(BaseTool):
+class IncusImageTool(_IncusHostCommandMixin, BaseTool):
     """Manage Incus images."""
 
     name = "incus_image"
@@ -880,7 +917,7 @@ class IncusImageTool(BaseTool):
 # ---------------------------------------------------------------------------
 # 10. Network management
 # ---------------------------------------------------------------------------
-class IncusNetworkTool(BaseTool):
+class IncusNetworkTool(_IncusHostCommandMixin, BaseTool):
     """Manage Incus networks."""
 
     name = "incus_network"
@@ -1027,7 +1064,7 @@ class IncusNetworkTool(BaseTool):
 # ---------------------------------------------------------------------------
 # 11. Storage management
 # ---------------------------------------------------------------------------
-class IncusStorageTool(BaseTool):
+class IncusStorageTool(_IncusHostCommandMixin, BaseTool):
     """Manage Incus storage pools and volumes."""
 
     name = "incus_storage"
@@ -1211,7 +1248,7 @@ class IncusStorageTool(BaseTool):
 # ---------------------------------------------------------------------------
 # 12. Profile management
 # ---------------------------------------------------------------------------
-class IncusProfileTool(BaseTool):
+class IncusProfileTool(_IncusHostCommandMixin, BaseTool):
     """Manage Incus profiles."""
 
     name = "incus_profile"
@@ -1332,7 +1369,7 @@ class IncusProfileTool(BaseTool):
 # ---------------------------------------------------------------------------
 # 13. Project management
 # ---------------------------------------------------------------------------
-class IncusProjectTool(BaseTool):
+class IncusProjectTool(_IncusHostCommandMixin, BaseTool):
     """Manage Incus projects."""
 
     name = "incus_project"
@@ -1429,7 +1466,7 @@ class IncusProjectTool(BaseTool):
 # ---------------------------------------------------------------------------
 # 14. Device management
 # ---------------------------------------------------------------------------
-class IncusDeviceTool(BaseTool):
+class IncusDeviceTool(_IncusHostCommandMixin, BaseTool):
     """Manage devices attached to Incus instances."""
 
     name = "incus_device"
@@ -1550,7 +1587,7 @@ class IncusDeviceTool(BaseTool):
 # ---------------------------------------------------------------------------
 # 15. Copy/Move instances
 # ---------------------------------------------------------------------------
-class IncusCopyMoveTool(BaseTool):
+class IncusCopyMoveTool(_IncusHostCommandMixin, BaseTool):
     """Copy or move Incus instances."""
 
     name = "incus_copy_move"

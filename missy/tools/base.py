@@ -100,6 +100,41 @@ class BaseTool(ABC):
         """
         ...
 
+    def resolve_shell_command(self, kwargs: dict[str, Any]) -> str | list[str] | None:
+        """Return the actual host command this invocation will execute.
+
+        The registry's default heuristic reads a ``command`` kwarg to decide
+        what to check against the shell allow-list. That heuristic is wrong
+        for tools whose real host-level program is fixed (or otherwise not
+        carried verbatim in a ``command`` kwarg) — e.g. a tool that always
+        shells out to a specific binary regardless of what the model passes
+        as an argument, or one where a ``command`` kwarg describes something
+        *other* than the host program invoked (such as a command run inside
+        a sandboxed guest). Overriding this method lets such a tool declare
+        the real target explicitly instead of letting an unrelated or
+        missing kwarg silently skip enforcement.
+
+        Returning ``None`` (the default) tells the registry to fall back to
+        its generic ``command`` kwarg heuristic, preserving existing
+        behaviour for tools that don't need this.
+        """
+        return None
+
+    def resolve_filesystem_targets(self, kwargs: dict[str, Any]) -> tuple[list[str], list[str]]:
+        """Return the ``(read_paths, write_paths)`` this invocation will touch.
+
+        The registry's default heuristic reads ``path``/``file_path``/
+        ``target``/``destination`` kwargs to find the real filesystem target
+        to check. Tools that carry their target under a different kwarg name
+        must override this method, or the filesystem policy engine never
+        sees the real path and the declared permission enforces nothing.
+
+        Returning ``([], [])`` (the default) tells the registry to fall back
+        to its generic-name heuristic, preserving existing behaviour for
+        tools that don't need this.
+        """
+        return ([], [])
+
     def get_schema(self) -> dict[str, Any]:
         """Return a JSON Schema dict describing the tool's parameters.
 

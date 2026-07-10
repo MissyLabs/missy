@@ -9,6 +9,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from missy.config.settings import (
+    FilesystemPolicy,
+    MissyConfig,
+    NetworkPolicy,
+    PluginPolicy,
+    ShellPolicy,
+)
+from missy.policy.engine import init_policy_engine
 from missy.tools.builtin.incus_tools import (
     IncusConfigTool,
     IncusCopyMoveTool,
@@ -27,6 +35,7 @@ from missy.tools.builtin.incus_tools import (
     IncusStorageTool,
     _run_incus,
 )
+from missy.tools.registry import ToolRegistry
 
 
 # ---------------------------------------------------------------------------
@@ -979,3 +988,210 @@ class TestIncusNetworkListExactRowPreservation:
         cmd = mock_run.call_args[0][0]
         assert cmd == ["incus", "network", "show", "incusbr0"]
         assert result.output == "name: incusbr0\ntype: bridge\n"
+
+
+# ---------------------------------------------------------------------------
+# SR-1.5: registry+policy integration -- Incus tools must be gated on the
+# real host command/paths they invoke, not a declaration/dispatch mismatch.
+# ---------------------------------------------------------------------------
+def _init_policy(
+    allowed_commands: list[str] | None = None,
+    allowed_write_paths: list[str] | None = None,
+    allowed_read_paths: list[str] | None = None,
+) -> None:
+    init_policy_engine(
+        MissyConfig(
+            network=NetworkPolicy(),
+            filesystem=FilesystemPolicy(
+                allowed_write_paths=allowed_write_paths or [],
+                allowed_read_paths=allowed_read_paths or [],
+            ),
+            shell=ShellPolicy(enabled=True, allowed_commands=allowed_commands or []),
+            plugins=PluginPolicy(),
+            providers={},
+            workspace_path="/tmp/incus-test-ws",
+            audit_log_path="/tmp/incus-test-audit.jsonl",
+        )
+    )
+
+
+class TestSR15ShellPolicyGatesRealHostCommand:
+    """Every Incus tool always runs the ``incus`` binary on the host --
+    that must be the command checked, not a dummy default or (for
+    incus_exec) the command run inside the guest."""
+
+    def test_incus_denied_when_only_unrelated_command_allowed(self) -> None:
+        _init_policy(allowed_commands=["git"])
+        registry = ToolRegistry()
+        registry.register(IncusInstanceActionTool())
+        result = registry.execute(
+            "incus_instance_action",
+            instance="victim",
+            action="delete",
+            force=True,
+            session_id="s",
+            task_id="t",
+        )
+        assert result.success is False
+        assert "incus" in result.error
+        assert "not in the allowed commands list" in result.error
+
+    @patch("missy.tools.builtin.incus_tools.subprocess.run")
+    def test_incus_allowed_when_incus_explicitly_allowlisted(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = _make_proc(stdout="")
+        _init_policy(allowed_commands=["incus"])
+        registry = ToolRegistry()
+        registry.register(IncusInstanceActionTool())
+        result = registry.execute(
+            "incus_instance_action",
+            instance="victim",
+            action="delete",
+            force=True,
+            session_id="s",
+            task_id="t",
+        )
+        assert result.success is True
+        mock_run.assert_called_once()
+
+    def test_incus_exec_checked_against_host_binary_not_guest_command(self) -> None:
+        """An operator who allowlists 'bash' -- intending only to let the
+        agent run bash scripts inside a sandboxed guest -- must NOT
+        thereby authorize the host `incus` binary itself. Before the
+        fix, the registry checked kwargs["command"] (the guest command),
+        so command="bash" slipped straight past the shell policy and the
+        real host `incus exec ...` call executed unauthorized."""
+        _init_policy(allowed_commands=["bash"])
+        registry = ToolRegistry()
+        registry.register(IncusExecTool())
+        result = registry.execute(
+            "incus_exec",
+            instance="victim-container",
+            command="bash",
+            session_id="s",
+            task_id="t",
+        )
+        assert result.success is False
+        assert "incus" in result.error
+        assert "not in the allowed commands list" in result.error
+
+    @patch("missy.tools.builtin.incus_tools.subprocess.run")
+    def test_incus_exec_allowed_when_incus_explicitly_allowlisted(
+        self, mock_run: MagicMock
+    ) -> None:
+        mock_run.return_value = _make_proc(stdout="")
+        _init_policy(allowed_commands=["incus"])
+        registry = ToolRegistry()
+        registry.register(IncusExecTool())
+        result = registry.execute(
+            "incus_exec",
+            instance="victim-container",
+            command="rm -rf /",
+            session_id="s",
+            task_id="t",
+        )
+        # The host command itself (incus) is authorized; the registry does
+        # not additionally gate the guest-side command string -- that is
+        # the operator's explicit tradeoff in allowlisting "incus" at all.
+        assert result.success is True
+        mock_run.assert_called_once()
+
+    def test_all_incus_tools_resolve_shell_command_to_incus(self) -> None:
+        tool_classes = [
+            IncusListTool,
+            IncusLaunchTool,
+            IncusInstanceActionTool,
+            IncusInfoTool,
+            IncusExecTool,
+            IncusFileTool,
+            IncusSnapshotTool,
+            IncusConfigTool,
+            IncusImageTool,
+            IncusNetworkTool,
+            IncusStorageTool,
+            IncusProfileTool,
+            IncusProjectTool,
+            IncusDeviceTool,
+            IncusCopyMoveTool,
+        ]
+        for cls in tool_classes:
+            tool = cls()
+            assert tool.resolve_shell_command({}) == "incus", (
+                f"{cls.__name__} must resolve its host command to 'incus'"
+            )
+
+
+class TestSR15IncusFileFilesystemEnforcement:
+    """incus_file must enforce the real host_path against the filesystem
+    policy -- previously it declared shell=True only, so host_path was
+    never checked against allowed_read_paths/allowed_write_paths at all."""
+
+    def test_pull_denied_when_write_path_not_allowlisted(self) -> None:
+        _init_policy(allowed_commands=["incus"], allowed_write_paths=["/safe/downloads"])
+        registry = ToolRegistry()
+        registry.register(IncusFileTool())
+        result = registry.execute(
+            "incus_file",
+            action="pull",
+            instance="victim",
+            instance_path="/etc/shadow",
+            host_path="/tmp/exfiltrated-secrets",
+            session_id="s",
+            task_id="t",
+        )
+        assert result.success is False
+        assert "Filesystem write denied" in result.error
+
+    @patch("missy.tools.builtin.incus_tools.subprocess.run")
+    def test_pull_allowed_when_write_path_allowlisted(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = _make_proc(stdout="")
+        _init_policy(allowed_commands=["incus"], allowed_write_paths=["/safe/downloads"])
+        registry = ToolRegistry()
+        registry.register(IncusFileTool())
+        result = registry.execute(
+            "incus_file",
+            action="pull",
+            instance="victim",
+            instance_path="/data/report.txt",
+            host_path="/safe/downloads/report.txt",
+            session_id="s",
+            task_id="t",
+        )
+        assert result.success is True
+
+    def test_push_denied_when_read_path_not_allowlisted(self) -> None:
+        _init_policy(allowed_commands=["incus"], allowed_read_paths=["/safe/uploads"])
+        registry = ToolRegistry()
+        registry.register(IncusFileTool())
+        result = registry.execute(
+            "incus_file",
+            action="push",
+            instance="victim",
+            instance_path="/tmp/payload",
+            host_path="/etc/passwd",
+            session_id="s",
+            task_id="t",
+        )
+        assert result.success is False
+        assert "Filesystem read denied" in result.error
+
+    def test_resolve_filesystem_targets_push_is_read_only(self) -> None:
+        tool = IncusFileTool()
+        reads, writes = tool.resolve_filesystem_targets(
+            {"action": "push", "host_path": "/some/path"}
+        )
+        assert reads == ["/some/path"]
+        assert writes == []
+
+    def test_resolve_filesystem_targets_pull_is_write_only(self) -> None:
+        tool = IncusFileTool()
+        reads, writes = tool.resolve_filesystem_targets(
+            {"action": "pull", "host_path": "/some/path"}
+        )
+        assert reads == []
+        assert writes == ["/some/path"]
+
+    def test_resolve_filesystem_targets_no_host_path_is_empty(self) -> None:
+        tool = IncusFileTool()
+        reads, writes = tool.resolve_filesystem_targets({"action": "push"})
+        assert reads == []
+        assert writes == []
