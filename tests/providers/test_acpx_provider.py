@@ -122,6 +122,7 @@ _HELP_TEXT_WITH_SECURITY_FLAGS = (
     "Options:\n"
     '  --allowed-tools <list>  Allowed tool names (use "" for no tools)\n'
     "  --non-interactive-permissions <policy>  deny or fail\n"
+    "  --deny-all  Deny all permission requests\n"
 )
 
 
@@ -182,7 +183,28 @@ class TestAcpxAvailability:
             MagicMock(returncode=0, stdout="", stderr=""),
             MagicMock(
                 returncode=0,
-                stdout='Options:\n  --allowed-tools <list>  (use "" for no tools)\n',
+                stdout='Options:\n  --allowed-tools <list>  (use "" for no tools)\n'
+                "  --deny-all  Deny all permission requests\n",
+                stderr="",
+            ),
+        ]
+        p = AcpxProvider(_make_config())
+        assert p.is_available() is False
+
+    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider.shutil.which", return_value="/usr/bin/acpx")
+    def test_unavailable_when_help_missing_deny_all_flag(self, mock_which, mock_run):
+        # --deny-all is the flag actually proven (by live reproduction
+        # against the real acpx+claude-agent-acp binary) to close the
+        # native-tool-access gap that --non-interactive-permissions deny
+        # alone does not. A future acpx release that renames or drops it
+        # must not silently mark the provider available.
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="", stderr=""),
+            MagicMock(
+                returncode=0,
+                stdout='Options:\n  --allowed-tools <list>  (use "" for no tools)\n'
+                "  --non-interactive-permissions <policy>  deny or fail\n",
                 stderr="",
             ),
         ]
@@ -236,6 +258,32 @@ class TestAcpxComplete:
         mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="error: auth failed")
         p = AcpxProvider(_make_config())
         with pytest.raises(ProviderError, match="exit.*1"):
+            p.complete([Message(role="user", content="Hi")])
+
+    @patch("missy.providers.acpx_provider.subprocess.run")
+    def test_nonzero_exit_with_recoverable_text_does_not_raise(self, mock_run):
+        # Live-reproduced behavior: with --deny-all enforcing zero native
+        # tool access, acpx exits nonzero (observed: code 5) whenever a
+        # native-tool permission request was denied during the turn --
+        # but the delegate's own agent_message_chunk text is still a
+        # legitimate response (e.g. explaining it lacks access). That
+        # text must be recovered and returned, not discarded.
+        stdout = self._ndjson(
+            {"type": "text_delta", "delta": "The user denied the Read tool. "},
+            {"type": "text_delta", "delta": "I cannot access the file."},
+        )
+        mock_run.return_value = MagicMock(returncode=5, stdout=stdout, stderr="")
+        p = AcpxProvider(_make_config())
+        resp = p.complete([Message(role="user", content="Read a file")])
+        assert resp.content == "The user denied the Read tool. I cannot access the file."
+
+    @patch("missy.providers.acpx_provider.subprocess.run")
+    def test_nonzero_exit_with_no_recoverable_text_still_raises(self, mock_run):
+        # If nothing usable can be parsed from stdout, the nonzero exit
+        # must still be treated as a real failure.
+        mock_run.return_value = MagicMock(returncode=5, stdout="", stderr="fatal error")
+        p = AcpxProvider(_make_config())
+        with pytest.raises(ProviderError, match="exit.*5"):
             p.complete([Message(role="user", content="Hi")])
 
     @patch("missy.providers.acpx_provider.subprocess.run")
@@ -986,6 +1034,10 @@ class TestZeroNativeToolsEnforcement:
         assert cmd[idx + 1] == ""
         idx2 = cmd.index("--non-interactive-permissions")
         assert cmd[idx2 + 1] == "deny"
+        # --deny-all is the flag actually verified (live, against the
+        # real acpx+claude-agent-acp binary) to block native tool use;
+        # --non-interactive-permissions deny alone does not.
+        assert "--deny-all" in cmd
 
     @patch("missy.providers.acpx_provider.subprocess.run")
     def test_complete_with_tools_always_passes_zero_native_tools_flags(self, mock_run):
@@ -1000,6 +1052,7 @@ class TestZeroNativeToolsEnforcement:
         assert cmd[idx + 1] == ""
         idx2 = cmd.index("--non-interactive-permissions")
         assert cmd[idx2 + 1] == "deny"
+        assert "--deny-all" in cmd
 
     @patch("missy.providers.acpx_provider.subprocess.run")
     def test_operator_cannot_reintroduce_native_tools_via_base_url(self, mock_run):

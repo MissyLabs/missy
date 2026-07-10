@@ -2085,6 +2085,65 @@ and its one remaining unnumbered bullet are now both fully
 remediated.** Full detail in `AUDIT_SECURITY.md`'s new "Availability
 hardening" section.
 
+### CRITICAL, found via live agent validation (task #10): FX-A's "zero native tools" enforcement did not actually work against the installed acpx binary
+
+While starting the 89-case tool-specific validation backlog (task #10)
+with the operator-authorized live acpx delegate runs, the very first
+live test (`missy ask` inspecting a real fixture directory via
+`list_files`/`file_read`) returned a response that accurately quoted
+real file contents it never should have had access to. Checked
+`~/.missy/audit.jsonl`: zero tool-dispatch/policy events for the call
+— `tools_used: []`, `call_count: 1`. Manually reproduced the exact
+`acpx` invocation Missy uses and inspected the raw ACP JSON-RPC
+transcript: the delegate used its own native `Read` tool via
+`ToolSearch`, and a `session/request_permission` request was
+auto-answered `"allow"` despite `--allowed-tools ""` and
+`--non-interactive-permissions deny` both being passed.
+
+Root cause: `--non-interactive-permissions deny` per `acpx --help`
+only applies "when prompting is unavailable" — but `acpx` can complete
+the permission round-trip over the JSON-RPC pipe without a TTY, so it
+never considers itself non-interactive and the flag never engages.
+`--deny-all` ("Deny all permission requests," unconditional) is the
+flag actually proven — via the identical live reproduction, rerun with
+it added — to correctly reject the tool call.
+
+Fixed (`missy/providers/acpx_provider.py`): added `--deny-all` to
+`_ZERO_NATIVE_TOOLS_FLAGS` (mandatory, un-overridable) and
+`_REQUIRED_SECURITY_FLAGS` (fail-closed health check). Found and fixed
+a second bug during verification: with `--deny-all` in place, `acpx`
+now legitimately exits nonzero whenever a permission was denied, even
+when the delegate's own subsequent text response is safe and
+legitimate — `_run_acpx()` previously discarded all output and raised
+unconditionally on nonzero exit, which would make every request that
+even brushes a native tool appear to fail. Fixed to recover and use
+the delegate's own `agent_message_chunk` text (never raw tool output)
+when parseable, only raising if nothing usable was recovered. Also
+strengthened the delegation envelope's wording to explicitly state
+native tools are always denied.
+
+Live re-verified (2 repeated reproductions, post-fix): zero file
+content leaked; the delegate correctly self-identifies it lacks
+`list_files`/`file_read` natively and asks for explicit permission
+instead of fabricating a result. `tests/providers/test_acpx_provider.py`:
+144 passed (up from 142, 4 new tests). `tests/providers/`: 913 passed.
+`tests/agent/`: 4229 passed, 4 pre-existing unrelated skips. Full
+suite: 3 failed (pre-existing `CameraDiscovery` flakes, unrelated),
+21118 passed (up from 21115), 13 skipped in 556.27s. Zero regressions.
+
+**Residual risk, tracked separately as task #46 (not blocking this
+fix):** even with native tool access now correctly and unconditionally
+blocked, the delegate does not reliably go straight to Missy's
+`<tool_call>` protocol on the first attempt — it often still reaches
+for a native tool first, gets denied, and sometimes asks for
+permission rather than retrying with the structured protocol as
+instructed. Not a security issue (the block is unconditional
+regardless of delegate behavior), but a real functional gap expected
+to cause many of the 89-case validation backlog's cases to fail on
+their first turn until addressed — likely needs runtime-level
+retry/correction logic, not just prompt wording. Full detail in
+`AUDIT_SECURITY.md`'s new critical-finding section.
+
 ### Known Pre-Existing Failure (not caused by this session)
 
 `tests/vision/test_discovery_capture_sysfs.py::TestCacheTTL::test_cache_valid_within_ttl`
@@ -2116,17 +2175,28 @@ desync teardown, malformed scheduler record isolation, webhook HMAC
 replay/timestamp/concurrency, EventBus history bound, provider
 base_url egress-widening audit event, image decompression-bomb
 pre-decode guard, audit log rotation+permissions, git safety-stash
-SHA-identity. Current remaining priority order:
+SHA-identity. **Also closed this checkpoint: a critical, previously-unknown
+finding discovered via live agent validation (not part of the review's
+text) — FX-A's zero-native-tools enforcement did not actually block
+the acpx delegate's own native filesystem access; fixed via `--deny-all`.**
+Current remaining priority order:
 
-1. Full 89-case tool-specific validation backlog (FS-001–DISC-CMD-008),
-   not yet re-run against current code at all this session — now the
-   largest remaining block of unverified surface area, since every
-   security-review item (numbered and unnumbered) is closed.
-2. Broader untouched "Product Goal" surface from prompt.md (providers,
+1. Task #46: the delegate's unreliable fallback to Missy's `<tool_call>`
+   protocol (vs. reaching for now-always-denied native tools first) —
+   not a security issue, but blocks meaningful progress on the 89-case
+   validation backlog until addressed, since most agentic cases will
+   fail their first turn otherwise.
+2. Full 89-case tool-specific validation backlog (FS-001–DISC-CMD-008)
+   — in progress (task #10); paused after the first live case
+   surfaced the critical finding above. Operator authorized live acpx
+   delegate runs (real API cost) for this backlog specifically; each
+   case should be live-verified through the real production path per
+   that authorization, once task #46 makes doing so meaningful.
+3. Broader untouched "Product Goal" surface from prompt.md (providers,
    tool intelligence, Discord/channels, scheduler/memory/sessions,
    hatching/persona, vision/audio/multimodal, Web TUI, OpenClaw-style
    architecture, CLI/operations).
-3. Smaller tracked follow-ups: pre-existing vision `CameraDiscovery`
+4. Smaller tracked follow-ups: pre-existing vision `CameraDiscovery`
    cache-TTL flake (3 tests, tracked above); Discord pairing approval
    endpoint (SR-1.12's fix removed the vulnerable path but no working
    approval surface exists now); `allowed_roles` Discord guild-policy

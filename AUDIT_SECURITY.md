@@ -3314,6 +3314,156 @@ rotation (`missy/observability/audit_logger.py`)**
   regression to flag. The `httpcore` private-import-path residual risk
   noted in SR-1.9b's section above is unrelated to this checkpoint.
 
+### CRITICAL (new, post-review): FX-A's "zero native tools" enforcement did not actually work against the installed acpx binary — the delegate had full native filesystem read access, bypassing every policy/audit control, with zero audit trail
+
+- **Status: fixed. Found via live agent-behavior validation of the
+  89-case tool-specific validation backlog (task #10) — not part of
+  `~/Missy-security-review.md`'s numbered SR-x.y list, but arguably the
+  most severe finding of the entire session**, since it silently
+  undermined the security guarantee nearly every other finding this
+  session assumed held (that the acpx delegate can only act through
+  Missy's `ToolRegistry`/policy/audit reference monitor).
+- **Reachability found and live-reproduced (real acpx call, real
+  fixture files, no mocks):** ran `missy ask` with a prompt asking
+  Missy's `list_files`/`file_read` tools to inspect a real fixture
+  directory (`/home/missy/workspace/tool-validate/fs-inventory`,
+  unrelated to any Missy source). The response accurately reproduced
+  the fixture's exact function signature, docstring text, and test
+  assertion — content it could only have obtained by actually reading
+  the files, since none of it was in the prompt. Checked
+  `~/.missy/audit.jsonl` for the corresponding run: between
+  `agent.run.start` and `agent.run.complete` there was exactly **one**
+  `provider_invoke` event with `detail.message: "completion successful"`
+  and `agent.run.complete`'s `tools_used: []`, `call_count: 1` — proving
+  the delegate answered from a single call with **zero** tool calls
+  ever reaching Missy's `ToolRegistry`, `PolicyEngine`, or audit sink.
+  Reproduced the mechanism directly by manually invoking `acpx` with
+  the exact flags `AcpxProvider._run_acpx()` uses
+  (`--allowed-tools "" --non-interactive-permissions deny --cwd
+  ~/.missy/acpx_sandbox claude exec "..."`) and inspecting the raw ACP
+  JSON-RPC transcript: the delegate (claude-agent-acp 0.23.1) called
+  its own native `ToolSearch` → `Read` tool, a `session/request_permission`
+  JSON-RPC request was sent, and it was answered
+  `{"outcome":"selected","optionId":"allow"}` — with neither
+  `--allowed-tools ""` nor `--non-interactive-permissions deny` doing
+  anything to prevent it.
+- **Root cause, isolated precisely via black-box testing against the
+  actual behavior (not just re-reading `acpx`'s own CLI-arg-parsing
+  source, which is what the original FX-A analysis relied on and which
+  cannot see how the separate downstream `@zed-industries/claude-agent-acp`
+  subprocess actually resolves permission requests):**
+  - `--allowed-tools ""` is correctly forwarded as `allowedTools: []`
+    in the `session/new` JSON-RPC params, but the claude-agent-acp
+    harness does not treat an empty allowlist as "allow nothing" — the
+    delegate still discovered and successfully invoked `Read`.
+  - `--non-interactive-permissions deny` per `acpx --help` only applies
+    "when prompting is unavailable." Because `acpx` spawns
+    claude-agent-acp as a JSON-RPC subprocess that *can* complete a
+    `session/request_permission` round-trip over the pipe (no TTY
+    required), `acpx` never considers this scenario non-interactive in
+    the sense the flag guards — so the flag never engages, and the
+    permission request is answered with a default of `allow`.
+  - `--deny-all` ("Deny all permission requests" per `acpx --help`) is
+    unconditional, not gated on "prompting is unavailable." Confirmed
+    fix: the identical Read-tool reproduction, rerun with `--deny-all`
+    added, produces `{"outcome":"selected","optionId":"reject"}`, the
+    tool call fails with `"User refused permission to run tool"`, and
+    the delegate correctly reports it cannot access the file.
+    `--deny-all` was already present in `_SECURITY_FLAG_TOKENS`
+    (stripped if an operator's `base_url` tried to set it) but was
+    never actually part of the enforced default flag set.
+- **Fix (`missy/providers/acpx_provider.py`):**
+  - Added `--deny-all` to `_ZERO_NATIVE_TOOLS_FLAGS` (the mandatory
+    flag set appended to every `acpx` invocation, un-overridable via
+    config) and to `_REQUIRED_SECURITY_FLAGS` (the fail-closed
+    `is_available()` health check now also refuses to mark the
+    provider available if a future acpx release renames or drops
+    `--deny-all` from its documented `--help` output). `--allowed-tools
+    ""` and `--non-interactive-permissions deny` are kept as
+    defense-in-depth (harmless, may matter for other ACP agent
+    backends not individually re-verified — codex, gemini, cursor,
+    etc.) but `--deny-all` is the flag actually proven to close the gap
+    for the default `claude` agent.
+  - Rewrote the module-level comment block above `_ZERO_NATIVE_TOOLS_FLAGS`
+    to document the real, live-verified mechanism rather than the
+    static source-code claim it previously made, so a future reader
+    doesn't repeat the original analysis gap.
+  - **Second bug found while verifying the first fix:** with `--deny-all`
+    in place, `acpx claude exec` now legitimately exits nonzero
+    (observed: code 5) whenever a native-tool permission request was
+    denied during the turn — even when the delegate's own subsequent
+    `agent_message_chunk` text is a perfectly safe, legitimate response
+    (e.g. "the user denied the Read tool, I cannot access the file").
+    `_run_acpx()` previously discarded `result.stdout` and raised
+    `ProviderError` unconditionally on any nonzero exit — which, now
+    that every native-tool attempt is *by design* always denied, would
+    make `--deny-all` appear to break every request that even brushes
+    against a native tool. Fixed: on nonzero exit, `_run_acpx()` now
+    first attempts `_parse_ndjson_output(result.stdout)`; if that
+    yields non-empty text, it's used as the response (with a warning
+    logged and an `allow`-result audit event noting the recovered exit
+    code) instead of raising. Only raises `ProviderError` if no usable
+    text could be recovered. `_extract_text_from_event()` only ever
+    extracts `agent_message_chunk` text (the model's own composed
+    prose) — never raw tool-call `rawOutput`/`rawInput` content — so
+    this recovery path cannot leak anything that was correctly blocked;
+    it only recovers the delegate's own safe, human-facing explanation.
+  - Strengthened `_ENVELOPE_PREAMBLE`'s rule 3 (the delegation
+    envelope's system-prompt text) to explicitly state that native
+    tools are hardcoded to always be denied regardless of retries, and
+    to go straight to Missy's `<tool_call>` protocol — a real but
+    incomplete mitigation for a related, separately tracked reliability
+    gap (see residual risk below).
+- **Live re-verification (real acpx call, post-fix):** reran the exact
+  FS-001-style `missy ask` reproduction. The delegate no longer
+  discloses any fixture file content; it correctly self-identifies "I'm
+  running as Claude Code, so I don't have `list_files`/`file_read` in
+  my toolset" after its native `Glob`/`Bash` attempts were both denied,
+  and asks for explicit permission or file paths instead of fabricating
+  a result. Zero secret/file content leaked in either of two repeated
+  reproductions.
+- **Verification:** `tests/providers/test_acpx_provider.py` — 2 new
+  tests asserting `--deny-all` is present in every `complete()`/
+  `complete_with_tools()` invocation
+  (`test_complete_always_passes_zero_native_tools_flags`,
+  `test_complete_with_tools_always_passes_zero_native_tools_flags`,
+  extended); new `test_unavailable_when_help_missing_deny_all_flag`
+  (fail-closed health check); 2 new tests for the exit-code-recovery
+  fix (`test_nonzero_exit_with_recoverable_text_does_not_raise`,
+  `test_nonzero_exit_with_no_recoverable_text_still_raises` — the
+  latter confirms a genuinely unrecoverable failure still raises, not
+  weakened). `tests/providers/test_acpx_provider.py`: 144 passed (up
+  from 142). `tests/providers/`: 913 passed. `tests/agent/`: 4229
+  passed, 4 pre-existing unrelated skips. Full suite:
+  `python3 -m pytest tests/ -q -o faulthandler_timeout=120` →
+  `3 failed, 21118 passed, 13 skipped in 556.27s (0:09:16)` — up from
+  21115 (the availability-hardening checkpoint), only the 3 known
+  pre-existing `CameraDiscovery` cache-TTL flakes failing. Zero
+  regressions.
+- **Residual risk, called out explicitly (tracked as a separate,
+  distinct follow-up — task #46, not blocking this fix):** even with
+  `--deny-all` correctly and unconditionally blocking every native tool
+  attempt (the security property this fix closes), the delegate does
+  not *reliably* go straight to Missy's `<tool_call>` protocol on the
+  first attempt — it frequently still reaches for its own native
+  Read/Glob/Bash tool first (observed twice, consistently, across
+  repeated live reproductions with the strengthened envelope wording in
+  place), gets correctly denied, and then sometimes asks the user for
+  permission rather than retrying with the structured protocol as
+  instructed. This is **not a security issue** — `--deny-all` blocks
+  the native attempt regardless of how many times or how the delegate
+  tries — but it is a real functional/reliability gap that will cause
+  many of the 89-case tool-specific validation backlog's cases (task
+  #10) to fail on their first reachable turn until addressed, likely
+  requiring either runtime-level retry/correction logic (re-prompting
+  the delegate with an explicit correction after a denied-native-tool
+  round instead of accepting a "please allow X" response as final) or
+  further prompt-engineering iteration. Also note: this fix was only
+  live-verified for the `claude` agent backend (Missy's `_DEFAULT_AGENT`
+  and the only one configured in this environment) — the `--deny-all`
+  flag's behavior with the `codex`/`gemini`/`cursor`/etc. ACP agent
+  adapters was not independently re-verified and could differ.
+
 ---
 
 - Timestamp: 2026-07-09 15:35:26 (raw grep-scan dump below, preserved

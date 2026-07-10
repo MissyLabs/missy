@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (38 checkpoints this session, full suite green after every one)
+## Changed (39 checkpoints this session, full suite green after every one)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -1255,11 +1255,98 @@ expected and desired, not called out as a trade-off. Full detail
 diffs) for every one of these 9 in `AUDIT_SECURITY.md`'s new
 "Availability hardening" section.
 
+### CRITICAL, found via live agent validation (task #10, thirty-third checkpoint): FX-A's "zero native tools" enforcement did not actually work against the installed acpx binary
+
+With the security review's text (numbered and unnumbered) fully closed,
+started the operator-authorized live-acpx-delegate-run pass on the
+89-case tool-specific validation backlog (task #10). The very first
+live case (`missy ask` asking Missy's `list_files`/`file_read` tools to
+inspect a real, unrelated fixture directory) returned a response
+accurately quoting real file contents — exact function signature,
+docstring, test assertion — that it never should have had access to.
+`~/.missy/audit.jsonl` showed zero tool-dispatch events for the call:
+one `provider_invoke` with `"message": "completion successful"`,
+`agent.run.complete`'s `tools_used: []`, `call_count: 1` — the delegate
+answered from a single call with **no tool calls ever reaching
+`ToolRegistry`, `PolicyEngine`, or the audit sink**.
+
+Manually reproduced the exact `acpx` invocation `AcpxProvider._run_acpx()`
+uses and inspected the raw ACP JSON-RPC transcript directly: the
+delegate (claude-agent-acp 0.23.1) called its own native `Read` tool
+via `ToolSearch`, and a `session/request_permission` request was
+auto-answered `{"outcome":"selected","optionId":"allow"}` — despite
+both `--allowed-tools ""` and `--non-interactive-permissions deny`
+being passed exactly as Missy's own code sends them.
+
+Root cause, found by testing the actually-installed binary rather than
+re-reading `acpx`'s own CLI-arg-parsing source (which the original
+FX-A analysis relied on and which cannot see how the *separate*
+downstream `claude-agent-acp` subprocess resolves permission
+requests): `--non-interactive-permissions deny` per `acpx --help` only
+applies "when prompting is unavailable" — but `acpx` can complete the
+`session/request_permission` round-trip over its JSON-RPC pipe without
+a TTY, so it never considers this scenario non-interactive, and the
+flag never engages. `--deny-all` ("Deny all permission requests,"
+unconditional) is the flag actually proven — via the identical live
+reproduction, rerun with it added — to correctly reject the tool call
+(`{"outcome":"selected","optionId":"reject"}`, `"User refused
+permission to run tool"`, delegate correctly reports it cannot access
+the file).
+
+Fixed (`missy/providers/acpx_provider.py`): added `--deny-all` to
+`_ZERO_NATIVE_TOOLS_FLAGS` (mandatory, un-overridable via config) and
+`_REQUIRED_SECURITY_FLAGS` (fail-closed health check now also requires
+`--deny-all` to remain documented in `acpx --help`). Found and fixed a
+second bug while verifying the first: with `--deny-all` in place,
+`acpx claude exec` now legitimately exits nonzero (observed: code 5)
+whenever a permission was denied during the turn, even when the
+delegate's own subsequent text response is a perfectly safe,
+legitimate one (e.g. "the user denied the Read tool, I cannot access
+the file") — `_run_acpx()` previously discarded all output and raised
+`ProviderError` unconditionally on any nonzero exit, which would make
+`--deny-all` appear to break every request that even brushes against a
+native tool, now that every native-tool attempt is *by design* always
+denied. Fixed to recover and return the delegate's own safe
+`agent_message_chunk` text (never raw tool-call output, which stays
+correctly sequestered) when parseable, only raising if nothing usable
+was recovered. Also strengthened the delegation envelope's wording to
+state explicitly that native tools are hardcoded to always be denied.
+
+Live re-verified (2 repeated reproductions through the real production
+path, not the manual bypass): zero file content leaked in either run;
+the delegate correctly self-identifies "I'm running as Claude Code, so
+I don't have `list_files`/`file_read` in my toolset" after its native
+`Glob`/`Bash` attempts were both denied, and asks for explicit
+permission or specific file paths instead of fabricating a result. 4
+new tests in `tests/providers/test_acpx_provider.py` (144 passed, up
+from 142); `tests/providers/` (913 passed); `tests/agent/` (4229
+passed, 4 pre-existing unrelated skips).
+
+**Residual risk, tracked separately as task #46 (not blocking this
+fix, no security impact — the block is unconditional regardless of
+what the delegate attempts):** even with native tool access now
+correctly and unconditionally blocked, the delegate does not reliably
+go straight to Missy's `<tool_call>` protocol on its first attempt —
+across repeated live reproductions, including with the strengthened
+envelope wording in place, it consistently still reached for a native
+tool first, got correctly denied, and sometimes asked the user for
+permission rather than retrying with the structured protocol as
+instructed. This is a genuine functional/reliability gap expected to
+cause many of the 89-case validation backlog's cases to fail on their
+first reachable turn until addressed — most likely needs runtime-level
+retry/correction logic (re-prompting the delegate with an explicit
+correction after a denied-native-tool round instead of accepting a
+"please allow X" response as final), not just further prompt wording.
+Also note: this fix was only live-verified for the `claude` agent
+backend (the only one configured in this environment); the `--deny-all`
+flag's behavior with `codex`/`gemini`/`cursor`/etc. ACP agent adapters
+was not independently re-verified and could differ.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-3 failed, 21115 passed, 13 skipped in 533.81s (0:08:53)
+3 failed, 21118 passed, 13 skipped in 556.27s (0:09:16)
 ```
 
 The 3 failures are exactly the known pre-existing `CameraDiscovery`
@@ -1270,12 +1357,17 @@ checkpoint this session
 `tests/vision/test_discovery_edge_cases.py::TestRapidAddRemove::test_cached_results_returned_within_ttl`),
 confirmed unrelated via `git stash` in earlier checkpoints and
 reproduced again here unchanged. Passed count is up from 21071
-(SR-1.9b's run) to 21115, reflecting this checkpoint's ~44 new/updated
-tests. Zero regressions from this checkpoint or any prior one this
-session. **This closes both the security review's entire numbered
-SR-x.y list and its one remaining unnumbered "harden secondary
-availability hazards" bullet — the security review's text has no open
-items left.**
+(SR-1.9b's run) to 21115 (availability-hardening checkpoint) to 21118
+(this checkpoint's 4 new `test_acpx_provider.py` tests). Zero
+regressions from this checkpoint or any prior one this session. **The
+security review's entire numbered SR-x.y list and its one remaining
+unnumbered "harden secondary availability hazards" bullet are both
+fully closed — the security review's text has no open items left.**
+Separately, this session's thirty-third checkpoint found and fixed a
+critical, previously-unknown vulnerability outside the review's text
+(FX-A's zero-native-tools enforcement did not actually work against
+the installed acpx binary — see above), discovered via live agent
+validation while starting task #10.
 
 Full detail in `BUILD_STATUS.md`, `AUDIT_SECURITY.md`, and
 `TEST_RESULTS.md` — each has one dated entry per checkpoint this
@@ -1322,8 +1414,27 @@ three files above.)
   product-policy decision (block launchers outright vs. runtime
   interception), not a mechanical bug fix — needs explicit product
   input before implementing.
-- **#10** Full 89-case tool-specific validation backlog — not yet
-  re-run against current code.
+- **#45 (CRITICAL, closed this checkpoint)** FX-A's zero-native-tools
+  enforcement did not actually work against the installed acpx binary —
+  `--non-interactive-permissions deny` only applies "when prompting is
+  unavailable" (never true for acpx's own JSON-RPC pipe), so the
+  delegate could use its own native `Read` tool with zero policy/audit
+  trail. Fixed via `--deny-all` (unconditional). Found via live agent
+  validation while starting task #10, not part of the security review's
+  text. Full detail in `AUDIT_SECURITY.md`.
+- **#46 (new, open)** FX-A residual: even with native tools now
+  correctly blocked, the delegate does not reliably use Missy's
+  `<tool_call>` protocol on the first attempt — it often reaches for a
+  native tool first, gets denied, and gives up rather than retrying
+  with the structured protocol. Not a security issue, but blocks
+  meaningful progress on task #10 until addressed (most agentic cases
+  will fail their first turn otherwise). Likely needs runtime-level
+  retry/correction logic, not just prompt wording.
+- **#10** Full 89-case tool-specific validation backlog — in progress;
+  paused after the first live case (FS-001) surfaced #45 above.
+  Operator explicitly authorized live acpx delegate runs (real API
+  cost) for this backlog. Not yet re-run against current code beyond
+  that first case.
 - **#11** Pre-existing vision `CameraDiscovery` cache-TTL flake (3
   tests) — confirmed present before this session's changes, unrelated,
   small isolated fix needed in `missy/vision/discovery.py`.
@@ -1370,6 +1481,26 @@ three files above.)
   aren't mocked — always time the affected test directories before/after
   and grep for realistic-looking hostnames used as allowlist entries in
   tests before considering such a change done.
+- **Lesson worth remembering for any "we verified this against the
+  binary's source" security claim** (from the #45 checkpoint): FX-A's
+  original zero-native-tools analysis read `acpx`'s own CLI-arg-parsing
+  source (`node_modules/acpx/dist/cli.js`) and concluded the flags were
+  correctly enforced — but `acpx` is a thin CLI wrapper that spawns a
+  *separate* downstream agent subprocess (`@zed-industries/claude-agent-acp`
+  for the `claude` agent) and pipes ACP JSON-RPC to it; the actual
+  permission-resolution logic lives in that separate package, which the
+  original analysis never inspected or black-box tested. Static source
+  reading of a CLI's own arg-parser proves the *arguments are received*,
+  not that the *downstream behavior matches what the flag name implies*
+  — especially for a flag like `--non-interactive-permissions <policy>`
+  whose real semantics ("only applies when prompting is unavailable")
+  are not obvious from the name alone. Whenever a security control's
+  correctness rests on a third-party binary/library's documented or
+  source-inferred behavior, black-box test the actual installed binary
+  end-to-end (not just its arg parser) before trusting the claim,
+  exactly as this session's own repeated discipline already required
+  for Missy's own code — that discipline apparently wasn't applied with
+  equal rigor to acpx itself in FX-A's original pass.
 - **Also noticed, not caused by this session:** an intermittent,
   pre-existing Hypothesis-deadline flake in
   `tests/security/test_property_based_fuzz.py::TestNetworkPolicyEngineFuzz::test_check_host_never_crashes_on_arbitrary_unicode`
@@ -1408,25 +1539,38 @@ image decompression-bomb pre-decode guard, audit log
 rotation+permissions, git stash SHA-identity — see that checkpoint's
 full write-up above).
 
-If a way to safely exercise a real or scripted acpx delegate call
-becomes available, prioritize FX-A bullet 6 ("prove end to end that
-representative filesystem, shell, browser, X11, AT-SPI, vision, audio,
-Discord upload, memory, self_create_tool, and code_evolve requests
-produce the expected registry, policy, and audit events") — it unblocks
-re-validating everything else with real evidence rather than
-code-level reasoning about what *should* happen. Otherwise, the natural
-next continuation is **task #10, the full 89-case tool-specific
-validation backlog (FS-001 through DISC-CMD-008)** — not re-run against
-current code at all this session, and now that every security finding
-is closed, the largest remaining block of unverified surface area.
-Alternatively pick up one of the concrete scoped tasks (#11 vision
-`CameraDiscovery` cache-TTL flake, #12 Discord pairing approval
-endpoint, #15 `allowed_roles` enforcement, #16 disposable
-browser-test environment, #17 acpx process-group cleanup), all
-self-contained and not requiring a live delegate. A Web TUI browser
-page for the `/api/v1/approvals` endpoints is also a reasonable,
-self-contained follow-up (the REST layer is done and tested; only the
-browser UI is missing).
+**The operator explicitly authorized live acpx delegate runs (real API
+cost) to close the "single biggest remaining gap" and validate task
+#10's 89-case backlog end-to-end.** That work began this checkpoint
+and immediately surfaced #45 (CRITICAL, now fixed — see above), which
+in turn surfaced #46 (open, not a security issue but a functional
+blocker): the delegate does not reliably use Missy's `<tool_call>`
+protocol on its first attempt now that native tools are correctly and
+unconditionally denied. **Prioritize #46 next** — until the delegate
+more reliably falls back to the structured protocol (or the runtime
+gains retry/correction logic for the "native tool denied" case), most
+of task #10's remaining 88 cases will fail on their first reachable
+turn for reasons unrelated to the specific tool/case being tested,
+producing low-signal results. Options worth considering for #46: (a)
+runtime-level retry — when a round's response shows the delegate was
+denied a native tool and gave up rather than emitting a `<tool_call>`,
+automatically re-prompt once with an explicit correction rather than
+accepting that as the final answer; (b) further envelope wording
+iteration (already tried once this checkpoint, real but incomplete
+effect); (c) accept a documented lower success rate as a known
+trade-off of closing the security hole, and note it plainly in each
+case's validation evidence rather than trying to force higher pass
+rates. Once #46 is resolved (or a scope decision is made about it),
+resume task #10's live-verified cases from FS-001 onward.
+
+If live acpx delegate runs become unavailable or cost-prohibited again,
+fall back to the concrete scoped tasks (#11 vision `CameraDiscovery`
+cache-TTL flake, #12 Discord pairing approval endpoint, #15
+`allowed_roles` enforcement, #16 disposable browser-test environment,
+#17 acpx process-group cleanup), all self-contained and not requiring a
+live delegate. A Web TUI browser page for the `/api/v1/approvals`
+endpoints is also a reasonable, self-contained follow-up (the REST
+layer is done and tested; only the browser UI is missing).
 
 Given how consistently this session's checkpoints turned out to hide a
 second layer beyond the obvious fix (SR-3.3/SR-3.5's "likely already

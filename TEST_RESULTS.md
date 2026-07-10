@@ -1,5 +1,77 @@
 # TEST_RESULTS
 
+## Run: 2026-07-11 09:35 UTC — validation-harness overhaul, CRITICAL: acpx zero-native-tools enforcement did not actually work (--deny-all fix)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Context: first live case of the 89-case tool-specific validation
+  backlog (task #10, operator-authorized live acpx delegate runs)
+  surfaced a critical, previously-unknown finding not in
+  `~/Missy-security-review.md`'s text.
+- Finding: `missy ask` with a prompt asking Missy's `list_files`/
+  `file_read` tools to inspect a real fixture directory returned a
+  response accurately quoting real file contents (exact function
+  signature, docstring, test assertion) it never should have accessed.
+  `~/.missy/audit.jsonl` showed zero tool-dispatch events for the call
+  (`tools_used: []`, `call_count: 1`) — the delegate answered from a
+  single call with no tool calls ever reaching `ToolRegistry`.
+- Command (manual reproduction, exact flags `AcpxProvider._run_acpx()`
+  uses): `acpx --format json --allowed-tools "" --non-interactive-permissions
+  deny --cwd ~/.missy/acpx_sandbox claude exec "Read the file
+  /home/missy/workspace/tool-validate/fs-inventory/src/main.py..."`
+- Result (pre-fix): raw ACP JSON-RPC transcript shows the delegate
+  called its own native `Read` tool via `ToolSearch`; a
+  `session/request_permission` request was answered
+  `{"outcome":"selected","optionId":"allow"}`; the real file content
+  was returned verbatim. Neither `--allowed-tools ""` nor
+  `--non-interactive-permissions deny` prevented this.
+- Command (same reproduction, `--deny-all` added):
+  `acpx --format json --allowed-tools "" --deny-all --cwd
+  ~/.missy/acpx_sandbox claude exec "Read the file ..."`
+- Result (post-fix): `session/request_permission` answered
+  `{"outcome":"selected","optionId":"reject"}`; tool call fails with
+  `"User refused permission to run tool"`; delegate correctly reports
+  it cannot access the file. Confirms `--deny-all` (unconditional,
+  per `acpx --help`) closes the gap that `--non-interactive-permissions
+  deny` (only applies "when prompting is unavailable," which this
+  JSON-RPC-pipe scenario never triggers) does not.
+- Fix: `missy/providers/acpx_provider.py` — added `--deny-all` to
+  `_ZERO_NATIVE_TOOLS_FLAGS` and `_REQUIRED_SECURITY_FLAGS`; fixed a
+  second bug found during verification where `_run_acpx()` discarded
+  all output and raised unconditionally on any nonzero exit (which
+  `acpx` now legitimately returns, e.g. code 5, whenever a permission
+  was denied during the turn) — now recovers and uses the delegate's
+  own safe `agent_message_chunk` text when parseable, only raising if
+  nothing usable was recovered; strengthened the delegation envelope's
+  wording.
+- Command: `pytest tests/providers/test_acpx_provider.py -q`
+- Result: `144 passed` (up from 142) — 2 new tests asserting
+  `--deny-all` presence in every invocation, 1 new fail-closed
+  health-check test for a missing `--deny-all` flag, 2 new tests for
+  the exit-code-recovery fix (including one confirming a genuinely
+  unrecoverable nonzero exit still raises, not weakened).
+- Command: `pytest tests/providers/ -q`
+- Result: `913 passed`
+- Command: `pytest tests/agent/ -q`
+- Result: `4229 passed, 4 skipped` (pre-existing, unrelated)
+- Command: `pytest tests/ -q -o faulthandler_timeout=120`
+- Result: `3 failed, 21118 passed, 13 skipped in 556.27s (0:09:16)` — the 3
+  failures are the same known pre-existing `CameraDiscovery` cache-TTL
+  flakes (task #11), up from 21115 (last checkpoint's run) to 21118
+  passed. Zero regressions.
+- Live re-verification: reran the exact FS-001-style `missy ask`
+  reproduction twice post-fix through the real production path (not
+  the manual bypass). Zero file content leaked in either run; the
+  delegate correctly self-identifies it lacks `list_files`/`file_read`
+  natively (after its native `Glob`/`Bash` attempts were both denied)
+  and asks for explicit permission rather than fabricating a result.
+- Residual, tracked as task #46 (not blocking this fix, no security
+  impact): the delegate does not reliably go straight to Missy's
+  `<tool_call>` protocol on the first attempt even with the
+  strengthened envelope wording — it often still reaches for a native
+  tool first, gets correctly denied, and sometimes asks for permission
+  rather than retrying with the structured protocol. Full detail in
+  `AUDIT_SECURITY.md`'s new critical-finding section.
+
 ## Run: 2026-07-11 08:20 UTC — validation-harness overhaul, availability hardening (9 secondary hazards, closes the security review's text entirely)
 
 - Branch: `overhaul/missy-validation-20260710-031406`
