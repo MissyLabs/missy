@@ -184,6 +184,134 @@ class TestCallTool:
         assert "not connected" in result
 
 
+class TestCallToolEnforcement:
+    """SR-4.7: call_tool() is the single dispatch chokepoint that must
+    re-verify the pinned manifest digest and enforce approval-required
+    annotations immediately before every call, not only at connect time."""
+
+    def _connect_fake_server(self, manager, tools, annotations=None):
+        client = MagicMock()
+        client.tools = tools
+        client.call_tool.return_value = "tool result"
+        manager._clients["srv"] = client
+        for tool_name, ann in (annotations or {}).items():
+            manager._annotation_registry.register(f"srv__{tool_name}", ann)
+        return client
+
+    def test_digest_match_allows_call(self, manager, tmp_config):
+        from missy.mcp.digest import compute_tool_manifest_digest
+
+        tools = [{"name": "read"}]
+        client = self._connect_fake_server(manager, tools)
+        digest = compute_tool_manifest_digest(tools)
+        Path(tmp_config).write_text(
+            json.dumps([{"name": "srv", "command": "x", "digest": digest}])
+        )
+
+        result = manager.call_tool("srv__read", {})
+        assert result == "tool result"
+        client.call_tool.assert_called_once()
+
+    def test_digest_drift_blocks_call(self, manager, tmp_config):
+        """A server whose live manifest no longer matches its pinned
+        digest must be denied at call time, not just at connect time."""
+        tools = [{"name": "read"}]
+        client = self._connect_fake_server(manager, tools)
+        Path(tmp_config).write_text(
+            json.dumps([{"name": "srv", "command": "x", "digest": "stale-pinned-digest"}])
+        )
+
+        result = manager.call_tool("srv__read", {})
+        assert result.startswith("[MCP BLOCKED]")
+        assert "digest" in result.lower()
+        client.call_tool.assert_not_called()
+
+    def test_no_pinned_digest_allows_call(self, manager):
+        """A server with no pinned digest at all has nothing to verify --
+        must not be treated as a mismatch."""
+        tools = [{"name": "read"}]
+        client = self._connect_fake_server(manager, tools)
+
+        result = manager.call_tool("srv__read", {})
+        assert result == "tool result"
+        client.call_tool.assert_called_once()
+
+    def test_requires_approval_denied_without_gate(self, manager):
+        """A destructive/mutating tool must be denied, fail-closed, when
+        no ApprovalGate is configured -- absence of confirmation
+        infrastructure must never silently mean 'run unconfirmed'."""
+        from missy.mcp.annotations import ToolAnnotation
+
+        tools = [{"name": "delete_all"}]
+        client = self._connect_fake_server(
+            manager, tools, {"delete_all": ToolAnnotation(mutating=True, requires_approval=True)}
+        )
+
+        result = manager.call_tool("srv__delete_all", {})
+        assert result.startswith("[MCP DENIED]")
+        assert "approval" in result.lower()
+        client.call_tool.assert_not_called()
+
+    def test_requires_approval_granted_by_gate_allows_call(self, tmp_config):
+        """When the gate approves, the call must proceed."""
+        from missy.mcp.annotations import ToolAnnotation
+
+        gate = MagicMock()
+        gate.request.return_value = None  # no exception raised = approved
+        mgr = McpManager(config_path=tmp_config, approval_gate=gate)
+        tools = [{"name": "delete_all"}]
+        client = self._connect_fake_server(
+            mgr, tools, {"delete_all": ToolAnnotation(mutating=True, requires_approval=True)}
+        )
+
+        result = mgr.call_tool("srv__delete_all", {})
+        assert result == "tool result"
+        client.call_tool.assert_called_once()
+        gate.request.assert_called_once()
+
+    def test_requires_approval_denied_by_gate_blocks_call(self, tmp_config):
+        """When the gate denies (raises ApprovalDenied), the call must
+        never reach the underlying MCP server."""
+        from missy.agent.approval import ApprovalDenied
+        from missy.mcp.annotations import ToolAnnotation
+
+        gate = MagicMock()
+        gate.request.side_effect = ApprovalDenied("operator said no")
+        mgr = McpManager(config_path=tmp_config, approval_gate=gate)
+        tools = [{"name": "delete_all"}]
+        client = self._connect_fake_server(
+            mgr, tools, {"delete_all": ToolAnnotation(mutating=True, requires_approval=True)}
+        )
+
+        result = mgr.call_tool("srv__delete_all", {})
+        assert result.startswith("[MCP DENIED]")
+        client.call_tool.assert_not_called()
+
+    def test_read_only_tool_never_requires_approval(self, manager):
+        """A tool with no requires_approval/mutating annotation dispatches
+        immediately -- approval gating must not become a blanket gate on
+        every MCP call."""
+        from missy.mcp.annotations import ToolAnnotation
+
+        tools = [{"name": "read"}]
+        client = self._connect_fake_server(manager, tools, {"read": ToolAnnotation(read_only=True)})
+
+        result = manager.call_tool("srv__read", {})
+        assert result == "tool result"
+        client.call_tool.assert_called_once()
+
+    def test_unannotated_tool_never_requires_approval(self, manager):
+        """A tool with no registered annotation at all (get_annotation()
+        returns None) must default to no approval requirement, matching
+        AnnotationRegistry.get_or_default()'s conservative default."""
+        tools = [{"name": "read"}]
+        client = self._connect_fake_server(manager, tools)  # no annotation registered
+
+        result = manager.call_tool("srv__read", {})
+        assert result == "tool result"
+        client.call_tool.assert_called_once()
+
+
 class TestListServers:
     def test_list_with_servers(self, manager):
         c1 = MagicMock()

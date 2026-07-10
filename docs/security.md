@@ -137,6 +137,19 @@ confusion attacks.  MCP configuration files are written with restrictive
 permissions (0o600) and verified for ownership and writability before
 loading.
 
+MCP tools are runtime-callable by the agent: each connected tool is
+wrapped and registered into the real `ToolRegistry`, so dispatch is
+gated by the same permission-check/audit path as any built-in tool.
+`McpManager.call_tool()` additionally re-verifies the pinned manifest
+digest immediately before every call (not only at connect time — a
+compromised server could otherwise mutate its manifest post-connect
+without triggering a reconnect) and enforces MCP annotation-driven
+approval: a tool whose manifest marks it destructive/mutating blocks on
+a configured `ApprovalGate` before running, and fails closed (denies)
+when no approval gate is available for that runtime. Tool output is
+scanned for prompt-injection patterns and can be blocked outright or
+flagged, per `block_injection` configuration.
+
 ### Vault Security
 
 Secrets are stored using ChaCha20-Poly1305 authenticated encryption.

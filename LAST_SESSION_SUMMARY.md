@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (31 checkpoints this session, full suite green after every one)
+## Changed (32 checkpoints this session, full suite green after every one)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -497,11 +497,124 @@ left unmodified — `delegate_task` is reachable under
 visibility path; curating named-group membership is a policy-tuning
 question orthogonal to whether the wiring itself works.
 
+### SR-4.7 (fifth §4 item, twenty-sixth finding this session)
+
+Product-policy decision, asked and confirmed with the operator: wire
+real MCP tool execution into production with full enforcement, rather
+than the review's alternative of stating the management-only limitation
+truthfully in CLI/docs/Web UI. Chosen because MCP servers are
+explicitly operator-configured and digest-pinnable (`missy mcp
+add`/`pin`) — a fundamentally different trust posture from SR-4.5's
+agent-authored-code question, closer to any other integration an
+operator deliberately opts into.
+
+`grep -n "mcp\|Mcp\|McpManager" missy/agent/runtime.py` matched nothing
+at all before this fix — `McpManager` was referenced only in its own
+module files and `missy mcp add/remove/list/pin`'s management commands.
+`call_tool()`/`all_tools()` had real, working dispatch logic (safe-name
+validation, prompt-injection scanning) but no code path anywhere fed
+either into `_get_tools()`/`_execute_tool()`: an agent could never
+actually invoke an MCP tool, regardless of how many servers were
+connected and pinned. Digest verification (SR-1.11) only ran once, at
+connect time — a compromised server could mutate its live manifest
+afterward with no reconnect required, and nothing would re-check it.
+`ToolAnnotation.requires_approval` was computed correctly from MCP's
+`destructiveHint` but never consulted anywhere, since there was no call
+site to consult it at.
+
+Fixed: `McpManager.call_tool()` is now the single dispatch chokepoint,
+enforcing both concerns immediately before every call, not only at
+connect time: re-verifies the pinned digest against the live client's
+current `tools` list (mismatch denies + emits an `mcp.tool_execute`
+audit event with `reason="digest_mismatch_at_call_time"`); consults
+`requires_approval` and blocks on a newly-threaded `approval_gate`
+constructor param, failing closed (`reason="no_approval_gate"`) when
+none is configured — matching SR-2.2's established fail-closed-without-
+confirmation precedent exactly; a real `ApprovalGate.request()` denial/
+timeout is caught and also denies. Added `McpToolWrapper(BaseTool)`
+(`missy/mcp/tool_wrapper.py`), making "register tools through the
+reference monitor" literally true: `AgentRuntime._sync_mcp_tools()`
+(called every turn, so newly connected/disconnected servers are
+reflected on the very next turn) registers one wrapper per connected
+MCP tool into the real `ToolRegistry`, so dispatch goes through the
+identical `ToolRegistry.execute()` → `_check_permissions()` →
+`tool.execute()` path — and the same `tool_execute` audit event — as
+any built-in tool, with `McpManager`'s own `mcp.tool_execute` event
+layered on top for the MCP-specific decisions the generic registry
+can't see. `McpToolWrapper`'s `ToolPermissions` are derived from the
+tool's annotation but documented explicitly as coarse: an MCP tool runs
+as its own external process, not through Missy's
+`PolicyHTTPClient`/filesystem layer, so this signals intent to the
+policy engine without concretely constraining which host/path the
+external process actually touches — the digest pin and approval gate
+are the concrete, enforceable MCP-specific controls, not the coarse
+permission declaration. Threaded `AgentConfig.mcp_approval_gate`
+through `McpManager` construction; wired `missy gateway start`'s
+existing SR-2.2 `ApprovalGate` into both agent runtimes it builds, so
+real approval flows work end-to-end under the gateway.
+
+Live-verified end-to-end with a real `McpManager`+`McpClient` (no real
+subprocess, but no other mocking) plus a real `AgentRuntime`/
+`ToolRegistry`: (1) a digest-matched, non-destructive MCP tool call
+dispatches through `_execute_tool()` → the real registry → the real
+wrapper → `McpManager.call_tool()` and returns the actual server
+result; (2) a pinned digest that no longer matches the live manifest
+denies the call with zero dispatch to the underlying client; (3) a
+destructive tool with no approval gate configured is denied end-to-end
+through `_execute_tool()`, before the client is ever touched; (4) a
+gate that approves lets the call proceed, one that raises
+`ApprovalDenied` blocks it. Corrected `CLAUDE.md`'s MCP section
+(previously silent on whether tools were callable — exactly the
+ambiguity the review flagged as needing a truthful statement one way or
+the other), `docs/security.md`'s "MCP Server Isolation" section, and
+added a `docs/implementation/module-map.md` entry for the new
+`missy.mcp.tool_wrapper` module.
+
+30 new regression tests across 3 files:
+`tests/mcp/test_mcp_manager.py::TestCallToolEnforcement` (9 tests —
+digest match/drift/unpinned, approval denied/granted/denied-by-gate,
+read-only/unannotated tools never gating),
+`tests/mcp/test_mcp_tool_wrapper.py` (new file, 17 tests — construction,
+permission derivation, schema pass-through, execute()'s success/
+blocked-prefix mapping), and
+`tests/agent/test_runtime_deep.py::TestMcpToolDispatch` (4 tests
+exercising the real `_get_tools()`/`_execute_tool()`/`ToolRegistry`
+path). Fixed 2 pre-existing test files whose manual
+`McpManager.__new__()` construction shortcut hadn't set the new
+attributes `call_tool()` now reads — fixing this surfaced that 2 of
+those tests had been exercising `_block_injection=False` (the "warn
+only" branch) purely by accident (never set on the manually
+constructed instance, so `getattr(..., False)` silently defaulted to
+the *non-default* behavior) rather than the real `McpManager()` default
+of `block_injection=True` ("block outright") — same root-cause pattern
+flagged repeatedly this session: a test bypassing real construction
+ends up exercising unrealistic state. Fixed by having those 2 tests
+explicitly set `_block_injection = False` (preserving their original
+intent) and adding a new `test_injection_blocked_by_default` test
+confirming the real default.
+`tests/agent/`+`tests/mcp/`+`tests/tools/`+`tests/cli/`+`tests/unit/`+
+`tests/security/`+`tests/integration/` (11,954 tests) pass with no
+regressions.
+
+**Residual risk, called out explicitly:** Missy has no way to enforce
+network/filesystem policy on what an MCP server subprocess itself does
+once it's running (it's a separate process — the existing "MCP Server
+Isolation" controls, sanitized env/timeouts/response-size limits, are
+the process-boundary controls, not app-level network/filesystem
+policy); this checkpoint doesn't change that structural fact, it makes
+the digest-pin and approval-gate controls actually apply at call time
+instead of only at connect time. `McpToolWrapper`'s coarse permission
+declaration means the policy engine's network/filesystem checks are
+effectively advisory for MCP tools specifically — called out explicitly
+rather than left implicit. No MCP-specific rate limit or per-server
+budget cap exists beyond the calling session's ordinary budget and
+`health_check()`'s dead-server restart.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-3 failed, 20947 passed, 13 skipped in 470.38s (0:07:50)
+3 failed, 20975 passed, 13 skipped in 461.01s (0:07:41)
 ```
 
 The 3 failures are exactly the known pre-existing `CameraDiscovery`
@@ -532,16 +645,17 @@ three files above.)
   SR-1.9a, SR-1.10, SR-1.11, SR-1.12, SR-1.13, SR-2.1, SR-2.2, SR-2.3,
   SR-2.4, SR-3.1 (substantially via FX-B), SR-3.2, SR-3.3, SR-3.4
   (including its cross-session-aggregation sub-finding), SR-3.5, SR-4.4,
-  SR-4.5, SR-4.3, SR-4.2 — **§2 and §3 are now both fully closed, with no
-  open sub-findings in either; §4 has four items fixed (SR-4.4
+  SR-4.5, SR-4.3, SR-4.2, SR-4.7 — **§2 and §3 are now both fully closed,
+  with no open sub-findings in either; §4 has five items fixed (SR-4.4
   done-criteria verification, SR-4.5 self_create_tool honesty, SR-4.3
-  checkpoint resume, SR-4.2 sub-agent delegation).** Remaining: SR-1.1
-  (audit signing — larger cross-cutting change), SR-1.9b (DNS TOCTOU,
-  substantially harder — needs connecting to a pinned policy-verified IP
-  rather than re-resolving at connect time), SR-4.1, SR-4.6, SR-4.7,
-  SR-4.8 (remaining dead/unwired features, 4 sub-items) — this is the
-  natural next large area now that §1 (partially), §2 (fully), §3
-  (fully), and four of §4's items are closed.
+  checkpoint resume, SR-4.2 sub-agent delegation, SR-4.7 MCP tool
+  execution).** Remaining: SR-1.1 (audit signing — larger cross-cutting
+  change), SR-1.9b (DNS TOCTOU, substantially harder — needs connecting
+  to a pinned policy-verified IP rather than re-resolving at connect
+  time), SR-4.1, SR-4.6, SR-4.8 (remaining dead/unwired features, 3
+  sub-items) — this is the natural next large area now that §1
+  (partially), §2 (fully), §3
+  (fully), and five of §4's items are closed.
 - **SR-1.7's launcher sub-finding** remains open — `find`/`xargs`/
   `bash`/`sudo` etc. are allowlist-able with only a warning, and
   nested shell commands inside a launcher's quoted arguments are
@@ -629,36 +743,37 @@ both fully closed**, with zero open sub-findings in either (SR-2.1:
 scheduled jobs default to `capability_mode="safe-chat"`; SR-2.2: a real
 `ApprovalGate` is wired into `ProactiveManager` and the Web API server;
 SR-3.4's cross-session-aggregation sub-finding is fixed — `CostTracker`
-is now per-session-keyed), and **§4 has four items fixed**: SR-4.4 —
+is now per-session-keyed), and **§4 has five items fixed**: SR-4.4 —
 `_tool_loop()` rejects a "done" claim made immediately after an
 unresolved tool error, up to 2 retries, with
 `agent.done_criteria.rejected`/`.unverified` audit events; SR-4.5 —
 `self_create_tool` no longer claims written scripts are
 "created"/"registered" as usable tools (operator-confirmed: kept
-proposal-only rather than building dynamic loading); SR-4.3 —
-`AgentRuntime.resume_checkpoint()` and `missy recover --resume ID` now
-actually continue an interrupted task from its saved conversation
-state, fail-closed on not-found/not-RUNNING/corrupted checkpoints, with
-policy freshly re-resolved at resume time; SR-4.2 —
-`SubAgentRunner`/`delegate_task` are now wired into production with
-real concurrency (`ThreadPoolExecutor`, not the previously-fake
-semaphore), shared-runtime budget aggregation, and a
-`MAX_SUB_AGENT_DEPTH` recursion bound (operator-confirmed: build the
-real feature, since resuming/delegating through the same runtime
-doesn't expand what's callable, unlike SR-4.5's dynamic-code-loading
-question). SR-1.1 (audit signing) is now the largest remaining §1 item;
-the remaining §4 items (SR-4.1 long-term memory, SR-4.6 OTLP export,
-SR-4.7 MCP execution/approval, SR-4.8 provider rotation/fallback claims
-— 4 sub-items) are the next natural continuation, each individually
+proposal-only rather than building dynamic loading — the one item this
+session where the operator chose the *smaller*, document-only path);
+SR-4.3 — `AgentRuntime.resume_checkpoint()` and `missy recover --resume
+ID` now actually continue an interrupted task from its saved
+conversation state, fail-closed on not-found/not-RUNNING/corrupted
+checkpoints; SR-4.2 — `SubAgentRunner`/`delegate_task` are now wired
+into production with real concurrency (`ThreadPoolExecutor`, not the
+previously-fake semaphore), shared-runtime budget aggregation, and a
+`MAX_SUB_AGENT_DEPTH` recursion bound; SR-4.7 — MCP tools are now
+runtime-callable, registered into the real `ToolRegistry` via
+`McpToolWrapper`, with `McpManager.call_tool()` re-verifying the pinned
+digest and enforcing annotation-driven approval immediately before
+every call, not only at connect time. SR-1.1 (audit signing) is now the
+largest remaining §1 item; the remaining §4 items (SR-4.1 long-term
+memory, SR-4.6 OTLP export, SR-4.8 provider rotation/fallback claims —
+3 sub-items) are the next natural continuation, each individually
 scoped and independently checkpointable like SR-4.2/SR-4.3/SR-4.4/
-SR-4.5 were. Given how the last several checkpoints went (SR-3.3 and
-SR-3.5 were both flagged "likely already fixed" and both turned out to
-hide live, confirmed, previously-undetected bugs; SR-2.1, SR-2.2, the
-SR-3.4 residual, SR-4.4, SR-4.5, SR-4.3, and SR-4.2 all turned out to
-have a second layer beyond the obvious fix — SR-2.1's fail-closed
-legacy-record handling, SR-2.2's entirely-unwired `ApprovalGate`
-requiring new REST endpoints, the SR-3.4 residual's 25-test
-mechanical-vs-intentional update split across 9 files, SR-4.4's
+SR-4.5/SR-4.7 were. Given how the last several checkpoints went (SR-3.3
+and SR-3.5 were both flagged "likely already fixed" and both turned out
+to hide live, confirmed, previously-undetected bugs; SR-2.1, SR-2.2,
+the SR-3.4 residual, SR-4.4, SR-4.5, SR-4.3, SR-4.2, and SR-4.7 all
+turned out to have a second layer beyond the obvious fix — SR-2.1's
+fail-closed legacy-record handling, SR-2.2's entirely-unwired
+`ApprovalGate` requiring new REST endpoints, the SR-3.4 residual's
+25-test mechanical-vs-intentional update split across 9 files, SR-4.4's
 fingerprint-history design discarded mid-implementation after live
 testing revealed a false-positive staleness bug, SR-4.5 turning out to
 be a genuine product-policy fork requiring explicit operator input
@@ -666,21 +781,27 @@ rather than an obvious "just fix it" bug, SR-4.3 requiring a genuine
 idempotency argument before it was safe to build resume at all, SR-4.2
 requiring an explicit (not threadlocal/contextvar) depth-parameter
 design specifically because the new concurrency it introduced would
-have silently broken an implicit propagation approach), keep applying
-the same discipline to whatever's picked up next: read the actual
-current code, trace actual runtime call paths, specifically check
-whether any existing test exercises the *real* production dispatch/
-entry point rather than just the unit under test in isolation,
-live-reproduce before declaring anything fixed, broken, or
+have silently broken an implicit propagation approach, SR-4.7's fix
+surfacing that 2 pre-existing tests were accidentally exercising a
+non-default `McpManager` code path purely because their manual
+`__new__()` construction never set an attribute the real `__init__`
+would have), keep applying the same discipline to whatever's picked up
+next: read the actual current code, trace actual runtime call paths,
+specifically check whether any existing test exercises the *real*
+production dispatch/entry point rather than just the unit under test in
+isolation, live-reproduce before declaring anything fixed, broken, or
 not-applicable, and ask before implementing whenever a finding turns
 out to be a genuine product-policy fork rather than a mechanical bug
-(SR-4.3/SR-4.2 vs. SR-4.5 remain a useful contrast: all three offered a
-review-sanctioned "or just document the limitation" escape hatch, but
-only SR-4.5's alternative actually expanded the security surface if
-built — SR-4.3's and SR-4.2's real fixes were strictly safer than
-leaving the features half-advertised, so neither needed to be asked).
-Alternatively pick up one of the concrete scoped tasks above (#11, #12,
-#15, #16, #17), all self-contained and not requiring a live delegate. A
-Web TUI browser page for the new `/api/v1/approvals` endpoints is also
-a reasonable, self-contained follow-up (the REST layer is done and
-tested; only the browser UI is missing).
+(SR-4.3/SR-4.2/SR-4.7 vs. SR-4.5 remain a useful contrast: all four
+offered a review-sanctioned "or just document the limitation" escape
+hatch, but only SR-4.5's alternative would have actually expanded the
+security surface if built — the operator judged SR-4.7's MCP servers,
+being explicitly operator-configured and digest-pinnable, to sit closer
+to SR-4.2/SR-4.3's "safe to build" side than to SR-4.5's "agent-authored
+code" side, even though MCP tool execution is itself dispatching
+third-party code). Alternatively pick up one of the concrete scoped
+tasks above (#11, #12, #15, #16, #17), all self-contained and not
+requiring a live delegate. A Web TUI browser page for the new
+`/api/v1/approvals` endpoints is also a reasonable, self-contained
+follow-up (the REST layer is done and tested; only the browser UI is
+missing).

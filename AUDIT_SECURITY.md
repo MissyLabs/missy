@@ -1949,6 +1949,143 @@ requirement — do not overwrite, append new entries as work continues.
   which named groups should additionally include it is a policy-tuning
   question orthogonal to whether the wiring itself works correctly.
 
+### SR-4.5 (SR-4.7) — MCP was management-only in practice; `McpManager.call_tool()`/`all_tools()` existed but nothing in `AgentRuntime` ever called them
+
+- **Status: fixed.** Fifth §4 item. Product-policy decision confirmed
+  with operator before implementing: wire real MCP tool execution into
+  production with full enforcement, rather than the review's alternative
+  of stating the management-only limitation truthfully in CLI/docs/Web
+  UI. Chosen because MCP servers are explicitly operator-configured and
+  digest-pinnable (`missy mcp add`/`missy mcp pin`) — a fundamentally
+  different trust posture than SR-4.5's agent-authored-code question,
+  closer to any other integration an operator opts into deliberately —
+  so building the full reference-monitor-gated dispatch path was judged
+  the more complete, still-safe outcome.
+- **Reachability found:** `grep -n "mcp\|Mcp\|McpManager" missy/agent/runtime.py`
+  (before this fix) matched nothing at all — `McpManager` was
+  constructed and referenced only inside its own module files and
+  `missy/cli/main.py`'s `missy mcp add/remove/list/pin` management
+  commands. `McpManager.call_tool()` had real, working dispatch logic
+  (safe-name validation, prompt-injection scanning of results) and
+  `all_tools()` returned properly namespaced tool definitions, but no
+  code path anywhere fed either into `AgentRuntime._get_tools()` or
+  `_execute_tool()` — an agent could never actually invoke an MCP tool,
+  regardless of how many servers were connected and pinned via `missy
+  mcp add`/`pin`. Digest verification (SR-1.11) only ran once, at
+  `add_server()`/connect time — a compromised or malicious server could
+  mutate its live tool manifest after that point (widening a tool's
+  effective behavior) with no reconnect required, and nothing would
+  re-check it before the next call. `ToolAnnotation.requires_approval`
+  (already computed correctly from MCP's `destructiveHint` at parse
+  time, per `AnnotationRegistry`) was stored but never consulted by
+  anything before a call — there was no call site to consult it at.
+- **Remediation evidence:** `McpManager.call_tool()` is now the single
+  dispatch chokepoint enforcing both concerns immediately before every
+  call, not only at connect time: (1) re-verifies the pinned digest
+  against the currently-connected client's live `tools` list — a
+  mismatch denies the call and emits an `mcp.tool_execute` audit event
+  with `reason="digest_mismatch_at_call_time"`, distinct from SR-1.11's
+  existing connect-time check; (2) consults
+  `annotation.to_policy_hints()["requires_approval"]` (true for
+  destructive/mutating tools) and, if set, blocks on a newly-threaded
+  `approval_gate: Any | None` (constructor param, defaults to `None`) —
+  absence of a configured gate is treated as absence of confirmation
+  infrastructure and fails closed (denies, `reason="no_approval_gate"`),
+  matching SR-2.2's established fail-closed-without-confirmation
+  precedent exactly; approval denial/timeout (via the real
+  `ApprovalGate.request()`, which raises `ApprovalDenied`/
+  `ApprovalTimeout`) is caught and also denies. Added a new
+  `McpToolWrapper(BaseTool)` (`missy/mcp/tool_wrapper.py`) that adapts
+  a connected MCP tool into a real `BaseTool` — this is what makes
+  "register tools through the reference monitor" literally true rather
+  than a parallel special-cased path: `AgentRuntime._sync_mcp_tools()`
+  (called at the top of `_get_tools()` every turn, so newly
+  connected/disconnected servers are reflected on the very next turn)
+  calls `registry.register()` for each currently-connected MCP tool,
+  after which dispatch goes through the exact same
+  `ToolRegistry.execute()` → `_check_permissions()` →
+  `tool.execute()` → (here) `McpManager.call_tool()` path, and the same
+  `tool_execute` audit event, as any built-in tool — `McpManager`'s own
+  `mcp.tool_execute` event captures the MCP-specific decisions (digest
+  drift, approval outcome) the generic registry has no visibility into,
+  on top of that. `McpToolWrapper`'s `ToolPermissions` are derived from
+  the tool's annotation (`network_access`/`filesystem_access`/
+  `mutating`) — documented explicitly as coarse: an arbitrary MCP tool
+  runs as its own external process, not through
+  `PolicyHTTPClient`/Missy's filesystem layer, so this signals intent
+  to the policy engine without concretely constraining which host/path
+  the external process actually touches; the digest pin and approval
+  gate are the concrete, enforceable MCP-specific controls, not the
+  coarse permission declaration. Threaded `AgentConfig.mcp_approval_gate`
+  through to `McpManager` construction (`AgentRuntime._make_mcp_manager()`);
+  wired `missy gateway start`'s existing SR-2.2 `ApprovalGate` into both
+  the interactive and Discord `AgentRuntime` instances it constructs, so
+  real approval flows work end-to-end for MCP tools running under the
+  gateway, matching how the same gate already serves proactive triggers.
+  Live-verified end-to-end with a real `McpManager`+`McpClient` (no real
+  subprocess, but no other mocking) plus a real `AgentRuntime`/
+  `ToolRegistry`: (1) a digest-matched, non-destructive MCP tool call
+  dispatches through `_execute_tool()` → the real registry → the real
+  wrapper → `McpManager.call_tool()` and returns the actual server
+  result; (2) a pinned digest that no longer matches the live manifest
+  denies the call with zero dispatch to the underlying client;
+  (3) a destructive tool with no approval gate configured is denied,
+  end-to-end through `_execute_tool()`, before the client is ever
+  touched; (4) a gate that approves lets the call proceed; a gate that
+  raises `ApprovalDenied` blocks it. Corrected `CLAUDE.md`'s MCP section
+  (previously silent on whether tools were callable — an ambiguity the
+  review specifically flagged as needing a truthful statement one way or
+  the other) and `docs/security.md`'s "MCP Server Isolation" section,
+  and added a new `docs/implementation/module-map.md` entry for
+  `missy.mcp.tool_wrapper`. 30 new regression tests:
+  `tests/mcp/test_mcp_manager.py::TestCallToolEnforcement` (9 tests
+  covering digest match/drift/unpinned, approval denied/granted/
+  denied-by-gate, read-only/unannotated tools never gating),
+  `tests/mcp/test_mcp_tool_wrapper.py` (new file, 17 tests covering
+  construction, permission derivation, schema pass-through, and
+  execute()'s success/blocked-prefix mapping), and
+  `tests/agent/test_runtime_deep.py::TestMcpToolDispatch` (4 tests
+  exercising the real `_get_tools()`/`_execute_tool()`/`ToolRegistry`
+  path). Fixed 2 pre-existing test files
+  (`tests/unit/test_mcp_tool_name_validation.py`,
+  `tests/security/test_scheduler_jobs_selfcreate_webhook_mcp_hardening.py`)
+  whose `McpManager.__new__()` manual-construction shortcuts didn't set
+  the new attributes `call_tool()` now reads (`_config_path`,
+  `_approval_gate`, `_block_injection`, `_annotation_registry`) —
+  fixing this surfaced that 2 of those tests had been exercising
+  `_block_injection=False` (the "warn only" branch) purely by accident
+  (the manual construction never set the attribute, so `getattr(...,
+  False)` silently defaulted to the non-default behavior) rather than
+  the real `McpManager()` default of `block_injection=True` ("block
+  outright") — same root-cause pattern flagged repeatedly this session
+  (a test bypassing real construction ends up exercising unrealistic
+  state); fixed by having those 2 tests explicitly set
+  `_block_injection = False` (preserving their original intent) and
+  adding a new `test_injection_blocked_by_default` test confirming the
+  real default. `tests/agent/`+`tests/mcp/`+`tests/tools/`+`tests/cli/`+
+  `tests/unit/`+`tests/security/`+`tests/integration/` (11,954 tests)
+  pass with no regressions.
+- **Residual risk:** Missy has no way to enforce network/filesystem
+  policy on what an MCP server process itself does once its own
+  subprocess is running (it is a separate process — see
+  `docs/security.md`'s existing "MCP Server Isolation" section for the
+  environment-variable/timeout/response-size controls that *are*
+  enforced at the process boundary); the digest pin and approval gate
+  are the practical trust controls for MCP, not network/filesystem
+  policy, and this checkpoint does not change that structural fact — it
+  makes those two controls actually apply at call time instead of only
+  at connect time. `McpToolWrapper`'s coarse permission declaration
+  means the policy engine's network/filesystem checks are effectively
+  advisory for MCP tools specifically (no concrete `allowed_hosts`/
+  `allowed_paths` can be resolved for an arbitrary third-party tool);
+  this is called out explicitly rather than left implicit. No rate
+  limiting or per-server budget cap exists for MCP tool calls
+  specifically (they consume the calling session's ordinary
+  `max_spend_usd`/iteration budget like any other tool call, but there
+  is no MCP-specific circuit breaker beyond `health_check()`'s dead-server
+  restart) — a future session could add one if MCP servers turn out to
+  be a common source of runaway calls.
+
 ---
 
 - Timestamp: 2026-07-09 15:35:26 (raw grep-scan dump below, preserved

@@ -1,6 +1,6 @@
 # Build Status
 
-Last updated: 2026-07-10 23:10 UTC
+Last updated: 2026-07-11 00:10 UTC
 
 ## Current Workstream: Validation-Harness Overhaul
 
@@ -1525,6 +1525,67 @@ This is the twenty-fifth independent, confirmed finding/change this
 session. Full detail in `AUDIT_SECURITY.md`'s new `### SR-4.4 (SR-4.2)`
 section.
 
+### Completed This Session, continued: SR-4.7 — MCP was management-only in practice; `call_tool()` existed but nothing in `AgentRuntime` ever called it (twenty-sixth finding, fifth §4 item)
+
+Product-policy decision, asked and confirmed with the operator: wire
+real MCP tool execution into production with full enforcement, rather
+than document the management-only limitation truthfully (the review's
+stated alternative). Chosen because MCP servers are explicitly
+operator-configured and digest-pinnable, a fundamentally different
+trust posture than SR-4.5's agent-authored-code question.
+
+Reachability: `grep -n "mcp\|Mcp\|McpManager" missy/agent/runtime.py`
+matched nothing — `McpManager` was referenced only in its own module
+and `missy mcp add/remove/list/pin`'s management commands.
+`call_tool()`/`all_tools()` had real dispatch logic but no call site
+anywhere fed them into `_get_tools()`/`_execute_tool()`. Digest
+verification (SR-1.11) only ran at connect time; `requires_approval`
+annotations were computed but never consulted anywhere.
+
+Fixed: `McpManager.call_tool()` is now the single dispatch chokepoint,
+enforcing both immediately before every call: re-verifies the pinned
+digest against the live manifest (denies + audits on drift, not just
+at connect); consults `requires_approval` and blocks on a newly-threaded
+`approval_gate` param, failing closed when none is configured (matching
+SR-2.2's precedent). Added `McpToolWrapper(BaseTool)`
+(`missy/mcp/tool_wrapper.py`) so MCP tools register into the real
+`ToolRegistry` — `AgentRuntime._sync_mcp_tools()` re-syncs every turn —
+making dispatch go through the identical `_check_permissions()`+audit
+path as any built-in tool, not a parallel special case. Threaded
+`AgentConfig.mcp_approval_gate` through `McpManager` construction;
+wired `missy gateway start`'s existing SR-2.2 `ApprovalGate` into both
+agent runtimes it builds. Live-verified end-to-end (real
+`McpManager`+`McpClient`, real `AgentRuntime`/`ToolRegistry`): a
+digest-matched safe tool dispatches through the full chain and returns
+the real result; digest drift denies with zero client dispatch; a
+destructive tool with no gate configured is denied end-to-end; a
+denying gate blocks the call. Corrected `CLAUDE.md`/`docs/security.md`/
+`docs/implementation/module-map.md`.
+
+30 new tests across 3 files. Fixed 2 pre-existing test files whose
+manual `McpManager.__new__()` construction hadn't set the new
+attributes `call_tool()` reads — this surfaced 2 tests accidentally
+exercising the non-default `block_injection=False` behavior rather than
+the real default (`True`); fixed with an explicit override plus a new
+test confirming the real default.
+`tests/agent/`+`tests/mcp/`+`tests/tools/`+`tests/cli/`+`tests/unit/`+
+`tests/security/`+`tests/integration/` (11,954 tests) pass with no
+regressions.
+
+Residual risk: Missy cannot enforce network/filesystem policy on what
+an MCP server subprocess itself does (separate process; existing
+"MCP Server Isolation" controls — sanitized env, timeouts, size limits
+— are the process-boundary controls, not app-level network/filesystem
+policy). `McpToolWrapper`'s permission declaration is necessarily coarse
+for the same reason — advisory, not concretely enforceable per-host/
+per-path. No MCP-specific rate limit or budget cap exists beyond the
+calling session's ordinary budget and `health_check()`'s dead-server
+restart.
+
+This is the twenty-sixth independent, confirmed finding/change this
+session. Full detail in `AUDIT_SECURITY.md`'s new `### SR-4.5 (SR-4.7)`
+section.
+
 ### Known Pre-Existing Failure (not caused by this session)
 
 `tests/vision/test_discovery_capture_sysfs.py::TestCacheTTL::test_cache_valid_within_ttl`
@@ -1541,17 +1602,17 @@ scoped to FX-A / voice-command work.
 FX-A through FX-G are all complete (see task list). §2 (Unattended-
 Execution Hazards) and §3 (Data Integrity, Availability, And Cost) are
 now both fully closed — SR-3.4's cross-session-aggregation sub-finding
-is fixed. §4 has four items fixed (SR-4.4 done-criteria verification;
+is fixed. §4 has five items fixed (SR-4.4 done-criteria verification;
 SR-4.5 self_create_tool honesty; SR-4.3 checkpoint resume; SR-4.2
-sub-agent delegation). Current remaining priority order:
+sub-agent delegation; SR-4.7 MCP tool execution). Current remaining
+priority order:
 
 1. SR-1.1 (audit event signing — larger cross-cutting change) and
    SR-1.9b (DNS TOCTOU — needs connecting to a pinned policy-verified IP
    rather than re-resolving at connect time).
-2. SR-4.1, SR-4.6, SR-4.7, SR-4.8 (remaining dead/unwired features:
-   long-term memory, OTLP export, MCP execution/approval, provider
-   rotation/fallback claims — SR-4.2, SR-4.3, SR-4.4, and SR-4.5 are now
-   fixed, see above).
+2. SR-4.1, SR-4.6, SR-4.8 (remaining dead/unwired features: long-term
+   memory, OTLP export, provider rotation/fallback claims — SR-4.2,
+   SR-4.3, SR-4.4, SR-4.5, and SR-4.7 are now fixed, see above).
 3. The "harden secondary availability hazards" bullet (circuit-breaker
    half-open single-probe, MCP RPC desync, malformed scheduler record
    isolation, webhook HMAC replay protection, EventBus history bound,

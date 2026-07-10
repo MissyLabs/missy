@@ -742,9 +742,17 @@ skipped with `tool.candidate.load_skipped` audit events.
 
 | Field | Value |
 |-------|-------|
-| **Purpose** | MCP server connection manager. Config at `~/.missy/mcp.json`. Auto-restarts dead servers. |
+| **Purpose** | MCP server connection manager. Config at `~/.missy/mcp.json`. Auto-restarts dead servers. `call_tool()` is the single dispatch chokepoint: re-verifies the pinned digest and enforces annotation-driven approval immediately before every call (SR-4.7), not only at connect time. |
 | **Key exports** | `McpManager` |
-| **Internal deps** | `missy.mcp.client`, `missy.mcp.digest`, `missy.tools.registry`, `missy.gateway.client` |
+| **Internal deps** | `missy.mcp.client`, `missy.mcp.digest`, `missy.mcp.tool_wrapper`, `missy.tools.registry`, `missy.gateway.client` |
+
+### missy.mcp.tool_wrapper
+
+| Field | Value |
+|-------|-------|
+| **Purpose** | `McpToolWrapper(BaseTool)` adapts a connected MCP tool for registration into the real `ToolRegistry`, so MCP dispatch goes through the same permission-check/audit path as any built-in tool. `AgentRuntime._sync_mcp_tools()` registers one wrapper per connected MCP tool every turn. |
+| **Key exports** | `McpToolWrapper` |
+| **Internal deps** | `missy.tools.base` |
 
 ### missy.mcp.digest
 

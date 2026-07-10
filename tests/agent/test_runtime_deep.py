@@ -1929,3 +1929,106 @@ class TestDelegateTaskDispatch:
             rt._execute_tool(tc, session_id="sess-1", task_id="task-1")
 
         assert captured_kwargs["_depth"] == 0
+
+
+class TestMcpToolDispatch:
+    """SR-4.7: MCP tools must be registered into the real ToolRegistry
+    (the reference monitor) and dispatched through the exact same
+    _execute_tool() -> registry.execute() -> tool.execute() path as any
+    built-in tool -- not a bypass/special case."""
+
+    def _connected_manager(self, tmp_path, tools, annotations=None):
+        from missy.mcp.annotations import ToolAnnotation
+        from missy.mcp.client import McpClient
+        from missy.mcp.manager import McpManager
+
+        mgr = McpManager(config_path=str(tmp_path / "mcp.json"))
+        client = McpClient(name="srv", command="true")
+        client._tools = tools
+        client.call_tool = MagicMock(return_value="mcp result")
+        mgr._clients["srv"] = client
+        for tool_name, ann in (annotations or {}).items():
+            mgr._annotation_registry.register(f"srv__{tool_name}", ann)
+        return mgr, client
+
+    def test_mcp_tool_appears_in_get_tools(self, tmp_path):
+        from missy.tools.registry import get_tool_registry, init_tool_registry
+
+        init_tool_registry()
+        provider = _make_provider()
+        registry = _make_registry({"fake": provider})
+        with patch("missy.agent.runtime.get_registry", return_value=registry):
+            rt = AgentRuntime(AgentConfig(provider="fake"))
+        rt._mcp_manager, _client = self._connected_manager(
+            tmp_path, [{"name": "echo", "description": "Echo", "inputSchema": {}}]
+        )
+
+        tools = rt._get_tools()
+
+        assert any(t.name == "srv__echo" for t in tools)
+
+    def test_mcp_tool_registered_into_real_tool_registry(self, tmp_path):
+        from missy.tools.registry import get_tool_registry, init_tool_registry
+
+        init_tool_registry()
+        provider = _make_provider()
+        registry = _make_registry({"fake": provider})
+        with patch("missy.agent.runtime.get_registry", return_value=registry):
+            rt = AgentRuntime(AgentConfig(provider="fake"))
+        rt._mcp_manager, _client = self._connected_manager(
+            tmp_path, [{"name": "echo", "description": "Echo", "inputSchema": {}}]
+        )
+
+        rt._get_tools()
+        treg = get_tool_registry()
+
+        assert treg.get("srv__echo") is not None
+
+    def test_execute_tool_dispatches_mcp_tool_through_real_registry(self, tmp_path):
+        from missy.providers.base import ToolCall
+        from missy.tools.registry import get_tool_registry, init_tool_registry
+
+        init_tool_registry()
+        provider = _make_provider()
+        registry = _make_registry({"fake": provider})
+        with patch("missy.agent.runtime.get_registry", return_value=registry):
+            rt = AgentRuntime(AgentConfig(provider="fake"))
+        rt._mcp_manager, client = self._connected_manager(
+            tmp_path,
+            [{"name": "echo", "description": "Echo", "inputSchema": {}}],
+        )
+        rt._get_tools()  # syncs srv__echo into the real registry
+
+        tc = ToolCall(id="tc1", name="srv__echo", arguments={"text": "hi"})
+        result = rt._execute_tool(tc, session_id="sess-1", task_id="task-1")
+
+        assert not result.is_error
+        assert result.content == "mcp result"
+        client.call_tool.assert_called_once_with("echo", {"text": "hi"})
+
+    def test_mcp_tool_requiring_approval_denied_without_gate(self, tmp_path):
+        """A destructive MCP tool dispatched with no approval_gate wired
+        into the runtime must fail closed, end-to-end through the real
+        registry dispatch path."""
+        from missy.mcp.annotations import ToolAnnotation
+        from missy.providers.base import ToolCall
+        from missy.tools.registry import init_tool_registry
+
+        init_tool_registry()
+        provider = _make_provider()
+        registry = _make_registry({"fake": provider})
+        with patch("missy.agent.runtime.get_registry", return_value=registry):
+            rt = AgentRuntime(AgentConfig(provider="fake"))  # mcp_approval_gate defaults to None
+        rt._mcp_manager, client = self._connected_manager(
+            tmp_path,
+            [{"name": "delete_all", "description": "Delete", "inputSchema": {}}],
+            {"delete_all": ToolAnnotation(mutating=True, requires_approval=True)},
+        )
+        rt._get_tools()
+
+        tc = ToolCall(id="tc1", name="srv__delete_all", arguments={})
+        result = rt._execute_tool(tc, session_id="sess-1", task_id="task-1")
+
+        assert result.is_error
+        assert "DENIED" in result.content
+        client.call_tool.assert_not_called()

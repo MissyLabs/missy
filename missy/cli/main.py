@@ -2049,7 +2049,15 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
     from missy.agent.runtime import DISCORD_SYSTEM_PROMPT, AgentConfig, AgentRuntime
 
     _provider_name = next(iter(cfg.providers), "anthropic") if cfg.providers else "anthropic"
-    _agent_cfg = AgentConfig(provider=_provider_name, **_agent_tool_policy_kwargs(cfg))
+    # SR-4.7: thread the same real ApprovalGate constructed above (for
+    # proactive triggers) into the agent runtimes so destructive/mutating
+    # MCP tool calls have real confirmation infrastructure to block on,
+    # instead of failing closed for lack of any gate at all.
+    _agent_cfg = AgentConfig(
+        provider=_provider_name,
+        mcp_approval_gate=approval_gate,
+        **_agent_tool_policy_kwargs(cfg),
+    )
     _agent = AgentRuntime(_agent_cfg)
 
     # Discord-specific agent with filtered tools and appropriate system prompt.
@@ -2057,6 +2065,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
         provider=_provider_name,
         system_prompt=DISCORD_SYSTEM_PROMPT,
         capability_mode="discord",
+        mcp_approval_gate=approval_gate,
         **_agent_tool_policy_kwargs(cfg),
     )
     _discord_agent = AgentRuntime(_discord_agent_cfg)

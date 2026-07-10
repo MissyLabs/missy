@@ -1,5 +1,40 @@
 # TEST_RESULTS
 
+## Run: 2026-07-11 00:10 UTC — validation-harness overhaul, SR-4.7 (MCP tool execution wired into production with full enforcement)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Finding: `McpManager.call_tool()`/`all_tools()` had real dispatch logic
+  but zero call sites in `AgentRuntime` — MCP was management-only in
+  practice. Digest verification only ran at connect time;
+  `requires_approval` annotations were never consulted.
+- Fix: `call_tool()` re-verifies the pinned digest and enforces
+  annotation-driven approval (fail-closed without a gate) immediately
+  before every call; new `McpToolWrapper(BaseTool)` registers MCP tools
+  into the real `ToolRegistry` via `AgentRuntime._sync_mcp_tools()`;
+  `AgentConfig.mcp_approval_gate` threaded through; `gateway start`
+  wires its existing SR-2.2 `ApprovalGate` in.
+- Command: `pytest tests/mcp/test_mcp_manager.py tests/mcp/test_mcp_tool_wrapper.py
+  tests/agent/test_runtime_deep.py -k "TestCallToolEnforcement or test_mcp_tool_wrapper or TestMcpToolDispatch" -v`
+- Result: `30 passed` (9 in `TestCallToolEnforcement`, 17 in
+  `test_mcp_tool_wrapper.py`, 4 in `TestMcpToolDispatch`)
+- Command: `pytest tests/mcp/ tests/unit/test_mcp_tool_name_validation.py
+  tests/unit/test_mcp_skills_plugins_edges.py tests/unit/test_scheduler_mcp_edges.py
+  tests/security/test_scheduler_jobs_selfcreate_webhook_mcp_hardening.py
+  tests/security/test_security_hardening_gateway_mcp.py
+  tests/integration/test_mcp_skills_integration.py -q`
+- Result: `724 passed` (2 pre-existing tests fixed: manual
+  `McpManager.__new__()` construction needed new attributes set;
+  surfaced 2 tests accidentally exercising non-default
+  `block_injection=False` — fixed with explicit override + new
+  `test_injection_blocked_by_default` confirming the real default)
+- Command: `pytest tests/agent/ tests/mcp/ tests/tools/ tests/cli/ tests/unit/ tests/security/ tests/integration/ -q -o faulthandler_timeout=120`
+- Result: `11954 passed, 6 skipped` — no regressions
+- Command: `pytest tests/ -q -o faulthandler_timeout=120`
+- Result: `3 failed, 20975 passed, 13 skipped in 461.01s (0:07:41)` —
+  up from 20947, only the 3 known pre-existing `CameraDiscovery`
+  cache-TTL flakes failing, zero regressions from this checkpoint's
+  changes.
+
 ## Run: 2026-07-10 23:10 UTC — validation-harness overhaul, SR-4.2 (sub-agent delegation wired into production with real limits)
 
 - Branch: `overhaul/missy-validation-20260710-031406`

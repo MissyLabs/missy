@@ -29,11 +29,21 @@ class TestMcpToolNameValidation:
     """Verify MCP manager rejects unsafe tool names."""
 
     def _make_manager(self):
+        from pathlib import Path
+
+        from missy.mcp.annotations import AnnotationRegistry
         from missy.mcp.manager import McpManager
 
         mgr = McpManager.__new__(McpManager)
         mgr._clients = {}
         mgr._lock = __import__("threading").Lock()
+        # SR-4.7: call_tool() now also reads these -- match what __init__
+        # would set so this manual-construction shortcut still models a
+        # real McpManager accurately.
+        mgr._config_path = Path("/nonexistent/mcp.json")
+        mgr._approval_gate = None
+        mgr._block_injection = True
+        mgr._annotation_registry = AnnotationRegistry()
         return mgr
 
     def test_valid_tool_name_accepted(self):

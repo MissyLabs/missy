@@ -302,6 +302,11 @@ class AgentConfig:
     sandbox_tool_policy: Any | None = None
     subagent_tool_policy: Any | None = None
     tool_intelligence: Any | None = None
+    #: SR-4.7 -- an ApprovalGate (missy.agent.approval.ApprovalGate) MCP
+    #: tool calls requiring human approval block on. None means no
+    #: confirmation infrastructure is available for this runtime instance;
+    #: such calls then fail closed (denied) rather than running unconfirmed.
+    mcp_approval_gate: Any | None = None
 
 
 #: System prompt for Discord channel — no desktop/X11/browser references.
@@ -395,6 +400,11 @@ class AgentRuntime:
         self._identity = self._make_identity()
         # Trust scorer for providers, tools, and MCP servers
         self._trust_scorer = TrustScorer()
+        # SR-4.7: MCP manager (graceful degradation) -- connects to
+        # configured servers and exposes their tools; _get_tools() syncs
+        # them into the real ToolRegistry each turn so dispatch goes
+        # through the same reference monitor as every built-in tool.
+        self._mcp_manager = self._make_mcp_manager()
         # Attention system (Feature B: brain-inspired attention subsystems)
         self._attention = self._make_attention_system()
         # Persona and behavior layer (humanistic response shaping)
@@ -1461,6 +1471,7 @@ class AgentRuntime:
         try:
             registry = get_tool_registry()
             self._load_enabled_candidate_tools(registry)
+            self._sync_mcp_tools(registry)
             tool_names = [name for name in registry.list_tools() if registry.is_enabled(name)]
         except RuntimeError:
             return []
@@ -1509,6 +1520,43 @@ class AgentRuntime:
                 )
         except Exception:
             logger.debug("Candidate runtime loader failed; continuing with registered tools only.")
+
+    def _sync_mcp_tools(self, registry: Any) -> None:
+        """Register every currently-connected MCP tool into *registry*.
+
+        SR-4.7: called at the top of every :meth:`_get_tools` so servers
+        connected/reconnected/disconnected after startup (via
+        ``missy mcp add``/``remove`` or :meth:`~missy.mcp.manager.McpManager.health_check`)
+        are reflected on the very next turn. ``registry.register()``
+        silently replaces any prior registration under the same name, so
+        re-syncing every call is cheap and idempotent -- it does not
+        matter that this re-wraps tools that haven't changed.
+        """
+        if self._mcp_manager is None:
+            return
+        try:
+            from missy.mcp.tool_wrapper import McpToolWrapper
+
+            for tool_dict in self._mcp_manager.all_tools():
+                name = tool_dict.get("name")
+                if not name:
+                    continue
+                annotation = self._mcp_manager.get_annotation(name)
+                if annotation is None:
+                    from missy.mcp.annotations import ToolAnnotation
+
+                    annotation = ToolAnnotation()
+                registry.register(
+                    McpToolWrapper(
+                        self._mcp_manager,
+                        name,
+                        tool_dict.get("description", ""),
+                        tool_dict.get("inputSchema", {}),
+                        annotation,
+                    )
+                )
+        except Exception:
+            logger.debug("MCP tool sync failed; continuing without MCP tools", exc_info=True)
 
     def _apply_provider_gate(self, tool_names: list[str]) -> list[str]:
         """Filter *tool_names* through :class:`~missy.tools.intelligence.provider_gate.ToolProviderGate`.
@@ -2439,6 +2487,30 @@ class AgentRuntime:
             set_interactive_approval(approval)
             return approval
         except Exception:
+            return None
+
+    def _make_mcp_manager(self) -> Any:
+        """Create and connect an :class:`~missy.mcp.manager.McpManager`.
+
+        Threads :attr:`AgentConfig.mcp_approval_gate` through so
+        destructive/mutating MCP tool calls block on the same real
+        approval mechanism the caller (e.g. ``missy gateway start``, per
+        SR-2.2) has wired up, rather than each subsystem inventing its
+        own.
+
+        Returns:
+            A connected :class:`~missy.mcp.manager.McpManager`, or
+            ``None`` when the module is unavailable or no servers are
+            configured (this is not an error -- MCP is entirely optional).
+        """
+        try:
+            from missy.mcp.manager import McpManager
+
+            manager = McpManager(approval_gate=self.config.mcp_approval_gate)
+            manager.connect_all()
+            return manager
+        except Exception:
+            logger.debug("McpManager unavailable; continuing without MCP tools", exc_info=True)
             return None
 
     @staticmethod
