@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (13 checkpoints this session, full suite green after every one)
+## Changed (14 checkpoints this session, full suite green after every one)
 
 1. Preserved/hardened the existing `voice_commands.py` fix; fixed a real
    trailing-comma leak bug the new regression tests caught.
@@ -91,13 +91,30 @@ Draft PR: https://github.com/MissyLabs/missy/pull/31
     — against the same policy engine, closing the part of the finding
     ("every subresource/redirect/fetch inside Firefox is outside the
     Python gateway too") a top-level-only check would have missed.
+14. **SR-1.4 (eighth critical finding)**: the same architectural pattern
+    as SR-1.5, in the tools the review names explicitly —
+    `VisionCaptureTool` declared `filesystem_read=True,
+    filesystem_write=True` but reads its target from `source` and
+    writes to `save_path` (also reads `device`), none matching the
+    registry's generic kwarg heuristic, so the permissions enforced
+    nothing. Live-reproduced: with nothing filesystem-allowlisted,
+    `vision_capture(source="/etc/shadow", save_path="/tmp/exfil.jpg")`
+    passed the registry's check with zero denial and the tool actually
+    called `cv2.imread("/etc/shadow")` — failed only because the file
+    isn't a valid image, not because of any policy gate. Fixed by
+    reusing SR-1.5's `resolve_filesystem_targets()` hook — no new
+    mechanism needed. `VisionBurstCaptureTool` fixed the same way,
+    correctly declaring a write target only in its `best_only=True`
+    branch (the only branch that actually calls `cv2.imwrite`).
 
-**Seven independent, confirmed critical vulnerabilities** found and
+**Eight independent, confirmed critical vulnerabilities** found and
 fixed this session (SR-1.2/1.3, SR-1.12, SR-1.13 ×2, SR-1.8, SR-1.5,
-SR-1.6). Five are the "missing gate before a side effect" pattern; two
-(SR-1.5, SR-1.6) are the review's other named pattern: declared tool
-metadata/permissions that don't match the operation actually performed.
-Plus the FX-A/B/C/D/F/G validation-harness root causes.
+SR-1.6, SR-1.4). Five are the "missing gate before a side effect"
+pattern; three (SR-1.5, SR-1.6, SR-1.4) are the review's other named
+pattern: declared tool metadata/permissions that don't match the
+operation actually performed — and the generic `resolve_*` hook
+mechanism built for SR-1.5 turned out to generalize cleanly to both
+later instances. Plus the FX-A/B/C/D/F/G validation-harness root causes.
 
 **All of FX-A through FX-G are now done** per the prompt's stated
 dependency order (some with residual/deferred sub-items tracked as
@@ -110,7 +127,7 @@ python3 -m pytest tests/ -q -o faulthandler_timeout=120 \
   --deselect tests/vision/test_discovery_capture_sysfs.py::TestCacheTTL::test_cache_valid_within_ttl \
   --deselect tests/vision/test_discovery_edge_cases.py::TestPermissionDeniedOnDevice::test_device_that_does_not_exist_is_skipped \
   --deselect tests/vision/test_discovery_edge_cases.py::TestRapidAddRemove::test_cached_results_returned_within_ttl
-20788 passed, 13 skipped, 3 deselected in 446.47s (0:07:26)
+20802 passed, 13 skipped, 3 deselected in 443.85s (0:07:23)
 ```
 
 Full detail in `BUILD_STATUS.md`, `AUDIT_SECURITY.md`, and
@@ -120,14 +137,14 @@ session, oldest at the bottom, nothing overwritten.
 ## Open tasks (session-tracked, carry into next session)
 
 - **#9** SR-1.x through SR-4.x security review remediation — most of
-  it. This session covered SR-1.2/1.3, SR-1.5, SR-1.6, SR-1.8, SR-1.12,
-  SR-1.13 (plus SR-3.1 substantially via FX-B). SR-1.1, SR-1.4, SR-1.7,
+  it. This session covered SR-1.2/1.3, SR-1.4, SR-1.5, SR-1.6, SR-1.8,
+  SR-1.12, SR-1.13 (plus SR-3.1 substantially via FX-B). SR-1.1, SR-1.7,
   SR-1.9 through SR-1.11, SR-2.x, SR-3.2 through SR-3.5, SR-4.x remain.
-  Note: SR-1.5's fix added a general per-tool permission-resolution
-  mechanism (`BaseTool.resolve_shell_command`/`resolve_filesystem_targets`/
-  `resolve_network_hosts`) that SR-1.4 (the same heuristic gap in other
-  tools, e.g. `vision_capture`) can reuse directly rather than needing
-  its own design.
+  Note: SR-1.4's fix confirms the `resolve_*` hook mechanism generalizes
+  well — a full sweep of every remaining `ToolPermissions(filesystem_*=True
+  /network=True)` declaration across `missy/tools/builtin/` against its
+  tool's actual kwargs has not been performed, so other not-yet-found
+  instances of this same pattern may remain beyond the three fixed so far.
 - **#10** Full 89-case tool-specific validation backlog — not yet
   re-run against current code.
 - **#11** Pre-existing vision `CameraDiscovery` cache-TTL flake (3
@@ -147,14 +164,12 @@ session, oldest at the bottom, nothing overwritten.
   works but needs the test-suite migration from mocking
   `subprocess.run` to `subprocess.Popen` done carefully in its own
   session.
-- **New this checkpoint:** SR-1.7 (shell allow-list is program-name-only
-  — launcher/redirection side channels; separate from and not addressed
-  by SR-1.5's fix, which only made the *checked* command accurate, not
-  the allow-list's granularity) and SR-1.9 (network policy TOCTOU/
-  deterministic-allowlist-skips-IP-check) are the strongest remaining
-  SR-1.x candidates. SR-1.4 (vision_capture and other tools' unresolved
-  kwarg-name heuristic gaps) can now reuse the `resolve_*` hook
-  mechanism directly with comparatively little new design work.
+- **Strongest remaining SR-1.x candidates:** SR-1.7 (shell allow-list is
+  program-name-only — launcher/redirection side channels; separate from
+  and not addressed by SR-1.5's fix, which only made the *checked*
+  command accurate, not the allow-list's granularity) and SR-1.9
+  (network policy TOCTOU/deterministic-allowlist-skips-IP-check, natural
+  next step given SR-1.6's network-policy work).
 
 ## The single biggest remaining gap
 

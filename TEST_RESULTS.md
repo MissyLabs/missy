@@ -1,5 +1,44 @@
 # TEST_RESULTS
 
+## Run: 2026-07-10 11:25 UTC — validation-harness overhaul, SR-1.4 (vision_capture/vision_burst filesystem permission mismatch)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Finding: `VisionCaptureTool` declared
+  `ToolPermissions(filesystem_read=True, filesystem_write=True)` but
+  reads its target from a `source` kwarg and writes to `save_path`
+  (also reads `device`) — none of which match the registry's generic
+  `path`/`file_path`/`target`/`destination` heuristic, so the declared
+  permissions enforced nothing. Same architectural pattern as SR-1.5,
+  in the tool the review names explicitly.
+- Live reproduction (real registry+policy stack, not mocks): with
+  nothing filesystem-allowlisted,
+  `vision_capture(source="/etc/shadow", save_path="/tmp/exfil.jpg")`
+  passed the registry's permission check with zero denial, and the tool
+  actually called `cv2.imread("/etc/shadow")` — failed only because
+  `/etc/shadow` isn't a valid image format, not because of any policy
+  gate. Confirmed fixed: same call now denied with `"Filesystem read
+  denied: '/etc/shadow' is not within an allowed read path"`.
+- Fix: reused SR-1.5's `resolve_filesystem_targets()` hook (no new
+  mechanism needed). `VisionCaptureTool` resolves `source` as a read
+  target (unless a non-path sentinel like `"webcam"`), `device` as an
+  additional read target, and `save_path` as the write target (falling
+  back to the same fixed `~/.missy/captures/` default `execute()` uses
+  when omitted). `VisionBurstCaptureTool` resolves `device` as a read
+  target and only declares a write target when `best_only=True`,
+  matching that its non-best-only branch never writes to disk.
+- Command: `pytest tests/vision/ tests/tools/ tests/policy/ -q`
+- Result: `5080 passed, 2 skipped` (3 known pre-existing
+  `CameraDiscovery` cache-TTL failures, unrelated — same run also
+  covers `tests/tools/`/`tests/policy/`, all passing); 14 new tests in
+  `tests/vision/test_vision_tools.py`
+- Command: `pytest tests/ -q -o faulthandler_timeout=120` with the 3
+  known pre-existing vision failures deselected
+- Result: `20802 passed, 13 skipped, 3 deselected in 443.85s (0:07:23)`
+  — 14 more passing than the prior (SR-1.6) checkpoint's 20788, matching
+  the tests added this checkpoint; no regressions.
+
+---
+
 ## Run: 2026-07-10 10:55 UTC — validation-harness overhaul, SR-1.6 (Playwright bypassed the network gateway — crown-jewel finding)
 
 - Branch: `overhaul/missy-validation-20260710-031406`

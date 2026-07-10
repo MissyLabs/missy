@@ -55,6 +55,31 @@ class VisionCaptureTool(BaseTool):
         },
     }
 
+    #: Matches execute()'s own default save location when save_path is omitted.
+    _DEFAULT_CAPTURES_DIR = str(Path.home() / ".missy" / "captures")
+
+    def resolve_filesystem_targets(self, kwargs: dict[str, Any]) -> tuple[list[str], list[str]]:
+        """SR-1.4: this tool reads ``source``/``device`` and writes
+        ``save_path`` — none of those kwarg names match the registry's
+        generic ``path``/``file_path``/``target``/``destination``
+        heuristic, so the declared filesystem permissions previously
+        enforced nothing at all regardless of configuration.
+        """
+        source = kwargs.get("source") or "webcam"
+        device = kwargs.get("device") or ""
+        save_path = kwargs.get("save_path") or ""
+
+        read_paths: list[str] = []
+        if source not in ("webcam", "camera", "screenshot"):
+            # Anything else is treated as a file path by execute().
+            read_paths.append(source)
+        if device:
+            read_paths.append(device)
+
+        write_paths = [save_path] if save_path else [self._DEFAULT_CAPTURES_DIR]
+
+        return (read_paths, write_paths)
+
     def execute(
         self,
         *,
@@ -181,6 +206,18 @@ class VisionBurstCaptureTool(BaseTool):
             "required": False,
         },
     }
+
+    #: Matches the fixed save location execute() uses in best_only mode.
+    _DEFAULT_CAPTURES_DIR = str(Path.home() / ".missy" / "captures")
+
+    def resolve_filesystem_targets(self, kwargs: dict[str, Any]) -> tuple[list[str], list[str]]:
+        """SR-1.4: reads ``device``; writes only in ``best_only`` mode, and
+        always to the fixed captures directory (no user-controlled write
+        target exists for this tool)."""
+        device = kwargs.get("device") or ""
+        read_paths = [device] if device else []
+        write_paths = [self._DEFAULT_CAPTURES_DIR] if kwargs.get("best_only") else []
+        return (read_paths, write_paths)
 
     def execute(
         self,

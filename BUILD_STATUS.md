@@ -1,6 +1,6 @@
 # Build Status
 
-Last updated: 2026-07-10 10:55 UTC
+Last updated: 2026-07-10 11:25 UTC
 
 ## Current Workstream: Validation-Harness Overhaul
 
@@ -650,6 +650,38 @@ unneeded capability). 18 new tests in `tests/tools/test_browser_tools_gaps.py`.
 Full detail, live-verification transcripts, and residual risk (DNS
 TOCTOU, WebRTC, `browser_evaluate` data exfiltration to already-allowed
 hosts) in `AUDIT_SECURITY.md`'s new `### SR-1.6` section.
+
+### Completed This Session, continued: SR-1.4 (vision_capture/vision_burst filesystem permission mismatch)
+
+The same architectural pattern as SR-1.5, in the vision tools the review
+names explicitly: `VisionCaptureTool` declared
+`ToolPermissions(filesystem_read=True, filesystem_write=True)` but reads
+its target from a `source` kwarg and writes to `save_path` (also reads
+`device` for camera hardware paths) — none of which match the
+registry's generic `path`/`file_path`/`target`/`destination` heuristic,
+so the declared permissions enforced nothing. Live-reproduced: with
+nothing filesystem-allowlisted, `vision_capture(source="/etc/shadow",
+save_path="/tmp/exfil.jpg")` passed the registry's permission check
+with zero denial and the tool actually called
+`cv2.imread("/etc/shadow")` — it only failed because `/etc/shadow`
+isn't a valid image format, not because of any policy gate.
+
+Fixed by reusing SR-1.5's `resolve_filesystem_targets()` hook — no new
+mechanism needed. `VisionCaptureTool` now resolves `source` as a read
+target (unless it's a non-path sentinel like `"webcam"`), `device` as
+an additional read target, and `save_path` as the write target
+(falling back to the same fixed `~/.missy/captures/` default
+`execute()` itself uses when omitted). `VisionBurstCaptureTool`
+resolves `device` as a read target and only declares a write target
+when `best_only=True`, matching that its non-best-only branch never
+writes to disk at all. Live-verified the `/etc/shadow` reproduction is
+now denied cleanly. 14 new tests in `tests/vision/test_vision_tools.py`.
+
+Full detail and residual risk (no full sweep of every
+`ToolPermissions(filesystem_*=True)`/`network=True` declaration across
+`missy/tools/builtin/` has been performed — other not-yet-found
+instances of this pattern may remain) in `AUDIT_SECURITY.md`'s new
+`### SR-1.4` section.
 
 ### Known Pre-Existing Failure (not caused by this session)
 

@@ -443,6 +443,62 @@ requirement — do not overwrite, append new entries as work continues.
   granularity) and SR-1.9 (network TOCTOU) remain separate, open
   findings.
 
+### SR-1.4 — Permission enforcement is a parameter-name heuristic (vision tools instance)
+
+- **Status: fixed** for `vision_capture`/`vision_burst`, the two tools
+  the review names explicitly. This is the same architectural gap as
+  SR-1.5 (Incus), fixed by reusing the `resolve_filesystem_targets()`
+  hook that session work added — no new mechanism was needed.
+- **Reachability found:** live and confirmed against the real
+  registry+policy stack. `VisionCaptureTool` declared
+  `ToolPermissions(filesystem_read=True, filesystem_write=True)` but
+  reads its target from a `source` kwarg and writes to a `save_path`
+  kwarg (also reads a `device` kwarg for camera hardware paths) — none
+  of these match the registry's generic `path`/`file_path`/`target`/
+  `destination` heuristic, so the declared permissions enforced
+  **nothing** regardless of `FilesystemPolicy` configuration.
+  Live-reproduced: with nothing filesystem-allowlisted,
+  `vision_capture(source="/etc/shadow", save_path="/tmp/exfil.jpg")`
+  **passed the registry's permission check** with zero denial and the
+  tool proceeded to actually call `cv2.imread("/etc/shadow")` — it only
+  failed because `/etc/shadow` isn't a valid image format, not because
+  of any policy gate. A source pointed at a real image file the operator
+  never intended to expose (or any other content OpenCV can decode, not
+  limited to conventional image formats) would have succeeded reading
+  it, and any `save_path` would have succeeded writing to it, with the
+  filesystem allowlist providing zero protection either direction.
+- **Remediation evidence:** `VisionCaptureTool.resolve_filesystem_targets()`
+  now returns `source` as a read target unless it's one of the
+  non-path sentinel values (`"webcam"`, `"camera"`, `"screenshot"`),
+  `device` as an additional read target when present, and `save_path` as
+  the write target — falling back to the same fixed
+  `~/.missy/captures/` default `execute()` itself uses when `save_path`
+  is omitted, so the check reflects the real write location even when
+  the model doesn't pass one explicitly. `VisionBurstCaptureTool`
+  likewise resolves `device` as a read target and, since its
+  `best_only=False` branch never writes to disk at all (confirmed by
+  reading `execute()`), only declares a write target
+  (`~/.missy/captures/`) when `best_only=True` — matching actual
+  behavior exactly rather than over- or under-checking. Live-verified
+  the fix denies the `/etc/shadow` reproduction above with a clean
+  `PolicyViolationError` (`"Filesystem read denied"`), and that a
+  matching request with both paths allowlisted passes the policy layer
+  cleanly. 14 new tests in `tests/vision/test_vision_tools.py`
+  (`TestVisionCaptureResolveFilesystemTargets`,
+  `TestSR14RegistryGatesVisionCapture`,
+  `TestVisionBurstResolveFilesystemTargets`).
+- **Residual risk:** `VisionDevicesTool` also declares
+  `filesystem_read=True` but was left unchanged — it takes no kwargs at
+  all and only enumerates a fixed, non-attacker-controlled sysfs path
+  set (`CameraDiscovery`), so there is no dynamic target for a resolver
+  to check; this isn't the same bug. The review's finding also names
+  `incus_file` (fixed under SR-1.5) as an example of this pattern; no
+  further tools were audited for the same parameter-name mismatch this
+  session — a full sweep of every `ToolPermissions(filesystem_*=True)`
+  or `network=True` declaration across `missy/tools/builtin/` against
+  its tool's actual kwargs has not been performed, so other
+  not-yet-found instances of this pattern may remain.
+
 ---
 
 - Timestamp: 2026-07-09 15:35:26 (raw grep-scan dump below, preserved
