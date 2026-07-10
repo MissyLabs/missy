@@ -1,6 +1,6 @@
 # Build Status
 
-Last updated: 2026-07-10 15:15 UTC
+Last updated: 2026-07-10 15:50 UTC
 
 ## Current Workstream: Validation-Harness Overhaul
 
@@ -929,6 +929,43 @@ session.
 Full detail and residual risk (mid-loop policy hot-reload revalidation
 is a narrower, separate scenario not specifically targeted by this fix)
 in `AUDIT_SECURITY.md`'s new `### SR-2.3` section.
+
+### Completed This Session, continued: SR-3.4 (budget cap checked only after the paid provider call — fifteenth critical finding, first §3 item)
+
+First finding addressed from the review's §3 (data-integrity/
+availability). `_tool_loop()` called the paid `provider.complete_with_tools()`
+first and only checked budget afterward — once accumulated spend had
+already crossed `max_spend_usd` from prior calls, the next call still
+happened, incurred real cost, and was denied only after the fact.
+Separately, `_single_turn()` — used both directly and as `_tool_loop`'s
+fallback when a provider doesn't implement `complete_with_tools` — never
+called `_check_budget()` at all, in either direction; a configured
+budget cap provided zero enforcement on that entire path. Live-verified
+both defects end-to-end: with the tracker's accumulated cost pre-set
+above a $0.01 cap, calling `_tool_loop()` still invoked
+`provider.complete_with_tools()` (confirmed via mock call assertion)
+before `BudgetExceededError` fired afterward.
+
+Fixed: added a budget check at the top of each `_tool_loop()` iteration
+(before the provider call, using cost already accumulated from prior
+calls — this cannot preempt the one call that actually crosses the
+threshold, since its own cost isn't known until it completes, but stops
+every call after that one). Also added budget checks to `_single_turn()`
+on both sides of its provider call, closing the second, independent gap
+— one change covers both the direct single-turn path and the tool-loop
+fallback. Live-verified: with the same over-budget setup,
+`provider.complete_with_tools()`/`provider.complete()` are now
+confirmed never called; normal under-budget operation and
+`max_spend_usd=0.0` (unlimited) are unaffected. 5 new tests in
+`tests/agent/test_runtime_enhancements.py::TestBudgetCheckedBeforePaidCall`.
+
+This is the fifteenth independent, confirmed critical finding this
+session.
+
+Full detail and residual risk (the separate cross-session-aggregation
+sub-finding — a shared Discord/API runtime's `CostTracker` never resets
+between logically distinct sessions — is not addressed by this ordering
+fix) in `AUDIT_SECURITY.md`'s new `### SR-3.4` section.
 
 ### Known Pre-Existing Failure (not caused by this session)
 

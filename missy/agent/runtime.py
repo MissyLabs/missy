@@ -992,6 +992,18 @@ class AgentRuntime:
         try:
             for iteration in range(self.config.max_iterations):
                 _progress.on_iteration(iteration, self.config.max_iterations)
+
+                # SR-3.4: check budget against cost already accumulated from
+                # prior calls *before* making another paid provider call.
+                # check_budget() only ever raises once total_cost_usd has
+                # already crossed max_spend_usd from previous responses, so
+                # this cannot preemptively deny the one call that actually
+                # crosses the threshold (its cost isn't known until it
+                # completes) — but it stops every call *after* that one from
+                # incurring further billed usage before being denied, which
+                # is what the post-call-only check below could never do.
+                self._check_budget(session_id=session_id, task_id=task_id)
+
                 if getattr(provider, "accepts_message_dicts", False) is True:
                     provider_messages = self._dicts_to_native_messages(system_prompt, loop_messages)
                 else:
@@ -1283,6 +1295,14 @@ class AgentRuntime:
         Returns:
             A :class:`~missy.providers.base.CompletionResponse`.
         """
+        # SR-3.4: _single_turn() previously never checked budget at all --
+        # neither before nor after its paid provider.complete() call. It is
+        # used both directly (the non-tool-loop single-turn path) and as
+        # _tool_loop's fallback when a provider doesn't implement
+        # complete_with_tools, so this is a second, independent gap from
+        # the pre-flight check added to _tool_loop's main iteration.
+        self._check_budget(session_id=session_id, task_id=task_id)
+
         msg_objects = self._dicts_to_messages(system_prompt, messages)
         complete_kwargs: dict = {
             "session_id": session_id,
@@ -1301,6 +1321,7 @@ class AgentRuntime:
             **complete_kwargs,
         )
         self._record_cost(result, session_id=session_id)
+        self._check_budget(session_id=session_id, task_id=task_id)
         return result
 
     # ------------------------------------------------------------------

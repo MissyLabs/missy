@@ -127,6 +127,152 @@ class TestCheckBudget:
 
 
 # ---------------------------------------------------------------------------
+# SR-3.4: budget must be checked BEFORE a paid provider call, not only
+# after -- otherwise every request past the cap incurs another paid
+# provider call before being denied (a billing-control bug worse than a
+# clean lockout).
+# ---------------------------------------------------------------------------
+
+
+class TestBudgetCheckedBeforePaidCall:
+    def test_tool_loop_denies_before_paid_call_when_already_over_budget(self):
+        """The core SR-3.4 reproduction: once accumulated cost from prior
+        calls has already crossed max_spend_usd, the NEXT provider call
+        must never happen at all."""
+        provider = _make_provider()
+        provider.accepts_message_dicts = False
+        provider.complete_with_tools = MagicMock()
+
+        reg = _make_registry({"fake": provider})
+        registry_module._registry = reg
+
+        cfg = AgentConfig(provider="fake", max_iterations=5, max_spend_usd=0.01)
+        runtime = AgentRuntime(cfg)
+        # Simulate: budget was already exhausted by prior calls in this
+        # session/runtime (CostTracker persists across calls).
+        runtime._cost_tracker.record(
+            "claude-opus-4", prompt_tokens=10_000, completion_tokens=10_000
+        )
+
+        with pytest.raises(BudgetExceededError):
+            runtime._tool_loop(
+                provider=provider,
+                tools=[],
+                system_prompt="",
+                messages=[{"role": "user", "content": "hi"}],
+                session_id="s",
+                task_id="t",
+            )
+
+        provider.complete_with_tools.assert_not_called()
+
+    def test_single_turn_denies_before_paid_call_when_already_over_budget(self):
+        """_single_turn() previously never checked budget at all, in
+        either direction -- used both directly and as _tool_loop's
+        fallback when a provider doesn't implement complete_with_tools."""
+        provider = _make_provider()
+        provider.complete = MagicMock()
+
+        reg = _make_registry({"fake": provider})
+        registry_module._registry = reg
+
+        cfg = AgentConfig(provider="fake", max_spend_usd=0.01)
+        runtime = AgentRuntime(cfg)
+        runtime._cost_tracker.record(
+            "claude-opus-4", prompt_tokens=10_000, completion_tokens=10_000
+        )
+
+        with pytest.raises(BudgetExceededError):
+            runtime._single_turn(
+                provider=provider,
+                system_prompt="",
+                messages=[{"role": "user", "content": "hi"}],
+                session_id="s",
+                task_id="t",
+            )
+
+        provider.complete.assert_not_called()
+
+    def test_tool_loop_proceeds_normally_under_budget(self):
+        from missy.providers.base import CompletionResponse
+
+        provider = _make_provider()
+        provider.accepts_message_dicts = False
+        provider.complete_with_tools = MagicMock(
+            return_value=CompletionResponse(
+                content="done",
+                model="m",
+                provider="fake",
+                usage={"prompt_tokens": 1, "completion_tokens": 1},
+                raw={},
+                finish_reason="stop",
+                tool_calls=None,
+            )
+        )
+
+        reg = _make_registry({"fake": provider})
+        registry_module._registry = reg
+
+        cfg = AgentConfig(provider="fake", max_iterations=3, max_spend_usd=100.0)
+        runtime = AgentRuntime(cfg)
+
+        result_text, tools_used = runtime._tool_loop(
+            provider=provider,
+            tools=[],
+            system_prompt="",
+            messages=[{"role": "user", "content": "hi"}],
+            session_id="s",
+            task_id="t",
+        )
+
+        assert result_text == "done"
+        provider.complete_with_tools.assert_called_once()
+
+    def test_single_turn_proceeds_normally_under_budget(self):
+        provider = _make_provider(reply="hello there")
+
+        reg = _make_registry({"fake": provider})
+        registry_module._registry = reg
+
+        cfg = AgentConfig(provider="fake", max_spend_usd=100.0)
+        runtime = AgentRuntime(cfg)
+
+        result = runtime._single_turn(
+            provider=provider,
+            system_prompt="",
+            messages=[{"role": "user", "content": "hi"}],
+            session_id="s",
+            task_id="t",
+        )
+
+        assert result.content == "hello there"
+        provider.complete.assert_called_once()
+
+    def test_unlimited_budget_never_blocks(self):
+        """max_spend_usd=0.0 (the default) means unlimited -- no check
+        should ever deny regardless of accumulated cost."""
+        provider = _make_provider()
+        reg = _make_registry({"fake": provider})
+        registry_module._registry = reg
+
+        cfg = AgentConfig(provider="fake", max_spend_usd=0.0)
+        runtime = AgentRuntime(cfg)
+        runtime._cost_tracker.record(
+            "claude-opus-4", prompt_tokens=1_000_000, completion_tokens=1_000_000
+        )
+
+        result = runtime._single_turn(
+            provider=provider,
+            system_prompt="",
+            messages=[{"role": "user", "content": "hi"}],
+            session_id="s",
+            task_id="t",
+        )
+        provider.complete.assert_called_once()
+        assert result is not None
+
+
+# ---------------------------------------------------------------------------
 # Checkpoint recovery scan
 # ---------------------------------------------------------------------------
 

@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (20 checkpoints this session, full suite green after every one)
+## Changed (21 checkpoints this session, full suite green after every one)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -19,7 +19,7 @@ Draft PR: https://github.com/MissyLabs/missy/pull/31
 
 **All of FX-A through FX-G are now done** per the prompt's stated dependency order.
 
-### Fourteen independent, confirmed critical security vulnerabilities (full detail in AUDIT_SECURITY.md)
+### Fifteen independent, confirmed critical security vulnerabilities (full detail in AUDIT_SECURITY.md)
 
 Found via the same systematic audit against `~/Missy-security-review.md`. Five are "an unauthenticated/unrestricted action reachable due to a missing gate"; the rest are variations — declared tool metadata not matching reality, a security check applied asymmetrically, and enforcement narrower than its own declared scope.
 
@@ -36,6 +36,7 @@ Found via the same systematic audit against `~/Missy-security-review.md`. Five a
 11. **SR-1.11**: `McpManager._save_config()` rebuilt every config entry purely from live client state (`name`/`command`/`url`), silently dropping any pinned `digest`. `add_server()` calls `_save_config()` unconditionally after every successful connect, including reconnects, so the very next ordinary restart after a successful `missy mcp pin` erased the pin — no attacker interaction needed. Live-reproduced: pinned a digest, simulated a restart via `connect_all()` on a fresh `McpManager` — the `digest` key was completely gone afterward, and a subsequent tampered manifest would then connect with zero verification and no signal that protection had silently stopped applying. Fixed by having `_save_config()` recover and preserve each server's currently pinned digest from the existing on-disk config before rewriting. Live-verified the digest survives repeated reconnect cycles *and* remains functionally effective — a tampered manifest after a clean reconnect is still correctly denied.
 12. **SR-2.4 (first §2 item — unattended-execution hazards)**: `_rewrite_heredoc_command()` wrote a model-supplied `shell_exec` heredoc body to a real temp file *before* the shell policy check (which only happens later inside `registry.execute()`) — no interpreter allowlist check existed in the function at all. Live-reproduced: a heredoc body reading `SUPER_SECRET_TOKEN` from the environment was written to `/tmp/missy_heredoc_*.py` unconditionally, regardless of whether `"python3"` would ever be permitted to execute; the file was also never deleted afterward. Fixed: the interpreter is now checked against the real shell policy (reusing SR-1.7's check) before anything is written — denied/uninitialised-policy cases return the original command unmodified with zero disk footprint — and the temp file path is returned to the caller, which now deletes it in a `finally` block once the tool call completes regardless of outcome. Live-verified: with `"python3"` not allowlisted, zero new files appear on disk at any point.
 13. **SR-2.3**: `_tool_loop()` resolves the per-turn visible tool set once via `_get_tools()` (capability_mode + tool_policy) and presents it to the provider, but `_execute_tool()` — the function that actually dispatches every tool call the model returns — checked nothing against that resolved set, looking the name up directly in the live `ToolRegistry`. Live-reproduced end-to-end against real `AgentRuntime` code: with `capability_mode="safe-chat"`, `_get_tools()` correctly excluded `shell_exec` from the visible set, yet calling `_execute_tool()` directly with a `shell_exec` call still dispatched to `registry.execute()` and returned success — a hallucinated, stale, or provider-ignored-the-function-list tool name would silently bypass the capability-mode/tool-policy layer entirely. Fixed: `_tool_loop()` now threads the exact resolved `allowed_tool_names` set into every `_execute_tool()` call; any name outside it is refused before the registry is ever consulted, with a `deny` audit event. Live-verified `registry.execute` is confirmed never invoked for the denied reproduction.
+14. **SR-3.4 (first §3 item — data-integrity/availability)**: `_tool_loop()` called the paid `provider.complete_with_tools()` first and only checked budget afterward, so once accumulated spend had already crossed `max_spend_usd` from prior calls, the next call still happened, incurred real cost, and was denied only after the fact. Separately, `_single_turn()` — used both directly and as `_tool_loop`'s fallback for providers without `complete_with_tools` — never called `_check_budget()` at all, in either direction. Live-verified both defects: with cost pre-set above a $0.01 cap, `_tool_loop()` still invoked the paid call before raising. Fixed by checking budget at the top of each loop iteration (using cost already accumulated from prior calls — the one call that actually crosses the threshold still happens, since its cost isn't known until it completes, but every call after that is now blocked pre-flight) and adding the same check to `_single_turn()` on both sides of its call. Live-verified zero paid calls occur once the budget is already exceeded.
 
 ## Verification
 
@@ -44,7 +45,7 @@ python3 -m pytest tests/ -q -o faulthandler_timeout=120 \
   --deselect tests/vision/test_discovery_capture_sysfs.py::TestCacheTTL::test_cache_valid_within_ttl \
   --deselect tests/vision/test_discovery_edge_cases.py::TestPermissionDeniedOnDevice::test_device_that_does_not_exist_is_skipped \
   --deselect tests/vision/test_discovery_edge_cases.py::TestRapidAddRemove::test_cached_results_returned_within_ttl
-20853 passed, 13 skipped, 3 deselected in 446.09s (0:07:26)
+20858 passed, 13 skipped, 3 deselected in 448.64s (0:07:28)
 ```
 
 Full detail in `BUILD_STATUS.md`, `AUDIT_SECURITY.md`, and
@@ -57,13 +58,16 @@ it lives in the three files above.)
 
 - **#9** SR-1.x through SR-4.x security review remediation — this
   session covered SR-1.2/1.3, SR-1.4, SR-1.5, SR-1.6, SR-1.7, SR-1.8,
-  SR-1.9a, SR-1.10, SR-1.11, SR-1.12, SR-1.13, SR-2.3, SR-2.4 (plus
-  SR-3.1 substantially via FX-B). Remaining: SR-1.1 (audit signing —
-  larger cross-cutting change), SR-1.9b (DNS TOCTOU, substantially
-  harder), SR-2.1/SR-2.2 (scheduled jobs default to full capability
-  mode; proactive triggers default to no-confirmation with no gate
-  wired — both are product-policy default-value questions more than
-  mechanical bugs), SR-3.2 through SR-3.5 (data-integrity/availability),
+  SR-1.9a, SR-1.10, SR-1.11, SR-1.12, SR-1.13, SR-2.3, SR-2.4, SR-3.4
+  (plus SR-3.1 substantially via FX-B). Remaining: SR-1.1 (audit
+  signing — larger cross-cutting change), SR-1.9b (DNS TOCTOU,
+  substantially harder), SR-2.1/SR-2.2 (scheduled jobs default to full
+  capability mode; proactive triggers default to no-confirmation with
+  no gate wired — both are product-policy default-value questions more
+  than mechanical bugs), SR-3.2/SR-3.3/SR-3.5 (compaction silently
+  swallowing exceptions, large-tool-output discard, non-atomic JSON
+  store writes — SR-3.4's cross-session-aggregation sub-finding also
+  remains open, separate from the ordering fix landed this checkpoint),
   SR-4.x (dead/unwired features).
 - **SR-1.7's launcher sub-finding** remains open — `find`/`xargs`/
   `bash`/`sudo` etc. are allowlist-able with only a warning, and
@@ -125,18 +129,23 @@ rather than code-level reasoning about what *should* happen.
 
 If a way to safely exercise a real or scripted acpx delegate call
 becomes available, prioritize FX-A bullet 6 — it unblocks re-validating
-everything else. Otherwise, §2 is now down to SR-2.1/SR-2.2, both of
-which are genuine product-policy decisions (should `capability_mode`
-default to something narrower than `"full"` for scheduled jobs? should
-`requires_confirmation` default to `True`, and should the production
-CLI construct/inject a real `ApprovalGate`?) rather than mechanical bug
-fixes — worth flagging for explicit product input before changing
-defaults that could break existing deployments' expectations. SR-1.1
-(audit signing) remains the largest §1 item; §3
-(data-integrity/availability) and §4 (dead/unwired features) are the
-next concrete, mechanical-fix-shaped targets — several §3 items
-(compaction silently swallowing exceptions, large-tool-output discard,
-non-atomic JSON store writes) read as similarly well-scoped to the
-findings closed this session. Alternatively pick up one of the concrete
-scoped tasks above (#11, #12, #15, #16, #17), all self-contained and
-not requiring a live delegate.
+everything else. Otherwise, §3 has its first item done (SR-3.4's
+ordering defect); SR-3.2 (compaction silently swallows three
+independent breaks — `timestamp[:19]` on a `datetime`, a call to
+`provider.chat()` no provider implements, a missing `add_summary` on
+the JSON store — note FX-B's memory-backend fix may have already
+resolved the JSON-store-specific breaks as a side effect, worth
+verifying before assuming new code is needed) and SR-3.3 (large tool
+outputs discarded with no retrievable record, likely the same
+already-fixed-by-FX-B situation) are natural next candidates precisely
+*because* they may turn out to be quick verification-only checkpoints
+rather than new fixes. §2 is down to SR-2.1/SR-2.2, both genuine
+product-policy decisions (should `capability_mode` default to something
+narrower than `"full"` for scheduled jobs? should `requires_confirmation`
+default to `True`, and should the production CLI construct/inject a
+real `ApprovalGate`?) rather than mechanical bug fixes — worth flagging
+for explicit product input before changing defaults that could break
+existing deployments' expectations. SR-1.1 (audit signing) remains the
+largest §1 item; §4 (dead/unwired features) follows after §3.
+Alternatively pick up one of the concrete scoped tasks above (#11, #12,
+#15, #16, #17), all self-contained and not requiring a live delegate.

@@ -1,5 +1,35 @@
 # TEST_RESULTS
 
+## Run: 2026-07-10 15:50 UTC — validation-harness overhaul, SR-3.4 (budget cap checked only after the paid provider call)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Finding: `_tool_loop()` called the paid provider before checking
+  budget, so once accumulated spend had already crossed
+  `max_spend_usd`, the next call still happened and incurred real cost
+  before being denied. `_single_turn()` never called `_check_budget()`
+  at all, in either direction.
+- Live reproduction: with the cost tracker's accumulated cost pre-set
+  above the configured cap, calling `_tool_loop()` still invoked
+  `provider.complete_with_tools()` (confirmed via mock call assertion)
+  before `BudgetExceededError` fired afterward. Confirmed fixed: the
+  identical scenario now confirms `provider.complete_with_tools()`/
+  `provider.complete()` are never called.
+- Fix: added a budget check at the top of each `_tool_loop()` iteration
+  (before the provider call, using cost already accumulated from prior
+  calls) and to `_single_turn()` on both sides of its provider call.
+- Command: `pytest tests/agent/test_runtime_enhancements.py -q`
+- Result: `18 passed` (5 new tests in
+  `TestBudgetCheckedBeforePaidCall`)
+- Command: `pytest tests/agent/ tests/tools/ tests/policy/ tests/integration/ -q`
+- Result: `6834 passed, 6 skipped`
+- Command: `pytest tests/ -q -o faulthandler_timeout=120` with the 3
+  known pre-existing vision failures deselected
+- Result: `20858 passed, 13 skipped, 3 deselected in 448.64s (0:07:28)`
+  — 5 more passing than the prior (SR-2.3) checkpoint's 20853, matching
+  the tests added this checkpoint exactly; no regressions.
+
+---
+
 ## Run: 2026-07-10 15:15 UTC — validation-harness overhaul, SR-2.3 (execution-time tool allow-set not revalidated at dispatch)
 
 - Branch: `overhaul/missy-validation-20260710-031406`

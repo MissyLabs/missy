@@ -882,6 +882,62 @@ requirement — do not overwrite, append new entries as work continues.
   registry-known name works regardless of the per-turn set" gap, which
   is the finding's primary, more broadly reachable claim).
 
+### SR-3.4 — Budget cap checked only after the paid provider call
+
+- **Status: fixed** for the checked-after-not-before ordering defect —
+  "a billing-control bug worse than a clean lockout," in the review's
+  own words. The separate cross-session-aggregation sub-finding (a
+  shared Discord/API runtime's `CostTracker` never resets between
+  logically distinct sessions) is unaddressed — see residual risk.
+- **Reachability found:** live and directly confirmed. `_tool_loop()`
+  called `provider.complete_with_tools()` (a paid call) and only
+  afterward called `_record_cost()` then `_check_budget()` — so once
+  accumulated spend had already crossed `max_spend_usd` from prior
+  calls, the *next* call still happened, incurred real provider cost,
+  and was denied only after the fact. Separately, `_single_turn()` —
+  used both directly for non-tool-loop single-turn requests and as
+  `_tool_loop`'s fallback when a provider doesn't implement
+  `complete_with_tools` — never called `_check_budget()` at all, in
+  either direction; a budget cap configured via `max_spend_usd`
+  provided **zero enforcement** on that entire code path. Live-verified
+  both defects end-to-end against real `AgentRuntime`/`CostTracker`
+  code: with `max_spend_usd=0.01` and the tracker's accumulated cost
+  pre-set to `$5.00` (simulating budget already exhausted by prior
+  calls), calling `_tool_loop()` still invoked
+  `provider.complete_with_tools()` — confirmed via mock call assertion
+  — before `BudgetExceededError` was raised afterward.
+- **Remediation evidence:** added a `self._check_budget(...)` call at
+  the very top of each `_tool_loop()` iteration, before the rate-limit
+  acquire and before the provider call — using the cost already
+  accumulated from *prior* calls (fully known at that point), which
+  cannot preemptively deny the one call that actually crosses the
+  threshold (its own cost isn't known until it completes and is
+  recorded, an inherent limit of usage-based billing) but does stop
+  every call *after* that one from incurring further billed usage
+  before being denied. Also added `_check_budget()` calls to
+  `_single_turn()` (both before and after its `provider.complete()`
+  call), closing the second, independent "no enforcement at all" gap
+  on that path — one change here covers every caller (the direct
+  single-turn path and the tool-loop fallback both benefit
+  automatically). Live-verified: with the same $5.00-already-spent /
+  $0.01-cap setup, `provider.complete_with_tools()` is now confirmed
+  **never called**, and the identical scenario for `_single_turn()`
+  confirms `provider.complete()` is also never called. Confirmed the
+  fix doesn't affect normal (under-budget) operation, and that
+  `max_spend_usd=0.0` (unlimited, the default) never blocks regardless
+  of accumulated cost. 5 new tests in
+  `tests/agent/test_runtime_enhancements.py::TestBudgetCheckedBeforePaidCall`.
+- **Residual risk:** the cross-session-aggregation sub-finding is not
+  addressed — `CostTracker` is constructed once per `AgentRuntime` and
+  never resets, so a shared runtime serving multiple logically distinct
+  sessions (e.g. a Discord bot or the Web API serving many users through
+  one process) aggregates spend across all of them against a single cap
+  intended to be per-session, which could cause one user's activity to
+  exhaust budget for everyone else sharing that runtime. That is a
+  separate architectural question (does `max_spend_usd` need to become
+  per-session-keyed rather than per-runtime?) not addressed by this
+  ordering fix.
+
 ---
 
 - Timestamp: 2026-07-09 15:35:26 (raw grep-scan dump below, preserved
