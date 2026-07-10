@@ -1044,6 +1044,7 @@ class TestScheduleList:
         job.name = "Daily digest"
         job.schedule = "daily at 09:00"
         job.provider = "anthropic"
+        job.capability_mode = "safe-chat"
         job.enabled = True
         job.run_count = 0
         job.last_run = None
@@ -1074,6 +1075,7 @@ class TestScheduleList:
         job.name = "Hourly check"
         job.schedule = "every hour"
         job.provider = "anthropic"
+        job.capability_mode = "safe-chat"
         job.enabled = True
         job.run_count = 5
         job.last_run = None
@@ -1105,6 +1107,7 @@ class TestScheduleList:
             job.name = name
             job.schedule = schedule
             job.provider = "anthropic"
+            job.capability_mode = "safe-chat"
             job.enabled = True
             job.run_count = 0
             job.last_run = None

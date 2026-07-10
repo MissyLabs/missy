@@ -1248,6 +1248,73 @@ requirement — do not overwrite, append new entries as work continues.
   fix (temp-file + atomic rename + fsync + locking) before shipping,
   not that the class itself is safe to reach for casually now.
 
+### SR-2.1 — Scheduled jobs defaulted to full capability_mode (unattended runs = interactive-session-level tool access)
+
+- **Status: fixed.** Product-policy decision requested and confirmed
+  with the operator before implementing (per prompt.md's requirement
+  that default-value changes affecting existing deployments get
+  explicit input, not be silently changed): scheduled jobs now default
+  to `capability_mode="safe-chat"` (read-only tools only) instead of
+  `"full"`, with an explicit per-job opt-in to `"full"`.
+- **Reachability found:** `SchedulerManager._run_job()`
+  (`missy/scheduler/manager.py`) constructed
+  `AgentRuntime(AgentConfig(provider=job.provider))` with no
+  `capability_mode` override at all, so every scheduled job ran with
+  `AgentConfig`'s class default, `capability_mode="full"` — identical
+  tool access (shell, filesystem write, browser, everything) to an
+  interactive session, but running completely unattended on a timer
+  with no human in the loop to catch a bad, hallucinated, or
+  prompt-injected action before it executes. `ScheduledJob`
+  (`missy/scheduler/jobs.py`) had no `capability_mode` field at all —
+  there was no way to configure a job's tool access differently even
+  if an operator wanted to.
+- **Remediation evidence:** added `ScheduledJob.capability_mode: str =
+  "safe-chat"` (a new field, round-tripped through `to_dict()`/
+  `from_dict()`); a legacy `jobs.json` record written before this field
+  existed gets `"safe-chat"` on load, not `"full"` — absence of an
+  explicit value must not imply the most permissive option (fail
+  closed), and an unrecognized/tampered stored value also falls back to
+  `"safe-chat"` rather than being passed through unvalidated. Added
+  `SchedulerManager.add_job(capability_mode: str = "safe-chat", ...)`
+  with validation against `VALID_CAPABILITY_MODES = ("full",
+  "safe-chat", "no-tools")` — deliberately excludes `"discord"`, a
+  channel-specific mode not appropriate for an unattended scheduler
+  run. `_run_job()` now threads `job.capability_mode` into
+  `AgentConfig(provider=job.provider,
+  capability_mode=job.capability_mode)`. Added `missy schedule add
+  --capability-mode` (default `safe-chat`, `click.Choice`-constrained,
+  same three values), and a `Mode` column in `missy schedule list`'s
+  table for visibility. Live-verified via a real `SchedulerManager`
+  end-to-end: a job created with default settings has
+  `capability_mode == "safe-chat"`, and `_run_job()` constructs
+  `AgentConfig` with `capability_mode="safe-chat"` (asserted via
+  `MockConfig.assert_called_once_with(...)`, not just checking the
+  stored field); a job explicitly created with `capability_mode="full"`
+  retains full access through the same call path — the restricted
+  default does not silently override an explicit opt-in. 20 new tests
+  across `tests/scheduler/test_jobs.py` (defaults, round-trip,
+  legacy-record fail-closed default, invalid-value fallback),
+  `tests/scheduler/test_manager_extended.py` (real
+  `SchedulerManager`/`_run_job` end-to-end), and
+  `tests/cli/test_cli_commands.py` (CLI flag forwarding, invalid-value
+  rejection). `tests/agent/`+`tests/tools/`+`tests/cli/`+
+  `tests/scheduler/`+`tests/skills/`+`tests/unit/`+`tests/memory/`
+  (10,060 tests) pass with no regressions; full suite 20,880 passed (up
+  from 20,870), only the 3 known pre-existing vision flakes failing.
+- **Residual risk:** this is a behavior change for any existing
+  deployment with scheduled jobs already relying on implicit `"full"`
+  tool access — on upgrade, those jobs' unattended runs will lose shell/
+  filesystem-write/browser access unless the operator explicitly edits
+  the job to `capability_mode="full"` (there is currently no `missy
+  schedule edit` command; the only way to change an existing job's mode
+  is to remove and re-add it, or hand-edit `~/.missy/jobs.json`). This
+  is a deliberate, confirmed trade-off (least-privilege-by-default over
+  silent continuity) rather than an oversight, but it should be called
+  out prominently in release notes / a migration note if this branch
+  ships. SR-2.2 (proactive trigger confirmation gating) is the
+  remaining item in this pair; not yet implemented as of this
+  checkpoint.
+
 ---
 
 - Timestamp: 2026-07-09 15:35:26 (raw grep-scan dump below, preserved

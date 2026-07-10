@@ -356,6 +356,7 @@ class TestScheduleAdd:
         job.name = "Test Job"
         job.schedule = "every 5 minutes"
         job.provider = "anthropic"
+        job.capability_mode = "safe-chat"
         return job
 
     def test_schedule_add_exits_zero(self, runner: CliRunner):
@@ -407,6 +408,101 @@ class TestScheduleAdd:
                 ],
             )
         assert "Test Job" in result.output or "Job added" in result.output
+
+    def test_schedule_add_defaults_capability_mode_to_safe_chat(self, runner: CliRunner):
+        """SR-2.1 regression: `missy schedule add` without --capability-mode
+        must forward "safe-chat" to add_job(), not leave the caller to
+        pick up whatever SchedulerManager.add_job()'s own default is
+        implicitly -- the CLI's advertised default and the manager's
+        actual default must agree.
+        """
+        cfg_path = _write_temp_config()
+        mock_mgr = MagicMock()
+        mock_mgr.add_job.return_value = self._make_job()
+        with (
+            _SubsystemsPatch(),
+            patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr),
+        ):
+            runner.invoke(
+                cli,
+                [
+                    "--config",
+                    cfg_path,
+                    "schedule",
+                    "add",
+                    "--name",
+                    "Test Job",
+                    "--schedule",
+                    "every 5 minutes",
+                    "--task",
+                    "Check the news",
+                ],
+            )
+        mock_mgr.add_job.assert_called_once_with(
+            name="Test Job",
+            schedule="every 5 minutes",
+            task="Check the news",
+            provider="anthropic",
+            capability_mode="safe-chat",
+        )
+
+    def test_schedule_add_explicit_full_capability_mode(self, runner: CliRunner):
+        cfg_path = _write_temp_config()
+        mock_mgr = MagicMock()
+        job = self._make_job()
+        job.capability_mode = "full"
+        mock_mgr.add_job.return_value = job
+        with (
+            _SubsystemsPatch(),
+            patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr),
+        ):
+            result = runner.invoke(
+                cli,
+                [
+                    "--config",
+                    cfg_path,
+                    "schedule",
+                    "add",
+                    "--name",
+                    "Test Job",
+                    "--schedule",
+                    "every 5 minutes",
+                    "--task",
+                    "Check the news",
+                    "--capability-mode",
+                    "full",
+                ],
+            )
+        assert result.exit_code == 0
+        mock_mgr.add_job.assert_called_once_with(
+            name="Test Job",
+            schedule="every 5 minutes",
+            task="Check the news",
+            provider="anthropic",
+            capability_mode="full",
+        )
+
+    def test_schedule_add_rejects_invalid_capability_mode(self, runner: CliRunner):
+        cfg_path = _write_temp_config()
+        with _SubsystemsPatch():
+            result = runner.invoke(
+                cli,
+                [
+                    "--config",
+                    cfg_path,
+                    "schedule",
+                    "add",
+                    "--name",
+                    "Test Job",
+                    "--schedule",
+                    "every 5 minutes",
+                    "--task",
+                    "Check the news",
+                    "--capability-mode",
+                    "root-access",
+                ],
+            )
+        assert result.exit_code != 0
 
     def test_schedule_add_invalid_schedule_exits_one(self, runner: CliRunner):
         cfg_path = _write_temp_config()

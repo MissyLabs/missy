@@ -8,6 +8,11 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+# SR-2.1: valid capability_mode values for a scheduled job. "discord" is
+# deliberately excluded -- it's a channel-specific mode, not appropriate
+# for an unattended scheduler run.
+VALID_CAPABILITY_MODES: tuple[str, ...] = ("full", "safe-chat", "no-tools")
+
 
 @dataclass
 class ScheduledJob:
@@ -34,6 +39,13 @@ class ScheduledJob:
         delete_after_run: When ``True`` the job is removed after one success.
         active_hours: ``"HH:MM-HH:MM"`` window outside which the job is skipped.
         timezone: IANA timezone string for this job (e.g. ``"America/New_York"``).
+        capability_mode: Tool-access mode for the agent run (SR-2.1).
+            ``"full"`` | ``"safe-chat"`` | ``"no-tools"``. Defaults to
+            ``"safe-chat"`` (read-only tools only) rather than ``"full"``
+            -- an unattended job with a compromised or mistaken task
+            string should not have the same blast radius as an
+            interactive session by default. Set to ``"full"`` explicitly
+            to opt a specific job into unrestricted tool access.
     """
 
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
@@ -72,6 +84,11 @@ class ScheduledJob:
     # Timezone
     # ------------------------------------------------------------------
     timezone: str = ""  # IANA timezone string, empty = system/UTC
+
+    # ------------------------------------------------------------------
+    # Capability mode (SR-2.1: least-privilege default for unattended runs)
+    # ------------------------------------------------------------------
+    capability_mode: str = "safe-chat"
 
     # ------------------------------------------------------------------
     # Helper methods
@@ -157,6 +174,8 @@ class ScheduledJob:
             "active_hours": self.active_hours,
             # Timezone
             "timezone": self.timezone,
+            # Capability mode
+            "capability_mode": self.capability_mode,
         }
 
     @classmethod
@@ -205,4 +224,14 @@ class ScheduledJob:
             active_hours=str(data.get("active_hours", "")),
             # Timezone
             timezone=str(data.get("timezone", "")),
+            # Capability mode -- legacy records predating this field (SR-2.1)
+            # get the new safe-chat default, not "full": absence of an
+            # explicit capability_mode must not imply the most permissive
+            # option. An unrecognized stored value also falls back to
+            # safe-chat rather than being passed through unvalidated.
+            capability_mode=(
+                cm
+                if (cm := str(data.get("capability_mode", "safe-chat"))) in VALID_CAPABILITY_MODES
+                else "safe-chat"
+            ),
         )

@@ -1,5 +1,42 @@
 # TEST_RESULTS
 
+## Run: 2026-07-10 18:20 UTC — validation-harness overhaul, SR-2.1 (scheduled jobs default to safe-chat capability_mode, not full)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Product-policy decision confirmed with operator before implementing:
+  scheduled jobs should default to a restricted `capability_mode`
+  rather than `"full"`.
+- Finding: `SchedulerManager._run_job()` constructed
+  `AgentConfig(provider=job.provider)` with no `capability_mode`
+  override, so every scheduled job ran with the class default
+  (`"full"`) — identical tool access to an interactive session, but
+  unattended. `ScheduledJob` had no `capability_mode` field at all.
+- Fix: added `ScheduledJob.capability_mode: str = "safe-chat"`
+  (round-tripped through serialization, fail-closed default for legacy/
+  unrecognized values); `SchedulerManager.add_job(capability_mode=...)`
+  with validation against `VALID_CAPABILITY_MODES = ("full",
+  "safe-chat", "no-tools")`; `_run_job()` now passes
+  `job.capability_mode` into `AgentConfig`; new `missy schedule add
+  --capability-mode` CLI flag (default `safe-chat`) and a `Mode` column
+  in `missy schedule list`.
+- Command: `pytest tests/scheduler/test_jobs.py
+  tests/scheduler/test_manager_extended.py
+  tests/cli/test_cli_commands.py -q`
+- Result: all pass (20 new tests: defaults/round-trip/fail-closed
+  legacy default/invalid-value fallback in `test_jobs.py`; real
+  `SchedulerManager`/`_run_job` end-to-end default-vs-explicit-full in
+  `test_manager_extended.py`; CLI flag forwarding + invalid-value
+  rejection in `test_cli_commands.py`)
+- Command: `pytest tests/agent/ tests/tools/ tests/cli/
+  tests/scheduler/ tests/skills/ tests/unit/ tests/memory/ -q
+  -o faulthandler_timeout=120`
+- Result: `10060 passed, 13 skipped` (up from 10050) — no regressions
+- Command: `pytest tests/ -q -o faulthandler_timeout=120`
+- Result: `3 failed, 20880 passed, 13 skipped in 458.82s (0:07:38)` —
+  up from 20870 (10 new tests), only the 3 known pre-existing
+  `CameraDiscovery` cache-TTL flakes failing, unrelated to this
+  checkpoint's changes.
+
 ## Run: 2026-07-10 17:45 UTC — validation-harness overhaul, SR-3.5 (non-atomic JSON writes confirmed unreachable; 3 wrong-backend bugs found and fixed)
 
 - Branch: `overhaul/missy-validation-20260710-031406`

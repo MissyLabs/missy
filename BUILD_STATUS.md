@@ -1,6 +1,6 @@
 # Build Status
 
-Last updated: 2026-07-10 17:45 UTC
+Last updated: 2026-07-10 18:20 UTC
 
 ## Current Workstream: Validation-Harness Overhaul
 
@@ -1125,6 +1125,48 @@ the security review entirely except for SR-3.4's separate
 cross-session-aggregation sub-finding. Full detail in
 `AUDIT_SECURITY.md`'s new `### SR-3.5` section.
 
+### Completed This Session, continued: SR-2.1 (scheduled jobs defaulted to full capability_mode — product-policy decision, confirmed with operator, nineteenth finding)
+
+First §2 item after this checkpoint's earlier ones (SR-2.4, SR-2.3).
+Unlike the mechanical bugs found so far, this was a genuine
+product-policy default-value question — asked and confirmed explicitly
+before implementing, per prompt.md's requirement not to silently change
+defaults affecting existing deployments. Answer: scheduled jobs should
+default to a restricted `capability_mode`, not `"full"`.
+
+Reachability: `SchedulerManager._run_job()` constructed
+`AgentRuntime(AgentConfig(provider=job.provider))` with no
+`capability_mode` override, so every scheduled job ran with
+`AgentConfig`'s class default (`"full"`) — the same tool access as an
+interactive session, but unattended, on a timer, with no human in the
+loop. `ScheduledJob` had no `capability_mode` field at all — no way to
+configure this per job even if an operator wanted to.
+
+Fixed: added `ScheduledJob.capability_mode: str = "safe-chat"`,
+round-tripped through serialization with a fail-closed legacy-record
+default (missing/unrecognized values become `"safe-chat"`, never
+`"full"`). Added `SchedulerManager.add_job(capability_mode=...)` with
+validation, threaded `job.capability_mode` into `_run_job()`'s
+`AgentConfig` construction. Added `missy schedule add
+--capability-mode` (default `safe-chat`) and a `Mode` column in
+`missy schedule list`. Live-verified end-to-end through a real
+`SchedulerManager`: default-created jobs run with `capability_mode=
+"safe-chat"`; explicitly-`"full"` jobs retain full access. 20 new
+tests. Full suite 20,880 passed (up from 20,870), only the 3 known
+pre-existing vision flakes failing.
+
+Residual risk, called out explicitly: this changes behavior for any
+existing deployment with scheduled jobs relying on implicit `"full"`
+access — those jobs lose shell/filesystem-write/browser access on
+upgrade unless the operator explicitly re-adds them with
+`--capability-mode full` (no `missy schedule edit` command exists yet).
+Deliberate trade-off, not an oversight — should be called out in
+release notes if this branch ships. SR-2.2 (proactive trigger
+confirmation gating) remains open.
+
+This is the nineteenth independent, confirmed finding/change this
+session. Full detail in `AUDIT_SECURITY.md`'s new `### SR-2.1` section.
+
 ### Known Pre-Existing Failure (not caused by this session)
 
 `tests/vision/test_discovery_capture_sysfs.py::TestCacheTTL::test_cache_valid_within_ttl`
@@ -1143,9 +1185,10 @@ Availability, And Cost) is now fully closed except SR-3.4's separate
 cross-session-aggregation sub-finding. Current remaining priority
 order:
 
-1. SR-2.1 (least-privilege scheduled jobs) / SR-2.2 (safe proactive
-   triggers, needs real `ApprovalGate` wiring) — product-policy default
-   questions.
+1. SR-2.2 (safe proactive triggers, needs real `ApprovalGate` wiring)
+   — the remaining §2 product-policy question; operator confirmed
+   "wire a real ApprovalGate, default to requiring confirmation" as
+   the direction.
 2. SR-1.1 (audit event signing — larger cross-cutting change) and
    SR-1.9b (DNS TOCTOU — needs connecting to a pinned policy-verified IP
    rather than re-resolving at connect time).

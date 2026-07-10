@@ -153,7 +153,7 @@ VoiceChannel (channels/voice/):
 
 **Skills (`missy/skills/`)** — `SkillDiscovery` scans directories for SKILL.md files (cross-agent portable skill format with YAML frontmatter). `missy skills scan` lists discovered skills. Fuzzy search by name/description.
 
-**Scheduler (`missy/scheduler/`)** — APScheduler-backed job management with JSON persistence at `~/.missy/jobs.json`. Parser converts human-friendly schedules to cron expressions.
+**Scheduler (`missy/scheduler/`)** — APScheduler-backed job management with JSON persistence at `~/.missy/jobs.json`. Parser converts human-friendly schedules to cron expressions. Each job carries a `capability_mode` (default `"safe-chat"`, read-only tools) that scopes its unattended agent run — a job's tool access does not default to `"full"` the way an interactive session's does; opt a specific job into `"full"` explicitly via `--capability-mode full`.
 
 **Security (`missy/security/`)**:
 - `InputSanitizer`: Detects 250+ prompt injection patterns with Unicode normalization, base64 decode, multi-language support
@@ -356,7 +356,7 @@ missy presets list                  Show built-in network policy presets
 missy plugins                       List plugins and their status
 missy doctor                        System health check
 
-missy schedule add                  Add scheduled job (--name, --schedule, --task, --provider)
+missy schedule add                  Add scheduled job (--name, --schedule, --task, --provider, --capability-mode; defaults to safe-chat, not full)
 missy schedule list                 List all scheduled jobs
 missy schedule pause JOB_ID         Pause a job
 missy schedule resume JOB_ID        Resume a paused job

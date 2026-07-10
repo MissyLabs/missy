@@ -779,6 +779,19 @@ def schedule() -> None:
 )
 @click.option("--task", required=True, help="Prompt/task text to run on each firing.")
 @click.option("--provider", default="anthropic", show_default=True, help="AI provider to use.")
+@click.option(
+    "--capability-mode",
+    "capability_mode",
+    default="safe-chat",
+    type=click.Choice(["full", "safe-chat", "no-tools"], case_sensitive=False),
+    show_default=True,
+    help=(
+        "Tool-access mode for this job's unattended run. safe-chat (read-only "
+        "tools) is the default so a scheduled job's blast radius is smaller "
+        "than an interactive session by default; pass --capability-mode full "
+        "to opt this specific job into unrestricted tool access."
+    ),
+)
 @click.pass_context
 def schedule_add(
     ctx: click.Context,
@@ -786,6 +799,7 @@ def schedule_add(
     schedule_str: str,
     task: str,
     provider: str,
+    capability_mode: str,
 ) -> None:
     """Add a new scheduled job.
 
@@ -795,6 +809,10 @@ def schedule_add(
             --name "Daily digest" \\
             --schedule "daily at 09:00" \\
             --task "Summarise the news"
+
+    By default the job runs in safe-chat mode (read-only tools only).
+    Pass --capability-mode full for jobs that need write access, shell,
+    or other elevated tools.
     """
     from missy.core.exceptions import SchedulerError
     from missy.scheduler.manager import SchedulerManager
@@ -804,7 +822,13 @@ def schedule_add(
 
     try:
         mgr.start()
-        job = mgr.add_job(name=name, schedule=schedule_str, task=task, provider=provider)
+        job = mgr.add_job(
+            name=name,
+            schedule=schedule_str,
+            task=task,
+            provider=provider,
+            capability_mode=capability_mode,
+        )
         mgr.stop()
     except ValueError as exc:
         _print_error(
@@ -821,7 +845,8 @@ def schedule_add(
         f"  ID      : [bold]{job.id}[/]\n"
         f"  Name    : {job.name}\n"
         f"  Schedule: {job.schedule}\n"
-        f"  Provider: {job.provider}"
+        f"  Provider: {job.provider}\n"
+        f"  Mode    : {job.capability_mode}"
     )
 
 
@@ -844,6 +869,7 @@ def schedule_list(ctx: click.Context) -> None:
     table.add_column("Name", style="bold")
     table.add_column("Schedule")
     table.add_column("Provider")
+    table.add_column("Mode")
     table.add_column("Enabled", justify="center")
     table.add_column("Runs", justify="right")
     table.add_column("Last Run")
@@ -858,6 +884,7 @@ def schedule_list(ctx: click.Context) -> None:
             job.name,
             job.schedule,
             job.provider,
+            job.capability_mode,
             enabled_text,
             str(job.run_count),
             last_run,

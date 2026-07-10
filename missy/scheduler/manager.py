@@ -28,7 +28,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 from missy.core.events import AuditEvent, event_bus
 from missy.core.exceptions import SchedulerError
-from missy.scheduler.jobs import ScheduledJob
+from missy.scheduler.jobs import VALID_CAPABILITY_MODES, ScheduledJob
 from missy.scheduler.parser import parse_schedule
 
 logger = logging.getLogger(__name__)
@@ -113,6 +113,7 @@ class SchedulerManager:
         delete_after_run: bool = False,
         active_hours: str = "",
         timezone: str = "",
+        capability_mode: str = "safe-chat",
     ) -> ScheduledJob:
         """Create a new job, persist it, and register it with APScheduler.
 
@@ -129,12 +130,19 @@ class SchedulerManager:
             delete_after_run: Remove the job after one successful execution.
             active_hours: ``"HH:MM-HH:MM"`` window; job is skipped outside it.
             timezone: IANA timezone string for cron/date triggers.
+            capability_mode: Tool-access mode for the job's agent run
+                (SR-2.1). One of ``"full"``, ``"safe-chat"``, or
+                ``"no-tools"``. Defaults to ``"safe-chat"`` (read-only
+                tools) rather than ``"full"`` -- an unattended job should
+                not have interactive-session-level tool access unless
+                explicitly opted in.
 
         Returns:
             The newly created :class:`ScheduledJob`.
 
         Raises:
-            ValueError: When *schedule* cannot be parsed.
+            ValueError: When *schedule* cannot be parsed, or
+                *capability_mode* is not a recognized value.
             SchedulerError: When APScheduler fails to register the job.
         """
         # --- Input validation ---
@@ -144,6 +152,10 @@ class SchedulerManager:
             raise ValueError("Job task must not be empty.")
         if max_attempts < 1:
             raise ValueError(f"max_attempts must be >= 1, got {max_attempts}.")
+        if capability_mode not in VALID_CAPABILITY_MODES:
+            raise ValueError(
+                f"capability_mode must be one of {VALID_CAPABILITY_MODES}, got {capability_mode!r}."
+            )
 
         # Validate task length to prevent excessive token usage / cost.
         _MAX_TASK_LENGTH = 50_000
@@ -176,6 +188,7 @@ class SchedulerManager:
             delete_after_run=delete_after_run,
             active_hours=active_hours,
             timezone=timezone,
+            capability_mode=capability_mode,
         )
         self._jobs[job.id] = job
 
@@ -191,7 +204,13 @@ class SchedulerManager:
         self._emit_event(
             event_type="scheduler.job.add",
             result="allow",
-            detail={"job_id": job.id, "name": name, "schedule": schedule, "provider": provider},
+            detail={
+                "job_id": job.id,
+                "name": name,
+                "schedule": schedule,
+                "provider": provider,
+                "capability_mode": capability_mode,
+            },
         )
         return job
 
@@ -373,6 +392,7 @@ class SchedulerManager:
                 "name": job.name,
                 "provider": job.provider,
                 "run_count": job.run_count,
+                "capability_mode": job.capability_mode,
             },
             session_id=session_id,
             task_id=task_id,
@@ -398,7 +418,9 @@ class SchedulerManager:
             except Exception:
                 logger.debug("Could not run InputSanitizer on job task", exc_info=True)
 
-            agent = AgentRuntime(AgentConfig(provider=job.provider))
+            agent = AgentRuntime(
+                AgentConfig(provider=job.provider, capability_mode=job.capability_mode)
+            )
             result_text = agent.run(job.task, session_id=session_id)
         except Exception as exc:
             logger.exception("Error executing scheduled job %r (id=%s).", job.name, job_id)

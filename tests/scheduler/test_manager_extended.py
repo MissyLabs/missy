@@ -49,6 +49,56 @@ class TestRunJob:
         assert updated_job.consecutive_failures == 0
 
     @patch("missy.scheduler.manager.uuid")
+    def test_run_job_uses_job_capability_mode_default_safe_chat(
+        self, mock_uuid, started_manager: SchedulerManager
+    ):
+        """SR-2.1 regression: a job created with default settings must run
+        the agent with capability_mode="safe-chat", not "full" -- an
+        unattended job's tool access must be restricted by default.
+        """
+        mock_uuid.uuid4.return_value = "test-session-id"
+        job = started_manager.add_job("default mode job", "every 5 minutes", "do stuff")
+        assert job.capability_mode == "safe-chat"
+
+        with (
+            patch("missy.agent.runtime.AgentRuntime") as MockRuntime,
+            patch("missy.agent.runtime.AgentConfig") as MockConfig,
+        ):
+            mock_agent = MagicMock()
+            mock_agent.run.return_value = "Done!"
+            MockRuntime.return_value = mock_agent
+
+            started_manager._run_job(job.id)
+
+        MockConfig.assert_called_once_with(provider=job.provider, capability_mode="safe-chat")
+
+    @patch("missy.scheduler.manager.uuid")
+    def test_run_job_full_capability_mode_explicit_opt_in(
+        self, mock_uuid, started_manager: SchedulerManager
+    ):
+        """A job explicitly created with capability_mode="full" retains
+        full tool access -- the restricted default must not silently
+        override an explicit opt-in.
+        """
+        mock_uuid.uuid4.return_value = "test-session-id"
+        job = started_manager.add_job(
+            "full mode job", "every 5 minutes", "do stuff", capability_mode="full"
+        )
+        assert job.capability_mode == "full"
+
+        with (
+            patch("missy.agent.runtime.AgentRuntime") as MockRuntime,
+            patch("missy.agent.runtime.AgentConfig") as MockConfig,
+        ):
+            mock_agent = MagicMock()
+            mock_agent.run.return_value = "Done!"
+            MockRuntime.return_value = mock_agent
+
+            started_manager._run_job(job.id)
+
+        MockConfig.assert_called_once_with(provider=job.provider, capability_mode="full")
+
+    @patch("missy.scheduler.manager.uuid")
     def test_run_job_error_increments_failures(self, mock_uuid, started_manager: SchedulerManager):
         mock_uuid.uuid4.return_value = "test-session"
         job = started_manager.add_job("fail", "every 5 minutes", "crash")

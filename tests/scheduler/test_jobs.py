@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from missy.scheduler.jobs import ScheduledJob
+from missy.scheduler.jobs import VALID_CAPABILITY_MODES, ScheduledJob
 
 
 class TestScheduledJobDefaults:
@@ -38,6 +38,15 @@ class TestScheduledJobDefaults:
         assert job.next_run is None
         assert job.last_result is None
 
+    def test_default_capability_mode_is_safe_chat(self):
+        """SR-2.1: unattended scheduled jobs must default to a restricted
+        tool-access mode, not the same "full" access an interactive
+        session gets -- an unattended job with a bad/compromised task
+        string should have a smaller blast radius by default.
+        """
+        job = ScheduledJob()
+        assert job.capability_mode == "safe-chat"
+
 
 class TestScheduledJobToDict:
     """Tests for ScheduledJob.to_dict."""
@@ -66,6 +75,7 @@ class TestScheduledJobToDict:
             "delete_after_run",
             "active_hours",
             "timezone",
+            "capability_mode",
         }
         assert expected_keys == set(d.keys())
 
@@ -148,3 +158,29 @@ class TestScheduledJobFromDict:
         ts = "2025-03-15T10:30:00"
         job = ScheduledJob.from_dict({"last_run": ts})
         assert job.last_run == datetime(2025, 3, 15, 10, 30, 0)
+
+    def test_from_dict_preserves_capability_mode(self):
+        job = ScheduledJob.from_dict({"capability_mode": "full"})
+        assert job.capability_mode == "full"
+
+    def test_from_dict_legacy_record_missing_capability_mode_fails_closed(self):
+        """SR-2.1 regression: a jobs.json entry written before this field
+        existed must not silently resolve to "full" -- absence of an
+        explicit capability_mode must not imply the most permissive
+        option (fail closed).
+        """
+        legacy_record = {"name": "old job", "schedule": "daily at 09:00", "task": "do stuff"}
+        assert "capability_mode" not in legacy_record
+        job = ScheduledJob.from_dict(legacy_record)
+        assert job.capability_mode == "safe-chat"
+
+    def test_from_dict_unrecognized_capability_mode_falls_back_to_safe_chat(self):
+        """A corrupted or tampered jobs.json with an invalid mode string
+        must not be passed through unvalidated.
+        """
+        job = ScheduledJob.from_dict({"capability_mode": "root-access-please"})
+        assert job.capability_mode == "safe-chat"
+
+    def test_valid_capability_modes_excludes_discord(self):
+        assert "discord" not in VALID_CAPABILITY_MODES
+        assert set(VALID_CAPABILITY_MODES) == {"full", "safe-chat", "no-tools"}
