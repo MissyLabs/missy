@@ -277,3 +277,71 @@ class TestMemoryExpandExceptionVsNotFound:
         assert not result.success
         assert "not found" not in result.error
         assert "internal error" in result.error
+
+
+class TestMemoryToolsDispatchThroughRealRegistry:
+    """SR-3.3 regression: memory_search/memory_describe/memory_expand must
+    survive dispatch through the real ToolRegistry, not just direct
+    .execute() calls.
+
+    Before this fix, none of the three tools declared the
+    ``permissions: ToolPermissions`` attribute ``BaseTool``/
+    ``ToolRegistry._check_permissions()`` requires (they carried vestigial,
+    unused ``requires_filesystem_read``-style attributes instead). Every
+    dispatch through ``ToolRegistry.execute()`` crashed with
+    ``AttributeError: 'MemoryExpandTool' object has no attribute
+    'permissions'`` before the tool's own logic ever ran — direct
+    ``tool.execute(...)`` calls (as used throughout the rest of this file)
+    never exercised that code path and so never caught it.
+    """
+
+    @pytest.fixture
+    def registry(self):
+        from missy.tools.registry import ToolRegistry
+
+        reg = ToolRegistry()
+        reg.register(MemorySearchTool())
+        reg.register(MemoryDescribeTool())
+        reg.register(MemoryExpandTool())
+        return reg
+
+    def test_all_three_tools_declare_permissions(self):
+        from missy.tools.base import ToolPermissions
+
+        for tool in (MemorySearchTool(), MemoryDescribeTool(), MemoryExpandTool()):
+            assert isinstance(tool.permissions, ToolPermissions)
+
+    def test_memory_search_dispatches_through_registry(self, registry, populated_store):
+        store, _, _ = populated_store
+        result = registry.execute(
+            "memory_search",
+            session_id="sess1",
+            task_id="t1",
+            query="kubernetes",
+            _memory_store=store,
+        )
+        assert result.success
+        assert "kubernetes" in result.output.lower()
+
+    def test_memory_describe_dispatches_through_registry(self, registry, populated_store):
+        store, sum_id, _ = populated_store
+        result = registry.execute(
+            "memory_describe",
+            session_id="sess1",
+            task_id="t1",
+            item_id=sum_id,
+            _memory_store=store,
+        )
+        assert result.success
+
+    def test_memory_expand_dispatches_through_registry(self, registry, populated_store):
+        store, _, ref_id = populated_store
+        result = registry.execute(
+            "memory_expand",
+            session_id="sess1",
+            task_id="t1",
+            item_id=ref_id,
+            _memory_store=store,
+        )
+        assert result.success
+        assert "kubectl" in result.output.lower() or "x" * 100 in result.output

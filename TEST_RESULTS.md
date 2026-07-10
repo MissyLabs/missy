@@ -1,5 +1,48 @@
 # TEST_RESULTS
 
+## Run: 2026-07-10 17:05 UTC — validation-harness overhaul, SR-3.3 (memory_search/memory_describe/memory_expand completely non-functional in production)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Finding: two independent stacked bugs meant these three tools never
+  worked in production. (1) None declared the `permissions:
+  ToolPermissions` attribute `ToolRegistry._check_permissions()`
+  requires — dispatch through the real registry crashed with
+  `AttributeError` before the tool ran. (2) Even fixed, `AgentRuntime
+  ._execute_tool()` never injected the `_memory_store`/`_session_id`
+  kwargs these tools read — dispatch would still return "Memory store
+  is not available." Every existing test called `tool.execute
+  (_memory_store=store, ...)` directly, bypassing both bugs.
+- Live reproduction: via the real `AgentRuntime._execute_tool()`
+  method, `memory_expand` on a real stored large-content record
+  returned `is_error=True`, `content="Tool execution failed due to an
+  internal error."`. Confirmed via `git stash` this reproduces on the
+  pre-fix tree. Confirmed fixed: identical reproduction now returns
+  `is_error=False` with the exact stored content.
+- Fix: added `permissions = ToolPermissions()` to `MemorySearchTool`/
+  `MemoryDescribeTool`/`MemoryExpandTool` (replacing vestigial unused
+  attributes). Added a `_MEMORY_RETRIEVAL_TOOL_NAMES` injection block
+  in `AgentRuntime._execute_tool()` (mirrors the existing SR-2.4
+  heredoc special-case pattern) that supplies `_memory_store`/
+  `_session_id` for these three tool names only.
+- Session-scoping check: with the wiring fixed, verified `memory_search`
+  correctly defaults to the calling session only when the model omits
+  `session_id` (two sessions sharing a keyword — only the calling
+  session's turn returned), while still honoring an explicit override
+  for intentional cross-session lookups (documented, opt-in behavior).
+- Command: `pytest tests/agent/test_memory_tool_dispatch_wiring.py
+  tests/tools/test_memory_tools.py -v`
+- Result: `36 passed` (10 new tests: 4 in
+  `TestMemoryToolsDispatchThroughRealRegistry`, 6 in the new
+  `test_memory_tool_dispatch_wiring.py`)
+- Command: `pytest tests/agent/ tests/tools/ -q -o faulthandler_timeout=120`
+- Result: `5656 passed, 6 skipped` — no regressions
+- Command: `pytest tests/ -q -o faulthandler_timeout=120`
+- Result: `3 failed, 20870 passed, 13 skipped in 446.04s (0:07:26)` —
+  the 3 failures are the same known pre-existing `CameraDiscovery`
+  cache-TTL flakes (task #11), unrelated to this checkpoint's changes.
+  10 more passing than the prior (SR-3.2) checkpoint's 20860, matching
+  the 10 tests added this checkpoint exactly; no regressions.
+
 ## Run: 2026-07-10 16:15 UTC — validation-harness overhaul, SR-3.2 (Summarizer called nonexistent provider.chat())
 
 - Branch: `overhaul/missy-validation-20260710-031406`

@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from missy.tools.base import BaseTool, ToolResult
+from missy.tools.base import BaseTool, ToolPermissions, ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -33,10 +33,7 @@ class MemorySearchTool(BaseTool):
         "Returns matching turns and summary excerpts with timestamps."
     )
 
-    requires_filesystem_read = []
-    requires_filesystem_write = []
-    requires_network = []
-    requires_shell = False
+    permissions = ToolPermissions()
 
     def get_schema(self) -> dict:
         return {
@@ -126,10 +123,7 @@ class MemoryDescribeTool(BaseTool):
         "parent/child relationships, and source turn count."
     )
 
-    requires_filesystem_read = []
-    requires_filesystem_write = []
-    requires_network = []
-    requires_shell = False
+    permissions = ToolPermissions()
 
     def get_schema(self) -> dict:
         return {
@@ -243,10 +237,7 @@ class MemoryExpandTool(BaseTool):
         "For large-content refs: retrieves the full stored content."
     )
 
-    requires_filesystem_read = []
-    requires_filesystem_write = []
-    requires_network = []
-    requires_shell = False
+    permissions = ToolPermissions()
 
     def get_schema(self) -> dict:
         return {

@@ -214,6 +214,15 @@ def _rewrite_heredoc_command(
 # with a compact reference.  Must be <= _MAX_TOOL_RESULT_CHARS.
 _LARGE_CONTENT_THRESHOLD = 50_000
 
+# SR-3.3: tools that retrieve from the memory store need a live store
+# reference and the calling session's ID, but neither is part of the
+# model-facing tool schema (the model cannot supply an object reference,
+# and letting it forge an arbitrary session_id as the *default* scope
+# would defeat per-session isolation). These are injected as private
+# (``_``-prefixed) kwargs at dispatch time, the same way SR-2.4's heredoc
+# rewrite special-cases shell_exec.
+_MEMORY_RETRIEVAL_TOOL_NAMES = frozenset({"memory_search", "memory_describe", "memory_expand"})
+
 
 @dataclass
 class AgentConfig:
@@ -1552,6 +1561,16 @@ class AgentRuntime:
         tool_args = {
             k: v for k, v in tool_call.arguments.items() if k not in ("session_id", "task_id")
         }
+
+        # SR-3.3: memory_search/memory_describe/memory_expand need a live
+        # store reference and the current session ID to function at all —
+        # neither is (or should be) model-suppliable. Without this
+        # injection every call to these tools returns "Memory store is not
+        # available" regardless of what was actually stored.
+        if tool_call.name in _MEMORY_RETRIEVAL_TOOL_NAMES:
+            tool_args = dict(tool_args)
+            tool_args.setdefault("_memory_store", self._memory_store)
+            tool_args.setdefault("_session_id", session_id)
 
         # Rewrite heredoc-style shell commands to temp files so they pass
         # the shell policy (which blocks << as a subshell marker).

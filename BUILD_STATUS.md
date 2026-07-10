@@ -1,6 +1,6 @@
 # Build Status
 
-Last updated: 2026-07-10 16:15 UTC
+Last updated: 2026-07-10 17:05 UTC
 
 ## Current Workstream: Validation-Harness Overhaul
 
@@ -1020,6 +1020,54 @@ in full with no regressions.
 This is the sixteenth independent, confirmed critical finding this
 session. Full detail in `AUDIT_SECURITY.md`'s new `### SR-3.2` section.
 
+### Completed This Session, continued: SR-3.3 (memory_search/memory_describe/memory_expand completely non-functional in production — seventeenth critical finding)
+
+Third §3 item. Started as a "verify before fixing" checkpoint (SR-3.3
+was flagged as possibly already resolved by FX-B) but verification
+found something worse than the review anticipated: two independent
+stacked bugs meant these three tools had never worked, in any
+configuration, for any call.
+
+Bug 1: none of `MemorySearchTool`/`MemoryDescribeTool`/`MemoryExpandTool`
+declared the `permissions: ToolPermissions` attribute `ToolRegistry
+._check_permissions()` requires — they carried vestigial, unused
+attributes instead. Every dispatch through the real registry crashed
+with `AttributeError` before the tool's own logic ran. Bug 2: even with
+that fixed, `AgentRuntime._execute_tool()` never injected the
+`_memory_store`/`_session_id` kwargs these tools need — dispatch would
+still return "Memory store is not available." Root cause of
+non-detection: every existing test called `tool.execute(_memory_store=
+store, ...)` directly, bypassing both bugs entirely — no test had ever
+dispatched these tools through the real registry or runtime.
+
+Severity: `_intercept_large_content()` explicitly tells the model "Use
+memory_search or memory_expand to retrieve full content" after every
+large-tool-output truncation — a promise the runtime could never keep.
+Live-reproduced via the real `AgentRuntime._execute_tool()` method:
+`memory_expand` on a real stored record returned `is_error=True`,
+"Tool execution failed due to an internal error." Confirmed via `git
+stash` on the pre-fix tree.
+
+Fixed: added `permissions = ToolPermissions()` to all three tools
+(replacing the vestigial attributes). Added a `_MEMORY_RETRIEVAL_TOOL_NAMES`
+constant and injection block in `_execute_tool()` mirroring the
+existing SR-2.4 heredoc special-case pattern — for these three tool
+names only, `tool_args` gains `_memory_store`/`_session_id` before
+dispatch. Live re-verified: `memory_expand`/`memory_describe` now work,
+and `memory_search` correctly defaults to the calling session only
+when the model omits `session_id` (verified with two sessions sharing
+a keyword — only the calling session's turn returned) while still
+honoring an explicit override for intentional cross-session lookups
+(documented, opt-in, not a leak). 10 new tests across
+`tests/tools/test_memory_tools.py::TestMemoryToolsDispatchThroughRealRegistry`
+and the new `tests/agent/test_memory_tool_dispatch_wiring.py`.
+`tests/agent/`+`tests/tools/` (5,656 tests) pass with no regressions;
+full suite 20,870 passed (up from 20,860), only the 3 known
+pre-existing vision flakes failing.
+
+This is the seventeenth independent, confirmed critical finding this
+session. Full detail in `AUDIT_SECURITY.md`'s new `### SR-3.3` section.
+
 ### Known Pre-Existing Failure (not caused by this session)
 
 `tests/vision/test_discovery_capture_sysfs.py::TestCacheTTL::test_cache_valid_within_ttl`
@@ -1034,12 +1082,15 @@ scoped to FX-A / voice-command work.
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). SR-1.2 through
-SR-3.4 and SR-3.2 are fixed/closed; current remaining priority order:
+SR-3.4, SR-3.2, and SR-3.3 are fixed/closed; current remaining priority
+order:
 
-1. SR-3.3 (retrievable large tool output) and SR-3.5 (atomic concurrent
-   persistence) — both flagged as likely-already-resolved-by-FX-B, need
-   the same "verify against current code" checkpoint SR-3.2 just got
-   rather than assumed new work.
+1. SR-3.5 (atomic concurrent persistence) — flagged as
+   likely-already-resolved-by-FX-B; needs the same "verify against
+   current code" checkpoint SR-3.2/SR-3.3 both just got rather than
+   assumed new work. (Note: SR-3.3's checkpoint turned out to
+   contradict its own "likely already resolved" flag — verify, don't
+   assume, applies equally to SR-3.5.)
 2. SR-2.1 (least-privilege scheduled jobs) / SR-2.2 (safe proactive
    triggers, needs real `ApprovalGate` wiring) — product-policy default
    questions.

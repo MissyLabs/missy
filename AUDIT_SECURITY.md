@@ -1040,6 +1040,103 @@ requirement — do not overwrite, append new entries as work continues.
   class of "test mocks a nonexistent method and never notices" bug
   elsewhere.
 
+### SR-3.3 — memory_search/memory_describe/memory_expand were completely non-functional in production
+
+- **Status: fixed.** This started as a "verify before fixing" checkpoint
+  (the review's SR-3.3 text was suspected possibly already resolved as a
+  side effect of FX-B, per the same discipline that closed out most of
+  SR-3.2). It was not — verification uncovered a worse, live, confirmed
+  reality than the review's own text anticipated: the retrieval tools
+  had never worked at all, in any configuration, for any call.
+- **Reachability found (live-verified, two independent stacked bugs):**
+  1. None of `MemorySearchTool`, `MemoryDescribeTool`, `MemoryExpandTool`
+     (`missy/tools/builtin/memory_tools.py`) declared the
+     `permissions: ToolPermissions` class attribute that
+     `BaseTool`/`ToolRegistry._check_permissions()` requires — they
+     carried vestigial, nonstandard attributes (`requires_filesystem_read
+     = []`, `requires_network = []`, etc.) that correspond to nothing the
+     registry reads. Every dispatch of any of these three tools through
+     the real `ToolRegistry.execute()` crashed with `AttributeError:
+     'MemoryExpandTool' object has no attribute 'permissions'` inside
+     `_check_permissions()`, before the tool's own logic ever ran.
+  2. Even with (1) hypothetically fixed, `AgentRuntime._execute_tool()`
+     never injected the `_memory_store`/`_session_id` private kwargs
+     these tools read via `kwargs.get("_memory_store")` — nothing in the
+     dispatch path (`_execute_tool()` → `ToolRegistry.execute()` →
+     `tool.execute(**tool_kwargs)`) ever set them, so even a
+     permissions-fixed tool would still unconditionally return "Memory
+     store is not available."
+  - Root cause of non-detection: every existing test for these three
+    tools called `tool.execute(_memory_store=store, ...)` directly,
+    which exercises neither bug — it bypasses both the registry's
+    permission check and the runtime's (nonexistent) kwarg injection
+    entirely. No test in the suite had ever dispatched these tools
+    through the real `ToolRegistry` or the real `AgentRuntime._execute_tool()`.
+  - Severity: `AgentRuntime._intercept_large_content()`
+    (`missy/agent/runtime.py`) explicitly tells the model "Use
+    memory_search or memory_expand to retrieve full content" after every
+    large-tool-output truncation — a promise the runtime could never
+    keep. Live-reproduced end-to-end via the real production
+    `AgentRuntime._execute_tool()` method (not a hand-simulation):
+    stored a large-content record, then called `memory_expand` through
+    `_execute_tool()` — result: `is_error=True`,
+    `content="Tool execution failed due to an internal error."`
+    (the generic catch-all in `_execute_tool()` swallowed the
+    `AttributeError`, so the agent loop itself never crashed, but the
+    tool call always failed). Confirmed via `git stash` that this
+    reproduces on the pre-fix tree.
+  - Separately audited (not found broken, but worth recording): once
+    wired up, does `memory_search` leak across sessions when the model
+    omits `session_id`? `MemorySearchTool.execute()`'s own code already
+    correctly falls back to a private `_session_id` kwarg
+    (`kwargs.get("session_id", "") or kwargs.get("_session_id", "")`,
+    matching its schema's documented "Empty = current session"
+    contract) — it was simply never being given a real `_session_id` to
+    fall back to, for the same reason as bug (2) above. No separate leak
+    once wiring is fixed; live-verified below.
+- **Remediation evidence:** Added `permissions = ToolPermissions()` to
+  all three tools (they need no elevated network/filesystem/shell access
+  — they only read from an in-process store reference), replacing the
+  vestigial attributes entirely rather than leaving dead, misleading
+  declarations in place. Added a new `_MEMORY_RETRIEVAL_TOOL_NAMES`
+  constant and injection block in `AgentRuntime._execute_tool()`
+  (mirroring the existing SR-2.4 heredoc special-case pattern already
+  used for `shell_exec`): for `memory_search`/`memory_describe`/
+  `memory_expand` specifically, `tool_args` is extended with
+  `_memory_store=self._memory_store` and `_session_id=session_id`
+  before dispatch; every other tool's args are unmodified. Live
+  re-verified through the real `AgentRuntime._execute_tool()` method:
+  `memory_expand` now retrieves the exact stored content
+  (`is_error=False`), `memory_describe` returns real metadata, and
+  `memory_search` both finds stored turns and — critically — **defaults
+  to the calling session only** when the model omits `session_id`
+  (verified with two sessions sharing a search keyword: only the
+  calling session's turn is returned), while still honoring an
+  explicit, model-supplied `session_id` override for intentional
+  cross-session lookups (documented, opt-in behavior for a
+  single-user local assistant retrieving related earlier context — not
+  a default-scope leak). 10 new tests:
+  `tests/tools/test_memory_tools.py::TestMemoryToolsDispatchThroughRealRegistry`
+  (4 tests, dispatch through a real `ToolRegistry`, catches bug 1) and
+  a new `tests/agent/test_memory_tool_dispatch_wiring.py` (6 tests,
+  dispatch through the real `AgentRuntime._execute_tool()`, catches bug
+  2 and the session-scoping behavior). `tests/agent/` + `tests/tools/`
+  (5,656 tests) pass with no regressions; full suite 20,870 passed (up
+  from 20,860), only the 3 known pre-existing vision flakes failing.
+- **Residual risk:** none identified for the core finding. The
+  "preserve enough evidence for the model and operator to verify
+  results" and "handle storage failure explicitly instead of
+  advertising nonexistent retrieval" parts of SR-3.3's text were
+  already correctly implemented in
+  `AgentRuntime._intercept_large_content()`'s exception path (verified
+  by reading, not assumed) and required no change. General note for
+  future work: any new agent-callable tool that needs a live runtime
+  reference (store, registry, session context) via a private `_`-kwarg
+  must have that injection point covered by a test that dispatches
+  through the real `ToolRegistry`/`AgentRuntime`, not just a direct
+  `tool.execute(...)` call — this exact gap is what hid both stacked
+  bugs here for however long they existed.
+
 ---
 
 - Timestamp: 2026-07-09 15:35:26 (raw grep-scan dump below, preserved
