@@ -78,6 +78,17 @@ def _get_option(interaction: dict[str, Any], name: str) -> str | None:
     return None
 
 
+def _interaction_author_id(interaction: dict[str, Any]) -> str:
+    """Extract the invoking user's ID from a slash-command interaction.
+
+    Guild interactions carry the invoking user under ``member.user``;
+    DM interactions carry it directly under ``user``.
+    """
+    member = interaction.get("member") or {}
+    user = member.get("user") or interaction.get("user") or {}
+    return str(user.get("id", ""))
+
+
 async def _handle_ask(interaction: dict[str, Any], channel: DiscordChannel) -> str:
     """Handle ``/ask`` — forward prompt to the agent and return the reply."""
     import asyncio
@@ -90,9 +101,19 @@ async def _handle_ask(interaction: dict[str, Any], channel: DiscordChannel) -> s
     if agent is None:
         return "Agent runtime is not available. Please try again later."
 
+    # Scope the session per invoking user, matching the convention used
+    # by the regular MESSAGE_CREATE path (session keyed by Discord author
+    # ID). Previously this hardcoded session_id="discord" for every user
+    # in every guild, so every /ask interaction across the whole bot
+    # shared one conversation history -- one user's prompts and the
+    # agent's replies to them became context for every other user's
+    # /ask calls.
+    author_id = _interaction_author_id(interaction)
+    session_id = author_id or "discord"
+
     try:
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, agent.run, prompt, "discord")
+        return await loop.run_in_executor(None, agent.run, prompt, session_id)
     except Exception as exc:
         logger.exception("Slash /ask handler failed: %s", exc)
         return f"Sorry, I encountered an error: {exc}"

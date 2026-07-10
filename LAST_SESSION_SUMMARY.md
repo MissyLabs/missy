@@ -55,12 +55,27 @@ Draft PR: https://github.com/MissyLabs/missy/pull/31
    boundary tracking, quoted transcript safety, long history, malicious
    history instructions, and full DISC-CMD-006 + report-followup
    end-to-end reproductions.
+7. **SR-1.13 (critical, two findings)**: `_handle_message()` dispatched
+   voice/image/screencast commands *before* DM/guild authorization ran
+   (explicit code comment admitted it: "handled before policy gates") —
+   fixed by reordering. More severely, `_handle_interaction()` (slash
+   commands: `/ask`/`/status`/`/model`/`/help`) had **no authorization
+   check whatsoever** — a completely separate Gateway event path from
+   regular messages — plus `_handle_ask()` hardcoded a shared
+   `session_id="discord"` for every user, meaning `/ask` conversations
+   bled across all users of the bot. Fixed both: added the same
+   authorization gate to `_handle_interaction()` (with a
+   `skip_mention_check` option since slash commands don't have `@mention`
+   text semantics), and scoped `/ask` sessions per invoking user. 25 new
+   regression tests total. Also found (not yet fixed, task #15):
+   `allowed_roles` config is documented and parsed but never enforced
+   anywhere.
 
 ## Verification
 
 ```text
-python3 -m pytest tests/providers/test_acpx_provider.py -q
-136 passed
+python3 -m pytest tests/channels/ -q
+1931 passed
 ```
 
 ```text
@@ -68,7 +83,7 @@ python3 -m pytest tests/ -q -o faulthandler_timeout=120 \
   --deselect tests/vision/test_discovery_capture_sysfs.py::TestCacheTTL::test_cache_valid_within_ttl \
   --deselect tests/vision/test_discovery_edge_cases.py::TestPermissionDeniedOnDevice::test_device_that_does_not_exist_is_skipped \
   --deselect tests/vision/test_discovery_edge_cases.py::TestRapidAddRemove::test_cached_results_returned_within_ttl
-20703 passed, 13 skipped, 3 deselected in 456.40s (0:07:36)
+20727 passed, 13 skipped, 3 deselected in 450.43s (0:07:30)
 ```
 
 Full detail in `BUILD_STATUS.md`, `AUDIT_SECURITY.md`, and
@@ -79,28 +94,33 @@ Full detail in `BUILD_STATUS.md`, `AUDIT_SECURITY.md`, and
 - FX-A bullet 6: live end-to-end proof across tool categories (not yet
   attempted).
 - FX-B loose ends (see prior session summary, preserved in git history).
-- SR-1.2/1.3 and SR-1.12 are **not fully solved** — both fixes close live
-  bypass paths but neither is the complete remediation the security
-  review asks for. `CodeEvolutionManager.approve()`/`apply()`/
-  `rollback()` still perform zero authentication themselves (CLI
-  terminal session is the only real trust boundary). Discord pairing has
-  no working approval path at all right now (task #12).
+- SR-1.2/1.3, SR-1.12, and SR-1.13 are **not fully solved** — all close
+  live bypass paths but none is the complete remediation the security
+  review asks for:
+  - `CodeEvolutionManager.approve()`/`apply()`/`rollback()` still
+    perform zero authentication themselves (CLI terminal session is the
+    only real trust boundary).
+  - Discord pairing has no working approval path at all right now
+    (task #12).
+  - `allowed_roles` config is documented but never enforced (task #15).
+  - Reactions beyond the two already-fixed flows, and voice-native
+    commands, were not re-audited for the same ordering pattern.
 - FX-C, FX-F, FX-G not yet started.
-- SR-1.1, SR-1.4 through SR-1.11, SR-1.13, SR-2.x through SR-4.x not yet
-  started.
+- SR-1.1, SR-1.4 through SR-1.11, SR-2.x through SR-4.x not yet started.
 - Full 89-case tool-specific validation backlog not yet re-run.
 - Pre-existing vision `CameraDiscovery` cache-TTL flake (3 tests,
   tracked separately, unrelated to this session).
 
 ## First Next Step
 
-Continue the SR-1.x sweep for the same bug class (unauthenticated
-privileged action reachable from the agent's own tool loop or an
-unauthenticated channel) — SR-1.5 (Incus policy composition), SR-1.6
-(browser network enforcement), and SR-1.13 (uniform Discord ingress
-authorization) are the most likely remaining candidates given this
-session's findings (two independent instances of the identical pattern
-already found and fixed). Alternatively, wire the Discord pairing
-approval endpoint (task #12) to restore working pairing functionality,
-or move to FX-C (grounding factual state claims in fresh tool evidence)
-per the prompt's stated dependency order.
+Continuing the SR-1.x sweep has found four confirmed critical
+vulnerabilities in this session alone (SR-1.2/1.3, SR-1.12, SR-1.13 ×2) —
+all the same "unauthenticated action reachable before the gate" pattern.
+SR-1.5 (Incus policy composition) and SR-1.6 (browser network
+enforcement) are the most likely remaining candidates worth auditing
+next with the same lens before moving to feature work. Alternatively,
+task #15 (`allowed_roles` unenforced) and task #12 (Discord pairing has
+no working approval path) are both concrete, scoped follow-ups from
+this session's findings. Or move to FX-C (grounding factual state
+claims in fresh tool evidence) per the prompt's stated dependency order
+if a change of pace is preferred.

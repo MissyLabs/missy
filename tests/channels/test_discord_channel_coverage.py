@@ -519,6 +519,176 @@ class TestHandleInteraction:
 
 
 # ---------------------------------------------------------------------------
+# SR-1.13 (critical): _handle_interaction() previously had NO authorization
+# check at all -- /ask (and every other slash command) dispatched straight
+# to handle_slash_command()/the full agent for any Discord user in any
+# guild/channel/DM, completely bypassing allowed_channels/allowed_users/
+# dm_policy. This is a separate Gateway event (INTERACTION_CREATE) from
+# regular messages, so it needed its own authorization gate.
+# ---------------------------------------------------------------------------
+
+
+class TestHandleInteractionAuthorizationSR113:
+    @pytest.mark.asyncio
+    async def test_guild_interaction_denied_when_unauthorized_never_dispatches(self):
+        import sys
+
+        ch = _make_channel()  # no guild_policies configured -> default deny
+        ch._rest.send_interaction_response = MagicMock()
+        ch._rest.edit_interaction_response = MagicMock()
+
+        mock_commands_module = MagicMock()
+        mock_commands_module.handle_slash_command = AsyncMock(return_value="should not run")
+
+        with patch.dict(sys.modules, {"missy.channels.discord.commands": mock_commands_module}):
+            data = {
+                "id": "int-1",
+                "token": "tok-abc",
+                "channel_id": "chan-1",
+                "guild_id": "unauthorized-guild",
+                "member": {"user": {"id": "user-1"}},
+                "data": {"name": "ask", "options": [{"name": "prompt", "value": "hi"}]},
+            }
+            await ch._handle_interaction(data)
+
+        mock_commands_module.handle_slash_command.assert_not_awaited()
+        # A denial response is sent (type 4), never the deferred type 5.
+        ch._rest.send_interaction_response.assert_called_once()
+        call = ch._rest.send_interaction_response.call_args
+        assert call.kwargs.get("response_type") == 4 or call.args[2] == 4
+        ch._rest.edit_interaction_response.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_guild_interaction_authorized_dispatches_normally(self):
+        import sys
+
+        account = _make_account(guild_policies={"guild-1": DiscordGuildPolicy(enabled=True)})
+        ch = _make_channel(account)
+        ch._rest.send_interaction_response = MagicMock()
+        ch._rest.edit_interaction_response = MagicMock()
+        ch.account_config.application_id = "app-1"
+
+        mock_commands_module = MagicMock()
+        mock_commands_module.handle_slash_command = AsyncMock(return_value="ok reply")
+
+        with patch.dict(sys.modules, {"missy.channels.discord.commands": mock_commands_module}):
+            data = {
+                "id": "int-1",
+                "token": "tok-abc",
+                "channel_id": "chan-1",
+                "guild_id": "guild-1",
+                "member": {"user": {"id": "user-1"}},
+                "data": {"name": "ask", "options": [{"name": "prompt", "value": "hi"}]},
+            }
+            await ch._handle_interaction(data)
+
+        mock_commands_module.handle_slash_command.assert_awaited_once()
+        ch._rest.edit_interaction_response.assert_called_once_with("app-1", "tok-abc", "ok reply")
+
+    @pytest.mark.asyncio
+    async def test_guild_interaction_authorized_even_when_require_mention_set(self):
+        # Slash commands are inherently addressed to the bot by Discord's
+        # own routing; require_mention (a text-message rule) must not
+        # block them.
+        import sys
+
+        account = _make_account(
+            guild_policies={"guild-1": DiscordGuildPolicy(enabled=True, require_mention=True)}
+        )
+        ch = _make_channel(account)
+        ch._rest.send_interaction_response = MagicMock()
+        ch._rest.edit_interaction_response = MagicMock()
+        ch.account_config.application_id = "app-1"
+
+        mock_commands_module = MagicMock()
+        mock_commands_module.handle_slash_command = AsyncMock(return_value="ok reply")
+
+        with patch.dict(sys.modules, {"missy.channels.discord.commands": mock_commands_module}):
+            data = {
+                "id": "int-1",
+                "token": "tok-abc",
+                "channel_id": "chan-1",
+                "guild_id": "guild-1",
+                "member": {"user": {"id": "user-1"}},
+                "data": {"name": "help", "options": []},
+            }
+            await ch._handle_interaction(data)
+
+        mock_commands_module.handle_slash_command.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_dm_interaction_denied_when_dm_policy_disabled(self):
+        import sys
+
+        account = _make_account(dm_policy=DiscordDMPolicy.DISABLED)
+        ch = _make_channel(account)
+        ch._rest.send_interaction_response = MagicMock()
+
+        mock_commands_module = MagicMock()
+        mock_commands_module.handle_slash_command = AsyncMock(return_value="should not run")
+
+        with patch.dict(sys.modules, {"missy.channels.discord.commands": mock_commands_module}):
+            data = {
+                "id": "int-1",
+                "token": "tok-abc",
+                "channel_id": "dm-chan-1",
+                "user": {"id": "stranger"},
+                "data": {"name": "ask", "options": [{"name": "prompt", "value": "hi"}]},
+            }
+            await ch._handle_interaction(data)
+
+        mock_commands_module.handle_slash_command.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_dm_interaction_denied_when_unpaired(self):
+        import sys
+
+        account = _make_account(dm_policy=DiscordDMPolicy.PAIRING)
+        ch = _make_channel(account)
+        ch._rest.send_interaction_response = MagicMock()
+
+        mock_commands_module = MagicMock()
+        mock_commands_module.handle_slash_command = AsyncMock(return_value="should not run")
+
+        with patch.dict(sys.modules, {"missy.channels.discord.commands": mock_commands_module}):
+            data = {
+                "id": "int-1",
+                "token": "tok-abc",
+                "channel_id": "dm-chan-1",
+                "user": {"id": "unpaired-user"},
+                "data": {"name": "ask", "options": [{"name": "prompt", "value": "hi"}]},
+            }
+            await ch._handle_interaction(data)
+
+        mock_commands_module.handle_slash_command.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_dm_interaction_allowed_when_on_allowlist(self):
+        import sys
+
+        account = _make_account(dm_policy=DiscordDMPolicy.ALLOWLIST, dm_allowlist=["trusted-user"])
+        ch = _make_channel(account)
+        ch._rest.send_interaction_response = MagicMock()
+        ch._rest.edit_interaction_response = MagicMock()
+        ch.account_config.application_id = "app-1"
+
+        mock_commands_module = MagicMock()
+        mock_commands_module.handle_slash_command = AsyncMock(return_value="ok reply")
+
+        with patch.dict(sys.modules, {"missy.channels.discord.commands": mock_commands_module}):
+            data = {
+                "id": "int-1",
+                "token": "tok-abc",
+                "channel_id": "dm-chan-1",
+                "user": {"id": "trusted-user"},
+                "data": {"name": "ask", "options": [{"name": "prompt", "value": "hi"}]},
+            }
+            await ch._handle_interaction(data)
+
+        mock_commands_module.handle_slash_command.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
 # _handle_reaction — reject path (line 1071) and exception path (lines 1080-1082)
 # ---------------------------------------------------------------------------
 

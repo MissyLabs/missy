@@ -522,37 +522,12 @@ class DiscordChannel(BaseChannel):
             logger.debug("Discord: ignoring own message (bot_id=%s)", self._bot_user_id)
             return
 
-        # 0. Voice and image commands (MESSAGE_CREATE) — handled before policy gates.
-        if guild_id and content:
-            handled = await self._maybe_handle_voice_command(
-                guild_id=str(guild_id),
-                channel_id=channel_id,
-                author_id=author_id,
-                content=content,
-            )
-            if handled:
-                return
-
-        # 0b. Image commands (!analyze, !screenshot).
-        if content:
-            handled = await self._maybe_handle_image_command(
-                channel_id=channel_id,
-                content=content,
-            )
-            if handled:
-                return
-
-        # 0c. Screencast commands (!screen share/list/stop/analyze/status).
-        if content:
-            handled = await self._maybe_handle_screen_command(
-                channel_id=channel_id,
-                author_id=author_id,
-                content=content,
-            )
-            if handled:
-                return
-
         # 1b. Credential / secrets detection — delete message and warn if secrets found.
+        #
+        # Runs before authorization so credentials are always scrubbed
+        # regardless of channel/DM policy, but produces no side effect
+        # beyond deleting the offending message and warning -- it does not
+        # dispatch to voice/image/screencast handling.
         if content:
             try:
                 from missy.security.secrets import SecretsDetector
@@ -607,6 +582,55 @@ class DiscordChannel(BaseChannel):
                 {"author_id": author_id, "is_bot": True},
             )
             return
+
+        # SR-1.13: DM/guild access control must run before ANY command
+        # dispatch that can produce a side effect (voice, image,
+        # screencast, or the eventual agent enqueue). This used to run
+        # last (as step "4"), with voice/image/screencast handled first
+        # under a comment literally reading "handled before policy gates"
+        # -- meaning any message in any guild channel (ignoring
+        # allowed_channels/allowed_roles/allowed_users/require_mention)
+        # or any DM (ignoring dm_policy DISABLED/ALLOWLIST/PAIRING) could
+        # join a voice channel, capture/analyze a screenshot, or start a
+        # screen share before authorization was ever checked. No pre-gate
+        # command may produce side effects.
+        if guild_id is None:
+            allowed = self._check_dm_policy(author_id, content)
+        else:
+            allowed = self._check_guild_policy(guild_id, channel_id, author_id, content, data)
+
+        if not allowed:
+            return
+
+        # 2b. Voice commands (MESSAGE_CREATE) — only after authorization.
+        if guild_id and content:
+            handled = await self._maybe_handle_voice_command(
+                guild_id=str(guild_id),
+                channel_id=channel_id,
+                author_id=author_id,
+                content=content,
+            )
+            if handled:
+                return
+
+        # 2c. Image commands (!analyze, !screenshot) — only after authorization.
+        if content:
+            handled = await self._maybe_handle_image_command(
+                channel_id=channel_id,
+                content=content,
+            )
+            if handled:
+                return
+
+        # 2d. Screencast commands (!screen ...) — only after authorization.
+        if content:
+            handled = await self._maybe_handle_screen_command(
+                channel_id=channel_id,
+                author_id=author_id,
+                content=content,
+            )
+            if handled:
+                return
 
         # 3. Attachment policy gate.
         attachments: list[dict] = data.get("attachments") or []
@@ -685,15 +709,6 @@ class DiscordChannel(BaseChannel):
                     len(image_attachments),
                     author_id,
                 )
-
-        # 4. Route to DM or guild access control.
-        if guild_id is None:
-            allowed = self._check_dm_policy(author_id, content)
-        else:
-            allowed = self._check_guild_policy(guild_id, channel_id, author_id, content, data)
-
-        if not allowed:
-            return
 
         # 5. Resolve thread-scoped session if applicable.
         effective_thread_id = thread_id
@@ -958,7 +973,39 @@ class DiscordChannel(BaseChannel):
         interaction_id: str = str(data.get("id", ""))
         interaction_token: str = str(data.get("token", ""))
         channel_id: str = str(data.get("channel_id", ""))
+        guild_id: str | None = data.get("guild_id") or None
         self._current_channel_id = channel_id
+
+        # SR-1.13: slash-command interactions arrive over a completely
+        # separate Gateway event (INTERACTION_CREATE) from regular
+        # messages and previously had NO authorization check at all --
+        # /ask dispatched straight to the full agent for any Discord
+        # user in any guild/channel/DM, ignoring allowed_channels/
+        # allowed_users/dm_policy entirely. Guild interactions carry the
+        # invoking user under member.user; DM interactions carry it
+        # under user directly.
+        member = data.get("member") or {}
+        interaction_user = member.get("user") or data.get("user") or {}
+        author_id: str = str(interaction_user.get("id", ""))
+
+        if guild_id is None:
+            allowed = self._check_dm_policy(author_id, "")
+        else:
+            allowed = self._check_guild_policy(
+                guild_id, channel_id, author_id, "", data, skip_mention_check=True
+            )
+
+        if not allowed:
+            try:
+                self._rest.send_interaction_response(
+                    interaction_id,
+                    interaction_token,
+                    response_type=4,  # CHANNEL_MESSAGE_WITH_SOURCE
+                    data={"content": "You're not authorized to use Missy commands here."},
+                )
+            except Exception as exc:
+                logger.error("Discord: interaction denial response failed: %s", exc)
+            return
 
         # Send deferred response immediately (type 5 = DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE)
         try:
@@ -1108,8 +1155,20 @@ class DiscordChannel(BaseChannel):
         author_id: str,
         content: str,
         data: dict[str, Any],
+        *,
+        skip_mention_check: bool = False,
     ) -> bool:
-        """Evaluate the guild-level access policy."""
+        """Evaluate the guild-level access policy.
+
+        Args:
+            skip_mention_check: When ``True``, the ``require_mention``
+                rule is not evaluated. Slash-command interactions are
+                inherently addressed to this bot by Discord's own
+                command routing -- there is no message text to contain
+                an ``@mention``, and requiring one would incorrectly
+                block every slash command in guilds configured with
+                ``require_mention: true``.
+        """
         guild_policy = self.account_config.guild_policies.get(guild_id)
         if guild_policy is None:
             # No policy defined for this guild — default deny.
@@ -1169,7 +1228,7 @@ class DiscordChannel(BaseChannel):
             return False
 
         # Mention requirement check.
-        if guild_policy.require_mention:
+        if guild_policy.require_mention and not skip_mention_check:
             own_id = self.bot_user_id or self.account_config.account_id
             if own_id:
                 mentioned = f"<@{own_id}>" in content or f"<@!{own_id}>" in content

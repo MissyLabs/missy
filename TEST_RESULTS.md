@@ -1,5 +1,28 @@
 # TEST_RESULTS
 
+## Run: 2026-07-10 07:00 UTC — validation-harness overhaul, SR-1.13 (Discord ingress authorization, 2 critical findings)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Finding 1: `_handle_message()` dispatched voice/image/screencast
+  commands before DM/guild authorization ran.
+- Finding 2 (more severe): `_handle_interaction()` (slash commands) had
+  no authorization check at all, plus `_handle_ask()` hardcoded a
+  shared `session_id="discord"` across all users.
+- Command: `pytest tests/channels/ -q`
+- Result: `1931 passed` (was 1925 before finding 1's fix, 1915 before
+  this session's SR-1.12 fix)
+- Command: `pytest tests/ -q -o faulthandler_timeout=120` with the 3
+  known pre-existing vision failures deselected
+- Result: `20727 passed, 13 skipped, 3 deselected in 450.43s (0:07:30)`
+- New tests: 11 in
+  `tests/channels/test_discord_channel_gap_coverage.py::TestUniformIngressAuthorizationSR113`,
+  6 in
+  `tests/channels/test_discord_channel_coverage.py::TestHandleInteractionAuthorizationSR113`,
+  8 in `tests/unit/test_discord_commands_coverage.py` (author-ID
+  extraction + per-user session isolation).
+
+---
+
 ## Run: 2026-07-10 06:00 UTC — validation-harness overhaul, FX-D (structural boundary + fail-closed)
 
 - Branch: `overhaul/missy-validation-20260710-031406`

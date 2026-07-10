@@ -1,6 +1,6 @@
 # Build Status
 
-Last updated: 2026-07-10 06:00 UTC
+Last updated: 2026-07-10 07:00 UTC
 
 ## Current Workstream: Validation-Harness Overhaul
 
@@ -336,6 +336,63 @@ Rerun per prompt.md: both `DISC-CMD-006` continuity and report-followup
 scenarios have unit-level reproductions now passing; live harness
 re-validation against a real delegate is still open (see FX-A residual
 work).
+
+### Completed This Session, continued: SR-1.13 (Discord ingress authorization — two critical findings)
+
+Continuing the security-finding sweep, found and fixed a third and
+fourth independent instance of "unauthenticated action reachable before
+the authorization gate" this session:
+
+1. **`_handle_message()` voice/image/screencast reordering.** The
+   handler dispatched voice-join, `!analyze`/`!screenshot`, and
+   `!screen ...` commands **before** `_check_dm_policy()`/
+   `_check_guild_policy()` ran — the code literally had a comment
+   reading "handled before policy gates." Any guild message (ignoring
+   `allowed_channels`/`allowed_users`/`require_mention`) or DM (ignoring
+   `dm_policy`) could trigger real side effects: joining a voice
+   channel, capturing/analyzing a screenshot, starting a screen share.
+   Fixed by reordering: bot-author filter and DM/guild authorization now
+   run before all three special-command dispatchers. Credential
+   scrubbing intentionally still runs first (before authorization) so
+   secrets get scrubbed everywhere regardless of policy — strictly more
+   protective, not a regression.
+
+2. **`_handle_interaction()` (slash commands) had *no* authorization
+   check at all — more severe than finding 1.** `/ask`, `/status`,
+   `/model`, `/help` arrive over a completely separate Gateway event
+   (`INTERACTION_CREATE`) with its own handler, which never called
+   `_check_dm_policy()`/`_check_guild_policy()` at all. Any Discord user,
+   in any guild/channel/DM, could invoke `/ask` and get a full agent
+   response regardless of every configured policy. **Compounding bug in
+   the same code path:** `_handle_ask()`
+   (`missy/channels/discord/commands.py`) hardcoded
+   `session_id="discord"` for every user, so every `/ask` interaction
+   across the whole bot shared one conversation history — cross-user
+   context bleeding, independent of the authorization gap. Fixed both:
+   `_handle_interaction()` now extracts the invoking user
+   (`member.user.id` for guilds, `user.id` for DMs) and runs the same
+   authorization gate (with a new `skip_mention_check` option on
+   `_check_guild_policy()`, since `require_mention` is a text-message
+   rule that doesn't apply to slash commands); `_handle_ask()` now
+   scopes `session_id` per invoking user, matching the convention
+   already used by the regular message path.
+
+Added 11 tests for finding 1
+(`tests/channels/test_discord_channel_gap_coverage.py::TestUniformIngressAuthorizationSR113`)
+and 14 tests for finding 2 (6 in
+`tests/channels/test_discord_channel_coverage.py::TestHandleInteractionAuthorizationSR113`,
+8 in `tests/unit/test_discord_commands_coverage.py` covering author-ID
+extraction and per-user session isolation).
+
+**New finding, not yet fixed, tracked as task #15:**
+`DiscordGuildPolicy.allowed_roles` is documented and parsed from config
+but never actually enforced anywhere in `_check_guild_policy()` — an
+operator who configures it gets no role-based restriction at all.
+Fixing it needs role-ID-to-name resolution from the message/interaction
+payload, a larger change deferred to a follow-up session.
+
+Full detail and residual risk for all four SR-1.x findings this session
+(SR-1.2/1.3, SR-1.12, SR-1.13 ×2) is in `AUDIT_SECURITY.md`.
 
 ### Known Pre-Existing Failure (not caused by this session)
 

@@ -155,8 +155,14 @@ class TestOnGatewayEventBotUserIdSync:
 class TestHandleMessageVoiceCommandEarlyReturn:
     @pytest.mark.asyncio
     async def test_voice_command_handled_means_message_not_queued(self):
-        """Line 474: when _maybe_handle_voice_command returns True, message is dropped."""
-        ch = _make_channel()
+        """When _maybe_handle_voice_command returns True, message is dropped.
+
+        SR-1.13: voice-command dispatch only runs after guild policy
+        authorization, so this test must authorize "guild-1" for the
+        dispatch to be reached at all.
+        """
+        account = _make_account(guild_policies={"guild-1": DiscordGuildPolicy(enabled=True)})
+        ch = _make_channel(account)
         ch._bot_user_id = "other-bot"  # not own message
         ch._maybe_handle_voice_command = AsyncMock(return_value=True)
 
@@ -169,6 +175,179 @@ class TestHandleMessageVoiceCommandEarlyReturn:
 
         assert ch._queue.empty()
         ch._maybe_handle_voice_command.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_voice_command_not_dispatched_when_guild_unauthorized(self):
+        """SR-1.13: an unauthorized guild must never reach voice-command
+        dispatch -- the pre-fix ordering let any guild message trigger
+        real side effects (joining voice, etc.) before authorization."""
+        ch = _make_channel()  # default account has no guild_policies at all
+        ch._bot_user_id = "other-bot"
+        ch._maybe_handle_voice_command = AsyncMock(return_value=True)
+
+        data = _make_message(
+            author_id="user-1",
+            content="join the general voice channel",
+            guild_id="unauthorized-guild",
+        )
+        await ch._handle_message(data)
+
+        ch._maybe_handle_voice_command.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# SR-1.13: uniform Discord ingress authorization.
+#
+# _handle_message() previously dispatched voice/image/screencast commands
+# BEFORE _check_dm_policy()/_check_guild_policy() ran (explicit comment:
+# "handled before policy gates"), so any message in any guild channel
+# (ignoring allowed_channels/allowed_roles/allowed_users/require_mention)
+# or any DM (ignoring dm_policy DISABLED/ALLOWLIST/PAIRING) could join a
+# voice channel, capture/analyze a screenshot, or start a screen share
+# with real side effects before authorization was ever checked.
+# ---------------------------------------------------------------------------
+
+
+class TestUniformIngressAuthorizationSR113:
+    @pytest.mark.asyncio
+    async def test_image_command_not_dispatched_when_guild_unauthorized(self):
+        ch = _make_channel()  # no guild_policies configured -> default deny
+        ch._bot_user_id = "other-bot"
+        ch._maybe_handle_image_command = AsyncMock(return_value=True)
+
+        data = _make_message(
+            author_id="user-1",
+            content="!analyze",
+            guild_id="unauthorized-guild",
+        )
+        await ch._handle_message(data)
+
+        ch._maybe_handle_image_command.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_image_command_dispatched_when_guild_authorized(self):
+        account = _make_account(guild_policies={"guild-1": DiscordGuildPolicy(enabled=True)})
+        ch = _make_channel(account)
+        ch._bot_user_id = "other-bot"
+        ch._maybe_handle_image_command = AsyncMock(return_value=True)
+
+        data = _make_message(author_id="user-1", content="!analyze", guild_id="guild-1")
+        await ch._handle_message(data)
+
+        ch._maybe_handle_image_command.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_screencast_command_not_dispatched_when_guild_unauthorized(self):
+        ch = _make_channel()
+        ch._bot_user_id = "other-bot"
+        ch._maybe_handle_screen_command = AsyncMock(return_value=True)
+
+        data = _make_message(
+            author_id="user-1",
+            content="!screen share",
+            guild_id="unauthorized-guild",
+        )
+        await ch._handle_message(data)
+
+        ch._maybe_handle_screen_command.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_screencast_command_dispatched_when_guild_authorized(self):
+        account = _make_account(guild_policies={"guild-1": DiscordGuildPolicy(enabled=True)})
+        ch = _make_channel(account)
+        ch._bot_user_id = "other-bot"
+        ch._maybe_handle_screen_command = AsyncMock(return_value=True)
+
+        data = _make_message(author_id="user-1", content="!screen share", guild_id="guild-1")
+        await ch._handle_message(data)
+
+        ch._maybe_handle_screen_command.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_image_command_not_dispatched_for_channel_not_in_allowlist(self):
+        # Guild is enabled overall but this specific channel isn't allowed --
+        # a real allowed_channels policy must still gate special commands.
+        account = _make_account(
+            guild_policies={
+                "guild-1": DiscordGuildPolicy(enabled=True, allowed_channels=["other-channel"])
+            }
+        )
+        ch = _make_channel(account)
+        ch._bot_user_id = "other-bot"
+        ch._maybe_handle_image_command = AsyncMock(return_value=True)
+
+        data = _make_message(
+            author_id="user-1",
+            content="!analyze",
+            guild_id="guild-1",
+            channel_id="chan-1",
+        )
+        await ch._handle_message(data)
+
+        ch._maybe_handle_image_command.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_image_command_not_dispatched_for_user_not_in_allowlist(self):
+        account = _make_account(
+            guild_policies={
+                "guild-1": DiscordGuildPolicy(enabled=True, allowed_users=["someone-else"])
+            }
+        )
+        ch = _make_channel(account)
+        ch._bot_user_id = "other-bot"
+        ch._maybe_handle_image_command = AsyncMock(return_value=True)
+
+        data = _make_message(author_id="user-1", content="!analyze", guild_id="guild-1")
+        await ch._handle_message(data)
+
+        ch._maybe_handle_image_command.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_image_command_not_dispatched_when_dm_policy_disabled(self):
+        account = _make_account(dm_policy=DiscordDMPolicy.DISABLED)
+        ch = _make_channel(account)
+        ch._bot_user_id = "other-bot"
+        ch._maybe_handle_image_command = AsyncMock(return_value=True)
+
+        data = _make_message(author_id="user-1", content="!analyze", guild_id=None)
+        await ch._handle_message(data)
+
+        ch._maybe_handle_image_command.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_screencast_command_not_dispatched_when_dm_unpaired(self):
+        # PAIRING policy: an unpaired DM sender must not reach screencast
+        # dispatch (screen sharing has real side effects on the host).
+        account = _make_account(dm_policy=DiscordDMPolicy.PAIRING)
+        ch = _make_channel(account)
+        ch._bot_user_id = "other-bot"
+        ch._maybe_handle_screen_command = AsyncMock(return_value=True)
+
+        data = _make_message(author_id="unpaired-user", content="!screen share", guild_id=None)
+        await ch._handle_message(data)
+
+        ch._maybe_handle_screen_command.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_authorization_runs_before_voice_image_and_screencast_all_three(self):
+        # A single unauthorized message must not reach ANY of the three
+        # special-command dispatchers.
+        ch = _make_channel()
+        ch._bot_user_id = "other-bot"
+        ch._maybe_handle_voice_command = AsyncMock(return_value=False)
+        ch._maybe_handle_image_command = AsyncMock(return_value=False)
+        ch._maybe_handle_screen_command = AsyncMock(return_value=False)
+
+        data = _make_message(
+            author_id="user-1",
+            content="join voice and !analyze and !screen share",
+            guild_id="unauthorized-guild",
+        )
+        await ch._handle_message(data)
+
+        ch._maybe_handle_voice_command.assert_not_awaited()
+        ch._maybe_handle_image_command.assert_not_awaited()
+        ch._maybe_handle_screen_command.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

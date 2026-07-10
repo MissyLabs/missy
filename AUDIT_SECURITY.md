@@ -103,6 +103,106 @@ requirement — do not overwrite, append new entries as work continues.
   and replay/expiration handling per the full SR-1.12 ask are also not
   yet implemented.
 
+### SR-1.13 — Uniform Discord ingress authorization
+
+- **Status: fixed** for both the message-command ingress path (voice,
+  image, screencast) and the slash-command interaction ingress path
+  (`/ask`, `/status`, `/model`, `/help`). Reactions (beyond the SR-1.2/
+  1.3 and SR-1.12 fixes already covering the two reaction-based flows)
+  were not re-audited this pass — see residual risk.
+- **Second, more severe finding in the same pass — slash commands had NO
+  authorization check at all, not even the pre-fix message-ordering
+  bug.** `_handle_interaction()` (`missy/channels/discord/channel.py`,
+  the handler for the `INTERACTION_CREATE` Gateway event, a completely
+  separate code path from `MESSAGE_CREATE`) dispatched straight to
+  `handle_slash_command()` → `_handle_ask()` → `agent.run()` with zero
+  call to `_check_dm_policy()`/`_check_guild_policy()` anywhere. Any
+  Discord user, in any guild/channel, or in any DM regardless of
+  `dm_policy`, could invoke `/ask` and get a full response from the
+  agent — completely ignoring `allowed_channels`/`allowed_roles`/
+  `allowed_users`/`dm_policy`. **Compounding bug found in the same
+  handler:** `missy/channels/discord/commands.py::_handle_ask()`
+  hardcoded `session_id="discord"` for every invocation regardless of
+  who called it, so every `/ask` interaction from every user across the
+  entire bot shared one conversation history — one user's prompts and
+  the agent's replies to them became context for every other user's
+  `/ask` calls (a privacy/isolation failure independent of the
+  authorization gap).
+- **Remediation evidence:** `_handle_interaction()` now extracts the
+  invoking user's ID (`member.user.id` for guild interactions, `user.id`
+  for DM interactions) and runs the same `_check_dm_policy()`/
+  `_check_guild_policy()` gate used by regular messages before any
+  dispatch, replying with an explicit denial (interaction response type
+  4) rather than silently dropping (Discord requires *some* response to
+  every interaction). Added `skip_mention_check` to `_check_guild_policy()`
+  since `require_mention` is a text-message rule that doesn't apply to
+  slash commands (Discord's own command routing already addresses them
+  to this bot specifically). `_handle_ask()` now derives `session_id`
+  from the same per-user extraction (`_interaction_author_id()`),
+  matching the convention already used by the regular message path
+  (`msg.metadata.get("discord_author", {}).get("id", "discord")` in
+  `missy/cli/main.py`). 6 new tests in
+  `tests/channels/test_discord_channel_coverage.py::TestHandleInteractionAuthorizationSR113`
+  (guild denied/authorized, require_mention bypass verified, DM
+  disabled/unpaired/allowlisted) and 8 new tests in
+  `tests/unit/test_discord_commands_coverage.py` covering
+  `_interaction_author_id()` extraction and per-user session isolation
+  (including a test asserting two different users get two different
+  session IDs from consecutive `/ask` calls).
+- **Reachability found:** live and directly exploitable, a third
+  independent instance of the same "unauthenticated side effect before
+  the gate" pattern found twice already this session (SR-1.2/1.3,
+  SR-1.12). `missy/channels/discord/channel.py::_handle_message()`
+  dispatched voice commands, image commands (`!analyze`/`!screenshot`
+  and natural-language equivalents), and screencast commands
+  (`!screen ...`) **before** `_check_dm_policy()`/`_check_guild_policy()`
+  ran — the code even had an explicit comment reading "handled before
+  policy gates." Concretely, this meant:
+  - Any message in **any** guild channel — regardless of
+    `allowed_channels`, `allowed_roles`, `allowed_users`, or
+    `require_mention` — could join a voice channel, capture and analyze
+    a screenshot, or start/stop a screen share.
+  - Any DM — regardless of `dm_policy` being `DISABLED`, `ALLOWLIST`, or
+    `PAIRING` with an unpaired sender — could trigger image and
+    screencast commands (voice commands are guild-only by construction).
+  - This directly violates the review's stated requirement: "No pre-gate
+    command may produce side effects."
+- **Remediation evidence:** reordered `_handle_message()` so
+  `_check_dm_policy()`/`_check_guild_policy()` now run immediately after
+  the own-bot filter and bot-author filter, before any of the three
+  special-command dispatchers. Credential/secrets scrubbing intentionally
+  still runs first (before authorization) so secrets are scrubbed from
+  every channel/DM regardless of policy — that's a strictly more
+  protective ordering, not a regression. 11 new tests in
+  `tests/channels/test_discord_channel_gap_coverage.py::TestUniformIngressAuthorizationSR113`
+  cover: unauthorized guild, authorized guild, channel-not-in-allowlist,
+  user-not-in-allowlist, DM policy `DISABLED`, unpaired DM under
+  `PAIRING`, and a combined test asserting a single unauthorized message
+  reaches none of the three dispatchers. Full `tests/channels/` suite
+  (1925 tests) and full repo suite both green after the change.
+- **Residual risk:**
+  - `allowed_roles` (`DiscordGuildPolicy.allowed_roles`) is a documented,
+    parsed config field ("Whitelist of role names that users must hold")
+    that is **never actually enforced** in `_check_guild_policy()` — an
+    operator configuring it believes interactions are role-gated but
+    they are not. Found during this audit, tracked separately (task
+    #15) since fixing it requires resolving Discord role IDs from the
+    message/interaction payload against role names, a larger change
+    than the ordering/gate fixes above.
+  - Voice-channel-native commands (`voice_commands.py`, gated separately
+    by `DiscordVoiceManager`) were not re-audited for the same pattern
+    this session.
+  - The Discord pairing reaction/DM flow is fixed (SR-1.12) and the
+    evolution-approval reaction flow is fixed (SR-1.2/1.3), but no other
+    `MESSAGE_REACTION_ADD` handling was re-verified for the same "side
+    effect before gate" pattern.
+  - Attachment gates (explicitly named in SR-1.13's text) were reviewed
+    as part of the `_handle_message()` reordering and confirmed to
+    already run after the credential-scrub step and are themselves
+    unaffected by the voice/image/screencast reordering, but were not
+    independently re-audited for authorization-bypass potential beyond
+    that.
+
 ---
 
 - Timestamp: 2026-07-09 15:35:26 (raw grep-scan dump below, preserved
