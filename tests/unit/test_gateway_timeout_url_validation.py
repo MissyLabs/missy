@@ -221,7 +221,7 @@ class TestStreamingFallbackLogging:
         rt._sanitizer = None
         rt._session_mgr = MagicMock()
         rt._session_mgr.get_active_session.return_value = MagicMock(id="test-sid")
-        rt._cost_tracker = None
+        rt._cost_tracking_enabled = False
         rt.config = MagicMock()
         rt.config.max_iterations = 1
 

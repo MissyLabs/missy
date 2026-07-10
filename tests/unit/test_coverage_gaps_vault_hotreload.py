@@ -303,7 +303,6 @@ class TestAgentRuntimeRecordCostStoreFailure:
 
         mock_cost_tracker = MagicMock()
         mock_cost_tracker.record_from_response.return_value = mock_rec
-        runtime._cost_tracker = mock_cost_tracker
 
         # Build a mock memory store whose record_cost raises.
         mock_store = MagicMock()
@@ -314,8 +313,9 @@ class TestAgentRuntimeRecordCostStoreFailure:
 
         mock_response = MagicMock()
 
-        # Should not raise — the exception is swallowed with a debug log.
-        runtime._record_cost(mock_response, session_id="test-session")
+        with patch.object(runtime, "_get_cost_tracker", return_value=mock_cost_tracker):
+            # Should not raise — the exception is swallowed with a debug log.
+            runtime._record_cost(mock_response, session_id="test-session")
 
         mock_store.record_cost.assert_called_once()
 
@@ -325,12 +325,12 @@ class TestAgentRuntimeRecordCostStoreFailure:
 
         mock_cost_tracker = MagicMock()
         mock_cost_tracker.record_from_response.side_effect = RuntimeError("bad response")
-        runtime._cost_tracker = mock_cost_tracker
 
         mock_response = MagicMock()
 
-        # Should not raise.
-        runtime._record_cost(mock_response, session_id="test-session")
+        with patch.object(runtime, "_get_cost_tracker", return_value=mock_cost_tracker):
+            # Should not raise.
+            runtime._record_cost(mock_response, session_id="test-session")
 
     def test_record_cost_unwraps_resilient_store(self) -> None:
         """If the memory store has a _primary attribute, record_cost is called on _primary."""
@@ -344,7 +344,6 @@ class TestAgentRuntimeRecordCostStoreFailure:
 
         mock_cost_tracker = MagicMock()
         mock_cost_tracker.record_from_response.return_value = mock_rec
-        runtime._cost_tracker = mock_cost_tracker
 
         mock_primary = MagicMock()
         mock_primary.record_cost.side_effect = RuntimeError("inner failure")
@@ -353,8 +352,9 @@ class TestAgentRuntimeRecordCostStoreFailure:
         mock_resilient._primary = mock_primary
         runtime._memory_store = mock_resilient
 
-        # Should not raise; inner exception is caught.
-        runtime._record_cost(MagicMock(), session_id="sid")
+        with patch.object(runtime, "_get_cost_tracker", return_value=mock_cost_tracker):
+            # Should not raise; inner exception is caught.
+            runtime._record_cost(MagicMock(), session_id="sid")
 
         mock_primary.record_cost.assert_called_once()
 

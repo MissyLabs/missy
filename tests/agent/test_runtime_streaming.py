@@ -162,5 +162,5 @@ class TestCostPersistence:
                 raw={},
             )
             agent._record_cost(response, session_id="sess-123")
-            # Cost tracker should have recorded
-            assert agent._cost_tracker.call_count == 1
+            # This session's cost tracker should have recorded
+            assert agent._get_cost_tracker("sess-123").call_count == 1

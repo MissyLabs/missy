@@ -75,7 +75,7 @@ def _build_runtime_with_tools(provider, max_iterations=5):
         runtime = AgentRuntime(cfg)
     runtime._rate_limiter = None
     runtime._memory_store = None
-    runtime._cost_tracker = None
+    runtime._cost_tracking_enabled = False
     runtime._context_manager = None
     return runtime, reg, tool_reg
 

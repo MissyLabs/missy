@@ -98,7 +98,7 @@ def _build_runtime(provider=None, max_iterations=1, capability_mode="no-tools"):
         rt = AgentRuntime(cfg)
     rt._rate_limiter = None
     rt._memory_store = None
-    rt._cost_tracker = None
+    rt._cost_tracking_enabled = False
     rt._context_manager = None
     return rt, reg
 
@@ -208,7 +208,7 @@ class TestDriftDetectorTamperWarning:
             rt = AgentRuntime(cfg)
         rt._rate_limiter = None
         rt._memory_store = None
-        rt._cost_tracker = None
+        rt._cost_tracking_enabled = False
         rt._context_manager = None
 
         drift = MagicMock()
@@ -276,7 +276,7 @@ class TestTrustScoreDropWarning:
             rt = AgentRuntime(cfg)
         rt._rate_limiter = None
         rt._memory_store = None
-        rt._cost_tracker = None
+        rt._cost_tracking_enabled = False
         rt._context_manager = None
 
         # Make trust scorer report below threshold
@@ -344,7 +344,7 @@ class TestLargeContentIntercept:
             rt = AgentRuntime(cfg)
         rt._rate_limiter = None
         rt._memory_store = None
-        rt._cost_tracker = None
+        rt._cost_tracking_enabled = False
         rt._context_manager = None
         return rt, reg, tool_reg
 

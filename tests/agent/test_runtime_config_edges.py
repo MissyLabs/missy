@@ -101,7 +101,7 @@ def _make_runtime(provider: MagicMock | None = None, **config_kwargs) -> AgentRu
     # Disable subsystems that require filesystem / network for these unit tests
     runtime._rate_limiter = None
     runtime._memory_store = None
-    runtime._cost_tracker = None
+    runtime._cost_tracking_enabled = False
     runtime._context_manager = None
     runtime._drift_detector = None
     return runtime

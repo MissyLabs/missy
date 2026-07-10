@@ -1323,7 +1323,7 @@ class TestRuntimeRecordCost:
 
         with patch("missy.agent.runtime.get_registry", return_value=reg):
             runtime = AgentRuntime(AgentConfig(provider="fake"))
-            runtime._cost_tracker = None
+            runtime._cost_tracking_enabled = False
             response = MagicMock()
             # Should not raise
             runtime._record_cost(response)
@@ -1353,11 +1353,11 @@ class TestRuntimeRecordCost:
 
             store = DirectStore()
 
-            runtime._cost_tracker = cost_tracker
-            runtime._memory_store = store
+            with patch.object(runtime, "_get_cost_tracker", return_value=cost_tracker):
+                runtime._memory_store = store
 
-            response = MagicMock()
-            runtime._record_cost(response, session_id="s1")
+                response = MagicMock()
+                runtime._record_cost(response, session_id="s1")
 
         assert hasattr(store, "last_call")
         assert store.last_call["session_id"] == "s1"
@@ -1372,10 +1372,10 @@ class TestRuntimeRecordCost:
             runtime = AgentRuntime(AgentConfig(provider="fake"))
             bad_tracker = MagicMock()
             bad_tracker.record_from_response.side_effect = Exception("cost error")
-            runtime._cost_tracker = bad_tracker
 
-            # Should not raise
-            runtime._record_cost(MagicMock())
+            with patch.object(runtime, "_get_cost_tracker", return_value=bad_tracker):
+                # Should not raise
+                runtime._record_cost(MagicMock())
 
 
 class TestRuntimeToolLoop:

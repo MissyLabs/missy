@@ -1,5 +1,31 @@
 # TEST_RESULTS
 
+## Run: 2026-07-10 19:55 UTC — validation-harness overhaul, SR-3.4 residual (CostTracker cross-session aggregation)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Finding: `AgentRuntime` constructed one shared `CostTracker` for its
+  entire lifetime despite `max_spend_usd` being documented as a
+  per-session cap; one session exhausting the budget silently blocked
+  every other session sharing that runtime instance.
+- Live reproduction: session "bob" (zero spend) was incorrectly denied
+  due to session "alice" exceeding the cap; confirmed via `git stash`
+  this reproduces on the pre-fix tree.
+- Fix: replaced the single `self._cost_tracker` with
+  `self._cost_trackers: dict[str, CostTracker]` keyed by session_id,
+  a `_cost_tracking_enabled` master switch, `_get_cost_tracker()`/
+  `_peek_cost_tracker()` accessors (bounded at 5,000 tracked sessions
+  with oldest-first eviction).
+- Command: `pytest tests/agent/test_runtime_enhancements.py -v`
+- Result: `25 passed` (7 new tests: `TestCostTrackerCrossSessionIsolation`
+  class of 6 plus one new end-to-end dispatch test)
+- Command: `pytest tests/agent/ tests/unit/ tests/security/ tests/cli/
+  tests/api/ tests/scheduler/ -q -o faulthandler_timeout=120`
+- Result: `9979 passed, 4 skipped` — no regressions
+- Command: `pytest tests/ -q -o faulthandler_timeout=120`
+- Result: `3 failed, 20900 passed, 13 skipped in 460.13s (0:07:40)` —
+  up from 20893, only the 3 known pre-existing `CameraDiscovery`
+  cache-TTL flakes failing, unrelated to this checkpoint's changes.
+
 ## Run: 2026-07-10 19:10 UTC — validation-harness overhaul, SR-2.2 (real ApprovalGate wired for proactive triggers; requires_confirmation defaults to True)
 
 - Branch: `overhaul/missy-validation-20260710-031406`

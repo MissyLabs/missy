@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (26 checkpoints this session, full suite green after every one)
+## Changed (27 checkpoints this session, full suite green after every one)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -152,11 +152,62 @@ same way: explicit `requires_confirmation: false` per trigger in
 config to opt back into auto-run) — should be called out in release
 notes alongside SR-2.1's note if this branch ships.
 
+### SR-3.4 residual: CostTracker cross-session aggregation (closes the last open §2/§3 item)
+
+The cross-session-aggregation sub-finding explicitly left open when
+SR-3.4's ordering defect was fixed earlier this session — investigated
+and closed as its own checkpoint, not a product-policy question, a
+genuine live bug.
+
+`AgentConfig.max_spend_usd`'s own inline comment says "per-session
+cost cap," and `CostTracker`'s docstrings describe per-session
+tracking — but `AgentRuntime.__init__` constructed exactly one shared
+`CostTracker` for the runtime's entire lifetime. `_check_budget()`/
+`_record_cost()` already threaded `session_id` through as a parameter,
+but only ever used it for audit logging, never for scoping
+enforcement — the same "declared behavior doesn't match dispatch
+behavior" pattern found repeatedly elsewhere this session (SR-1.4/1.5,
+SR-3.3). Since `AgentRuntime` is constructed once and shared across
+every session it serves in real deployments (`missy gateway start`
+builds one runtime for all Discord users, all Web API sessions), this
+was live: one session's spend silently blocked every other session
+sharing that process. Live-reproduced: session "bob" (zero spend) was
+incorrectly denied due to session "alice" exceeding the cap; confirmed
+via `git stash` this reproduces on the pre-fix tree.
+
+Fixed: replaced the single `self._cost_tracker` with
+`self._cost_trackers: dict[str, CostTracker]` keyed by `session_id`, a
+`_cost_tracking_enabled` master switch (preserving the old "tracking
+entirely disabled" semantics), and `_get_cost_tracker()`/
+`_peek_cost_tracker()` accessors (lazy, thread-safe, bounded at 5,000
+tracked sessions with oldest-first eviction — matching the eviction
+pattern `CostTracker` itself already uses internally). Updated all 3
+real call sites. Live re-verified: alice is still correctly denied
+(the earlier SR-3.4 ordering fix is fully preserved), while bob's
+independent budget is completely unaffected, confirmed both directly
+and end-to-end through `_single_turn()`'s real dispatch path.
+
+7 new regression tests plus 25 pre-existing tests updated across 9
+files — the pre-existing tests previously poked a single shared
+`runtime._cost_tracker` directly; each was updated case-by-case to
+match its real intent (disable-tracking vs. inject-a-specific-mock-
+tracker) rather than a blanket mechanical rename.
+
+**Residual risk:** the per-session tracker dict is in-memory only — a
+process restart resets accumulated spend to zero (arguably reasonable
+for a live budget window, but worth noting: `max_spend_usd` is a
+per-session-per-process-lifetime cap, not a durable cross-restart cap).
+Durable historical cost data already exists independently via
+`SQLiteMemoryStore.record_cost()`/`get_session_costs()` (used by
+`missy cost --session`), already correctly per-session-scoped before
+this fix and unaffected by it — only the live in-memory *enforcement*
+path had the bug.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-3 failed, 20893 passed, 13 skipped in 450.66s (0:07:30)
+3 failed, 20900 passed, 13 skipped in 460.13s (0:07:40)
 ```
 
 The 3 failures are exactly the known pre-existing `CameraDiscovery`
@@ -175,17 +226,15 @@ three files above.)
 - **#9** SR-1.x through SR-4.x security review remediation — this
   session covered SR-1.2/1.3, SR-1.4, SR-1.5, SR-1.6, SR-1.7, SR-1.8,
   SR-1.9a, SR-1.10, SR-1.11, SR-1.12, SR-1.13, SR-2.1, SR-2.2, SR-2.3,
-  SR-2.4, SR-3.2, SR-3.3, SR-3.4, SR-3.5 (plus SR-3.1 substantially via
-  FX-B — §2 and §3 are now both fully closed except SR-3.4's
-  cross-session-aggregation sub-finding). Remaining: SR-1.1 (audit
-  signing — larger cross-cutting change), SR-1.9b (DNS TOCTOU,
-  substantially harder — needs connecting to a pinned policy-verified IP
-  rather than re-resolving at connect time), the cross-session-aggregation
-  sub-finding of SR-3.4 (a shared Discord/API runtime's `CostTracker`
-  never resets between logically distinct sessions — separate from the
-  ordering fix already landed), SR-4.x (dead/unwired features) — this
-  is the natural next area now that §1 (partially), §2 (fully), and §3
-  (mostly) are closed.
+  SR-2.4, SR-3.1 (substantially via FX-B), SR-3.2, SR-3.3, SR-3.4
+  (including its cross-session-aggregation sub-finding), SR-3.5 — **§2
+  and §3 are now both fully closed, with no open sub-findings in
+  either.** Remaining: SR-1.1 (audit signing — larger cross-cutting
+  change), SR-1.9b (DNS TOCTOU, substantially harder — needs connecting
+  to a pinned policy-verified IP rather than re-resolving at connect
+  time), SR-4.x (dead/unwired features, 8 sub-items) — this is the
+  natural next large area now that §1 (partially), §2 (fully), and §3
+  (fully) are closed.
 - **SR-1.7's launcher sub-finding** remains open — `find`/`xargs`/
   `bash`/`sudo` etc. are allowlist-able with only a warning, and
   nested shell commands inside a launcher's quoted arguments are
@@ -268,23 +317,23 @@ rather than code-level reasoning about what *should* happen.
 
 If a way to safely exercise a real or scripted acpx delegate call
 becomes available, prioritize FX-A bullet 6 — it unblocks re-validating
-everything else. Otherwise, **§2 is now fully closed** (SR-2.1:
+everything else. Otherwise, **§2 and §3 of the security review are now
+both fully closed**, with zero open sub-findings in either (SR-2.1:
 scheduled jobs default to `capability_mode="safe-chat"`; SR-2.2: a real
-`ApprovalGate` is wired into `ProactiveManager` and the Web API server,
-`requires_confirmation` defaults to `True`, both operator-confirmed).
-SR-1.1 (audit signing) is now the largest remaining §1 item; §4
-(dead/unwired features — SR-4.1 through SR-4.8) is the next natural
-large area, and the cross-session-aggregation sub-finding of SR-3.4
-(`CostTracker` never resets between logically distinct sessions in a
-shared Discord/API runtime) is a smaller, self-contained §3 leftover
-worth picking up on its own. Given how the last several checkpoints
-went (SR-3.3 and SR-3.5 were both flagged "likely already fixed" and
-both turned out to hide live, confirmed, previously-undetected bugs;
-SR-2.1 and SR-2.2 both turned out to have a second layer beyond the
-obvious default-value fix — SR-2.1's fail-closed legacy-record handling,
-SR-2.2's entirely-unwired `ApprovalGate` requiring new REST endpoints),
-keep applying the same discipline to whatever's picked up next: read
-the actual current code, trace actual runtime call paths, specifically
+`ApprovalGate` is wired into `ProactiveManager` and the Web API server;
+SR-3.4's cross-session-aggregation sub-finding is fixed — `CostTracker`
+is now per-session-keyed). SR-1.1 (audit signing) is now the largest
+remaining §1 item; §4 (dead/unwired features — SR-4.1 through SR-4.8,
+8 sub-items) is the next natural large area to work through. Given how
+the last several checkpoints went (SR-3.3 and SR-3.5 were both flagged
+"likely already fixed" and both turned out to hide live, confirmed,
+previously-undetected bugs; SR-2.1, SR-2.2, and the SR-3.4 residual all
+turned out to have a second layer beyond the obvious fix — SR-2.1's
+fail-closed legacy-record handling, SR-2.2's entirely-unwired
+`ApprovalGate` requiring new REST endpoints, the SR-3.4 residual's
+25-test mechanical-vs-intentional update split across 9 files), keep
+applying the same discipline to whatever's picked up next: read the
+actual current code, trace actual runtime call paths, specifically
 check whether any existing test exercises the *real* production
 dispatch/entry point rather than just the unit under test in isolation,
 and live-reproduce before declaring anything fixed, broken, or

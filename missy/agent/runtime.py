@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import threading
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
@@ -367,8 +368,15 @@ class AgentRuntime:
         # Lazy-loaded subsystems
         self._context_manager = self._make_context_manager()
         self._memory_store = self._make_memory_store()
-        # Cost tracking (graceful degradation)
-        self._cost_tracker = self._make_cost_tracker()
+        # Cost tracking (graceful degradation). SR-3.4 cross-session fix:
+        # max_spend_usd is documented as a per-session cap
+        # (AgentConfig.max_spend_usd), so each session gets its own
+        # CostTracker rather than one shared across every session this
+        # runtime instance serves (e.g. every Discord user, every Web API
+        # session) -- see _get_cost_tracker().
+        self._cost_tracking_enabled = self._cost_tracker_module_available()
+        self._cost_trackers: dict[str, Any] = {}
+        self._cost_trackers_lock = threading.Lock()
         # Input sanitizer for tool output injection detection
         self._sanitizer = self._make_sanitizer()
         # Scan for incomplete checkpoints from previous runs
@@ -731,9 +739,10 @@ class AgentRuntime:
         self._maybe_compact(sid, provider)
 
         cost_detail = {}
-        if self._cost_tracker is not None:
+        _session_tracker = self._peek_cost_tracker(sid)
+        if _session_tracker is not None:
             with contextlib.suppress(Exception):
-                cost_detail = self._cost_tracker.get_summary()
+                cost_detail = _session_tracker.get_summary()
 
         self._emit_event(
             session_id=sid,
@@ -2205,6 +2214,76 @@ class AgentRuntime:
             return None
 
     @staticmethod
+    def _cost_tracker_module_available() -> bool:
+        """Return ``True`` when the cost-tracker module can be imported."""
+        try:
+            import missy.agent.cost_tracker  # noqa: F401
+        except Exception:
+            return False
+        return True
+
+    #: Maximum number of per-session CostTracker instances retained in
+    #: memory at once. Bounds growth for a long-running shared runtime
+    #: (e.g. a Discord bot or Web API process) serving many distinct
+    #: sessions over its lifetime; oldest-created trackers are evicted
+    #: first, matching the eviction pattern already used inside
+    #: CostTracker itself for per-call usage records.
+    _MAX_TRACKED_SESSIONS: int = 5_000
+
+    def _get_cost_tracker(self, session_id: str) -> Any:
+        """Return the :class:`CostTracker` for *session_id*, creating it if needed.
+
+        SR-3.4 (cross-session-aggregation fix): ``max_spend_usd`` is
+        documented as a per-session budget cap, but a single shared
+        ``AgentRuntime`` instance commonly serves many logically distinct
+        sessions (every Discord user, every Web API session, every
+        scheduled job run). A single runtime-wide accumulator would let
+        one session's spend count against every other session's budget.
+        Each session therefore gets its own tracker, keyed by
+        *session_id*.
+
+        Args:
+            session_id: The session this cost/budget check belongs to.
+                An empty string is treated as its own session bucket
+                (matches callers that have no session context, e.g.
+                direct unit-level calls).
+
+        Returns:
+            A :class:`~missy.agent.cost_tracker.CostTracker`, or ``None``
+            when cost tracking is disabled/unavailable for this runtime.
+        """
+        if not self._cost_tracking_enabled:
+            return None
+        key = session_id or "__no_session__"
+        with self._cost_trackers_lock:
+            tracker = self._cost_trackers.get(key)
+            if tracker is None:
+                tracker = self._make_cost_tracker()
+                if tracker is None:
+                    self._cost_tracking_enabled = False
+                    return None
+                self._cost_trackers[key] = tracker
+                if len(self._cost_trackers) > self._MAX_TRACKED_SESSIONS:
+                    oldest_key = next(iter(self._cost_trackers))
+                    if oldest_key != key:
+                        del self._cost_trackers[oldest_key]
+            return tracker
+
+    def _peek_cost_tracker(self, session_id: str) -> Any:
+        """Return *session_id*'s CostTracker without creating one.
+
+        Non-side-effecting counterpart to :meth:`_get_cost_tracker`, for
+        read-only display sites (e.g. audit-event summaries) that should
+        not fabricate a fresh empty tracker for a session that never
+        actually recorded any cost.
+        """
+        if not self._cost_tracking_enabled:
+            return None
+        key = session_id or "__no_session__"
+        with self._cost_trackers_lock:
+            return self._cost_trackers.get(key)
+
+    @staticmethod
     def _make_rate_limiter() -> Any:
         """Create a :class:`~missy.providers.rate_limiter.RateLimiter`.
 
@@ -2387,11 +2466,12 @@ class AgentRuntime:
         return list(self._pending_recovery)
 
     def _record_cost(self, response, session_id: str = "") -> None:
-        """Record token usage in the cost tracker and persist to SQLite."""
-        if self._cost_tracker is None:
+        """Record token usage in this session's cost tracker and persist to SQLite."""
+        tracker = self._get_cost_tracker(session_id)
+        if tracker is None:
             return
         try:
-            rec = self._cost_tracker.record_from_response(response)
+            rec = tracker.record_from_response(response)
             # Persist to SQLite for historical cost queries
             if rec is not None and session_id and self._memory_store is not None:
                 try:
@@ -2425,13 +2505,17 @@ class AgentRuntime:
         """Enforce budget limits after recording cost.
 
         Raises :class:`~missy.agent.cost_tracker.BudgetExceededError` if the
-        accumulated session cost exceeds ``max_spend_usd``.  An audit event
-        is emitted before the exception propagates.
+        accumulated cost for *session_id* exceeds ``max_spend_usd``. Each
+        session is checked against its own accumulated total (SR-3.4) --
+        one session's spend never counts against another session's budget
+        even when they share this runtime instance. An audit event is
+        emitted before the exception propagates.
         """
-        if self._cost_tracker is None:
+        tracker = self._get_cost_tracker(session_id)
+        if tracker is None:
             return
         try:
-            self._cost_tracker.check_budget()
+            tracker.check_budget()
         except Exception:
             # Emit audit event for budget breach
             with contextlib.suppress(Exception):
@@ -2440,7 +2524,7 @@ class AgentRuntime:
                     task_id=task_id,
                     event_type="agent.budget.exceeded",
                     result="deny",
-                    detail=self._cost_tracker.get_summary(),
+                    detail=tracker.get_summary(),
                 )
             raise
 

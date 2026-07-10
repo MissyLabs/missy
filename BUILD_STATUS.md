@@ -1,6 +1,6 @@
 # Build Status
 
-Last updated: 2026-07-10 19:10 UTC
+Last updated: 2026-07-10 19:55 UTC
 
 ## Current Workstream: Validation-Harness Overhaul
 
@@ -1222,6 +1222,60 @@ session, and closes §2 (Unattended-Execution Hazards) of the security
 review entirely. Full detail in `AUDIT_SECURITY.md`'s new `### SR-2.2`
 section.
 
+### Completed This Session, continued: SR-3.4 residual — CostTracker cross-session aggregation (twenty-first finding)
+
+The cross-session-aggregation sub-finding explicitly left open when
+SR-3.4's ordering defect was fixed earlier this session. Investigated
+and closed as its own checkpoint.
+
+Reachability: `AgentConfig.max_spend_usd`'s own inline comment says
+"per-session cost cap," and `CostTracker`'s docstrings describe
+per-session tracking — but `AgentRuntime.__init__` constructed exactly
+one shared `CostTracker` for the runtime's entire lifetime.
+`_check_budget()`/`_record_cost()` already threaded `session_id`
+through as a parameter, but only for audit logging, never for scoping
+enforcement — the same "declared behavior doesn't match dispatch
+behavior" pattern found repeatedly elsewhere this session. Since
+`AgentRuntime` is constructed once and shared across every session it
+serves in real deployments (confirmed at `missy gateway start`'s
+construction site), this was live: one user/session exhausting the
+budget silently blocked every other session sharing that process.
+Live-reproduced: session "bob" (zero spend of his own) was incorrectly
+denied due to session "alice" exceeding the cap; confirmed via `git
+stash` this reproduces on the pre-fix tree.
+
+Fixed: replaced the single `self._cost_tracker` with
+`self._cost_trackers: dict[str, CostTracker]` keyed by session_id, a
+`_cost_tracking_enabled` master switch, and `_get_cost_tracker()`/
+`_peek_cost_tracker()` accessors (lazy creation, thread-safe, bounded
+at 5,000 tracked sessions with oldest-first eviction). Updated all 3
+real call sites. Live re-verified: alice is still correctly denied
+(the earlier ordering fix is preserved), while bob's independent
+budget is completely unaffected, confirmed both directly and
+end-to-end through `_single_turn()`'s real dispatch path.
+
+7 new regression tests plus 25 pre-existing tests updated across 9
+files (the pre-existing tests previously poked a single shared
+`runtime._cost_tracker` directly; each was updated case-by-case to
+match its real intent — disable-tracking vs. inject-a-mock-tracker —
+rather than a blanket mechanical rename). `tests/agent/`+`tests/unit/`+
+`tests/security/`+`tests/cli/`+`tests/api/`+`tests/scheduler/` (9,979
+tests) pass with no regressions; full suite 20,900 passed (up from
+20,893), only the 3 known pre-existing vision flakes failing.
+
+Residual risk: the per-session tracker dict is in-memory only — a
+process restart resets accumulated spend to zero (a reasonable
+property for a live budget window, but worth noting: `max_spend_usd`
+is a per-session-per-process-lifetime cap, not a durable cross-restart
+cap). Durable historical cost data already exists independently via
+`SQLiteMemoryStore.record_cost()`/`get_session_costs()` (used by
+`missy cost --session`), already correctly per-session-scoped before
+this fix and unaffected by it.
+
+This is the twenty-first independent, confirmed finding/change this
+session. Full detail in `AUDIT_SECURITY.md`'s new `### SR-3.4 residual`
+section.
+
 ### Known Pre-Existing Failure (not caused by this session)
 
 `tests/vision/test_discovery_capture_sysfs.py::TestCacheTTL::test_cache_valid_within_ttl`
@@ -1237,8 +1291,8 @@ scoped to FX-A / voice-command work.
 
 FX-A through FX-G are all complete (see task list). §2 (Unattended-
 Execution Hazards) and §3 (Data Integrity, Availability, And Cost) are
-now fully closed, except SR-3.4's separate cross-session-aggregation
-sub-finding. Current remaining priority order:
+now both fully closed — SR-3.4's cross-session-aggregation sub-finding
+is fixed. Current remaining priority order:
 
 1. SR-1.1 (audit event signing — larger cross-cutting change) and
    SR-1.9b (DNS TOCTOU — needs connecting to a pinned policy-verified IP
@@ -1263,11 +1317,9 @@ sub-finding. Current remaining priority order:
    endpoint (SR-1.12's fix removed the vulnerable path but no working
    approval surface exists now); `allowed_roles` Discord guild-policy
    field never enforced; FX-F bullet 2/4 disposable browser-test
-   environment; FX-G residual acpx process-group timeout kill;
-   SR-3.4's cross-session-aggregation sub-finding (a shared Discord/API
-   runtime's `CostTracker` never resets between logically distinct
-   sessions); a Web TUI browser page for approvals (SR-2.2's REST
-   endpoints are real and authenticated but have no browser UI yet).
+   environment; FX-G residual acpx process-group timeout kill; a Web
+   TUI browser page for approvals (SR-2.2's REST endpoints are real and
+   authenticated but have no browser UI yet).
 
 ### Blockers
 

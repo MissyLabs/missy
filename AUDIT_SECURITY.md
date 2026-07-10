@@ -1423,6 +1423,110 @@ requirement — do not overwrite, append new entries as work continues.
   YAML config to opt back into auto-run) — should be called out in
   release notes alongside SR-2.1's note if this branch ships.
 
+### SR-3.4 residual — CostTracker aggregated spend across sessions instead of per-session, contradicting its own documented contract
+
+- **Status: fixed.** This is the residual sub-finding explicitly left
+  open when SR-3.4's ordering defect was fixed earlier in this session
+  ("the cross-session-aggregation sub-finding ... is a separate
+  architectural question ... not addressed by this ordering fix").
+  Investigated and closed as its own checkpoint.
+- **Reachability found (live-verified, and confirmed a documented-vs-
+  actual-behavior mismatch, not merely a design gap):**
+  `AgentConfig.max_spend_usd`'s own inline comment reads `# 0 =
+  unlimited; per-session cost cap`, and `CostTracker`'s own module
+  docstring / class docstring both describe it as per-session tracking.
+  But `AgentRuntime.__init__` constructed exactly one
+  `CostTracker` instance (`self._cost_tracker`) shared by the entire
+  runtime for its whole lifetime, and every session that ran through
+  that runtime accumulated into the *same* `_total_cost` counter.
+  `_check_budget(session_id=..., task_id=...)` and
+  `_record_cost(response, session_id=...)` both already threaded
+  `session_id` through as a parameter — but only ever used it for audit
+  logging, never for scoping the actual enforcement, which is the
+  precise "declared behavior doesn't match dispatch behavior" pattern
+  this session found repeatedly in other subsystems (SR-1.4/1.5, SR-3.3).
+  Because `AgentRuntime` is explicitly constructed once and reused
+  across every session it serves in real deployments (`missy gateway
+  start` builds one shared runtime instance for all Discord users, all
+  Web API sessions — confirmed by rereading that construction site),
+  this was live and exploitable: one user/session exhausting the
+  configured budget silently blocked every other user/session sharing
+  that process, even though `max_spend_usd` is documented and intended
+  as a per-user/per-session cap, not a process-wide one.
+  Live-reproduced: constructed a real `AgentRuntime` with
+  `max_spend_usd=0.01`, recorded enough usage against session "alice"
+  to exceed the cap, then called `_check_budget(session_id="bob")` for
+  an unrelated session that had recorded zero cost of its own — `bob`
+  was incorrectly denied with `BudgetExceededError` due to `alice`'s
+  spend. Confirmed via `git stash` that this reproduces on the pre-fix
+  tree and is fixed on the post-fix tree (`bob` now proceeds normally).
+- **Remediation evidence:** replaced the single `self._cost_tracker`
+  instance with `self._cost_trackers: dict[str, CostTracker]` keyed by
+  `session_id`, plus a `self._cost_tracking_enabled: bool` master switch
+  (preserving the old "cost tracking entirely disabled" semantics that
+  `self._cost_tracker = None` used to express). Added
+  `_get_cost_tracker(session_id)` (lazily creates and caches a
+  per-session tracker, thread-safe via a lock, bounded at 5,000
+  concurrently tracked sessions with oldest-first eviction to prevent
+  unbounded memory growth in a long-running shared process — matching
+  the same eviction pattern `CostTracker` itself already uses for
+  per-call usage records) and `_peek_cost_tracker(session_id)` (a
+  non-side-effecting read-only variant for the `agent.run.complete`
+  audit-event summary site, so a session that never actually recorded
+  any cost doesn't get a fabricated empty tracker entry). Updated all 3
+  real call sites (`_record_cost`, `_check_budget`, and the
+  `agent.run.complete` cost-summary read) to route through the new
+  per-session accessor. Live re-verified the exact reproduction above
+  now passes: `alice` is still correctly denied once her own spend
+  exceeds the cap (the ordering fix from earlier in this session is
+  fully preserved — `provider.complete`/`complete_with_tools` are still
+  never called for a denied session), while `bob`'s independent, unspent
+  budget is completely unaffected by `alice`'s usage, confirmed both via
+  direct `_check_budget()` calls and end-to-end through the real
+  `_single_turn()` dispatch path (session B's actual provider call
+  proceeds and returns its real response while session A's identical
+  call is denied pre-flight). 7 new regression tests plus 25 pre-existing
+  tests updated across 9 files: `tests/agent/test_runtime_enhancements.py`
+  gained a new `TestCostTrackerCrossSessionIsolation` class (6 tests:
+  isolation, independent totals, same-session-returns-same-instance,
+  peek-doesn't-create, disable-applies-globally, bounded-eviction) plus
+  one new end-to-end cross-session dispatch test in the existing
+  `TestBudgetCheckedBeforePaidCall` class (7 new tests total); 9
+  pre-existing tests in that same file were updated from directly
+  poking a single shared `runtime._cost_tracker` to using session-scoped
+  `_get_cost_tracker(...)` calls matching each test's actual session_id,
+  preserving their original intent rather than just making them pass
+  mechanically. 16 other pre-existing tests across 9 additional files
+  (`tests/agent/test_runtime_coverage_gaps.py`,
+  `tests/agent/test_coverage_gaps.py`,
+  `tests/agent/test_runtime_config_edges.py`,
+  `tests/agent/test_runtime_tool_output_injection.py`,
+  `tests/agent/test_tool_intelligence_wiring.py`,
+  `tests/agent/test_runtime_streaming.py`,
+  `tests/unit/test_gateway_timeout_url_validation.py`,
+  `tests/unit/test_hardening_piper_discord.py`,
+  `tests/unit/test_coverage_gaps_vault_hotreload.py`) that disabled or
+  mocked cost tracking via the old single-attribute pattern were updated
+  to the new `_cost_tracking_enabled` flag or `patch.object(runtime,
+  "_get_cost_tracker", ...)` pattern, matching each test's real intent
+  (disable-tracking tests vs. inject-a-specific-mock-tracker tests) case
+  by case rather than a blanket mechanical rename.
+  `tests/agent/`+`tests/unit/`+`tests/security/`+`tests/cli/`+
+  `tests/api/`+`tests/scheduler/` (9,979 tests) pass with no
+  regressions; full suite 20,900 passed (up from 20,893), only the 3
+  known pre-existing vision flakes failing.
+- **Residual risk:** none identified for the core cross-session-
+  aggregation finding. The per-session tracker dict is in-memory only —
+  a process restart resets every session's accumulated spend to zero
+  (arguably a reasonable, even desirable property for a live budget
+  window, but worth noting explicitly: it means `max_spend_usd` is a
+  per-session-per-process-lifetime cap, not a truly durable
+  cross-restart cap). Durable historical cost data already exists
+  independently via `SQLiteMemoryStore.record_cost()`/`get_session_costs()`
+  (used by `missy cost --session`), which was already correctly
+  per-session-scoped before this fix and is unaffected by it — only the
+  live in-memory *enforcement* path had the aggregation bug.
+
 ---
 
 - Timestamp: 2026-07-09 15:35:26 (raw grep-scan dump below, preserved
