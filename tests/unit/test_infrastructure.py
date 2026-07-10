@@ -1390,6 +1390,12 @@ class TestOtelExporterExportEvent:
     def _enabled_exporter(self):
         exporter = OtelExporter.__new__(OtelExporter)
         exporter._enabled = True
+        # SR-4.6 added these attributes; a manually __new__()-constructed
+        # instance must set them too or export_event()'s except-block
+        # (self._export_failure_count += 1) raises AttributeError instead
+        # of exercising the intended "must not propagate" behavior.
+        exporter._export_failure_count = 0
+        exporter._last_export_error = None
         mock_tracer = MagicMock()
         mock_span = MagicMock()
         mock_tracer.start_as_current_span.return_value.__enter__ = MagicMock(return_value=mock_span)
@@ -1424,10 +1430,15 @@ class TestOtelExporterExportEvent:
     def test_export_event_exception_does_not_propagate(self):
         exporter = OtelExporter.__new__(OtelExporter)
         exporter._enabled = True
+        exporter._export_failure_count = 0
+        exporter._last_export_error = None
         mock_tracer = MagicMock()
         mock_tracer.start_as_current_span.side_effect = RuntimeError("tracer error")
         exporter._tracer = mock_tracer
         exporter.export_event({"event_type": "test"})  # Must not raise
+        # SR-4.6: failures are now surfaced (countable), not just logged.
+        assert exporter.export_failure_count == 1
+        assert exporter.last_export_error == "tracer error"
 
     def test_export_event_skips_non_scalar_values(self):
         exporter, _, mock_span = self._enabled_exporter()
@@ -1437,63 +1448,118 @@ class TestOtelExporterExportEvent:
 
 
 class TestOtelExporterSubscribe:
-    def test_subscribe_registers_handler_on_event_bus(self):
+    """SR-4.6: subscribe() previously called event_bus.subscribe(_handler)
+    with only one argument, but EventBus.subscribe(event_type, callback)
+    requires two -- that call always raised TypeError, silently caught,
+    so OTLP export received zero events in every configuration. Fixed by
+    wrapping publish() itself (the same pattern AuditLogger already uses
+    to capture every event without per-type registration). These tests
+    were rewritten to match; the previous versions asserted
+    `mock_bus.subscribe.assert_called_once()`, which exercised the
+    removed/broken code path rather than the fix."""
+
+    def _exporter(self):
         exporter = OtelExporter.__new__(OtelExporter)
         exporter._enabled = True
         exporter._tracer = MagicMock()
+        exporter._export_failure_count = 0
+        exporter._last_export_error = None
+        exporter._bus = None
+        exporter._original_publish = None
+        return exporter
 
-        mock_bus = MagicMock()
-        # event_bus is imported inside subscribe(); patch at its source module
-        with patch("missy.core.events.event_bus", mock_bus):
+    def test_subscribe_wraps_publish_on_event_bus(self):
+        from missy.core.events import EventBus
+
+        exporter = self._exporter()
+        bus = EventBus()
+        # EventBus.publish is unbound on the class; comparing to it (not a
+        # freshly-accessed bound method, which is a new object every
+        # access) is what actually detects whether the instance's own
+        # publish attribute has been overridden.
+        original_publish = EventBus.publish
+
+        with patch("missy.core.events.event_bus", bus):
             exporter.subscribe()
 
-        mock_bus.subscribe.assert_called_once()
+        # After subscribe(), bus.publish is an instance attribute pointing
+        # directly at the patched closure (not a bound method), so no
+        # .__func__ unwrapping applies to it.
+        assert bus.publish is not original_publish
+        assert exporter._bus is bus
+        # _original_publish was captured *before* the override, while
+        # `publish` was still the class's real bound method.
+        assert exporter._original_publish.__func__ is original_publish
 
     def test_subscribe_handler_calls_export_event(self):
-        exporter = OtelExporter.__new__(OtelExporter)
-        exporter._enabled = True
-        exporter._tracer = MagicMock()
+        from missy.core.events import AuditEvent, EventBus
+
+        exporter = self._exporter()
         exporter.export_event = MagicMock()
 
-        captured_handler = []
-        mock_bus = MagicMock()
-        mock_bus.subscribe.side_effect = lambda h: captured_handler.append(h)
-
-        with patch("missy.core.events.event_bus", mock_bus):
+        bus = EventBus()
+        with patch("missy.core.events.event_bus", bus):
             exporter.subscribe()
 
-        assert len(captured_handler) == 1
-        fake_event = MagicMock()
-        fake_event.__dict__ = {"event_type": "tool_call", "session_id": "s1"}
-        captured_handler[0](fake_event)
-        exporter.export_event.assert_called_once_with(
-            {"event_type": "tool_call", "session_id": "s1"}
+        bus.publish(
+            AuditEvent.now(
+                session_id="s1",
+                task_id="t1",
+                event_type="tool_call",
+                category="plugin",
+                result="allow",
+                detail={},
+            )
         )
 
+        exporter.export_event.assert_called_once()
+        captured = exporter.export_event.call_args[0][0]
+        assert captured["event_type"] == "tool_call"
+        assert captured["session_id"] == "s1"
+
+    def test_subscribe_still_calls_original_publish(self):
+        """The wrapper must not replace publish()'s real behavior (e.g.
+        appending to the in-process audit log) -- only add export on top."""
+        from missy.core.events import AuditEvent, EventBus
+
+        exporter = self._exporter()
+        bus = EventBus()
+        with patch("missy.core.events.event_bus", bus):
+            exporter.subscribe()
+
+        event = AuditEvent.now(
+            session_id="s1",
+            task_id="t1",
+            event_type="tool_call",
+            category="plugin",
+            result="allow",
+            detail={},
+        )
+        bus.publish(event)
+
+        assert event in bus.get_events()
+
     def test_subscribe_failure_does_not_propagate(self):
-        exporter = OtelExporter.__new__(OtelExporter)
-        exporter._enabled = True
-        exporter._tracer = MagicMock()
+        exporter = self._exporter()
 
         # Simulate the import inside subscribe() raising an exception
         with patch("builtins.__import__", side_effect=ImportError("no events module")):
             exporter.subscribe()  # Must not raise
 
     def test_subscribe_handler_uses_empty_dict_when_event_has_no_dict(self):
-        exporter = OtelExporter.__new__(OtelExporter)
-        exporter._enabled = True
-        exporter._tracer = MagicMock()
+        exporter = self._exporter()
         exporter.export_event = MagicMock()
 
-        captured_handler = []
+        # A mock bus accepts any publish() argument (unlike the real
+        # EventBus, which requires event.event_type) -- this isolates the
+        # specific behavior under test: the patched publish() must hand
+        # export_event() an empty dict for an object with no __dict__
+        # (e.g. a plain string), not crash.
         mock_bus = MagicMock()
-        mock_bus.subscribe.side_effect = lambda h: captured_handler.append(h)
-
         with patch("missy.core.events.event_bus", mock_bus):
             exporter.subscribe()
 
-        # Event object with no __dict__ (e.g. a plain string)
-        captured_handler[0]("plain_string_event")
+        mock_bus.publish("plain_string_event")
         exporter.export_event.assert_called_once_with({})
 
 
@@ -1502,16 +1568,23 @@ class TestInitOtel:
         config = MagicMock()
         config.observability.otel_enabled = False
         exporter = init_otel(config)
-        # init_otel returns a bare OtelExporter.__new__() stub (no __init__ called)
-        # when otel is disabled; it is the right type but has no _enabled attribute set.
+        # SR-4.6: init_otel() returns a disabled OtelExporter (via
+        # _disabled_stub(), not a bare __new__() with zero attributes as
+        # before -- that version made exporter.is_enabled raise
+        # AttributeError the moment any caller touched it). Every
+        # attribute a caller might read must now be safely accessible.
         assert isinstance(exporter, OtelExporter)
-        assert not hasattr(exporter, "_enabled")
+        assert hasattr(exporter, "_enabled")
+        assert exporter.is_enabled is False
+        assert exporter.export_failure_count == 0
+        assert exporter.last_export_error is None
 
     def test_returns_disabled_stub_when_no_observability_attr(self):
         config = MagicMock(spec=[])  # no observability attribute
         exporter = init_otel(config)
         assert isinstance(exporter, OtelExporter)
-        assert not hasattr(exporter, "_enabled")
+        assert hasattr(exporter, "_enabled")
+        assert exporter.is_enabled is False
 
     def test_creates_exporter_with_config_values_when_enabled(self):
         config = MagicMock()

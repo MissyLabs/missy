@@ -594,9 +594,9 @@ skipped with `tool.candidate.load_skipped` audit events.
 
 | Field | Value |
 |-------|-------|
-| **Purpose** | OpenTelemetry traces and metrics export via OTLP (gRPC or HTTP). Requires `pip install -e ".[otel]"`. |
-| **Key exports** | `OtelExporter` |
-| **Internal deps** | `missy.config.settings` |
+| **Purpose** | OpenTelemetry span export via OTLP (gRPC or HTTP). `subscribe()` wraps `event_bus.publish()` (matching `AuditLogger`'s pattern) so every event is exported regardless of type; `export_event()` redacts `detail` first and tracks failures (`export_failure_count`/`last_export_error`) rather than only logging at DEBUG. Requires `pip install -e ".[otel]"`. |
+| **Key exports** | `OtelExporter`, `init_otel` |
+| **Internal deps** | `missy.config.settings`, `missy.core.events`, `missy.observability.audit_logger` |
 
 ---
 

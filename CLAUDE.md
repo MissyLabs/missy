@@ -191,7 +191,7 @@ VoiceChannel (channels/voice/):
 
 **API Server (`missy/api/`)** — Agent-as-a-Service REST API (`missy api start`). Loopback-only binding by default, API key authentication, rate limiting, and automatic secrets censoring on responses. Also serves the **Web TUI** (`missy/api/web_console.py`), a browser-based operator console (providers, tools, sessions, memory browser, audit trail, scheduler, live diagnostics, safe controls, and a streaming "Ask Missy" run console). `missy gateway start` launches the Web TUI automatically (disable via `api.enabled: false`); it is also reachable standalone via `missy api start`. Every provider/tool/session/memory/audit row is clickable and opens a shared detail Inspector panel (`missy/api/operator_controls.py` backs the safe-control actions).
 
-**Observability (`missy/observability/`)** — `AuditLogger` writes structured JSONL to `~/.missy/audit.jsonl`. `OtelExporter` sends traces/metrics to an OTLP endpoint when enabled.
+**Observability (`missy/observability/`)** — `AuditLogger` writes structured JSONL to `~/.missy/audit.jsonl` by wrapping `event_bus.publish()` so every event is captured regardless of type. `OtelExporter` sends every published audit event as an OTLP span when `otel_enabled: true`, using the same publish-wrapping pattern (its own `subscribe()` re-verifies the wrapper is installed). `detail` fields are redacted (`missy.observability.audit_logger._redact_detail`) before becoming span attributes. Export failures increment `OtelExporter.export_failure_count`/set `.last_export_error` rather than only logging at DEBUG.
 
 ### Default File Locations
 

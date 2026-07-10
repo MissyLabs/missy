@@ -1,6 +1,6 @@
 # Build Status
 
-Last updated: 2026-07-11 01:45 UTC
+Last updated: 2026-07-11 02:30 UTC
 
 ## Current Workstream: Validation-Harness Overhaul
 
@@ -1687,6 +1687,72 @@ flake), 13 skipped in 196.91s` — no timeout, no accumulation, no
 slowdown. Added 2 permanent regression tests to `TestSleeptimeWiring`
 as a standing guard against this recurring.
 
+### Completed This Session, continued: SR-4.6 — `OtelExporter.subscribe()` always raised `TypeError`, silently caught; OTLP export received zero events in every configuration (twenty-eighth finding, seventh §4 item)
+
+Purely mechanical fix, no product-policy question — reuses
+`AuditLogger`'s already-established publish-wrapping pattern.
+
+Reachability: `subscribe()` called `event_bus.subscribe(_handler)` with
+one argument, but `EventBus.subscribe(event_type, callback)` requires
+two — always raised `TypeError`, caught and merely logged as a warning.
+Live-reproduced: a real `OtelExporter` connected successfully
+(`is_enabled=True`), `subscribe()` logged "subscribe failed", and a
+published `AuditEvent` produced no span — every `otel_enabled: true`
+configuration exported nothing, ever. Separately, `EventBus` has no
+wildcard subscription mode at all (`_subscribers` is keyed by exact
+`event_type`), so even a syntactically correct call could only ever
+receive one type, never "every event" as the class docstring promised.
+`export_event()` also never redacted `detail` before setting span
+attributes (mirrors SR-1.10 for the OTLP path specifically); failures
+were only `logger.debug()`'d (invisible); `BatchSpanProcessor` used
+zero explicit queue-bound parameters. Also found: `init_otel()`'s
+disabled path returned a bare `__new__()` stub with zero attributes set
+— touching `.is_enabled` raised `AttributeError`; 2 pre-existing tests
+literally asserted this crash as correct behavior.
+
+Fixed: `subscribe()` now wraps `event_bus.publish` directly (mirroring
+`AuditLogger`'s exact pattern), making "every event, any type"
+genuinely true. `export_event()` now applies the real SR-1.10
+`_redact_detail()` (imported, not reimplemented) before setting
+attributes. Failures now increment `export_failure_count`/set
+`last_export_error` and log at WARNING. `BatchSpanProcessor` now takes
+explicit `max_queue_size=2048`/`max_export_batch_size=512`/
+`schedule_delay_millis=5000`/`export_timeout_millis=30000`. Added
+`_disabled_stub()` replacing the bare `__new__()` call. Live-verified
+end-to-end with the real `opentelemetry-sdk`/`-otlp-proto-grpc`
+packages (installed alongside this fix): real subscribe→publish→export
+chain genuinely attempts network delivery to the configured endpoint
+(observed via the SDK's own "Connection refused, retrying" logs); using
+`InMemorySpanExporter` as a stand-in collector, a published event
+arrives as a real span with correct name/attributes across 3 arbitrary
+event types; a secret in `detail.url` never reaches the collector
+unredacted.
+
+Fixed 2 pre-existing test files whose tests exercised the removed
+`event_bus.subscribe()` call path directly — rewritten to assert the
+new wrap-publish behavior; corrected 2 tests that had encoded the
+disabled-stub crash as expected behavior (same "test encodes a
+known-broken behavior as correct" pattern found repeatedly this session
+— SR-3.5, SR-3.2). `tests/observability/`+`tests/cli/`+
+`tests/integration/`+`tests/unit/`+`tests/security/` (5,980 tests) pass
+with no regressions — the one observed failure is the already-
+documented pre-existing Hypothesis deadline flake. Corrected
+`CLAUDE.md`/`docs/implementation/module-map.md`.
+
+Residual risk: `BatchSpanProcessor` still silently drops spans if its
+queue fills during sustained collector unreachability (standard,
+correct OTel SDK behavior — a telemetry path must never itself degrade
+agent responsiveness). `export_failure_count` only captures failures
+`export_event()` observes synchronously, not the SDK's async
+background-export-thread network failures (those remain visible only in
+the SDK's own logger output). No `missy doctor` check currently
+surfaces `export_failure_count`/`is_enabled` for OTLP specifically —
+reasonable small follow-up.
+
+This is the twenty-eighth independent, confirmed finding/change this
+session. Full detail in `AUDIT_SECURITY.md`'s new `### SR-4.7 (SR-4.6)`
+section.
+
 ### Known Pre-Existing Failure (not caused by this session)
 
 `tests/vision/test_discovery_capture_sysfs.py::TestCacheTTL::test_cache_valid_within_ttl`
@@ -1703,17 +1769,17 @@ scoped to FX-A / voice-command work.
 FX-A through FX-G are all complete (see task list). §2 (Unattended-
 Execution Hazards) and §3 (Data Integrity, Availability, And Cost) are
 now both fully closed — SR-3.4's cross-session-aggregation sub-finding
-is fixed. §4 has six items fixed (SR-4.4 done-criteria verification;
+is fixed. §4 has seven items fixed (SR-4.4 done-criteria verification;
 SR-4.5 self_create_tool honesty; SR-4.3 checkpoint resume; SR-4.2
 sub-agent delegation; SR-4.7 MCP tool execution; SR-4.1 long-term
-memory). Current remaining priority order:
+memory; SR-4.6 OTLP export). Current remaining priority order:
 
 1. SR-1.1 (audit event signing — larger cross-cutting change) and
    SR-1.9b (DNS TOCTOU — needs connecting to a pinned policy-verified IP
    rather than re-resolving at connect time).
-2. SR-4.6, SR-4.8 (remaining dead/unwired features: OTLP export,
-   provider rotation/fallback claims — SR-4.1, SR-4.2, SR-4.3, SR-4.4,
-   SR-4.5, and SR-4.7 are now fixed, see above).
+2. SR-4.8 (last remaining dead/unwired feature: provider rotation/
+   fallback claims — SR-4.1 through SR-4.7 are all now fixed, see
+   above).
 3. The "harden secondary availability hazards" bullet (circuit-breaker
    half-open single-probe, MCP RPC desync, malformed scheduler record
    isolation, webhook HMAC replay protection, EventBus history bound,

@@ -2244,6 +2244,145 @@ requirement — do not overwrite, append new entries as work continues.
   guard against this specific failure mode recurring if the fixture is
   ever accidentally removed or the wrapped method's name changes.
 
+### SR-4.7 (SR-4.6) — `OtelExporter.subscribe()` always raised `TypeError`, silently caught; OTLP export received zero events in every configuration
+
+- **Status: fixed.** Seventh §4 item, purely mechanical (no
+  product-policy question involved) — the fix reuses an
+  already-established pattern (`AuditLogger`'s publish-wrapping) rather
+  than introducing new design surface.
+- **Reachability found and live-reproduced:**
+  `OtelExporter.subscribe()` called `event_bus.subscribe(_handler)`
+  with a single positional argument, but
+  `missy.core.events.EventBus.subscribe(self, event_type: str,
+  callback: EventCallback)` requires **two** — `_handler` filled the
+  `event_type` slot and `callback` was simply missing. This call always
+  raised `TypeError: EventBus.subscribe() missing 1 required positional
+  argument: 'callback'`, caught by `subscribe()`'s own broad
+  `except Exception` and merely logged as a warning. Live-reproduced
+  through the real classes (`OtelExporter` + real `event_bus`, no
+  mocks): `OtelExporter(...)` connected successfully
+  (`is_enabled=True`), `subscribe()` logged "subscribe failed", and a
+  subsequently published `AuditEvent` produced no span at all — meaning
+  **every configuration with `otel_enabled: true` exported nothing,
+  ever**, regardless of collector reachability, protocol, or which
+  events were published. Separately, `EventBus` (the bus `AuditEvent`s
+  actually flow through) has no wildcard/catch-all subscription mode at
+  all — `_subscribers: dict[str, list[EventCallback]]` is keyed by
+  exact `event_type` string, so even a syntactically correct
+  `subscribe(event_type, callback)` call could only ever receive one
+  specific event type, never "every event" as the class's own docstring
+  promised ("Subscribes to the event bus and forwards events as OTLP
+  spans"). `AuditLogger` (`missy/observability/audit_logger.py`) had
+  already solved exactly this problem for the on-disk JSONL log, by
+  wrapping the bus instance's `publish()` method itself rather than
+  using `subscribe()` — confirmed via its own docstring, which
+  explicitly documents this as deliberate: "wraps
+  `EventBus.publish`... so that every published event — regardless of
+  its `event_type` — is captured without requiring per-type
+  subscription registrations." `export_event()` also never redacted
+  `detail` before setting span attributes — a live gap mirroring
+  SR-1.10 (audit-sink redaction) for the OTLP export path specifically,
+  since `AuditLogger`'s SR-1.10 fix only covers its own on-disk write
+  path, not `OtelExporter`'s independent one. Export failures were only
+  ever `logger.debug(...)`'d — invisible in default logging
+  configuration, with no counter or inspectable state an operator or
+  `missy doctor`-style check could query. `BatchSpanProcessor(exporter)`
+  was constructed with zero explicit parameters, relying entirely on
+  undocumented-in-this-codebase OTel SDK defaults for queue/batch
+  bounds. Also found, while implementing the fix: `init_otel()`'s
+  disabled-config path returned `OtelExporter.__new__(OtelExporter)` —
+  skipping `__init__` entirely, leaving **zero** instance attributes
+  set — so touching `.is_enabled` (or anything else) on that stub raised
+  `AttributeError` immediately; `tests/unit/test_infrastructure.py`
+  had two tests that literally asserted this broken state as correct
+  (`assert not hasattr(exporter, "_enabled")`, with a comment
+  describing the bug precisely) rather than flagging it — the same
+  "test encodes a known-broken behavior as expected" pattern found
+  repeatedly this session (SR-3.5, SR-3.2).
+- **Remediation evidence:** `subscribe()` now wraps `event_bus.publish`
+  directly (mirroring `AuditLogger`'s exact pattern — captures the
+  original bound `publish`, installs a closure that calls it first then
+  calls `export_event()`, assigns the closure back onto the bus
+  instance), which is what makes "every event, any type" genuinely
+  true. `export_event()` now imports and applies
+  `missy.observability.audit_logger._redact_detail` (the real SR-1.10
+  function, reused rather than reimplemented, so the two redaction
+  paths cannot drift independently) to `detail` before any value
+  becomes a span attribute. Failures now increment a new
+  `export_failure_count` and record `last_export_error`, and log at
+  `WARNING` (not `DEBUG`) with the running failure count in the
+  message. `BatchSpanProcessor` is now constructed with explicit
+  `max_queue_size=2048`, `max_export_batch_size=512`,
+  `schedule_delay_millis=5000`, `export_timeout_millis=30000` (all
+  overridable via new `OtelExporter.__init__` parameters) — deliberate,
+  documented values rather than implicit SDK defaults. Added
+  `_disabled_stub()` (replacing the bare `__new__()` call) that
+  explicitly initialises every attribute a real caller might read, so
+  `init_otel()`'s disabled path is safe to introspect. Live-verified
+  end-to-end with the real `opentelemetry-sdk`/`opentelemetry-exporter-
+  otlp-proto-grpc` packages installed (not previously present in this
+  dev environment; installed alongside this fix specifically to enable
+  real verification rather than asserting only that internal methods
+  were called): (1) constructing a real `OtelExporter`, calling the
+  real `subscribe()`, then publishing a real `AuditEvent` through the
+  real `event_bus` no longer logs "subscribe failed" and the SDK's
+  `BatchSpanProcessor` genuinely attempts real network delivery to the
+  configured `localhost:4317` endpoint (observed via the SDK's own
+  "Connection refused, retrying" log lines — proof the full config →
+  subscribe → publish → export → network-attempt chain is live, not
+  merely internally self-consistent); (2) using
+  `InMemorySpanExporter` as a stand-in "collector" (obtaining a tracer
+  directly from a locally-constructed `TracerProvider` rather than the
+  process-global `trace.set_tracer_provider()` API, since that global
+  can only be set once per process and an earlier test in the same run
+  already claims it — a real cross-test-isolation subtlety discovered
+  while writing this verification, not a production bug), a published
+  event genuinely arrives as a span with the correct name and
+  attributes, across three arbitrary/unrelated `event_type` strings, not
+  just one — confirming the fix isn't accidentally type-scoped like the
+  original bug implicitly was; (3) a secret embedded in `detail.url`
+  never reaches the "collector" unredacted. Fixed 2 pre-existing test
+  files whose tests exercised the now-removed `event_bus.subscribe()`
+  call path directly (`mock_bus.subscribe.assert_called_once()`-style
+  assertions no longer apply since `subscribe()` doesn't call that
+  method at all anymore) — rewritten to assert the new wrap-publish
+  behavior instead of the removed one; corrected the two
+  `test_infrastructure.py` tests that had encoded the disabled-stub
+  crash as expected behavior to assert the fixed, safe behavior
+  instead. `tests/observability/`+`tests/cli/`+`tests/integration/`+
+  `tests/unit/`+`tests/security/` (5,980 tests) pass with no
+  regressions — the one observed failure is the already-documented
+  pre-existing Hypothesis deadline flake, unrelated. Corrected
+  `CLAUDE.md`'s Observability section (previously silent on whether
+  OTLP export actually worked once enabled) and
+  `docs/implementation/module-map.md`'s `missy.observability.otel`
+  entry.
+- **Residual risk:** the OTel SDK's `BatchSpanProcessor` (even with
+  explicit bounds now) still silently drops spans once its queue fills
+  if the collector is unreachable for a sustained period — this is
+  standard, documented OTel SDK behavior (a full queue drops new spans
+  rather than blocking the publishing thread, which is the correct
+  choice for a diagnostics/telemetry path that must never itself
+  degrade agent responsiveness) and not something this checkpoint
+  changes; `export_failure_count`/`last_export_error` only capture
+  failures `export_event()` itself observes synchronously (span
+  creation/attribute-setting), not asynchronous network-export failures
+  the SDK's background export thread encounters after the span has
+  already been handed off — those remain visible only in the SDK's own
+  logger output (`opentelemetry.exporter.otlp.*`), not through
+  `OtelExporter`'s new counters. A future session wanting fully unified
+  failure visibility would need to either poll the SDK's own internal
+  metrics/callbacks (not all exporters expose these) or accept that
+  network-level export health is a separate signal from
+  application-level export attempts. No `missy doctor` check currently
+  surfaces `export_failure_count`/`is_enabled` for OTLP specifically
+  (other subsystems' doctor checks were not extended as part of this
+  checkpoint, which was scoped to the review's four explicit
+  sub-items — subscription compatibility, failure surfacing via the new
+  properties, bounded queues, and redaction — not to building new CLI
+  surface); wiring those properties into `missy doctor`'s existing
+  output would be a reasonable, small follow-up.
+
 ---
 
 - Timestamp: 2026-07-09 15:35:26 (raw grep-scan dump below, preserved

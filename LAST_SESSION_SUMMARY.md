@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (33 checkpoints this session, full suite green after every one)
+## Changed (34 checkpoints this session, full suite green after every one)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -747,27 +747,119 @@ thread accumulation, no slowdown. Added 2 permanent regression tests to
 `TestSleeptimeWiring` as a standing guard against this specific failure
 mode recurring.
 
+### SR-4.6 (seventh §4 item, twenty-eighth finding this session)
+
+Purely mechanical fix, no product-policy question — reuses
+`AuditLogger`'s already-established publish-wrapping pattern rather
+than introducing new design surface.
+
+`OtelExporter.subscribe()` called `event_bus.subscribe(_handler)` with
+a single positional argument, but `EventBus.subscribe(event_type: str,
+callback)` requires two — `_handler` filled the `event_type` slot and
+`callback` was simply missing. This call always raised `TypeError`,
+caught by `subscribe()`'s own broad exception handler and merely logged
+as a warning. Live-reproduced through the real classes (no mocks):
+`OtelExporter(...)` connected successfully (`is_enabled=True`),
+`subscribe()` logged "subscribe failed", and a subsequently published
+`AuditEvent` produced no span at all — **every configuration with
+`otel_enabled: true` exported nothing, ever**, regardless of collector
+reachability or which events were published. Separately, `EventBus` has
+no wildcard/catch-all subscription mode at all — `_subscribers` is
+keyed by exact `event_type` string — so even a syntactically correct
+`subscribe()` call could only ever receive one event type, never "every
+event" as the class's own docstring promised. `AuditLogger` had already
+solved exactly this problem for the on-disk JSONL log by wrapping the
+bus instance's `publish()` method directly rather than using
+`subscribe()` — its own docstring explicitly documents this as
+deliberate. `export_event()` also never redacted `detail` before
+setting span attributes (a live gap mirroring SR-1.10 for the OTLP
+export path specifically, since `AuditLogger`'s SR-1.10 fix only covers
+its own on-disk write path). Export failures were only ever
+`logger.debug()`'d — invisible in default logging configuration.
+`BatchSpanProcessor(exporter)` was constructed with zero explicit
+parameters. Also found while implementing the fix:
+`init_otel()`'s disabled-config path returned
+`OtelExporter.__new__(OtelExporter)` — skipping `__init__` entirely,
+leaving zero instance attributes set, so touching `.is_enabled` raised
+`AttributeError` immediately; `tests/unit/test_infrastructure.py` had
+two tests that literally asserted this broken state as correct
+(`assert not hasattr(exporter, "_enabled")`, with a comment describing
+the bug precisely) — the same "test encodes a known-broken behavior as
+expected" pattern found repeatedly this session (SR-3.5, SR-3.2).
+
+Fixed: `subscribe()` now wraps `event_bus.publish` directly (mirroring
+`AuditLogger`'s exact pattern), making "every event, any type"
+genuinely true. `export_event()` now imports and applies the real
+SR-1.10 `_redact_detail()` function (reused, not reimplemented) before
+any value becomes a span attribute. Failures now increment a new
+`export_failure_count` and record `last_export_error`, logged at
+WARNING (not DEBUG) with the running failure count. `BatchSpanProcessor`
+now takes explicit `max_queue_size=2048`/`max_export_batch_size=512`/
+`schedule_delay_millis=5000`/`export_timeout_millis=30000` (all
+overridable via new `__init__` parameters) — deliberate, documented
+values rather than implicit SDK defaults. Added `_disabled_stub()`
+(replacing the bare `__new__()` call) that explicitly initialises every
+attribute a real caller might read.
+
+Live-verified end-to-end with the real `opentelemetry-sdk`/
+`opentelemetry-exporter-otlp-proto-grpc` packages installed (not
+previously present in this dev environment; installed alongside this
+fix specifically to enable real verification rather than asserting only
+that internal methods were called): (1) constructing a real
+`OtelExporter`, calling the real `subscribe()`, then publishing a real
+`AuditEvent` through the real `event_bus` no longer logs "subscribe
+failed," and the SDK's `BatchSpanProcessor` genuinely attempts real
+network delivery to the configured `localhost:4317` endpoint (observed
+via the SDK's own "Connection refused, retrying" log lines — proof the
+full config → subscribe → publish → export → network-attempt chain is
+live); (2) using `InMemorySpanExporter` as a stand-in "collector"
+(obtaining a tracer directly from a locally-constructed
+`TracerProvider` rather than the process-global
+`trace.set_tracer_provider()` API, since that global can only be set
+once per process and an earlier test in the same run already claims it
+— a real cross-test-isolation subtlety discovered while writing this
+verification, not a production bug), a published event genuinely
+arrives as a span with the correct name and attributes, across three
+arbitrary/unrelated `event_type` strings, confirming the fix isn't
+accidentally type-scoped like the original bug implicitly was; (3) a
+secret embedded in `detail.url` never reaches the "collector"
+unredacted.
+
+Fixed 2 pre-existing test files whose tests exercised the now-removed
+`event_bus.subscribe()` call path directly — rewritten to assert the
+new wrap-publish behavior instead; corrected the two
+`test_infrastructure.py` tests that had encoded the disabled-stub crash
+as expected behavior. `tests/observability/`+`tests/cli/`+
+`tests/integration/`+`tests/unit/`+`tests/security/` (5,980 tests) pass
+with no regressions — the one observed failure is the already-
+documented pre-existing Hypothesis deadline flake, unrelated. Corrected
+`CLAUDE.md`'s Observability section and
+`docs/implementation/module-map.md`'s `missy.observability.otel` entry.
+
+**Residual risk, called out explicitly:** the OTel SDK's
+`BatchSpanProcessor` (even with explicit bounds now) still silently
+drops spans once its queue fills if the collector is unreachable for a
+sustained period — standard, documented OTel SDK behavior, not
+something this checkpoint changes; `export_failure_count`/
+`last_export_error` only capture failures `export_event()` itself
+observes synchronously, not asynchronous network-export failures the
+SDK's background export thread encounters after the span has already
+been handed off — those remain visible only in the SDK's own logger
+output. No `missy doctor` check currently surfaces
+`export_failure_count`/`is_enabled` for OTLP specifically — a
+reasonable, small follow-up.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-3 failed, 20989 passed, 13 skipped in 471.49s (0:07:51)
+3 failed, 21003 passed, 13 skipped in 499.80s (0:08:19)
 ```
 
 The 3 failures are exactly the known pre-existing `CameraDiscovery`
 cache-TTL flakes (task #11), confirmed unrelated via `git stash` in
 earlier checkpoints and reproduced again here unchanged. Zero
-regressions from SR-4.2 or any checkpoint this session.
-
-The 3 failures are exactly the known pre-existing `CameraDiscovery`
-cache-TTL flakes (task #11), confirmed unrelated via `git stash` in
-earlier checkpoints and reproduced again here unchanged. Zero
-regressions from SR-4.3 or any checkpoint this session.
-
-The 3 failures are exactly the known pre-existing `CameraDiscovery`
-cache-TTL flakes (task #11), confirmed unrelated via `git stash` in an
-earlier checkpoint and reproduced again here unchanged. Zero
-regressions from this session's changes.
+regressions from SR-4.6 or any checkpoint this session.
 
 Full detail in `BUILD_STATUS.md`, `AUDIT_SECURITY.md`, and
 `TEST_RESULTS.md` — each has one dated entry per checkpoint this
@@ -782,17 +874,18 @@ three files above.)
   SR-1.9a, SR-1.10, SR-1.11, SR-1.12, SR-1.13, SR-2.1, SR-2.2, SR-2.3,
   SR-2.4, SR-3.1 (substantially via FX-B), SR-3.2, SR-3.3, SR-3.4
   (including its cross-session-aggregation sub-finding), SR-3.5, SR-4.4,
-  SR-4.5, SR-4.3, SR-4.2, SR-4.7, SR-4.1 — **§2 and §3 are now both fully
-  closed, with no open sub-findings in either; §4 has six items fixed
-  (SR-4.4 done-criteria verification, SR-4.5 self_create_tool honesty,
-  SR-4.3 checkpoint resume, SR-4.2 sub-agent delegation, SR-4.7 MCP tool
-  execution, SR-4.1 long-term memory).** Remaining: SR-1.1 (audit
-  signing — larger cross-cutting change), SR-1.9b (DNS TOCTOU,
-  substantially harder — needs connecting to a pinned policy-verified IP
-  rather than re-resolving at connect time), SR-4.6, SR-4.8 (remaining
-  dead/unwired features, 2 sub-items) — this is the natural next large
+  SR-4.5, SR-4.3, SR-4.2, SR-4.7, SR-4.1, SR-4.6 — **§2 and §3 are now
+  both fully closed, with no open sub-findings in either; §4 has seven
+  items fixed (SR-4.4 done-criteria verification, SR-4.5
+  self_create_tool honesty, SR-4.3 checkpoint resume, SR-4.2 sub-agent
+  delegation, SR-4.7 MCP tool execution, SR-4.1 long-term memory, SR-4.6
+  OTLP export).** Remaining: SR-1.1 (audit signing — larger
+  cross-cutting change), SR-1.9b (DNS TOCTOU, substantially harder —
+  needs connecting to a pinned policy-verified IP rather than
+  re-resolving at connect time), SR-4.8 (the sole remaining §4 item:
+  provider rotation/fallback claims) — this is the natural next large
   area now that §1 (partially), §2 (fully), §3
-  (fully), and six of §4's items are closed.
+  (fully), and seven of §4's items are closed.
 - **SR-1.7's launcher sub-finding** remains open — `find`/`xargs`/
   `bash`/`sudo` etc. are allowlist-able with only a warning, and
   nested shell commands inside a launcher's quoted arguments are
@@ -880,7 +973,7 @@ both fully closed**, with zero open sub-findings in either (SR-2.1:
 scheduled jobs default to `capability_mode="safe-chat"`; SR-2.2: a real
 `ApprovalGate` is wired into `ProactiveManager` and the Web API server;
 SR-3.4's cross-session-aggregation sub-finding is fixed — `CostTracker`
-is now per-session-keyed), and **§4 has six items fixed**: SR-4.4 —
+is now per-session-keyed), and **§4 has seven items fixed**: SR-4.4 —
 `_tool_loop()` rejects a "done" claim made immediately after an
 unresolved tool error, up to 2 retries; SR-4.5 — `self_create_tool` no
 longer claims written scripts are "created"/"registered" as usable
@@ -897,16 +990,19 @@ before every call; SR-4.1 — `_record_learnings()` now actually persists
 extracted learnings (was silently discarding them after extraction),
 and `SleeptimeWorker` is wired into production exactly as its own
 module docstring documented (operator-confirmed: enabled by default,
-matching its own class default, unlike SR-4.5's opt-out choice).
-SR-1.1 (audit signing) is now the largest remaining §1 item; the
-remaining §4 items (SR-4.6 OTLP export, SR-4.8 provider
-rotation/fallback claims — 2 sub-items) are the next natural
-continuation, each individually scoped and independently
-checkpointable like the six above were. Given how the last several
-checkpoints went (SR-3.3 and SR-3.5 were both flagged "likely already
-fixed" and both turned out to hide live, confirmed,
-previously-undetected bugs; SR-2.1, SR-2.2, the SR-3.4 residual, and
-every SR-4.x fix this session (SR-4.1 through SR-4.5, SR-4.7) all
+matching its own class default, unlike SR-4.5's opt-out choice); SR-4.6
+— `OtelExporter.subscribe()`'s always-`TypeError`'ing call to
+`event_bus.subscribe()` (silently caught) meant OTLP export received
+zero events in every configuration ever, regardless of collector
+reachability — fixed by wrapping `event_bus.publish` directly (mirroring
+`AuditLogger`'s already-established pattern), plus redaction before
+export and failure-count surfacing.
+SR-1.1 (audit signing) is now the largest remaining §1 item; SR-4.8
+(provider rotation/fallback claims) is the sole remaining §4 item and
+the next natural continuation. Given how the last several checkpoints
+went (SR-3.3 and SR-3.5 were both flagged "likely already fixed" and
+both turned out to hide live, confirmed, previously-undetected bugs;
+SR-2.1, SR-2.2, the SR-3.4 residual, and most SR-4.x fixes this session
 turned out to have a second layer beyond the obvious fix — SR-2.1's
 fail-closed legacy-record handling, SR-2.2's entirely-unwired
 `ApprovalGate` requiring new REST endpoints, the SR-3.4 residual's
@@ -921,7 +1017,12 @@ pre-existing tests accidentally exercising a non-default `McpManager`
 code path purely because manual `__new__()` construction never set an
 attribute the real `__init__` would have, SR-4.1's sub-finding 1 being
 a completely uneventful one-line mechanical fix sitting right next to
-sub-finding 2's genuine design question in the same review item), keep
+sub-finding 2's genuine design question in the same review item, SR-4.6
+being the session's cleanest counter-example — a purely mechanical fix
+with zero product-policy ambiguity, yet still hiding a *second*
+pre-existing bug (`init_otel()`'s disabled-stub `AttributeError` crash,
+with 2 tests that had literally encoded that crash as correct behavior)
+found only by tracing the fix through to its test coverage), keep
 applying the same discipline to whatever's picked up next: read the
 actual current code, trace actual runtime call paths, specifically
 check whether any existing test exercises the *real* production

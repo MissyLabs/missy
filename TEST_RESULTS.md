@@ -1,5 +1,43 @@
 # TEST_RESULTS
 
+## Run: 2026-07-11 02:30 UTC — validation-harness overhaul, SR-4.6 (OTLP export event subscription fixed + redaction + failure surfacing)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Finding: `OtelExporter.subscribe()` called `event_bus.subscribe(_handler)`
+  with one argument but `EventBus.subscribe(event_type, callback)`
+  requires two — always raised `TypeError`, silently caught. OTLP export
+  received zero events in every configuration. `export_event()` never
+  redacted `detail`; failures only logged at DEBUG; queue bounds
+  implicit. `init_otel()`'s disabled path returned a zero-attribute
+  `__new__()` stub whose `.is_enabled` crashed with `AttributeError`.
+- Fix: `subscribe()` wraps `event_bus.publish` (mirrors `AuditLogger`'s
+  pattern); `export_event()` applies the real SR-1.10 `_redact_detail()`;
+  failures tracked via `export_failure_count`/`last_export_error` and
+  logged at WARNING; `BatchSpanProcessor` given explicit bounds; added
+  `_disabled_stub()`.
+- Installed `opentelemetry-sdk`/`-otlp-proto-grpc`/`-otlp-proto-http`
+  (not previously present in this dev environment) to enable real
+  end-to-end verification rather than mocking the SDK away.
+- Command: `pytest tests/observability/test_otel.py -v`
+- Result: `25 passed` (includes `TestEndToEndRealSdk`, 3 tests using the
+  real OTel SDK with `InMemorySpanExporter` standing in for the network
+  collector — proves a published event genuinely arrives as a span with
+  correct name/attributes, across 3 arbitrary event types, and that a
+  secret in `detail` never reaches the collector unredacted)
+- Command: `pytest tests/unit/test_infrastructure.py -q -k Otel`
+- Result: `21 passed` (rewrote `TestOtelExporterSubscribe`'s tests to
+  match the new wrap-publish behavior — the old assertions exercised the
+  removed `event_bus.subscribe()` call path; corrected 2
+  `TestInitOtel` tests that had asserted the disabled-stub
+  `AttributeError` crash as expected behavior)
+- Command: `pytest tests/observability/ tests/cli/ tests/integration/ tests/unit/ tests/security/ -q -o faulthandler_timeout=120`
+- Result: `1 failed, 5979 passed` — the 1 failure is the already-
+  documented pre-existing Hypothesis deadline flake, unrelated
+- Command: `pytest tests/ -q -o faulthandler_timeout=120`
+- Result: `3 failed, 21003 passed, 13 skipped in 499.80s (0:08:19)` — up
+  from 20989, only the 3 known pre-existing `CameraDiscovery` cache-TTL
+  flakes failing, zero regressions from this checkpoint's changes.
+
 ## Run: 2026-07-11 01:10 UTC — validation-harness overhaul, SR-4.1 (learnings persistence fix + SleeptimeWorker wired into production)
 
 - Branch: `overhaul/missy-validation-20260710-031406`
