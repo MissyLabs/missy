@@ -1,8 +1,29 @@
 # BUILD_RESULTS
 
+## Run: 2026-07-10 08:40 UTC — validation-harness overhaul session
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Draft PR: https://github.com/MissyLabs/missy/pull/31
+- Primary focus: `~/missy-loops/prompt.md`'s validation-harness overhaul
+  — FX-A through FX-G (all complete this session) plus a same-pattern
+  security sweep that found and fixed four independent unauthenticated
+  authorization-bypass vulnerabilities (SR-1.2/1.3, SR-1.12, SR-1.13 ×2).
+- Full detail, per-checkpoint evidence, and residual risk: see
+  `BUILD_STATUS.md`, `AUDIT_SECURITY.md`, `TEST_RESULTS.md`, and
+  `LAST_SESSION_SUMMARY.md` — each has one dated entry per checkpoint
+  this session, oldest entries preserved further down / below.
+- Full suite at end of session: `20754 passed, 13 skipped` (3
+  pre-existing, unrelated `CameraDiscovery` cache-TTL failures
+  deselected — tracked as task #11, confirmed present before this
+  session's changes via `git stash`).
+
+---
+
 - Timestamp: 2026-07-09 15:28:21
 - Branch: overhaul/tools-20260709-174109
-- Primary focus: complete tool usage and tool intelligence overhaul
+- Primary focus: complete tool usage and tool intelligence overhaul (prior
+  workstream, preserved for history — superseded by the validation-harness
+  overhaul above)
 
 ## Python
 Python 3.12.3
