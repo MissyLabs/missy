@@ -1,5 +1,45 @@
 # TEST_RESULTS
 
+## Run: 2026-07-11 11:30 UTC — validation-harness overhaul, task #11 (vision CameraDiscovery cache-TTL flake, fixed)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Finding, two independent root causes: (1) real bug —
+  `missy/vision/discovery.py`'s `discover()` cache-freshness check
+  `if not force and self._cache and ...` treats an empty cached list
+  (zero cameras found) as falsy, so the TTL cache silently never
+  engages when the last scan found nothing, rescanning every call
+  regardless of freshness; (2)
+  `test_device_that_does_not_exist_is_skipped` assumed `/dev/video0`
+  doesn't exist on the test machine (explicit comment: "won't actually
+  exist in CI"), false in this dev sandbox which has real
+  `/dev/video0`/`/dev/video1`.
+- Fix: `self._cache` changed from `list[CameraDevice] = []` to
+  `list[CameraDevice] | None = None`, gate changed to `self._cache is
+  not None`, distinguishing "never scanned" from "scanned, found
+  nothing" without disturbing the non-empty-cache case. Test fixed by
+  applying the same `Path.exists` selective-mock pattern already used
+  by its neighboring test.
+- **Regression caught before finalizing:** a first-attempt fix using a
+  separate `self._has_scanned` boolean (instead of the `None` sentinel)
+  broke 12 other pre-existing tests across 4 files that manually seed
+  `disc._cache = [...]` directly, bypassing `discover()`, without
+  knowing about a new internal flag. Caught via `pytest tests/vision/
+  -q` before committing; the `None`-sentinel redesign is naturally
+  compatible with that pattern.
+- Command: `pytest tests/vision/test_discovery_capture_sysfs.py::TestCacheTTL tests/vision/test_discovery_edge_cases.py::TestPermissionDeniedOnDevice tests/vision/test_discovery_edge_cases.py::TestRapidAddRemove -v`
+- Result: `12 passed` — all 3 originally-failing tests now pass.
+- Command: `pytest tests/vision/ -q`
+- Result: `2964 passed` (up from 2952 passed + 3 known failures), zero
+  regressions.
+- Command: `pytest tests/vision/ tests/agent/ tests/providers/ -q`
+- Result: `8113 passed, 4 skipped` (pre-existing, unrelated)
+- Command: `pytest tests/ -q -o faulthandler_timeout=120`
+- Result: **`21128 passed, 13 skipped in 547.92s (0:09:07)` — 0 failed.**
+  This is the first fully green full-suite run this session: the 3
+  pre-existing `CameraDiscovery` cache-TTL flakes that persisted
+  through every prior checkpoint are now fixed, and nothing else
+  failed. Up from 21125 passed / 3 failed (previous checkpoint).
+
 ## Run: 2026-07-11 10:40 UTC — validation-harness overhaul, task #46 (bounded retry after denied native-tool attempt)
 
 - Branch: `overhaul/missy-validation-20260710-031406`

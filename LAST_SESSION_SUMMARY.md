@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (40 checkpoints this session, full suite green after every one)
+## Changed (41 checkpoints this session, full suite green after every one — and, as of this checkpoint, the full suite itself has zero failures for the first time)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -1401,35 +1401,91 @@ response). 151 passed (up from 144) in
 `tests/providers/test_acpx_provider.py`; `tests/providers/`: 920
 passed; `tests/agent/`: 4229 passed, 4 pre-existing unrelated skips.
 
+### Task #11 (thirty-fifth checkpoint): fixed the pre-existing vision `CameraDiscovery` cache-TTL flake
+
+Investigated the 3 pre-existing failures tracked since early in the
+session (`TestCacheTTL::test_cache_valid_within_ttl` and 2 in
+`test_discovery_edge_cases.py`). Found **two independent root causes**:
+
+1. **A real production bug** in `missy/vision/discovery.py`'s
+   `discover()`: the TTL-cache-freshness check
+   (`if not force and self._cache and (now - self._cache_time) <
+   self._cache_ttl`) treats `self._cache` truthiness as the "is there a
+   valid cache" signal — but an *empty* list (zero cameras found, a
+   completely legitimate result, e.g. no camera plugged in) is falsy in
+   Python, so this check silently failed every time the last scan
+   found nothing, causing `discover()` to rescan on *every* call
+   regardless of TTL freshness. The cache never actually cached the
+   "no camera" case at all.
+2. **A test-environment dependency**, not a production issue:
+   `test_device_that_does_not_exist_is_skipped`'s own comment stated
+   "Do NOT patch Path.exists — /dev/video0 won't actually exist in
+   CI" — an assumption that's false in this dev sandbox, which has a
+   real `/dev/video0`/`/dev/video1`.
+
+Fixed (1) by using `None` as an explicit "never scanned yet" sentinel
+(`self._cache: list[CameraDevice] | None = None`, gated on `self._cache
+is not None`) instead of relying on the cached list's truthiness —
+correctly distinguishes "never scanned" from "scanned, found nothing"
+without changing behavior for the non-empty-cache case. Fixed (2) by
+applying the exact same `Path.exists` selective-mock pattern already
+used by the test's own neighbor (`test_device_exists_false_skips_entry`),
+making the test deterministic regardless of the host's actual camera
+hardware.
+
+**First-attempt regression caught before finalizing** (matching this
+session's established discipline of verifying broadly before
+declaring a fix done): an initial version of fix (1) used a separate
+`self._has_scanned` boolean flag rather than the `None`-sentinel
+redesign. This broke 12 *other* pre-existing tests across 4 files that
+manually seed `disc._cache = [...]`/`disc._cache_time = ...` directly
+as a convenient shortcut (bypassing `discover()` entirely) without
+knowing about a brand-new internal flag — `self._has_scanned` stayed
+at its `__init__` default of `False` for those tests, so the fixed
+cache gate never engaged and they fell through to a real, unwanted
+sysfs rescan against the actual host filesystem. Caught by running the
+full `tests/vision/` directory before committing, not just the 3
+originally-targeted tests. The `None`-sentinel approach is naturally
+backward-compatible with that manual-seeding pattern (any
+manually-assigned non-`None` list, empty or not, satisfies the gate
+correctly), requiring zero changes to those 12 tests.
+
+Verified: `tests/vision/` — 2964 passed (up from 2952 passed + 3 known
+failures), all 3 originally-failing tests now pass, zero regressions
+across the rest of the suite. `tests/vision/ tests/agent/
+tests/providers/` combined: 8113 passed, 4 pre-existing unrelated
+skips.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-3 failed, 21125 passed, 13 skipped in 538.35s (0:08:58)
+21128 passed, 13 skipped in 547.92s (0:09:07)
 ```
 
-The 3 failures are exactly the known pre-existing `CameraDiscovery`
-cache-TTL flakes (task #11) — same 3 test node IDs as every previous
-checkpoint this session
+**Zero failures.** This is the first fully green full-suite run this
+session — the 3 pre-existing `CameraDiscovery` cache-TTL flakes
 (`tests/vision/test_discovery_capture_sysfs.py::TestCacheTTL::test_cache_valid_within_ttl`,
 `tests/vision/test_discovery_edge_cases.py::TestPermissionDeniedOnDevice::test_device_that_does_not_exist_is_skipped`,
-`tests/vision/test_discovery_edge_cases.py::TestRapidAddRemove::test_cached_results_returned_within_ttl`),
-confirmed unrelated via `git stash` in earlier checkpoints and
-reproduced again here unchanged. Passed count is up from 21071
-(SR-1.9b's run) to 21115 (availability-hardening checkpoint) to 21118
-(the acpx `--deny-all` critical-finding checkpoint) to 21125 (this
-checkpoint's 7 new `test_acpx_provider.py` tests for the native-tool
-denial retry mechanism). Zero regressions from this checkpoint or any
-prior one this session. **The security review's entire numbered SR-x.y
-list and its one remaining unnumbered "harden secondary availability
-hazards" bullet are both fully closed — the security review's text has
-no open items left.** Separately, this session's thirty-third
-checkpoint found and fixed a critical, previously-unknown vulnerability
-outside the review's text (FX-A's zero-native-tools enforcement did
-not actually work against the installed acpx binary — see above),
-discovered via live agent validation while starting task #10; the
-thirty-fourth checkpoint added a real, tested, but honestly incomplete
-mitigation for the resulting delegate-reliability residual (task #46).
+`tests/vision/test_discovery_edge_cases.py::TestRapidAddRemove::test_cached_results_returned_within_ttl`)
+that persisted, confirmed-unrelated, through every prior checkpoint
+this session are now genuinely fixed (task #11, thirty-fifth
+checkpoint — see above). Passed count is up from 21071 (SR-1.9b's run)
+to 21115 (availability-hardening checkpoint) to 21118 (the acpx
+`--deny-all` critical-finding checkpoint) to 21125 (the native-tool
+denial retry checkpoint) to 21128 (this checkpoint). Zero regressions
+from this checkpoint or any prior one this session. **The security
+review's entire numbered SR-x.y list and its one remaining unnumbered
+"harden secondary availability hazards" bullet are both fully closed —
+the security review's text has no open items left.** Separately, this
+session's thirty-third checkpoint found and fixed a critical,
+previously-unknown vulnerability outside the review's text (FX-A's
+zero-native-tools enforcement did not actually work against the
+installed acpx binary — see above), discovered via live agent
+validation while starting task #10; the thirty-fourth checkpoint added
+a real, tested, but honestly incomplete mitigation for the resulting
+delegate-reliability residual (task #46); the thirty-fifth checkpoint
+fixed the last remaining known test failure in the entire suite.
 
 Full detail in `BUILD_STATUS.md`, `AUDIT_SECURITY.md`, and
 `TEST_RESULTS.md` — each has one dated entry per checkpoint this
@@ -1501,9 +1557,12 @@ three files above.)
   (real API cost) for this backlog. Not yet re-run against current code
   beyond that first case; ready to resume now that #46 has at least a
   documented, bounded mitigation in place.
-- **#11** Pre-existing vision `CameraDiscovery` cache-TTL flake (3
-  tests) — confirmed present before this session's changes, unrelated,
-  small isolated fix needed in `missy/vision/discovery.py`.
+- **#11 (fixed this checkpoint)** Pre-existing vision `CameraDiscovery`
+  cache-TTL flake — two root causes found and fixed (a real `None`-vs-`[]`
+  cache-truthiness bug in `discover()`, plus a test assuming
+  `/dev/video0` doesn't exist on the host, false in this sandbox). Full
+  suite is now 100% green with zero failures for the first time this
+  session. See the thirty-fifth checkpoint above.
 - **#12** Wire an authenticated Discord pairing approval endpoint —
   the SR-1.12 fix removed the vulnerable path but pairing currently has
   *no* working approval surface at all.
@@ -1624,13 +1683,14 @@ count it as a Missy security or policy failure — the security property
 (no native access ever succeeds) holds regardless.
 
 If live acpx delegate runs become unavailable or cost-prohibited again,
-fall back to the concrete scoped tasks (#11 vision `CameraDiscovery`
-cache-TTL flake, #12 Discord pairing approval endpoint, #15
-`allowed_roles` enforcement, #16 disposable browser-test environment,
-#17 acpx process-group cleanup), all self-contained and not requiring a
-live delegate. A Web TUI browser page for the `/api/v1/approvals`
-endpoints is also a reasonable, self-contained follow-up (the REST
-layer is done and tested; only the browser UI is missing).
+fall back to the concrete scoped tasks (#12 Discord pairing approval
+endpoint, #15 `allowed_roles` enforcement, #16 disposable browser-test
+environment, #17 acpx process-group cleanup — #11's vision
+`CameraDiscovery` flake is now fixed, see this checkpoint), all
+self-contained and not requiring a live delegate. A Web TUI browser
+page for the `/api/v1/approvals` endpoints is also a reasonable,
+self-contained follow-up (the REST layer is done and tested; only the
+browser UI is missing).
 
 Given how consistently this session's checkpoints turned out to hide a
 second layer beyond the obvious fix (SR-3.3/SR-3.5's "likely already

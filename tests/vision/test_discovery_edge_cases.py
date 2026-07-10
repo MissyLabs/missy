@@ -349,8 +349,22 @@ class TestPermissionDeniedOnDevice:
 
         disc = CameraDiscovery(sysfs_base=str(sysfs))
 
-        # Do NOT patch Path.exists — /dev/video0 won't actually exist in CI
-        cameras = disc.discover(force=True)
+        # Deterministically simulate /dev/video0 being absent rather than
+        # relying on the ambient assumption that no real camera exists on
+        # the machine running this test -- some environments (this dev
+        # sandbox included) have a real /dev/video0, which previously made
+        # this test flaky/host-dependent. Same pattern as the neighboring
+        # test_device_exists_false_skips_entry.
+        original_exists = Path.exists
+
+        def selective_exists(self_path: Path) -> bool:
+            if str(self_path).startswith("/dev/"):
+                return False
+            return original_exists(self_path)
+
+        with patch.object(Path, "exists", selective_exists):
+            cameras = disc.discover(force=True)
+
         assert cameras == []
 
     def test_device_exists_false_skips_entry(self, tmp_path):

@@ -2202,16 +2202,57 @@ plain-text response with no denial signal). `tests/providers/test_acpx_provider.
 (pre-existing `CameraDiscovery` flakes, unrelated), 21125 passed (up
 from 21118), 13 skipped in 538.35s. Zero regressions.
 
-### Known Pre-Existing Failure (not caused by this session)
+### Task #11: fixed the pre-existing vision `CameraDiscovery` cache-TTL flake
 
-`tests/vision/test_discovery_capture_sysfs.py::TestCacheTTL::test_cache_valid_within_ttl`
-and two related cases in `tests/vision/test_discovery_edge_cases.py`
-fail on a clean checkout before any of this session's changes
-(confirmed via `git stash`): `CameraDiscovery`'s cache-TTL logic doesn't
-suppress a rescan within the TTL window when a new sysfs entry appears
-between calls. Needs investigation in `missy/vision/discovery.py`.
-Tracked as a separate task; not fixed in this session to keep commits
-scoped to FX-A / voice-command work.
+Investigated the 3 pre-existing failures
+(`tests/vision/test_discovery_capture_sysfs.py::TestCacheTTL::test_cache_valid_within_ttl`
+and two in `tests/vision/test_discovery_edge_cases.py`) tracked since
+early in the session. Found **two independent root causes**, not one:
+
+1. **Real production bug** in `missy/vision/discovery.py`'s
+   `discover()`: the TTL-cache-freshness check was `if not force and
+   self._cache and (now - self._cache_time) < self._cache_ttl`. Since
+   `self._cache` is a `list`, an *empty* list (zero cameras found — a
+   common, legitimate result, e.g. no camera plugged in) is falsy in
+   Python, so the truthiness check silently failed whenever the last
+   scan found nothing, causing `discover()` to rescan on *every* call
+   regardless of how fresh the cache actually was — the TTL cache
+   never engaged for the "no camera" case at all. Fixed by using `None`
+   as the "never scanned yet" sentinel instead of relying on `_cache`'s
+   truthiness (`self._cache: list[CameraDevice] | None = None`,
+   checked via `self._cache is not None`) — distinguishes "never
+   scanned" from "scanned, found nothing" without disturbing any
+   existing behavior for the non-empty-cache case.
+2. **Test-environment dependency** (test-only, not a production issue):
+   `test_device_that_does_not_exist_is_skipped` explicitly commented
+   "Do NOT patch Path.exists — /dev/video0 won't actually exist in CI"
+   — an assumption false in this dev sandbox, which has a real
+   `/dev/video0`/`/dev/video1`. Fixed by applying the exact same
+   `Path.exists` selective-mock pattern already used by its neighboring
+   test (`test_device_exists_false_skips_entry`), making the test
+   deterministic regardless of the host's actual camera hardware.
+
+**First-attempt regression caught before finalizing:** an initial fix
+using a separate `self._has_scanned` boolean flag (rather than the
+`None`-sentinel approach above) broke 12 *other* pre-existing tests
+across 4 files that manually seed `disc._cache = [...]`/
+`disc._cache_time = ...` directly (bypassing `discover()` as a
+convenient shortcut) without knowing about a new internal flag —
+`self._has_scanned` stayed `False` for those tests, so the cache gate
+never engaged and they fell through to a real (unwanted) sysfs rescan.
+Caught via `tests/vision/ -q` before committing; the `None`-sentinel
+redesign is naturally compatible with that existing pattern (a
+manually-assigned non-`None` list, empty or not, satisfies the gate
+correctly) with no changes needed to those 12 tests.
+
+Verified: `tests/vision/` — 2964 passed (up from 2952 passed + 3
+known failures), all 3 originally-failing tests now pass, zero
+regressions across the rest of the suite. `tests/vision/ tests/agent/
+tests/providers/` combined: 8113 passed, 4 pre-existing unrelated
+skips. **Full suite: `21128 passed, 13 skipped in 547.92s (0:09:07)` —
+0 failed.** This is the first fully green full-suite run this
+session — the 3 pre-existing `CameraDiscovery` flakes that persisted
+through every prior checkpoint are now genuinely fixed.
 
 ### Remaining Work (priority order per prompt.md)
 
