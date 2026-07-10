@@ -68,6 +68,23 @@ class TestAcpxInit:
         assert p._timeout == 30  # ProviderConfig default
         assert p._extra_flags == []
 
+    def test_timeout_within_bound_is_unchanged(self):
+        p = AcpxProvider(_make_config(timeout=300))
+        assert p._timeout == 300
+
+    def test_timeout_clamped_to_safe_upper_bound(self):
+        # FX-G: a misconfigured excessive timeout must not let a single
+        # delegate call hang indefinitely.
+        p = AcpxProvider(_make_config(timeout=999_999))
+        assert p._timeout == 600
+
+    def test_timeout_clamp_logs_warning(self, caplog):
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="missy.providers.acpx_provider"):
+            AcpxProvider(_make_config(timeout=99_999))
+        assert any("exceeds the safe upper bound" in r.message for r in caplog.records)
+
     def test_custom_agent(self):
         p = AcpxProvider(_make_config(model="codex"))
         assert p._agent == "codex"
@@ -227,6 +244,19 @@ class TestAcpxComplete:
         p = AcpxProvider(_make_config())
         with pytest.raises(ProviderError, match="timed out"):
             p.complete([Message(role="user", content="Hi")])
+
+    @patch("missy.providers.acpx_provider.subprocess.run")
+    def test_timeout_error_states_outcome_is_unknown(self, mock_run):
+        # FX-G: on timeout the caller must be told the outcome is
+        # unverified, not silently treated as "nothing happened."
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd="acpx", timeout=120)
+        p = AcpxProvider(_make_config())
+        with pytest.raises(ProviderError) as exc_info:
+            p.complete([Message(role="user", content="Hi")])
+        message = str(exc_info.value)
+        assert "UNKNOWN" in message
+        assert "idempotent" in message
+        assert "fresh" in message.lower()
 
     @patch("missy.providers.acpx_provider.subprocess.run")
     def test_binary_not_found_raises(self, mock_run):

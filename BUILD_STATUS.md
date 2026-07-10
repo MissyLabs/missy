@@ -1,6 +1,6 @@
 # Build Status
 
-Last updated: 2026-07-10 08:10 UTC
+Last updated: 2026-07-10 08:40 UTC
 
 ## Current Workstream: Validation-Harness Overhaul
 
@@ -492,6 +492,50 @@ tuning) and rerunning `WB-002` through `WB-007` and `XT-001` against
 it. This dev sandbox cannot launch a real browser at all (confirmed
 live), so there's no environment available in which to build or test
 that infrastructure this session.
+
+### Completed This Session, continued: FX-G (bound and decompose long acpx work)
+
+Two of three FX-G bullets are substantially addressed as a side effect
+of FX-A: post-FX-A, the delegate can no longer chain an entire
+multi-step infrastructure lifecycle inside one native-tool-using acpx
+call (native tools are disabled). Each acpx invocation now only needs
+to make one tool-call decision, and the runtime's existing tool loop
+(`AgentRuntime._tool_loop()`) already decomposes multi-step tasks into
+bounded, observable rounds with per-iteration checkpointing and
+failure-strategy rotation. Bullet 1 ("decompose... do not rely on one
+opaque delegate execution") is therefore largely already satisfied by
+the FX-A architecture change, not something requiring additional code
+this session.
+
+Implemented for bullet 2 ("explicit timeout configuration... safe upper
+bounds"):
+- `AcpxProvider.__init__` now clamps the configured timeout to a hard
+  ceiling (`_MAX_TIMEOUT_SECONDS = 600`), logging a warning when a
+  configured value is clamped. A misconfigured excessive timeout could
+  otherwise let a single delegate call hang indefinitely, blocking
+  budget enforcement and channel responsiveness.
+- The timeout `ProviderError` message now explicitly states the
+  outcome is UNKNOWN (not confirmed failed or succeeded) and instructs
+  the caller to perform a fresh read-only check before retrying and to
+  make any retry idempotent — the core of bullet 3 ("mark pending
+  effects unknown... make mutating retries idempotent").
+
+**Attempted and reverted this session:** process-group cleanup on
+timeout (`start_new_session=True` + `os.killpg` via a `Popen`-based
+rewrite of `_run_acpx`/`stream()`), to ensure no descendant process
+(the underlying claude/codex CLI) survives after Missy gives up on a
+timed-out call — `subprocess.run()`'s built-in timeout handling only
+kills the immediate PID. Live-tested and confirmed working, but it
+required mocking `subprocess.Popen` instead of `subprocess.run`, which
+broke ~136 existing tests that mock the latter; migrating all of them
+safely is a larger, separate task. Reverted to keep this checkpoint's
+diff scoped and the test suite fully green; tracked as task #17 for a
+dedicated future session.
+
+Not done this session: idempotent retry enforcement for INCUS mutating
+actions specifically, and a live rerun of `INCUS-006`'s timeout/
+partial-completion/retry/cleanup paths (blocked on the same live-delegate
+gap as FX-A bullet 6).
 
 ### Known Pre-Existing Failure (not caused by this session)
 

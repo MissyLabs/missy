@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (8 checkpoints this session, full suite green after each)
+## Changed (10 checkpoints this session, full suite green after every one)
 
 1. Preserved/hardened the existing `voice_commands.py` fix; fixed a real
    trailing-comma leak bug the new regression tests caught.
@@ -15,52 +15,44 @@ Draft PR: https://github.com/MissyLabs/missy/pull/31
    envelope, leaked-marker defense). Dominant root cause behind ~30 of
    43 failing validation cases.
 3. **FX-B**: fixed the production memory backend mismatch — Discord
-   conversation turns were being written to the wrong file
-   (`~/.missy/memory.json` instead of `~/.missy/memory.db`), explaining
-   "only 3 rows despite 937 agent.run.start events." Found the identical
-   bug independently in `VisionMemoryBridge`.
+   conversation turns were being written to the wrong file. Found the
+   identical bug independently in `VisionMemoryBridge`.
 4. **FX-E + SR-1.2/1.3 (critical)**: closed a live, unauthenticated
-   code-self-approval vulnerability — the default system prompt taught
-   the agent to approve/apply its own code changes, and the underlying
-   manager performed zero authentication. A second instance let any
-   Discord user approve via emoji reaction.
+   code-self-approval vulnerability (default system prompt taught
+   self-approval; a second instance let any Discord user approve via
+   emoji reaction).
 5. **SR-1.12 (critical)**: closed an unauthenticated Discord DM-pairing
-   self-approval bypass — any unpaired stranger could self-approve with
-   two DM messages, zero authentication.
-6. **FX-D**: added an explicit structural current-turn boundary to the
-   acpx prompt (previously prose-only) and made the provider fail closed
-   on totally fabricated delegate responses instead of silently
-   returning empty content.
-7. **SR-1.13 (critical, two findings)**: `_handle_message()` dispatched
-   voice/image/screencast commands before authorization ran; more
-   severely, slash-command interactions (`/ask` etc.) had **no**
-   authorization check at all, plus a hardcoded shared session ID
-   causing cross-user conversation bleeding. Both fixed.
-8. **FX-C**: added exception-vs-not-found distinction to memory ID
-   lookups (`memory_describe`/`memory_expand`); confirmed and locked in
-   with tests that Incus list/network tools are deterministic JSON
-   passthroughs with no tool-layer fabrication risk; added an explicit
-   envelope rule forbidding the delegate from padding/altering
-   structured tool results (the actual locus of the harness's observed
-   "invented lo network" failure, since the tool layer was already
-   correct).
-9. **FX-F bullet 1**: added `_classify_browser_error()` to
-   `browser_tools.py`, distinguishing missing playwright, uninstalled
-   browser binary, and sandbox/kernel launch failure (matching the
-   harness's exact two observed error strings) from generic interaction
-   errors, with remediation text that explicitly forbids
-   `--no-sandbox`/`SYS_ADMIN`/privileged containers as a fix.
-   Live-verified against this dev sandbox, which has the identical
-   environment limitation the harness observed (no playwright
-   installed, cannot launch a real browser). Bullets 2/4 (actual
-   disposable browser-test environment + WB/XT rerun) deferred as real
-   infrastructure work — task #16.
+   self-approval bypass (any unpaired stranger, two messages, zero auth).
+6. **FX-D**: explicit structural current-turn boundary in the acpx
+   prompt + fail-closed on totally fabricated delegate responses.
+7. **SR-1.13 (critical, two findings)**: Discord message-command and
+   slash-command ingress both lacked proper authorization; the latter
+   also had a cross-user session-bleeding bug (`session_id="discord"`
+   hardcoded for every user).
+8. **FX-C**: grounded memory-ID lookups (exception vs. genuinely
+   missing); confirmed and locked in with tests that Incus tools are
+   fabrication-proof at the tool layer; added an explicit envelope rule
+   against padding/altering structured tool results.
+9. **FX-F bullet 1**: browser error classification (tool absence vs.
+   installation vs. sandbox/kernel failure vs. real interaction error),
+   live-verified against this dev sandbox's actual missing-playwright
+   state.
+10. **FX-G**: safe upper bound on acpx timeout config + explicit
+    "outcome is UNKNOWN, verify before retry, make retries idempotent"
+    timeout messaging. Attempted process-group cleanup on timeout too,
+    but reverted after it broke ~136 existing tests (mocks target
+    `subprocess.run`, the fix needed `subprocess.Popen`) — tracked as
+    task #17 for a dedicated session.
 
 **Four independent, confirmed critical authorization-bypass
 vulnerabilities** found and fixed this session (SR-1.2/1.3, SR-1.12,
 SR-1.13 ×2), all the same underlying pattern: an unauthenticated action
-reachable before the policy gate. Plus three validation-harness root
-causes (FX-A, FX-B, FX-D/FX-C groundwork).
+reachable before the policy gate. Plus the FX-A/B/C/D/F/G validation-
+harness root causes.
+
+**All of FX-A through FX-G are now done** per the prompt's stated
+dependency order (some with residual/deferred sub-items tracked as
+separate tasks — see below).
 
 ## Verification
 
@@ -69,41 +61,58 @@ python3 -m pytest tests/ -q -o faulthandler_timeout=120 \
   --deselect tests/vision/test_discovery_capture_sysfs.py::TestCacheTTL::test_cache_valid_within_ttl \
   --deselect tests/vision/test_discovery_edge_cases.py::TestPermissionDeniedOnDevice::test_device_that_does_not_exist_is_skipped \
   --deselect tests/vision/test_discovery_edge_cases.py::TestRapidAddRemove::test_cached_results_returned_within_ttl
-20750 passed, 13 skipped, 3 deselected in 447.53s (0:07:27)
+20754 passed, 13 skipped, 3 deselected in 447.40s (0:07:27)
 ```
 
 Full detail in `BUILD_STATUS.md`, `AUDIT_SECURITY.md`, and
-`TEST_RESULTS.md` (each has a dated entry per checkpoint, oldest at
-bottom, nothing overwritten).
+`TEST_RESULTS.md` — each has one dated entry per checkpoint this
+session, oldest at the bottom, nothing overwritten.
 
-## Remains
+## Open tasks (session-tracked, carry into next session)
 
-- FX-A bullet 6 / live harness re-validation of every fix landed this
-  session: none of this session's fixes have been proven against a real
-  or scripted acpx delegate invocation yet — all verification so far is
-  unit/integration-level with mocks or the real (but not-LLM-calling)
-  acpx binary. This is the single biggest gap before any of FX-A
-  through FX-D can be considered fully closed per the validation
-  harness's own bar.
-- SR-1.2/1.3, SR-1.12, SR-1.13 are **not fully solved** — see
-  `AUDIT_SECURITY.md` residual-risk notes for each. Concrete follow-ups:
-  task #12 (Discord pairing has no working approval path currently),
-  task #15 (`allowed_roles` config documented but never enforced).
-- FX-C's done-criteria/verification-engine bullet overlaps SR-4.4 (not
-  yet wired) — deferred as separate, larger scope.
-- FX-F, FX-G not yet started.
-- SR-1.1, SR-1.4 through SR-1.11, SR-2.x through SR-4.x not yet started.
-- Full 89-case tool-specific validation backlog not yet re-run.
-- Pre-existing vision `CameraDiscovery` cache-TTL flake (3 tests,
-  tracked separately, unrelated to this session).
+- **#9** SR-1.x through SR-4.x security review remediation — most of
+  it. This session covered SR-1.2/1.3, SR-1.12, SR-1.13 only (plus SR-3.1
+  substantially via FX-B). SR-1.1, SR-1.4 through SR-1.11, SR-2.x,
+  SR-3.2 through SR-3.5, SR-4.x remain.
+- **#10** Full 89-case tool-specific validation backlog — not yet
+  re-run against current code.
+- **#11** Pre-existing vision `CameraDiscovery` cache-TTL flake (3
+  tests) — confirmed present before this session's changes, unrelated,
+  small isolated fix needed in `missy/vision/discovery.py`.
+- **#12** Wire an authenticated Discord pairing approval endpoint —
+  the SR-1.12 fix removed the vulnerable path but pairing currently has
+  *no* working approval surface at all.
+- **#15** `allowed_roles` Discord config field documented but never
+  enforced.
+- **#16** FX-F bullets 2/4: build an actual disposable, threat-modeled
+  browser-test environment and rerun WB-002 through WB-007 + XT-001
+  against it. This dev sandbox cannot launch a browser at all (no
+  playwright installed) — confirmed live, matching the harness's own
+  observation.
+- **#17** FX-G process-group cleanup on acpx timeout — implementation
+  works but needs the test-suite migration from mocking
+  `subprocess.run` to `subprocess.Popen` done carefully in its own
+  session.
+
+## The single biggest remaining gap
+
+**None of this session's fixes have been validated against a real or
+scripted acpx delegate invocation.** All verification so far is
+unit/integration-level with mocks, or against the real (but
+non-LLM-calling) acpx binary for `--version`/`--help`. FX-A bullet 6
+("prove end to end that representative filesystem, shell, browser,
+X11, AT-SPI, vision, audio, Discord upload, memory, self_create_tool,
+and code_evolve requests produce the expected registry, policy, and
+audit events") is still fully open, and it's the prerequisite for
+re-running most of the 89-case validation backlog with real evidence
+rather than code-level reasoning about what *should* happen.
 
 ## First Next Step
 
-Two reasonable directions: (a) continue the SR-1.x audit sweep with the
-same lens (SR-1.5 Incus policy composition, SR-1.6 browser network
-enforcement are the strongest remaining candidates given four
-confirmed findings already this session), or (b) shift to FX-F (browser
-validation environment) per the prompt's stated dependency order now
-that FX-A/B/D/E/C are done. Either way, the task list (14 open items)
-has concrete next steps recorded — check task list before re-deriving
-priorities from scratch.
+If a way to safely exercise a real or scripted acpx delegate call
+becomes available, prioritize FX-A bullet 6 — it unblocks re-validating
+everything else. Otherwise, continue the SR-1.x security sweep (SR-1.5
+Incus policy composition, SR-1.6 browser network enforcement are the
+strongest remaining candidates given four confirmed findings already)
+or pick up one of the concrete scoped tasks above (#11, #12, #15, #16,
+#17) — all are self-contained and don't require a live delegate.

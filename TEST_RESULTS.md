@@ -1,5 +1,29 @@
 # TEST_RESULTS
 
+## Run: 2026-07-10 08:40 UTC — validation-harness overhaul, FX-G (bound/decompose long acpx work)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Added `_MAX_TIMEOUT_SECONDS = 600` hard ceiling on configured acpx
+  timeout, with a warning log when clamped. Improved the timeout
+  `ProviderError` message to state the outcome is UNKNOWN and instruct
+  fresh verification + idempotent retries.
+- Attempted a `Popen`-based process-group-kill rewrite of `_run_acpx`/
+  `stream()` for FX-G bullet 2's subprocess-cleanup ask; reverted after
+  confirming (via a hung/background test run, killed manually) that it
+  broke ~136 existing tests mocking `subprocess.run`. Tracked as task
+  #17 for a dedicated future session with the necessary test migration.
+- Command: `pytest tests/providers/test_acpx_provider.py -q` (with a
+  hard 60s wall-clock guard to catch any subprocess-mock regression
+  immediately)
+- Result: `141 passed in 0.88s` (was 137 before this checkpoint)
+- Command: `pytest tests/providers/ -q`
+- Result: `890 passed in 24.93s`
+- Command: `pytest tests/ -q -o faulthandler_timeout=120` with the 3
+  known pre-existing vision failures deselected
+- Result: `20754 passed, 13 skipped, 3 deselected in 447.40s (0:07:27)`
+
+---
+
 ## Run: 2026-07-10 08:10 UTC — validation-harness overhaul, FX-F bullet 1 (browser diagnostics)
 
 - Branch: `overhaul/missy-validation-20260710-031406`

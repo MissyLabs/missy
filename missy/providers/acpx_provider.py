@@ -85,6 +85,10 @@ logger = logging.getLogger(__name__)
 _DEFAULT_AGENT = "claude"
 _DEFAULT_TIMEOUT = 120
 
+# FX-G: hard ceiling on the configured acpx subprocess timeout, regardless
+# of what a provider config requests. See AcpxProvider.__init__.
+_MAX_TIMEOUT_SECONDS = 600
+
 # ---------------------------------------------------------------------------
 # Zero-native-tools / fail-closed permission enforcement (FX-A)
 #
@@ -722,7 +726,21 @@ class AcpxProvider(BaseProvider):
 
     def __init__(self, config: ProviderConfig) -> None:
         self._agent: str = config.model or _DEFAULT_AGENT
-        self._timeout: int = config.timeout or _DEFAULT_TIMEOUT
+        requested_timeout = config.timeout or _DEFAULT_TIMEOUT
+        # FX-G: explicit safe upper bound. A misconfigured excessive
+        # timeout would let a single delegate call hang indefinitely,
+        # blocking the whole agent loop, budget enforcement, and channel
+        # responsiveness. Post-FX-A each acpx invocation only needs to
+        # make one tool-call decision (the delegate can no longer chain
+        # an entire multi-step task internally via native tools), so a
+        # long-running single call is itself a signal something is wrong.
+        if requested_timeout > _MAX_TIMEOUT_SECONDS:
+            logger.warning(
+                "acpx timeout %ss exceeds the safe upper bound of %ss; clamping.",
+                requested_timeout,
+                _MAX_TIMEOUT_SECONDS,
+            )
+        self._timeout: int = min(requested_timeout, _MAX_TIMEOUT_SECONDS)
         raw_extra_flags = config.base_url.split() if config.base_url else []
         self._extra_flags: list[str] = _sanitize_extra_flags(raw_extra_flags)
         self._binary: str = shutil.which("acpx") or "acpx"
@@ -1139,7 +1157,19 @@ class AcpxProvider(BaseProvider):
             )
         except subprocess.TimeoutExpired as exc:
             self._emit_event(session_id, task_id, "error", "subprocess timed out")
-            raise ProviderError(f"acpx subprocess timed out after {self._timeout}s") from exc
+            # FX-G: on timeout, any effect this call may have triggered
+            # (e.g. a tool call the delegate was mid-way through
+            # reasoning about) is UNKNOWN, not confirmed failed or
+            # succeeded. Callers must not assume the action did or didn't
+            # happen -- verify with a fresh read-only check before
+            # retrying, and make any retry idempotent.
+            raise ProviderError(
+                f"acpx subprocess timed out after {self._timeout}s. The outcome of "
+                "this call is UNKNOWN -- it was not confirmed to succeed or fail. "
+                "Do not assume it happened or that it didn't; perform a fresh "
+                "read-only state check before retrying or reporting status, and "
+                "make any mutating retry idempotent."
+            ) from exc
         except FileNotFoundError as exc:
             self._emit_event(session_id, task_id, "error", "acpx binary not found")
             raise ProviderError(
