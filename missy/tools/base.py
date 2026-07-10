@@ -120,6 +120,25 @@ class BaseTool(ABC):
         """
         return None
 
+    def resolve_network_hosts(self, kwargs: dict[str, Any]) -> list[str]:
+        """Return additional hostnames this invocation will contact.
+
+        Unlike the filesystem/shell checks, the registry has no kwarg-name
+        heuristic for network targets at all by default — it only checks
+        ``permissions.allowed_hosts`` (a static declaration). A tool whose
+        real destination is only known at call time (e.g. a URL kwarg, or
+        a browser-automation tool that hands the URL to something other
+        than :class:`~missy.gateway.client.PolicyHTTPClient`) must
+        override this method, or the network policy engine never sees the
+        real destination and the declared ``network=True`` permission
+        enforces nothing.
+
+        Returning ``[]`` (the default) means no additional hosts beyond
+        ``permissions.allowed_hosts`` are checked, preserving existing
+        behaviour for tools that don't need this.
+        """
+        return []
+
     def resolve_filesystem_targets(self, kwargs: dict[str, Any]) -> tuple[list[str], list[str]]:
         """Return the ``(read_paths, write_paths)`` this invocation will touch.
 

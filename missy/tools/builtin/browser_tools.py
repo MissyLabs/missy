@@ -15,10 +15,22 @@ import threading
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from missy.tools.base import BaseTool, ToolPermissions, ToolResult
 
 logger = logging.getLogger(__name__)
+
+#: SR-1.6: schemes that carry a real network destination -- every request
+#: using one of these is gated against the network policy engine.
+_ROUTED_NETWORK_SCHEMES = frozenset({"http", "https", "ws", "wss"})
+
+#: SR-1.6: schemes with no real network destination that pages legitimately
+#: need for normal rendering (inline data/blob URIs, internal browser
+#: pages, extension resources) -- always allowed through unchecked.
+_ROUTED_ALWAYS_ALLOWED_SCHEMES = frozenset(
+    {"data", "blob", "about", "chrome", "moz-extension", "chrome-extension"}
+)
 
 #: Environment variables safe to pass to browser subprocesses.
 #: Prevents API key leakage to Firefox/Playwright.
@@ -58,6 +70,50 @@ _FIREFOX_PREFS = {
     "browser.tabs.warnOnClose": False,
     "toolkit.startup.max_resumed_crashes": -1,
 }
+
+
+def _route_through_network_policy(route: Any) -> None:
+    """Gate a single Playwright request against the network policy engine.
+
+    SR-1.6: registered on every :class:`BrowserSession`'s context via
+    ``context.route("**/*", ...)`` so navigation, redirects, subresources,
+    and JS-triggered fetch/XHR calls (e.g. via ``browser_evaluate``) are
+    all checked -- not just the initial ``page.goto()`` call, which the
+    registry checks separately (and more cleanly) via
+    :meth:`BrowserNavigateTool.resolve_network_hosts`.
+
+    Fails closed on anything unexpected: an unrecognized scheme, a missing
+    host, a policy denial, or the policy engine not being initialised all
+    abort the request rather than letting it through.
+    """
+    request_url = route.request.url
+    scheme = urlparse(request_url).scheme.lower()
+
+    if scheme in _ROUTED_ALWAYS_ALLOWED_SCHEMES:
+        route.continue_()
+        return
+
+    if scheme not in _ROUTED_NETWORK_SCHEMES:
+        # Includes file:// (arbitrary local filesystem access via the
+        # browser is a distinct, unneeded capability for agent browsing
+        # tasks) and any other scheme this allowlist doesn't recognise.
+        route.abort("blockedbyclient")
+        return
+
+    host = urlparse(request_url).hostname
+    if not host:
+        route.abort("blockedbyclient")
+        return
+
+    try:
+        from missy.policy.engine import get_policy_engine
+
+        get_policy_engine().check_network(host, category="tool")
+    except Exception:
+        route.abort("blockedbyclient")
+        return
+
+    route.continue_()
 
 
 # ---------------------------------------------------------------------------
@@ -113,6 +169,14 @@ class BrowserSession:
             firefox_user_prefs=_FIREFOX_PREFS,
             env={k: v for k, v in os.environ.items() if k in _SAFE_BROWSER_ENV_VARS},
         )
+        # SR-1.6: gate EVERY network request this browser context makes --
+        # not just the top-level page.goto() call the registry checks
+        # before a tool even runs, but every subresource, redirect, and
+        # JS-triggered fetch/XHR/navigation (e.g. via browser_evaluate) too.
+        # Without this, the network policy engine ("no outbound traffic
+        # unless whitelisted") is entirely bypassed once Firefox itself is
+        # driving requests, which is most of the time.
+        self._context.route("**/*", _route_through_network_policy)
 
     def get_page(self) -> Any:
         """Return the most recent open page in the context.
@@ -218,6 +282,15 @@ _INSTALLATION_ERROR_MARKERS: tuple[str, ...] = (
     "playwright install",
 )
 
+# SR-1.6: markers Playwright/Firefox raises when a request is aborted via
+# route.abort("blockedbyclient") -- distinguishes a policy denial from a
+# genuine network/interaction failure.
+_NETWORK_POLICY_BLOCKED_MARKERS: tuple[str, ...] = (
+    "blockedbyclient",
+    "err_blocked_by_client",
+    "ns_binding_aborted",
+)
+
 
 def _classify_browser_error(exc: Exception) -> str:
     """Return a categorized, actionable error message for a browser failure.
@@ -253,6 +326,15 @@ def _classify_browser_error(exc: Exception) -> str:
 
     if "playwright not installed" in lowered:
         return text  # Already specific; _start() sets its own guidance.
+
+    if any(marker in lowered for marker in _NETWORK_POLICY_BLOCKED_MARKERS):
+        return (
+            f"Blocked by Missy's network policy: {text}\n"
+            "This request's destination host is not on the configured "
+            "network allowlist. Add it to network.allowed_hosts/"
+            "allowed_domains/presets if this destination should be "
+            "reachable — do not disable this check as a workaround."
+        )
 
     if any(marker in lowered for marker in _INSTALLATION_ERROR_MARKERS):
         return (
@@ -304,6 +386,23 @@ class BrowserNavigateTool(BaseTool):
         },
         "session_id": {"type": "string", "description": "Session name (default 'default')."},
     }
+
+    def resolve_network_hosts(self, kwargs: dict[str, Any]) -> list[str]:
+        """SR-1.6: gate the target host before ever touching Playwright.
+
+        The registry previously performed zero host checks for this tool
+        (``allowed_hosts`` was declared empty, and there was no dynamic
+        heuristic for network targets at all), so ``page.goto(url)`` ran
+        with no policy check whatsoever. This gives a clean, immediate
+        denial for the common case; :func:`_route_through_network_policy`
+        additionally covers redirects/subresources/JS-driven navigation
+        that happen after this initial check.
+        """
+        url = kwargs.get("url")
+        if not url:
+            return []
+        host = urlparse(url).hostname
+        return [host] if host else []
 
     def execute(
         self,

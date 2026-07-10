@@ -343,6 +343,106 @@ requirement — do not overwrite, append new entries as work continues.
   every other shell-gated tool in this codebase, not a regression
   specific to this fix.
 
+### SR-1.6 — Playwright browser navigation bypassed the network policy gateway entirely
+
+- **Status: fixed.** This was flagged as a crown-jewel bypass: for a
+  product whose stated value proposition is "no outbound traffic unless
+  explicitly allowlisted," `BrowserNavigateTool` navigated with zero
+  policy enforcement of any kind.
+- **Reachability found:** live and directly exploitable, confirmed
+  against the real registry+policy stack (not just mocks). `web_fetch`
+  and Discord upload both route every request through
+  `PolicyHTTPClient`, which enforces the network policy internally per
+  request; `browser_tools.py` was the sole exception — it called
+  Playwright's `page.goto(url)` directly. Two independent gaps
+  compounded:
+  1. `ToolPermissions(network=True)` was declared with an empty static
+     `allowed_hosts`, and (before this session's SR-1.5 work added the
+     `resolve_*` hook mechanism) the registry had **no dynamic
+     kwarg-based check for network targets at all** — unlike filesystem/
+     shell, which at least had a generic-name heuristic. So the registry
+     performed literally zero host checks for this tool regardless of
+     configuration.
+  2. Even if the registry had checked something, `page.goto()` itself
+     never consulted the policy engine, `PolicyHTTPClient`, or any
+     equivalent — Playwright drove the HTTP request directly.
+  Live-reproduced: with `NetworkPolicy()` (nothing allowlisted),
+  `browser_navigate(url="http://169.254.169.254/latest/meta-data/")` —
+  the AWS/GCP/Azure instance-metadata SSRF target explicitly named by
+  the review — **passed the registry's permission check** and proceeded
+  straight to Playwright with no denial of any kind (it then failed only
+  because this dev sandbox has no `playwright` package installed, an
+  unrelated pre-existing environment limitation). The review additionally
+  notes that "every subresource/redirect/fetch inside Firefox is outside
+  the Python gateway too" — i.e. even a naive fix that only checked the
+  top-level `page.goto()` URL would still leave every redirect,
+  subresource, and JS-triggered `fetch()`/XHR (reachable via the
+  `browser_evaluate` tool) completely unchecked.
+- **Remediation evidence — two layers, addressing both the initial
+  navigation and everything after it:**
+  1. **Registry-level pre-check:** `BrowserNavigateTool` now overrides
+     the `resolve_network_hosts()` hook added by this session's SR-1.5
+     fix, extracting the target hostname from the `url` kwarg via
+     `urllib.parse.urlparse`. The registry (`missy/tools/registry.py`)
+     now calls `engine.check_network()` on every resolved host for any
+     tool that overrides this hook, in addition to the (still-empty)
+     static `allowed_hosts` list. This gives a clean, immediate
+     `PolicyViolationError`-backed denial before Playwright is ever
+     touched — verified live: the cloud-metadata URL above is now
+     denied with `"Network access denied: '169.254.169.254' is not in
+     an allowed CIDR block"`, and a matching request to an explicitly
+     allowlisted domain passes the policy check cleanly (fails only on
+     the pre-existing missing-playwright environment limitation, proving
+     the policy layer itself is not what's blocking it).
+  2. **Playwright-level request interception (defense in depth for
+     everything the registry can't see ahead of time):**
+     `BrowserSession._start()` now registers
+     `context.route("**/*", _route_through_network_policy)` on every
+     browser context. This handler runs on **every** request the
+     context makes — main-frame navigation, redirects, subresources,
+     and JS-triggered `fetch()`/XHR calls issued via `browser_evaluate`
+     — extracts the hostname, and calls `engine.check_network()` before
+     allowing the request to proceed (`route.continue_()`); any
+     exception (denial, policy engine not initialised, malformed URL,
+     disallowed scheme) results in `route.abort("blockedbyclient")`,
+     failing closed. `data:`/`blob:`/`about:`/`chrome:`/extension
+     schemes (no real network destination, required for normal page
+     rendering) are always allowed through unchecked; `file://` and any
+     unrecognized scheme are always blocked — `file://` grants arbitrary
+     local filesystem access via the browser, a materially different and
+     unneeded capability no browser tool declares or asks for.
+     `_classify_browser_error()` gained a marker recognizing
+     Playwright's abort-reason error text so a route-level policy denial
+     surfaces as a clear, actionable message rather than a generic
+     network error.
+  New tests: `TestBrowserNavigateResolveNetworkHosts` (3),
+  `TestSR16RegistryGatesBrowserNavigate` (3, including the live
+  cloud-metadata denial reproduction),
+  `TestRouteThroughNetworkPolicy` (10, covering denial, allow, fail-closed
+  on uninitialised policy engine, fail-closed on `PolicyViolationError`,
+  always-allowed pseudo-schemes, `file://` blocking regardless of
+  network config, unrecognized-scheme fail-closed, and no-host
+  fail-closed), plus one test confirming `_start()` wires up the route
+  handler and one confirming the new error-classification marker — 18
+  new tests total in `tests/tools/test_browser_tools_gaps.py`.
+- **Residual risk:** this closes the Python-level and same-context
+  bypasses the review's evidence demonstrates, but is not a complete
+  browser sandbox. Not addressed: (a) DNS-rebinding-style TOCTOU between
+  this check and Firefox's own connection (same class of gap as SR-1.9,
+  not specific to browser tools); (b) any Playwright/Firefox
+  capability that establishes a connection through a mechanism other
+  than the standard request pipeline `context.route()` intercepts (e.g.
+  WebRTC ICE candidate gathering, which can leak local/LAN IPs via a
+  path this interception does not cover — a known general limitation of
+  browser-level network policy enforcement, not unique to this
+  implementation); (c) `browser_evaluate`'s arbitrary JS execution can
+  still read/exfiltrate data via any request that *does* pass the host
+  check (e.g. to an allowlisted domain) — host-level allowlisting was
+  the review's explicit ask and is what's fixed, not a general
+  same-origin/CSP-style content policy. SR-1.7 (shell allow-list
+  granularity) and SR-1.9 (network TOCTOU) remain separate, open
+  findings.
+
 ---
 
 - Timestamp: 2026-07-09 15:35:26 (raw grep-scan dump below, preserved

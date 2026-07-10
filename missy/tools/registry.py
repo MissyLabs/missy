@@ -264,16 +264,22 @@ class ToolRegistry:
                 detail="Policy engine must be initialised before tool execution.",
             ) from err
 
+        # SR-1.4/SR-1.5/SR-1.6: a tool that overrides resolve_network_hosts /
+        # resolve_filesystem_targets / resolve_shell_command is declaring the
+        # real operation it performs, rather than relying on the registry's
+        # generic kwarg-name heuristic (or, for network, the registry's
+        # static-only allowed_hosts check) -- several first-party tools'
+        # actual kwargs/targets don't match those defaults, so enforcement
+        # was silently skipped instead of failing closed.
+        _kw = kwargs or {}
+
         if perms.network:
             for host in perms.allowed_hosts:
                 engine.check_network(host, session_id=session_id, task_id=task_id)
+            if type(tool).resolve_network_hosts is not BaseTool.resolve_network_hosts:
+                for host in tool.resolve_network_hosts(_kw):
+                    engine.check_network(host, session_id=session_id, task_id=task_id)
 
-        # SR-1.4/SR-1.5: a tool that overrides resolve_filesystem_targets /
-        # resolve_shell_command is declaring the real operation it performs,
-        # rather than relying on the registry's generic kwarg-name heuristic
-        # (which several first-party tools' actual kwargs don't match, so the
-        # heuristic silently skips enforcement instead of failing closed).
-        _kw = kwargs or {}
         resolves_fs_targets = (
             type(tool).resolve_filesystem_targets is not BaseTool.resolve_filesystem_targets
         )

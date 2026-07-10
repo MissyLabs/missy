@@ -18,14 +18,26 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from missy.config.settings import (
+    FilesystemPolicy,
+    MissyConfig,
+    NetworkPolicy,
+    PluginPolicy,
+    ShellPolicy,
+)
+from missy.core.exceptions import PolicyViolationError
+from missy.policy.engine import init_policy_engine
 from missy.tools.builtin.browser_tools import (
+    BrowserNavigateTool,
     BrowserSession,
     _classify_browser_error,
     _err,
     _page,
     _registry,
+    _route_through_network_policy,
     _SessionRegistry,
 )
+from missy.tools.registry import ToolRegistry
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -151,6 +163,34 @@ class TestBrowserSessionStart:
         mock_pw.firefox.launch_persistent_context.assert_called_once()
         assert session._pw is mock_pw
         assert session._context is mock_context
+
+    def test_start_registers_network_policy_route_handler(self, monkeypatch):
+        """SR-1.6: every context must have the policy route handler wired
+        up so navigation, redirects, subresources, and JS-triggered
+        fetches are all gated -- not just the initial page.goto() call."""
+        session = _make_session(headless=True)
+
+        mock_context = MagicMock()
+        mock_pw = MagicMock()
+        mock_pw.firefox.launch_persistent_context.return_value = mock_context
+        mock_sync_pw_ctx = MagicMock()
+        mock_sync_pw_ctx.start.return_value = mock_pw
+        mock_sync_playwright = MagicMock(return_value=mock_sync_pw_ctx)
+
+        fake_sync_api = MagicMock()
+        fake_sync_api.sync_playwright = mock_sync_playwright
+        fake_playwright = MagicMock()
+
+        with (
+            patch.object(session, "_ensure_display"),
+            patch.dict(
+                "sys.modules",
+                {"playwright": fake_playwright, "playwright.sync_api": fake_sync_api},
+            ),
+        ):
+            session._start()
+
+        mock_context.route.assert_called_once_with("**/*", _route_through_network_policy)
 
 
 # ---------------------------------------------------------------------------
@@ -455,3 +495,180 @@ class TestClassifyBrowserError:
         result = _err(exc)
         assert result.success is False
         assert "sandbox/kernel launch failure" in result.error
+
+    def test_network_policy_blocked_request_classified_clearly(self):
+        exc = RuntimeError('page.goto: NS_BINDING_ABORTED at "http://blocked.invalid/"')
+        result = _classify_browser_error(exc)
+        assert "Blocked by Missy's network policy" in result
+        assert "network.allowed_hosts" in result
+
+
+# ---------------------------------------------------------------------------
+# SR-1.6: Playwright browser navigation must be gated by the network policy
+# engine, not bypass it entirely by calling page.goto()/routing directly.
+# ---------------------------------------------------------------------------
+def _init_policy(allowed_hosts=None, allowed_domains=None, allowed_cidrs=None):
+    init_policy_engine(
+        MissyConfig(
+            network=NetworkPolicy(
+                allowed_hosts=allowed_hosts or [],
+                allowed_domains=allowed_domains or [],
+                allowed_cidrs=allowed_cidrs or [],
+            ),
+            filesystem=FilesystemPolicy(),
+            shell=ShellPolicy(enabled=False, allowed_commands=[]),
+            plugins=PluginPolicy(),
+            providers={},
+            workspace_path="/tmp/browser-test-ws",
+            audit_log_path="/tmp/browser-test-audit.jsonl",
+        )
+    )
+
+
+class TestBrowserNavigateResolveNetworkHosts:
+    def test_extracts_hostname_from_url(self):
+        tool = BrowserNavigateTool()
+        assert tool.resolve_network_hosts({"url": "https://example.com/path"}) == ["example.com"]
+
+    def test_no_url_kwarg_returns_empty(self):
+        tool = BrowserNavigateTool()
+        assert tool.resolve_network_hosts({}) == []
+
+    def test_malformed_url_with_no_host_returns_empty(self):
+        tool = BrowserNavigateTool()
+        assert tool.resolve_network_hosts({"url": "not-a-url"}) == []
+
+
+class TestSR16RegistryGatesBrowserNavigate:
+    """Before the fix, ToolPermissions(network=True) with no static
+    allowed_hosts meant the registry performed ZERO host checks for
+    browser_navigate -- page.goto(url) ran completely ungated."""
+
+    def test_navigate_denied_to_unallowlisted_host(self):
+        _init_policy()  # nothing allowlisted
+        registry = ToolRegistry()
+        registry.register(BrowserNavigateTool())
+        result = registry.execute(
+            "browser_navigate",
+            url="http://169.254.169.254/latest/meta-data/",
+            session_id="s",
+            task_id="t",
+        )
+        assert result.success is False
+        assert "Network access denied" in result.error
+
+    def test_navigate_denied_to_private_lan_host(self):
+        _init_policy()
+        registry = ToolRegistry()
+        registry.register(BrowserNavigateTool())
+        result = registry.execute(
+            "browser_navigate",
+            url="http://192.168.1.1/admin",
+            session_id="s",
+            task_id="t",
+        )
+        assert result.success is False
+
+    def test_navigate_passes_policy_when_domain_allowlisted(self):
+        _init_policy(allowed_domains=["example.com"])
+        registry = ToolRegistry()
+        registry.register(BrowserNavigateTool())
+        result = registry.execute(
+            "browser_navigate",
+            url="https://example.com/",
+            session_id="s",
+            task_id="t",
+        )
+        # Policy passes; the tool then fails for an unrelated reason (no
+        # playwright/browser available in the test environment) -- proof
+        # policy is what's evaluated first, and it doesn't itself deny.
+        assert "Network access denied" not in (result.error or "")
+        assert "not in the allowed" not in (result.error or "")
+
+
+class TestRouteThroughNetworkPolicy:
+    """Direct tests of the Playwright context.route() handler that gates
+    every subresource/redirect/JS-triggered fetch, not just the initial
+    navigation the registry checks separately."""
+
+    def _mock_route(self, url: str) -> MagicMock:
+        route = MagicMock()
+        route.request.url = url
+        return route
+
+    def test_denied_host_is_aborted(self):
+        _init_policy()  # nothing allowlisted
+        route = self._mock_route("http://169.254.169.254/secret")
+        _route_through_network_policy(route)
+        route.abort.assert_called_once_with("blockedbyclient")
+        route.continue_.assert_not_called()
+
+    def test_allowed_host_continues(self):
+        _init_policy(allowed_domains=["example.com"])
+        route = self._mock_route("https://example.com/script.js")
+        _route_through_network_policy(route)
+        route.continue_.assert_called_once()
+        route.abort.assert_not_called()
+
+    def test_policy_engine_not_initialised_fails_closed(self):
+        with patch(
+            "missy.policy.engine.get_policy_engine",
+            side_effect=RuntimeError("not initialised"),
+        ):
+            route = self._mock_route("https://example.com/")
+            _route_through_network_policy(route)
+            route.abort.assert_called_once_with("blockedbyclient")
+            route.continue_.assert_not_called()
+
+    def test_policy_violation_error_from_check_network_aborts(self):
+        mock_engine = MagicMock()
+        mock_engine.check_network.side_effect = PolicyViolationError(
+            "denied", category="network", detail="denied.example.com"
+        )
+        with patch("missy.policy.engine.get_policy_engine", return_value=mock_engine):
+            route = self._mock_route("https://denied.example.com/")
+            _route_through_network_policy(route)
+            route.abort.assert_called_once_with("blockedbyclient")
+            route.continue_.assert_not_called()
+
+    def test_data_uri_always_allowed_without_policy_check(self):
+        _init_policy()  # nothing allowlisted -- data: must still pass
+        route = self._mock_route("data:image/png;base64,iVBORw0KGgo=")
+        _route_through_network_policy(route)
+        route.continue_.assert_called_once()
+        route.abort.assert_not_called()
+
+    def test_blob_uri_always_allowed(self):
+        _init_policy()
+        route = self._mock_route("blob:https://example.com/uuid-here")
+        _route_through_network_policy(route)
+        route.continue_.assert_called_once()
+
+    def test_about_blank_always_allowed(self):
+        _init_policy()
+        route = self._mock_route("about:blank")
+        _route_through_network_policy(route)
+        route.continue_.assert_called_once()
+
+    def test_file_scheme_is_blocked_even_with_no_policy_restriction(self):
+        """file:// grants arbitrary local filesystem access via the
+        browser -- a distinct capability from network access that no
+        browser tool declares or needs. Always blocked regardless of
+        network policy configuration."""
+        _init_policy(allowed_domains=["example.com"])  # unrelated to file://
+        route = self._mock_route("file:///etc/passwd")
+        _route_through_network_policy(route)
+        route.abort.assert_called_once_with("blockedbyclient")
+        route.continue_.assert_not_called()
+
+    def test_unrecognized_scheme_fails_closed(self):
+        _init_policy(allowed_domains=["example.com"])
+        route = self._mock_route("ftp://example.com/file")
+        _route_through_network_policy(route)
+        route.abort.assert_called_once_with("blockedbyclient")
+
+    def test_url_with_no_host_is_aborted(self):
+        _init_policy(allowed_domains=["example.com"])
+        route = self._mock_route("https:///path-with-no-host")
+        _route_through_network_policy(route)
+        route.abort.assert_called_once_with("blockedbyclient")

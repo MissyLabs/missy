@@ -1,6 +1,6 @@
 # Build Status
 
-Last updated: 2026-07-10 10:05 UTC
+Last updated: 2026-07-10 10:55 UTC
 
 ## Current Workstream: Validation-Harness Overhaul
 
@@ -609,6 +609,47 @@ including the live `incus_exec` host/guest-confusion reproduction and
 
 Full detail, live-verification transcripts, and residual risk in
 `AUDIT_SECURITY.md`'s new `### SR-1.5` section.
+
+### Completed This Session, continued: SR-1.6 (Playwright browser navigation bypassed the network gateway — crown-jewel finding)
+
+The review's most severe remaining finding: `BrowserNavigateTool` called
+Playwright's `page.goto(url)` directly, with zero routing through
+`PolicyHTTPClient` or the network policy engine — for a product whose
+core claim is "no outbound traffic unless explicitly whitelisted." Two
+compounding gaps: (1) the registry had no dynamic host-checking
+mechanism for network permissions at all (unlike filesystem/shell, which
+at least have a kwarg-name heuristic) — only a static, always-empty
+`allowed_hosts` list; (2) even a top-level check wouldn't have covered
+"every subresource/redirect/fetch inside Firefox," which the review
+explicitly calls out as outside the Python gateway's reach.
+
+Live-reproduced against the real registry+policy stack: with nothing
+allowlisted, `browser_navigate(url="http://169.254.169.254/latest/meta-data/")`
+— the AWS/GCP/Azure metadata-service SSRF target the review names
+explicitly — passed the registry's permission check with zero denial,
+proceeding straight to Playwright (failed only on this sandbox's
+missing `playwright` package, an unrelated pre-existing limitation).
+
+Fixed with two layers: (1) added a `resolve_network_hosts()` hook to
+`BaseTool` (same pattern as SR-1.5's `resolve_shell_command`/
+`resolve_filesystem_targets`), which `BrowserNavigateTool` overrides to
+extract the target host from its `url` kwarg — the registry now checks
+it via `engine.check_network()` before Playwright is ever touched,
+confirmed to now deny the metadata-service URL above with a clean
+`PolicyViolationError`. (2) Registered a Playwright
+`context.route("**/*", ...)` handler on every browser session that gates
+**every** request the browser makes — navigation, redirects,
+subresources, and JS-triggered `fetch()`/XHR via `browser_evaluate` —
+against the same policy engine, aborting (`route.abort("blockedbyclient")`)
+on denial, an uninitialised policy engine, a disallowed scheme, or a
+malformed URL; `data:`/`blob:`/`about:`/extension schemes are always
+allowed through (required for normal rendering), and `file://` is always
+blocked (arbitrary local filesystem access via the browser is a distinct,
+unneeded capability). 18 new tests in `tests/tools/test_browser_tools_gaps.py`.
+
+Full detail, live-verification transcripts, and residual risk (DNS
+TOCTOU, WebRTC, `browser_evaluate` data exfiltration to already-allowed
+hosts) in `AUDIT_SECURITY.md`'s new `### SR-1.6` section.
 
 ### Known Pre-Existing Failure (not caused by this session)
 

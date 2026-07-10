@@ -1,5 +1,45 @@
 # TEST_RESULTS
 
+## Run: 2026-07-10 10:55 UTC — validation-harness overhaul, SR-1.6 (Playwright bypassed the network gateway — crown-jewel finding)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Finding: `BrowserNavigateTool` called Playwright's `page.goto(url)`
+  directly with zero routing through `PolicyHTTPClient` or the network
+  policy engine, unlike every other network-permission tool
+  (`web_fetch`, Discord upload) in the codebase. The registry itself had
+  no dynamic host-checking mechanism for network permissions at all —
+  only a static, always-empty `allowed_hosts` list.
+- Live reproduction (real registry+policy stack, not mocks):
+  `NetworkPolicy()` (nothing allowlisted) →
+  `browser_navigate(url="http://169.254.169.254/latest/meta-data/")` —
+  the cloud-metadata SSRF target the review names explicitly — **passed
+  the registry's permission check** with zero denial, proceeding
+  straight to Playwright (failed only for the unrelated pre-existing
+  reason that this sandbox has no `playwright` package installed).
+  Confirmed fixed: same call now denied with `"Network access denied:
+  '169.254.169.254' is not in an allowed CIDR block"`.
+- Fix (two layers): (1) `BaseTool.resolve_network_hosts()` hook (mirrors
+  SR-1.5's `resolve_shell_command`/`resolve_filesystem_targets`
+  pattern) — `BrowserNavigateTool` overrides it to extract the target
+  host from `url`; the registry checks it before Playwright is ever
+  touched. (2) `context.route("**/*", ...)` interception registered on
+  every browser session, gating navigation, redirects, subresources,
+  and JS-triggered `fetch()`/XHR (via `browser_evaluate`) against the
+  same policy engine — the part of the review's finding ("every
+  subresource/redirect/fetch inside Firefox is outside the Python
+  gateway too") a top-level-only check would have missed.
+- Command: `pytest tests/tools/test_browser_tools_gaps.py tests/tools/ tests/policy/ -q`
+- Result: `2123 passed, 2 skipped` (18 new tests in
+  `tests/tools/test_browser_tools_gaps.py` — see `AUDIT_SECURITY.md`'s
+  `### SR-1.6` section for the full breakdown)
+- Command: `pytest tests/ -q -o faulthandler_timeout=120` with the 3
+  known pre-existing vision failures deselected
+- Result: `20788 passed, 13 skipped, 3 deselected in 446.47s (0:07:26)`
+  — 18 more passing than the prior (SR-1.5) checkpoint's 20770, matching
+  the tests added this checkpoint; no regressions.
+
+---
+
 ## Run: 2026-07-10 10:05 UTC — validation-harness overhaul, SR-1.5 (Incus declaration/dispatch mismatch)
 
 - Branch: `overhaul/missy-validation-20260710-031406`
