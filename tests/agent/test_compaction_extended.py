@@ -24,6 +24,7 @@ from missy.agent.compaction import (
 )
 from missy.agent.context import TokenBudget
 from missy.memory.sqlite_store import ConversationTurn, SQLiteMemoryStore
+from missy.providers.base import BaseProvider, CompletionResponse
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -38,10 +39,13 @@ def memory_store(tmp_path):
 
 @pytest.fixture
 def mock_provider():
-    provider = MagicMock()
-    resp = MagicMock()
-    resp.content = "Mock summary text."
-    provider.chat.return_value = resp
+    # spec=BaseProvider ensures this mock rejects calls to nonexistent
+    # methods (e.g. the historical provider.chat() bug) the same way a
+    # real provider would.
+    provider = MagicMock(spec=BaseProvider)
+    provider.complete.return_value = CompletionResponse(
+        content="Mock summary text.", model="test-model", provider="test", usage={}, raw={}
+    )
     return provider
 
 
@@ -289,7 +293,7 @@ class TestCompactSessionEmptySession:
 
         s = Summarizer(mock_provider)
         compact_session("empty-sess", memory_store, s, fresh_tail_count=16)
-        mock_provider.chat.assert_not_called()
+        mock_provider.complete.assert_not_called()
 
 
 class TestCompactSessionSingleTurn:

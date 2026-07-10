@@ -938,6 +938,108 @@ requirement — do not overwrite, append new entries as work continues.
   per-session-keyed rather than per-runtime?) not addressed by this
   ordering fix.
 
+### SR-3.2 — Summarizer silently never summarizes; three named sub-bugs, one still live
+
+- **Status: fixed** for the sub-bug that was actually still reachable;
+  the other two sub-bugs the review named are **no longer applicable** —
+  independently re-verified against current code rather than assumed
+  fixed, per the prompt's "verify before fixing" requirement.
+- **Reachability found (live-verified):** `Summarizer._call_llm()`
+  (`missy/agent/summarizer.py:176`) called `self._provider.chat(...)`.
+  No provider in this codebase implements `.chat()` —
+  `missy.providers.base.BaseProvider` only defines `complete()` /
+  `complete_with_tools()` (confirmed via
+  `grep -rln "def chat(" missy/providers/` → empty). Live reproduction
+  with a `MagicMock(spec=["complete", "complete_with_tools",
+  "is_available", "name"])` provider (matching the real interface)
+  confirmed both Tier 1 ("normal") and Tier 2 ("aggressive") of
+  `_escalate()` raised `AttributeError` on every call and were silently
+  swallowed by the surrounding `except Exception` blocks, falling
+  through to Tier 3 on every single invocation:
+  `tier_counts: {'normal': 0, 'aggressive': 0, 'fallback': 1}`,
+  `provider.complete.called == False`. This is worse than "summarization
+  is degraded" — Tier 3's fallback truncates the *prompt template
+  string itself* (`prompt[:target_tokens*4]`), so the persisted
+  "summary" actually stored via `compact_session()` →
+  `memory_store.add_summary()` was largely boilerplate instruction text
+  ("Summarize the following conversation excerpt. Preserve: - Key
+  decisions...") rather than any real content from the conversation,
+  with a hard cliff at the token budget. Since `AgentRuntime` wires a
+  real provider into every `Summarizer` (`runtime.py:1945`), this fired
+  on every real compaction pass in production, not just tests.
+  - Root cause of why this went undetected: the existing test suite
+    (`tests/agent/test_summarizer.py`,
+    `tests/agent/test_compaction.py`,
+    `tests/agent/test_compaction_extended.py`) all constructed provider
+    mocks as bare `MagicMock()` with no `spec`. A bare `MagicMock()`
+    auto-vivifies any attribute access, so `provider.chat(...)` silently
+    returned another `MagicMock` instead of raising `AttributeError` —
+    the tests exercised and asserted against a method that doesn't
+    exist on any real provider, and would have kept passing forever
+    regardless of which provider method the implementation called.
+  - The other two sub-bugs the review's text names were independently
+    re-derived as **already resolved / not currently reproducible**,
+    verified by reading the actual current code and tracing actual
+    runtime call paths rather than trusting the review's text at face
+    value:
+    - `_format_turns()`'s `t.timestamp[:19]` string-slicing: confirmed
+      `ConversationTurn.timestamp` (`missy/memory/sqlite_store.py`) is
+      genuinely `str`-typed and populated via
+      `datetime.now(UTC).isoformat()` in `.new()`; the SQLite connection
+      has no `detect_types`/converter registration, so this column
+      returns as a plain `str` on every read path. String-slicing a
+      `str` is valid; no crash reproduces.
+    - `compact_session()` calling `memory_store` methods that don't
+      exist: confirmed `SQLiteMemoryStore` (the production store per
+      FX-B's `_make_memory_store()` fix) implements every method
+      `compact_session()`/`compact_if_needed()` calls —
+      `get_session_turns`, `get_summaries`, `add_summary`,
+      `get_uncompacted_summaries`, `mark_summary_compacted`,
+      `get_session_token_count` — all present and correctly wired.
+      Likely resolved as a side effect of this session's earlier FX-B
+      fix (which moved production off the old JSON `MemoryStore` onto a
+      bare `SQLiteMemoryStore()`), or the review's pinned commit
+      (`abb7015`) predates other unrelated fixes to this file.
+- **Remediation evidence:** `_call_llm()` now calls
+  `self._provider.complete(messages, temperature=temperature,
+  max_tokens=4096)`, matching `BaseProvider.complete(self, messages:
+  list[Message], **kwargs) -> CompletionResponse`'s real signature.
+  Also corrected the `Summarizer.__init__` docstring, which claimed a
+  provider needed "a `chat()` or `complete()` method" (no such
+  alternative ever existed). Live re-verification with the identical
+  `MagicMock(spec=[...])` reproduction setup now shows
+  `provider.complete.called == True`,
+  `tier_counts: {'normal': 1, 'aggressive': 0, 'fallback': 0}`, and a
+  real LLM-generated summary text returned instead of boilerplate
+  truncation. Fixed the same bug-masking pattern at its source in all
+  three affected test files
+  (`tests/agent/test_summarizer.py`,
+  `tests/agent/test_compaction.py`,
+  `tests/agent/test_compaction_extended.py`) by switching every
+  provider mock to `MagicMock(spec=BaseProvider)`, which rejects calls
+  to nonexistent methods exactly like a real provider would, plus a
+  dedicated `FakeProvider.complete()` rename in
+  `tests/agent/test_summarizer_proactive_edges.py` (a hand-written fake,
+  not a `MagicMock`, so it would otherwise now raise `AttributeError`
+  itself post-fix). Added 2 new regression tests to
+  `tests/agent/test_summarizer.py`:
+  `TestSummarizeTurns::test_calls_provider_complete_not_chat` (asserts
+  `provider.complete.called` and `tier_counts["fallback"] == 0` for a
+  normal summarization call) and
+  `TestSummarizeTurns::test_real_provider_interface_rejects_chat_call`
+  (a standalone sanity check that `spec=BaseProvider` genuinely enforces
+  the interface, i.e. that this regression test would itself fail loudly
+  if the interface-conformance guard were ever removed). 129 tests in
+  the 4 affected files pass; `tests/agent/` (4,143 tests) passes in
+  full with no regressions.
+- **Residual risk:** none identified for this specific finding. General
+  note for future work: any new provider-facing code path added to
+  `missy/agent/` should default new test doubles to
+  `MagicMock(spec=BaseProvider)` (or an equivalent interface-constrained
+  fake) rather than a bare `MagicMock()`, to avoid reintroducing this
+  class of "test mocks a nonexistent method and never notices" bug
+  elsewhere.
+
 ---
 
 - Timestamp: 2026-07-09 15:35:26 (raw grep-scan dump below, preserved

@@ -1,6 +1,6 @@
 # Build Status
 
-Last updated: 2026-07-10 15:50 UTC
+Last updated: 2026-07-10 16:15 UTC
 
 ## Current Workstream: Validation-Harness Overhaul
 
@@ -967,6 +967,59 @@ sub-finding — a shared Discord/API runtime's `CostTracker` never resets
 between logically distinct sessions — is not addressed by this ordering
 fix) in `AUDIT_SECURITY.md`'s new `### SR-3.4` section.
 
+### Completed This Session, continued: SR-3.2 (Summarizer called nonexistent provider.chat() — sixteenth critical finding)
+
+Second §3 item. `Summarizer._call_llm()` called
+`self._provider.chat(...)`, but no provider in the codebase implements
+`.chat()` — `BaseProvider` only defines `complete()`/
+`complete_with_tools()`. Live reproduction with a
+`MagicMock(spec=["complete", "complete_with_tools", "is_available",
+"name"])` provider (matching the real interface) confirmed both Tier 1
+and Tier 2 of `_escalate()` raised `AttributeError` on every call,
+silently swallowed, always falling through to Tier 3's deterministic
+truncation (`tier_counts: {'normal': 0, 'aggressive': 0, 'fallback':
+1}`). Worse than degraded output: Tier 3 truncates the *prompt template
+string itself*, so every persisted "summary" in production was mostly
+boilerplate instruction text, not real conversation content — and this
+fired on every compaction pass, since `AgentRuntime` wires a real
+provider into every `Summarizer` (`runtime.py:1945`).
+
+Root cause of non-detection: the existing tests
+(`test_summarizer.py`, `test_compaction.py`,
+`test_compaction_extended.py`) all used bare `MagicMock()` provider
+mocks with no `spec`, which auto-vivify any attribute access —
+`provider.chat(...)` silently returned another mock instead of raising
+`AttributeError`, so the tests exercised a method that doesn't exist on
+any real provider and would have passed forever.
+
+Independently re-verified the review's other two named sub-bugs against
+current code rather than assuming they still apply, per the "verify
+before fixing" discipline used all session: `_format_turns()`'s
+`t.timestamp[:19]` slicing is safe (`ConversationTurn.timestamp` is
+genuinely `str`-typed, no crash reproduces), and `compact_session()`'s
+calls into `memory_store` (`add_summary`, `get_uncompacted_summaries`,
+etc.) are all implemented on the production `SQLiteMemoryStore` —
+likely resolved as a side effect of this session's earlier FX-B fix.
+Both marked "no longer applicable" rather than re-fixed.
+
+Fixed: `_call_llm()` now calls `self._provider.complete(messages,
+temperature=temperature, max_tokens=4096)`, matching
+`BaseProvider.complete()`'s real signature; corrected the misleading
+`Summarizer.__init__` docstring. Live re-verification with the same
+spec'd mock now shows `provider.complete.called == True` and
+`tier_counts: {'normal': 1, ...}` with real summary text returned.
+Fixed the same mock-masking pattern at its source in all three affected
+test files (switched to `MagicMock(spec=BaseProvider)`) plus a
+`FakeProvider.complete()` rename in
+`test_summarizer_proactive_edges.py`. Added 2 new regression tests
+including a standalone sanity check that the interface-conformance
+guard (`spec=BaseProvider`) actually enforces the contract. 129 tests
+across the 4 affected files pass; `tests/agent/` (4,143 tests) passes
+in full with no regressions.
+
+This is the sixteenth independent, confirmed critical finding this
+session. Full detail in `AUDIT_SECURITY.md`'s new `### SR-3.2` section.
+
 ### Known Pre-Existing Failure (not caused by this session)
 
 `tests/vision/test_discovery_capture_sysfs.py::TestCacheTTL::test_cache_valid_within_ttl`
@@ -980,21 +1033,40 @@ scoped to FX-A / voice-command work.
 
 ### Remaining Work (priority order per prompt.md)
 
-1. FX-B: wire real Discord → `SQLiteMemoryStore` persistence + integration
-   tests; rerun `MEM-001`, `MEM-004`, `SEC-PI-004`, `XT-006`.
-2. FX-D/FX-E: independent-grading enforcement beyond the acpx envelope
-   (never trust self-authored scorecards elsewhere in the codebase);
-   core safety instruction for gated-tool-unavailable fallback paths
-   (no bypass suggestions).
-3. FX-C: done-criteria/runtime verification for mid-task claims; fix
-   `memory_describe`/`memory_expand`; preserve structured Incus output.
-4. FX-F: browser diagnostics + disposable sandboxed Playwright test
-   environment.
-5. FX-G: bounded/decomposed long acpx work with per-step deadlines.
-6. SR-1.1 through SR-4.8 security-review remediation
-   (`~/Missy-security-review.md`, pinned at commit `abb7015`).
-7. Full 89-case tool-specific validation backlog.
-8. Pre-existing vision cache-TTL flake (tracked above).
+FX-A through FX-G are all complete (see task list). SR-1.2 through
+SR-3.4 and SR-3.2 are fixed/closed; current remaining priority order:
+
+1. SR-3.3 (retrievable large tool output) and SR-3.5 (atomic concurrent
+   persistence) — both flagged as likely-already-resolved-by-FX-B, need
+   the same "verify against current code" checkpoint SR-3.2 just got
+   rather than assumed new work.
+2. SR-2.1 (least-privilege scheduled jobs) / SR-2.2 (safe proactive
+   triggers, needs real `ApprovalGate` wiring) — product-policy default
+   questions.
+3. SR-1.1 (audit event signing — larger cross-cutting change) and
+   SR-1.9b (DNS TOCTOU — needs connecting to a pinned policy-verified IP
+   rather than re-resolving at connect time).
+4. SR-4.1 through SR-4.8 (dead/unwired features: long-term memory,
+   sub-agents, checkpoint recovery, done-criteria verification,
+   custom-tool loading, OTLP export, MCP execution/approval, provider
+   rotation/fallback claims).
+5. The "harden secondary availability hazards" bullet (circuit-breaker
+   half-open single-probe, MCP RPC desync, malformed scheduler record
+   isolation, webhook HMAC replay protection, EventBus history bound,
+   provider base_url egress widening, image decompression-bomb cap,
+   audit log rotation, git safety-stash ownership).
+6. Full 89-case tool-specific validation backlog (FS-001–DISC-CMD-008),
+   not yet re-run against current code at all this session.
+7. Broader untouched "Product Goal" surface from prompt.md (providers,
+   tool intelligence, Discord/channels, scheduler/memory/sessions,
+   hatching/persona, vision/audio/multimodal, Web TUI, OpenClaw-style
+   architecture, CLI/operations).
+8. Smaller tracked follow-ups: pre-existing vision `CameraDiscovery`
+   cache-TTL flake (3 tests, tracked above); Discord pairing approval
+   endpoint (SR-1.12's fix removed the vulnerable path but no working
+   approval surface exists now); `allowed_roles` Discord guild-policy
+   field never enforced; FX-F bullet 2/4 disposable browser-test
+   environment; FX-G residual acpx process-group timeout kill.
 
 ### Blockers
 

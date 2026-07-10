@@ -72,8 +72,8 @@ class Summarizer:
     """Summarizes conversation chunks using an LLM provider.
 
     Args:
-        provider: A configured provider instance with a ``chat()`` or
-            ``complete()`` method.
+        provider: A configured provider instance implementing
+            ``BaseProvider.complete()`` (see ``missy/providers/base.py``).
         timeout: HTTP timeout in seconds for LLM calls.
     """
 
@@ -173,8 +173,8 @@ class Summarizer:
 
         messages = [Message(role="user", content=prompt)]
         start = time.monotonic()
-        response = self._provider.chat(
-            messages=messages,
+        response = self._provider.complete(
+            messages,
             temperature=temperature,
             max_tokens=4096,
         )

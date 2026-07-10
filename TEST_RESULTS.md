@@ -1,5 +1,58 @@
 # TEST_RESULTS
 
+## Run: 2026-07-10 16:15 UTC — validation-harness overhaul, SR-3.2 (Summarizer called nonexistent provider.chat())
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Finding: `Summarizer._call_llm()` called `self._provider.chat(...)`, a
+  method no provider implements (`BaseProvider` only defines
+  `complete()`/`complete_with_tools()`). Tiers 1 and 2 of `_escalate()`
+  raised `AttributeError` on every call, silently caught, always
+  falling through to Tier 3's deterministic truncation — which
+  truncates the *prompt template string*, so persisted "summaries" were
+  mostly boilerplate, not real content. Root cause of non-detection: all
+  3 affected test files mocked the provider as a bare `MagicMock()`
+  (no `spec`), which auto-vivifies `.chat` instead of raising
+  `AttributeError` like a real provider.
+- Live reproduction: `Summarizer(provider=MagicMock(spec=["complete",
+  "complete_with_tools", "is_available", "name"]))` →
+  `summarize_turns(...)` produced `tier_counts: {'normal': 0,
+  'aggressive': 0, 'fallback': 1}`, `provider.complete.called == False`.
+  Confirmed fixed: identical reproduction now shows `tier_counts:
+  {'normal': 1, 'aggressive': 0, 'fallback': 0}`,
+  `provider.complete.called == True`, real summary text returned.
+- Independently re-verified (not assumed) the other two sub-bugs the
+  security review named: `_format_turns()`'s `timestamp[:19]` slicing is
+  safe against the real `str`-typed `ConversationTurn.timestamp`; every
+  `memory_store` method `compact_session()` calls exists on the
+  production `SQLiteMemoryStore`. Both marked "no longer applicable" —
+  likely resolved as a side effect of the session's earlier FX-B fix.
+- Fix: `_call_llm()` now calls `self._provider.complete(messages,
+  temperature=temperature, max_tokens=4096)`. Corrected the
+  `Summarizer.__init__` docstring's stale `chat()`-or-`complete()`
+  claim. Switched all provider mocks in `test_summarizer.py`,
+  `test_compaction.py`, `test_compaction_extended.py` to
+  `MagicMock(spec=BaseProvider)` so this class of bug can't recur
+  silently; renamed `FakeProvider.chat()` → `.complete()` in
+  `test_summarizer_proactive_edges.py`.
+- Command: `pytest tests/agent/test_summarizer.py
+  tests/agent/test_compaction.py tests/agent/test_compaction_extended.py
+  tests/agent/test_summarizer_proactive_edges.py
+  tests/agent/test_compaction_context_edges.py -v`
+- Result: `129 passed` (2 new tests in
+  `TestSummarizeTurns::test_calls_provider_complete_not_chat` and
+  `::test_real_provider_interface_rejects_chat_call`)
+- Command: `pytest tests/agent/ -q -o faulthandler_timeout=120`
+- Result: `4143 passed, 4 skipped` — no regressions
+- Command: `pytest tests/ -q -o faulthandler_timeout=120`
+- Result: `3 failed, 20860 passed, 13 skipped in 444.29s (0:07:24)` — the
+  3 failures are exactly the known pre-existing `CameraDiscovery`
+  cache-TTL flakes (`tests/vision/test_discovery_capture_sysfs.py::TestCacheTTL::test_cache_valid_within_ttl`,
+  `tests/vision/test_discovery_edge_cases.py::TestPermissionDeniedOnDevice::test_device_that_does_not_exist_is_skipped`,
+  `tests/vision/test_discovery_edge_cases.py::TestRapidAddRemove::test_cached_results_returned_within_ttl`
+  — tracked as task #11, unrelated to this checkpoint's changes). 2 more
+  passing than the prior (SR-3.4) checkpoint's 20858, matching the 2
+  tests added this checkpoint exactly; no regressions.
+
 ## Run: 2026-07-10 15:50 UTC — validation-harness overhaul, SR-3.4 (budget cap checked only after the paid provider call)
 
 - Branch: `overhaul/missy-validation-20260710-031406`

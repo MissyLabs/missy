@@ -46,7 +46,7 @@ class FakeProvider:
         self._idx = 0
         self.calls: list[dict] = []
 
-    def chat(self, messages: Any, temperature: float = 0.2, max_tokens: int = 4096) -> Any:
+    def complete(self, messages: Any, temperature: float = 0.2, max_tokens: int = 4096) -> Any:
         self.calls.append({"messages": messages, "temperature": temperature})
         if self._idx < len(self._responses):
             resp = self._responses[self._idx]

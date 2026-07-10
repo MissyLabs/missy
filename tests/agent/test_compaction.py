@@ -16,6 +16,7 @@ from missy.agent.compaction import (
 )
 from missy.agent.context import TokenBudget
 from missy.memory.sqlite_store import ConversationTurn, SQLiteMemoryStore
+from missy.providers.base import BaseProvider, CompletionResponse
 
 
 @pytest.fixture
@@ -26,10 +27,17 @@ def memory_store():
 
 @pytest.fixture
 def summarizer():
-    provider = MagicMock()
-    resp = MagicMock()
-    resp.content = "Summary of the conversation."
-    provider.chat.return_value = resp
+    # spec=BaseProvider ensures this mock rejects calls to nonexistent
+    # methods (e.g. the historical provider.chat() bug) the same way a
+    # real provider would.
+    provider = MagicMock(spec=BaseProvider)
+    provider.complete.return_value = CompletionResponse(
+        content="Summary of the conversation.",
+        model="test-model",
+        provider="test",
+        usage={},
+        raw={},
+    )
     from missy.agent.summarizer import Summarizer
 
     return Summarizer(provider)
