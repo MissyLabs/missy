@@ -1,4 +1,4 @@
-"""Tests for Discord evolution reaction-based approval workflow.
+"""Tests for the Discord evolution reaction workflow.
 
 Covers:
 - add_evolution_reactions() adds ✅/❌ and tracks the proposal
@@ -6,6 +6,12 @@ Covers:
 - Ignores reactions from the bot itself
 - Ignores reactions on non-tracked messages
 - Ignores non-approve/reject emoji
+- SR-1.2/1.3: a ✅ reaction from any Discord user is refused, not
+  treated as approval -- CodeEvolutionManager.approve() must never be
+  called from this path, since a Discord reaction is not an
+  authenticated human operator. Only `missy evolve approve <id>` run
+  from a terminal on the host can approve a proposal. ❌ (reject) is
+  still available since it only narrows scope.
 - send_to() returns the last message ID
 - Gateway intents include reaction bits
 """
@@ -112,10 +118,15 @@ class TestHandleReaction:
         _run(channel._handle_reaction(data))
         mock_rest.send_message.assert_not_called()
 
-    def test_approve_reaction(self, channel: DiscordChannel, mock_rest: MagicMock):
+    def test_approve_reaction_is_refused_not_approved(
+        self, channel: DiscordChannel, mock_rest: MagicMock
+    ):
+        # SR-1.2/1.3: a Discord user reacting with an emoji must never be
+        # able to approve a code-evolution proposal -- Discord identity is
+        # not an authenticated human operator. mgr.approve() must never be
+        # called from this path.
         channel._pending_evolutions["msg-1"] = "evo-1"
         mock_mgr = MagicMock()
-        mock_mgr.approve.return_value = True
 
         data = {
             "message_id": "msg-1",
@@ -129,7 +140,7 @@ class TestHandleReaction:
         ):
             _run(channel._handle_reaction(data))
 
-        mock_mgr.approve.assert_called_once_with("evo-1")
+        mock_mgr.approve.assert_not_called()
         mock_rest.send_message.assert_called_once()
         sent_content = mock_rest.send_message.call_args.kwargs.get(
             "content", mock_rest.send_message.call_args[1].get("content", "")
@@ -141,7 +152,9 @@ class TestHandleReaction:
                 if len(mock_rest.send_message.call_args[0]) > 1
                 else ""
             )
-        assert "approved" in sent_content.lower()
+        assert "cannot be approved" in sent_content.lower()
+        assert "missy evolve approve" in sent_content
+        # The proposal remains pending -- the reaction had no effect on it.
         assert "msg-1" not in channel._pending_evolutions
 
     def test_reject_reaction(self, channel: DiscordChannel, mock_rest: MagicMock):
@@ -164,10 +177,11 @@ class TestHandleReaction:
         mock_mgr.reject.assert_called_once_with("evo-1")
         assert "msg-1" not in channel._pending_evolutions
 
-    def test_approve_failure_sends_error(self, channel: DiscordChannel, mock_rest: MagicMock):
+    def test_approve_reaction_emits_deny_audit_event(
+        self, channel: DiscordChannel, mock_rest: MagicMock
+    ):
         channel._pending_evolutions["msg-1"] = "evo-1"
         mock_mgr = MagicMock()
-        mock_mgr.approve.return_value = False
 
         data = {
             "message_id": "msg-1",
@@ -175,14 +189,16 @@ class TestHandleReaction:
             "channel_id": "ch-1",
             "emoji": {"name": "\u2705"},
         }
-        with patch(
-            "missy.agent.code_evolution.CodeEvolutionManager",
-            return_value=mock_mgr,
+        with (
+            patch("missy.agent.code_evolution.CodeEvolutionManager", return_value=mock_mgr),
+            patch.object(channel, "_emit_audit") as mock_audit,
         ):
             _run(channel._handle_reaction(data))
 
-        # Should still send a message (error message)
-        mock_rest.send_message.assert_called_once()
+        mock_audit.assert_called_once()
+        call_args = mock_audit.call_args.args
+        assert call_args[0] == "discord.evolution.approve_denied"
+        assert call_args[1] == "deny"
 
 
 # ---------------------------------------------------------------------------

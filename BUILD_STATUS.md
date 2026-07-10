@@ -1,6 +1,6 @@
 # Build Status
 
-Last updated: 2026-07-10 04:20 UTC
+Last updated: 2026-07-10 05:10 UTC
 
 ## Current Workstream: Validation-Harness Overhaul
 
@@ -202,6 +202,90 @@ Rerun per prompt.md: `MEM-001`, `MEM-004`, `SEC-PI-004`, `XT-006` still
 need live/harness re-validation against real seeded content (not yet
 attempted this session — requires either a live acpx delegate run or a
 scripted harness replay).
+
+### Completed This Session, continued: FX-E + SR-1.2/1.3 (critical: unauthenticated code-evolution self-approval)
+
+While investigating FX-E ("never offer approval/policy bypasses when a
+gated tool is unavailable"), found a **critical, live, actively-exploitable
+vulnerability**, not just the narrower FX-E symptom: Missy's own default
+system prompt instructed the agent to approve and apply its own code
+changes, and nothing in the code path stopped it.
+
+**Root cause 1 — the agent-facing tool had no gate at all.**
+`missy/tools/builtin/code_evolve.py`'s `CodeEvolveTool` exposed
+`approve`, `apply`, and `rollback` actions directly to the model's
+tool-calling loop. `CodeEvolutionManager.approve()`/`apply()`/
+`rollback()` (`missy/agent/code_evolution.py`) perform **no
+authentication of any kind** — they trust every caller unconditionally.
+Worse, the default `AgentConfig.system_prompt`
+(`missy/agent/runtime.py`) literally instructed the model: *"2)
+code_evolve(action='propose', ...) 3) code_evolve(action='approve',
+...) 4) code_evolve(action='apply', ...) — runs tests, commits,
+restarts."* — actively teaching the exact behavior SR-1.2 prohibits: *"A
+model ... must never approve its own code change."* Since `code_evolve`
+is in the Discord-allowed tool group, this was reachable from ordinary
+conversation.
+
+**Root cause 2 — a second, independent path with the same flaw.**
+`missy/channels/discord/channel.py`'s `_handle_reaction()` implements a
+✅/❌ emoji-reaction workflow on evolution-proposal messages. It called
+`CodeEvolutionManager().approve(proposal_id)` directly for **any**
+Discord user who reacted with ✅ — no admin/owner allowlist check
+existed at all (SR-1.2 explicitly names "Discord user" as an entity
+that must never approve its own — or anyone's — code change). This is a
+separate, independently-discovered instance of the identical trust
+failure via a different ingress.
+
+**Fix (interim, matching the actual local-first single-operator trust
+boundary this codebase already relies on elsewhere):**
+- `CodeEvolveTool` no longer exposes `approve`/`apply`/`rollback` to
+  the model at all — those actions are refused unconditionally, before
+  `CodeEvolutionManager` is even constructed, with a clear message
+  pointing to the real path (`missy evolve approve/apply/rollback <id>`
+  from a terminal on the host). `propose`, `propose_multi`, `list`,
+  `show`, `reject` remain available (none of them mutate source or
+  restart the process). Removed the now-dead `_approve`/`_apply`/
+  `_rollback` handler methods.
+- Rewrote the default system prompt's self-evolution instructions:
+  propose, then stop and tell the user/operator the proposal needs
+  human review — explicit "never offer a bypass" instruction added.
+- Added a general FX-E safety instruction to the default system prompt:
+  when any gated tool is unavailable/denied, report the limitation and
+  stop; never suggest raw file writes, shell commands, alternate
+  providers, or manual storage edits as a substitute.
+- `_handle_reaction()`'s ✅ branch no longer calls `mgr.approve()`. It
+  replies that Discord cannot approve evolutions and directs the user to
+  the CLI, and emits a `discord.evolution.approve_denied` (`deny`)
+  audit event instead of `discord.evolution.approved` (`allow`). ❌
+  (reject) is unchanged — safe, since it only narrows scope.
+- The legitimate human-operator path (`missy evolve approve/apply/
+  rollback` in `missy/cli/main.py`, calling `CodeEvolutionManager`
+  directly) is untouched — it already requires an interactive shell
+  session on the host, the same trust boundary every other local-first
+  Missy control surface relies on. No Web API evolve-approval route
+  exists yet; CLAUDE.md's Web TUI docs should be checked for accuracy
+  here in a future session.
+- Updated ~15 existing tests across `tests/tools/test_code_evolve.py`,
+  `tests/tools/test_code_evolve_gap_coverage.py`,
+  `tests/security/test_self_create_tool_script_validation.py`, and
+  `tests/channels/test_discord_evolution_reactions.py` that exercised
+  the now-removed tool-level approve/apply/rollback behavior. Added new
+  tests asserting the refusal (including that `CodeEvolutionManager` is
+  never constructed for those actions from the tool, and that Discord
+  approve reactions emit a deny audit event without ever calling
+  `mgr.approve()`).
+
+**Not a complete SR-1.2/1.3 fix.** This closes the two live bypass
+paths but does not yet implement the full ask: "unforgeable,
+proposal-bound, expiring approval artifact," disposable-sandbox
+validation before promotion, or an authenticated Web API approval
+route. `CodeEvolutionManager.approve()`/`apply()`/`rollback()`
+themselves still perform zero authentication — the CLI's own terminal
+session is the only thing standing between "authenticated" and "not."
+Tracked as remaining SR-1.2/1.3 work.
+
+Rerun per prompt.md: `SELF-002` (rerun after FX-A too, per the FX-A
+rerun list) should be re-validated against this fix.
 
 ### Known Pre-Existing Failure (not caused by this session)
 

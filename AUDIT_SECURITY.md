@@ -1,6 +1,77 @@
 # AUDIT_SECURITY
 
-- Timestamp: 2026-07-09 15:35:26
+## Validation-harness overhaul findings (curated)
+
+Findings from the 2026-07-09/10 validation-harness/security-review
+overhaul (`~/missy-loops/prompt.md`, `~/Missy-security-review.md` pinned
+at commit `abb7015`). Branch:
+`overhaul/missy-validation-20260710-031406`. Tracked by finding ID,
+current reachability, and remediation evidence per the prompt's
+requirement — do not overwrite, append new entries as work continues.
+
+### SR-1.2 / SR-1.3 — Unauthenticated code-evolution self-approval
+
+- **Status: partially fixed (interim), not fully remediated.**
+- **Reachability found:** live and exploitable via two independent
+  paths as of commit `eb04006`/`327595b` (this branch, before the fix
+  in commit below):
+  1. `missy/tools/builtin/code_evolve.py`'s agent-facing `code_evolve`
+     tool exposed `approve`/`apply`/`rollback` actions directly to the
+     model's tool-calling loop, with no gate. Worse, the default system
+     prompt (`missy/agent/runtime.py::AgentConfig.system_prompt`)
+     explicitly instructed the model to call
+     `code_evolve(action='approve', ...)` then `action='apply'` as
+     steps 3-4 of its own "self-evolution workflow" — actively teaching
+     self-approval.
+  2. `missy/channels/discord/channel.py::_handle_reaction()` let *any*
+     Discord user who reacted ✅ on a proposal message trigger
+     `CodeEvolutionManager().approve(proposal_id)` directly, with zero
+     admin/owner check.
+  3. `CodeEvolutionManager.approve()`/`apply()`/`rollback()`
+     (`missy/agent/code_evolution.py`) themselves perform **no
+     authentication of any kind** — every one of the above paths worked
+     because nothing downstream stopped them either.
+- **Remediation evidence (commit on this branch, see git log for
+  message "FX-E / SR-1.2/1.3: ..."):**
+  - `CodeEvolveTool` no longer dispatches `approve`/`apply`/`rollback`;
+    those actions are refused unconditionally before
+    `CodeEvolutionManager` is constructed. Test:
+    `tests/tools/test_code_evolve.py::TestHumanOperatorOnlyActionsRefused`
+    and `tests/tools/test_code_evolve_gap_coverage.py::TestHumanOperatorOnlyActionsNeverConstructManager`
+    assert the manager class is never called.
+  - Default system prompt rewritten: propose-then-stop, plus a general
+    "never bypass a gate" instruction.
+  - `_handle_reaction()`'s approve branch no longer calls
+    `mgr.approve()`; it refuses and emits
+    `discord.evolution.approve_denied` (`deny`). Test:
+    `tests/channels/test_discord_evolution_reactions.py::TestHandleReaction::test_approve_reaction_is_refused_not_approved`
+    and `::test_approve_reaction_emits_deny_audit_event`.
+- **Residual risk (not yet fixed):** `CodeEvolutionManager.approve()`/
+  `apply()`/`rollback()` still perform zero authentication of their
+  own. The only real trust boundary is that `missy evolve
+  approve/apply/rollback` (the CLI, `missy/cli/main.py`) requires an
+  interactive shell session on the host. There is no "unforgeable,
+  proposal-bound, expiring approval artifact" as SR-1.2 asks for, no
+  disposable-sandbox validation before promotion (SR-1.3), and no
+  authenticated Web API route (none exists yet, so nothing to fix there
+  today — but if one is added it must not reuse this trust gap). If any
+  future code path constructs `CodeEvolutionManager` directly (bypassing
+  the CLI) without its own authentication check, the same class of bug
+  reappears. Do not treat this finding as closed.
+- **Related, not yet checked this session:** `channel.py` has a
+  DM-pairing approval flow with a comment reading "admin only —
+  simplified" (SR-1.12). Given this session found the *identical* bug
+  pattern (unauthenticated Discord-user approval of a sensitive action)
+  in the evolution-reaction handler, the pairing handler should be
+  audited next with high priority — it may have the same flaw.
+
+---
+
+- Timestamp: 2026-07-09 15:35:26 (raw grep-scan dump below, preserved
+  for history; unrelated to the curated findings above — note it was
+  captured from a different working tree path, `~/missy-loops/missy/`,
+  and largely covers the prior "tool intelligence" overhaul, not this
+  session's work)
 
 ## Expected common security and operations docs
 - present: README.md

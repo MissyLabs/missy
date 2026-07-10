@@ -1,14 +1,14 @@
 """Gap coverage tests for missy/tools/builtin/code_evolve.py.
 
 Targets remaining uncovered lines:
-  165-166   : execute() — CodeEvolutionManager init raises
-  247       : _propose_multi — ValueError from mgr.propose_multi
-  285-286   : _propose_multi — ValueError already covered, ensure it hits line 285-286
-  340       : _show — prop.diffs has description (so "Why:" line is appended)
-  345       : _show — prop.error_pattern is set
-  348       : _show — prop.test_output is set
-  390       : _approve — mgr.approve returns False
-  460-466   : _apply — success path with restart_process call; apply returns failure dict
+  execute() — CodeEvolutionManager init raises
+  _propose_multi — ValueError from mgr.propose_multi
+  _show — prop.diffs has description (so "Why:" line is appended)
+  _show — prop.error_pattern is set
+  _show — prop.test_output is set
+
+Also covers the SR-1.2/1.3 refusal path for approve/apply/rollback
+(CodeEvolutionManager must never be constructed for those actions).
 """
 
 from __future__ import annotations
@@ -241,96 +241,28 @@ class TestShowWithOptionalFields:
 
 
 # ---------------------------------------------------------------------------
-# _approve — mgr.approve returns False  (line 390)
+# approve / apply / rollback — SR-1.2/1.3: unconditionally refused before
+# CodeEvolutionManager is ever constructed. The old _approve/_apply/
+# _rollback handler methods these tests used to exercise were removed
+# entirely; a model must never approve or apply its own code change.
 # ---------------------------------------------------------------------------
 
 
-class TestApproveReturnsFalse:
-    def test_approve_returns_false_when_manager_approve_fails(self, tool, tmp_repo, store_path):
-        """Line 390: mgr.approve(proposal_id) returns False → failure ToolResult."""
-
-        mgr = MagicMock()
-        mock_prop = MagicMock()
-        # Status must have a .value attribute equal to "proposed".
-        mock_prop.status = MagicMock()
-        mock_prop.status.value = "proposed"
-        mgr.get.return_value = mock_prop
-        mgr.approve.return_value = False  # simulate failure
-
-        with patch(
-            "missy.agent.code_evolution.CodeEvolutionManager",
-            return_value=mgr,
-        ):
+class TestHumanOperatorOnlyActionsNeverConstructManager:
+    def test_approve_never_constructs_manager(self, tool, tmp_repo, store_path):
+        with patch("missy.agent.code_evolution.CodeEvolutionManager") as mock_cls:
             result = tool.execute(action="approve", proposal_id="pid-123")
-
         assert not result.success
-        assert "Failed to approve" in result.error
+        mock_cls.assert_not_called()
 
-
-# ---------------------------------------------------------------------------
-# _apply — apply returns failure dict; apply ValueError  (lines 460-466)
-# ---------------------------------------------------------------------------
-
-
-class TestApplyFailurePaths:
-    def test_apply_failure_dict_returns_failure_result(self, tool, tmp_repo, store_path):
-        """Lines 460-463: mgr.apply returns {'success': False, 'message': '...'} → failure."""
-        from missy.agent.code_evolution import EvolutionStatus
-
-        mock_mgr = MagicMock()
-        mock_prop = MagicMock()
-        # Status must equal the string "approved" for the inequality check to pass.
-        mock_prop.status = EvolutionStatus.APPROVED
-        mock_mgr.get.return_value = mock_prop
-        mock_mgr.apply.return_value = {"success": False, "message": "Tests failed"}
-
-        with patch(
-            "missy.agent.code_evolution.CodeEvolutionManager",
-            return_value=mock_mgr,
-        ):
+    def test_apply_never_constructs_manager(self, tool, tmp_repo, store_path):
+        with patch("missy.agent.code_evolution.CodeEvolutionManager") as mock_cls:
             result = tool.execute(action="apply", proposal_id="pid-abc")
-
         assert not result.success
-        assert "Tests failed" in result.error
+        mock_cls.assert_not_called()
 
-    def test_apply_value_error_returns_error_result(self, tool, tmp_repo, store_path):
-        """Lines 465-466: mgr.apply raises ValueError → ToolResult error."""
-        from missy.agent.code_evolution import EvolutionStatus
-
-        mock_mgr = MagicMock()
-        mock_prop = MagicMock()
-        mock_prop.status = EvolutionStatus.APPROVED
-        mock_mgr.get.return_value = mock_prop
-        mock_mgr.apply.side_effect = ValueError("proposal not in approved state")
-
-        with patch(
-            "missy.agent.code_evolution.CodeEvolutionManager",
-            return_value=mock_mgr,
-        ):
-            result = tool.execute(action="apply", proposal_id="pid-abc")
-
+    def test_rollback_never_constructs_manager(self, tool, tmp_repo, store_path):
+        with patch("missy.agent.code_evolution.CodeEvolutionManager") as mock_cls:
+            result = tool.execute(action="rollback", proposal_id="pid-abc")
         assert not result.success
-        assert "proposal not in approved state" in result.error
-
-    def test_apply_success_calls_restart_process(self, tool, tmp_repo, store_path):
-        """Lines 453-459: apply succeeds → restart_process called, output contains message."""
-        from missy.agent.code_evolution import EvolutionStatus
-
-        mock_mgr = MagicMock()
-        mock_prop = MagicMock()
-        mock_prop.status = EvolutionStatus.APPROVED
-        mock_mgr.get.return_value = mock_prop
-        mock_mgr.apply.return_value = {"success": True, "message": "Applied and committed sha123"}
-
-        with (
-            patch(
-                "missy.agent.code_evolution.CodeEvolutionManager",
-                return_value=mock_mgr,
-            ),
-            patch("missy.agent.code_evolution.restart_process") as mock_restart,
-        ):
-            result = tool.execute(action="apply", proposal_id="pid-abc")
-
-        assert result.success
-        assert "Restarting" in result.output
-        mock_restart.assert_called_once()
+        mock_cls.assert_not_called()

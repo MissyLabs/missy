@@ -8,40 +8,41 @@ Draft PR: https://github.com/MissyLabs/missy/pull/31
 ## Changed
 
 1. Preserved and hardened the existing `voice_commands.py` fix, adding
-   regression tests that caught and fixed a real trailing-comma leak bug
-   in channel-name parsing.
+   regression tests that caught and fixed a real trailing-comma leak bug.
 2. **FX-A** (first slice): forced the acpx delegate provider through
-   Missy's structured tool protocol — zero native tools
-   (`--allowed-tools ""`, verified against the actual pinned
-   `acpx@0.3.1` source), fail-closed permissions
-   (`--non-interactive-permissions deny`), a fail-closed `is_available()`
-   health check, an isolated sandbox cwd, config-can't-override
-   sanitization of security flags, a versioned delegation envelope, and
-   defensive stripping of leaked transcript markers (fixes the exact
-   `DISC-CMD-006` failure shape).
+   Missy's structured tool protocol — zero native tools, fail-closed
+   permissions, isolated sandbox cwd, config-can't-override sanitization,
+   a versioned delegation envelope, and defensive stripping of leaked
+   transcript markers.
 3. **FX-B** (root cause fixed): `AgentRuntime._make_memory_store()` was
-   constructing the JSON-file-backed `MemoryStore` (`~/.missy/memory.json`)
-   instead of the SQLite backend (`~/.missy/memory.db`) that every other
-   production consumer (memory tools, compaction, large-content
-   retrieval, hatching, vision memory, this validation harness) already
-   assumes. This is the direct explanation for "only 3 rows in
-   memory.db despite 937 agent.run.start events." Fixed to use
-   `SQLiteMemoryStore`, fixed `_save_turn()`'s call convention (object,
-   not kwargs), made the user turn persist *before* the provider call
-   (so a crashing delegate no longer erases the incoming request),
-   upgraded silent-swallow logging to a warning + new
-   `memory.persist_failed` audit event, and found/fixed the identical
-   bug independently in `VisionMemoryBridge.store_observation()` (vision
-   observations were never actually being persisted either). Added a
-   real integration test (`tests/integration/test_discord_memory_persistence.py`)
-   driving `AgentRuntime.run()` the same way Discord's channel handler
-   does, against a real on-disk SQLite store — no memory-layer mocking.
+   using the wrong memory backend (JSON file instead of SQLite),
+   explaining "only 3 rows despite 937 agent.run.start events." Fixed
+   the store class, the `_save_turn()` call convention, made the user
+   turn persist before the provider call, and found/fixed the identical
+   bug independently in `VisionMemoryBridge`.
+4. **FX-E + SR-1.2/1.3 (critical)**: found and fixed a live,
+   unauthenticated code-self-approval vulnerability, not just the
+   narrower "don't suggest bypasses" symptom FX-E describes. Missy's own
+   default system prompt instructed the agent to approve and apply its
+   own code changes via `code_evolve`, and `CodeEvolutionManager.approve()`/
+   `apply()`/`rollback()` perform zero authentication — they trusted any
+   caller. A second, independent instance of the same flaw existed in
+   Discord's ✅/❌ reaction-based evolution approval handler, which let
+   *any* Discord user approve a code change with no admin/owner check at
+   all. Fixed both: the agent-facing `code_evolve` tool no longer exposes
+   approve/apply/rollback (refused before `CodeEvolutionManager` is even
+   constructed); the default system prompt no longer instructs
+   self-approval and gained an explicit "never bypass a gate" rule;
+   Discord's approve-reaction path now refuses and emits a deny audit
+   event instead of calling `mgr.approve()`. The legitimate path (`missy
+   evolve approve/apply/rollback` CLI, requiring a real terminal session
+   on the host) is untouched.
 
 ## Verification
 
 ```text
-python3 -m pytest tests/integration/test_discord_memory_persistence.py tests/agent/test_coverage_gaps.py tests/vision/ -q
-3041 passed, 3 failed (pre-existing, unrelated), 0 new failures
+python3 -m pytest tests/tools/ tests/agent/ tests/channels/ tests/security/ -q
+9530 passed, 6 skipped
 ```
 
 ```text
@@ -49,39 +50,39 @@ python3 -m pytest tests/ -q -o faulthandler_timeout=120 \
   --deselect tests/vision/test_discovery_capture_sysfs.py::TestCacheTTL::test_cache_valid_within_ttl \
   --deselect tests/vision/test_discovery_edge_cases.py::TestPermissionDeniedOnDevice::test_device_that_does_not_exist_is_skipped \
   --deselect tests/vision/test_discovery_edge_cases.py::TestRapidAddRemove::test_cached_results_returned_within_ttl
-20701 passed, 13 skipped, 3 deselected in 452.13s (0:07:32)
+20686 passed, 13 skipped, 3 deselected in 447.60s (0:07:27)
 ```
 
-Full detail (root-cause writeups, all evidence) in `BUILD_STATUS.md` and
-`TEST_RESULTS.md`.
+Full detail in `BUILD_STATUS.md` and `TEST_RESULTS.md`.
 
 ## Remains
 
 - FX-A bullet 6: live end-to-end proof across tool categories (not yet
-  attempted — needs a real or scripted acpx delegate invocation).
-- FX-B loose ends: `run_stream()`'s CLI-only streaming path still saves
-  both turns post-completion rather than user-first; redaction/secret
-  scrubbing before persistence not yet covered (overlaps SR-1.10).
-  `MEM-001`, `MEM-004`, `SEC-PI-004`, `XT-006` still need live harness
-  re-validation.
-- FX-C through FX-G not yet started.
-- SR-1.1 through SR-4.8 security-review remediation not yet started —
-  note that SR-3.1 ("one production memory backend") and part of SR-3.2/
-  SR-3.3 are now substantially addressed by the FX-B fix; still needs
-  explicit re-verification and write-up against the security review's
-  own finding IDs.
+  attempted).
+- FX-B loose ends (see prior session summary, preserved in git history).
+- SR-1.2/1.3 is **not fully solved** — this session closed the two live
+  bypass paths (agent tool, Discord reactions) but
+  `CodeEvolutionManager.approve()`/`apply()`/`rollback()` still perform
+  zero authentication themselves. A genuinely "unforgeable,
+  proposal-bound, expiring approval artifact" and disposable-sandbox
+  validation before promotion are still missing. The CLI's terminal
+  session is the only real trust boundary today.
+- FX-C, FX-D (remaining, beyond what the FX-A envelope covers), FX-F,
+  FX-G not yet started.
+- SR-1.1, SR-1.4 through SR-4.8 not yet started.
 - Full 89-case tool-specific validation backlog not yet re-run.
 - Pre-existing vision `CameraDiscovery` cache-TTL flake (3 tests,
-  unrelated to this session, tracked separately).
+  tracked separately, unrelated to this session).
 
 ## First Next Step
 
-Two good options, pick based on what's available: (a) if a safe way to
-exercise a real/scripted acpx delegate call exists, prioritize proving
-FX-A bullet 6 end-to-end since it unblocks the largest failure cluster;
-otherwise (b) continue with FX-D/FX-E (independent-grading enforcement
-and gated-tool-bypass refusal) since they're implementation-only (no
-live delegate needed) and partially already started via the FX-A
-envelope work. After either, map SR-3.1/3.2/3.3 findings in
-`~/Missy-security-review.md` explicitly onto the FX-B fix just landed
-and update `AUDIT_SECURITY.md`.
+Given the severity of what FX-E investigation turned up, do a focused
+sweep of the remaining SR-1.x findings for the same class of bug
+(unauthenticated privileged action reachable from the agent's own tool
+loop or from an unauthenticated channel like Discord) before moving on
+to FX-C/F/G — SR-1.5 (Incus policy composition), SR-1.6 (browser network
+enforcement), SR-1.12 (Discord pairing self-approval — the pairing
+handler's "admin only — simplified" comment in `channel.py` is worth
+checking immediately, it may have the identical flaw), and SR-1.13
+(uniform Discord ingress authorization) are the most likely candidates
+based on this session's findings.

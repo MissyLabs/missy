@@ -1324,28 +1324,30 @@ class DiscordChannel(BaseChannel):
             mgr = CodeEvolutionManager()
 
             if action == "approve":
-                if mgr.approve(proposal_id):
-                    self._rest.send_message(
-                        channel_id,
-                        f"\u2705 Evolution **{proposal_id}** approved by <@{user_id}>.\n"
-                        f"Use `code_evolve(action='apply', proposal_id='{proposal_id}')` "
-                        f"to apply the change.",
-                    )
-                    self._emit_audit(
-                        "discord.evolution.approved",
-                        "allow",
-                        {
-                            "proposal_id": proposal_id,
-                            "user_id": user_id,
-                            "channel_id": channel_id,
-                        },
-                    )
-                else:
-                    self._rest.send_message(
-                        channel_id,
-                        f"Could not approve evolution **{proposal_id}** — "
-                        f"it may already be approved or in an invalid state.",
-                    )
+                # SR-1.2/1.3: a Discord user reacting with an emoji is not an
+                # authenticated human operator -- Discord identity is soft,
+                # and any user able to see and react to this message could
+                # otherwise approve a change to Missy's own source code with
+                # no authentication at all. Approval is only available via
+                # `missy evolve approve <id>` run from a terminal session on
+                # the host. Do not call mgr.approve() here.
+                self._rest.send_message(
+                    channel_id,
+                    f"\u26a0\ufe0f Evolution **{proposal_id}** cannot be approved from "
+                    "Discord. An operator must run "
+                    f"`missy evolve approve {proposal_id}` from a terminal on "
+                    f"the host, then `missy evolve apply {proposal_id}` to apply it.",
+                )
+                self._emit_audit(
+                    "discord.evolution.approve_denied",
+                    "deny",
+                    {
+                        "proposal_id": proposal_id,
+                        "user_id": user_id,
+                        "channel_id": channel_id,
+                        "reason": "discord_reaction_cannot_approve_code_evolution",
+                    },
+                )
             else:
                 if mgr.reject(proposal_id):
                     self._rest.send_message(

@@ -1,5 +1,31 @@
 # TEST_RESULTS
 
+## Run: 2026-07-10 05:10 UTC — validation-harness overhaul, FX-E + SR-1.2/1.3 (critical)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Finding: live, unauthenticated code-self-approval vulnerability.
+  Default system prompt instructed the agent to approve/apply its own
+  code changes via `code_evolve`; `CodeEvolutionManager.approve()`/
+  `apply()`/`rollback()` perform no authentication. A second,
+  independent instance existed in Discord's ✅ reaction handler (any
+  Discord user could approve, no admin check).
+- Command: `pytest tests/tools/ tests/agent/ tests/channels/ tests/security/ -q`
+- Result: `9530 passed, 6 skipped`
+- Command: `pytest tests/ -q -o faulthandler_timeout=120` with the 3
+  known pre-existing vision failures deselected
+- Result: `20686 passed, 13 skipped, 3 deselected in 447.60s (0:07:27)`
+- Updated ~15 tests across `tests/tools/test_code_evolve.py`,
+  `tests/tools/test_code_evolve_gap_coverage.py`,
+  `tests/security/test_self_create_tool_script_validation.py`, and
+  `tests/channels/test_discord_evolution_reactions.py` from the old
+  (now-removed) tool-level approve/apply/rollback behavior to the new
+  refusal contract. New assertions confirm `CodeEvolutionManager` is
+  never constructed by the tool for approve/apply/rollback, and that
+  Discord's approve-reaction path emits a `deny` audit event without
+  ever calling `mgr.approve()`.
+
+---
+
 ## Run: 2026-07-10 04:20 UTC — validation-harness overhaul, FX-B (memory backend fix)
 
 - Branch: `overhaul/missy-validation-20260710-031406`

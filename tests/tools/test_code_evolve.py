@@ -89,7 +89,7 @@ class TestPropose:
             )
         assert result.success
         assert "Evolution proposed" in result.output
-        assert "code_evolve(action='approve'" in result.output
+        assert "missy evolve approve" in result.output
 
     def test_propose_missing_fields(self, tool):
         result = tool.execute(action="propose", title="T")
@@ -224,40 +224,59 @@ class TestShow:
 
 
 # ---------------------------------------------------------------------------
-# approve
+# approve / apply / rollback — SR-1.2/1.3: refused unconditionally.
+#
+# A model must never approve or apply its own code change. These actions
+# are only reachable through the human-operator `missy evolve` CLI
+# (missy/cli/main.py), which calls CodeEvolutionManager directly and does
+# not go through this tool at all. No CodeEvolutionManager patching is
+# needed for these tests since the tool refuses before ever constructing
+# a manager.
 # ---------------------------------------------------------------------------
 
 
-class TestApprove:
-    def test_approve_missing_id(self, tool):
+class TestHumanOperatorOnlyActionsRefused:
+    def test_approve_refused_without_touching_manager(self, tool):
+        with patch("missy.agent.code_evolution.CodeEvolutionManager") as mock_mgr_cls:
+            result = tool.execute(action="approve", proposal_id="abc123")
+        assert not result.success
+        assert "authenticated human operator" in result.error
+        assert "missy evolve approve abc123" in result.error
+        mock_mgr_cls.assert_not_called()
+
+    def test_apply_refused_without_touching_manager(self, tool):
+        with patch("missy.agent.code_evolution.CodeEvolutionManager") as mock_mgr_cls:
+            result = tool.execute(action="apply", proposal_id="abc123")
+        assert not result.success
+        assert "authenticated human operator" in result.error
+        assert "missy evolve apply abc123" in result.error
+        mock_mgr_cls.assert_not_called()
+
+    def test_rollback_refused_without_touching_manager(self, tool):
+        with patch("missy.agent.code_evolution.CodeEvolutionManager") as mock_mgr_cls:
+            result = tool.execute(action="rollback", proposal_id="abc123")
+        assert not result.success
+        assert "authenticated human operator" in result.error
+        assert "missy evolve rollback abc123" in result.error
+        mock_mgr_cls.assert_not_called()
+
+    def test_approve_refused_even_without_proposal_id(self, tool):
         result = tool.execute(action="approve")
         assert not result.success
-        assert "proposal_id is required" in result.error
+        assert "authenticated human operator" in result.error
 
-    def test_approve_not_found(self, tool, tmp_repo, store_path):
-        with _patch_mgr(store_path, str(tmp_repo)):
-            result = tool.execute(action="approve", proposal_id="nope")
+    def test_refusal_does_not_suggest_bypass(self, tool):
+        result = tool.execute(action="apply", proposal_id="xyz")
         assert not result.success
+        assert "do not write" in result.error.lower()
 
-    def test_approve_success(self, tool, tmp_repo, store_path):
-        mgr = _make_mgr(store_path, str(tmp_repo))
-        prop = mgr.propose(
-            title="Approve me",
-            description="D",
-            file_path="missy/example.py",
-            original_code="return 'hello'",
-            proposed_code="return 'hi'",
-        )
-        with patch(
-            "missy.agent.code_evolution.CodeEvolutionManager",
-            return_value=mgr,
-        ):
-            result = tool.execute(action="approve", proposal_id=prop.id)
-        assert result.success
-        assert "approved" in result.output
-        assert "code_evolve(action='apply'" in result.output
-
-    def test_approve_already_approved(self, tool, tmp_repo, store_path):
+    def test_real_manager_approve_still_has_no_gate_itself(self, tmp_repo, store_path):
+        # Documents the actual trust boundary: CodeEvolutionManager.approve()
+        # performs no authentication of its own -- the gate lives entirely
+        # in the tool's refusal to expose these actions. The `missy evolve`
+        # CLI is trusted because it requires a human's own shell session on
+        # the host, the same boundary every other local-first Missy control
+        # surface relies on.
         mgr = _make_mgr(store_path, str(tmp_repo))
         prop = mgr.propose(
             title="T",
@@ -266,14 +285,7 @@ class TestApprove:
             original_code="return 'hello'",
             proposed_code="return 'hi'",
         )
-        mgr.approve(prop.id)
-        with patch(
-            "missy.agent.code_evolution.CodeEvolutionManager",
-            return_value=mgr,
-        ):
-            result = tool.execute(action="approve", proposal_id=prop.id)
-        assert not result.success
-        assert "approved" in result.error
+        assert mgr.approve(prop.id) is True
 
 
 # ---------------------------------------------------------------------------
@@ -308,23 +320,10 @@ class TestReject:
             result = tool.execute(action="reject", proposal_id="nope")
         assert not result.success
 
-
-# ---------------------------------------------------------------------------
-# apply
-# ---------------------------------------------------------------------------
-
-
-class TestApply:
-    def test_apply_missing_id(self, tool):
-        result = tool.execute(action="apply")
-        assert not result.success
-
-    def test_apply_not_found(self, tool, tmp_repo, store_path):
-        with _patch_mgr(store_path, str(tmp_repo)):
-            result = tool.execute(action="apply", proposal_id="nope")
-        assert not result.success
-
-    def test_apply_not_approved(self, tool, tmp_repo, store_path):
+    def test_reject_is_not_a_human_operator_only_action(self, tool, tmp_repo, store_path):
+        # reject only narrows scope (marks a proposal rejected); it does
+        # not mutate source or restart the process, so it stays available
+        # to the agent unlike approve/apply/rollback.
         mgr = _make_mgr(store_path, str(tmp_repo))
         prop = mgr.propose(
             title="T",
@@ -333,87 +332,9 @@ class TestApply:
             original_code="return 'hello'",
             proposed_code="return 'hi'",
         )
-        with patch(
-            "missy.agent.code_evolution.CodeEvolutionManager",
-            return_value=mgr,
-        ):
-            result = tool.execute(action="apply", proposal_id=prop.id)
-        assert not result.success
-        assert "Approve it first" in result.error
-
-    def test_apply_approved_success(self, tool, tmp_repo, store_path):
-        mgr = _make_mgr(store_path, str(tmp_repo))
-        prop = mgr.propose(
-            title="T",
-            description="D",
-            file_path="missy/example.py",
-            original_code="return 'hello'",
-            proposed_code="return 'hi'",
-        )
-        mgr.approve(prop.id)
-        with (
-            patch(
-                "missy.agent.code_evolution.CodeEvolutionManager",
-                return_value=mgr,
-            ),
-            patch(
-                "missy.agent.code_evolution.restart_process",
-            ),
-        ):
-            result = tool.execute(action="apply", proposal_id=prop.id)
+        with patch("missy.agent.code_evolution.CodeEvolutionManager", return_value=mgr):
+            result = tool.execute(action="reject", proposal_id=prop.id)
         assert result.success
-        assert "committed" in result.output
-
-
-# ---------------------------------------------------------------------------
-# rollback
-# ---------------------------------------------------------------------------
-
-
-class TestRollback:
-    def test_rollback_missing_id(self, tool):
-        result = tool.execute(action="rollback")
-        assert not result.success
-
-    def test_rollback_not_applied(self, tool, tmp_repo, store_path):
-        mgr = _make_mgr(store_path, str(tmp_repo))
-        prop = mgr.propose(
-            title="T",
-            description="D",
-            file_path="missy/example.py",
-            original_code="return 'hello'",
-            proposed_code="return 'hi'",
-        )
-        with patch(
-            "missy.agent.code_evolution.CodeEvolutionManager",
-            return_value=mgr,
-        ):
-            result = tool.execute(action="rollback", proposal_id=prop.id)
-        assert not result.success
-
-    def test_rollback_success(self, tool, tmp_repo, store_path):
-        mgr = _make_mgr(store_path, str(tmp_repo))
-        prop = mgr.propose(
-            title="T",
-            description="D",
-            file_path="missy/example.py",
-            original_code="return 'hello'",
-            proposed_code="return 'hi'",
-        )
-        mgr.approve(prop.id)
-        mgr.apply(prop.id)
-        with (
-            patch(
-                "missy.agent.code_evolution.CodeEvolutionManager",
-                return_value=mgr,
-            ),
-            patch(
-                "missy.agent.code_evolution.restart_process",
-            ),
-        ):
-            result = tool.execute(action="rollback", proposal_id=prop.id)
-        assert result.success
-        assert "Reverted" in result.output
 
 
 # ---------------------------------------------------------------------------
