@@ -653,6 +653,16 @@ class DiscordChannel(BaseChannel):
                     len(denied_attachments),
                     author_id,
                 )
+                with contextlib.suppress(Exception):
+                    names = ", ".join(
+                        a.get("filename", "attachment") for a, _v in denied_attachments
+                    )
+                    self._rest.send_message(
+                        channel_id,
+                        f"⚠️ <@{author_id}> I can't accept {names} — only image "
+                        f"attachments are supported right now. Paste the content as text "
+                        f"instead if you'd like me to look at it.",
+                    )
                 return
 
             if image_attachments:
