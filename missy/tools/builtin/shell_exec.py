@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import subprocess
 from typing import Any
 
@@ -31,6 +32,15 @@ _MAX_OUTPUT_BYTES = 32_768  # 32 KB
 _DEFAULT_TIMEOUT = 30
 _MAX_TIMEOUT = 300
 _MAX_COMMAND_LENGTH = 8192  # 8 KB — prevents resource exhaustion in shlex/policy
+
+#: Matches bash's "last backgrounded PID" expansion. Each shell_exec call is a
+#: fresh subprocess with no job-control history, so ``$!`` is always empty
+#: here — referencing it (typically ``kill $!``) silently no-ops instead of
+#: affecting a process started in a previous call, and the failure is easy to
+#: miss because bash's own error is often masked by a later command in a
+#: compound chain (e.g. ``kill $!; echo done`` exits 0 even though the kill
+#: itself failed with "usage: kill ...").
+_BACKGROUND_PID_VAR_RE = re.compile(r"\$!|\$\{!\}")
 
 #: Environment variables safe to inherit into shell subprocesses.
 #: Everything else (API keys, tokens, secrets) is stripped to prevent
@@ -91,7 +101,14 @@ class ShellExecTool(BaseTool):
         "IMPORTANT: Heredocs (<<) and here-strings (<<<) are NOT allowed. "
         "To run multi-line scripts, first write the script to a file using file_write, "
         "then execute it (e.g. file_write the script to /tmp/script.py, then shell_exec 'python3 /tmp/script.py'). "
-        "Subshells ($(...), backticks) are also forbidden."
+        "Subshells ($(...), backticks) are also forbidden. "
+        "IMPORTANT: each call runs in a brand-new subprocess — shell variables, "
+        "background job state ($!), and 'cd' do NOT persist between calls. "
+        "To start a background process (e.g. a dev server) in one call and stop it in a "
+        "later call: do not rely on $! — instead find it afterward by port or command name, "
+        "e.g. command='lsof -ti:3000 | xargs -r kill' or command=\"pkill -f 'node src/server.js'\". "
+        "Always verify a process actually stopped (re-check the port or use pgrep) rather than "
+        "assuming a kill command succeeded — if you don't re-check, you may leave it running."
     )
     permissions = ToolPermissions(shell=True)
 
@@ -151,6 +168,23 @@ class ShellExecTool(BaseTool):
                 success=False,
                 output=None,
                 error=f"Command exceeds maximum length ({_MAX_COMMAND_LENGTH} bytes).",
+            )
+
+        if _BACKGROUND_PID_VAR_RE.search(command):
+            return ToolResult(
+                success=False,
+                output=None,
+                error=(
+                    "'$!' is not usable here: each shell_exec call runs in a brand-new "
+                    "subprocess with no job-control history, so '$!' is always empty and "
+                    "a command like 'kill $!' silently does nothing to the process you "
+                    "started in an earlier call — it will NOT report failure if chained "
+                    "with other commands (e.g. 'kill $!; echo done' still exits 0). "
+                    "Find the process by port or name instead, e.g. "
+                    '"lsof -ti:3000 | xargs -r kill" or "pkill -f \'node src/server.js\'", '
+                    "then verify it is actually gone with a follow-up check "
+                    "(re-check the port or 'pgrep -f ...') before reporting it stopped."
+                ),
             )
 
         # Route through Docker sandbox when available

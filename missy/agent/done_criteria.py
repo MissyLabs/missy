@@ -97,8 +97,13 @@ def make_verification_prompt() -> str:
         whether DONE conditions are satisfied.
     """
     return (
-        "Review the tool output above. "
-        "If the task is fully complete, reply with a concise summary for the user. "
-        "If it failed or is incomplete, call the appropriate tool again to fix it — "
-        "do not describe what went wrong, just retry with corrected parameters."
+        "Review the tool output above, especially any errors or non-zero exit codes. "
+        "Do NOT report the task as complete unless every tool call relevant to it "
+        "actually succeeded — if a command errored, timed out, or a resource (file, "
+        "repository, URL) was not directly confirmed to exist via a tool call, the "
+        "task is NOT done, even if you already produced content for it. "
+        "If something failed or is incomplete, call the appropriate tool again to "
+        "fix it — do not describe what went wrong, just retry with corrected "
+        "parameters. Only once every relevant step has genuinely succeeded should "
+        "you reply with a concise summary for the user."
     )

@@ -34,6 +34,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import re
 import time
 from collections.abc import Iterator
 from typing import Any
@@ -129,6 +130,28 @@ def _codex_request_error(exc: Exception) -> ProviderError:
             f"{suffix}"
         )
     return ProviderError(f"openai-codex request failed: {exc}")
+
+
+_LEAKED_TOOL_CALL_RE = re.compile(
+    r"<[a-zA-Z_][\w]*(?:\s+[a-zA-Z_][\w]*=\"[^\"]*\")+\s*/?>",
+)
+
+
+def _strip_leaked_tool_call_tags(text: str) -> str:
+    """Remove leaked, never-executed tool-call-like tags from response text.
+
+    The Codex backend occasionally emits its own native tool-invocation
+    syntax (e.g. ``<shell_exec command="..." .../>``) as plain output text
+    rather than a structured ``function_call`` item — this never actually
+    executes (no matching audit/tool_execute event exists for it), so
+    leaving it in the response would present a phantom "action" to the user
+    as if it were real. Stripped defensively; does not change whether the
+    model believes an unexecuted action succeeded, only prevents the raw
+    leaked syntax from reaching the user.
+    """
+    if "<" not in text:
+        return text
+    return _LEAKED_TOOL_CALL_RE.sub("", text).strip()
 
 
 def _messages_to_input(messages: list[Message]) -> list[dict]:
@@ -462,10 +485,20 @@ class CodexProvider(BaseProvider):
 
         finish_reason = "tool_calls" if tool_calls else "stop"
 
+        raw_content = "".join(text_parts)
+        content = _strip_leaked_tool_call_tags(raw_content)
+        if content != raw_content:
+            logger.warning(
+                "openai-codex: stripped leaked tool-call-like tag(s) from response text "
+                "(model emitted tool-call syntax as plain output instead of a real "
+                "function_call; the leaked text never executed)"
+            )
+            self._emit_event(session_id, task_id, "warn", "leaked_tool_call_syntax_stripped")
+
         self._emit_event(session_id, task_id, "allow", f"completion: {finish_reason}")
 
         return CompletionResponse(
-            content="".join(text_parts),
+            content=content,
             model=self._model,
             provider=self.name,
             usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},

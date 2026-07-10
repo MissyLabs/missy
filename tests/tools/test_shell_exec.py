@@ -49,6 +49,46 @@ class TestDirectExecution:
         result = tool.execute(command="echo ok", timeout=99999)
         assert result.success is True
 
+    def test_background_pid_var_rejected(self):
+        # $! never refers to anything real: each call is a fresh subprocess
+        # with no job-control history, so a command like this would silently
+        # no-op instead of killing whatever was started in a prior call.
+        tool = ShellExecTool()
+        result = tool.execute(command="kill $!")
+        assert result.success is False
+        assert "$!" in result.error
+        assert "fresh" not in result.error  # sanity: not asserting exact wording elsewhere
+        assert "subprocess" in result.error
+
+    def test_background_pid_var_rejected_when_chained(self):
+        # The whole point: a naive exit-code check on the compound command
+        # would see success (echo masks kill's failure), so this must be
+        # caught before execution, not left to the model to notice.
+        tool = ShellExecTool()
+        result = tool.execute(command="kill $! ; echo done")
+        assert result.success is False
+        assert "$!" in result.error
+
+    def test_background_pid_var_braced_form_rejected(self):
+        tool = ShellExecTool()
+        result = tool.execute(command="kill ${!}")
+        assert result.success is False
+        assert "$!" in result.error or "${!}" in result.error
+
+    def test_port_based_kill_still_allowed(self):
+        # The recommended alternative pattern must not be caught by the
+        # $! rejection — it doesn't reference the job-control variable at all.
+        tool = ShellExecTool()
+        result = tool.execute(command="lsof -ti:59999 | xargs -r kill")
+        assert result.success is True
+
+    def test_literal_bang_without_dollar_still_allowed(self):
+        # Only the $! expansion is rejected, not any bare '!' character.
+        tool = ShellExecTool()
+        result = tool.execute(command="echo 'hello!'")
+        assert result.success is True
+        assert "hello!" in result.output
+
 
 # ---------------------------------------------------------------------------
 # Sandbox routing
