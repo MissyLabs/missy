@@ -20,6 +20,8 @@ import pytest
 
 from missy.tools.builtin.browser_tools import (
     BrowserSession,
+    _classify_browser_error,
+    _err,
     _page,
     _registry,
     _SessionRegistry,
@@ -383,3 +385,73 @@ class TestSessionRegistry:
     def test_close_nonexistent_session_is_safe(self):
         reg = _SessionRegistry()
         reg.close("no-such-session")  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# FX-F: browser diagnostics must distinguish tool absence, browser
+# installation failure, and sandbox/kernel launch failure from a generic
+# response, and must never suggest disabling sandboxing as a fix.
+# ---------------------------------------------------------------------------
+
+
+class TestClassifyBrowserError:
+    def test_missing_playwright_package_passed_through_unmodified(self):
+        # _start() already raises a specific, actionable RuntimeError for
+        # this case; classification must not double-wrap it.
+        exc = RuntimeError(
+            "playwright not installed — run: pip install playwright && playwright install firefox"
+        )
+        result = _classify_browser_error(exc)
+        assert result == str(exc)
+
+    def test_browser_binary_not_installed_gets_install_remediation(self):
+        exc = RuntimeError(
+            "Executable doesn't exist at /home/user/.cache/ms-playwright/firefox-1234/firefox"
+        )
+        result = _classify_browser_error(exc)
+        assert "Browser installation error" in result
+        assert "playwright install firefox" in result
+        # The real underlying error text must still be present.
+        assert "Executable doesn't exist" in result
+
+    def test_sandbox_namespace_failure_gets_environment_remediation(self):
+        # The exact failure mode reported by the validation harness.
+        exc = RuntimeError("unshare(CLONE_NEWPID): EPERM (Operation not permitted)")
+        result = _classify_browser_error(exc)
+        assert "sandbox/kernel launch failure" in result
+        assert "unshare(CLONE_NEWPID): EPERM" in result
+        assert "disposable test environment" in result
+
+    def test_sandbox_error_never_suggests_disabling_sandboxing(self):
+        exc = RuntimeError("unshare(CLONE_NEWPID): EPERM (Operation not permitted)")
+        result = _classify_browser_error(exc)
+        assert "--no-sandbox" not in result
+        assert "Do not disable sandboxing" in result
+        assert "SYS_ADMIN" in result  # named explicitly as what NOT to do
+
+    def test_protocol_error_browser_enable_classified_as_sandbox_failure(self):
+        # The second exact failure mode reported by the validation harness.
+        exc = RuntimeError("BrowserType.launch_persistent_context: Protocol error (Browser.enable)")
+        result = _classify_browser_error(exc)
+        assert "sandbox/kernel launch failure" in result
+
+    def test_unrelated_navigation_error_passed_through_unmodified(self):
+        # A real interaction/navigation error (timeout, DNS failure,
+        # selector not found) must not be relabeled as a launch failure --
+        # that would be misleading about what actually went wrong.
+        exc = RuntimeError('Timeout 30000ms exceeded while waiting for selector "#submit"')
+        result = _classify_browser_error(exc)
+        assert result == str(exc)
+        assert "sandbox" not in result.lower()
+        assert "installation" not in result.lower()
+
+    def test_dns_failure_passed_through_unmodified(self):
+        exc = RuntimeError("net::ERR_NAME_NOT_RESOLVED at https://nonexistent.invalid/")
+        result = _classify_browser_error(exc)
+        assert result == str(exc)
+
+    def test_err_helper_uses_classification(self):
+        exc = RuntimeError("unshare(CLONE_NEWPID): EPERM")
+        result = _err(exc)
+        assert result.success is False
+        assert "sandbox/kernel launch failure" in result.error

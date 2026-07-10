@@ -1,5 +1,32 @@
 # TEST_RESULTS
 
+## Run: 2026-07-10 08:10 UTC — validation-harness overhaul, FX-F bullet 1 (browser diagnostics)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Added `_classify_browser_error()` in
+  `missy/tools/builtin/browser_tools.py` distinguishing missing
+  playwright, browser-binary-not-installed, and sandbox/kernel launch
+  failure (the harness's exact two observed error strings) from generic
+  interaction errors. Remediation text explicitly forbids
+  `--no-sandbox`/`SYS_ADMIN`/privileged containers.
+- Command: `pytest tests/tools/test_browser_tools_gaps.py tests/unit/test_browser_session_id_validation.py -q`
+- Result: `37 passed`
+- Command: `pytest tests/tools/ -q`
+- Result: `1470 passed, 2 skipped`
+- Command: `pytest tests/ -q -o faulthandler_timeout=120` with the 3
+  known pre-existing vision failures deselected
+- Result: `20750 passed, 13 skipped, 3 deselected in 447.53s (0:07:27)`
+- Live-verified: this dev sandbox has no `playwright` package installed
+  and cannot launch a real browser — same environment limitation the
+  validation harness observed. `_classify_browser_error()` correctly
+  returns the specific install-guidance message rather than a generic
+  failure.
+- FX-F bullets 2/4 (disposable browser-test environment, WB-002..007 +
+  XT-001 rerun) deferred as real infrastructure work — tracked as
+  task #16.
+
+---
+
 ## Run: 2026-07-10 07:40 UTC — validation-harness overhaul, FX-C (grounding factual state claims)
 
 - Branch: `overhaul/missy-validation-20260710-031406`

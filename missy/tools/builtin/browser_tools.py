@@ -195,8 +195,91 @@ def _page(session_id: str = "default", headless: bool = False) -> Any:
     return _registry.get_or_create(session_id, headless=headless).get_page()
 
 
+# FX-F: browser diagnostics must distinguish tool absence, browser
+# installation failure, and sandbox/kernel launch failure from a generic
+# or fabricated "no browser" response, and must never suggest disabling
+# sandboxing (--no-sandbox, SYS_ADMIN, privileged containers) as a fix --
+# only a properly configured disposable test environment.
+_SANDBOX_LAUNCH_ERROR_MARKERS: tuple[str, ...] = (
+    "unshare(",
+    "clone_newpid",
+    "clone_newns",
+    "clone_newuser",
+    "namespace",
+    "seccomp",
+    "protocol error (browser.enable)",
+    "failed to launch",
+    "target closed",
+    "browser closed",
+)
+
+_INSTALLATION_ERROR_MARKERS: tuple[str, ...] = (
+    "executable doesn't exist",
+    "playwright install",
+)
+
+
+def _classify_browser_error(exc: Exception) -> str:
+    """Return a categorized, actionable error message for a browser failure.
+
+    Distinguishes the failure modes named in FX-F rather than passing a
+    possibly-cryptic raw exception through unlabeled:
+
+    * Missing playwright package (raised explicitly as ``RuntimeError``
+      by :meth:`BrowserSession._start`).
+    * Browser binary not installed (``playwright install firefox`` never
+      run).
+    * Sandbox/kernel/namespace launch failure -- the browser process
+      itself could not start under this environment's kernel
+      restrictions (e.g. ``unshare(CLONE_NEWPID): EPERM``, a Protocol
+      error on ``Browser.enable``). This is an environment limitation,
+      not a Missy bug, and must never be silently "fixed" by relaxing
+      sandboxing; remediation points to a disposable test environment
+      instead.
+    * Everything else (navigation timeouts, DNS failures, selector not
+      found, etc.) is returned as-is -- those are real interaction
+      errors, not launch failures, and relabeling them would be
+      misleading.
+
+    Args:
+        exc: The exception raised by a Playwright call.
+
+    Returns:
+        A message combining the real error text with a category label
+        and remediation guidance where applicable.
+    """
+    text = str(exc)
+    lowered = text.lower()
+
+    if "playwright not installed" in lowered:
+        return text  # Already specific; _start() sets its own guidance.
+
+    if any(marker in lowered for marker in _INSTALLATION_ERROR_MARKERS):
+        return (
+            f"Browser installation error: {text}\n"
+            "Remediation: run `playwright install firefox` to download the "
+            "browser binary Playwright expects."
+        )
+
+    if any(marker in lowered for marker in _SANDBOX_LAUNCH_ERROR_MARKERS):
+        return (
+            f"Browser sandbox/kernel launch failure: {text}\n"
+            "This environment's kernel or container restrictions "
+            "(namespaces, seccomp) prevented the browser process itself "
+            "from starting -- it is not a missing tool, a policy denial, "
+            "or a Missy bug. Remediation: run browser tools in a "
+            "disposable test environment whose kernel/seccomp/namespace "
+            "configuration supports the browser (see FX-F). Do not "
+            "disable sandboxing, add SYS_ADMIN, or run privileged "
+            "containers as a fix -- that weakens production security for "
+            "every workload, not just browser tools."
+        )
+
+    return text
+
+
 def _err(exc: Exception) -> ToolResult:
-    return ToolResult(success=False, output=None, error=str(exc))
+    return ToolResult(success=False, output=None, error=_classify_browser_error(exc))
 
 
 # ---------------------------------------------------------------------------

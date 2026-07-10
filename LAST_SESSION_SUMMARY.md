@@ -44,6 +44,17 @@ Draft PR: https://github.com/MissyLabs/missy/pull/31
    structured tool results (the actual locus of the harness's observed
    "invented lo network" failure, since the tool layer was already
    correct).
+9. **FX-F bullet 1**: added `_classify_browser_error()` to
+   `browser_tools.py`, distinguishing missing playwright, uninstalled
+   browser binary, and sandbox/kernel launch failure (matching the
+   harness's exact two observed error strings) from generic interaction
+   errors, with remediation text that explicitly forbids
+   `--no-sandbox`/`SYS_ADMIN`/privileged containers as a fix.
+   Live-verified against this dev sandbox, which has the identical
+   environment limitation the harness observed (no playwright
+   installed, cannot launch a real browser). Bullets 2/4 (actual
+   disposable browser-test environment + WB/XT rerun) deferred as real
+   infrastructure work — task #16.
 
 **Four independent, confirmed critical authorization-bypass
 vulnerabilities** found and fixed this session (SR-1.2/1.3, SR-1.12,
@@ -58,7 +69,7 @@ python3 -m pytest tests/ -q -o faulthandler_timeout=120 \
   --deselect tests/vision/test_discovery_capture_sysfs.py::TestCacheTTL::test_cache_valid_within_ttl \
   --deselect tests/vision/test_discovery_edge_cases.py::TestPermissionDeniedOnDevice::test_device_that_does_not_exist_is_skipped \
   --deselect tests/vision/test_discovery_edge_cases.py::TestRapidAddRemove::test_cached_results_returned_within_ttl
-20742 passed, 13 skipped, 3 deselected in 448.39s (0:07:28)
+20750 passed, 13 skipped, 3 deselected in 447.53s (0:07:27)
 ```
 
 Full detail in `BUILD_STATUS.md`, `AUDIT_SECURITY.md`, and

@@ -1,6 +1,6 @@
 # Build Status
 
-Last updated: 2026-07-10 07:40 UTC
+Last updated: 2026-07-10 08:10 UTC
 
 ## Current Workstream: Validation-Harness Overhaul
 
@@ -447,6 +447,51 @@ for the exact failure modes described; `INCUS-006`, `INCUS-010` have
 direct unit coverage proving the tool layer doesn't fabricate — live
 harness re-validation of all four is still open (needs a real/scripted
 delegate invocation, same blocker as FX-A bullet 6).
+
+### Completed This Session, continued: FX-F bullet 1 (browser diagnostics classification)
+
+Implemented `_classify_browser_error()` in
+`missy/tools/builtin/browser_tools.py`, used by the shared `_err()`
+helper every browser tool's `execute()` already routes exceptions
+through. Distinguishes:
+- Missing `playwright` package (passed through — `_start()` already
+  raises a specific, actionable message).
+- Browser binary not installed (`playwright install firefox` never
+  run) — detected via Playwright's own "Executable doesn't exist"
+  message, remediation added.
+- Sandbox/kernel/namespace launch failure — detected via markers
+  matching the harness's exact two observed failures
+  (`unshare(CLONE_NEWPID): EPERM`, `Protocol error (Browser.enable)`)
+  plus related namespace/seccomp/launch-failure text. Labeled
+  explicitly as an environment limitation, not a Missy bug, a missing
+  tool, or a policy denial — and the remediation text explicitly says
+  **not** to disable sandboxing, add `SYS_ADMIN`, or use privileged
+  containers (bullet 3), pointing instead at a disposable test
+  environment (bullet 2, not yet built — see below).
+- Everything else (navigation timeouts, DNS failures, selector not
+  found) passes through unmodified — relabeling a real interaction
+  error as a launch failure would itself be misleading.
+
+Live-verified against this actual dev sandbox: `playwright` is not
+installed here, and `_classify_browser_error()` correctly returns the
+specific "playwright not installed" guidance rather than a generic
+"browser unavailable" message — this dev environment has the exact
+same limitation the validation harness observed.
+
+Added 8 new tests in
+`tests/tools/test_browser_tools_gaps.py::TestClassifyBrowserError`,
+including one that verifies the sandbox-failure remediation text never
+contains `--no-sandbox` and explicitly names `SYS_ADMIN`/privileged
+containers as what *not* to do.
+
+**Not done this session (tracked as task #16, real infrastructure
+work deserving its own session):** FX-F bullets 2 and 4 — providing an
+actual reproducible, disposable, threat-modeled browser-test
+environment (container/Incus profile with kernel/seccomp/namespace
+tuning) and rerunning `WB-002` through `WB-007` and `XT-001` against
+it. This dev sandbox cannot launch a real browser at all (confirmed
+live), so there's no environment available in which to build or test
+that infrastructure this session.
 
 ### Known Pre-Existing Failure (not caused by this session)
 
