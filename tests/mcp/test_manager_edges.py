@@ -656,6 +656,138 @@ class TestPinServerDigest:
 
 
 # ---------------------------------------------------------------------------
+# SR-1.11: _save_config must preserve a pinned digest, not erase it.
+#
+# add_server() calls _save_config() unconditionally after every successful
+# connect, including reconnects. Before this fix, _save_config() rebuilt
+# every entry from self._clients (name/command/url only), so the very next
+# McpManager restart after a successful `missy mcp pin` silently destroyed
+# the pin -- every connection after that skipped digest verification with
+# no signal to the operator that protection was lost.
+# ---------------------------------------------------------------------------
+class TestSaveConfigPreservesDigest:
+    def test_digest_survives_a_reconnect_cycle(self, tmp_path):
+        """The core reproduction: pin, then simulate a full process restart
+        (a fresh McpManager reconnecting via add_server) -- the digest must
+        still be in the config file afterward."""
+        cfg = tmp_path / "mcp.json"
+        mgr = McpManager(config_path=str(cfg))
+        tools = [{"name": "t", "description": "T"}]
+        mc = _mock_client(name="srv", command="echo", tools=tools)
+        with patch("missy.mcp.manager.McpClient", return_value=mc):
+            mgr.add_server("srv", command="echo")
+        digest = mgr.pin_server_digest("srv")
+
+        # Simulate a restart: a brand-new manager reconnects from the saved
+        # config, which internally digest-verifies then calls
+        # _save_config() again via add_server().
+        mgr2 = McpManager(config_path=str(cfg))
+        mc2 = _mock_client(name="srv", command="echo", tools=tools)
+        with patch("missy.mcp.manager.McpClient", return_value=mc2):
+            mgr2.connect_all()
+
+        saved = json.loads(cfg.read_text())
+        entry = next(e for e in saved if e["name"] == "srv")
+        assert entry.get("digest") == digest
+
+    def test_digest_still_survives_a_second_reconnect_cycle(self, tmp_path):
+        """Not just one reconnect -- the digest must be durable across
+        repeated restarts, not merely re-derived once and then lost again."""
+        cfg = tmp_path / "mcp.json"
+        mgr = McpManager(config_path=str(cfg))
+        tools = [{"name": "t", "description": "T"}]
+        mc = _mock_client(name="srv", command="echo", tools=tools)
+        with patch("missy.mcp.manager.McpClient", return_value=mc):
+            mgr.add_server("srv", command="echo")
+        digest = mgr.pin_server_digest("srv")
+
+        for _ in range(3):
+            fresh_mgr = McpManager(config_path=str(cfg))
+            fresh_mc = _mock_client(name="srv", command="echo", tools=tools)
+            with patch("missy.mcp.manager.McpClient", return_value=fresh_mc):
+                fresh_mgr.connect_all()
+
+        saved = json.loads(cfg.read_text())
+        entry = next(e for e in saved if e["name"] == "srv")
+        assert entry.get("digest") == digest
+
+    def test_tampered_manifest_still_denied_after_a_reconnect_cycle(self, tmp_path):
+        """The pin must remain functionally effective, not just present in
+        the file -- a manifest change after a reconnect cycle must still be
+        caught, proving the preserved digest is actually consulted."""
+        cfg = tmp_path / "mcp.json"
+        mgr = McpManager(config_path=str(cfg))
+        original_tools = [{"name": "t", "description": "T"}]
+        mc = _mock_client(name="srv", command="echo", tools=original_tools)
+        with patch("missy.mcp.manager.McpClient", return_value=mc):
+            mgr.add_server("srv", command="echo")
+        mgr.pin_server_digest("srv")
+
+        # One clean reconnect cycle (digest now preserved by the fix).
+        mgr2 = McpManager(config_path=str(cfg))
+        mc2 = _mock_client(name="srv", command="echo", tools=original_tools)
+        with patch("missy.mcp.manager.McpClient", return_value=mc2):
+            mgr2.connect_all()
+
+        # A tampered manifest on the next connection attempt must still be denied.
+        tampered_tools = [{"name": "t_evil", "description": "malicious"}]
+        mgr3 = McpManager(config_path=str(cfg))
+        mc3 = _mock_client(name="srv", command="echo", tools=tampered_tools)
+        with (
+            patch("missy.mcp.manager.McpClient", return_value=mc3),
+            pytest.raises(ValueError, match="digest mismatch"),
+        ):
+            mgr3.add_server("srv", command="echo")
+
+    def test_save_config_preserves_digests_for_multiple_servers(self, tmp_path):
+        cfg = tmp_path / "mcp.json"
+        mgr = McpManager(config_path=str(cfg))
+        mc_a = _mock_client(name="a", command="echo a", tools=[{"name": "ta"}])
+        mc_b = _mock_client(name="b", command="echo b", tools=[{"name": "tb"}])
+        with patch("missy.mcp.manager.McpClient", side_effect=[mc_a, mc_b]):
+            mgr.add_server("a", command="echo a")
+            mgr.add_server("b", command="echo b")
+        digest_a = mgr.pin_server_digest("a")
+        digest_b = mgr.pin_server_digest("b")
+
+        # Adding a third server triggers another _save_config() rewrite --
+        # both existing pins must survive it.
+        mc_c = _mock_client(name="c", command="echo c", tools=[{"name": "tc"}])
+        with patch("missy.mcp.manager.McpClient", return_value=mc_c):
+            mgr.add_server("c", command="echo c")
+
+        saved = {e["name"]: e for e in json.loads(cfg.read_text())}
+        assert saved["a"]["digest"] == digest_a
+        assert saved["b"]["digest"] == digest_b
+        assert "digest" not in saved["c"]
+
+    def test_save_config_with_no_existing_file_does_not_crash(self, tmp_path):
+        """The first-ever _save_config() call has no prior file to read
+        digests from -- must not raise."""
+        cfg = tmp_path / "mcp.json"
+        mgr = McpManager(config_path=str(cfg))
+        mc = _mock_client(name="srv", command="echo", tools=[])
+        with patch("missy.mcp.manager.McpClient", return_value=mc):
+            mgr.add_server("srv", command="echo")
+        saved = json.loads(cfg.read_text())
+        assert saved[0]["name"] == "srv"
+        assert "digest" not in saved[0]
+
+    def test_save_config_with_corrupt_existing_file_does_not_crash(self, tmp_path):
+        """A corrupt on-disk config must not prevent _save_config() from
+        writing a fresh, valid one -- digests just can't be recovered from
+        an unparseable file."""
+        cfg = tmp_path / "mcp.json"
+        cfg.write_text("{not valid json")
+        mgr = McpManager(config_path=str(cfg))
+        mc = _mock_client(name="srv", command="echo", tools=[])
+        with patch("missy.mcp.manager.McpClient", return_value=mc):
+            mgr.add_server("srv", command="echo")
+        saved = json.loads(cfg.read_text())
+        assert saved[0]["name"] == "srv"
+
+
+# ---------------------------------------------------------------------------
 # 13. call_tool injection-scan exception passthrough
 # ---------------------------------------------------------------------------
 

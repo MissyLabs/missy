@@ -1,5 +1,38 @@
 # TEST_RESULTS
 
+## Run: 2026-07-10 14:05 UTC — validation-harness overhaul, SR-1.11 (MCP manifest digest pinning self-destructs on reconnect)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Finding: `McpManager._save_config()` rebuilt every config entry
+  purely from `self._clients` (`name`/`command`/`url`), silently
+  dropping any `digest` field. `add_server()` calls `_save_config()`
+  unconditionally after every successful connect, including
+  reconnects, so the very next ordinary `McpManager` restart after a
+  successful `missy mcp pin` erases the pin.
+- Live reproduction: pinned a server's digest, simulated a process
+  restart via `connect_all()` on a fresh `McpManager` reading the same
+  config file — the `digest` key was completely gone afterward.
+  Confirmed the consequence: with the pin erased, a tampered tool
+  manifest connects successfully with no error, warning, or audit
+  signal. Confirmed fixed: the digest now survives one reconnect
+  cycle, three repeated reconnect cycles, and a tampered manifest
+  presented after a clean reconnect is still correctly denied.
+- Fix: `_save_config()` now reads the existing on-disk config first to
+  recover each server's currently pinned digest and merges it back
+  into the freshly rebuilt entries before writing.
+- Command: `pytest tests/mcp/test_manager_edges.py -q`
+- Result: `133 passed` (6 new tests in
+  `TestSaveConfigPreservesDigest`)
+- Command: `pytest tests/mcp/ tests/cli/ -q -k "mcp or Mcp"`
+- Result: `374 passed, 1019 deselected`
+- Command: `pytest tests/ -q -o faulthandler_timeout=120` with the 3
+  known pre-existing vision failures deselected
+- Result: `20844 passed, 13 skipped, 3 deselected in 438.56s (0:07:18)`
+  — 6 more passing than the prior (SR-1.10) checkpoint's 20838, matching
+  the tests added this checkpoint exactly; no regressions.
+
+---
+
 ## Run: 2026-07-10 13:35 UTC — validation-harness overhaul, SR-1.10 (audit sink wrote secrets to disk unredacted)
 
 - Branch: `overhaul/missy-validation-20260710-031406`

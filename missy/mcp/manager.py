@@ -335,11 +335,39 @@ class McpManager:
                 c.disconnect()
 
     def _save_config(self) -> None:
+        # SR-1.11: rebuilding entries from self._clients alone drops any
+        # digest pinned via `missy mcp pin` — this method is called
+        # unconditionally after every successful add_server(), including on
+        # reconnect, so without this the very next restart after a
+        # successful pin+verify silently erases the pin and every
+        # subsequent connection skips digest verification with no operator
+        # signal that protection was lost. Read whatever digest currently
+        # exists on disk for each server name and carry it forward.
+        existing_digests: dict[str, str] = {}
+        if self._config_path.exists():
+            try:
+                existing = json.loads(self._config_path.read_text())
+                for entry in existing:
+                    digest = entry.get("digest")
+                    entry_name = entry.get("name")
+                    if digest and entry_name:
+                        existing_digests[entry_name] = digest
+            except Exception:
+                logger.warning(
+                    "MCP: could not read existing config at %s to preserve pinned "
+                    "digests; any existing pins will not be carried forward",
+                    self._config_path,
+                )
+
         with self._lock:
             entries = [
                 {"name": name, "command": c._command, "url": c._url}
                 for name, c in self._clients.items()
             ]
+        for entry in entries:
+            digest = existing_digests.get(entry["name"])
+            if digest:
+                entry["digest"] = digest
         self._config_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         # Write with restrictive permissions (owner read/write only) to
         # prevent other users from reading server commands or URLs.

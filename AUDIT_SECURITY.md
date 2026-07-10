@@ -709,6 +709,59 @@ requirement — do not overwrite, append new entries as work continues.
   `_redact_detail()` helper independently; it is not itself
   automatically inherited by new persistence paths.
 
+### SR-1.11 — MCP manifest digest pinning self-destructs on reconnect
+
+- **Status: fixed.**
+- **Reachability found:** live and directly exploitable through normal
+  operational use, no attacker interaction needed. `McpManager.add_server()`
+  (`missy/mcp/manager.py`) calls `self._save_config()` unconditionally
+  after every successful connect — including reconnects — and
+  `_save_config()` rebuilt every config entry purely from
+  `self._clients` (`name`/`command`/`url`), silently dropping any
+  `digest` field. `missy mcp pin <name>` correctly writes the digest via
+  `pin_server_digest()` (which reads-modifies-writes the existing file
+  directly), but the very next time `McpManager` starts up and
+  reconnects — a completely ordinary event, not an attack — `add_server()`'s
+  post-connect `_save_config()` call erases it. Live-reproduced
+  end-to-end: pinned a server's digest, then simulated a process restart
+  (`connect_all()` on a fresh `McpManager` reading the same config file)
+  — the `digest` key was **completely gone** from the config file
+  afterward. A second reproduction confirmed the consequence: after that
+  reconnect erased the pin, `add_server()`'s `expected_digest is None`
+  branch means digest verification is silently skipped entirely on every
+  subsequent connection — a compromised/tampered MCP server's tool
+  manifest would connect successfully with **no error, warning, or audit
+  signal** that the protection `missy mcp pin` was supposed to provide
+  had quietly stopped applying.
+- **Remediation evidence:** `_save_config()` now reads the existing
+  on-disk config first (if present) to recover each server's currently
+  pinned `digest`, and merges it back into the freshly rebuilt entries
+  before writing — preserving whatever digest is already pinned for a
+  given server name across every rewrite, regardless of what triggered
+  it (add/remove/reconnect of any server). Live-verified: the exact
+  reproduction above now retains the digest after one reconnect cycle,
+  *and* after three repeated reconnect cycles (proving the digest isn't
+  merely re-derived once and then lost again), *and* — critically — the
+  pin remains functionally effective afterward: a tampered tool manifest
+  presented on a connection attempt following a clean reconnect cycle is
+  still correctly denied with `"MCP server 'srv' tool manifest digest
+  mismatch"`. Also verified digests for multiple independently-pinned
+  servers all survive a `_save_config()` triggered by adding an
+  unrelated new server, and that both a missing and a corrupt on-disk
+  config degrade gracefully (no digests to recover, but the write itself
+  still succeeds — matches `_get_server_digest()`'s existing
+  fail-open-on-corrupt-file-format for *reading*, not a new fail-open
+  for the actual digest *check*, which is unaffected). 7 new tests in
+  `tests/mcp/test_manager_edges.py::TestSaveConfigPreservesDigest`.
+- **Residual risk:** the digest itself still only covers `name` +
+  `description` of each tool (per `mcp/digest.py`, unchanged by this
+  fix) — not `inputSchema` or annotations, a separate, narrower gap the
+  review notes in the same finding and that this checkpoint does not
+  address. The `_save_config()` write path is otherwise unchanged
+  (atomic tempfile + rename, `0o600` permissions, uid/group-writable
+  checks on load) — this fix only changes which fields are included in
+  the rewritten entries, not the write mechanism itself.
+
 ---
 
 - Timestamp: 2026-07-09 15:35:26 (raw grep-scan dump below, preserved

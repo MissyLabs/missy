@@ -1,6 +1,6 @@
 # Build Status
 
-Last updated: 2026-07-10 13:35 UTC
+Last updated: 2026-07-10 14:05 UTC
 
 ## Current Workstream: Validation-Harness Overhaul
 
@@ -816,6 +816,43 @@ Full detail and residual risk (only the two explicitly-named token
 shapes were closed; a general "any query param literally named
 `key`/`token` is a secret" pattern was deliberately not added due to
 false-positive risk) in `AUDIT_SECURITY.md`'s new `### SR-1.10` section.
+
+### Completed This Session, continued: SR-1.11 (MCP manifest digest pinning self-destructs on reconnect — twelfth critical finding)
+
+`McpManager.add_server()` calls `_save_config()` unconditionally after
+every successful connect, including reconnects; `_save_config()`
+rebuilt every config entry purely from `self._clients`
+(`name`/`command`/`url`), silently dropping any `digest` field. `missy
+mcp pin <name>` correctly writes a digest, but the very next ordinary
+`McpManager` restart erases it — no attacker interaction needed.
+Live-reproduced end-to-end: pinned a server's digest, simulated a
+process restart via `connect_all()` on a fresh `McpManager` reading the
+same config file — the `digest` key was completely gone afterward. A
+second reproduction confirmed the consequence: with the pin erased,
+`add_server()`'s digest check is silently skipped entirely, so a
+tampered MCP server's tool manifest would connect successfully with no
+error, warning, or audit signal that protection had quietly stopped
+applying.
+
+Fixed: `_save_config()` now reads the existing on-disk config first (if
+present) to recover each server's currently pinned digest and merges it
+back into the freshly rebuilt entries before writing, regardless of
+what triggered the rewrite. Live-verified: the digest survives one
+reconnect cycle, three repeated reconnect cycles, and — critically —
+remains functionally effective: a tampered manifest presented after a
+clean reconnect cycle is still correctly denied. Also verified digests
+for multiple independently-pinned servers all survive an unrelated
+server's `_save_config()` trigger, and that missing/corrupt on-disk
+config degrades gracefully. 7 new tests in
+`tests/mcp/test_manager_edges.py::TestSaveConfigPreservesDigest`.
+
+This is the twelfth independent, confirmed critical finding this
+session.
+
+Full detail and residual risk (the digest itself still only covers
+tool `name`+`description`, not `inputSchema`/annotations — a separate,
+narrower gap this checkpoint does not address) in
+`AUDIT_SECURITY.md`'s new `### SR-1.11` section.
 
 ### Known Pre-Existing Failure (not caused by this session)
 
