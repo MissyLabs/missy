@@ -1,5 +1,38 @@
 # TEST_RESULTS
 
+## Run: 2026-07-10 15:15 UTC — validation-harness overhaul, SR-2.3 (execution-time tool allow-set not revalidated at dispatch)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Finding: `_tool_loop()` resolves the per-turn visible tool set once
+  via `_get_tools()` (capability_mode + tool_policy), but
+  `_execute_tool()` dispatched any registry-known tool name the model
+  returned with no check against that resolved set.
+- Live reproduction against real `AgentRuntime`/`_get_tools()`/
+  `_execute_tool()` code: with `capability_mode="safe-chat"`,
+  `_get_tools()` correctly excluded `shell_exec` from the visible set,
+  yet calling `_execute_tool()` directly with a `shell_exec` call still
+  dispatched to `registry.execute()` and returned success. Confirmed
+  fixed: the identical call now returns `is_error=True` with
+  `registry.execute` never invoked.
+- Fix: `_tool_loop()` computes `allowed_tool_names` from the exact
+  `tools` list it resolved and passes it to every `_execute_tool()`
+  call; `_execute_tool()` refuses any name outside that set before the
+  registry is consulted, emitting a `tool_execute`/`deny` audit event.
+  `None` (default) skips the check for backward compatibility.
+- Command: `pytest tests/agent/test_coverage_gaps.py tests/agent/test_mutation_fingerprint.py -q`
+- Result: `103 passed` (6 new tests in
+  `TestRuntimeExecuteToolAllowSet`; 3 pre-existing tests updated for
+  the new kwarg)
+- Command: `pytest tests/agent/ tests/tools/ tests/policy/ tests/integration/ -q`
+- Result: `6829 passed, 6 skipped`
+- Command: `pytest tests/ -q -o faulthandler_timeout=120` with the 3
+  known pre-existing vision failures deselected
+- Result: `20853 passed, 13 skipped, 3 deselected in 446.09s (0:07:26)`
+  — 6 more passing than the prior (SR-2.4) checkpoint's 20847, matching
+  the tests added this checkpoint exactly; no regressions.
+
+---
+
 ## Run: 2026-07-10 14:40 UTC — validation-harness overhaul, SR-2.4 (heredoc rewrite wrote model code to disk before policy approval)
 
 - Branch: `overhaul/missy-validation-20260710-031406`

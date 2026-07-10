@@ -1,6 +1,6 @@
 # Build Status
 
-Last updated: 2026-07-10 14:40 UTC
+Last updated: 2026-07-10 15:15 UTC
 
 ## Current Workstream: Validation-Harness Overhaul
 
@@ -893,6 +893,42 @@ Full detail and residual risk (this closes the specific mechanism
 named by the review; a full audit for the same "write-then-check"
 ordering across all other built-in tools was not performed) in
 `AUDIT_SECURITY.md`'s new `### SR-2.4` section.
+
+### Completed This Session, continued: SR-2.3 (execution-time tool allow-set not revalidated at dispatch — fourteenth critical finding)
+
+`_tool_loop()` computes the per-turn visible tool set exactly once via
+`_get_tools()` (which resolves `capability_mode` +
+`tool_policy`/`agent_tool_policy`/`group_tool_policy`) and presents
+that list to the provider — but `_execute_tool()`, the function that
+actually dispatches every tool call the model returns, looked up the
+name directly in the live `ToolRegistry` with **no check whatsoever**
+against the resolved per-turn set. Live-reproduced end-to-end against
+real `AgentRuntime`/`_get_tools()`/`_execute_tool()` code: with
+`capability_mode="safe-chat"`, `_get_tools()` correctly excluded
+`shell_exec` from the visible set, yet calling `_execute_tool()`
+directly with a `shell_exec` call still dispatched to
+`registry.execute("shell_exec", ...)` and returned success — a
+hallucinated, stale, or provider-ignored-the-function-list tool name
+would silently bypass the capability-mode/tool-policy layer entirely.
+
+Fixed: `_tool_loop()` now computes `allowed_tool_names` from the exact
+`tools` list it resolved and hands it to every `_execute_tool()` call
+for that turn; `_execute_tool()` refuses any name outside that set
+before the registry is ever consulted, emitting a `tool_execute`/`deny`
+audit event. `None` (default) skips the check, preserving exact prior
+behavior for call sites without a resolved per-turn set. Live-verified
+the exact reproduction now returns `is_error=True` with `registry.execute`
+confirmed never invoked. 6 new tests in
+`tests/agent/test_coverage_gaps.py::TestRuntimeExecuteToolAllowSet`,
+including one exercising the full `_tool_loop()` → `_execute_tool()`
+wiring end-to-end; 3 pre-existing tests updated for the new kwarg.
+
+This is the fourteenth independent, confirmed critical finding this
+session.
+
+Full detail and residual risk (mid-loop policy hot-reload revalidation
+is a narrower, separate scenario not specifically targeted by this fix)
+in `AUDIT_SECURITY.md`'s new `### SR-2.3` section.
 
 ### Known Pre-Existing Failure (not caused by this session)
 

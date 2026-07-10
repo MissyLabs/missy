@@ -822,6 +822,197 @@ class TestRuntimeExecuteTool:
         assert "path" in call_kwargs
 
 
+class TestRuntimeExecuteToolAllowSet:
+    """SR-2.3: dispatch must reject any tool name outside the per-turn
+    allow-set resolved by _get_tools() (capability_mode + tool_policy),
+    rather than trusting the registry alone. The capability_mode/
+    tool_policy layer is meant to be an earlier, independent gate --
+    without this check, a hallucinated, stale, or provider-ignored-the-
+    constraint tool name would still dispatch via the registry even
+    though it was never presented to the model for this turn."""
+
+    def test_tool_outside_allow_set_is_refused_without_reaching_registry(self):
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        provider = _make_provider()
+        reg = _make_registry({"fake": provider})
+
+        tool_reg = MagicMock()
+        tool_reg.execute.return_value = MagicMock(success=True, output="ran anyway", error=None)
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            runtime = AgentRuntime(AgentConfig(provider="fake"))
+            tc = ToolCall(id="1", name="shell_exec", arguments={"command": "echo hi"})
+            result = runtime._execute_tool(
+                tc, session_id="s", task_id="t", allowed_tool_names={"calculator"}
+            )
+
+        assert result.is_error is True
+        assert "not available this turn" in result.content
+        tool_reg.execute.assert_not_called()
+
+    def test_tool_inside_allow_set_dispatches_normally(self):
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        provider = _make_provider()
+        reg = _make_registry({"fake": provider})
+
+        tool_result_mock = MagicMock()
+        tool_result_mock.success = True
+        tool_result_mock.output = "4"
+        tool_result_mock.error = None
+
+        tool_reg = MagicMock()
+        tool_reg.execute.return_value = tool_result_mock
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            runtime = AgentRuntime(AgentConfig(provider="fake"))
+            tc = ToolCall(id="2", name="calculator", arguments={"expr": "2+2"})
+            result = runtime._execute_tool(
+                tc, session_id="s", task_id="t", allowed_tool_names={"calculator", "file_read"}
+            )
+
+        assert result.is_error is False
+        assert result.content == "4"
+        tool_reg.execute.assert_called_once()
+
+    def test_none_allow_set_skips_check_for_backward_compatibility(self):
+        """Call sites with no resolved per-turn set (allowed_tool_names=None,
+        the default) must behave exactly as before this fix."""
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        provider = _make_provider()
+        reg = _make_registry({"fake": provider})
+
+        tool_reg = MagicMock()
+        tool_reg.execute.return_value = MagicMock(success=True, output="ok", error=None)
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            runtime = AgentRuntime(AgentConfig(provider="fake"))
+            tc = ToolCall(id="3", name="anything", arguments={})
+            result = runtime._execute_tool(tc, session_id="s", task_id="t")
+
+        assert result.is_error is False
+        tool_reg.execute.assert_called_once()
+
+    def test_empty_allow_set_refuses_every_tool(self):
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        provider = _make_provider()
+        reg = _make_registry({"fake": provider})
+
+        tool_reg = MagicMock()
+        tool_reg.execute.return_value = MagicMock(success=True, output="ok", error=None)
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            runtime = AgentRuntime(AgentConfig(provider="fake"))
+            tc = ToolCall(id="4", name="calculator", arguments={})
+            result = runtime._execute_tool(
+                tc, session_id="s", task_id="t", allowed_tool_names=set()
+            )
+
+        assert result.is_error is True
+        tool_reg.execute.assert_not_called()
+
+    def test_denial_emits_audit_event(self):
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        provider = _make_provider()
+        reg = _make_registry({"fake": provider})
+        tool_reg = MagicMock()
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+            patch("missy.agent.runtime.event_bus") as mock_bus,
+        ):
+            runtime = AgentRuntime(AgentConfig(provider="fake"))
+            tc = ToolCall(id="5", name="shell_exec", arguments={})
+            runtime._execute_tool(
+                tc, session_id="s", task_id="t", allowed_tool_names={"calculator"}
+            )
+
+        assert mock_bus.publish.called
+        published_event = mock_bus.publish.call_args[0][0]
+        assert published_event.result == "deny"
+        assert published_event.detail["tool"] == "shell_exec"
+
+    def test_tool_loop_threads_resolved_allow_set_into_dispatch(self):
+        """End-to-end through _tool_loop: the exact set _get_tools()
+        resolved for this turn is what gates dispatch, not a hardcoded
+        or stale set."""
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+        from missy.providers.base import CompletionResponse
+
+        provider = _make_provider()
+        reg = _make_registry({"fake": provider})
+
+        calc_tool = MagicMock()
+        calc_tool.name = "calculator"
+
+        tool_reg = MagicMock()
+        tool_reg.list_tools.return_value = ["calculator"]
+        tool_reg.is_enabled.return_value = True
+        tool_reg.get.return_value = calc_tool
+        tool_reg.execute.return_value = MagicMock(
+            success=True, output="ran shell anyway", error=None
+        )
+
+        shell_call = ToolCall(id="1", name="shell_exec", arguments={"command": "echo hi"})
+        tool_response = CompletionResponse(
+            content="",
+            model="m",
+            provider="fake",
+            usage={},
+            raw={},
+            finish_reason="tool_calls",
+            tool_calls=[shell_call],
+        )
+        final_response = CompletionResponse(
+            content="done",
+            model="m",
+            provider="fake",
+            usage={},
+            raw={},
+            finish_reason="stop",
+            tool_calls=None,
+        )
+        provider.complete_with_tools = MagicMock(side_effect=[tool_response, final_response])
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            runtime = AgentRuntime(AgentConfig(provider="fake", capability_mode="full"))
+            with patch("missy.agent.done_criteria.make_verification_prompt", return_value=""):
+                result_text, tools_used = runtime._tool_loop(
+                    provider=provider,
+                    tools=[calc_tool],
+                    system_prompt="",
+                    messages=[{"role": "user", "content": "hi"}],
+                    session_id="s",
+                    task_id="t",
+                )
+
+        # shell_exec was requested by the model but is not in the resolved
+        # `tools=[calc_tool]` set passed into _tool_loop -- it must never
+        # reach registry.execute() even though the registry itself knows
+        # nothing about a per-turn restriction.
+        tool_reg.execute.assert_not_called()
+
+
 class TestRuntimeDictsToMessages:
     """Tests for _dicts_to_messages (lines 940-951)."""
 

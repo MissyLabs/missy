@@ -964,6 +964,18 @@ class AgentRuntime:
         # Mutable message list for the loop; starts from what context manager gave us
         loop_messages: list[dict] = list(messages)
 
+        # SR-2.3: the tools presented to the provider for this turn are the
+        # only ones that may actually be dispatched. _get_tools() already
+        # resolved capability_mode/tool_policy for this exact call; without
+        # re-checking dispatch against that same set, a hallucinated,
+        # stale, or provider-ignored-the-constraint tool name would still
+        # execute via the registry — silently bypassing the capability
+        # mode/tool-policy layer (the registry's own filesystem/network/
+        # shell checks still apply independently, but this layer is meant
+        # to be a separate, earlier gate).
+        allowed_tool_names = {getattr(t, "name", None) for t in tools}
+        allowed_tool_names.discard(None)
+
         # --- OpenClaw A3: mutation fingerprinting + sticky lastToolError ---
         # Maps fingerprint → call count across all iterations.
         _mutation_fp_counts: dict[str, int] = {}
@@ -1042,7 +1054,12 @@ class AgentRuntime:
                                 },
                                 source=f"tool:{tc.name}",
                             )
-                        tr = self._execute_tool(tc, session_id=session_id, task_id=task_id)
+                        tr = self._execute_tool(
+                            tc,
+                            session_id=session_id,
+                            task_id=task_id,
+                            allowed_tool_names=allowed_tool_names,
+                        )
                         if _HAS_MESSAGE_BUS:
                             self._bus_publish(
                                 _BUS_TOOL_RESULT,
@@ -1419,7 +1436,11 @@ class AgentRuntime:
         return tuple(transient)
 
     def _execute_tool(
-        self, tool_call: ToolCall, session_id: str = "", task_id: str = ""
+        self,
+        tool_call: ToolCall,
+        session_id: str = "",
+        task_id: str = "",
+        allowed_tool_names: set[str] | None = None,
     ) -> ToolResult:
         """Execute a single tool call via the tool registry.
 
@@ -1431,6 +1452,17 @@ class AgentRuntime:
             tool_call: The :class:`~missy.providers.base.ToolCall` to execute.
             session_id: For audit events.
             task_id: For audit events.
+            allowed_tool_names: SR-2.3 — when provided, the exact per-turn
+                tool set resolved by :meth:`_get_tools` (capability_mode +
+                tool_policy already applied). Any ``tool_call.name`` outside
+                this set is refused before the registry is ever consulted,
+                regardless of whether the underlying registry itself would
+                otherwise permit it — a hallucinated, stale, or
+                provider-ignored-the-constraint tool name must not slip
+                past the capability-mode/tool-policy layer just because the
+                registry happens to have a tool by that name registered.
+                ``None`` skips this check (used by call sites that don't
+                have a resolved per-turn set, e.g. direct/legacy callers).
 
         Returns:
             A :class:`~missy.providers.base.ToolResult` with the outcome.
@@ -1439,6 +1471,30 @@ class AgentRuntime:
 
         _MAX_TOOL_RETRIES = 2
         _RETRY_BASE_DELAY = 1.0  # seconds
+
+        if allowed_tool_names is not None and tool_call.name not in allowed_tool_names:
+            logger.warning(
+                "Tool %r requested but not in this turn's resolved allow-set "
+                "(capability_mode=%r); refusing dispatch.",
+                tool_call.name,
+                self.config.capability_mode,
+            )
+            self._emit_event(
+                session_id=session_id,
+                task_id=task_id,
+                event_type="tool_execute",
+                result="deny",
+                detail={"tool": tool_call.name, "reason": "not_in_per_turn_allow_set"},
+            )
+            return ToolResult(
+                tool_call_id=tool_call.id,
+                name=tool_call.name,
+                content=(
+                    f"Tool {tool_call.name!r} is not available this turn "
+                    "(not in the current capability_mode/tool_policy allow-set)."
+                ),
+                is_error=True,
+            )
 
         # Lazily initialise transient error types once.
         if not AgentRuntime._TRANSIENT_ERRORS:

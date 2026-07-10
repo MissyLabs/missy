@@ -821,6 +821,67 @@ requirement — do not overwrite, append new entries as work continues.
   for the same "write-then-check" ordering across all built-in tools was
   not performed.
 
+### SR-2.3 — Execution-time tool allow-set was not revalidated at dispatch
+
+- **Status: fixed.**
+- **Reachability found:** live and directly confirmed against the real
+  `AgentRuntime`. `_tool_loop()` computes the per-turn visible tool set
+  exactly once via `_get_tools()` — which resolves `capability_mode`
+  (`"full"`/`"safe-chat"`/`"discord"`/`"no-tools"`) and
+  `tool_policy`/`agent_tool_policy`/`group_tool_policy` layers — and
+  presents that resolved list to the provider as the available function
+  definitions for the turn. But `_execute_tool()`, the dispatch function
+  actually invoked for every tool call the model returns, looked up
+  `tool_call.name` directly in the live `ToolRegistry` and called
+  `registry.execute()` with **no check whatsoever** against the
+  resolved per-turn set — meaning the capability-mode/tool-policy layer
+  only ever constrained what the model was *shown*, never what could
+  actually be *dispatched*. Live-reproduced end-to-end against real
+  `AgentRuntime`/`_get_tools()`/`_execute_tool()` code (only the
+  underlying `ToolRegistry` itself was mocked): with
+  `capability_mode="safe-chat"`, `_get_tools()` correctly excluded
+  `shell_exec` from the visible set (only `calculator` survived), yet
+  calling `_execute_tool()` directly with a `shell_exec` tool call
+  still dispatched to `registry.execute("shell_exec", ...)` and
+  returned success — a hallucinated, stale-from-an-earlier-turn, or
+  provider-ignored-the-function-list tool name would silently bypass
+  `capability_mode`/`tool_policy` entirely (though the registry's own
+  independent filesystem/network/shell checks, if any apply to that
+  tool, still ran — this is specifically about the higher-level
+  capability layer being skippable, not a total security bypass).
+- **Remediation evidence:** `_tool_loop()` now computes
+  `allowed_tool_names = {t.name for t in tools}` once (from the exact
+  `tools` list it already resolved and handed to the provider) and
+  passes it into every `_execute_tool()` call for that turn.
+  `_execute_tool()` gained an `allowed_tool_names: set[str] | None`
+  parameter — when provided, any `tool_call.name` not in the set is
+  refused immediately with a `ToolResult(is_error=True, ...)` and a
+  `tool_execute`/`deny` audit event, **before the registry is consulted
+  at all** (`registry.execute()` is never called for a denied name,
+  confirmed via mock-call assertions). `None` (the default) skips the
+  check entirely, preserving exact prior behavior for any call site
+  without a resolved per-turn set. Live-verified the exact reproduction
+  above: the identical `shell_exec` dispatch now returns
+  `is_error=True` with `"not available this turn"`, and
+  `registry.execute` is confirmed never invoked. 6 new tests in
+  `tests/agent/test_coverage_gaps.py::TestRuntimeExecuteToolAllowSet`,
+  including one exercising the full `_tool_loop()` → `_execute_tool()`
+  wiring end-to-end (not just the guard clause in isolation). 3
+  pre-existing tests in `tests/agent/test_mutation_fingerprint.py` that
+  stub `_execute_tool()` wholesale were updated to accept the new
+  keyword argument.
+- **Residual risk:** this closes the specific gap the review names —
+  dispatch not being checked against the per-turn resolved set — but
+  does not add allow-set revalidation for policy *hot-reloads* mid-loop
+  (a config change applied between one iteration and the next within
+  the same multi-step tool loop would not be picked up until the next
+  `_get_tools()` call, i.e. the next full turn) — the review's finding
+  text explicitly frames this as "a hole under policy hot-reload
+  mid-loop," which is a narrower, separate scenario this fix does not
+  specifically target (though it does close the more general "any
+  registry-known name works regardless of the per-turn set" gap, which
+  is the finding's primary, more broadly reachable claim).
+
 ---
 
 - Timestamp: 2026-07-09 15:35:26 (raw grep-scan dump below, preserved

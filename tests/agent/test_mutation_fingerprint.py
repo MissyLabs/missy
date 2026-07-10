@@ -118,7 +118,7 @@ def test_repeated_error_fingerprint_injects_lastToolError():
         final_response,
     ]
 
-    def mock_execute(tc, session_id="", task_id=""):
+    def mock_execute(tc, session_id="", task_id="", **_kwargs):
         return error_tr
 
     rt._execute_tool = mock_execute  # type: ignore[method-assign]
@@ -177,7 +177,7 @@ def test_successful_retry_clears_fingerprint_error():
     )
     provider.complete_with_tools.side_effect = [tool_response, final_response]
 
-    def mock_execute(tc, session_id="", task_id=""):
+    def mock_execute(tc, session_id="", task_id="", **_kwargs):
         return success_tr
 
     rt._execute_tool = mock_execute  # type: ignore[method-assign]
@@ -223,7 +223,7 @@ def test_different_args_do_not_trigger_mutation_injection():
 
     call_count = [0]
 
-    def mock_execute(tc, session_id="", task_id=""):
+    def mock_execute(tc, session_id="", task_id="", **_kwargs):
         call_count[0] += 1
         if call_count[0] == 1:
             return error_tr1
