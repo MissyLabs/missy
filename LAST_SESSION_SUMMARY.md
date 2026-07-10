@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (29 checkpoints this session, full suite green after every one)
+## Changed (30 checkpoints this session, full suite green after every one)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -300,15 +300,115 @@ agent-authored tools" product question remains open and intentionally
 unbuilt — if pursued later, this checkpoint documents the minimum bar
 in `AUDIT_SECURITY.md`'s `SR-4.2 (SR-4.5)` section.
 
+### SR-4.3 (third §4 item, twenty-fourth finding this session)
+
+Unlike SR-4.5, the review's "...or stop advertising recovery"
+alternative was rejected in favor of building the real feature —
+resuming a checkpoint doesn't expand what's callable, it only continues
+something already fully authorized, through the exact same per-call
+policy enforcement as any fresh run. No product-policy question needed
+asking here; this was a mechanical "the mechanism exists but nothing
+consumes it" gap, same shape as several earlier findings this session.
+
+`CheckpointManager.classify()` labels checkpoints
+`"resume"`/`"restart"`/`"abandon"` by age, and `missy recover`'s output
+table displayed exactly that recommendation — but a grep for every
+plausible resume entry point (`\.resume(`, `def resume`,
+`restore_checkpoint`, `resume_checkpoint`, `load_checkpoint`) across
+`missy/` matched nothing relevant (only an unrelated
+`SchedulerManager.resume_job()`, which pauses/resumes *scheduled jobs*,
+a different feature entirely). `AgentRuntime` had no method that ever
+read a checkpoint's persisted `loop_messages`/`iteration` back and
+continued the tool loop — the only real action `missy recover` could
+take was `--abandon-all`. Confirmed the write path is safe to resume
+from before building anything: `_tool_loop()` only calls
+`_cm.update(...)` *after* a full round's tool calls and their results
+are all appended to `loop_messages`, never mid-call, so every saved
+checkpoint represents a safe boundary (no tool call can ever be
+replayed by feeding the saved messages into a fresh provider call).
+
+Fixed: added `CheckpointManager.get(id)` (single-row lookup in any
+state — `get_incomplete()` only returns `RUNNING` rows, but resume
+needs to distinguish "not found" from "found but already
+terminal") and `validate_loop_messages()` (a conservative schema gate:
+must be a non-empty list of dicts; each `role` must be a recognized
+value; `tool` entries need `name`/`content`; `assistant` `tool_calls`
+entries need `name` — rejects anything that doesn't look exactly like
+what `_tool_loop()` itself writes). Added
+`AgentRuntime.resume_checkpoint(checkpoint_id)`: fails closed with
+`ValueError` if not found or not `RUNNING`; fails closed with a new
+`CheckpointCorruptedError` (checkpoint marked `FAILED` first, so it's
+never offered for resume again) if `loop_messages` fails validation;
+otherwise re-resolves both the system prompt (persona/behavior/memory-
+synthesis may have changed) and the tool set
+(`_get_tools()`, under the *current* `capability_mode`/`tool_policy` —
+this is the policy-revalidation step, requiring zero special-case code
+since every tool call already goes through
+`ToolRegistry._check_permissions()` on every dispatch, resumed or not)
+before handing the saved `loop_messages` straight to the real
+`_tool_loop()`. The old checkpoint is marked `COMPLETE` immediately
+after its data is validated and handed off — before the resumed
+`_tool_loop()` runs, so a concurrent `missy recover --resume` on the
+same ID cannot double-resume it; the resumed run gets its own new
+checkpoint via `_tool_loop()`'s existing internal create/complete/fail
+calls, unaffected by this change. Added `missy recover --resume ID`
+(plus `--provider` to override), wired to the new method, with the
+CLI's own "recommended action" hint text updated to mention it.
+
+Live-verified end-to-end via a real `CheckpointManager` (isolated
+`HOME`, real SQLite, zero mocks on the checkpoint side) plus a mocked
+provider: (1) happy path — a checkpoint holding one completed
+`calculator` round resumes to a genuine "The answer is 4." response,
+the saved messages are actually what was sent to the provider (not
+discarded/rebuilt from scratch), and the old checkpoint transitions to
+`COMPLETE`; (2) a non-existent checkpoint ID raises `ValueError`,
+provider never called; (3) a `COMPLETE`-state checkpoint raises
+`ValueError` ("not resumable"), provider never called; (4) corrupted
+`loop_messages` — both invalid JSON (which `_row_to_dict()`'s existing
+exception handling silently degrades to `[]`, now correctly rejected
+since empty lists are invalid) and valid-JSON-wrong-shape (a list of
+bare strings instead of message dicts) — raises
+`CheckpointCorruptedError` and marks the checkpoint `FAILED`, provider
+never called; (5) a checkpoint resumed under
+`capability_mode="no-tools"` genuinely receives an empty tool list in
+the actual provider call, confirming policy revalidation is live
+behavior, not just a claim in a docstring. Corrected
+`docs/implementation/module-map.md`'s checkpoint entry (the claim
+"Enables `missy recover` to resume incomplete sessions" is now true
+instead of aspirational; also fixed a wrong "Key exports" line that
+named a nonexistent `Checkpoint` class instead of the real
+`CheckpointManager`) and `CLAUDE.md`'s CLI command table.
+
+24 new regression tests: `tests/agent/test_checkpoint.py` (`TestGet`,
+`TestValidateLoopMessages`), `tests/agent/test_runtime_deep.py`
+(`TestResumeCheckpoint`, 6 tests against the real resume path),
+`tests/cli/test_cost_recover.py` (`TestRecoverResume`, 4 tests).
+`tests/agent/`+`tests/cli/`+`tests/unit/`+`tests/security/`+
+`tests/scheduler/` (9,853 tests) pass with no regressions.
+
+**Residual risk, called out explicitly:** the total iteration budget
+resets to `max_iterations` on resume rather than continuing the
+original run's counter (e.g. a task interrupted at iteration 8 of 10
+gets a fresh 10 after resume, not 2) — a deliberate simplification, not
+a safety gap, since it only ever grants a resumed task *more* room to
+finish, never less, and every additional iteration still goes through
+identical per-call policy/budget enforcement. No automatic/scheduled
+resume exists — an operator must run `missy recover --resume ID`
+manually; `ProactiveManager` does not retry interrupted tasks on its
+own (out of scope for this finding, which was about the resume
+mechanism existing at all, not about triggering it automatically).
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-3 failed, 20903 passed, 13 skipped in 459.75s (0:07:39)
+3 failed, 20928 passed, 13 skipped in 459.64s (0:07:39)
 ```
 
-(Re-run after SR-4.5; identical pass/fail counts to the SR-4.4 run,
-confirming SR-4.5 introduced zero regressions.)
+The 3 failures are exactly the known pre-existing `CameraDiscovery`
+cache-TTL flakes (task #11), confirmed unrelated via `git stash` in
+earlier checkpoints and reproduced again here unchanged. Zero
+regressions from SR-4.3 or any checkpoint this session.
 
 The 3 failures are exactly the known pre-existing `CameraDiscovery`
 cache-TTL flakes (task #11), confirmed unrelated via `git stash` in an
@@ -328,15 +428,15 @@ three files above.)
   SR-1.9a, SR-1.10, SR-1.11, SR-1.12, SR-1.13, SR-2.1, SR-2.2, SR-2.3,
   SR-2.4, SR-3.1 (substantially via FX-B), SR-3.2, SR-3.3, SR-3.4
   (including its cross-session-aggregation sub-finding), SR-3.5, SR-4.4,
-  SR-4.5 — **§2 and §3 are now both fully closed, with no open
-  sub-findings in either; §4 has its first two items (SR-4.4
-  done-criteria verification, SR-4.5 self_create_tool honesty) fixed.**
-  Remaining: SR-1.1 (audit signing — larger cross-cutting change),
-  SR-1.9b (DNS TOCTOU, substantially harder — needs connecting to a
-  pinned policy-verified IP rather than re-resolving at connect time),
-  SR-4.1, SR-4.2, SR-4.3, SR-4.6, SR-4.7, SR-4.8 (remaining dead/unwired
-  features, 6 sub-items) — this is the natural next large area now that
-  §1 (partially), §2 (fully), §3 (fully), and two of §4's items are
+  SR-4.5, SR-4.3 — **§2 and §3 are now both fully closed, with no open
+  sub-findings in either; §4 has three items fixed (SR-4.4 done-criteria
+  verification, SR-4.5 self_create_tool honesty, SR-4.3 checkpoint
+  resume).** Remaining: SR-1.1 (audit signing — larger cross-cutting
+  change), SR-1.9b (DNS TOCTOU, substantially harder — needs connecting
+  to a pinned policy-verified IP rather than re-resolving at connect
+  time), SR-4.1, SR-4.2, SR-4.6, SR-4.7, SR-4.8 (remaining dead/unwired
+  features, 5 sub-items) — this is the natural next large area now that
+  §1 (partially), §2 (fully), §3 (fully), and three of §4's items are
   closed.
 - **SR-1.7's launcher sub-finding** remains open — `find`/`xargs`/
   `bash`/`sudo` etc. are allowlist-able with only a warning, and
@@ -425,37 +525,47 @@ both fully closed**, with zero open sub-findings in either (SR-2.1:
 scheduled jobs default to `capability_mode="safe-chat"`; SR-2.2: a real
 `ApprovalGate` is wired into `ProactiveManager` and the Web API server;
 SR-3.4's cross-session-aggregation sub-finding is fixed — `CostTracker`
-is now per-session-keyed), and **§4's first two items are now fixed**:
-SR-4.4 — `_tool_loop()` rejects a "done" claim made immediately after
-an unresolved tool error, up to 2 retries, with
+is now per-session-keyed), and **§4 has three items fixed**: SR-4.4 —
+`_tool_loop()` rejects a "done" claim made immediately after an
+unresolved tool error, up to 2 retries, with
 `agent.done_criteria.rejected`/`.unverified` audit events; SR-4.5 —
 `self_create_tool` no longer claims written scripts are
 "created"/"registered" as usable tools (operator-confirmed: kept
-proposal-only rather than building dynamic loading). SR-1.1 (audit
-signing) is now the largest remaining §1 item; the remaining §4 items
-(SR-4.1 long-term memory, SR-4.2 sub-agents, SR-4.3 checkpoint recovery,
-SR-4.6 OTLP export, SR-4.7 MCP execution/approval, SR-4.8 provider
-rotation/fallback claims — 6 sub-items) are the next natural
-continuation, each individually scoped and independently
-checkpointable like SR-4.4/SR-4.5 were. Given how the last several
-checkpoints went (SR-3.3 and SR-3.5 were both flagged "likely already
-fixed" and both turned out to hide live, confirmed,
-previously-undetected bugs; SR-2.1, SR-2.2, the SR-3.4 residual, SR-4.4,
-and SR-4.5 all turned out to have a second layer beyond the obvious fix
-— SR-2.1's fail-closed legacy-record handling, SR-2.2's
-entirely-unwired `ApprovalGate` requiring new REST endpoints, the
-SR-3.4 residual's 25-test mechanical-vs-intentional update split across
-9 files, SR-4.4's fingerprint-history design discarded mid-
-implementation after live testing revealed a false-positive staleness
-bug, SR-4.5 turning out to be a genuine product-policy fork requiring
-explicit operator input rather than an obvious "just fix it" bug), keep
-applying the same discipline to whatever's picked up next: read the
-actual current code, trace actual runtime call paths, specifically
-check whether any existing test exercises the *real* production
-dispatch/entry point rather than just the unit under test in isolation,
-live-reproduce before declaring anything fixed, broken, or
-not-applicable, and ask before implementing whenever a finding turns
-out to be a genuine product-policy fork rather than a mechanical bug.
+proposal-only rather than building dynamic loading); SR-4.3 —
+`AgentRuntime.resume_checkpoint()` and `missy recover --resume ID` now
+actually continue an interrupted task from its saved conversation
+state, fail-closed on not-found/not-RUNNING/corrupted checkpoints, with
+policy freshly re-resolved at resume time. SR-1.1 (audit signing) is
+now the largest remaining §1 item; the remaining §4 items (SR-4.1
+long-term memory, SR-4.2 sub-agents, SR-4.6 OTLP export, SR-4.7 MCP
+execution/approval, SR-4.8 provider rotation/fallback claims — 5
+sub-items) are the next natural continuation, each individually scoped
+and independently checkpointable like SR-4.3/SR-4.4/SR-4.5 were. Given
+how the last several checkpoints went (SR-3.3 and SR-3.5 were both
+flagged "likely already fixed" and both turned out to hide live,
+confirmed, previously-undetected bugs; SR-2.1, SR-2.2, the SR-3.4
+residual, SR-4.4, SR-4.5, and SR-4.3 all turned out to have a second
+layer beyond the obvious fix — SR-2.1's fail-closed legacy-record
+handling, SR-2.2's entirely-unwired `ApprovalGate` requiring new REST
+endpoints, the SR-3.4 residual's 25-test mechanical-vs-intentional
+update split across 9 files, SR-4.4's fingerprint-history design
+discarded mid-implementation after live testing revealed a
+false-positive staleness bug, SR-4.5 turning out to be a genuine
+product-policy fork requiring explicit operator input rather than an
+obvious "just fix it" bug, SR-4.3 requiring a genuine idempotency
+argument (verifying checkpoints are only ever saved at a safe round
+boundary) before it was safe to build resume at all), keep applying the
+same discipline to whatever's picked up next: read the actual current
+code, trace actual runtime call paths, specifically check whether any
+existing test exercises the *real* production dispatch/entry point
+rather than just the unit under test in isolation, live-reproduce
+before declaring anything fixed, broken, or not-applicable, and ask
+before implementing whenever a finding turns out to be a genuine
+product-policy fork rather than a mechanical bug (SR-4.3 vs. SR-4.5 is
+a useful contrast: both offered a review-sanctioned "or just document
+the limitation" escape hatch, but only SR-4.5's actually expanded the
+security surface if built — SR-4.3's real fix was strictly safer than
+leaving the feature half-advertised, so it didn't need to be asked).
 Alternatively pick up one of the concrete scoped tasks above (#11, #12,
 #15, #16, #17), all self-contained and not requiring a live delegate. A
 Web TUI browser page for the new `/api/v1/approvals` endpoints is also

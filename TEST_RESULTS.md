@@ -1,5 +1,33 @@
 # TEST_RESULTS
 
+## Run: 2026-07-10 22:05 UTC — validation-harness overhaul, SR-4.3 (real checkpoint resume)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Finding: `missy recover` classified/displayed a `"resume"` action for
+  fresh checkpoints, but no code anywhere ever read a checkpoint's
+  saved `loop_messages`/`iteration` back and continued the tool loop —
+  `grep -rn "\.resume(\|def resume\|restore_checkpoint\|resume_checkpoint\|load_checkpoint" missy/`
+  matched nothing relevant. The only real action available was
+  `--abandon-all`.
+- Fix: `CheckpointManager.get()`, `validate_loop_messages()`,
+  `AgentRuntime.resume_checkpoint()` (fail-closed on not-found/
+  not-RUNNING/corrupted, re-resolves system prompt + tools under
+  current config before resuming via the real `_tool_loop()`),
+  `missy recover --resume ID`.
+- Command: `pytest tests/agent/test_checkpoint.py tests/agent/test_runtime_deep.py -v`
+- Result: `184 passed` (new: `TestGet`, `TestValidateLoopMessages`,
+  `TestResumeCheckpoint` — 6 tests exercising the real resume path
+  against a real SQLite-backed `CheckpointManager`, no mocks)
+- Command: `pytest tests/cli/test_cost_recover.py -v`
+- Result: `13 passed` (new: `TestRecoverResume`, 4 tests)
+- Command: `pytest tests/agent/ tests/cli/ tests/unit/ tests/security/ tests/scheduler/ -q -o faulthandler_timeout=120`
+- Result: `9853 passed, 4 skipped` — no regressions
+- Command: `pytest tests/ -q -o faulthandler_timeout=120`
+- Result: `3 failed, 20928 passed, 13 skipped in 459.64s (0:07:39)` —
+  up from 20903, only the 3 known pre-existing `CameraDiscovery`
+  cache-TTL flakes failing, zero regressions from this checkpoint's
+  changes.
+
 ## Run: 2026-07-10 21:15 UTC — validation-harness overhaul, SR-4.5 (self_create_tool honesty about proposal-only status)
 
 - Branch: `overhaul/missy-validation-20260710-031406`

@@ -2541,6 +2541,148 @@ class AgentRuntime:
         """
         return list(self._pending_recovery)
 
+    def resume_checkpoint(self, checkpoint_id: str) -> str:
+        """Resume an interrupted task from a persisted checkpoint (SR-4.3).
+
+        Loads the checkpoint's saved ``loop_messages`` (the exact
+        conversation-plus-tool-results history at the point of the last
+        completed round -- see :class:`~missy.agent.checkpoint.CheckpointManager`'s
+        ``update()``, which is only ever called *after* a round's tool
+        calls and their results have all been appended, never mid-call),
+        validates it, and feeds it straight into the real
+        :meth:`_tool_loop` so the resumed run goes through exactly the
+        same per-call policy/permission enforcement as any other tool
+        call -- resuming does not re-authorize anything the current
+        config/policy wouldn't already allow.
+
+        Args:
+            checkpoint_id: Primary key of a ``RUNNING`` checkpoint, as
+                returned by :attr:`pending_recovery` or ``missy recover``.
+
+        Returns:
+            The resumed run's final response text.
+
+        Raises:
+            ValueError: When no such checkpoint exists, or it is not in
+                the ``RUNNING`` state (already completed/failed/abandoned
+                checkpoints cannot be resumed).
+            CheckpointCorruptedError: When the checkpoint's persisted
+                ``loop_messages`` fails schema validation. The checkpoint
+                is marked ``FAILED`` before this is raised, so it will not
+                be offered for resume again.
+            ProviderError: Propagated from the underlying tool loop, same
+                as :meth:`run`.
+        """
+        from missy.agent.checkpoint import (
+            CheckpointCorruptedError,
+            CheckpointManager as _CheckpointManager,
+            validate_loop_messages,
+        )
+
+        cm = _CheckpointManager()
+        checkpoint = cm.get(checkpoint_id)
+        if checkpoint is None:
+            raise ValueError(f"No checkpoint found with id {checkpoint_id!r}.")
+        if checkpoint["state"] != "RUNNING":
+            raise ValueError(
+                f"Checkpoint {checkpoint_id!r} is not resumable "
+                f"(state={checkpoint['state']!r}); only RUNNING checkpoints "
+                "can be resumed."
+            )
+
+        loop_messages = checkpoint["loop_messages"]
+        if not validate_loop_messages(loop_messages):
+            cm.fail(checkpoint_id, error="Corrupted checkpoint: loop_messages failed schema validation.")
+            raise CheckpointCorruptedError(
+                f"Checkpoint {checkpoint_id!r} has corrupted loop_messages; marked FAILED."
+            )
+
+        sid = checkpoint["session_id"]
+        original_prompt = checkpoint["prompt"]
+        task_id = str(self._session_mgr.generate_task_id())
+
+        provider = self._get_provider()
+
+        # Rebuild the system prompt fresh (persona/behavior/memory-synthesis
+        # may have changed since the checkpoint was created); the saved
+        # loop_messages already carries the full prior conversation, so the
+        # freshly-built `messages` return value is discarded -- we only
+        # need a current system_prompt.
+        system_prompt, _unused_messages = self._build_context_messages(
+            original_prompt, history=[], session_id=sid
+        )
+        if self._drift_detector is not None:
+            self._drift_detector.register("system_prompt", system_prompt)
+
+        # Re-resolve tools under the CURRENT capability_mode/tool_policy --
+        # this is the policy-revalidation step: if config has tightened
+        # since the checkpoint was created, the resumed run only gets the
+        # narrower set, same as any fresh run would.
+        tools = self._get_tools()
+
+        # This checkpoint's data has now been consumed and handed off to a
+        # new checkpoint-tracked run (created inside _tool_loop()) -- mark
+        # it complete so it is never offered for resume again, including by
+        # a concurrent `missy recover --resume` invocation.
+        cm.complete(checkpoint_id)
+
+        self._emit_event(
+            session_id=sid,
+            task_id=task_id,
+            event_type="agent.checkpoint.resumed",
+            result="allow",
+            detail={"checkpoint_id": checkpoint_id, "iteration": checkpoint.get("iteration", 0)},
+        )
+
+        try:
+            final_response, all_tool_names_used = self._tool_loop(
+                provider=provider,
+                system_prompt=system_prompt,
+                messages=loop_messages,
+                tools=tools,
+                session_id=sid,
+                task_id=task_id,
+                user_input=original_prompt,
+            )
+        except Exception as exc:
+            self._emit_event(
+                session_id=sid,
+                task_id=task_id,
+                event_type="agent.run.error",
+                result="error",
+                detail={"error": str(exc), "stage": "resume", "checkpoint_id": checkpoint_id},
+            )
+            if isinstance(exc, ProviderError):
+                raise
+            raise ProviderError(f"Unexpected error resuming checkpoint: {exc}") from exc
+
+        self._track_request(original_prompt, sid, all_tool_names_used, provider.name)
+        self._save_turn(sid, "assistant", final_response, provider=provider.name, task_id=task_id)
+        if all_tool_names_used:
+            self._record_learnings(all_tool_names_used, final_response, original_prompt)
+        self._maybe_compact(sid, provider)
+
+        cost_detail = {}
+        _session_tracker = self._peek_cost_tracker(sid)
+        if _session_tracker is not None:
+            with contextlib.suppress(Exception):
+                cost_detail = _session_tracker.get_summary()
+
+        self._emit_event(
+            session_id=sid,
+            task_id=task_id,
+            event_type="agent.run.complete",
+            result="allow",
+            detail={
+                "provider": provider.name,
+                "tools_used": all_tool_names_used,
+                "resumed_from": checkpoint_id,
+                **cost_detail,
+            },
+        )
+
+        return censor_response(final_response)
+
     def _record_cost(self, response, session_id: str = "") -> None:
         """Record token usage in this session's cost tracker and persist to SQLite."""
         tracker = self._get_cost_tracker(session_id)

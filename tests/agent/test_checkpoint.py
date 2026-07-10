@@ -9,7 +9,12 @@ import time
 
 import pytest
 
-from missy.agent.checkpoint import CheckpointManager, RecoveryResult, scan_for_recovery
+from missy.agent.checkpoint import (
+    CheckpointManager,
+    RecoveryResult,
+    scan_for_recovery,
+    validate_loop_messages,
+)
 from missy.core.events import event_bus
 
 # ---------------------------------------------------------------------------
@@ -533,3 +538,101 @@ class TestRecoveryResult:
             action="restart",
         )
         assert r.iteration == 0
+
+
+# ---------------------------------------------------------------------------
+# CheckpointManager.get() -- SR-4.3 (single-row lookup, used by resume)
+# ---------------------------------------------------------------------------
+
+
+class TestGet:
+    def test_get_existing_checkpoint(self, cm):
+        cid = cm.create("sess", "task", "do the thing")
+        cm.update(cid, [{"role": "user", "content": "hi"}], ["tool_a"], 3)
+        row = cm.get(cid)
+        assert row is not None
+        assert row["id"] == cid
+        assert row["session_id"] == "sess"
+        assert row["state"] == "RUNNING"
+        assert row["iteration"] == 3
+        assert row["loop_messages"] == [{"role": "user", "content": "hi"}]
+
+    def test_get_nonexistent_returns_none(self, cm):
+        assert cm.get("no-such-id") is None
+
+    def test_get_returns_terminal_states_too(self, cm):
+        """Unlike get_incomplete(), get() must return any state -- resume
+        needs to distinguish "not found" from "found but not resumable"."""
+        cid = cm.create("sess", "task", "prompt")
+        cm.complete(cid)
+        row = cm.get(cid)
+        assert row is not None
+        assert row["state"] == "COMPLETE"
+
+
+# ---------------------------------------------------------------------------
+# validate_loop_messages() -- SR-4.3 schema gate before resume
+# ---------------------------------------------------------------------------
+
+
+class TestValidateLoopMessages:
+    def test_valid_conversation_accepted(self):
+        assert validate_loop_messages(
+            [
+                {"role": "user", "content": "hi"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{"id": "t1", "name": "calculator", "arguments": {}}],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "t1",
+                    "name": "calculator",
+                    "content": "4",
+                    "is_error": False,
+                },
+            ]
+        )
+
+    def test_not_a_list_rejected(self):
+        assert not validate_loop_messages({"role": "user", "content": "hi"})
+        assert not validate_loop_messages("not a list")
+        assert not validate_loop_messages(None)
+
+    def test_empty_list_rejected(self):
+        """A checkpoint with zero history is never usefully resumable."""
+        assert not validate_loop_messages([])
+
+    def test_entry_not_a_dict_rejected(self):
+        assert not validate_loop_messages(["just a string"])
+
+    def test_unknown_role_rejected(self):
+        assert not validate_loop_messages([{"role": "system-hijack", "content": "x"}])
+
+    def test_missing_role_rejected(self):
+        assert not validate_loop_messages([{"content": "no role key"}])
+
+    def test_tool_message_missing_name_rejected(self):
+        assert not validate_loop_messages(
+            [{"role": "tool", "tool_call_id": "t1", "content": "4"}]
+        )
+
+    def test_tool_message_missing_content_rejected(self):
+        assert not validate_loop_messages([{"role": "tool", "name": "calculator"}])
+
+    def test_assistant_tool_calls_not_a_list_rejected(self):
+        assert not validate_loop_messages(
+            [{"role": "assistant", "content": "", "tool_calls": "not-a-list"}]
+        )
+
+    def test_assistant_tool_call_missing_name_rejected(self):
+        assert not validate_loop_messages(
+            [{"role": "assistant", "content": "", "tool_calls": [{"id": "t1"}]}]
+        )
+
+    def test_assistant_without_tool_calls_accepted(self):
+        assert validate_loop_messages([{"role": "assistant", "content": "final answer"}])
+
+    def test_system_role_accepted(self):
+        assert validate_loop_messages([{"role": "system", "content": "you are Missy"}])

@@ -40,6 +40,15 @@ from missy.core.events import AuditEvent, event_bus
 
 logger = logging.getLogger(__name__)
 
+
+class CheckpointCorruptedError(Exception):
+    """Raised when a checkpoint's persisted loop state fails schema validation.
+
+    The offending checkpoint is marked ``FAILED`` before this is raised, so
+    it will not be offered for resume again.
+    """
+
+
 _DEFAULT_DB_PATH = "~/.missy/checkpoints.db"
 
 #: Age thresholds (in seconds) for checkpoint recovery classification.
@@ -243,6 +252,23 @@ class CheckpointManager:
     # Read operations
     # ------------------------------------------------------------------
 
+    def get(self, checkpoint_id: str) -> dict | None:
+        """Fetch a single checkpoint by ID, in any state.
+
+        Args:
+            checkpoint_id: Primary key to look up.
+
+        Returns:
+            A dict with keys matching the ``checkpoints`` table columns
+            (``loop_messages``/``tool_names_used`` deserialised from JSON),
+            or ``None`` if no row exists with that ID.
+        """
+        conn = self._connect()
+        row = conn.execute(
+            "SELECT * FROM checkpoints WHERE id = ?", (checkpoint_id,)
+        ).fetchone()
+        return self._row_to_dict(row) if row is not None else None
+
     def get_incomplete(self) -> list[dict]:
         """Return all checkpoints with state ``RUNNING``.
 
@@ -362,6 +388,51 @@ class CheckpointManager:
             except (json.JSONDecodeError, TypeError):
                 d[key] = []
         return d
+
+
+#: Roles a persisted loop message may carry. Matches the dict shapes
+#: AgentRuntime._tool_loop() appends to loop_messages.
+_VALID_ROLES = frozenset({"user", "assistant", "tool", "system"})
+
+
+def validate_loop_messages(loop_messages: object) -> bool:
+    """Validate that *loop_messages* has the shape AgentRuntime expects.
+
+    Used before resuming a checkpoint (SR-4.3): a corrupted or
+    hand-edited ``loop_messages`` column must never be fed straight into
+    the provider/tool-call loop. Deliberately conservative -- rejects
+    anything that doesn't look exactly like what
+    ``AgentRuntime._tool_loop()`` itself writes, rather than trying to
+    sanitise or coerce malformed data into something usable.
+
+    Args:
+        loop_messages: The deserialised value read back from the
+            checkpoints table (expected: ``list[dict]``).
+
+    Returns:
+        ``True`` if every entry has a recognised ``role`` and the
+        role-appropriate required keys; ``False`` otherwise (including
+        when *loop_messages* itself isn't a list).
+    """
+    if not isinstance(loop_messages, list) or not loop_messages:
+        return False
+    for msg in loop_messages:
+        if not isinstance(msg, dict):
+            return False
+        role = msg.get("role")
+        if role not in _VALID_ROLES:
+            return False
+        if role == "tool":
+            if not isinstance(msg.get("name"), str) or "content" not in msg:
+                return False
+        if role == "assistant" and "tool_calls" in msg:
+            tool_calls = msg["tool_calls"]
+            if not isinstance(tool_calls, list):
+                return False
+            for tc in tool_calls:
+                if not isinstance(tc, dict) or not isinstance(tc.get("name"), str):
+                    return False
+    return True
 
 
 # ---------------------------------------------------------------------------

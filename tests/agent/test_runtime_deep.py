@@ -1696,3 +1696,162 @@ class TestAttentionSystemIntegration:
         attn = AttentionSystem()
         state = attn.process("hello there")
         assert 0.0 <= state.urgency <= 1.0
+
+
+class TestResumeCheckpoint:
+    """SR-4.3: a checkpoint's persisted loop state must actually be usable
+    to continue an interrupted task, not just listed by `missy recover`.
+    Uses a real CheckpointManager against an isolated HOME so these tests
+    exercise the same SQLite read/write path production code goes through.
+    """
+
+    def test_resume_continues_from_saved_history_and_completes(self, monkeypatch, tmp_path):
+        """Core reproduction: a checkpoint left behind mid-task (a completed
+        tool round with no final answer yet) must be resumable to a real
+        final answer, using the saved history rather than starting over."""
+        from missy.agent.checkpoint import CheckpointManager
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        provider = _make_provider(reply="The answer is 4.")
+        provider.complete_with_tools.return_value = _make_stop_response("The answer is 4.")
+        registry = _make_registry({"fake": provider})
+
+        cm = CheckpointManager()
+        saved_messages = [
+            {"role": "user", "content": "add 2 and 2"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "tc-1", "name": "calculator", "arguments": {"expression": "2+2"}}],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "tc-1",
+                "name": "calculator",
+                "content": "4",
+                "is_error": False,
+            },
+        ]
+        cid = cm.create("sess-1", "task-1", "add 2 and 2")
+        cm.update(cid, saved_messages, ["calculator"], iteration=1)
+
+        with patch("missy.agent.runtime.get_registry", return_value=registry):
+            rt = AgentRuntime(AgentConfig(provider="fake"))
+            result = rt.resume_checkpoint(cid)
+
+        assert result == "The answer is 4."
+        # The saved history was actually fed to the provider, not discarded
+        # (the +1 is the system prompt _dicts_to_messages() prepends).
+        sent_messages = provider.complete_with_tools.call_args[0][0]
+        assert len(sent_messages) == len(saved_messages) + 1
+        assert any("4" in (m.content or "") for m in sent_messages)
+        # The old checkpoint is consumed (never offered for resume again).
+        assert cm.get(cid)["state"] == "COMPLETE"
+
+    def test_resume_emits_expected_audit_events(self, monkeypatch, tmp_path):
+        from missy.agent.checkpoint import CheckpointManager
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        provider = _make_provider(reply="done")
+        provider.complete_with_tools.return_value = _make_stop_response("done")
+        registry = _make_registry({"fake": provider})
+
+        cm = CheckpointManager()
+        cid = cm.create("sess-1", "task-1", "prompt")
+        cm.update(cid, [{"role": "user", "content": "prompt"}], [], iteration=0)
+
+        events = []
+        with patch("missy.agent.runtime.get_registry", return_value=registry):
+            rt = AgentRuntime(AgentConfig(provider="fake"))
+            rt._emit_event = lambda **kw: events.append(kw)
+            rt.resume_checkpoint(cid)
+
+        types = [e["event_type"] for e in events]
+        assert "agent.checkpoint.resumed" in types
+        assert "agent.run.complete" in types
+
+    def test_resume_nonexistent_checkpoint_raises_value_error(self, monkeypatch, tmp_path):
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        provider = _make_provider()
+        registry = _make_registry({"fake": provider})
+        with patch("missy.agent.runtime.get_registry", return_value=registry):
+            rt = AgentRuntime(AgentConfig(provider="fake"))
+            with pytest.raises(ValueError, match="No checkpoint found"):
+                rt.resume_checkpoint("does-not-exist")
+
+    def test_resume_non_running_checkpoint_raises_value_error(self, monkeypatch, tmp_path):
+        from missy.agent.checkpoint import CheckpointManager
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        provider = _make_provider()
+        registry = _make_registry({"fake": provider})
+
+        cm = CheckpointManager()
+        cid = cm.create("sess-1", "task-1", "prompt")
+        cm.update(cid, [{"role": "user", "content": "prompt"}], [], iteration=0)
+        cm.complete(cid)
+
+        with patch("missy.agent.runtime.get_registry", return_value=registry):
+            rt = AgentRuntime(AgentConfig(provider="fake"))
+            with pytest.raises(ValueError, match="not resumable"):
+                rt.resume_checkpoint(cid)
+        # complete_with_tools must never be called for a rejected resume.
+        provider.complete_with_tools.assert_not_called()
+
+    def test_resume_corrupted_checkpoint_marks_failed_and_raises(self, monkeypatch, tmp_path):
+        """A checkpoint with structurally invalid loop_messages must be
+        rejected fail-closed, not fed into the provider/tool loop."""
+        from missy.agent.checkpoint import CheckpointCorruptedError, CheckpointManager
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        provider = _make_provider()
+        registry = _make_registry({"fake": provider})
+
+        cm = CheckpointManager()
+        cid = cm.create("sess-1", "task-1", "prompt")
+        conn = cm._connect()
+        conn.execute(
+            "UPDATE checkpoints SET loop_messages = ? WHERE id = ?",
+            ('["just", "a", "list", "of", "strings"]', cid),
+        )
+        conn.commit()
+
+        with patch("missy.agent.runtime.get_registry", return_value=registry):
+            rt = AgentRuntime(AgentConfig(provider="fake"))
+            with pytest.raises(CheckpointCorruptedError):
+                rt.resume_checkpoint(cid)
+
+        assert cm.get(cid)["state"] == "FAILED"
+        provider.complete_with_tools.assert_not_called()
+
+    def test_resume_revalidates_policy_via_current_tool_set(self, monkeypatch, tmp_path):
+        """Resuming must re-resolve tools under the CURRENT config, not
+        silently trust whatever was authorized when the checkpoint was
+        created -- if capability_mode has tightened since, the resumed run
+        only sees the narrower tool set, same as any fresh run would."""
+        from missy.agent.checkpoint import CheckpointManager
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        provider = _make_provider(reply="ok")
+        provider.complete_with_tools.return_value = _make_stop_response("ok")
+        registry = _make_registry({"fake": provider})
+
+        cm = CheckpointManager()
+        cid = cm.create("sess-1", "task-1", "prompt")
+        cm.update(cid, [{"role": "user", "content": "prompt"}], [], iteration=0)
+
+        with patch("missy.agent.runtime.get_registry", return_value=registry):
+            rt = AgentRuntime(AgentConfig(provider="fake", capability_mode="no-tools"))
+            rt.resume_checkpoint(cid)
+
+        # no-tools means _get_tools() returns [] -- verify the resumed call
+        # actually used the current, empty tool set.
+        _tools_arg = provider.complete_with_tools.call_args[0][1]
+        assert _tools_arg == []

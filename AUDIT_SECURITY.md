@@ -1715,6 +1715,122 @@ requirement — do not overwrite, append new entries as work continues.
   benchmarked execution before the first live call, not simply
   `exec()`-ing whatever the model wrote.
 
+### SR-4.3 — `missy recover` could list interrupted tasks but never actually resume one
+
+- **Status: fixed.** Third §4 item; unlike SR-4.5, the review's own
+  "...or stop advertising recovery" alternative was rejected here in
+  favor of building the real feature, because resuming a checkpoint
+  doesn't expand what's callable — it only continues something already
+  fully authorized to run, through the exact same per-call policy
+  enforcement as any fresh run. That's a materially different security
+  calculus than SR-4.5's "should agent-authored code become
+  auto-executable" question, so no product-policy question needed to be
+  asked here.
+- **Reachability found:** `missy/agent/checkpoint.py`'s module
+  docstring claimed "On startup (`AgentRuntime.__init__`), incomplete
+  checkpoints are scanned and classified for recovery" — true as far as
+  it went, but `CheckpointManager.classify()` labels checkpoints under 1
+  hour old `"resume"`, under 24 hours `"restart"`, and the CLI's
+  `missy recover` table displays exactly that recommendation to the
+  operator. Grepped every call site: `grep -rn "\.resume(\|def resume\|restore_checkpoint\|resume_checkpoint\|load_checkpoint"
+  missy/` (before this fix) matched nothing except an unrelated
+  `SchedulerManager.resume_job()` (pause/resume of *scheduled jobs*, a
+  completely different feature). `AgentRuntime` had no method that ever
+  read a checkpoint's persisted `loop_messages`/`iteration` back and
+  continued the tool loop from it — `missy recover`'s output table
+  recommended "resume" as an action the operator could not actually
+  take; the only real action available was `--abandon-all`.
+  `_tool_loop()` does write real, replayable state
+  (`_cm.update(_checkpoint_id, loop_messages, tool_names_used,
+  iteration)`), and — critically for safety — only ever does so
+  *after* a full round's tool calls and their results have all been
+  appended to `loop_messages`, never mid-call, so every saved
+  checkpoint represents a safe boundary to resume from (no tool call
+  could ever be replayed by feeding the saved messages back into a
+  fresh provider call).
+- **Remediation evidence:** added `CheckpointManager.get(checkpoint_id)`
+  (single-row lookup in any state, needed to distinguish "not found"
+  from "found but not resumable" — `get_incomplete()` only returns
+  `RUNNING` rows). Added `validate_loop_messages()`, a conservative
+  schema gate (must be a non-empty list of dicts; each entry's `role`
+  must be one of `user`/`assistant`/`tool`/`system`; `tool` entries must
+  carry `name`/`content`; `assistant` entries with `tool_calls` must
+  have each call carry a `name`) — rejects anything that doesn't look
+  exactly like what `_tool_loop()` itself writes, rather than trying to
+  coerce malformed data into something usable. Added
+  `AgentRuntime.resume_checkpoint(checkpoint_id)`: loads the checkpoint,
+  fails closed with `ValueError` if not found or not `RUNNING` (a
+  `COMPLETE`/`FAILED`/`ABANDONED` checkpoint cannot be resumed), fails
+  closed with a new `CheckpointCorruptedError` (checkpoint marked
+  `FAILED` first, so it's never offered for resume again) if
+  `loop_messages` fails schema validation, then re-resolves both the
+  system prompt (persona/behavior/memory-synthesis may have changed)
+  and the tool set (`_get_tools()`, under the *current*
+  `capability_mode`/`tool_policy` — this is the policy-revalidation
+  requirement: if config has tightened since the checkpoint was
+  created, the resumed run only gets the narrower set, exactly like any
+  fresh run would, with zero special-case code needed since every tool
+  call already goes through `ToolRegistry._check_permissions()` on
+  every dispatch, resumed or not) before handing the saved
+  `loop_messages` to the real `_tool_loop()`. Idempotency: relies on the
+  invariant above (checkpoints only saved at a safe round boundary) —
+  live-verified by constructing a checkpoint mid-task (one completed
+  tool round, no final answer yet) and confirming resume calls the
+  provider with exactly the saved history, never re-invokes the already-
+  completed tool call, and reaches a genuine final answer. The old
+  checkpoint is marked `COMPLETE` immediately after its data is
+  validated and handed off (before the resumed `_tool_loop()` runs, so
+  a concurrent `missy recover --resume` on the same ID cannot double-
+  resume it) — the resumed run gets its own new checkpoint via
+  `_tool_loop()`'s existing internal `_cm.create()`/`.complete()`/
+  `.fail()` calls, unaffected by this change. Added `missy recover
+  --resume ID` (plus `--provider` to override) which constructs a real
+  `AgentRuntime` and calls `resume_checkpoint()`, printing the response
+  or a clear error for the not-found/not-resumable/corrupted cases;
+  updated the CLI's own "recommended action" hint text to mention it.
+  Live-verified end-to-end via a real `CheckpointManager` (isolated
+  `HOME`, real SQLite, no mocks) plus a mocked provider: (1) happy path
+  — a checkpoint with a completed `calculator` round resumes to a real
+  "The answer is 4." response, the saved messages are actually what was
+  sent to the provider, and the old checkpoint transitions to
+  `COMPLETE`; (2) non-existent checkpoint ID raises `ValueError`,
+  provider never called; (3) a `COMPLETE`-state checkpoint raises
+  `ValueError` ("not resumable"), provider never called; (4) corrupted
+  `loop_messages` (both invalid JSON, which `_row_to_dict()`'s existing
+  exception handling degrades to `[]`, and valid-JSON-wrong-shape, e.g.
+  a list of bare strings) raises `CheckpointCorruptedError` and marks
+  the checkpoint `FAILED`, provider never called; (5) a checkpoint
+  resumed under `capability_mode="no-tools"` genuinely receives an empty
+  tool list in the provider call, confirming policy revalidation is
+  live, not just claimed. Corrected `docs/implementation/module-map.md`'s
+  entry (was: "Enables `missy recover` to resume incomplete sessions" —
+  now true instead of aspirational; also fixed its "Key exports" line,
+  which named a nonexistent `Checkpoint` class instead of the real
+  `CheckpointManager`) and `CLAUDE.md`'s CLI command table. 24 new
+  regression tests across `tests/agent/test_checkpoint.py` (get(),
+  validate_loop_messages()) and `tests/agent/test_runtime_deep.py`
+  (`TestResumeCheckpoint`, 6 tests exercising the real
+  `AgentRuntime.resume_checkpoint()` path against a real SQLite-backed
+  `CheckpointManager`), plus 4 new CLI tests in
+  `tests/cli/test_cost_recover.py`. `tests/agent/`+`tests/cli/`+
+  `tests/unit/`+`tests/security/`+`tests/scheduler/` (9,853 tests) pass
+  with no regressions.
+- **Residual risk:** the total iteration budget resets to
+  `max_iterations` on resume rather than continuing from where the
+  original run's counter left off (e.g. a task interrupted at iteration
+  8 of 10 gets a fresh 10 iterations after resume, not 2). This is a
+  deliberate simplification, not a safety gap — it only ever grants a
+  resumed task *more* room to finish, never less, and every one of
+  those additional iterations still goes through the same per-call
+  policy/budget enforcement as any other iteration. A future session
+  could thread the original iteration count through if exact budget
+  parity across resume is ever required. Also unaddressed: no
+  automatic/scheduled resume — an operator must run `missy recover
+  --resume ID` manually; `ProactiveManager` does not currently retry
+  interrupted tasks on its own (out of scope for this finding, which was
+  about the resume mechanism existing at all, not about triggering it
+  automatically).
+
 ---
 
 - Timestamp: 2026-07-09 15:35:26 (raw grep-scan dump below, preserved

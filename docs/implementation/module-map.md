@@ -336,8 +336,8 @@ dependencies on other `missy` modules.
 
 | Field | Value |
 |-------|-------|
-| **Purpose** | WAL-mode SQLite task checkpointing. Enables `missy recover` to resume incomplete sessions. |
-| **Key exports** | `Checkpoint` |
+| **Purpose** | WAL-mode SQLite task checkpointing. Enables `missy recover --resume ID` to actually continue an incomplete session from its saved conversation state (`AgentRuntime.resume_checkpoint()`), not just list it. |
+| **Key exports** | `CheckpointManager`, `CheckpointCorruptedError`, `validate_loop_messages`, `scan_for_recovery` |
 | **Internal deps** | None (SQLite at `~/.missy/checkpoints.db`) |
 
 ### missy.agent.cost_tracker

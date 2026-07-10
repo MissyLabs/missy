@@ -1,6 +1,6 @@
 # Build Status
 
-Last updated: 2026-07-10 21:15 UTC
+Last updated: 2026-07-10 22:05 UTC
 
 ## Current Workstream: Validation-Harness Overhaul
 
@@ -1401,6 +1401,70 @@ This is the twenty-third independent, confirmed finding/change this
 session. Full detail in `AUDIT_SECURITY.md`'s new `### SR-4.2 (SR-4.5)`
 section.
 
+### Completed This Session, continued: SR-4.3 — `missy recover` could list interrupted tasks but never actually resume one (twenty-fourth finding, third §4 item)
+
+Unlike SR-4.5, the review's "...or stop advertising recovery"
+alternative was rejected in favor of building the real feature —
+resuming a checkpoint doesn't expand what's callable, it only continues
+something already fully authorized, through the exact same per-call
+policy enforcement as any fresh run. No product-policy question needed
+to be asked.
+
+Reachability: `CheckpointManager.classify()` labels checkpoints
+`"resume"`/`"restart"`/`"abandon"` by age, and `missy recover`'s output
+table displayed exactly that recommendation — but
+`grep -rn "\.resume(\|def resume\|restore_checkpoint\|resume_checkpoint\|load_checkpoint" missy/`
+matched nothing (only an unrelated `SchedulerManager.resume_job()` for
+scheduled jobs). `AgentRuntime` had no method that ever read a
+checkpoint's persisted `loop_messages`/`iteration` back and continued
+the tool loop; the only real action `missy recover` could take was
+`--abandon-all`. Confirmed the write path is safe to resume from:
+`_tool_loop()` only calls `_cm.update(...)` *after* a full round's tool
+calls and results are all appended, never mid-call, so every checkpoint
+is a safe boundary (no tool call can be replayed by resuming).
+
+Fixed: added `CheckpointManager.get(id)` (single-row lookup in any
+state) and `validate_loop_messages()` (conservative schema gate,
+rejects anything that doesn't match what `_tool_loop()` itself writes).
+Added `AgentRuntime.resume_checkpoint(checkpoint_id)`: fails closed
+with `ValueError` if not found or not `RUNNING`; fails closed with a
+new `CheckpointCorruptedError` (checkpoint marked `FAILED` first) if
+`loop_messages` fails validation; otherwise re-resolves both system
+prompt and tool set under the *current* config (policy revalidation —
+if capability_mode has tightened, the resumed run only gets the
+narrower set, via the same per-call enforcement every tool call already
+goes through) before handing the saved messages to the real
+`_tool_loop()`. The old checkpoint is marked `COMPLETE` before the
+resumed run starts (so a concurrent resume attempt on the same ID can't
+double-resume it). Added `missy recover --resume ID` (+`--provider`)
+wired to the new method. Live-verified end-to-end with a real SQLite
+`CheckpointManager` (no mocks) and a mocked provider: happy path
+resumes a mid-task checkpoint to a genuine final answer using the saved
+history; non-existent/non-RUNNING/corrupted checkpoints all fail closed
+without ever reaching the provider; a checkpoint resumed under
+`capability_mode="no-tools"` genuinely receives an empty tool list,
+confirming policy revalidation is live. Corrected
+`docs/implementation/module-map.md`'s checkpoint entry (claim now true
+instead of aspirational; also fixed a wrong "Key exports" line) and
+`CLAUDE.md`'s CLI table.
+
+24 new tests (`tests/agent/test_checkpoint.py`,
+`tests/agent/test_runtime_deep.py::TestResumeCheckpoint`,
+`tests/cli/test_cost_recover.py`).
+`tests/agent/`+`tests/cli/`+`tests/unit/`+`tests/security/`+
+`tests/scheduler/` (9,853 tests) pass with no regressions.
+
+Residual risk: the iteration budget resets to `max_iterations` on
+resume rather than continuing the original counter (deliberate — only
+ever grants *more* room to finish, never less, and every additional
+iteration still goes through the same enforcement). No automatic/
+scheduled resume — an operator must run `missy recover --resume`
+manually (out of scope: this finding was about the mechanism existing,
+not about triggering it automatically).
+
+This is the twenty-fourth independent, confirmed finding/change this
+session. Full detail in `AUDIT_SECURITY.md`'s new `### SR-4.3` section.
+
 ### Known Pre-Existing Failure (not caused by this session)
 
 `tests/vision/test_discovery_capture_sysfs.py::TestCacheTTL::test_cache_valid_within_ttl`
@@ -1417,18 +1481,17 @@ scoped to FX-A / voice-command work.
 FX-A through FX-G are all complete (see task list). §2 (Unattended-
 Execution Hazards) and §3 (Data Integrity, Availability, And Cost) are
 now both fully closed — SR-3.4's cross-session-aggregation sub-finding
-is fixed. §4's first two items (SR-4.4 done-criteria verification;
-SR-4.5 self_create_tool honesty) are now fixed. Current remaining
-priority order:
+is fixed. §4's first three items (SR-4.4 done-criteria verification;
+SR-4.5 self_create_tool honesty; SR-4.3 checkpoint resume) are now
+fixed. Current remaining priority order:
 
 1. SR-1.1 (audit event signing — larger cross-cutting change) and
    SR-1.9b (DNS TOCTOU — needs connecting to a pinned policy-verified IP
    rather than re-resolving at connect time).
-2. SR-4.1, SR-4.2, SR-4.3, SR-4.6, SR-4.7, SR-4.8 (remaining
-   dead/unwired features: long-term memory, sub-agents, checkpoint
-   recovery, OTLP export, MCP execution/approval, provider
-   rotation/fallback claims — SR-4.4 and SR-4.5 are now fixed, see
-   above).
+2. SR-4.1, SR-4.2, SR-4.6, SR-4.7, SR-4.8 (remaining dead/unwired
+   features: long-term memory, sub-agents, OTLP export, MCP
+   execution/approval, provider rotation/fallback claims — SR-4.3,
+   SR-4.4, and SR-4.5 are now fixed, see above).
 3. The "harden secondary availability hazards" bullet (circuit-breaker
    half-open single-probe, MCP RPC desync, malformed scheduler record
    isolation, webhook HMAC replay protection, EventBus history bound,

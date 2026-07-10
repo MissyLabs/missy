@@ -444,7 +444,7 @@ missy persona rollback              Restore persona from latest backup
 missy persona log                   Show persona change audit log (--limit)
 
 missy cost                          Show cost tracking config and budget status (--session)
-missy recover                       List incomplete checkpoints from previous sessions (--abandon-all)
+missy recover                       List incomplete checkpoints from previous sessions (--abandon-all, --resume ID, --provider)
 ```
 
 ## Optional Extras

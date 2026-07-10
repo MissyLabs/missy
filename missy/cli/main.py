@@ -2739,16 +2739,30 @@ def cost(ctx: click.Context, session: str | None) -> None:
 
 @cli.command()
 @click.option("--abandon-all", is_flag=True, help="Abandon all incomplete checkpoints.")
+@click.option(
+    "--resume",
+    "resume_id",
+    default=None,
+    help="Resume the checkpoint with this ID from its saved conversation state.",
+)
+@click.option(
+    "--provider", default=None, help="Provider to use for --resume (overrides config default)."
+)
 @click.pass_context
-def recover(ctx: click.Context, abandon_all: bool) -> None:
+def recover(ctx: click.Context, abandon_all: bool, resume_id: str | None, provider: str | None) -> None:
     """List or act on incomplete task checkpoints from previous sessions.
 
     Scans for tasks that were interrupted by crashes or restarts and shows
-    recovery options.  Use --abandon-all to clear all stale checkpoints.
+    recovery options.  Use --abandon-all to clear all stale checkpoints, or
+    --resume ID to continue a specific checkpoint from its saved state.
     """
 
     try:
-        from missy.agent.checkpoint import CheckpointManager, scan_for_recovery
+        from missy.agent.checkpoint import (
+            CheckpointCorruptedError,
+            CheckpointManager,
+            scan_for_recovery,
+        )
     except ImportError:
         _print_error("Checkpoint module not available.")
         sys.exit(1)
@@ -2761,6 +2775,38 @@ def recover(ctx: click.Context, abandon_all: bool) -> None:
         except Exception as exc:
             _print_error(f"Failed to abandon checkpoints: {exc}")
             sys.exit(1)
+        return
+
+    if resume_id:
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+        from missy.core.exceptions import ProviderError
+
+        cfg = _load_subsystems(ctx.obj["config_path"])
+        provider_name = provider or (
+            next(iter(cfg.providers), "anthropic") if cfg.providers else "anthropic"
+        )
+        agent_cfg = AgentConfig(
+            provider=provider_name,
+            max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
+            **_agent_tool_policy_kwargs(cfg),
+        )
+        agent = AgentRuntime(agent_cfg)
+        with console.status(f"[bold cyan]Resuming {resume_id[:12]}...[/]", spinner="dots"):
+            try:
+                response = agent.resume_checkpoint(resume_id)
+            except CheckpointCorruptedError as exc:
+                _print_error(f"Checkpoint corrupted, marked FAILED: {exc}")
+                sys.exit(1)
+            except ValueError as exc:
+                _print_error(str(exc))
+                sys.exit(1)
+            except ProviderError as exc:
+                _print_error(
+                    f"Provider error: {exc}",
+                    hint="Check that your API key is set and the provider is configured.",
+                )
+                sys.exit(1)
+        console.print(Panel(response, title="[bold cyan]Missy (resumed)[/]", border_style="cyan"))
         return
 
     results = scan_for_recovery()
@@ -2793,7 +2839,9 @@ def recover(ctx: click.Context, abandon_all: bool) -> None:
     console.print(table)
     console.print(
         f"\n[dim]{len(results)} checkpoint(s) found. "
-        "Use [bold]missy recover --abandon-all[/bold] to clear stale tasks.[/]"
+        "Use [bold]missy recover --resume ID[/bold] to continue one from its "
+        "saved state, or [bold]missy recover --abandon-all[/bold] to clear "
+        "stale tasks.[/]"
     )
 
 
