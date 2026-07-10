@@ -1855,3 +1855,77 @@ class TestResumeCheckpoint:
         # actually used the current, empty tool set.
         _tools_arg = provider.complete_with_tools.call_args[0][1]
         assert _tools_arg == []
+
+
+class TestDelegateTaskDispatch:
+    """SR-4.2: _execute_tool() must inject _runtime/_session_id/_depth for
+    delegate_task -- none of these are model-suppliable, and without this
+    injection the tool always refuses with "requires runtime context"."""
+
+    def test_execute_tool_injects_runtime_session_and_depth(self):
+        from missy.providers.base import ToolCall
+
+        provider = _make_provider()
+        registry = _make_registry({"fake": provider})
+
+        real_tool = MagicMock()
+        real_tool.name = "delegate_task"
+        captured_kwargs = {}
+
+        def _fake_execute(**kwargs):
+            captured_kwargs.update(kwargs)
+            result = MagicMock()
+            result.success = True
+            result.output = "ok"
+            result.error = None
+            return result
+
+        tool_reg = MagicMock()
+        tool_reg.get.return_value = real_tool
+        tool_reg.execute.side_effect = lambda name, **kw: _fake_execute(**kw)
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake"))
+            tc = ToolCall(id="tc1", name="delegate_task", arguments={"prompt": "1. a"})
+            rt._execute_tool(tc, session_id="sess-1", task_id="task-1", _delegation_depth=1)
+
+        assert captured_kwargs["_runtime"] is rt
+        assert captured_kwargs["_session_id"] == "sess-1"
+        assert captured_kwargs["_depth"] == 1
+
+    def test_execute_tool_defaults_depth_to_zero(self):
+        """A top-level call (not itself a resumed/nested delegation) must
+        inject depth=0, matching _tool_loop()'s own default."""
+        from missy.providers.base import ToolCall
+
+        provider = _make_provider()
+        registry = _make_registry({"fake": provider})
+
+        real_tool = MagicMock()
+        real_tool.name = "delegate_task"
+        captured_kwargs = {}
+
+        def _fake_execute(**kwargs):
+            captured_kwargs.update(kwargs)
+            result = MagicMock()
+            result.success = True
+            result.output = "ok"
+            result.error = None
+            return result
+
+        tool_reg = MagicMock()
+        tool_reg.get.return_value = real_tool
+        tool_reg.execute.side_effect = lambda name, **kw: _fake_execute(**kw)
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake"))
+            tc = ToolCall(id="tc1", name="delegate_task", arguments={"prompt": "1. a"})
+            rt._execute_tool(tc, session_id="sess-1", task_id="task-1")
+
+        assert captured_kwargs["_depth"] == 0

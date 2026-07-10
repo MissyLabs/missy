@@ -1831,6 +1831,124 @@ requirement — do not overwrite, append new entries as work continues.
   about the resume mechanism existing at all, not about triggering it
   automatically).
 
+### SR-4.4 (SR-4.2) — `SubAgentRunner`/`delegate_task` were entirely dead code, and the claimed concurrency was fake
+
+- **Status: fixed.** Fourth §4 item. Product-policy decision confirmed
+  with operator before implementing: wire sub-agent delegation into
+  production with real limits, rather than the review's alternative of
+  documenting the feature as unavailable.
+- **Reachability found:** `grep -rn "SubAgentRunner\|parse_subtasks"
+  missy/ --include=*.py` (before this fix) matched only
+  `missy/agent/sub_agent.py` itself — no tool, CLI command, or runtime
+  code anywhere constructed or invoked it; it was entirely unreachable
+  dead code, worse than SR-4.5's finding (self_create_tool was at least
+  a real, dispatchable tool whose *output* wasn't consumable — here
+  nothing consumed the class at all). Its claimed concurrency was also
+  fake: `SubAgentRunner.__init__` constructed a
+  `threading.Semaphore(MAX_CONCURRENT)`, but `run_all()`'s body was a
+  plain `for task in subtasks: result = self.run_subtask(task, ...)`
+  loop — nothing ever contended on that semaphore because nothing ran
+  concurrently. It also had no cross-child budget aggregation (each
+  subtask got a wholly independent `AgentRuntime` via a
+  `runtime_factory` callable, with its own from-scratch
+  `_cost_trackers` dict — a sub-agent's spend could never be checked
+  against the parent call's `max_spend_usd` cap) and no recursion-depth
+  guard at all (nothing prevented a wired-in version from nesting
+  delegation indefinitely).
+- **Remediation evidence:** redesigned `SubAgentRunner` to take a
+  *shared* `runtime`/`session_id`/`depth` (reused across every subtask)
+  instead of a `runtime_factory` — this single change is what makes
+  budget aggregation work for free: every subtask calls
+  `self._runtime.run(prompt, session_id=self._session_id,
+  _delegation_depth=self._depth)` on the *same* `AgentRuntime` instance
+  and *same* session, so `_get_cost_tracker(session_id)` (the SR-3.4
+  residual fix) returns the exact same `CostTracker` object for every
+  call — no separate cross-child aggregation logic needed. Real
+  concurrency: `run_all()` now schedules subtasks in dependency-ordered
+  "waves" via `concurrent.futures.ThreadPoolExecutor(max_workers=MAX_CONCURRENT)`
+  — every task in a wave (all dependencies already satisfied) genuinely
+  runs in parallel, capped at `MAX_CONCURRENT`; a task with an unmet
+  dependency waits for the next wave. `run_subtask()` itself also kept
+  its own semaphore acquire as defense-in-depth, for any caller that
+  invokes it directly rather than through `run_all()`'s pool. Added
+  `MAX_SUB_AGENT_DEPTH = 2`: threaded an explicit `_delegation_depth`
+  parameter down `AgentRuntime.run()` → `_run_loop()` → `_tool_loop()` →
+  `_execute_tool()` (an *explicit* parameter, not a `threading.local`/
+  `contextvars.ContextVar`, since values in those do not reliably
+  propagate into a new OS thread spawned by `ThreadPoolExecutor` without
+  manual `copy_context()` plumbing — an implicit-propagation approach
+  here would have been a real, silent way for the depth guard to be
+  bypassed under concurrency). Added a new `delegate_task` tool
+  (`missy/tools/builtin/delegate_task.py`), dispatched through
+  `_execute_tool()`'s existing kwarg-injection pattern (mirroring
+  SR-3.3's memory-store injection and SR-4.2 depth): `_runtime`,
+  `_session_id`, `_depth` are all injected, never model-suppliable. The
+  tool refuses with a clear error at `_depth >= MAX_SUB_AGENT_DEPTH`
+  ("Delegation depth limit (2) reached...") and at missing runtime
+  context, before ever calling `parse_subtasks()`/`SubAgentRunner`.
+  Live-verified end-to-end (no mocks on the concurrency-timing
+  assertions): (1) three independent subtasks each simulating a 0.3s
+  provider call finished in ~0.37s total via the real `SubAgentRunner`
+  against a real `AgentRuntime`, with call-start timestamps within
+  0.6ms of each other — genuine parallelism, not sequential dressed up
+  with an unused semaphore; (2) a sequential (`then`-chain) delegation
+  with a tight `max_spend_usd` cap correctly raised
+  `BudgetExceededError` on the second dependent step once the first
+  step's spend had been recorded against the shared session tracker;
+  (3) `delegate_task` at `_depth=MAX_SUB_AGENT_DEPTH` refuses
+  immediately with no provider call attempted, confirmed via the real
+  registered tool, not a stub. Corrected `CLAUDE.md`'s
+  `SubAgentRunner` description (was "Spawns child agent instances,"
+  vague enough to already sound wired; now states the actual production
+  wiring, shared-runtime budget model, and depth bound) and
+  `docs/implementation/module-map.md`'s corresponding entries (module +
+  new builtin-tool table row). 40 new/updated regression tests across
+  `tests/agent/test_sub_agent.py` (rewritten `TestSubAgentRunner` for
+  the new shared-runtime constructor, plus new `TestRealConcurrency`
+  and `TestMaxSubAgentDepth` classes), `tests/tools/test_delegate_task.py`
+  (new file), `tests/agent/test_runtime_deep.py` (new
+  `TestDelegateTaskDispatch`), and two pre-existing files
+  (`tests/agent/test_agent_modules.py`,
+  `tests/agent/test_approval_subagent_edges.py`) whose
+  `SubAgentRunner(runtime_factory=...)` construction calls no longer
+  compile against the new constructor — updated to the shared-runtime
+  API while preserving each test's original intent (including the
+  concurrency-cap test, which still verifies `run_subtask()`'s own
+  semaphore independent of `run_all()`'s pool). `tests/agent/`+
+  `tests/tools/`+`tests/cli/`+`tests/unit/`+`tests/security/` (11,034
+  tests) pass with no regressions.
+- **Residual risk, called out explicitly:** concurrent same-wave
+  sub-agent calls have a real, deliberately-not-hidden TOCTOU race in
+  budget enforcement — `_check_budget()` is checked *before* a
+  provider call, and cost is only recorded *after* it returns, so
+  several subtasks launched in the same parallel wave can all pass
+  their initial pre-spend check before any of them has committed spend,
+  letting aggregate spend for that one wave transiently exceed a very
+  tight `max_spend_usd` cap (live-reproduced: a `$0.00001` cap with 3
+  fully-independent subtasks let all 3 complete, since none of the 3
+  concurrent checks saw a sibling's not-yet-recorded cost; the
+  *sequential/dependent* case, tested separately, correctly denies once
+  a prior wave's spend is recorded). This is the same category of risk
+  SR-3.4's original ordering defect addressed for a *single* call
+  stream — extending atomic check-and-reserve semantics across
+  concurrent siblings would require a real reservation/pre-commit
+  mechanism in `CostTracker`, which does not exist yet and is out of
+  scope for this checkpoint (SR-4.2 was about making concurrency and
+  budget-sharing genuinely work, not about closing every timing gap
+  concurrency introduces). The `MAX_CONCURRENT = 3` cap bounds how bad
+  this can get for any single wave (at most ~3 calls' worth of
+  over-spend), and every subsequent wave is correctly gated by the
+  now-committed total. `is_compound_task()`/`make_done_prompt()`/
+  `DoneCriteria`-style "self-declared conditions" have no equivalent
+  here either — `delegate_task`'s own completion is still governed by
+  the normal SR-4.4 done-criteria gate on whichever call site invoked
+  it. Tool-group membership (`missy/policy/tool_policy_pipeline.py`'s
+  `MISSY_DISCORD_TOOLS`/`"coding"` curated lists) was deliberately left
+  unmodified — `delegate_task` is reachable under `capability_mode="full"`
+  today via the generic per-permission tool-visibility path, and curating
+  which named groups should additionally include it is a policy-tuning
+  question orthogonal to whether the wiring itself works correctly.
+
 ---
 
 - Timestamp: 2026-07-09 15:35:26 (raw grep-scan dump below, preserved

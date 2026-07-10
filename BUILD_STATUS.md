@@ -1,6 +1,6 @@
 # Build Status
 
-Last updated: 2026-07-10 22:05 UTC
+Last updated: 2026-07-10 23:10 UTC
 
 ## Current Workstream: Validation-Harness Overhaul
 
@@ -1465,6 +1465,66 @@ not about triggering it automatically).
 This is the twenty-fourth independent, confirmed finding/change this
 session. Full detail in `AUDIT_SECURITY.md`'s new `### SR-4.3` section.
 
+### Completed This Session, continued: SR-4.2 — `SubAgentRunner`/`delegate_task` were entirely dead code with fake claimed concurrency (twenty-fifth finding, fourth §4 item)
+
+Product-policy decision, asked and confirmed with the operator: wire
+sub-agent delegation into production with real limits, rather than
+document it as unavailable (the review's stated alternative).
+
+Reachability: `grep -rn "SubAgentRunner\|parse_subtasks" missy/` (before
+this fix) matched only `sub_agent.py` itself — entirely unreachable
+dead code, no tool/CLI/runtime call site anywhere. Its claimed
+concurrency was fake too: `run_all()` was a plain sequential for-loop
+despite constructing an unused `threading.Semaphore(MAX_CONCURRENT)`.
+No cross-child budget aggregation (each subtask got an independent
+`AgentRuntime` via `runtime_factory`, its own from-scratch cost
+tracker) and no recursion-depth guard at all.
+
+Fixed: redesigned `SubAgentRunner` to reuse a *shared*
+`runtime`/`session_id`/`depth` across every subtask instead of a
+factory — this single change makes budget aggregation work for free,
+since every subtask call hits the exact same `AgentRuntime`'s
+`_get_cost_tracker(session_id)` (the SR-3.4 residual mechanism).
+`run_all()` now schedules dependency-ordered "waves" via a real
+`ThreadPoolExecutor(max_workers=MAX_CONCURRENT)` — independent tasks
+genuinely run in parallel; `run_subtask()` also kept its own semaphore
+as defense-in-depth for direct callers. Added `MAX_SUB_AGENT_DEPTH = 2`,
+threaded as an *explicit* parameter through
+`run()`→`_run_loop()`→`_tool_loop()`→`_execute_tool()` (not a
+threadlocal/contextvar, which wouldn't reliably propagate into
+`ThreadPoolExecutor` worker threads — an implicit approach would have
+been a silent depth-guard bypass under concurrency). Added a new
+`delegate_task` tool dispatched through `_execute_tool()`'s existing
+kwarg-injection pattern (`_runtime`/`_session_id`/`_depth`, none
+model-suppliable), refusing at the depth limit before any provider
+call. Live-verified: 3 independent 0.3s subtasks finished in ~0.37s
+total with call-starts within 0.6ms of each other (genuine
+parallelism); a sequential delegation chain with a tight budget cap
+correctly raised `BudgetExceededError` on the second dependent step;
+depth-limited delegation refuses immediately via the real tool.
+Corrected `CLAUDE.md`/`docs/implementation/module-map.md`'s stale
+descriptions. 40 new/updated tests across 5 files (2 pre-existing files
+needed their `SubAgentRunner(runtime_factory=...)` construction updated
+to the new shared-runtime constructor).
+`tests/agent/`+`tests/tools/`+`tests/cli/`+`tests/unit/`+
+`tests/security/` (11,034 tests) pass with no regressions.
+
+Residual risk, called out explicitly: concurrent same-wave sub-agent
+calls have a real TOCTOU race in budget enforcement — several subtasks
+launched in parallel can all pass a pre-spend check before any commits
+its cost, letting a single wave's aggregate spend transiently exceed a
+very tight cap (live-reproduced with a `$0.00001` cap; the
+sequential/dependent case correctly denies once prior spend is
+recorded). `MAX_CONCURRENT = 3` bounds how bad any one wave's overshoot
+can be; closing this fully would need a real reservation/pre-commit
+mechanism in `CostTracker`, out of scope here (this checkpoint was
+about making concurrency and budget-sharing genuinely work, not about
+closing every timing gap concurrency introduces).
+
+This is the twenty-fifth independent, confirmed finding/change this
+session. Full detail in `AUDIT_SECURITY.md`'s new `### SR-4.4 (SR-4.2)`
+section.
+
 ### Known Pre-Existing Failure (not caused by this session)
 
 `tests/vision/test_discovery_capture_sysfs.py::TestCacheTTL::test_cache_valid_within_ttl`
@@ -1481,17 +1541,17 @@ scoped to FX-A / voice-command work.
 FX-A through FX-G are all complete (see task list). §2 (Unattended-
 Execution Hazards) and §3 (Data Integrity, Availability, And Cost) are
 now both fully closed — SR-3.4's cross-session-aggregation sub-finding
-is fixed. §4's first three items (SR-4.4 done-criteria verification;
-SR-4.5 self_create_tool honesty; SR-4.3 checkpoint resume) are now
-fixed. Current remaining priority order:
+is fixed. §4 has four items fixed (SR-4.4 done-criteria verification;
+SR-4.5 self_create_tool honesty; SR-4.3 checkpoint resume; SR-4.2
+sub-agent delegation). Current remaining priority order:
 
 1. SR-1.1 (audit event signing — larger cross-cutting change) and
    SR-1.9b (DNS TOCTOU — needs connecting to a pinned policy-verified IP
    rather than re-resolving at connect time).
-2. SR-4.1, SR-4.2, SR-4.6, SR-4.7, SR-4.8 (remaining dead/unwired
-   features: long-term memory, sub-agents, OTLP export, MCP
-   execution/approval, provider rotation/fallback claims — SR-4.3,
-   SR-4.4, and SR-4.5 are now fixed, see above).
+2. SR-4.1, SR-4.6, SR-4.7, SR-4.8 (remaining dead/unwired features:
+   long-term memory, OTLP export, MCP execution/approval, provider
+   rotation/fallback claims — SR-4.2, SR-4.3, SR-4.4, and SR-4.5 are now
+   fixed, see above).
 3. The "harden secondary availability hazards" bullet (circuit-breaker
    half-open single-probe, MCP RPC desync, malformed scheduler record
    isolation, webhook HMAC replay protection, EventBus history bound,

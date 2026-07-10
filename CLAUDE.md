@@ -135,7 +135,7 @@ VoiceChannel (channels/voice/):
 - `DoneCriteria`: Generates verification prompts injected after each tool-call round
 - `Learnings`: Extracts task_type/outcome/lesson from tool-augmented runs, persisted in SQLite
 - `PromptPatchManager`: Self-tuning prompt patches with approval workflow (proposed/approved/rejected)
-- `SubAgentRunner`: Spawns child agent instances
+- `SubAgentRunner`: Decomposes a compound task into sub-agent calls, wired into production via the `delegate_task` tool. Reuses the calling `AgentRuntime`/session (not a fresh runtime per call) so sub-agent spend aggregates against the same per-session `CostTracker` and policy/capability_mode enforcement is identical to the parent call. Independent subtasks run concurrently via `ThreadPoolExecutor` (capped at `MAX_CONCURRENT`); dependent subtasks wait for their dependency's result. Recursion bounded by `MAX_SUB_AGENT_DEPTH`.
 - `ApprovalGate`: Human-in-the-loop approval for sensitive operations
 - `CostTracker`: Per-session cost tracking and budget enforcement (`max_spend_usd`). Raises `BudgetExceededError` when cap hit.
 - `Checkpoint`: WAL-mode SQLite checkpointing for task state. Enables `missy recover` to resume incomplete sessions.

@@ -686,22 +686,27 @@ class TestParseSubtasks:
 
 
 class TestSubAgentRunner:
-    """Tests for SubAgentRunner."""
+    """Tests for SubAgentRunner.
+
+    SR-4.2: SubAgentRunner now takes a shared ``runtime``/``session_id``
+    (reused across every subtask, not a fresh runtime per call) so
+    spend/policy aggregate correctly; the old ``runtime_factory=``
+    constructor no longer exists.
+    """
 
     def _make_runner(self, reply="done"):
         mock_runtime = MagicMock()
         mock_runtime.run.return_value = reply
-        factory = Mock(return_value=mock_runtime)
 
         from missy.agent.sub_agent import SubAgentRunner
 
-        runner = SubAgentRunner(runtime_factory=factory)
-        return runner, factory, mock_runtime
+        runner = SubAgentRunner(runtime=mock_runtime, session_id="sess-1", depth=0)
+        return runner, mock_runtime
 
     def test_run_subtask_returns_result(self):
         from missy.agent.sub_agent import SubTask
 
-        runner, factory, runtime = self._make_runner(reply="task result")
+        runner, runtime = self._make_runner(reply="task result")
         task = SubTask(id=0, description="do something")
 
         result = runner.run_subtask(task)
@@ -711,7 +716,7 @@ class TestSubAgentRunner:
     def test_run_subtask_prepends_context(self):
         from missy.agent.sub_agent import SubTask
 
-        runner, factory, runtime = self._make_runner()
+        runner, runtime = self._make_runner()
         task = SubTask(id=1, description="step two")
 
         runner.run_subtask(task, context="prior result")
@@ -720,15 +725,12 @@ class TestSubAgentRunner:
         assert "Task: step two" in call_prompt
 
     def test_run_subtask_handles_exception(self):
-        from missy.agent.sub_agent import SubTask
+        from missy.agent.sub_agent import SubAgentRunner, SubTask
 
         mock_runtime = MagicMock()
         mock_runtime.run.side_effect = RuntimeError("boom")
-        factory = Mock(return_value=mock_runtime)
 
-        from missy.agent.sub_agent import SubAgentRunner
-
-        runner = SubAgentRunner(runtime_factory=factory)
+        runner = SubAgentRunner(runtime=mock_runtime, session_id="sess-1", depth=0)
         task = SubTask(id=0, description="failing task")
 
         result = runner.run_subtask(task)
@@ -738,7 +740,7 @@ class TestSubAgentRunner:
     def test_run_all_executes_all_tasks(self):
         from missy.agent.sub_agent import SubTask
 
-        runner, factory, runtime = self._make_runner(reply="ok")
+        runner, runtime = self._make_runner(reply="ok")
 
         tasks = [SubTask(id=0, description="a"), SubTask(id=1, description="b")]
         results = runner.run_all(tasks)
@@ -748,7 +750,7 @@ class TestSubAgentRunner:
     def test_run_all_caps_at_max_total(self):
         from missy.agent.sub_agent import SubTask
 
-        runner, factory, runtime = self._make_runner(reply="ok")
+        runner, runtime = self._make_runner(reply="ok")
 
         tasks = [SubTask(id=i, description=f"task {i}") for i in range(15)]
         results = runner.run_all(tasks, max_total=5)
@@ -756,21 +758,18 @@ class TestSubAgentRunner:
         assert runtime.run.call_count == 5
 
     def test_run_all_accumulates_dependency_context(self):
-        from missy.agent.sub_agent import SubTask
+        from missy.agent.sub_agent import SubAgentRunner, SubTask
 
         mock_runtime = MagicMock()
         call_prompts = []
 
-        def capture_run(prompt):
+        def capture_run(prompt, session_id="", _delegation_depth=0):
             call_prompts.append(prompt)
             return "result"
 
         mock_runtime.run.side_effect = capture_run
-        factory = Mock(return_value=mock_runtime)
 
-        from missy.agent.sub_agent import SubAgentRunner
-
-        runner = SubAgentRunner(runtime_factory=factory)
+        runner = SubAgentRunner(runtime=mock_runtime, session_id="sess-1", depth=0)
 
         tasks = [
             SubTask(id=0, description="first"),
@@ -782,22 +781,25 @@ class TestSubAgentRunner:
         assert "Result of step 0:" in call_prompts[1]
 
     def test_run_all_returns_results_in_order(self):
-        from missy.agent.sub_agent import SubTask
+        from missy.agent.sub_agent import SubAgentRunner, SubTask
 
         counter = {"n": 0}
 
-        def incremental_run(prompt):
+        def incremental_run(prompt, session_id="", _delegation_depth=0):
             counter["n"] += 1
             return f"result_{counter['n']}"
 
         mock_runtime = MagicMock()
         mock_runtime.run.side_effect = incremental_run
-        factory = Mock(return_value=mock_runtime)
 
-        from missy.agent.sub_agent import SubAgentRunner
-
-        runner = SubAgentRunner(runtime_factory=factory)
-        tasks = [SubTask(id=i, description=f"t{i}") for i in range(3)]
+        runner = SubAgentRunner(runtime=mock_runtime, session_id="sess-1", depth=0)
+        # depends_on chain forces strictly sequential, order-preserving
+        # execution so the incremental counter maps predictably to id order.
+        tasks = [
+            SubTask(id=0, description="t0"),
+            SubTask(id=1, description="t1", depends_on=[0]),
+            SubTask(id=2, description="t2", depends_on=[1]),
+        ]
         results = runner.run_all(tasks)
         assert results == ["result_1", "result_2", "result_3"]
 

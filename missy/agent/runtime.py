@@ -551,7 +551,9 @@ class AgentRuntime:
     # Public interface
     # ------------------------------------------------------------------
 
-    def run(self, user_input: str, session_id: str | None = None) -> str:
+    def run(
+        self, user_input: str, session_id: str | None = None, _delegation_depth: int = 0
+    ) -> str:
         """Run the agent with *user_input* and return the response string.
 
         Execution steps:
@@ -576,6 +578,13 @@ class AgentRuntime:
                 session with that ID is not already active on the current
                 thread a new session is created (the ID is stored in its
                 metadata for traceability).
+            _delegation_depth: SR-4.2 -- internal. How many levels of
+                ``delegate_task`` nesting produced this call. ``0`` for a
+                genuine top-level call. Threaded down to
+                ``_execute_tool()`` so the ``delegate_task`` tool can
+                refuse to spawn further sub-agents once
+                ``sub_agent.MAX_SUB_AGENT_DEPTH`` is reached. Not intended
+                for external callers to set.
 
         Returns:
             The model's reply as a plain string.
@@ -685,6 +694,7 @@ class AgentRuntime:
                 session_id=sid,
                 task_id=task_id,
                 user_input=user_input,
+                _delegation_depth=_delegation_depth,
             )
         except ProviderError as exc:
             self._emit_event(
@@ -873,6 +883,7 @@ class AgentRuntime:
         session_id: str,
         task_id: str,
         user_input: str = "",
+        _delegation_depth: int = 0,
     ) -> tuple[str, list[str]]:
         """Execute the multi-step provider loop.
 
@@ -888,6 +899,8 @@ class AgentRuntime:
             task_id: Task ID for kwargs forwarding.
             user_input: Original user prompt, forwarded to the tool loop for
                 checkpointing.
+            _delegation_depth: SR-4.2 -- internal, forwarded to
+                :meth:`_tool_loop`. See :meth:`run`.
 
         Returns:
             A 2-tuple of ``(final_response_text, list_of_tool_names_used)``.
@@ -904,6 +917,7 @@ class AgentRuntime:
                 session_id=session_id,
                 task_id=task_id,
                 user_input=user_input,
+                _delegation_depth=_delegation_depth,
             )
         else:
             response = self._single_turn(
@@ -924,6 +938,7 @@ class AgentRuntime:
         session_id: str,
         task_id: str,
         user_input: str = "",
+        _delegation_depth: int = 0,
     ) -> tuple[str, list[str]]:
         """Inner agentic tool-call loop.
 
@@ -1103,6 +1118,7 @@ class AgentRuntime:
                             session_id=session_id,
                             task_id=task_id,
                             allowed_tool_names=allowed_tool_names,
+                            _delegation_depth=_delegation_depth,
                         )
                         if _HAS_MESSAGE_BUS:
                             self._bus_publish(
@@ -1556,6 +1572,7 @@ class AgentRuntime:
         session_id: str = "",
         task_id: str = "",
         allowed_tool_names: set[str] | None = None,
+        _delegation_depth: int = 0,
     ) -> ToolResult:
         """Execute a single tool call via the tool registry.
 
@@ -1656,6 +1673,19 @@ class AgentRuntime:
             tool_args = dict(tool_args)
             tool_args.setdefault("_memory_store", self._memory_store)
             tool_args.setdefault("_session_id", session_id)
+
+        # SR-4.2: delegate_task needs a live AgentRuntime reference (to run
+        # sub-agents through the same policy/budget/audit machinery as this
+        # call) plus the current session_id (so child spend aggregates
+        # against the same per-session CostTracker rather than escaping the
+        # parent's budget cap) and the current delegation depth (so nested
+        # delegate_task calls can enforce MAX_SUB_AGENT_DEPTH). None of
+        # these are model-suppliable.
+        if tool_call.name == "delegate_task":
+            tool_args = dict(tool_args)
+            tool_args.setdefault("_runtime", self)
+            tool_args.setdefault("_session_id", session_id)
+            tool_args.setdefault("_depth", _delegation_depth)
 
         # Rewrite heredoc-style shell commands to temp files so they pass
         # the shell policy (which blocks << as a subshell marker).

@@ -1,5 +1,35 @@
 # TEST_RESULTS
 
+## Run: 2026-07-10 23:10 UTC — validation-harness overhaul, SR-4.2 (sub-agent delegation wired into production with real limits)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Finding: `SubAgentRunner`/`parse_subtasks` had zero production call
+  sites (entirely dead code); `run_all()` ran subtasks sequentially
+  despite an unused `MAX_CONCURRENT` semaphore; no cross-child budget
+  aggregation (independent `AgentRuntime` per subtask via
+  `runtime_factory`) or recursion-depth guard.
+- Fix: redesigned `SubAgentRunner` to reuse a shared `runtime`/
+  `session_id`/`depth`; real `ThreadPoolExecutor`-based wave scheduling
+  respecting `depends_on`; `MAX_SUB_AGENT_DEPTH = 2` threaded as an
+  explicit parameter through `run()`/`_run_loop()`/`_tool_loop()`/
+  `_execute_tool()`; new `delegate_task` tool with `_runtime`/
+  `_session_id`/`_depth` kwarg injection.
+- Command: `pytest tests/agent/test_sub_agent.py tests/tools/test_delegate_task.py
+  tests/agent/test_runtime_deep.py tests/agent/test_agent_modules.py
+  tests/agent/test_approval_subagent_edges.py -v`
+- Result: `307 passed` (24 new in `test_sub_agent.py`
+  `TestRealConcurrency`/`TestMaxSubAgentDepth`/rewritten
+  `TestSubAgentRunner`; 12 new in `test_delegate_task.py`; 4 new in
+  `test_runtime_deep.py::TestDelegateTaskDispatch`; 2 pre-existing files
+  updated to the new shared-runtime constructor, no assertion weakened)
+- Command: `pytest tests/agent/ tests/tools/ tests/cli/ tests/unit/ tests/security/ -q -o faulthandler_timeout=120`
+- Result: `11034 passed, 6 skipped` — no regressions
+- Command: `pytest tests/ -q -o faulthandler_timeout=120`
+- Result: `3 failed, 20947 passed, 13 skipped in 470.38s (0:07:50)` —
+  up from 20928, only the 3 known pre-existing `CameraDiscovery`
+  cache-TTL flakes failing, zero regressions from this checkpoint's
+  changes.
+
 ## Run: 2026-07-10 22:05 UTC — validation-harness overhaul, SR-4.3 (real checkpoint resume)
 
 - Branch: `overhaul/missy-validation-20260710-031406`

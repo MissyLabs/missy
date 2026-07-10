@@ -296,9 +296,9 @@ dependencies on other `missy` modules.
 
 | Field | Value |
 |-------|-------|
-| **Purpose** | Spawns child agent instances for parallel work. |
-| **Key exports** | `SubAgentRunner` |
-| **Internal deps** | `missy.agent.runtime` |
+| **Purpose** | Decomposes a compound task into sub-agent steps, run against the *same* AgentRuntime/session as the caller (budget/policy stay aggregated, not per-child-independent) with genuine parallelism for independent steps, bounded by `MAX_SUB_AGENT_DEPTH`. Wired into production via the `delegate_task` tool. |
+| **Key exports** | `SubAgentRunner`, `SubTask`, `parse_subtasks`, `MAX_SUB_AGENT_DEPTH` |
+| **Internal deps** | `missy.agent.runtime` (via the runtime instance passed in, not an import) |
 
 ### missy.agent.approval
 
@@ -462,6 +462,7 @@ dependencies on other `missy` modules.
 | `incus_tools` | LXD/Incus container management |
 | `code_evolve` | Self-code modification (with approval) |
 | `self_create_tool` | Writes custom tool *proposal* scripts to `~/.missy/custom-tools/` for human review — not automatically loaded/registered/callable |
+| `delegate_task` | Decomposes a compound task into sub-agent steps via `SubAgentRunner`, reusing the caller's runtime/session for shared budget+policy; depth-limited, real concurrency for independent steps |
 
 ### missy.tools.intelligence
 
