@@ -323,8 +323,13 @@ class TestRuntimeToolCallLoop:
         tool_reg = _make_tool_registry([bad_tool])
         tool_reg.execute.side_effect = Exception("tool boom")
 
+        # SR-4.4: the tool error means the "recovered" claim is rejected
+        # and retried up to _MAX_DONE_VERIFICATION_RETRIES times before
+        # being accepted -- supply enough repeated stop responses.
         provider.complete_with_tools.side_effect = [
             _make_tool_call_response("bad_tool"),
+            _make_stop_response("recovered"),
+            _make_stop_response("recovered"),
             _make_stop_response("recovered"),
         ]
 
@@ -334,7 +339,7 @@ class TestRuntimeToolCallLoop:
             patch("missy.agent.runtime.get_registry", return_value=registry),
             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
         ):
-            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=5))
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=7))
             result = rt.run("try bad tool")
 
         # Error is swallowed by the loop; we get the final response
@@ -696,6 +701,128 @@ class TestRuntimeDoneCriteria:
 
         assert result == "instant answer"
         assert provider.complete_with_tools.call_count == 1
+
+
+class TestDoneCriteriaEnforcement:
+    """SR-4.4: task completion must depend on tool-observed evidence, not
+    just the model's own "done" claim. Before this fix, DoneCriteria's
+    verification prompt (TestRuntimeDoneCriteria above) was purely a
+    static text nudge the model could freely ignore -- a model could
+    declare success immediately after a tool call errored, and the
+    runtime would return that claim completely unverified.
+    """
+
+    def test_stop_claim_after_tool_error_is_rejected_and_retried(self):
+        """Core SR-4.4 reproduction: a "done" claim following an errored
+        tool call in the immediately preceding round must not be trusted
+        on the first attempt."""
+        provider = _make_provider()
+        calc_tool = _make_mock_tool("calculator")
+        tool_reg = _make_tool_registry([calc_tool])
+        tool_reg.execute.side_effect = None
+        tool_reg.execute.return_value = MagicMock(
+            success=False, output=None, error="division by zero"
+        )
+
+        provider.complete_with_tools.side_effect = [
+            _make_tool_call_response("calculator"),
+            _make_stop_response("Done! I successfully computed the result."),
+            _make_stop_response("Done! I successfully computed the result."),
+            _make_stop_response("Done! I successfully computed the result."),
+        ]
+        registry = _make_registry({"fake": provider})
+
+        events = []
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=7))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("compute something")
+
+        # Rejected twice (the retry cap), then accepted with an audit
+        # warning on the third attempt -- never trusted on the first.
+        rejected = [e for e in events if e["event_type"] == "agent.done_criteria.rejected"]
+        unverified = [e for e in events if e["event_type"] == "agent.done_criteria.unverified"]
+        assert len(rejected) == 2
+        assert len(unverified) == 1
+        assert provider.complete_with_tools.call_count == 4
+        assert result == "Done! I successfully computed the result."
+
+    def test_successful_tool_call_never_triggers_rejection(self):
+        """Happy path: a tool call that succeeds must not trigger any
+        done-criteria rejection or extra provider calls."""
+        provider = _make_provider()
+        calc_tool = _make_mock_tool("calculator")
+        tool_reg = _make_tool_registry([calc_tool])  # succeeds by default
+
+        provider.complete_with_tools.side_effect = [
+            _make_tool_call_response("calculator"),
+            _make_stop_response("The answer is 4."),
+        ]
+        registry = _make_registry({"fake": provider})
+
+        events = []
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=5))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("what is 2+2")
+
+        done_criteria_events = [e for e in events if "done_criteria" in e["event_type"]]
+        assert done_criteria_events == []
+        assert provider.complete_with_tools.call_count == 2
+        assert result == "The answer is 4."
+
+    def test_error_followed_by_later_success_is_accepted_immediately(self):
+        """A tool call that errors, followed by a *later* round that
+        succeeds, must be accepted on the first "done" claim -- the gate
+        only looks at the most recent round, not all history, so a
+        corrected retry with different arguments isn't penalized forever."""
+        provider = _make_provider()
+        calc_tool = _make_mock_tool("calculator")
+        tool_reg = _make_tool_registry([calc_tool])
+
+        call_count = [0]
+
+        def _execute(name: str, **kwargs):
+            call_count[0] += 1
+            result = MagicMock()
+            if call_count[0] == 1:
+                result.success = False
+                result.output = None
+                result.error = "bad expression"
+            else:
+                result.success = True
+                result.output = "4"
+                result.error = None
+            return result
+
+        tool_reg.execute.side_effect = _execute
+
+        provider.complete_with_tools.side_effect = [
+            _make_tool_call_response("calculator", tool_id="tc-1"),
+            _make_tool_call_response("calculator", tool_id="tc-2"),
+            _make_stop_response("The answer is 4."),
+        ]
+        registry = _make_registry({"fake": provider})
+
+        events = []
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("what is 2+2")
+
+        done_criteria_events = [e for e in events if "done_criteria" in e["event_type"]]
+        assert done_criteria_events == []
+        assert provider.complete_with_tools.call_count == 3
+        assert result == "The answer is 4."
 
 
 # ---------------------------------------------------------------------------

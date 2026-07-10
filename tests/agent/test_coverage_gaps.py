@@ -989,7 +989,15 @@ class TestRuntimeExecuteToolAllowSet:
             finish_reason="stop",
             tool_calls=None,
         )
-        provider.complete_with_tools = MagicMock(side_effect=[tool_response, final_response])
+        # SR-4.4: the denied shell_exec call counts as this round's error,
+        # so the done-criteria gate rejects the "done" claim and retries
+        # (up to _MAX_DONE_VERIFICATION_RETRIES) before accepting it --
+        # supply enough repeated final_response entries for that to
+        # resolve naturally without affecting what this test actually
+        # asserts (that the denied call never reaches registry.execute()).
+        provider.complete_with_tools = MagicMock(
+            side_effect=[tool_response, final_response, final_response, final_response]
+        )
 
         with (
             patch("missy.agent.runtime.get_registry", return_value=reg),

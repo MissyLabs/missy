@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (27 checkpoints this session, full suite green after every one)
+## Changed (28 checkpoints this session, full suite green after every one)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -203,11 +203,65 @@ Durable historical cost data already exists independently via
 this fix and unaffected by it — only the live in-memory *enforcement*
 path had the bug.
 
+### SR-4.4 (first §4 item, twenty-second finding this session — "Advertised But Unwired Features")
+
+`missy/agent/done_criteria.py` advertises a "DONE criteria engine," but
+grepping every production call site showed only
+`make_verification_prompt()` (a static text nudge) was actually wired
+in, and only for the branch where the model keeps calling tools.
+`is_compound_task()`, `make_done_prompt()`, and the `DoneCriteria`
+dataclass are unused dead code. Critically, the *other* branch — where
+the model declares `finish_reason == "stop"` and the loop returns
+immediately — had zero code-level verification of any kind: no
+cross-reference against whether the immediately preceding round of
+tool calls actually succeeded. Live-reproduced through the real
+`AgentRuntime.run()`/`_tool_loop()`: a `calculator` tool call that
+errored, immediately followed by the model claiming `"Done! I
+successfully computed the result."` with `finish_reason="stop"`, was
+returned as final output with zero rejection and zero audit trail.
+
+Fixed: added a deterministic completion gate in `_tool_loop()`. First
+design reused `_mutation_fp_errors` (fingerprint-keyed error history)
+as the signal, but live-testing a corrected-retry scenario (error, then
+a later successful retry with different arguments) revealed this never
+clears the original fingerprint's error — causing permanent
+false-positive rejections even after genuine recovery. Redesigned
+around `_last_round_errors`, overwritten (not accumulated) every round,
+reflecting only the immediately preceding round's `ToolResult.is_error`
+outcomes. A "stop"/"length" claim is now rejected when that list is
+non-empty, up to `_MAX_DONE_VERIFICATION_RETRIES = 2` times — the model
+is told which call(s) errored and to retry or explain, and the loop
+continues. Each rejection emits `agent.done_criteria.rejected` (deny);
+if retries exhaust with the error still unresolved, the response is
+still returned (never silently rewritten) but tagged
+`agent.done_criteria.unverified` (warn) so the gap stays visible.
+Live-verified all three cases: unresolved error rejected twice then
+accepted-with-warning; genuinely successful round never triggers
+rejection or extra provider calls (zero happy-path change); error
+followed by a later successful retry is accepted immediately on the
+next "done" claim. Corrected `done_criteria.py`'s module docstring to
+state plainly what's wired versus dead code. Fixed 5 pre-existing tests
+across 4 files (additional mocked provider responses for the new
+bounded retry; assertions preserved). Added 3 new regression tests in
+`tests/agent/test_runtime_deep.py::TestDoneCriteriaEnforcement`.
+
+**Residual risk, called out explicitly:** `is_compound_task()`,
+`make_done_prompt()`, and `DoneCriteria` remain unused — a genuinely
+different, softer feature (model self-declares completion conditions
+upfront) not required to close the "false completion claims trusted
+unconditionally" gap, which this checkpoint's code-level
+`ToolResult.is_error` gate closes on its own. Also unaddressed: the
+gate only catches errors from tool calls the model actually made — a
+model that fabricates a success claim without calling any tool at all
+is not caught here; that's the broader FX-C-style "ground factual
+claims" pattern, addressed for specific subsystems (memory IDs, Incus
+state) but not generically solved by this checkpoint.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-3 failed, 20900 passed, 13 skipped in 460.13s (0:07:40)
+3 failed, 20903 passed, 13 skipped in 475.16s (0:07:55)
 ```
 
 The 3 failures are exactly the known pre-existing `CameraDiscovery`
@@ -227,14 +281,16 @@ three files above.)
   session covered SR-1.2/1.3, SR-1.4, SR-1.5, SR-1.6, SR-1.7, SR-1.8,
   SR-1.9a, SR-1.10, SR-1.11, SR-1.12, SR-1.13, SR-2.1, SR-2.2, SR-2.3,
   SR-2.4, SR-3.1 (substantially via FX-B), SR-3.2, SR-3.3, SR-3.4
-  (including its cross-session-aggregation sub-finding), SR-3.5 — **§2
-  and §3 are now both fully closed, with no open sub-findings in
-  either.** Remaining: SR-1.1 (audit signing — larger cross-cutting
+  (including its cross-session-aggregation sub-finding), SR-3.5, SR-4.4
+  — **§2 and §3 are now both fully closed, with no open sub-findings in
+  either; §4 has its first item (SR-4.4, done-criteria verification)
+  fixed.** Remaining: SR-1.1 (audit signing — larger cross-cutting
   change), SR-1.9b (DNS TOCTOU, substantially harder — needs connecting
   to a pinned policy-verified IP rather than re-resolving at connect
-  time), SR-4.x (dead/unwired features, 8 sub-items) — this is the
-  natural next large area now that §1 (partially), §2 (fully), and §3
-  (fully) are closed.
+  time), SR-4.1, SR-4.2, SR-4.3, SR-4.5, SR-4.6, SR-4.7, SR-4.8
+  (remaining dead/unwired features, 7 sub-items) — this is the natural
+  next large area now that §1 (partially), §2 (fully), §3 (fully), and
+  §4's first item are closed.
 - **SR-1.7's launcher sub-finding** remains open — `find`/`xargs`/
   `bash`/`sudo` etc. are allowlist-able with only a warning, and
   nested shell commands inside a launcher's quoted arguments are
@@ -322,23 +378,32 @@ both fully closed**, with zero open sub-findings in either (SR-2.1:
 scheduled jobs default to `capability_mode="safe-chat"`; SR-2.2: a real
 `ApprovalGate` is wired into `ProactiveManager` and the Web API server;
 SR-3.4's cross-session-aggregation sub-finding is fixed — `CostTracker`
-is now per-session-keyed). SR-1.1 (audit signing) is now the largest
-remaining §1 item; §4 (dead/unwired features — SR-4.1 through SR-4.8,
-8 sub-items) is the next natural large area to work through. Given how
-the last several checkpoints went (SR-3.3 and SR-3.5 were both flagged
-"likely already fixed" and both turned out to hide live, confirmed,
-previously-undetected bugs; SR-2.1, SR-2.2, and the SR-3.4 residual all
-turned out to have a second layer beyond the obvious fix — SR-2.1's
-fail-closed legacy-record handling, SR-2.2's entirely-unwired
+is now per-session-keyed), and **§4's first item (SR-4.4, done-criteria
+verification) is now fixed** — `_tool_loop()` rejects a "done" claim
+made immediately after an unresolved tool error, up to 2 retries, with
+`agent.done_criteria.rejected`/`.unverified` audit events. SR-1.1
+(audit signing) is now the largest remaining §1 item; the remaining §4
+items (SR-4.1 long-term memory, SR-4.2 sub-agents, SR-4.3 checkpoint
+recovery, SR-4.5 custom-tool loading, SR-4.6 OTLP export, SR-4.7 MCP
+execution/approval, SR-4.8 provider rotation/fallback claims — 7
+sub-items) are the next natural continuation, each individually scoped
+and independently checkpointable like SR-4.4 was. Given how the last
+several checkpoints went (SR-3.3 and SR-3.5 were both flagged "likely
+already fixed" and both turned out to hide live, confirmed,
+previously-undetected bugs; SR-2.1, SR-2.2, the SR-3.4 residual, and
+SR-4.4 all turned out to have a second layer beyond the obvious fix —
+SR-2.1's fail-closed legacy-record handling, SR-2.2's entirely-unwired
 `ApprovalGate` requiring new REST endpoints, the SR-3.4 residual's
-25-test mechanical-vs-intentional update split across 9 files), keep
-applying the same discipline to whatever's picked up next: read the
-actual current code, trace actual runtime call paths, specifically
-check whether any existing test exercises the *real* production
-dispatch/entry point rather than just the unit under test in isolation,
-and live-reproduce before declaring anything fixed, broken, or
-not-applicable. Alternatively pick up one of the concrete scoped tasks
-above (#11, #12, #15, #16, #17), all self-contained and not requiring a
-live delegate. A Web TUI browser page for the new `/api/v1/approvals`
-endpoints is also a reasonable, self-contained follow-up (the REST
-layer is done and tested; only the browser UI is missing).
+25-test mechanical-vs-intentional update split across 9 files, SR-4.4's
+fingerprint-history design discarded mid-implementation after live
+testing revealed a false-positive staleness bug), keep applying the
+same discipline to whatever's picked up next: read the actual current
+code, trace actual runtime call paths, specifically check whether any
+existing test exercises the *real* production dispatch/entry point
+rather than just the unit under test in isolation, and live-reproduce
+before declaring anything fixed, broken, or not-applicable.
+Alternatively pick up one of the concrete scoped tasks above (#11, #12,
+#15, #16, #17), all self-contained and not requiring a live delegate. A
+Web TUI browser page for the new `/api/v1/approvals` endpoints is also
+a reasonable, self-contained follow-up (the REST layer is done and
+tested; only the browser UI is missing).

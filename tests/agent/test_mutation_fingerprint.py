@@ -82,7 +82,10 @@ def test_repeated_error_fingerprint_injects_lastToolError():
     from missy.agent.runtime import AgentConfig, AgentRuntime
     from missy.providers.base import CompletionResponse, ToolCall, ToolResult
 
-    config = AgentConfig(max_iterations=4)
+    # SR-4.4: a "stop" response following an errored tool round is now
+    # rejected and retried up to _MAX_DONE_VERIFICATION_RETRIES (2) times
+    # before being accepted -- allow enough iterations/responses for that.
+    config = AgentConfig(max_iterations=6)
     rt = AgentRuntime(config)
 
     provider = MagicMock()
@@ -111,10 +114,13 @@ def test_repeated_error_fingerprint_injects_lastToolError():
         tool_calls=None,
         **_base,
     )
-    # Return tool_calls twice, then stop
+    # Return tool_calls twice, then stop (repeated to satisfy the SR-4.4
+    # done-criteria retry gate, since the tool call never actually succeeds).
     provider.complete_with_tools.side_effect = [
         tool_response,
         tool_response,
+        final_response,
+        final_response,
         final_response,
     ]
 
@@ -202,7 +208,10 @@ def test_different_args_do_not_trigger_mutation_injection():
     from missy.agent.runtime import AgentConfig, AgentRuntime
     from missy.providers.base import CompletionResponse, ToolCall, ToolResult
 
-    config = AgentConfig(max_iterations=4)
+    # SR-4.4: tc2 also errors (error_tr2), so the done-criteria gate still
+    # rejects/retries the "stop" claim even though the two calls don't
+    # share a mutation fingerprint -- allow enough iterations/responses.
+    config = AgentConfig(max_iterations=6)
     rt = AgentRuntime(config)
 
     provider = MagicMock()
@@ -219,7 +228,7 @@ def test_different_args_do_not_trigger_mutation_injection():
     resp1 = CompletionResponse(content="", finish_reason="tool_calls", tool_calls=[tc1], **_base)
     resp2 = CompletionResponse(content="", finish_reason="tool_calls", tool_calls=[tc2], **_base)
     final = CompletionResponse(content="All done.", finish_reason="stop", tool_calls=None, **_base)
-    provider.complete_with_tools.side_effect = [resp1, resp2, final]
+    provider.complete_with_tools.side_effect = [resp1, resp2, final, final, final]
 
     call_count = [0]
 

@@ -1527,6 +1527,105 @@ requirement — do not overwrite, append new entries as work continues.
   per-session-scoped before this fix and is unaffected by it — only the
   live in-memory *enforcement* path had the aggregation bug.
 
+### SR-4.1 (SR-4.4) — Done-criteria "verification engine" was a static prompt instruction, not wired to any tool-observed evidence
+
+- **Status: fixed** for the core completion-trust gap. First §4 item
+  addressed this session — moving from the security-review-remediation
+  sections (§1–§3, now closed except SR-1.1/SR-1.9b) into "Advertised
+  But Unwired Features."
+- **Reachability found (live-verified):** `missy/agent/done_criteria.py`
+  advertises a "DONE criteria engine" with `is_compound_task()` (detects
+  multi-step prompts), `make_done_prompt()` (asks the model to define
+  its own completion conditions), a `DoneCriteria` dataclass
+  (`conditions`/`verified`/`all_met`/`pending` — the only piece capable
+  of holding real, externally-verified per-condition state), and
+  `make_verification_prompt()` (a static nudge string). Grepped every
+  production call site: `is_compound_task`, `make_done_prompt`, and
+  `DoneCriteria` are **never used anywhere** in `AgentRuntime` or
+  elsewhere — completely dead code. Only `make_verification_prompt()`
+  is used, and only in one place: `_tool_loop()` appends its fixed text
+  to the conversation after every round where the model chooses to keep
+  calling tools (`finish_reason == "tool_calls"`). Critically, the
+  *other* branch — where the model declares `finish_reason == "stop"`
+  and the loop returns immediately — had **zero verification of any
+  kind**: no check of whether the immediately preceding round of tool
+  calls actually succeeded, no code-level cross-reference against
+  `ToolResult.is_error`, nothing. The model's own text claim of success
+  was trusted completely unconditionally, even directly following a
+  tool call that errored. Live-reproduced end-to-end through the real
+  `AgentRuntime.run()`/`_tool_loop()`: simulated a `calculator` tool
+  call that errored, immediately followed by the model responding
+  `"Done! I successfully computed the result."` with
+  `finish_reason="stop"` — the runtime returned that text as the final
+  answer with zero rejection, zero audit event, and zero additional
+  verification of any kind. Confirmed via `git stash` this reproduces
+  on the pre-fix tree.
+- **Remediation evidence:** added a deterministic, tool-observed
+  completion gate directly in `_tool_loop()`. Rather than reusing the
+  existing `_mutation_fp_errors` dict (which tracks errors keyed by
+  exact tool-name+arguments fingerprint and is designed to stay
+  populated until the *exact same* call succeeds — investigated and
+  rejected as the basis for this gate because a corrected retry
+  necessarily uses different arguments/a different fingerprint, so
+  gating on "any fingerprint ever errored" would keep rejecting
+  completion long after the model successfully recovered via a
+  different call), added a new `_last_round_errors` list that is
+  overwritten (not accumulated) after every round of tool execution,
+  reflecting only the *immediately preceding* round's
+  `ToolResult.is_error` outcomes. When `finish_reason == "stop"` or
+  `"length"` and `_last_round_errors` is non-empty, the completion claim
+  is rejected: the model is told exactly which tool call(s) errored and
+  instructed to retry or explain, and the loop continues rather than
+  returning — up to `_MAX_DONE_VERIFICATION_RETRIES = 2` attempts. Each
+  rejection emits an `agent.done_criteria.rejected` audit event
+  (`result: "deny"`). If retries are exhausted and the error is still
+  unresolved, the response is still returned (the runtime does not
+  silently rewrite or discard a model's response — that could corrupt
+  legitimate content) but an `agent.done_criteria.unverified` audit
+  event (`result: "warn"`) makes the gap visible rather than treating it
+  as a verified success. Live re-verified all three cases end-to-end
+  through the real `AgentRuntime.run()`: (1) an unresolved error is
+  rejected twice then accepted-with-warning on the third attempt, never
+  trusted on the first; (2) a genuinely successful tool call never
+  triggers any rejection or extra provider calls (zero behavior change
+  for the happy path); (3) an error followed by a *later, successful*
+  round (a corrected retry) is accepted immediately on the very next
+  "done" claim — confirming the fingerprint-history alternative design
+  would have been wrong and the most-recent-round-only design is
+  correct. Fixed 5 pre-existing tests across 4 files whose scenarios
+  triggered a genuine tool error followed by an unretried "stop" claim
+  — each needed additional mocked provider responses to accommodate the
+  new bounded retry behavior (their actual assertions, e.g. "the denied
+  tool call never reached `registry.execute()`", were preserved and
+  still pass; none were weakened). Added 3 new regression tests in
+  `tests/agent/test_runtime_deep.py::TestDoneCriteriaEnforcement`
+  covering exactly the three cases above. `tests/agent/`+`tests/unit/`+
+  `tests/security/`+`tests/cli/`+`tests/api/` (9,637 tests) pass with
+  no regressions; full suite 20,903 passed (up from 20,900), only the 3
+  known pre-existing vision flakes failing. Corrected
+  `missy/agent/done_criteria.py`'s module docstring, which implied the
+  whole module was an integrated "engine" — it now states plainly which
+  pieces are wired (only `make_verification_prompt()`) and which remain
+  dead code (`is_compound_task`, `make_done_prompt`, `DoneCriteria`).
+- **Residual risk:** `is_compound_task()`, `make_done_prompt()`, and the
+  `DoneCriteria` dataclass remain unused. These represent a genuinely
+  different, softer feature (having the model declare its own
+  candidate completion conditions upfront, then track which are met) —
+  not strictly required to close the "false completion claims are
+  trusted unconditionally" security gap, which this checkpoint's
+  code-level `ToolResult.is_error`-based gate closes independent of
+  whether the model ever articulates conditions at all. If a future
+  session wants the full compound-task-detection UX (proactively
+  showing the model's own DONE checklist), that dead code is available
+  to build on, but it is not itself a security requirement. Also
+  unaddressed: the gate only catches errors from *tool calls*; a model
+  that fabricates a false success claim without ever calling a tool at
+  all (e.g. claiming a file was created when it never attempted the
+  `file_write` call) is not caught by this mechanism — that class of
+  claim requires the broader FX-C-style "ground factual claims in fresh
+  evidence" work already addressed elsewhere this session for specific
+  subsystems (memory IDs, Incus state), not a generic solution.
+
 ---
 
 - Timestamp: 2026-07-09 15:35:26 (raw grep-scan dump below, preserved

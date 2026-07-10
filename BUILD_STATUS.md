@@ -1,6 +1,6 @@
 # Build Status
 
-Last updated: 2026-07-10 19:55 UTC
+Last updated: 2026-07-10 20:40 UTC
 
 ## Current Workstream: Validation-Harness Overhaul
 
@@ -1276,6 +1276,83 @@ This is the twenty-first independent, confirmed finding/change this
 session. Full detail in `AUDIT_SECURITY.md`'s new `### SR-3.4 residual`
 section.
 
+### Completed This Session, continued: SR-4.4 — done-criteria verification wired into task completion (twenty-second finding, first §4 item)
+
+First §4 item ("Advertised But Unwired Features") addressed this
+session, moving on from §1/§2/§3 (now closed except SR-1.1/SR-1.9b).
+
+Reachability: `missy/agent/done_criteria.py` advertises a "DONE
+criteria engine" — `is_compound_task()`, `make_done_prompt()`, a
+`DoneCriteria` dataclass, `make_verification_prompt()` — but grepping
+every production call site showed only `make_verification_prompt()` is
+actually used, and only as a static text nudge appended after rounds
+where the model keeps calling tools. The `finish_reason == "stop"`
+branch — where the model declares itself done and the loop returns
+immediately — had zero code-level verification: no cross-reference
+against the immediately preceding round's actual `ToolResult.is_error`
+outcomes, nothing. Live-reproduced through the real
+`AgentRuntime.run()`/`_tool_loop()`: a `calculator` tool call that
+errored, immediately followed by the model claiming
+`"Done! I successfully computed the result."` with
+`finish_reason="stop"`, was returned as the final answer with zero
+rejection and zero audit trail. Confirmed via `git stash` this
+reproduces pre-fix.
+
+Fixed: added a deterministic completion gate directly in
+`_tool_loop()`. Considered reusing the existing `_mutation_fp_errors`
+dict (errors keyed by exact tool-name+arguments fingerprint) but
+rejected it after live-testing — a corrected retry necessarily uses
+different arguments, so a fingerprint-history gate would keep rejecting
+completion forever after any single early error even following a
+successful recovery. Instead added `_last_round_errors`, overwritten
+(not accumulated) after every round, reflecting only the most recent
+round's `ToolResult.is_error` outcomes. When the model claims
+`"stop"`/`"length"` with `_last_round_errors` non-empty, the claim is
+rejected (up to `_MAX_DONE_VERIFICATION_RETRIES = 2` times): the model
+is told which call(s) errored and told to retry or explain, and the
+loop continues. Each rejection emits `agent.done_criteria.rejected`
+(`result: "deny"`); if retries are exhausted with the error still
+unresolved, the response is still returned (never silently rewritten)
+but tagged with `agent.done_criteria.unverified` (`result: "warn"`) so
+the gap is visible rather than treated as verified success. Live
+re-verified all three cases end-to-end: (1) an unresolved error is
+rejected twice then accepted-with-warning, never trusted on the first
+claim; (2) a genuinely successful round never triggers any rejection or
+extra provider calls — zero happy-path behavior change; (3) an error
+followed by a later successful retry round is accepted immediately on
+the next "done" claim, confirming the most-recent-round-only design
+(not fingerprint-history) is correct. Corrected
+`missy/agent/done_criteria.py`'s module docstring to state plainly
+which pieces are wired (only `make_verification_prompt()`) versus dead
+code (`is_compound_task`, `make_done_prompt`, `DoneCriteria`).
+
+Fixed 5 pre-existing tests across 4 files whose scenarios triggered a
+genuine tool error followed by an unretried "stop" claim — each needed
+additional mocked provider responses for the new bounded retry; their
+actual assertions were preserved, none weakened. Added 3 new regression
+tests in `tests/agent/test_runtime_deep.py::TestDoneCriteriaEnforcement`
+covering the three cases above. `tests/agent/`+`tests/unit/`+
+`tests/security/`+`tests/cli/`+`tests/api/` (9,637 tests) pass with no
+regressions; full suite `3 failed, 20903 passed, 13 skipped` (up from
+20,900), only the 3 known pre-existing vision flakes failing.
+
+Residual risk: `is_compound_task()`, `make_done_prompt()`, and
+`DoneCriteria` remain unused — a genuinely different, softer feature
+(model self-declares completion conditions upfront) not required to
+close the "false completion claims trusted unconditionally" gap, which
+this checkpoint's code-level `ToolResult.is_error` gate closes on its
+own. Also unaddressed: the gate only catches errors from tool calls a
+model actually made — a model that fabricates a success claim without
+calling any tool at all (e.g. claims a file was written but never
+called `file_write`) is not caught by this mechanism; that's the
+broader FX-C-style "ground factual claims" pattern, already addressed
+for specific subsystems (memory IDs, Incus state) but not generically
+solved here.
+
+This is the twenty-second independent, confirmed finding/change this
+session. Full detail in `AUDIT_SECURITY.md`'s new `### SR-4.1 (SR-4.4)`
+section.
+
 ### Known Pre-Existing Failure (not caused by this session)
 
 `tests/vision/test_discovery_capture_sysfs.py::TestCacheTTL::test_cache_valid_within_ttl`
@@ -1292,15 +1369,17 @@ scoped to FX-A / voice-command work.
 FX-A through FX-G are all complete (see task list). §2 (Unattended-
 Execution Hazards) and §3 (Data Integrity, Availability, And Cost) are
 now both fully closed — SR-3.4's cross-session-aggregation sub-finding
-is fixed. Current remaining priority order:
+is fixed. §4's first item (SR-4.4, done-criteria verification) is now
+fixed. Current remaining priority order:
 
 1. SR-1.1 (audit event signing — larger cross-cutting change) and
    SR-1.9b (DNS TOCTOU — needs connecting to a pinned policy-verified IP
    rather than re-resolving at connect time).
-2. SR-4.1 through SR-4.8 (dead/unwired features: long-term memory,
-   sub-agents, checkpoint recovery, done-criteria verification,
-   custom-tool loading, OTLP export, MCP execution/approval, provider
-   rotation/fallback claims).
+2. SR-4.1, SR-4.2, SR-4.3, SR-4.5, SR-4.6, SR-4.7, SR-4.8 (remaining
+   dead/unwired features: long-term memory, sub-agents, checkpoint
+   recovery, custom-tool loading, OTLP export, MCP execution/approval,
+   provider rotation/fallback claims — SR-4.4 done-criteria verification
+   is now fixed, see above).
 3. The "harden secondary availability hazards" bullet (circuit-breaker
    half-open single-probe, MCP RPC desync, malformed scheduler record
    isolation, webhook HMAC replay protection, EventBus history bound,

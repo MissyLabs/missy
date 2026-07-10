@@ -1,5 +1,46 @@
 # TEST_RESULTS
 
+## Run: 2026-07-10 20:40 UTC — validation-harness overhaul, SR-4.4 (done-criteria verification wired into task completion)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Finding: `_tool_loop()`'s `finish_reason == "stop"` branch trusted a
+  model's "done" claim unconditionally, with zero cross-reference
+  against the immediately preceding round's actual `ToolResult.is_error`
+  outcomes. `is_compound_task()`/`make_done_prompt()`/`DoneCriteria` in
+  `missy/agent/done_criteria.py` are unused dead code; only
+  `make_verification_prompt()` (a static text nudge) was wired in, and
+  only for the "keep calling tools" branch, not the "stop" branch.
+- Live reproduction: a `calculator` tool call that errored, immediately
+  followed by the model claiming `"Done! I successfully computed the
+  result."` with `finish_reason="stop"`, was returned as final output
+  with zero rejection and zero audit event. Confirmed via `git stash`
+  this reproduces on the pre-fix tree.
+- Design iteration: first attempt reused `_mutation_fp_errors`
+  (fingerprint-keyed error history) as the gating signal; live-testing
+  a corrected-retry scenario revealed this never clears an original
+  fingerprint's error after a successful retry with different
+  arguments, causing permanent false-positive rejections. Replaced with
+  `_last_round_errors`, overwritten (not accumulated) every round.
+- Fix: `_tool_loop()` rejects a "stop"/"length" claim when
+  `_last_round_errors` is non-empty, up to
+  `_MAX_DONE_VERIFICATION_RETRIES = 2` times, emitting
+  `agent.done_criteria.rejected` (deny) each time; if retries exhaust
+  with the error still unresolved, the response is still returned but
+  tagged `agent.done_criteria.unverified` (warn) rather than treated as
+  verified.
+- Command: `pytest tests/agent/test_runtime_deep.py::TestDoneCriteriaEnforcement -v`
+- Result: `3 passed` (new: false-completion-rejected-then-warned,
+  happy-path-unaffected, corrected-retry-accepted-immediately)
+- Command: `pytest tests/agent/ tests/unit/ tests/security/ tests/cli/
+  tests/api/ -q -o faulthandler_timeout=120`
+- Result: `9637 passed` — no regressions (5 pre-existing tests across 4
+  files fixed with additional mocked provider responses to accommodate
+  the new bounded retry behavior; original assertions preserved)
+- Command: `pytest tests/ -q -o faulthandler_timeout=120`
+- Result: `3 failed, 20903 passed, 13 skipped in 475.16s (0:07:55)` —
+  up from 20900, only the 3 known pre-existing `CameraDiscovery`
+  cache-TTL flakes failing, unrelated to this checkpoint's changes.
+
 ## Run: 2026-07-10 19:55 UTC — validation-harness overhaul, SR-3.4 residual (CostTracker cross-session aggregation)
 
 - Branch: `overhaul/missy-validation-20260710-031406`

@@ -1000,6 +1000,20 @@ class AgentRuntime:
         # Maps fingerprint → last error text (cleared when same fp succeeds).
         _mutation_fp_errors: dict[str, str] = {}
 
+        # SR-4.4: done-criteria verification. Deterministic, tool-observed
+        # evidence (not a model self-report) that the round of tool calls
+        # immediately preceding a "stop" claim actually succeeded. Tracks
+        # only the *most recent* round rather than _mutation_fp_errors'
+        # full per-argument-fingerprint history: a corrected retry
+        # necessarily uses different arguments (a different fingerprint),
+        # so gating on "any fingerprint ever errored" would keep rejecting
+        # completion long after the model successfully recovered via a
+        # different call -- gating on "did the last round contain an
+        # unresolved error" avoids that false-positive class entirely.
+        _last_round_errors: list[str] = []
+        _MAX_DONE_VERIFICATION_RETRIES = 2
+        _done_verification_retries = 0
+
         # Resolve progress reporter (graceful degradation for tests that bypass __init__)
         _progress = getattr(self, "_progress", None)
         if _progress is None:
@@ -1152,6 +1166,13 @@ class AgentRuntime:
                         }
                     )
 
+                    # SR-4.4: record this round's errors (and only this
+                    # round's -- overwritten, not accumulated) for the
+                    # done-criteria completion gate below.
+                    _last_round_errors = [
+                        f"{tr.name}: {tr.content}" for tr in tool_results if tr.is_error
+                    ]
+
                     # Append tool result messages (with injection scanning)
                     for tr in tool_results:
                         content = tr.content
@@ -1260,6 +1281,61 @@ class AgentRuntime:
                     iteration + 1,
                     response.finish_reason,
                 )
+
+                # SR-4.4: reject a completion claim when the round of tool
+                # calls immediately preceding it contained an error --
+                # deterministic, tool-observed evidence, not the model's
+                # own say-so.
+                if _last_round_errors:
+                    if _done_verification_retries < _MAX_DONE_VERIFICATION_RETRIES:
+                        _done_verification_retries += 1
+                        rejection_msg = (
+                            "DONE-CRITERIA CHECK FAILED: you reported completion, but "
+                            f"{len(_last_round_errors)} tool call(s) in the immediately "
+                            "preceding round errored:\n"
+                            + "\n".join(f"  • {e[:200]}" for e in _last_round_errors)
+                            + "\nThis task is not done until these are resolved, or you "
+                            "explicitly explain why they cannot be fixed. Retry the "
+                            "failed operation(s) with corrected parameters, or use a "
+                            "different tool/approach."
+                        )
+                        loop_messages.append({"role": "assistant", "content": final_text})
+                        loop_messages.append({"role": "user", "content": rejection_msg})
+                        with contextlib.suppress(Exception):
+                            self._emit_event(
+                                session_id=session_id,
+                                task_id=task_id,
+                                event_type="agent.done_criteria.rejected",
+                                result="deny",
+                                detail={
+                                    "unresolved_error_count": len(_last_round_errors),
+                                    "attempt": _done_verification_retries,
+                                    "max_attempts": _MAX_DONE_VERIFICATION_RETRIES,
+                                },
+                            )
+                        # Deliberately NOT cleared here: if the model
+                        # responds again without calling any tool (i.e.
+                        # without changing the evidence), the same
+                        # still-unaddressed error must keep being rejected
+                        # up to the retry cap rather than being accepted on
+                        # a second identical claim. A new round of tool
+                        # calls (success or failure) naturally overwrites
+                        # this list above regardless.
+                        continue
+                    # Retries exhausted -- still return the model's response
+                    # (a stale/incorrect completion claim is not something
+                    # the runtime should silently rewrite), but make the
+                    # gap visible via audit rather than treating it as a
+                    # verified success.
+                    with contextlib.suppress(Exception):
+                        self._emit_event(
+                            session_id=session_id,
+                            task_id=task_id,
+                            event_type="agent.done_criteria.unverified",
+                            result="warn",
+                            detail={"unresolved_error_count": len(_last_round_errors)},
+                        )
+
                 # Feature #8: mark checkpoint complete on success
                 if _cm is not None and _checkpoint_id is not None:
                     with contextlib.suppress(Exception):

@@ -256,7 +256,15 @@ class TestTrustScoreDropWarning:
             raw={},
             finish_reason="stop",
         )
-        provider.complete_with_tools.side_effect = [tool_call_resp, stop_resp]
+        # SR-4.4: the errored tool call means the "stop" claim is rejected
+        # and retried up to _MAX_DONE_VERIFICATION_RETRIES times before
+        # being accepted -- supply enough repeated stop_resp entries.
+        provider.complete_with_tools.side_effect = [
+            tool_call_resp,
+            stop_resp,
+            stop_resp,
+            stop_resp,
+        ]
 
         tool = MagicMock()
         tool.name = "calc"
@@ -267,7 +275,7 @@ class TestTrustScoreDropWarning:
         tool_reg.execute.return_value = MagicMock(success=False, output=None, error="failed")
 
         reg = _make_registry(provider)
-        cfg = AgentConfig(provider="fake", max_iterations=5, capability_mode="full")
+        cfg = AgentConfig(provider="fake", max_iterations=7, capability_mode="full")
 
         with (
             patch("missy.agent.runtime.get_registry", return_value=reg),
