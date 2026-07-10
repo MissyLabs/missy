@@ -1061,18 +1061,33 @@ class DiscordChannel(BaseChannel):
             logger.info("Discord: pairing requested by %s", author_id)
             return False  # Don't forward the pairing command itself.
 
-        # Commands to accept/deny pending pair requests (admin only — simplified).
-        if content.strip().lower().startswith("!pair accept "):
-            target_id = content.strip().split()[-1]
-            self._pending_pairs.discard(target_id)
-            self.account_config.dm_allowlist.append(target_id)
-            logger.info("Discord: pairing accepted for %s", target_id)
-            return False
-
-        if content.strip().lower().startswith("!pair deny "):
-            target_id = content.strip().split()[-1]
-            self._pending_pairs.discard(target_id)
-            logger.info("Discord: pairing denied for %s", target_id)
+        # SR-1.12: pairing approval/denial must NEVER be reachable from an
+        # in-band DM message. There is no way to authenticate the sender of
+        # a Discord DM as an authorized operator from within this handler --
+        # any unpaired stranger could otherwise DM `!pair` followed by
+        # `!pair accept <their own id>` and grant themselves access with no
+        # authentication at all. accept_pair()/deny_pair() remain the only
+        # way to resolve a pending request, and must only ever be invoked
+        # from an authenticated operator surface (the Web console/API,
+        # which shares this process under `missy gateway start`) -- never
+        # from message content. Treat these as unrecognised commands and
+        # audit the attempt.
+        lowered = content.strip().lower()
+        if lowered.startswith(("!pair accept ", "!pair deny ")):
+            self._emit_audit(
+                "discord.channel.pairing_decision_denied",
+                "deny",
+                {
+                    "reason": "pairing_decisions_not_available_via_dm",
+                    "author_id": author_id,
+                },
+            )
+            logger.warning(
+                "Discord: rejected in-band pairing decision command from %s "
+                "-- pairing must be approved via an authenticated operator "
+                "surface, not DM content.",
+                author_id,
+            )
             return False
 
         # Regular message: allowed only if already in the allowlist.

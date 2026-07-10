@@ -58,12 +58,50 @@ requirement — do not overwrite, append new entries as work continues.
   future code path constructs `CodeEvolutionManager` directly (bypassing
   the CLI) without its own authentication check, the same class of bug
   reappears. Do not treat this finding as closed.
-- **Related, not yet checked this session:** `channel.py` has a
-  DM-pairing approval flow with a comment reading "admin only —
-  simplified" (SR-1.12). Given this session found the *identical* bug
-  pattern (unauthenticated Discord-user approval of a sensitive action)
-  in the evolution-reaction handler, the pairing handler should be
-  audited next with high priority — it may have the same flaw.
+- **Related finding, checked and fixed this session:** see SR-1.12
+  below — the DM-pairing approval flow had the *identical* bug pattern,
+  confirmed and fixed in the same session.
+
+### SR-1.12 — Authenticated Discord pairing
+
+- **Status: fixed (self-approval and any in-band DM approval closed).**
+- **Reachability found:** live and directly exploitable — worse than
+  SR-1.2/1.3 in one respect, since it required no prior state at all.
+  `missy/channels/discord/channel.py::_check_pairing()` processed
+  `!pair accept <target_id>` and `!pair deny <target_id>` DM commands
+  with **zero check on who sent them**. Any unpaired stranger could DM
+  the bot `!pair` (adding themselves to `_pending_pairs`) immediately
+  followed by `!pair accept <their-own-user-id>` and grant themselves
+  full DM access — a complete, self-service bypass of the pairing gate
+  requiring no authorization step at all. The code comment above the
+  block ("admin only — simplified") acknowledged the intended design
+  but the "admin only" check was never actually implemented.
+- **Remediation evidence:** `_check_pairing()` no longer processes
+  `!pair accept`/`!pair deny` from DM content at all — those commands
+  are now unconditionally refused with a
+  `discord.channel.pairing_decision_denied` (`deny`) audit event
+  regardless of sender. `accept_pair()`/`deny_pair()`/
+  `get_pending_pairs()` remain as the only way to resolve a pending
+  request, and are documented as requiring an authenticated operator
+  surface (the Web console/API, which shares the same process as the
+  Discord channel under `missy gateway start`) — never DM content. New
+  tests:
+  `tests/channels/test_discord_channel_coverage.py::TestCheckPairingDeny::test_pair_deny_via_dm_is_refused_not_processed`,
+  `tests/channels/discord/test_discord_channel_integration.py::TestCheckPairing::test_accept_command_via_dm_is_refused`,
+  `::test_deny_command_via_dm_is_refused`,
+  `::test_accept_pair_only_available_via_programmatic_api`,
+  `tests/unit/test_discord_channel.py::TestPairingWorkflow::test_accept_via_dm_command_is_refused`.
+- **Residual risk:** no authenticated Web API/console endpoint has
+  actually been wired to call `accept_pair()`/`deny_pair()` yet, so
+  there is currently **no way for an operator to approve a pending
+  Discord pairing at all** through any surface — this trades the
+  vulnerability for a (safe, but incomplete) loss of functionality.
+  Wiring a real authenticated approval endpoint (or a `missy discord
+  pairs` CLI command backed by shared persistence, mirroring
+  `missy devices pair`'s `DeviceRegistry` pattern) is tracked as
+  follow-up work. Rate-limiting of pairing *requests* (`!pair` itself)
+  and replay/expiration handling per the full SR-1.12 ask are also not
+  yet implemented.
 
 ---
 

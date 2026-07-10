@@ -400,26 +400,39 @@ class TestCheckPairing:
         channel._check_pairing("u-new", "/pair")
         assert "u-new" in channel._pending_pairs
 
-    def test_accept_command_moves_to_allowlist(self, channel):
+    def test_accept_command_via_dm_is_refused(self, channel):
+        # SR-1.12: an in-band "!pair accept" DM must never approve a
+        # pairing -- there is no way to authenticate the sender as an
+        # authorized operator from message content alone. The request
+        # stays pending and the allowlist is untouched.
         channel._pending_pairs.add("u-pending")
         channel._check_pairing("admin", "!pair accept u-pending")
-        assert "u-pending" not in channel._pending_pairs
-        assert "u-pending" in channel.account_config.dm_allowlist
+        assert "u-pending" in channel._pending_pairs
+        assert "u-pending" not in channel.account_config.dm_allowlist
 
     def test_accept_command_returns_false(self, channel):
         channel._pending_pairs.add("u-pending")
         result = channel._check_pairing("admin", "!pair accept u-pending")
         assert result is False
 
-    def test_deny_command_removes_from_pending(self, channel):
+    def test_deny_command_via_dm_is_refused(self, channel):
         channel._pending_pairs.add("u-pending")
         channel._check_pairing("admin", "!pair deny u-pending")
-        assert "u-pending" not in channel._pending_pairs
+        assert "u-pending" in channel._pending_pairs
 
     def test_deny_command_returns_false(self, channel):
         channel._pending_pairs.add("u-pending")
         result = channel._check_pairing("admin", "!pair deny u-pending")
         assert result is False
+
+    def test_accept_pair_only_available_via_programmatic_api(self, channel):
+        # The only supported way to resolve a pending pairing is calling
+        # accept_pair()/deny_pair() directly -- from an authenticated
+        # operator surface (Web console/API), never from DM content.
+        channel._pending_pairs.add("u-pending")
+        channel.accept_pair("u-pending")
+        assert "u-pending" not in channel._pending_pairs
+        assert "u-pending" in channel.account_config.dm_allowlist
 
     def test_regular_message_denied_when_not_in_allowlist(self, channel):
         channel.account_config.dm_allowlist = []

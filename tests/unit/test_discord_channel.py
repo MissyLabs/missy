@@ -412,15 +412,20 @@ class TestPairingWorkflow:
         result = channel._check_dm_policy("user-bad", "hello!")
         assert result is False
 
-    def test_accept_pair_via_command_message(self) -> None:
+    def test_accept_via_dm_command_is_refused(self) -> None:
+        # SR-1.12: a DM sender must never approve a pairing by sending
+        # "!pair accept <id>" -- there is no way to authenticate that
+        # sender as an authorized operator from message content. Only
+        # accept_pair(), called from an authenticated operator surface,
+        # may resolve a pending request.
         account = DiscordAccountConfig(account_id="b", dm_policy=DiscordDMPolicy.PAIRING)
         channel = _make_channel(account)
         channel._pending_pairs.add("target-user")
 
         result = channel._check_pairing("admin", "!pair accept target-user")
         assert result is False  # Command itself not forwarded.
-        assert "target-user" not in channel.get_pending_pairs()
-        assert "target-user" in channel.account_config.dm_allowlist
+        assert "target-user" in channel.get_pending_pairs()
+        assert "target-user" not in channel.account_config.dm_allowlist
 
 
 # ---------------------------------------------------------------------------

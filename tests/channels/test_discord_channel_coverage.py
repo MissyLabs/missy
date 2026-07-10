@@ -397,14 +397,17 @@ class TestCheckDMPolicyPairing:
 
 
 class TestCheckPairingDeny:
-    def test_pair_deny_removes_from_pending(self):
+    def test_pair_deny_via_dm_is_refused_not_processed(self):
+        # SR-1.12: pairing decisions must never be reachable from in-band
+        # DM content -- there is no way to authenticate the sender as an
+        # authorized operator. The pending request must be left untouched.
         account = _make_account(dm_policy=DiscordDMPolicy.PAIRING)
         ch = _make_channel(account)
         ch._pending_pairs.add("user-pending")
 
         result = ch._check_pairing("admin", "!pair deny user-pending")
 
-        assert "user-pending" not in ch._pending_pairs
+        assert "user-pending" in ch._pending_pairs
         assert result is False
 
 
