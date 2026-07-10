@@ -499,6 +499,77 @@ requirement — do not overwrite, append new entries as work continues.
   its tool's actual kwargs has not been performed, so other
   not-yet-found instances of this pattern may remain.
 
+### SR-1.9a — Network policy: allowlisted hosts/domains skipped DNS-rebinding IP verification
+
+- **Status: fixed** for the deterministic sub-finding (a) — an
+  allowlisted hostname's resolved IP was never checked. Sub-finding (b)
+  (TOCTOU between policy-check-time and connect-time DNS resolution,
+  which requires attacker control of DNS with a low TTL) is a distinct,
+  substantially harder problem and remains open — see residual risk.
+- **Reachability found:** live and confirmed against the real
+  `NetworkPolicyEngine`, and previously encoded as *intentional,
+  tested* behavior. `check_host()`'s exact-hostname match (step 3,
+  `allowed_hosts`) and domain-suffix match (step 4, `allowed_domains`)
+  both returned `allow` immediately with **zero IP verification** — the
+  DNS-rebinding defense (deny if a resolved address is private/loopback/
+  link-local and not separately covered by `allowed_cidrs`) only ran on
+  the step-5 fallback path, for hostnames that matched *neither*
+  `allowed_hosts` nor `allowed_domains`. Two pre-existing tests in
+  `tests/policy/test_network_edges.py::TestShortCircuitBehaviour`
+  (`test_exact_host_match_does_not_call_dns`,
+  `test_domain_match_does_not_call_dns`) explicitly asserted this as
+  correct, mirroring the SR-1.8 pattern of a vulnerable behavior encoded
+  as a passing test. Live-reproduced: with `allowed_hosts=
+  ["build.corp.example.com"]` and a fake resolver configured to raise
+  `AssertionError` if ever called, `check_host("build.corp.example.com")`
+  **returned `True` without the resolver ever being invoked** — proving
+  the review's concrete scenario (an allowlisted hostname whose DNS
+  record now points at `10.0.0.5`, or any other internal/reserved
+  address) would connect with no verification of any kind, unlike every
+  other host in the system.
+- **Remediation evidence:** extracted the existing step-5
+  rebinding-check logic into a shared `_resolve_and_check_rebinding()`
+  helper and applied it uniformly to steps 3 and 4 as well — a matched
+  hostname now still has its resolved IP(s) checked before the request
+  is allowed, exactly the same protection step 5 already gave
+  non-matched hostnames. A hostname that fails to resolve at all
+  (`OSError`) is still allowed (there is nothing to "rebind" if the name
+  has no live DNS record — this preserves prior behavior for names with
+  no DNS record, matching how most test fixtures and disposable/internal
+  hostnames behave) — the previous "match by name" result is untouched
+  in that case. Live-verified: the exact reproduction above now raises a
+  `PolicyViolationError` mentioning "rebinding". 6 new/rewritten tests in
+  `tests/policy/test_network_edges.py::TestShortCircuitBehaviour`.
+  **Test-suite performance regression found and fixed in the same
+  checkpoint:** six Hypothesis property tests in
+  `tests/policy/test_policy_property.py` (`TestNetworkDomainMatching`,
+  `TestNetworkAllowedHosts`) generate random hostnames as `allowed_hosts`/
+  `allowed_domains` entries and assert the match is allowed, without
+  mocking DNS — previously fine since matched hosts never called DNS,
+  but after this fix each of up to 100 Hypothesis examples per test
+  performed a real, unmocked `socket.getaddrinfo()` call for a
+  nonexistent hostname, taking `tests/policy/`+`tests/gateway/`+
+  `tests/security/` from ~76s to ~380s. Fixed by mocking
+  `socket.getaddrinfo` to raise `OSError` in those six tests, exactly
+  matching the pattern this same file already used correctly for its
+  deny-path tests — runtime returned to ~69s (in line with the ~76s
+  baseline) with the same 3040 tests passing.
+- **Residual risk:** sub-finding (b), the TOCTOU between this
+  policy-check-time resolution and the actual connect-time resolution
+  `httpx`/Playwright perform independently, is **not** addressed — an
+  attacker who controls DNS for an allowlisted domain with a very low
+  TTL could still serve a public IP to the policy check and a private
+  one to the real connection a moment later. Closing that requires
+  connecting to a pinned, policy-verified IP rather than re-resolving
+  the hostname at connect time (a materially larger change touching the
+  gateway client and/or the OS-level connection APIs), and is out of
+  scope for this checkpoint. This finding also does not address
+  `browser_tools.py`'s own request path (`_route_through_network_policy`,
+  fixed under SR-1.6) needing a parallel fix, since it already calls the
+  same `NetworkPolicyEngine.check_network()`/`check_host()` and
+  therefore inherits this fix automatically — verified by inspection,
+  not by adding a redundant browser-specific test.
+
 ---
 
 - Timestamp: 2026-07-09 15:35:26 (raw grep-scan dump below, preserved

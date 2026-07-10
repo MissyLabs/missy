@@ -1,5 +1,65 @@
 # TEST_RESULTS
 
+## Run: 2026-07-10 12:10 UTC — validation-harness overhaul, SR-1.9a (network policy allowlisted-host DNS-rebinding gap)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Finding: `NetworkPolicyEngine.check_host()`'s exact-hostname
+  (`allowed_hosts`) and domain-suffix (`allowed_domains`) matches
+  returned `allow` immediately with zero IP verification — the
+  DNS-rebinding defense only ran for hostnames matching neither list.
+  Two pre-existing tests
+  (`test_exact_host_match_does_not_call_dns`,
+  `test_domain_match_does_not_call_dns`) explicitly asserted this as
+  correct — same "vulnerable behavior encoded as a passing test"
+  pattern as SR-1.8.
+- Live reproduction: with `allowed_hosts=["build.corp.example.com"]`
+  and a fake resolver configured to raise `AssertionError` if ever
+  invoked, `check_host("build.corp.example.com")` returned `True`
+  **without the resolver ever being called**. Confirmed fixed: the same
+  scenario with a resolver returning `10.0.0.5` now raises
+  `PolicyViolationError` mentioning "rebinding".
+- Fix: extracted the existing step-5 rebinding-check logic into a
+  shared `_resolve_and_check_rebinding()` helper, applied uniformly to
+  the name-match steps (3/4) as well as the no-match fallback (5). DNS
+  resolution failure (`OSError`) still allows a name match through
+  (nothing to rebind if there's no live DNS record).
+- Command: `pytest tests/policy/test_network.py tests/policy/test_network_edges.py -q`
+- Result: `192 passed` (6 tests rewritten in
+  `TestShortCircuitBehaviour` — 2 renamed to reflect new behavior, 4 new)
+- **Performance regression caught and fixed in the same checkpoint:**
+  6 Hypothesis property tests in `tests/policy/test_policy_property.py`
+  (`TestNetworkDomainMatching`, `TestNetworkAllowedHosts`) generate
+  random hostnames as allowlist entries without mocking DNS — after
+  this fix, each of up to 100 examples/test performed a real,
+  unmocked `getaddrinfo()` call, pushing
+  `tests/policy/+tests/gateway/+tests/security/` from 75.56s to
+  382.66s (confirmed via direct pre/post timing comparison). Fixed by
+  mocking DNS to raise `OSError` in those 6 tests (matching this same
+  file's existing pattern for its deny-path tests). Re-verified:
+  `tests/policy/+tests/gateway/+tests/security/` → `3040 passed in
+  68.53s` (in line with the 75.56s baseline).
+- **One additional real regression found and fixed via the full-suite
+  run:** `tests/unit/test_policy_gateway_edges.py::TestPolicyHTTPClientEdgeCases::test_url_with_unusual_port_host_matched_by_allowed_hosts`
+  used the literal hostname `"internal.corp.com"` as an `allowed_hosts`
+  entry without mocking DNS; that hostname has a real DNS record
+  resolving to `127.0.53.53` (ICANN's name-collision warning sentinel,
+  a loopback address) in this sandbox — correctly triggering the new
+  rebinding check as a genuine private/loopback address. Fixed by
+  mocking DNS to fail for this test too, removing the unintended live
+  DNS dependency (not weakening the test — it was never testing DNS
+  behavior, only that unusual-port URLs match policy correctly).
+- Command: `pytest tests/ -q -o faulthandler_timeout=120` with the 3
+  known pre-existing vision failures deselected
+- Result: `20806 passed, 13 skipped, 3 deselected in 466.52s (0:07:46)`
+  — 4 more passing than the prior (SR-1.4) checkpoint's 20802, matching
+  the net new tests added in `test_network_edges.py` (2 renamed +
+  4 new); the mocking fixes in `test_policy_property.py` and
+  `test_policy_gateway_edges.py` modified existing tests without adding
+  new ones. Runtime back in line with prior checkpoints, confirming the
+  performance regression was fully resolved before this run.
+
+---
+
 ## Run: 2026-07-10 11:25 UTC — validation-harness overhaul, SR-1.4 (vision_capture/vision_burst filesystem permission mismatch)
 
 - Branch: `overhaul/missy-validation-20260710-031406`

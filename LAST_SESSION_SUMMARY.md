@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (14 checkpoints this session, full suite green after every one)
+## Changed (15 checkpoints this session, full suite green after every one)
 
 1. Preserved/hardened the existing `voice_commands.py` fix; fixed a real
    trailing-comma leak bug the new regression tests caught.
@@ -106,15 +106,48 @@ Draft PR: https://github.com/MissyLabs/missy/pull/31
     mechanism needed. `VisionBurstCaptureTool` fixed the same way,
     correctly declaring a write target only in its `best_only=True`
     branch (the only branch that actually calls `cv2.imwrite`).
+15. **SR-1.9a (ninth critical finding)**:
+    `NetworkPolicyEngine.check_host()`'s exact-hostname
+    (`allowed_hosts`) and domain-suffix (`allowed_domains`) matches
+    returned `allow` immediately with **zero IP verification** — the
+    DNS-rebinding defense (deny if a resolved address is
+    private/loopback/link-local and not covered by `allowed_cidrs`)
+    only ran for hostnames matching neither list. Two pre-existing
+    tests explicitly asserted this as correct
+    (`test_exact_host_match_does_not_call_dns`,
+    `test_domain_match_does_not_call_dns`) — the same "vulnerable
+    behavior encoded as a passing test" pattern as SR-1.8.
+    Live-reproduced: with a fake resolver configured to raise
+    `AssertionError` if ever invoked, an allowlisted hostname passed
+    `check_host()` with the resolver never called at all. Fixed by
+    extracting the existing rebinding-check logic into a shared
+    `_resolve_and_check_rebinding()` helper applied uniformly to all
+    three matching paths. **Caught and fixed a real test-suite
+    performance regression from this fix in the same checkpoint:** 6
+    Hypothesis property tests generate random allowlisted hostnames
+    without mocking DNS, which (correctly, but expensively) now each
+    perform a real DNS lookup per example — pushed
+    `tests/policy/+gateway/+security/` from 76s to 383s; fixed by
+    mocking DNS in those 6 tests, matching this file's own
+    already-established pattern for its deny-path tests. Also found
+    and fixed one real full-suite failure: a test using the literal
+    hostname `"internal.corp.com"` as an allowlisted host, which
+    genuinely resolves via live DNS in this sandbox to ICANN's
+    name-collision warning sentinel (a loopback address), correctly
+    triggering the new check — fixed by mocking DNS there too, removing
+    an unintended live-network dependency the test was never meant to
+    have.
 
-**Eight independent, confirmed critical vulnerabilities** found and
+**Nine independent, confirmed critical vulnerabilities** found and
 fixed this session (SR-1.2/1.3, SR-1.12, SR-1.13 ×2, SR-1.8, SR-1.5,
-SR-1.6, SR-1.4). Five are the "missing gate before a side effect"
-pattern; three (SR-1.5, SR-1.6, SR-1.4) are the review's other named
-pattern: declared tool metadata/permissions that don't match the
-operation actually performed — and the generic `resolve_*` hook
-mechanism built for SR-1.5 turned out to generalize cleanly to both
-later instances. Plus the FX-A/B/C/D/F/G validation-harness root causes.
+SR-1.6, SR-1.4, SR-1.9a). Five are the "missing gate before a side
+effect" pattern; three (SR-1.5, SR-1.6, SR-1.4) are the review's other
+named pattern — declared tool metadata/permissions that don't match the
+operation actually performed, with the `resolve_*` hook mechanism built
+for SR-1.5 generalizing cleanly to both later instances; SR-1.9a is a
+third distinct pattern — a security check applied asymmetrically
+(unmatched hosts got IP verification, matched/"trusted" ones didn't).
+Plus the FX-A/B/C/D/F/G validation-harness root causes.
 
 **All of FX-A through FX-G are now done** per the prompt's stated
 dependency order (some with residual/deferred sub-items tracked as
@@ -127,7 +160,7 @@ python3 -m pytest tests/ -q -o faulthandler_timeout=120 \
   --deselect tests/vision/test_discovery_capture_sysfs.py::TestCacheTTL::test_cache_valid_within_ttl \
   --deselect tests/vision/test_discovery_edge_cases.py::TestPermissionDeniedOnDevice::test_device_that_does_not_exist_is_skipped \
   --deselect tests/vision/test_discovery_edge_cases.py::TestRapidAddRemove::test_cached_results_returned_within_ttl
-20802 passed, 13 skipped, 3 deselected in 443.85s (0:07:23)
+20806 passed, 13 skipped, 3 deselected in 466.52s (0:07:46)
 ```
 
 Full detail in `BUILD_STATUS.md`, `AUDIT_SECURITY.md`, and
@@ -138,13 +171,9 @@ session, oldest at the bottom, nothing overwritten.
 
 - **#9** SR-1.x through SR-4.x security review remediation — most of
   it. This session covered SR-1.2/1.3, SR-1.4, SR-1.5, SR-1.6, SR-1.8,
-  SR-1.12, SR-1.13 (plus SR-3.1 substantially via FX-B). SR-1.1, SR-1.7,
-  SR-1.9 through SR-1.11, SR-2.x, SR-3.2 through SR-3.5, SR-4.x remain.
-  Note: SR-1.4's fix confirms the `resolve_*` hook mechanism generalizes
-  well — a full sweep of every remaining `ToolPermissions(filesystem_*=True
-  /network=True)` declaration across `missy/tools/builtin/` against its
-  tool's actual kwargs has not been performed, so other not-yet-found
-  instances of this same pattern may remain beyond the three fixed so far.
+  SR-1.9a, SR-1.12, SR-1.13 (plus SR-3.1 substantially via FX-B).
+  SR-1.1, SR-1.7, SR-1.9b (the harder DNS TOCTOU sub-finding), SR-1.10,
+  SR-1.11, SR-2.x, SR-3.2 through SR-3.5, SR-4.x remain.
 - **#10** Full 89-case tool-specific validation backlog — not yet
   re-run against current code.
 - **#11** Pre-existing vision `CameraDiscovery` cache-TTL flake (3
@@ -164,12 +193,21 @@ session, oldest at the bottom, nothing overwritten.
   works but needs the test-suite migration from mocking
   `subprocess.run` to `subprocess.Popen` done carefully in its own
   session.
-- **Strongest remaining SR-1.x candidates:** SR-1.7 (shell allow-list is
+- **Strongest remaining SR-1.x candidate:** SR-1.7 (shell allow-list is
   program-name-only — launcher/redirection side channels; separate from
   and not addressed by SR-1.5's fix, which only made the *checked*
-  command accurate, not the allow-list's granularity) and SR-1.9
-  (network policy TOCTOU/deterministic-allowlist-skips-IP-check, natural
-  next step given SR-1.6's network-policy work).
+  command accurate, not the allow-list's granularity). SR-1.9b (DNS
+  TOCTOU requiring attacker-controlled low-TTL DNS) is real but
+  substantially harder — would need connecting to a pinned,
+  policy-verified IP rather than re-resolving at connect time, a larger
+  change touching the gateway client itself.
+- **New lesson from this checkpoint, worth remembering for future
+  policy-engine changes:** a security fix that adds real DNS/network
+  calls to a previously-synchronous/local code path can silently turn
+  into a major test-suite performance regression if fixture hostnames
+  aren't mocked — always time the affected test directories before/after
+  and grep for realistic-looking hostnames used as allowlist entries in
+  tests before considering such a change done.
 
 ## The single biggest remaining gap
 
@@ -188,11 +226,8 @@ rather than code-level reasoning about what *should* happen.
 
 If a way to safely exercise a real or scripted acpx delegate call
 becomes available, prioritize FX-A bullet 6 — it unblocks re-validating
-everything else. Otherwise, continue the SR-1.x security sweep — SR-1.9
-(network policy TOCTOU / deterministic-hosts-skip-IP-check) is the
-strongest next candidate given the network-policy work already fresh
-from SR-1.6, or SR-1.7 (shell allow-list granularity — launchers,
-redirection side channels) given the shell-policy work fresh from
-SR-1.5/SR-1.8 — or pick up one of the concrete scoped tasks above (#11,
-#12, #15, #16, #17), all self-contained and not requiring a live
-delegate.
+everything else. Otherwise, continue the SR-1.x security sweep with
+SR-1.7 (shell allow-list granularity — launchers, redirection side
+channels) given the shell-policy work fresh from SR-1.5/SR-1.8, or pick
+up one of the concrete scoped tasks above (#11, #12, #15, #16, #17), all
+self-contained and not requiring a live delegate.

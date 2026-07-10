@@ -511,7 +511,15 @@ class TestPolicyHTTPClientEdgeCases:
     # --- Non-standard port does not affect host matching ---
 
     def test_url_with_unusual_port_host_matched_by_allowed_hosts(self) -> None:
-        """Policy engine matches 'host' not 'host:port'; port in URL is stripped by urlparse."""
+        """Policy engine matches 'host' not 'host:port'; port in URL is stripped by urlparse.
+
+        DNS is mocked to fail (SR-1.9a made check_host() verify the
+        resolved IP even for allowed_hosts matches) -- "internal.corp.com"
+        happens to have a real DNS record resolving to an ICANN
+        name-collision sentinel loopback address, which would otherwise
+        make this test fail/depend on live network behavior it isn't
+        actually testing.
+        """
         init_policy_engine(
             _make_config(
                 default_deny=True,
@@ -520,7 +528,10 @@ class TestPolicyHTTPClientEdgeCases:
         )
         client = PolicyHTTPClient()
         mock_resp = _mock_response(200)
-        with patch.object(httpx.Client, "get", return_value=mock_resp):
+        with (
+            patch.object(socket, "getaddrinfo", side_effect=OSError("no dns")),
+            patch.object(httpx.Client, "get", return_value=mock_resp),
+        ):
             resp = client.get("https://internal.corp.com:9000/api/data")
         assert resp.status_code == 200
 

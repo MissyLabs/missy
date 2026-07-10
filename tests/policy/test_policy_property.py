@@ -277,19 +277,29 @@ class TestNetworkDomainMatching:
         domain=st.builds(lambda a, b: f"{a}.{b}", _label, _label),
     )
     def test_wildcard_matches_subdomain(self, sub: str, domain: str) -> None:
-        """*.example.com should match sub.example.com."""
+        """*.example.com should match sub.example.com.
+
+        SR-1.9a made check_host() also verify the resolved IP for name
+        matches (not just short-circuit on the name), so these
+        Hypothesis-generated hostnames (which have no real DNS record)
+        must have DNS mocked -- matching this file's existing pattern for
+        the deny-path tests below -- or the test suite depends on live,
+        unbounded-latency network resolution of made-up domains.
+        """
         assume(sub not in ("", domain))
         host = f"{sub}.{domain}"
-        engine = _make_network_engine(allowed_domains=[f"*.{domain}"])
-        assert engine.check_host(host) is True
+        with patch.object(socket, "getaddrinfo", side_effect=OSError("no dns")):
+            engine = _make_network_engine(allowed_domains=[f"*.{domain}"])
+            assert engine.check_host(host) is True
 
     @given(
         domain=st.builds(lambda a, b: f"{a}.{b}", _label, _label),
     )
     def test_wildcard_also_matches_apex(self, domain: str) -> None:
         """*.example.com should also match the apex domain example.com itself."""
-        engine = _make_network_engine(allowed_domains=[f"*.{domain}"])
-        assert engine.check_host(domain) is True
+        with patch.object(socket, "getaddrinfo", side_effect=OSError("no dns")):
+            engine = _make_network_engine(allowed_domains=[f"*.{domain}"])
+            assert engine.check_host(domain) is True
 
     @given(
         domain=st.builds(lambda a, b: f"{a}.{b}", _label, _label),
@@ -310,8 +320,9 @@ class TestNetworkDomainMatching:
 
     @given(domain=st.builds(lambda a, b: f"{a}.{b}", _label, _label))
     def test_exact_domain_matches_itself(self, domain: str) -> None:
-        engine = _make_network_engine(allowed_domains=[domain])
-        assert engine.check_host(domain) is True
+        with patch.object(socket, "getaddrinfo", side_effect=OSError("no dns")):
+            engine = _make_network_engine(allowed_domains=[domain])
+            assert engine.check_host(domain) is True
 
     @given(
         domain=st.builds(lambda a, b: f"{a}.{b}", _label, _label),
@@ -332,14 +343,16 @@ class TestNetworkAllowedHosts:
 
     @given(host=_hostname)
     def test_exact_host_entry_is_allowed(self, host: str) -> None:
-        engine = _make_network_engine(allowed_hosts=[host])
-        assert engine.check_host(host) is True
+        with patch.object(socket, "getaddrinfo", side_effect=OSError("no dns")):
+            engine = _make_network_engine(allowed_hosts=[host])
+            assert engine.check_host(host) is True
 
     @given(host=_hostname, port=st.integers(min_value=1, max_value=65535))
     def test_host_with_port_entry_matches_bare_host(self, host: str, port: int) -> None:
         """An entry like 'api.example.com:443' must allow 'api.example.com'."""
-        engine = _make_network_engine(allowed_hosts=[f"{host}:{port}"])
-        assert engine.check_host(host) is True
+        with patch.object(socket, "getaddrinfo", side_effect=OSError("no dns")):
+            engine = _make_network_engine(allowed_hosts=[f"{host}:{port}"])
+            assert engine.check_host(host) is True
 
     @given(host=_hostname, other=_hostname)
     def test_unrelated_host_not_matched(self, host: str, other: str) -> None:
@@ -355,8 +368,9 @@ class TestNetworkAllowedHosts:
     def test_per_category_host_allows_matching_host(self, host: str, category: str) -> None:
         """A host in the per-category list must be allowed when that category is passed."""
         cat_key = f"{category}_allowed_hosts"
-        engine = _make_network_engine(**{cat_key: [host]})
-        assert engine.check_host(host, category=category) is True
+        with patch.object(socket, "getaddrinfo", side_effect=OSError("no dns")):
+            engine = _make_network_engine(**{cat_key: [host]})
+            assert engine.check_host(host, category=category) is True
 
     @given(host=_hostname, category=st.sampled_from(["provider", "tool", "discord"]))
     def test_per_category_host_requires_matching_category(self, host: str, category: str) -> None:

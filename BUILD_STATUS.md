@@ -1,6 +1,6 @@
 # Build Status
 
-Last updated: 2026-07-10 11:25 UTC
+Last updated: 2026-07-10 12:10 UTC
 
 ## Current Workstream: Validation-Harness Overhaul
 
@@ -682,6 +682,45 @@ Full detail and residual risk (no full sweep of every
 `missy/tools/builtin/` has been performed — other not-yet-found
 instances of this pattern may remain) in `AUDIT_SECURITY.md`'s new
 `### SR-1.4` section.
+
+### Completed This Session, continued: SR-1.9a (network policy allowlisted-host DNS-rebinding gap)
+
+`NetworkPolicyEngine.check_host()`'s exact-hostname match (`allowed_hosts`)
+and domain-suffix match (`allowed_domains`) returned `allow` immediately
+with zero IP verification — the DNS-rebinding defense (deny if a
+resolved address is private/loopback/link-local and not covered by
+`allowed_cidrs`) only ran for hostnames matching *neither* list. Two
+pre-existing tests explicitly asserted this as correct
+(`test_exact_host_match_does_not_call_dns`,
+`test_domain_match_does_not_call_dns`), the same "vulnerable behavior
+encoded as a passing test" pattern found in SR-1.8. Live-reproduced with
+a fake resolver configured to raise `AssertionError` if ever called:
+`check_host("build.corp.example.com")` with that host allowlisted
+returned `True` **without the resolver ever being invoked** — proving
+an allowlisted hostname whose DNS now points at internal infrastructure
+would connect with zero verification.
+
+Fixed by extracting the existing rebinding-check logic into a shared
+`_resolve_and_check_rebinding()` helper and applying it uniformly to
+the name-match steps too, not just the no-match fallback. A hostname
+that fails to resolve entirely is still allowed (nothing to rebind if
+there's no live DNS record), preserving prior behavior for such names.
+
+**Caught and fixed a real test-suite performance regression from this
+fix in the same checkpoint:** six Hypothesis property tests in
+`tests/policy/test_policy_property.py` generate random hostnames as
+allowlist entries without mocking DNS — previously fine since matched
+hosts never called DNS, but after this fix each took a real, unmocked
+`getaddrinfo()` hit per example (up to 100 examples/test), pushing
+`tests/policy/`+`tests/gateway/`+`tests/security/` from ~76s to ~380s.
+Fixed by mocking DNS to raise `OSError` in those six tests, matching
+the pattern this same file already used correctly for its deny-path
+tests; runtime returned to ~69s with the same 3040 tests passing.
+
+Full detail and residual risk (sub-finding (b), the harder
+policy-check-vs-connect-time DNS TOCTOU requiring attacker-controlled
+low-TTL DNS, remains open and out of scope) in `AUDIT_SECURITY.md`'s
+new `### SR-1.9a` section.
 
 ### Known Pre-Existing Failure (not caused by this session)
 

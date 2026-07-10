@@ -120,78 +120,41 @@ class NetworkPolicyEngine:
             )
 
         # Step 3 – exact hostname match (global + per-category).
+        #
+        # SR-1.9a: a name match alone is not sufficient — still verify the
+        # resolved IP isn't private/rebound (see _resolve_and_check_rebinding).
+        # Previously this step allowed immediately with zero IP check, so an
+        # explicitly allowlisted hostname (e.g. "build.corp.example.com")
+        # that resolves to internal infrastructure (10.0.0.5) connected with
+        # no verification at all — the opposite of every other host, which
+        # gets this same check via step 5 below. Trusting a *name* is not the
+        # same as trusting whatever IP it happens to resolve to right now.
         rule = self._check_exact_host(host, category=category)
         if rule:
+            self._resolve_and_check_rebinding(host, session_id, task_id)
             self._emit_event(host, "allow", rule, session_id, task_id)
             return True
 
-        # Step 4 – wildcard / suffix domain match.
+        # Step 4 – wildcard / suffix domain match. Same SR-1.9a rebinding
+        # check as step 3.
         rule = self._check_domain(host)
         if rule:
+            self._resolve_and_check_rebinding(host, session_id, task_id)
             self._emit_event(host, "allow", rule, session_id, task_id)
             return True
 
-        # Step 5 – DNS resolution + CIDR re-check.
-        # Defense against DNS rebinding: when a *hostname* (not a direct IP)
-        # resolves to a private/reserved address, deny unless that private
-        # range is explicitly allowed via CIDR.  This prevents an attacker
-        # from pointing evil.example.com at 169.254.169.254 (cloud metadata)
-        # or 10.0.0.1 (internal infrastructure) and bypassing domain checks.
-        #
-        # IMPORTANT: We check ALL resolved addresses before making a decision.
-        # If ANY address is private/reserved and not in allowed CIDRs, the
-        # entire request is denied.  This prevents mixed-record attacks where
-        # a hostname resolves to both a public and a private IP.
+        # Step 5 – DNS resolution + CIDR re-check for hostnames not matched
+        # by name at all.
         try:
-            infos = socket.getaddrinfo(host, None)
-            # De-duplicate resolved IPs.
-            seen_ips: set[str] = set()
-            resolved: list[tuple[str, ipaddress.IPv4Address | ipaddress.IPv6Address]] = []
-            for info in infos:
-                ip_str = info[4][0]
-                if ip_str in seen_ips:
-                    continue
-                seen_ips.add(ip_str)
-                try:
-                    addr = ipaddress.ip_address(ip_str)
-                except ValueError:
-                    continue
-                resolved.append((ip_str, addr))
-
-            # First pass: deny if ANY resolved IP is private and not allowed.
-            for ip_str, addr in resolved:
-                if addr.is_private or addr.is_loopback or addr.is_link_local:
+            resolved = self._resolve_and_check_rebinding(host, session_id, task_id)
+            if resolved:
+                for ip_str, _addr in resolved:
                     rule = self._check_cidr(ip_str)
-                    if not rule:
-                        logger.warning(
-                            "NetworkPolicyEngine: DNS rebinding blocked — %r resolved to "
-                            "private address %s which is not in allowed_cidrs",
-                            host,
-                            ip_str,
-                        )
-                        self._emit_event(host, "deny", None, session_id, task_id)
-                        raise PolicyViolationError(
-                            f"Network access denied: {host!r} resolved to private "
-                            f"address {ip_str} (possible DNS rebinding attack).",
-                            category="network",
-                            detail=(
-                                f"Hostname {host!r} resolved to {ip_str} which is a "
-                                "private/reserved address not explicitly allowed by policy."
-                            ),
-                        )
-
-            # Second pass: all private IPs (if any) are allowed; check public
-            # IPs against CIDR allowlist.
-            for ip_str, _addr in resolved:
-                rule = self._check_cidr(ip_str)
-                if rule:
-                    self._emit_event(host, "allow", rule, session_id, task_id)
-                    return True
+                    if rule:
+                        self._emit_event(host, "allow", rule, session_id, task_id)
+                        return True
         except PolicyViolationError:
             raise
-        except OSError:
-            # DNS failure – treat as unresolvable and fall through to deny.
-            logger.debug("NetworkPolicyEngine: DNS resolution failed for %r", host)
 
         # Step 6 – deny.
         self._emit_event(host, "deny", None, session_id, task_id)
@@ -207,6 +170,84 @@ class NetworkPolicyEngine:
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _resolve_and_check_rebinding(
+        self,
+        host: str,
+        session_id: str,
+        task_id: str,
+    ) -> list[tuple[str, ipaddress.IPv4Address | ipaddress.IPv6Address]] | None:
+        """Resolve *host* and deny if any resolved IP is an unallowed private address.
+
+        Applied uniformly to every hostname match — exact, domain, and the
+        no-name-match DNS fallback — so that an explicitly allowlisted
+        hostname gets the same DNS-rebinding protection as any other host
+        (SR-1.9a). This prevents an attacker (or a hostname whose DNS record
+        later changes) from pointing an allowlisted name at
+        ``169.254.169.254`` (cloud metadata) or ``10.0.0.1`` (internal
+        infrastructure) and bypassing the name-based checks entirely.
+
+        We check ALL resolved addresses before allowing. If ANY address is
+        private/loopback/link-local and not covered by ``allowed_cidrs``,
+        the entire request is denied — this prevents mixed-record attacks
+        where a hostname resolves to both a public and a private IP.
+
+        Args:
+            host: Normalised (lowercase, no brackets) hostname.
+            session_id: Calling session identifier, for the audit event.
+            task_id: Calling task identifier, for the audit event.
+
+        Returns:
+            De-duplicated ``(ip_str, addr)`` pairs for every resolved
+            address, or ``None`` if DNS resolution failed (nothing to rebind
+            if the name doesn't resolve — the caller's own name-based match,
+            if any, still stands).
+
+        Raises:
+            PolicyViolationError: When a resolved IP is private/reserved and
+                not covered by ``allowed_cidrs``.
+        """
+        try:
+            infos = socket.getaddrinfo(host, None)
+        except OSError:
+            logger.debug("NetworkPolicyEngine: DNS resolution failed for %r", host)
+            return None
+
+        seen_ips: set[str] = set()
+        resolved: list[tuple[str, ipaddress.IPv4Address | ipaddress.IPv6Address]] = []
+        for info in infos:
+            ip_str = info[4][0]
+            if ip_str in seen_ips:
+                continue
+            seen_ips.add(ip_str)
+            try:
+                addr = ipaddress.ip_address(ip_str)
+            except ValueError:
+                continue
+            resolved.append((ip_str, addr))
+
+        for ip_str, addr in resolved:
+            if addr.is_private or addr.is_loopback or addr.is_link_local:
+                rule = self._check_cidr(ip_str)
+                if not rule:
+                    logger.warning(
+                        "NetworkPolicyEngine: DNS rebinding blocked — %r resolved to "
+                        "private address %s which is not in allowed_cidrs",
+                        host,
+                        ip_str,
+                    )
+                    self._emit_event(host, "deny", None, session_id, task_id)
+                    raise PolicyViolationError(
+                        f"Network access denied: {host!r} resolved to private "
+                        f"address {ip_str} (possible DNS rebinding attack).",
+                        category="network",
+                        detail=(
+                            f"Hostname {host!r} resolved to {ip_str} which is a "
+                            "private/reserved address not explicitly allowed by policy."
+                        ),
+                    )
+
+        return resolved
 
     @staticmethod
     def _is_ip(host: str) -> bool:
