@@ -40,9 +40,16 @@ _BOT_MENTION_RE = re.compile(r"^(<@!?\d+>\s*)+")
 _SPACE_RE = re.compile(r"\s+")
 
 
+_TRAILING_PUNCT_RE = re.compile(r"[.!?]+$")
+
+
 def _clean_text(content: str | None) -> str:
     text = _SPACE_RE.sub(" ", (content or "").strip())
-    return _BOT_MENTION_RE.sub("", text).strip()
+    text = _BOT_MENTION_RE.sub("", text).strip()
+    # All intent patterns below use re.fullmatch, so a trailing full stop from
+    # an ordinary sentence (e.g. "join the General voice channel.") would
+    # otherwise silently fail to match anything.
+    return _TRAILING_PUNCT_RE.sub("", text).strip()
 
 
 def _strip_leading_politeness(text: str) -> str:
@@ -59,8 +66,18 @@ def _strip_leading_politeness(text: str) -> str:
         previous = current
 
 
+_TRAILING_CLAUSE_RE = re.compile(
+    r"\s+(?:and|then|so|please|,)\b.*$",
+    re.I,
+)
+
+
 def _normalise_channel_target(raw_target: str) -> tuple[str | None, int | None] | None:
     target = raw_target.strip(" .")
+    # Drop a trailing conversational clause (e.g. "the General voice channel
+    # and report your voice status" -> "the General voice channel") so a
+    # verbose, natural request doesn't get treated as a literal channel name.
+    target = _TRAILING_CLAUSE_RE.sub("", target).strip(" .")
     target = re.sub(r"^(?:the|a|an)\s+", "", target, flags=re.I)
     target = re.sub(r"^(?:my|current|my current|this)\s+", "", target, flags=re.I)
     target = re.sub(r"\s+(?:voice\s+channel|voice\s+room|voice)$", "", target, flags=re.I)
