@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (15 checkpoints this session, full suite green after every one)
+## Changed (16 checkpoints this session, full suite green after every one)
 
 1. Preserved/hardened the existing `voice_commands.py` fix; fixed a real
    trailing-comma leak bug the new regression tests caught.
@@ -137,17 +137,38 @@ Draft PR: https://github.com/MissyLabs/missy/pull/31
     triggering the new check — fixed by mocking DNS there too, removing
     an unintended live-network dependency the test was never meant to
     have.
+16. **SR-1.7 (tenth critical finding)**: `ShellPolicyEngine` only ever
+    validated program names — redirection operators (`>`, `>>`, `<`)
+    were never parsed or routed through `FilesystemPolicyEngine` at
+    all. Live-reproduced through the real, unmocked production
+    `shell_exec` tool via `ToolRegistry`: with only `"echo"`
+    allowlisted and no write paths allowlisted,
+    `shell_exec(command="echo pwned > /tmp/.../pwn.txt")` returned
+    `success: True` and **the file was genuinely created on disk** —
+    an unrestricted arbitrary-file-write primitive available through
+    any config permitting even one innocuous command. Fixed:
+    `ShellPolicyEngine.extract_redirect_targets()` tokenises with
+    POSIX-punctuation-aware `shlex` so operators are recognised with or
+    without whitespace (closing a naive-scanner dodge), excluding
+    fd-duplication forms (`2>&1`); `PolicyEngine.check_shell()` routes
+    every target through the filesystem engine. Live-verified the
+    reproduction is now denied and the file is never created. **Bug
+    found and fixed in the same checkpoint:** the pre-existing
+    chain-splitting regex misparsed `2>&1`/`>&2`/`<&0` as background
+    execution, denying the common `2>&1` idiom outright even with the
+    command allowlisted — confirmed pre-existing via `git stash`,
+    fixed with a negative lookbehind.
 
-**Nine independent, confirmed critical vulnerabilities** found and
-fixed this session (SR-1.2/1.3, SR-1.12, SR-1.13 ×2, SR-1.8, SR-1.5,
-SR-1.6, SR-1.4, SR-1.9a). Five are the "missing gate before a side
-effect" pattern; three (SR-1.5, SR-1.6, SR-1.4) are the review's other
-named pattern — declared tool metadata/permissions that don't match the
-operation actually performed, with the `resolve_*` hook mechanism built
-for SR-1.5 generalizing cleanly to both later instances; SR-1.9a is a
-third distinct pattern — a security check applied asymmetrically
-(unmatched hosts got IP verification, matched/"trusted" ones didn't).
-Plus the FX-A/B/C/D/F/G validation-harness root causes.
+**Ten independent, confirmed critical vulnerabilities** found and fixed
+this session (SR-1.2/1.3, SR-1.12, SR-1.13 ×2, SR-1.8, SR-1.5, SR-1.6,
+SR-1.4, SR-1.9a, SR-1.7). Five are the "missing gate before a side
+effect" pattern; three (SR-1.5, SR-1.6, SR-1.4) are declared tool
+metadata not matching the operation actually performed, with the
+`resolve_*` hook mechanism generalizing cleanly across all three;
+SR-1.9a is a security check applied asymmetrically; SR-1.7 is a
+narrower-than-declared enforcement scope (checking the program name but
+not everything that name's execution can actually touch). Plus the
+FX-A/B/C/D/F/G validation-harness root causes.
 
 **All of FX-A through FX-G are now done** per the prompt's stated
 dependency order (some with residual/deferred sub-items tracked as
@@ -160,7 +181,7 @@ python3 -m pytest tests/ -q -o faulthandler_timeout=120 \
   --deselect tests/vision/test_discovery_capture_sysfs.py::TestCacheTTL::test_cache_valid_within_ttl \
   --deselect tests/vision/test_discovery_edge_cases.py::TestPermissionDeniedOnDevice::test_device_that_does_not_exist_is_skipped \
   --deselect tests/vision/test_discovery_edge_cases.py::TestRapidAddRemove::test_cached_results_returned_within_ttl
-20806 passed, 13 skipped, 3 deselected in 466.52s (0:07:46)
+20832 passed, 13 skipped, 3 deselected in 472.05s (0:07:52)
 ```
 
 Full detail in `BUILD_STATUS.md`, `AUDIT_SECURITY.md`, and
@@ -170,9 +191,9 @@ session, oldest at the bottom, nothing overwritten.
 ## Open tasks (session-tracked, carry into next session)
 
 - **#9** SR-1.x through SR-4.x security review remediation — most of
-  it. This session covered SR-1.2/1.3, SR-1.4, SR-1.5, SR-1.6, SR-1.8,
-  SR-1.9a, SR-1.12, SR-1.13 (plus SR-3.1 substantially via FX-B).
-  SR-1.1, SR-1.7, SR-1.9b (the harder DNS TOCTOU sub-finding), SR-1.10,
+  it. This session covered SR-1.2/1.3, SR-1.4, SR-1.5, SR-1.6, SR-1.7,
+  SR-1.8, SR-1.9a, SR-1.12, SR-1.13 (plus SR-3.1 substantially via
+  FX-B). SR-1.1, SR-1.9b (the harder DNS TOCTOU sub-finding), SR-1.10,
   SR-1.11, SR-2.x, SR-3.2 through SR-3.5, SR-4.x remain.
 - **#10** Full 89-case tool-specific validation backlog — not yet
   re-run against current code.
@@ -193,15 +214,20 @@ session, oldest at the bottom, nothing overwritten.
   works but needs the test-suite migration from mocking
   `subprocess.run` to `subprocess.Popen` done carefully in its own
   session.
-- **Strongest remaining SR-1.x candidate:** SR-1.7 (shell allow-list is
-  program-name-only — launcher/redirection side channels; separate from
-  and not addressed by SR-1.5's fix, which only made the *checked*
-  command accurate, not the allow-list's granularity). SR-1.9b (DNS
-  TOCTOU requiring attacker-controlled low-TTL DNS) is real but
-  substantially harder — would need connecting to a pinned,
+- **New this checkpoint:** SR-1.7's launcher sub-finding remains open —
+  `find`/`xargs`/`bash`/`sudo` etc. are allowlist-able with only a
+  warning, and nested shell commands inside a launcher's quoted
+  arguments are structurally invisible to any static command-string
+  parser (confirmed by inspection: `find . -exec sh -c 'echo x > file'
+  \;` tokenises the quoted argument as one opaque string). This is a
+  product-policy decision (block launchers outright vs. runtime
+  interception), not a mechanical bug fix — needs explicit product
+  input before implementing.
+- SR-1.9b (DNS TOCTOU requiring attacker-controlled low-TTL DNS) is
+  real but substantially harder — would need connecting to a pinned,
   policy-verified IP rather than re-resolving at connect time, a larger
   change touching the gateway client itself.
-- **New lesson from this checkpoint, worth remembering for future
+- **Lesson from SR-1.9a's checkpoint, worth remembering for future
   policy-engine changes:** a security fix that adds real DNS/network
   calls to a previously-synchronous/local code path can silently turn
   into a major test-suite performance regression if fixture hostnames
@@ -226,8 +252,11 @@ rather than code-level reasoning about what *should* happen.
 
 If a way to safely exercise a real or scripted acpx delegate call
 becomes available, prioritize FX-A bullet 6 — it unblocks re-validating
-everything else. Otherwise, continue the SR-1.x security sweep with
-SR-1.7 (shell allow-list granularity — launchers, redirection side
-channels) given the shell-policy work fresh from SR-1.5/SR-1.8, or pick
-up one of the concrete scoped tasks above (#11, #12, #15, #16, #17), all
-self-contained and not requiring a live delegate.
+everything else. Otherwise, the SR-1.x sweep has now covered every
+"wired & reachable" §1 finding from the review except SR-1.1 (audit
+signing — a larger, cross-cutting change), SR-1.9b (DNS TOCTOU), and
+SR-1.10/SR-1.11 (audit-secrets-redaction, MCP manifest pinning) — those,
+or §2/§3/§4 (unattended-execution hazards, data-integrity/availability,
+dead/unwired features) are the natural next targets. Alternatively pick
+up one of the concrete scoped tasks above (#11, #12, #15, #16, #17),
+all self-contained and not requiring a live delegate.

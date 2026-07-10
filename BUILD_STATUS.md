@@ -1,6 +1,6 @@
 # Build Status
 
-Last updated: 2026-07-10 12:10 UTC
+Last updated: 2026-07-10 12:55 UTC
 
 ## Current Workstream: Validation-Harness Overhaul
 
@@ -721,6 +721,48 @@ Full detail and residual risk (sub-finding (b), the harder
 policy-check-vs-connect-time DNS TOCTOU requiring attacker-controlled
 low-TTL DNS, remains open and out of scope) in `AUDIT_SECURITY.md`'s
 new `### SR-1.9a` section.
+
+### Completed This Session, continued: SR-1.7 (shell redirection bypassed the filesystem policy — tenth critical finding)
+
+`ShellPolicyEngine.check_command()` only ever validated program names;
+redirection operators (`>`, `>>`, `<`, etc.) were never parsed or routed
+through `FilesystemPolicyEngine` at all. Live-reproduced through the
+real, unmocked production `shell_exec` tool via `ToolRegistry` — not a
+theoretical gap: with only `"echo"` allowlisted and
+`allowed_write_paths` completely empty,
+`shell_exec(command="echo pwned > /tmp/.../not_allowed/pwn.txt")`
+returned `success: True` and **the file was genuinely created on disk**
+with content `"pwned"` — an unrestricted arbitrary-file-write primitive
+available through any config permitting even one innocuous command.
+
+Fixed: added `ShellPolicyEngine.extract_redirect_targets()`, tokenising
+with POSIX-punctuation-aware `shlex` so operators are recognised with or
+without surrounding whitespace (`echo x>file` closes an obvious
+naive-scanner dodge), correctly excluding fd-duplication forms (`2>&1`,
+`>&2`). `PolicyEngine.check_shell()` now routes every extracted target
+through `filesystem.check_write()`/`check_read()` after the program-name
+check passes. Live-verified the exact reproduction above is now denied
+and the file is never created; a matching request with the path
+allowlisted passes cleanly. 25 new tests across
+`tests/policy/test_shell.py` and `tests/policy/test_engine.py`.
+
+**Bug found and fixed in the same checkpoint** (directly in the code
+this work touches, not itself a security finding): the chain-operator
+splitting regex treated `&` in `2>&1`/`>&2`/`<&0` as the
+background-execution operator, splitting `"echo hi 2>&1"` into fake
+sub-commands and denying the extremely common `2>&1` idiom outright even
+with `echo` correctly allowlisted. Confirmed pre-existing via `git
+stash`. Fixed with a negative lookbehind; genuine background `&`
+splitting is unaffected.
+
+This is the tenth independent, confirmed critical finding this session.
+
+Full detail and residual risk (the launcher sub-finding —
+`find`/`xargs`/`bash`/`sudo` etc. remaining allowlist-able with only a
+warning, and nested shell commands inside a launcher's quoted arguments
+being structurally invisible to any static command-string parser — is a
+separate product-policy question, not addressed here) in
+`AUDIT_SECURITY.md`'s new `### SR-1.7` section.
 
 ### Known Pre-Existing Failure (not caused by this session)
 

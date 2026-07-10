@@ -570,6 +570,81 @@ requirement — do not overwrite, append new entries as work continues.
   therefore inherits this fix automatically — verified by inspection,
   not by adding a redundant browser-specific test.
 
+### SR-1.7 — Shell policy: redirection targets bypassed the filesystem policy entirely
+
+- **Status: fixed** for the redirection-target sub-finding. The
+  launcher-command sub-finding (`env`/`find`/`xargs`/`bash`/`sudo` etc.
+  being "warned, not blocked") is a distinct product-policy question —
+  see residual risk — and is intentionally not changed here.
+- **Reachability found:** live and directly exploitable through the
+  real, unmocked production `shell_exec` tool — not a theoretical gap.
+  `ShellPolicyEngine.check_command()` only ever validated program
+  names; redirection operators (`>`, `>>`, `<`, etc.) were never parsed
+  or routed through `FilesystemPolicyEngine` at all, and
+  `shell_exec.py::_execute_direct()` runs every command via
+  `subprocess.run(command, shell=True, executable="/bin/bash")` — a
+  real shell that genuinely interprets redirection syntax.
+  End-to-end reproduction against the live `ToolRegistry` +
+  `shell_exec` tool, with only `"echo"` in `allowed_commands` and
+  `allowed_write_paths` completely empty: `shell_exec(command="echo
+  pwned > /tmp/.../not_allowed/pwn.txt")` returned `success: True`,
+  and **the file was genuinely created on disk** with content
+  `"pwned"` — an unrestricted arbitrary-file-write primitive available
+  through any tool config that permits even a single, entirely
+  innocuous-seeming command like `echo`.
+- **Remediation evidence:** added
+  `ShellPolicyEngine.extract_redirect_targets()`
+  (`missy/policy/shell.py`), which tokenises a command with
+  POSIX-punctuation-aware `shlex` (`punctuation_chars=True`) so
+  redirect operators are recognised whether or not surrounded by
+  whitespace (`echo x>file` is caught exactly like `echo x > file`,
+  closing an obvious naive-scanner dodge) and returns every write
+  (`>`, `>>`, `>|`, `&>`, `&>>`) and read (`<`, `<>`) target across all
+  sub-commands of a compound chain, while correctly excluding
+  file-descriptor-duplication forms (`2>&1`, `>&2`) which name an fd
+  number, not a path. `PolicyEngine.check_shell()`
+  (`missy/policy/engine.py`) — the facade with access to both the
+  shell and filesystem engines — now calls this after the program-name
+  check passes and routes every target through
+  `filesystem.check_write()`/`check_read()`. Live-verified the exact
+  reproduction above is now denied
+  (`"Filesystem write denied: ... is not within an allowed write
+  path"`) and the target file is never created; a matching request
+  with the write path allowlisted passes cleanly. 18 new tests in
+  `tests/policy/test_shell.py::TestExtractRedirectTargets` and 7 new
+  in `tests/policy/test_engine.py::TestCheckShellRedirectionTargets`.
+- **Bug found and fixed in the same checkpoint (not itself a security
+  finding, but directly in the code this fix touches):**
+  `_extract_all_programs()`'s chain-operator splitting regex treated a
+  bare `&` as the background-execution operator even when it was part
+  of a file-descriptor-duplication redirect (`2>&1`, `>&2`, `<&0`),
+  splitting `"echo hi 2>&1"` into fake sub-commands `"echo hi 2>"` and
+  `"1"` and denying the extremely common `2>&1` idiom outright (`"'1'
+  is not in the allowed commands list"`) even when `echo` was
+  correctly allowlisted. Confirmed pre-existing via `git stash`. Fixed
+  with a negative lookbehind excluding `&` immediately preceded by `<`
+  or `>`; genuine background-execution `&` (not part of a redirect)
+  still splits correctly. 5 new tests in
+  `tests/policy/test_shell.py::TestExtractAllPrograms`.
+- **Residual risk:** the launcher sub-finding is unaddressed — `find`,
+  `xargs`, `bash`, `sh`, `python`, `sudo`, etc. remain allowlist-able
+  with only a log warning, and a launcher's arguments can embed a
+  nested shell command whose own redirects are invisible to this
+  (or any) static command-string parser — confirmed by inspection:
+  `find . -exec sh -c 'echo x > /etc/passwd' \;` tokenises the quoted
+  `sh -c` argument as a single opaque string, so
+  `extract_redirect_targets()` correctly does not (and structurally
+  cannot) see the redirect inside it. Closing this requires either
+  blocking launcher commands outright (a real behavioral/product change
+  affecting legitimate scripting use cases, not a mechanical bug fix)
+  or runtime-level interception (e.g. a sandboxed/traced subprocess),
+  neither of which was attempted this checkpoint. Also not addressed:
+  Incus tools' `resolve_shell_command()` (SR-1.5) always resolves to the
+  literal string `"incus"`, so this new redirect check has no visibility
+  into Incus's own argv-list-based `subprocess.run(["incus", ...])`
+  invocation — correctly so, since Incus never uses `shell=True` and
+  therefore has no shell-redirection attack surface of this kind at all.
+
 ---
 
 - Timestamp: 2026-07-09 15:35:26 (raw grep-scan dump below, preserved

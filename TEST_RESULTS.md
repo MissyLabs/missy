@@ -1,5 +1,46 @@
 # TEST_RESULTS
 
+## Run: 2026-07-10 12:55 UTC — validation-harness overhaul, SR-1.7 (shell redirection bypassed filesystem policy)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Finding: `ShellPolicyEngine.check_command()` only validated program
+  names; redirection operators (`>`, `>>`, `<`, etc.) were never parsed
+  or routed through `FilesystemPolicyEngine`.
+- Live reproduction via the real, unmocked production `shell_exec` tool
+  through `ToolRegistry` (not a theoretical gap): with only `"echo"`
+  allowlisted and `allowed_write_paths` empty,
+  `shell_exec(command="echo pwned > /tmp/.../not_allowed/pwn.txt")`
+  returned `success: True` and **the file was genuinely created on
+  disk** with content `"pwned"`. Confirmed fixed: the identical call now
+  returns `success: False` with `"Filesystem write denied"`, and the
+  file is never created.
+- Fix: `ShellPolicyEngine.extract_redirect_targets()` tokenises with
+  POSIX-punctuation-aware `shlex` so `>`/`>>`/`<` etc. are recognised
+  with or without surrounding whitespace, correctly excluding
+  fd-duplication forms (`2>&1`, `>&2`).
+  `PolicyEngine.check_shell()` routes every extracted target through
+  `filesystem.check_write()`/`check_read()` after the program-name check
+  passes.
+- **Bug found and fixed in the same checkpoint:** the pre-existing
+  chain-operator splitting regex treated `&` in `2>&1`/`>&2`/`<&0` as
+  the background-execution operator, denying the common `2>&1` idiom
+  outright even with the command correctly allowlisted (confirmed
+  pre-existing via `git stash`: `echo hi 2>&1` with `echo` allowlisted →
+  `"Shell command denied: '1' is not in the allowed commands list"`).
+  Fixed with a negative lookbehind excluding `&` preceded by `<`/`>`.
+- Command: `pytest tests/policy/test_shell.py tests/policy/test_engine.py -q`
+- Result: `95 passed` (26 new tests: 18 in `test_shell.py`, 8 in
+  `test_engine.py`)
+- Command: `pytest tests/policy/ tests/tools/ tests/integration/ tests/security/ tests/unit/ -q`
+- Result: `6968 passed, 2 skipped`
+- Command: `pytest tests/ -q -o faulthandler_timeout=120` with the 3
+  known pre-existing vision failures deselected
+- Result: `20832 passed, 13 skipped, 3 deselected in 472.05s (0:07:52)`
+  — 26 more passing than the prior (SR-1.9a) checkpoint's 20806,
+  matching the tests added this checkpoint exactly; no regressions.
+
+---
+
 ## Run: 2026-07-10 12:10 UTC — validation-harness overhaul, SR-1.9a (network policy allowlisted-host DNS-rebinding gap)
 
 - Branch: `overhaul/missy-validation-20260710-031406`

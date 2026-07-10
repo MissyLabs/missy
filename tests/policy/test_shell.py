@@ -329,3 +329,126 @@ class TestExtractAllPrograms:
     def test_mixed_operators(self):
         result = ShellPolicyEngine._extract_all_programs("a && b || c; d | e")
         assert result == ["a", "b", "c", "d", "e"]
+
+    # -----------------------------------------------------------------
+    # Bug fix (found while implementing SR-1.7): a bare "&" immediately
+    # preceded by "<" or ">" is a file-descriptor-duplication redirect
+    # (2>&1, >&2, <&0), not the background-execution chain operator. The
+    # previous regex split "cmd 2>&1" into "cmd 2>" and "1", denying the
+    # extremely common "2>&1" idiom by misparsing "1" as a fake
+    # sub-command's program name.
+    # -----------------------------------------------------------------
+
+    def test_stderr_to_stdout_redirect_is_not_split(self):
+        assert ShellPolicyEngine._extract_all_programs("echo hi 2>&1") == ["echo"]
+
+    def test_bare_fd_dup_redirect_is_not_split(self):
+        assert ShellPolicyEngine._extract_all_programs("echo hi >&2") == ["echo"]
+
+    def test_input_fd_dup_redirect_is_not_split(self):
+        assert ShellPolicyEngine._extract_all_programs("cat <&0") == ["cat"]
+
+    def test_genuine_background_ampersand_still_splits(self):
+        """A bare "&" NOT preceded by a redirect operator is still the
+        background-execution chain operator and must still split."""
+        assert ShellPolicyEngine._extract_all_programs("sleep 5 & echo done") == [
+            "sleep",
+            "echo",
+        ]
+
+    def test_stderr_redirect_combined_with_chain_operator(self):
+        result = ShellPolicyEngine._extract_all_programs("cmd1 2>&1 && cmd2")
+        assert result == ["cmd1", "cmd2"]
+
+
+# ---------------------------------------------------------------------------
+# SR-1.7: redirection targets bypass filesystem policy.
+#
+# ShellPolicyEngine only ever inspected program names -- an allowed
+# program like "echo" could write to any host path via
+# "echo x > /etc/cron.d/pwn" with zero filesystem check. Fixed by adding
+# extract_redirect_targets(), which PolicyEngine.check_shell() (the
+# facade with access to both engines) routes through the filesystem
+# policy engine.
+# ---------------------------------------------------------------------------
+class TestExtractRedirectTargets:
+    def test_no_redirection_returns_empty(self):
+        engine = make_engine(commands=["echo"])
+        assert engine.extract_redirect_targets("echo hello") == ([], [])
+
+    def test_simple_write_redirect(self):
+        engine = make_engine(commands=["echo"])
+        writes, reads = engine.extract_redirect_targets("echo x > /tmp/out.txt")
+        assert writes == ["/tmp/out.txt"]
+        assert reads == []
+
+    def test_write_redirect_with_no_surrounding_whitespace(self):
+        """ "echo x>/tmp/out.txt" (no spaces) must still be recognised --
+        an attacker/model could omit spaces specifically to dodge a naive
+        whitespace-based redirect scanner."""
+        engine = make_engine(commands=["echo"])
+        writes, _reads = engine.extract_redirect_targets("echo x>/tmp/out.txt")
+        assert writes == ["/tmp/out.txt"]
+
+    def test_append_redirect(self):
+        engine = make_engine(commands=["echo"])
+        writes, _reads = engine.extract_redirect_targets("echo x >> /tmp/log.txt")
+        assert writes == ["/tmp/log.txt"]
+
+    def test_force_overwrite_redirect(self):
+        engine = make_engine(commands=["echo"])
+        writes, _reads = engine.extract_redirect_targets("echo x >| /tmp/out.txt")
+        assert writes == ["/tmp/out.txt"]
+
+    def test_combined_stdout_stderr_redirect(self):
+        engine = make_engine(commands=["cmd"])
+        writes, _reads = engine.extract_redirect_targets("cmd &> /tmp/both.log")
+        assert writes == ["/tmp/both.log"]
+
+    def test_read_redirect(self):
+        engine = make_engine(commands=["cat"])
+        _writes, reads = engine.extract_redirect_targets("cat < /etc/shadow")
+        assert reads == ["/etc/shadow"]
+
+    def test_fd_duplication_is_not_a_file_target(self):
+        """ "2>&1" and ">&2" duplicate a file descriptor -- the next token
+        is a bare fd number, not a filesystem path, and must not be
+        treated as one."""
+        engine = make_engine(commands=["echo"])
+        writes, reads = engine.extract_redirect_targets("echo hi 2>&1")
+        assert writes == []
+        assert reads == []
+
+    def test_bare_fd_dup_is_not_a_file_target(self):
+        engine = make_engine(commands=["echo"])
+        writes, _reads = engine.extract_redirect_targets("echo hi >&2")
+        assert writes == []
+
+    def test_multiple_redirects_in_one_command(self):
+        engine = make_engine(commands=["cmd"])
+        writes, reads = engine.extract_redirect_targets("cmd < /tmp/in.txt > /tmp/out.txt 2>&1")
+        assert reads == ["/tmp/in.txt"]
+        assert writes == ["/tmp/out.txt"]
+
+    def test_redirects_across_compound_command(self):
+        engine = make_engine(commands=["echo"])
+        writes, _reads = engine.extract_redirect_targets(
+            "echo a > /tmp/a.txt && echo b > /tmp/b.txt"
+        )
+        assert writes == ["/tmp/a.txt", "/tmp/b.txt"]
+
+    def test_redirect_inside_quotes_is_not_a_real_operator(self):
+        """A literal '>' inside a quoted argument is just text, not a
+        redirection -- shlex's quote-aware tokenisation must not treat it
+        as an operator."""
+        engine = make_engine(commands=["echo"])
+        writes, reads = engine.extract_redirect_targets("echo 'a > b'")
+        assert writes == []
+        assert reads == []
+
+    def test_malformed_quoting_returns_empty_not_raises(self):
+        engine = make_engine(commands=["echo"])
+        # Unbalanced quote -- check_command's own tokenisation already
+        # denies this command before redirect extraction is reached; this
+        # method itself must degrade gracefully rather than raising.
+        assert engine.extract_redirect_targets("echo 'unterminated") == ([], [])

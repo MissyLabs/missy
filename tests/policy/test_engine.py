@@ -160,6 +160,67 @@ class TestCheckShell:
 
 
 # ---------------------------------------------------------------------------
+# SR-1.7: check_shell() must route redirection targets through the
+# filesystem policy engine, not just validate the program name.
+# ---------------------------------------------------------------------------
+class TestCheckShellRedirectionTargets:
+    def test_write_redirect_to_unallowlisted_path_denied(self):
+        pe = PolicyEngine(make_config(shell_enabled=True, shell_commands=["echo"]))
+        with pytest.raises(PolicyViolationError, match="Filesystem write denied"):
+            pe.check_shell("echo x > /etc/cron.d/pwn")
+
+    def test_write_redirect_with_no_spaces_denied(self):
+        """An attacker/model could omit whitespace around the operator
+        specifically to dodge a naive redirect scanner."""
+        pe = PolicyEngine(make_config(shell_enabled=True, shell_commands=["echo"]))
+        with pytest.raises(PolicyViolationError, match="Filesystem write denied"):
+            pe.check_shell("echo x>/etc/cron.d/pwn")
+
+    def test_write_redirect_to_allowlisted_path_permitted(self):
+        pe = PolicyEngine(
+            make_config(shell_enabled=True, shell_commands=["echo"], write_paths=["/tmp"])
+        )
+        assert pe.check_shell("echo hi > /tmp/ok.txt") is True
+
+    def test_read_redirect_from_unallowlisted_path_denied(self):
+        pe = PolicyEngine(make_config(shell_enabled=True, shell_commands=["cat"]))
+        with pytest.raises(PolicyViolationError, match="Filesystem read denied"):
+            pe.check_shell("cat < /etc/shadow")
+
+    def test_read_redirect_from_allowlisted_path_permitted(self):
+        pe = PolicyEngine(
+            make_config(shell_enabled=True, shell_commands=["cat"], read_paths=["/tmp"])
+        )
+        assert pe.check_shell("cat < /tmp/data.txt") is True
+
+    def test_fd_duplication_redirect_not_treated_as_file_target(self):
+        """ "2>&1" must not be misparsed as a write to a file named "1" --
+        it's a file-descriptor duplication, not a filesystem write."""
+        pe = PolicyEngine(make_config(shell_enabled=True, shell_commands=["echo"]))
+        assert pe.check_shell("echo hi 2>&1") is True
+
+    def test_denied_command_short_circuits_before_redirect_check(self):
+        """A denied program name must fail on its own terms -- the error
+        should be about the command, not a redirect target that's never
+        reached."""
+        pe = PolicyEngine(make_config(shell_enabled=True, shell_commands=["git"]))
+        with pytest.raises(PolicyViolationError, match="not in the allowed commands list"):
+            pe.check_shell("rm x > /tmp/should-not-be-reached")
+
+    def test_multiple_redirects_all_checked(self):
+        pe = PolicyEngine(
+            make_config(
+                shell_enabled=True,
+                shell_commands=["cmd"],
+                read_paths=["/tmp/in"],
+                write_paths=[],
+            )
+        )
+        with pytest.raises(PolicyViolationError, match="Filesystem write denied"):
+            pe.check_shell("cmd < /tmp/in/data.txt > /tmp/out/data.txt")
+
+
+# ---------------------------------------------------------------------------
 # Singleton helpers
 # ---------------------------------------------------------------------------
 
