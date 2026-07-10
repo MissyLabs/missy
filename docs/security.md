@@ -147,13 +147,19 @@ in key file paths are rejected.
 
 ### Custom Tool Content Validation
 
-The `self_create_tool` tool allows the agent to create custom scripts in
-`~/.missy/custom-tools/`.  Before writing any script, the content is
-scanned for 15+ dangerous patterns including network access (`curl`,
-`wget`, `nc`, `/dev/tcp/`), code execution (`eval`, `exec`, `os.system`,
-`subprocess`), and privilege escalation (`chmod +s`, `setuid`).  Scripts
-matching any pattern are rejected with a descriptive error.  Tool names
-are validated to alphanumeric/underscore/hyphen characters only.
+The `self_create_tool` tool allows the agent to write custom tool
+*proposal* scripts to `~/.missy/custom-tools/` for human review.  Before
+writing any script, the content is scanned for 15+ dangerous patterns
+including network access (`curl`, `wget`, `nc`, `/dev/tcp/`), code
+execution (`eval`, `exec`, `os.system`, `subprocess`), and privilege
+escalation (`chmod +s`, `setuid`).  Scripts matching any pattern are
+rejected with a descriptive error.  Tool names are validated to
+alphanumeric/underscore/hyphen characters only.  **These proposals are
+not automatically loaded or made callable** — nothing in Missy scans
+`~/.missy/custom-tools/` and registers its contents into the live tool
+registry.  A human operator must review a proposal and wire it in
+manually before it can ever run; this is a deliberate scope limit, not
+a gap (see `AUDIT_SECURITY.md`'s SR-4.5 finding).
 
 ### Device Registry Safety
 

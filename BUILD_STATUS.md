@@ -1,6 +1,6 @@
 # Build Status
 
-Last updated: 2026-07-10 20:40 UTC
+Last updated: 2026-07-10 21:15 UTC
 
 ## Current Workstream: Validation-Harness Overhaul
 
@@ -1353,6 +1353,54 @@ This is the twenty-second independent, confirmed finding/change this
 session. Full detail in `AUDIT_SECURITY.md`'s new `### SR-4.1 (SR-4.4)`
 section.
 
+### Completed This Session, continued: SR-4.5 — `self_create_tool` claimed created scripts were "registered at startup" (twenty-third finding, second §4 item)
+
+Product-policy decision, asked and confirmed with the operator before
+implementing: build the full secure dynamic-tool-loading lifecycle, or
+keep the feature proposal-only and fix its dishonest messaging?
+**Operator chose proposal-only** — the more conservative option, since
+real dynamic loading means agent-authored code becomes auto-executable,
+a meaningfully larger security surface than any other tool in this
+codebase.
+
+Reachability: `self_create_tool.py`'s module docstring claimed scripts
+are "registered at startup"; its `create` action's success message said
+"Custom tool '{name}' created at {path}"; `module-map.md` called it
+"Dynamic tool creation." All three are false —
+`grep -rn "custom-tools\|CUSTOM_TOOLS_DIR" missy/` matches only
+`self_create_tool.py` itself; nothing scans that directory or
+registers its contents into the live `ToolRegistry`. A script written
+here can never be called, in any configuration, ever, but the model
+(and the operator reading `missy` output) is told it was just created
+as a usable tool, and `action="list"` reinforces the illusion by
+showing it as an existing entry.
+
+Fixed: rewrote every user-facing string this tool returns to say
+"proposal"/"written for review," never "created"/"registered" — module
+docstring, the `description` schema field, `list`'s header/empty-state
+message, `create`'s success message (now explicitly states "This is
+NOT a registered or callable tool"), `delete`'s messages. Corrected
+`docs/implementation/module-map.md` and added an explicit paragraph to
+`docs/security.md`. Live-verified via the real `SelfCreateTool` class:
+both `create` and `list` output now explicitly disclaim
+registration/callability. Updated 3 pre-existing test files' string
+assertions to track the intentionally changed wording (no assertion
+weakened). 363 tests across 7 files pass;
+`tests/tools/`+`tests/unit/`+`tests/security/` (5,782 tests) pass with
+no regressions.
+
+Residual risk: none from this specific finding — behavior now matches
+what the tool tells the model/operator. The underlying "should Missy
+support real agent-authored tools" product question remains open and
+intentionally unbuilt; if pursued later, this checkpoint's residual-risk
+note in `AUDIT_SECURITY.md` documents the minimum bar (ApprovalGate
+step, real policy-engine-validated permissions, sandboxed/benchmarked
+execution before first call).
+
+This is the twenty-third independent, confirmed finding/change this
+session. Full detail in `AUDIT_SECURITY.md`'s new `### SR-4.2 (SR-4.5)`
+section.
+
 ### Known Pre-Existing Failure (not caused by this session)
 
 `tests/vision/test_discovery_capture_sysfs.py::TestCacheTTL::test_cache_valid_within_ttl`
@@ -1369,17 +1417,18 @@ scoped to FX-A / voice-command work.
 FX-A through FX-G are all complete (see task list). §2 (Unattended-
 Execution Hazards) and §3 (Data Integrity, Availability, And Cost) are
 now both fully closed — SR-3.4's cross-session-aggregation sub-finding
-is fixed. §4's first item (SR-4.4, done-criteria verification) is now
-fixed. Current remaining priority order:
+is fixed. §4's first two items (SR-4.4 done-criteria verification;
+SR-4.5 self_create_tool honesty) are now fixed. Current remaining
+priority order:
 
 1. SR-1.1 (audit event signing — larger cross-cutting change) and
    SR-1.9b (DNS TOCTOU — needs connecting to a pinned policy-verified IP
    rather than re-resolving at connect time).
-2. SR-4.1, SR-4.2, SR-4.3, SR-4.5, SR-4.6, SR-4.7, SR-4.8 (remaining
+2. SR-4.1, SR-4.2, SR-4.3, SR-4.6, SR-4.7, SR-4.8 (remaining
    dead/unwired features: long-term memory, sub-agents, checkpoint
-   recovery, custom-tool loading, OTLP export, MCP execution/approval,
-   provider rotation/fallback claims — SR-4.4 done-criteria verification
-   is now fixed, see above).
+   recovery, OTLP export, MCP execution/approval, provider
+   rotation/fallback claims — SR-4.4 and SR-4.5 are now fixed, see
+   above).
 3. The "harden secondary availability hazards" bullet (circuit-breaker
    half-open single-probe, MCP RPC desync, malformed scheduler record
    isolation, webhook HMAC replay protection, EventBus history bound,

@@ -136,7 +136,7 @@ class TestSelfCreateTool:
         ):
             result = tool.execute(action="list")
         assert result.success
-        assert "No custom tools" in result.output
+        assert "No custom tool proposals" in result.output
 
     def test_list_with_tools(self, tmp_path):
         tool = self._make_tool()
@@ -159,7 +159,7 @@ class TestSelfCreateTool:
         with patch("missy.tools.builtin.self_create_tool.CUSTOM_TOOLS_DIR", tools_dir):
             result = tool.execute(action="list")
         assert result.success
-        assert "No custom tools" in result.output
+        assert "No custom tool proposals" in result.output
 
     def test_delete_no_name(self):
         tool = self._make_tool()

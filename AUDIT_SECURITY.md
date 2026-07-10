@@ -1626,6 +1626,95 @@ requirement — do not overwrite, append new entries as work continues.
   evidence" work already addressed elsewhere this session for specific
   subsystems (memory IDs, Incus state), not a generic solution.
 
+### SR-4.2 (SR-4.5) — `self_create_tool` claimed created scripts were "registered at startup"; nothing anywhere loads them into the live ToolRegistry
+
+- **Status: fixed** (product-policy decision confirmed with operator:
+  keep the feature proposal-only, do not build dynamic tool loading).
+- **Reachability found (verified by direct code inspection, not
+  inference):** `missy/tools/builtin/self_create_tool.py`'s module
+  docstring stated "Custom tools are scripts stored in
+  `~/.missy/custom-tools/` and registered at startup." Its `execute()`
+  method's success message on `action="create"` read `"Custom tool
+  '{tool_name}' created at {script_path}"`. `docs/implementation/module-map.md`
+  described the tool as "Dynamic tool creation." All three statements
+  are false: `grep -rn "custom-tools\|CUSTOM_TOOLS_DIR"
+  missy/` matches only `self_create_tool.py` itself — no other file in
+  the codebase reads `~/.missy/custom-tools/`, no startup hook scans it,
+  and `ToolRegistry.register()` (the only method that makes a tool
+  callable) has exactly one call site pattern, `registry.register(<a
+  concrete BaseTool subclass instance>)`, all of which are the
+  first-party built-in tools enumerated in
+  `missy/tools/builtin/__init__.py` — never anything constructed from a
+  file under `custom-tools/`. A script written by `self_create_tool` can
+  therefore never be called by the agent, in any configuration, ever —
+  the model is told (via its own tool's success message) that it just
+  created a usable tool, and `action="list"` echoes the illusion back
+  by showing it as an existing entry with a description, exactly like a
+  real available capability.
+- **Product-policy decision, asked and confirmed before implementing:**
+  the review itself frames this as "either securely register and
+  execute approved outputs through the normal registry/policy/benchmark
+  lifecycle, or clearly keep the feature proposal-only" — a genuine
+  choice, not a mechanical bug. Building real dynamic loading means
+  agent-authored code becomes an auto-executable tool (even gated
+  behind human approval, this is a meaningfully larger security surface
+  than anything else in this codebase, since every other tool's code is
+  first-party and reviewed pre-deployment). Operator chose: **keep
+  proposal-only, fix the false "created"/"registered" claims** — the
+  smaller, faster, most conservative option, consistent with this
+  session's established default of picking the more restrictive option
+  absent an explicit reason to expand capability.
+- **Remediation evidence:** rewrote every user-facing and
+  developer-facing string this tool touches to say "proposal" and
+  "written for review," never "created" or "registered": the module
+  docstring, the tool's `description` schema field (now explicitly
+  states proposals are NOT automatically registered or callable), the
+  `list` action's header and empty-state message ("No custom tool
+  proposals on file" / "Custom tool PROPOSALS on file (not
+  registered/callable -- pending human review)"), the `create` action's
+  success message (now: "Proposal script '{name}' written to {path} for
+  human review. This is NOT a registered or callable tool ... Tell the
+  user/operator the proposal exists; do not treat it as available to
+  call."), and the `delete` action's messages ("Deleted custom tool
+  proposal" / "Tool proposal not found"). Corrected
+  `docs/implementation/module-map.md`'s one-line description and added
+  an explicit paragraph to `docs/security.md`'s "Custom Tool Content
+  Validation" section stating plainly that proposals are not
+  automatically loaded, with a pointer to this finding. Live-verified
+  end-to-end via the real `SelfCreateTool` class (not a mock): a
+  `create` call's returned `ToolResult.output` and a subsequent `list`
+  call's output both now explicitly disclaim registration/callability.
+  Confirmed via `grep -rn "custom-tools\|CUSTOM_TOOLS_DIR" missy/` one
+  more time post-fix that the "nothing loads this directory" claim in
+  the new docstring/docs text is still accurate (no new loader was
+  introduced, matching the chosen scope). Updated 3 pre-existing test
+  files' string assertions (`"No custom tools"` → `"No custom tool
+  proposals"`) to match the corrected, more honest wording — no test
+  assertion was weakened or had its actual check removed, only the
+  literal matched substring was updated to track the intentionally
+  changed (not accidentally broken) output text.
+  `tests/tools/test_self_create_tool.py`+`tests/tools/test_builtin_tools.py`+
+  `tests/unit/test_discord_upload_self_create_tool_coverage.py`+
+  `tests/unit/test_vault_audit_discovery_tools_coverage.py`+
+  `tests/security/test_scheduler_jobs_selfcreate_webhook_mcp_hardening.py`+
+  `tests/security/test_self_create_tool_expanded_blocklist.py`+
+  `tests/security/test_self_create_tool_script_validation.py` (363
+  tests) pass. `tests/tools/`+`tests/unit/`+`tests/security/` (5,782
+  tests) pass with no regressions.
+- **Residual risk:** no security gap remains from this specific finding
+  — the tool's actual behavior (write files, never load them) now
+  matches what it tells the model and the operator. The underlying
+  product question ("should Missy ever support real agent-authored
+  custom tools") remains open and unbuilt; if a future session decides
+  to build it, `AUDIT_SECURITY.md`'s reasoning here (proposal-only was
+  chosen specifically because unreviewed agent-authored code becoming
+  auto-executable is a large security-surface expansion) should inform
+  the design — at minimum a human `ApprovalGate` step, explicit
+  `ToolPermissions` declaration validated against the same policy
+  engine every other tool goes through, and probably sandboxed/
+  benchmarked execution before the first live call, not simply
+  `exec()`-ing whatever the model wrote.
+
 ---
 
 - Timestamp: 2026-07-09 15:35:26 (raw grep-scan dump below, preserved

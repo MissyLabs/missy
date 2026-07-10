@@ -1,5 +1,40 @@
 # TEST_RESULTS
 
+## Run: 2026-07-10 21:15 UTC — validation-harness overhaul, SR-4.5 (self_create_tool honesty about proposal-only status)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Product-policy decision confirmed with operator before implementing:
+  keep `self_create_tool` proposal-only (don't build dynamic tool
+  loading) and fix its dishonest "created"/"registered" messaging
+  instead.
+- Finding: `self_create_tool.py`'s docstring/success message and
+  `docs/implementation/module-map.md` all claimed created scripts were
+  "registered"/"created" as usable tools; `grep -rn
+  "custom-tools\|CUSTOM_TOOLS_DIR" missy/` confirmed nothing in the
+  codebase ever loads `~/.missy/custom-tools/` into the live
+  `ToolRegistry` — a written script can never be called.
+- Fix: rewrote every user-facing string this tool returns
+  (docstring, `description`, `list`/`create`/`delete` messages) to say
+  "proposal"/"written for review," never "created"/"registered."
+  Corrected `docs/implementation/module-map.md` and
+  `docs/security.md`.
+- Command: `pytest tests/tools/test_self_create_tool.py
+  tests/tools/test_builtin_tools.py
+  tests/unit/test_discord_upload_self_create_tool_coverage.py
+  tests/unit/test_vault_audit_discovery_tools_coverage.py
+  tests/security/test_scheduler_jobs_selfcreate_webhook_mcp_hardening.py
+  tests/security/test_self_create_tool_expanded_blocklist.py
+  tests/security/test_self_create_tool_script_validation.py -q`
+- Result: `363 passed` (3 pre-existing string-assertion updates to
+  track the intentionally changed wording; no assertion weakened)
+- Command: `pytest tests/tools/ tests/unit/ tests/security/ -q -o faulthandler_timeout=120`
+- Result: `5782 passed, 2 skipped` — no regressions
+- Command: `pytest tests/ -q -o faulthandler_timeout=120`
+- Result: `3 failed, 20903 passed, 13 skipped in 459.75s (0:07:39)` — same
+  count as the SR-4.4 checkpoint, only the 3 known pre-existing
+  `CameraDiscovery` cache-TTL flakes failing, zero regressions from
+  this checkpoint's changes.
+
 ## Run: 2026-07-10 20:40 UTC — validation-harness overhaul, SR-4.4 (done-criteria verification wired into task completion)
 
 - Branch: `overhaul/missy-validation-20260710-031406`

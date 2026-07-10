@@ -461,7 +461,7 @@ dependencies on other `missy` modules.
 | `discord_upload` | Discord file/image uploads |
 | `incus_tools` | LXD/Incus container management |
 | `code_evolve` | Self-code modification (with approval) |
-| `self_create_tool` | Dynamic tool creation in `~/.missy/custom-tools/` |
+| `self_create_tool` | Writes custom tool *proposal* scripts to `~/.missy/custom-tools/` for human review — not automatically loaded/registered/callable |
 
 ### missy.tools.intelligence
 

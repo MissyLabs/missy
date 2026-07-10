@@ -1,7 +1,14 @@
-"""Built-in tool: create, list, and delete agent-authored custom tools.
+"""Built-in tool: create, list, and delete agent-authored custom tool proposals.
 
-Custom tools are scripts stored in ~/.missy/custom-tools/ and registered
-at startup. The agent can create bash, python, or node scripts as tools.
+SR-4.5: this tool only writes scripts to ~/.missy/custom-tools/ plus a
+sidecar metadata JSON. Nothing in Missy scans that directory or loads
+its contents back into the live ToolRegistry -- a script written here
+can never actually be called as a tool. This is intentional (dynamic
+loading and auto-execution of agent-authored code is a significant,
+currently-unimplemented security surface -- see AUDIT_SECURITY.md's
+"SR-4.5" section), not an oversight, so every user-facing string this
+tool returns says "proposal"/"written for review", never "created" or
+"registered".
 """
 
 from __future__ import annotations
@@ -20,12 +27,22 @@ ALLOWED_LANGUAGES = {"bash": ".sh", "python": ".py", "node": ".js"}
 
 
 class SelfCreateTool(BaseTool):
-    """Create, list, or delete agent-authored persistent custom tools."""
+    """Write, list, or delete agent-authored custom tool *proposals*.
+
+    These scripts are NOT automatically loaded or made callable -- see the
+    module docstring. This tool only manages files on disk for later human
+    review; it does not expand what the agent itself can do.
+    """
 
     name = "self_create_tool"
     description = (
-        "Create, list, or delete persistent custom tools. "
-        "Use action='create' to write a script; action='list' to see existing; action='delete' to remove."
+        "Write, list, or delete custom tool PROPOSAL scripts for human review. "
+        "IMPORTANT: proposals are NOT automatically registered or callable -- "
+        "writing one here does not give you, or any future turn, the ability "
+        "to invoke it. A human operator must review the script and wire it "
+        "into the tool registry manually before it can run. "
+        "Use action='create' to write a proposal; action='list' to see existing "
+        "proposals; action='delete' to remove one."
     )
     permissions = ToolPermissions(filesystem_write=True)
     parameters = {
@@ -68,7 +85,7 @@ class SelfCreateTool(BaseTool):
 
         if action == "list":
             if not tools_dir.exists():
-                return ToolResult(success=True, output="No custom tools defined.", error=None)
+                return ToolResult(success=True, output="No custom tool proposals on file.", error=None)
             entries = []
             for meta_file in sorted(tools_dir.glob("*.json")):
                 try:
@@ -76,8 +93,15 @@ class SelfCreateTool(BaseTool):
                     entries.append(f"- {meta.get('name', '?')}: {meta.get('description', '')}")
                 except Exception as _meta_exc:
                     logger.debug("self_create_tool: failed to load %s: %s", meta_file, _meta_exc)
+            header = (
+                "Custom tool PROPOSALS on file (not registered/callable -- "
+                "pending human review):"
+            )
+            body = "\n".join(entries) if entries else "No custom tool proposals on file."
             return ToolResult(
-                success=True, output="\n".join(entries) or "No custom tools defined.", error=None
+                success=True,
+                output=f"{header}\n{body}" if entries else body,
+                error=None,
             )
 
         if action == "delete":
@@ -104,9 +128,11 @@ class SelfCreateTool(BaseTool):
                 removed = True
             if removed:
                 return ToolResult(
-                    success=True, output=f"Deleted custom tool: {tool_name}", error=None
+                    success=True, output=f"Deleted custom tool proposal: {tool_name}", error=None
                 )
-            return ToolResult(success=False, output="", error=f"Tool not found: {tool_name}")
+            return ToolResult(
+                success=False, output="", error=f"Tool proposal not found: {tool_name}"
+            )
 
         if action == "create":
             import re
@@ -205,7 +231,14 @@ class SelfCreateTool(BaseTool):
 
             return ToolResult(
                 success=True,
-                output=f"Custom tool '{tool_name}' created at {script_path}",
+                output=(
+                    f"Proposal script '{tool_name}' written to {script_path} for human "
+                    "review. This is NOT a registered or callable tool -- no mechanism "
+                    "loads scripts from this directory into the active tool registry. "
+                    "A human operator must review and manually wire it in before it can "
+                    "ever run. Tell the user/operator the proposal exists; do not treat "
+                    "it as available to call."
+                ),
                 error=None,
             )
 

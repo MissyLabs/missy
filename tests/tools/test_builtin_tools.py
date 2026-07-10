@@ -1137,7 +1137,7 @@ class TestSelfCreateTool:
             result = mod.SelfCreateTool().execute(action="list")
 
         assert result.success is True
-        assert "no custom tools" in result.output.lower()
+        assert "no custom tool proposals" in result.output.lower()
 
     def test_list_tools_action_shows_existing(self, tmp_path: Path) -> None:
         import missy.tools.builtin.self_create_tool as mod
