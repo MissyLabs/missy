@@ -555,6 +555,14 @@ class AgentRuntime:
         # Load history from memory store
         history = self._load_history(sid)
 
+        # Persist the user turn immediately, before the (possibly failing
+        # or long-running) provider call, so a provider crash, timeout, or
+        # policy denial doesn't leave the incoming message unrecorded
+        # (FX-B: persistence failure -- including "we never even tried" --
+        # must never disappear silently). Loading history above first
+        # avoids this turn leaking into its own prompt context.
+        self._save_turn(sid, "user", user_input, task_id=task_id)
+
         # Attention system: process input to get urgency, topics, priorities
         attention_query = user_input
         if self._attention is not None:
@@ -646,9 +654,9 @@ class AgentRuntime:
         # Record turn to request tracker for pattern detection.
         self._track_request(user_input, sid, all_tool_names_used, provider.name)
 
-        # Persist turn
-        self._save_turn(sid, "user", user_input)
-        self._save_turn(sid, "assistant", final_response, provider=provider.name)
+        # Persist the assistant turn (the user turn was already saved
+        # above, before the provider call was attempted).
+        self._save_turn(sid, "assistant", final_response, provider=provider.name, task_id=task_id)
 
         # Extract learnings from tool-augmented runs
         if all_tool_names_used:
@@ -1677,26 +1685,54 @@ class AgentRuntime:
             logger.debug("Failed to load history from memory store: %s", exc)
             return []
 
-    def _save_turn(self, session_id: str, role: str, content: str, provider: str = "") -> None:
+    def _save_turn(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        provider: str = "",
+        task_id: str = "",
+    ) -> None:
         """Persist a conversation turn to the memory store.
+
+        ``SQLiteMemoryStore.add_turn()`` (the production memory backend,
+        see :meth:`_make_memory_store`) takes a single ``ConversationTurn``
+        object rather than keyword arguments, so one is constructed here.
 
         Args:
             session_id: Session to write to.
             role: Speaker role (``"user"`` or ``"assistant"``).
             content: Message content.
             provider: Provider name (for assistant turns).
+            task_id: Task identifier, for the failure audit event.
         """
         if self._memory_store is None:
             return
         try:
-            self._memory_store.add_turn(
+            from missy.memory.sqlite_store import ConversationTurn
+
+            turn = ConversationTurn.new(
                 session_id=session_id,
                 role=role,
                 content=content,
                 provider=provider,
             )
+            self._memory_store.add_turn(turn)
         except Exception as exc:
-            logger.debug("Failed to save turn to memory store: %s", exc)
+            # FX-B: persistence failure must never disappear silently.
+            logger.warning(
+                "Failed to save %s turn to memory store (session=%s): %s",
+                role,
+                session_id,
+                exc,
+            )
+            self._emit_event(
+                session_id=session_id,
+                task_id=task_id,
+                event_type="memory.persist_failed",
+                result="error",
+                detail={"role": role, "error": str(exc)},
+            )
 
     def _intercept_large_content(self, session_id: str, tool_name: str, content: str) -> str:
         """Store large content and return a compact reference.
@@ -1951,16 +1987,36 @@ class AgentRuntime:
 
     @staticmethod
     def _make_memory_store() -> Any:
-        """Create a :class:`~missy.memory.store.MemoryStore`.
+        """Create the production memory store.
+
+        Uses :class:`~missy.memory.sqlite_store.SQLiteMemoryStore` (the
+        durable, WAL-mode, FTS5-searchable backend at ``~/.missy/memory.db``)
+        -- the same backend every other production consumer already
+        assumes: ``memory_search``/``memory_describe``/``memory_expand``
+        tools, :func:`~missy.agent.compaction.compact_if_needed` (which is
+        type-hinted to require it), :meth:`_intercept_large_content`
+        (which imports ``LargeContentRecord`` from this module), hatching's
+        welcome-turn seeding, and :class:`~missy.vision.vision_memory.VisionMemoryBridge`.
+
+        Previously this returned :class:`~missy.memory.store.MemoryStore`
+        (a JSON file at ``~/.missy/memory.json``) which every one of those
+        call sites is incompatible with -- e.g. it has no
+        ``store_large_content``/``add_summary`` methods at all, and
+        :meth:`_save_turn` here called ``add_turn`` with keyword arguments
+        that only the JSON store's signature accepts. That mismatch (SR-3.1)
+        is the direct cause of the FX-B finding that real Discord
+        conversation turns were never durably persisted: turns were written
+        to ``memory.json`` while every read path (memory tools, `missy
+        sessions`, this validation harness) looks at ``memory.db``.
 
         Returns:
-            A :class:`~missy.memory.store.MemoryStore` instance, or ``None``
-            when unavailable.
+            A :class:`~missy.memory.sqlite_store.SQLiteMemoryStore` instance,
+            or ``None`` when unavailable.
         """
         try:
-            from missy.memory.store import MemoryStore
+            from missy.memory.sqlite_store import SQLiteMemoryStore
 
-            return MemoryStore()
+            return SQLiteMemoryStore()
         except Exception:
             return None
 

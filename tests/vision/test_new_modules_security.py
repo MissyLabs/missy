@@ -261,9 +261,8 @@ class TestVisionMemoryBridgeInjection:
 
         assert isinstance(obs_id, str)
         sqlite.add_turn.assert_called_once()
-        call_kwargs = sqlite.add_turn.call_args
-        stored_session_id = call_kwargs[1].get("session_id") or call_kwargs[0][0]
-        assert stored_session_id == malicious_session_id
+        (turn,) = sqlite.add_turn.call_args.args
+        assert turn.session_id == malicious_session_id
 
     def test_sql_injection_in_recall_query_handled_safely(self) -> None:
         """SQL injection in recall query must not crash."""
@@ -303,8 +302,8 @@ class TestVisionMemoryBridgeInjection:
             observation=payload,
         )
 
-        stored_content = sqlite.add_turn.call_args[1]["content"]
-        assert stored_content == payload
+        (turn,) = sqlite.add_turn.call_args.args
+        assert turn.content == payload
 
 
 # ---------------------------------------------------------------------------

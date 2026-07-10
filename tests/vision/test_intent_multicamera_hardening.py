@@ -427,8 +427,8 @@ class TestVisionMemoryErrorPaths:
             metadata={"session_id": "EVIL", "custom_key": "safe"},
         )
 
-        call_args = mock_mem.add_turn.call_args
-        meta = call_args.kwargs.get("metadata") or call_args[1].get("metadata")
+        (turn,) = mock_mem.add_turn.call_args.args
+        meta = turn.metadata
         assert meta["session_id"] == "s1"  # not "EVIL"
         assert meta["custom_key"] == "safe"
 

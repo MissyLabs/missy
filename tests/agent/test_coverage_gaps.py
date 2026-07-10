@@ -994,7 +994,10 @@ class TestRuntimeSaveTurn:
             runtime._save_turn("s1", "user", "hello")
 
     def test_save_turn_calls_memory_store(self):
+        # SQLiteMemoryStore.add_turn() takes a single ConversationTurn
+        # object, not keyword arguments (FX-B / SR-3.1 fix).
         from missy.agent.runtime import AgentConfig, AgentRuntime
+        from missy.memory.sqlite_store import ConversationTurn
 
         provider = _make_provider()
         reg = _make_registry({"fake": provider})
@@ -1006,12 +1009,35 @@ class TestRuntimeSaveTurn:
 
             runtime._save_turn("s1", "assistant", "reply", provider="fake")
 
-        good_store.add_turn.assert_called_once_with(
-            session_id="s1",
-            role="assistant",
-            content="reply",
-            provider="fake",
-        )
+        good_store.add_turn.assert_called_once()
+        (turn,), _kwargs = good_store.add_turn.call_args
+        assert isinstance(turn, ConversationTurn)
+        assert turn.session_id == "s1"
+        assert turn.role == "assistant"
+        assert turn.content == "reply"
+        assert turn.provider == "fake"
+
+    def test_save_turn_failure_emits_audit_event(self):
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        provider = _make_provider()
+        reg = _make_registry({"fake": provider})
+
+        with patch("missy.agent.runtime.get_registry", return_value=reg):
+            runtime = AgentRuntime(AgentConfig(provider="fake"))
+            bad_store = MagicMock()
+            bad_store.add_turn.side_effect = Exception("write error")
+            runtime._memory_store = bad_store
+
+            with patch.object(runtime, "_emit_event") as mock_emit:
+                runtime._save_turn("s1", "user", "hello", task_id="t1")
+
+        mock_emit.assert_called_once()
+        _, kwargs = mock_emit.call_args
+        assert kwargs["event_type"] == "memory.persist_failed"
+        assert kwargs["result"] == "error"
+        assert kwargs["session_id"] == "s1"
+        assert kwargs["task_id"] == "t1"
 
 
 class TestRuntimeRecordLearnings:

@@ -147,16 +147,25 @@ class VisionMemoryBridge:
             **safe_metadata,
         }
 
-        # Store in SQLite memory as a "vision" role turn
+        # Store in SQLite memory as a "vision" role turn.
+        #
+        # SQLiteMemoryStore.add_turn() takes a single ConversationTurn
+        # object, not keyword arguments -- passing kwargs here previously
+        # raised a TypeError on every call against a real store (silently
+        # swallowed by the except below), so vision observations were
+        # never actually persisted (see FX-B / SR-3.1).
         if self._memory is not None:
             try:
-                self._memory.add_turn(
+                from missy.memory.sqlite_store import ConversationTurn
+
+                turn = ConversationTurn.new(
                     session_id=session_id,
                     role="vision",
                     content=observation,
                     provider="vision",
-                    metadata=entry,
                 )
+                turn.metadata = entry
+                self._memory.add_turn(turn)
             except Exception as exc:
                 logger.warning("Failed to store vision observation in SQLite: %s", exc)
 

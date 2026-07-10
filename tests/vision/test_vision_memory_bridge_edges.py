@@ -45,9 +45,11 @@ class TestVisionMemoryBridge:
             },
         )
 
-        # The add_turn call should have been made
+        # The add_turn call should have been made with a ConversationTurn
+        # object (SQLiteMemoryStore.add_turn() takes no kwargs).
         call_args = mock_memory.add_turn.call_args
-        stored_metadata = call_args.kwargs.get("metadata", {})
+        (turn,) = call_args.args
+        stored_metadata = turn.metadata
         assert stored_metadata["observation_id"] != "OVERRIDE_ATTEMPT"
         assert stored_metadata["session_id"] == "s1"  # uses the real value
         assert stored_metadata.get("custom_key") == "allowed"
@@ -157,9 +159,8 @@ class TestVisionMemoryBridge:
             confidence=0.92,
         )
 
-        call_args = mock_memory.add_turn.call_args
-        stored_metadata = call_args.kwargs.get("metadata", {})
-        assert stored_metadata["confidence"] == 0.92
+        (turn,) = mock_memory.add_turn.call_args.args
+        assert turn.metadata["confidence"] == 0.92
 
     def test_vector_store_receives_tagged_text(self):
         """Vector store should receive task-type-prefixed text."""

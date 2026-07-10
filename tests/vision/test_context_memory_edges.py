@@ -350,8 +350,8 @@ class TestVisionMemoryRecallEdgeCases:
             frame_id=3,
         )
 
-        call_args = mock_mem.add_turn.call_args
-        meta = call_args.kwargs.get("metadata") or call_args[1].get("metadata")
+        (turn,) = mock_mem.add_turn.call_args.args
+        meta = turn.metadata
         assert meta["confidence"] == 0.92
         assert meta["source"] == "webcam:/dev/video0"
         assert meta["frame_id"] == 3

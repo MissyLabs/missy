@@ -190,8 +190,8 @@ class TestVisionMemoryBridge:
             observation="test",
             metadata={"session_id": "EVIL", "custom_key": "safe"},
         )
-        call_kwargs = memory.add_turn.call_args[1]
-        meta = call_kwargs["metadata"]
+        (turn,) = memory.add_turn.call_args.args
+        meta = turn.metadata
         assert meta["session_id"] == "s1"  # Not overridden
         assert meta["custom_key"] == "safe"
 
@@ -352,8 +352,8 @@ class TestVisionMemoryBridge:
             observation="test",
             confidence=1.5,
         )
-        meta = memory.add_turn.call_args[1]["metadata"]
-        assert meta["confidence"] == 1.5
+        (turn,) = memory.add_turn.call_args.args
+        assert turn.metadata["confidence"] == 1.5
 
 
 # ---------------------------------------------------------------------------

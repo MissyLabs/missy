@@ -1,5 +1,36 @@
 # TEST_RESULTS
 
+## Run: 2026-07-10 04:20 UTC — validation-harness overhaul, FX-B (memory backend fix)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Root cause: `AgentRuntime._make_memory_store()` returned the JSON
+  `MemoryStore` (`~/.missy/memory.json`) instead of `SQLiteMemoryStore`
+  (`~/.missy/memory.db`), which every other production consumer already
+  assumed. Same bug independently present in
+  `VisionMemoryBridge.store_observation()`.
+- Command: `pytest tests/integration/test_discord_memory_persistence.py tests/agent/test_coverage_gaps.py tests/vision/ -q`
+- Result: `3041 passed`, 3 failed (pre-existing `CameraDiscovery`
+  cache-TTL bug, unrelated, tracked separately)
+- Command: `pytest tests/ -q -o faulthandler_timeout=120` with the 3
+  known pre-existing failures deselected
+- Result: `20701 passed, 13 skipped, 3 deselected in 452.13s (0:07:32)`
+- New test file: `tests/integration/test_discord_memory_persistence.py`
+  (8 tests) — real on-disk `SQLiteMemoryStore`, no memory-layer mocking,
+  drives `AgentRuntime.run()` the same way Discord's channel handler
+  does. Covers basic persistence, retrieval via
+  `get_recent_turns`/`get_session_turns`/`search`, restart/resume across
+  a fresh runtime instance on the same db file, concurrent multi-channel
+  isolation, failed-provider-call behavior, and session-id derivation.
+- ~30 pre-existing test assertions across 8 vision test files and
+  `tests/agent/test_coverage_gaps.py` updated from the old (incorrect)
+  kwargs-call assertion pattern to the real object-based
+  `SQLiteMemoryStore.add_turn(turn)` contract — those assertions
+  previously passed only because they mocked `add_turn` with a bare
+  `MagicMock()` that silently accepted any call shape, which is exactly
+  how the underlying persistence bug shipped undetected.
+
+---
+
 ## Run: 2026-07-10 03:xx UTC — validation-harness overhaul, FX-A slice 1
 
 - Branch: `overhaul/missy-validation-20260710-031406`

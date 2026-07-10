@@ -7,103 +7,81 @@ Draft PR: https://github.com/MissyLabs/missy/pull/31
 
 ## Changed
 
-- Preserved and hardened the existing `missy/channels/discord/voice_commands.py`
-  fix (already committed as `voice_fix` on master before this session).
-  Added 9 regression tests directly against `parse_voice_intent()`. Found
-  and fixed a real bug the new tests exposed: a trailing comma attached
-  directly to a channel name (no preceding whitespace) leaked into the
-  parsed channel name. Fixed `_TRAILING_CLAUSE_RE` and target stripping
-  in `_normalise_channel_target()`.
-- Implemented the first concrete slice of **FX-A** (dominant root cause
-  behind ~30 of 43 failing validation cases) in
-  `missy/providers/acpx_provider.py`:
-  - Every acpx invocation now forces `--allowed-tools ""` and
-    `--non-interactive-permissions deny`, verified against the actual
-    pinned `acpx@0.3.1` source (not just `--help` text) to confirm the
-    empty-string form really means zero native tools for the Claude Code
-    delegate adapter.
-  - `_sanitize_extra_flags()` strips security-critical flags (including
-    `--cwd`) from operator-configured `base_url` so they cannot be
-    reintroduced via a mutable local config file.
-  - `is_available()` now fails closed if the installed acpx version
-    doesn't document the required flags in `--help`.
-  - Added `_isolated_cwd()` (`~/.missy/acpx_sandbox`, mode 0700) so the
-    delegate never defaults into Missy's actual repository.
-  - Added a versioned delegation envelope
-    (`_render_delegation_envelope`) replacing the bare `[System]:` text
-    boundary, explicitly stating the delegate is Missy's planning
-    component with no native tools and must not fabricate additional
-    conversation turns or a self-authored scorecard (overlaps FX-D).
-  - Added `_strip_leaked_transcript_markers()` defensive scrub, applied
-    before tool-call parsing, with a regression test reproducing the
-    exact `DISC-CMD-006` failure shape.
-  - Confirmed tool-call execution already routes through
-    `AgentRuntime._tool_loop()` → `ToolRegistry.execute()` — no change
-    needed there.
-  - Live-verified against the real installed `acpx` binary (health
-    check + argv construction with a hostile `base_url`), not just
-    mocks.
+1. Preserved and hardened the existing `voice_commands.py` fix, adding
+   regression tests that caught and fixed a real trailing-comma leak bug
+   in channel-name parsing.
+2. **FX-A** (first slice): forced the acpx delegate provider through
+   Missy's structured tool protocol — zero native tools
+   (`--allowed-tools ""`, verified against the actual pinned
+   `acpx@0.3.1` source), fail-closed permissions
+   (`--non-interactive-permissions deny`), a fail-closed `is_available()`
+   health check, an isolated sandbox cwd, config-can't-override
+   sanitization of security flags, a versioned delegation envelope, and
+   defensive stripping of leaked transcript markers (fixes the exact
+   `DISC-CMD-006` failure shape).
+3. **FX-B** (root cause fixed): `AgentRuntime._make_memory_store()` was
+   constructing the JSON-file-backed `MemoryStore` (`~/.missy/memory.json`)
+   instead of the SQLite backend (`~/.missy/memory.db`) that every other
+   production consumer (memory tools, compaction, large-content
+   retrieval, hatching, vision memory, this validation harness) already
+   assumes. This is the direct explanation for "only 3 rows in
+   memory.db despite 937 agent.run.start events." Fixed to use
+   `SQLiteMemoryStore`, fixed `_save_turn()`'s call convention (object,
+   not kwargs), made the user turn persist *before* the provider call
+   (so a crashing delegate no longer erases the incoming request),
+   upgraded silent-swallow logging to a warning + new
+   `memory.persist_failed` audit event, and found/fixed the identical
+   bug independently in `VisionMemoryBridge.store_observation()` (vision
+   observations were never actually being persisted either). Added a
+   real integration test (`tests/integration/test_discord_memory_persistence.py`)
+   driving `AgentRuntime.run()` the same way Discord's channel handler
+   does, against a real on-disk SQLite store — no memory-layer mocking.
 
 ## Verification
 
 ```text
-python3 -m pytest tests/channels/discord/test_voice_commands.py tests/providers/test_acpx_provider.py -q
-157 passed
+python3 -m pytest tests/integration/test_discord_memory_persistence.py tests/agent/test_coverage_gaps.py tests/vision/ -q
+3041 passed, 3 failed (pre-existing, unrelated), 0 new failures
 ```
 
 ```text
-python3 -m ruff check missy/providers/acpx_provider.py tests/providers/test_acpx_provider.py missy/channels/discord/voice_commands.py tests/channels/discord/test_voice_commands.py
-All checks passed!
-python3 -m ruff format --check <same files>
-4 files already formatted
+python3 -m pytest tests/ -q -o faulthandler_timeout=120 \
+  --deselect tests/vision/test_discovery_capture_sysfs.py::TestCacheTTL::test_cache_valid_within_ttl \
+  --deselect tests/vision/test_discovery_edge_cases.py::TestPermissionDeniedOnDevice::test_device_that_does_not_exist_is_skipped \
+  --deselect tests/vision/test_discovery_edge_cases.py::TestRapidAddRemove::test_cached_results_returned_within_ttl
+20701 passed, 13 skipped, 3 deselected in 452.13s (0:07:32)
 ```
 
-```text
-python3 -m pytest tests/providers/ tests/agent/ -q
-4995 passed, 4 skipped in 78.27s
-```
-
-```text
-python3 -m pytest -q -o faulthandler_timeout=120   # full suite
-20692 passed, 3 failed, 13 skipped in 490.29s (0:08:10)
-```
-
-The 3 failures are a pre-existing `CameraDiscovery` cache-TTL bug in
-`missy/vision/discovery.py`, confirmed present on master before this
-session's changes (via `git stash`) and unrelated to acpx/voice work.
-Tracked as a follow-up task, not fixed this session.
-
-Live smoke test against the real `acpx@0.3.1` binary (no LLM calls —
-`--version`/`--help` only):
-
-```text
-$ python3 -c "... AcpxProvider(...).is_available() ..."
-is_available(): True
-isolated cwd: /home/missy/.missy/acpx_sandbox (mode 0700)
-```
+Full detail (root-cause writeups, all evidence) in `BUILD_STATUS.md` and
+`TEST_RESULTS.md`.
 
 ## Remains
 
-- FX-A bullet 6: representative end-to-end proof (real acpx delegate
-  invocation, not mocks) across filesystem, shell, browser, X11, AT-SPI,
-  vision, audio, Discord upload, memory, `self_create_tool`, and
-  `code_evolve` categories. This requires either a live Claude Code
-  delegate call through acpx or a scripted fake ACP agent — not yet
-  attempted.
-- FX-B through FX-G not yet started (see `BUILD_STATUS.md` for detail
-  and priority order).
-- SR-1.1 through SR-4.8 security-review remediation not yet started.
+- FX-A bullet 6: live end-to-end proof across tool categories (not yet
+  attempted — needs a real or scripted acpx delegate invocation).
+- FX-B loose ends: `run_stream()`'s CLI-only streaming path still saves
+  both turns post-completion rather than user-first; redaction/secret
+  scrubbing before persistence not yet covered (overlaps SR-1.10).
+  `MEM-001`, `MEM-004`, `SEC-PI-004`, `XT-006` still need live harness
+  re-validation.
+- FX-C through FX-G not yet started.
+- SR-1.1 through SR-4.8 security-review remediation not yet started —
+  note that SR-3.1 ("one production memory backend") and part of SR-3.2/
+  SR-3.3 are now substantially addressed by the FX-B fix; still needs
+  explicit re-verification and write-up against the security review's
+  own finding IDs.
 - Full 89-case tool-specific validation backlog not yet re-run.
-- Pre-existing vision `CameraDiscovery` cache-TTL flake (3 tests).
+- Pre-existing vision `CameraDiscovery` cache-TTL flake (3 tests,
+  unrelated to this session, tracked separately).
 
 ## First Next Step
 
-Wire real Discord conversation-turn persistence to `SQLiteMemoryStore`
-(FX-B) — the harness observed only 3 memory rows across 937
-`agent.run.start` events, meaning almost no production Discord traffic
-was ever durably remembered. Trace every runtime/Discord call path to
-`add_turn()`, add an integration test through the real Discord handler,
-and rerun `MEM-001`, `MEM-004`, `SEC-PI-004`, `XT-006`. Alternatively,
-if a live/sandboxed way to exercise a real acpx delegate call becomes
-available, prioritize proving FX-A bullet 6 first since it unblocks the
-largest cluster of the 43 failing cases.
+Two good options, pick based on what's available: (a) if a safe way to
+exercise a real/scripted acpx delegate call exists, prioritize proving
+FX-A bullet 6 end-to-end since it unblocks the largest failure cluster;
+otherwise (b) continue with FX-D/FX-E (independent-grading enforcement
+and gated-tool-bypass refusal) since they're implementation-only (no
+live delegate needed) and partially already started via the FX-A
+envelope work. After either, map SR-3.1/3.2/3.3 findings in
+`~/Missy-security-review.md` explicitly onto the FX-B fix just landed
+and update `AUDIT_SECURITY.md`.

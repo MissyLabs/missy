@@ -218,23 +218,30 @@ class TestStoreObservation:
         uuid.UUID(result)
 
     def test_calls_add_turn_on_sqlite(self) -> None:
+        # SQLiteMemoryStore.add_turn() takes a single ConversationTurn
+        # object, not keyword arguments (FX-B / SR-3.1 fix) -- passing
+        # kwargs against a real store previously raised TypeError on every
+        # call, silently swallowed, so vision observations were never
+        # actually persisted.
+        from missy.memory.sqlite_store import ConversationTurn
+
         mstore = _make_sqlite_mock()
         bridge = VisionMemoryBridge(memory_store=mstore)
         bridge.store_observation("s1", "puzzle", "a piece observation")
         mstore.add_turn.assert_called_once()
-        _, kwargs = mstore.add_turn.call_args
-        assert kwargs["session_id"] == "s1"
-        assert kwargs["role"] == "vision"
-        assert kwargs["content"] == "a piece observation"
-        assert kwargs["provider"] == "vision"
+        (turn,), _kwargs = mstore.add_turn.call_args
+        assert isinstance(turn, ConversationTurn)
+        assert turn.session_id == "s1"
+        assert turn.role == "vision"
+        assert turn.content == "a piece observation"
+        assert turn.provider == "vision"
 
     def test_metadata_passed_to_add_turn(self) -> None:
         mstore = _make_sqlite_mock()
         bridge = VisionMemoryBridge(memory_store=mstore)
         bridge.store_observation("s1", "puzzle", "obs", metadata={"extra": "data"})
-        _, kwargs = mstore.add_turn.call_args
-        stored_meta = kwargs["metadata"]
-        assert stored_meta["extra"] == "data"
+        (turn,), _kwargs = mstore.add_turn.call_args
+        assert turn.metadata["extra"] == "data"
 
     def test_entry_contains_all_fields(self) -> None:
         mstore = _make_sqlite_mock()
@@ -247,8 +254,8 @@ class TestStoreObservation:
             source="webcam:/dev/video0",
             frame_id=3,
         )
-        _, kwargs = mstore.add_turn.call_args
-        meta = kwargs["metadata"]
+        (turn,), _kwargs = mstore.add_turn.call_args
+        meta = turn.metadata
         assert meta["session_id"] == "s1"
         assert meta["task_type"] == "painting"
         assert meta["observation"] == "brush stroke analysis"
@@ -315,8 +322,8 @@ class TestStoreObservation:
         mstore = _make_sqlite_mock()
         bridge = VisionMemoryBridge(memory_store=mstore)
         bridge.store_observation("s1", "general", "obs")
-        _, kwargs = mstore.add_turn.call_args
-        meta = kwargs["metadata"]
+        (turn,), _kwargs = mstore.add_turn.call_args
+        meta = turn.metadata
         assert meta["confidence"] == 0.0
         assert meta["source"] == ""
         assert meta["frame_id"] == 0
@@ -867,12 +874,10 @@ class TestStoreRecallRoundTrip:
         """Stored observations should be retrievable via SQLite fallback."""
         stored_meta: dict[str, Any] = {}
 
-        def fake_add_turn(
-            session_id: str, role: str, content: str, provider: str, metadata: dict
-        ) -> None:
-            stored_meta.update(metadata)
-            stored_meta["_content"] = content
-            stored_meta["_session_id"] = session_id
+        def fake_add_turn(turn) -> None:
+            stored_meta.update(turn.metadata)
+            stored_meta["_content"] = turn.content
+            stored_meta["_session_id"] = turn.session_id
 
         def fake_get_recent(limit: int = 10) -> list:
             if stored_meta:

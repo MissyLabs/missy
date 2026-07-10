@@ -1,6 +1,6 @@
 # Build Status
 
-Last updated: 2026-07-10 03:40 UTC
+Last updated: 2026-07-10 04:20 UTC
 
 ## Current Workstream: Validation-Harness Overhaul
 
@@ -122,6 +122,86 @@ reproduced here to avoid drift between two copies.
      (`AUD-001..005`, `VIS-001..005`, `WB-002..007`, `X11-001..005`,
      `AT-001..004`, `XT-001,2,4,5,6`, `DU-001,002`, `DISC-CMD-002`,
      `SELF-002`, `SELF-004`).
+
+### Completed This Session, continued: FX-B (Discord memory persistence)
+
+Root cause found and fixed. `AgentRuntime._make_memory_store()`
+(`missy/agent/runtime.py`) was constructing
+`missy.memory.store.MemoryStore` — a JSON file at `~/.missy/memory.json`
+— while every real consumer of `self._memory_store` already assumed the
+SQLite backend at `~/.missy/memory.db`:
+
+- `_intercept_large_content()` imports `LargeContentRecord` from
+  `missy.memory.sqlite_store` and calls `.store_large_content()`, which
+  the JSON store doesn't implement at all (silently caught, falling back
+  to a truncated preview — this is also SR-3.3).
+- `compact_if_needed()` (`missy/agent/compaction.py`) is type-hinted to
+  require `SQLiteMemoryStore` specifically and calls
+  `get_uncompacted_summaries`/`add_summary`/etc., none of which the JSON
+  store has (also SR-3.2).
+- `memory_search`/`memory_describe`/`memory_expand` tools, `missy
+  sessions`, hatching's welcome-turn seeding, and this validation
+  harness all read `~/.missy/memory.db` directly.
+- `_save_turn()` called `add_turn(session_id=..., role=..., ...)` with
+  keyword arguments — the JSON store's signature. The real
+  `SQLiteMemoryStore.add_turn()` takes one `ConversationTurn` object
+  positionally; calling it with those kwargs would have raised
+  `TypeError` on every write had the store actually been swapped without
+  also fixing this call site.
+
+Fixed:
+- `_make_memory_store()` now returns `SQLiteMemoryStore()`
+  (`~/.missy/memory.db`), matching every other production consumer and
+  `CLAUDE.md`'s documented "Memory DB" path.
+- `_save_turn()` now constructs a `ConversationTurn` object and calls
+  `add_turn(turn)`. On failure it now logs at `warning` (was `debug`,
+  i.e. invisible by default) and emits a new `memory.persist_failed`
+  audit event — FX-B: "never let persistence failure disappear
+  silently."
+- The user turn is now persisted immediately after loading history and
+  *before* the (possibly failing/timing-out) provider call, not only
+  after a successful completion. Previously a crashing delegate meant
+  neither the user's message nor any response was ever recorded — the
+  incoming request itself disappeared. History is loaded first so the
+  just-saved turn can't leak into its own prompt context.
+- **Same bug, second instance found and fixed**:
+  `VisionMemoryBridge.store_observation()`
+  (`missy/vision/vision_memory.py`) had the identical kwargs-vs-object
+  mismatch calling `self._memory.add_turn(session_id=..., ..., metadata=...)`
+  against a real `SQLiteMemoryStore` — meaning vision observations were
+  never actually persisted either (every call raised `TypeError`,
+  silently caught). Fixed to construct a `ConversationTurn` via
+  `.new()`, set `.metadata`, and call `add_turn(turn)`. This likely
+  affects `VIS-004` (scene memory) in the validation backlog.
+- Added `tests/integration/test_discord_memory_persistence.py`: drives
+  `AgentRuntime.run()` the same way Discord's channel handler does
+  (`missy/cli/main.py`'s `_process_channel` → `_discord_agent.run`),
+  against a real on-disk `SQLiteMemoryStore` (no memory-layer mocking).
+  Covers basic persistence, `get_recent_turns`/`get_session_turns`/
+  `search` retrieval, session restart/resume across a fresh runtime
+  instance pointed at the same db file, concurrent multi-channel
+  isolation, a failing provider (user turn still recorded, audit event
+  emitted), and session-id derivation correctness.
+- Updated ~30 existing test assertions across `tests/vision/test_vision_memory*.py`,
+  `test_context_memory_edges.py`, `test_intent_multicamera_hardening.py`,
+  `test_new_modules_security.py`, `test_shutdown_frame_coverage.py`,
+  `test_vision_modules_edges.py`, `test_vision_security_edges.py`, and
+  `tests/agent/test_coverage_gaps.py` that were asserting against the old
+  (incorrect) kwargs-call convention using bare `MagicMock()`s — which is
+  exactly why this bug shipped undetected: the mocks accepted any call
+  shape, so the tests never caught the real-store signature mismatch.
+
+Not yet done: `run_stream()` (CLI-only streaming path, not used by
+Discord) still saves both turns after completion rather than the user
+turn first — left as-is to keep this change scoped, tracked as
+follow-up. Redaction/privacy-scope requirements beyond faithful
+session-id isolation (e.g. secret scrubbing before persistence) are not
+yet covered — overlaps SR-1.10 and is deferred to that work.
+
+Rerun per prompt.md: `MEM-001`, `MEM-004`, `SEC-PI-004`, `XT-006` still
+need live/harness re-validation against real seeded content (not yet
+attempted this session — requires either a live acpx delegate run or a
+scripted harness replay).
 
 ### Known Pre-Existing Failure (not caused by this session)
 
