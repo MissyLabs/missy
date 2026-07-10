@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (35 checkpoints this session, full suite green after every one)
+## Changed (36 checkpoints this session, full suite green after every one)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -956,19 +956,91 @@ genuinely per-key (not per-account) rate limit would benefit from
 rotation there too, deliberately not implemented since no built-in
 provider documents that behavior.
 
+### SR-1.1 (thirtieth finding this session — closes §1 except SR-1.9b)
+
+The review's three specific criticisms, each live-reproduced first:
+(1) the only signing path anywhere (`AgentRuntime._emit_event()`)
+signed just `{session_id, task_id, event_type}` — `result`, the field
+an attacker would flip to turn a `deny` into an `allow`, was
+completely unauthenticated; (2) the signature lived *inside* the
+mutable `detail` dict it was supposedly protecting; (3) only events
+emitted via that one method were signed — everything published
+directly via `event_bus.publish()` (the overwhelming majority) was
+never signed at all. Reproduced the review's exact PoC against
+current code: signed a real `deny` event, hand-edited `result` to
+`allow` in the persisted JSONL, read it back — succeeded cleanly,
+undetected.
+
+Fixed: new `AgentIdentity.load_or_generate()` (single source of truth
+so `AgentRuntime` and `AuditLogger` sign with the same keypair — its
+`path` parameter defaults to `None` rather than binding
+`DEFAULT_KEY_PATH` at function-definition time, specifically so tests
+can monkeypatch the module constant, a real Python gotcha caught via
+a live test failure while writing this). `AuditLogger._handle_event()`
+— the one place every published event reaches disk regardless of
+type, per its own docstring — now signs the complete canonical record
+and stores `identity_signature` as a top-level field, never nested in
+`detail`. New `verify_audit_log()` recomputes each line's signature
+and reports valid/tampered/unsigned/malformed. Direct `AuditLogger(...)`
+construction stays unsigned by default (no implicit key I/O for the
+70+ existing test/CLI-reader call sites); `init_audit_logger()` — the
+documented production entry point — signs by default with zero
+call-site changes needed at its one production wiring site in
+`cli/main.py`. Deleted the old narrow 3-field signing block in
+`_emit_event()`. New `missy audit verify` CLI command.
+
+Live re-verified: the review's exact PoC now reports `tampered`;
+`detail` tampering (not just top-level fields) is caught; deleting the
+signature reports `unsigned`, not a false valid; wrong-identity
+verification fails correctly; JSON key reordering does not itself
+trigger a false tamper report.
+
+**Second bug found and fixed along the way**: running the broader
+regression suite in a deliberately reordered sequence
+(`observability/security/cli` before `agent`, unlike the alphabetical
+default) exposed 14 failures in `tests/agent/test_runtime.py` —
+`TypeError: ... got 'MagicMock'` inside `censor_response()`. Root
+cause: those tests never patched `get_tool_registry`, implicitly
+relying on the global `ToolRegistry` singleton never being
+initialised during the session; once populated by an earlier test
+file, `_get_tools()` returned real tools, flipping `_run_loop()` to
+the tool-call loop and hitting an unconfigured
+`provider.complete_with_tools` mock instead of the properly-configured
+`provider.complete` mock these tests actually rely on. Not a bug in
+this checkpoint's production code — a latent, pre-existing
+test-isolation gap that only this checkpoint's own out-of-order
+verification run happened to expose (every prior full-suite run this
+session was accidentally protected by `tests/agent/` sorting
+alphabetically before the polluting directories). Fixed with a new
+autouse fixture patching `get_tool_registry` to raise, matching the
+file's actual single-turn test intent; re-verified the exact
+previously-failing ordering clean (7,449 passed, 4 skipped) before
+re-running the full standard suite.
+
+**Residual risk, called out explicitly:** no hash chain linking
+consecutive events, so a whole line deleted from the middle of the
+file (or truncation at the end) is not currently detectable — the
+review's own text explicitly noted no hash-chain claim exists in the
+product, so this was out of scope; this checkpoint closes exactly the
+documented gap (unsigned→signed, unverified→verified). Key lifecycle
+(rotation, revocation, multi-key trust) is unaddressed. No `missy
+doctor` check surfaces signing status yet — small follow-up.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-3 failed, 21032 passed, 13 skipped in 496.77s (0:08:16)
+3 failed, 21055 passed, 13 skipped in 530.63s (0:08:50)
 ```
 
 The 3 failures are exactly the known pre-existing `CameraDiscovery`
 cache-TTL flakes (task #11), confirmed unrelated via `git stash` in
 earlier checkpoints and reproduced again here unchanged. Zero
-regressions from SR-4.8 or any checkpoint this session. This closes
+regressions from SR-1.1 or any checkpoint this session. This closes
 section 4 ("Advertised But Unwired Features") of the security review
-entirely — all eight SR-4.x items are now fixed.
+entirely — all eight SR-4.x items are now fixed — and section 1
+except for SR-1.9b (DNS TOCTOU), now the last remaining numbered
+SR-x.y item.
 
 Full detail in `BUILD_STATUS.md`, `AUDIT_SECURITY.md`, and
 `TEST_RESULTS.md` — each has one dated entry per checkpoint this
@@ -979,23 +1051,25 @@ three files above.)
 ## Open tasks (session-tracked, carry into next session)
 
 - **#9** SR-1.x through SR-4.x security review remediation — this
-  session covered SR-1.2/1.3, SR-1.4, SR-1.5, SR-1.6, SR-1.7, SR-1.8,
-  SR-1.9a, SR-1.10, SR-1.11, SR-1.12, SR-1.13, SR-2.1, SR-2.2, SR-2.3,
-  SR-2.4, SR-3.1 (substantially via FX-B), SR-3.2, SR-3.3, SR-3.4
-  (including its cross-session-aggregation sub-finding), SR-3.5, SR-4.4,
-  SR-4.5, SR-4.3, SR-4.2, SR-4.7, SR-4.1, SR-4.6, SR-4.8 — **§2, §3, and
-  §4 are now all fully closed, with no open sub-findings in any of
-  them.** §4 ("Advertised But Unwired Features") closed with all eight
-  items fixed (SR-4.4 done-criteria verification, SR-4.5
-  self_create_tool honesty, SR-4.3 checkpoint resume, SR-4.2 sub-agent
-  delegation, SR-4.7 MCP tool execution, SR-4.1 long-term memory, SR-4.6
-  OTLP export, SR-4.8 provider rotation/fallback). Remaining: SR-1.1
-  (audit signing — larger cross-cutting change), SR-1.9b (DNS TOCTOU,
-  substantially harder — needs connecting to a pinned policy-verified
-  IP rather than re-resolving at connect time) — this is the natural
-  next area now that §2, §3, and §4 are fully closed and only §1's
-  two hardest items plus the "harden secondary availability hazards"
-  bullet remain in the security review proper.
+  session covered SR-1.1, SR-1.2/1.3, SR-1.4, SR-1.5, SR-1.6, SR-1.7,
+  SR-1.8, SR-1.9a, SR-1.10, SR-1.11, SR-1.12, SR-1.13, SR-2.1, SR-2.2,
+  SR-2.3, SR-2.4, SR-3.1 (substantially via FX-B), SR-3.2, SR-3.3,
+  SR-3.4 (including its cross-session-aggregation sub-finding), SR-3.5,
+  SR-4.4, SR-4.5, SR-4.3, SR-4.2, SR-4.7, SR-4.1, SR-4.6, SR-4.8 —
+  **§2, §3, and §4 are now all fully closed, with no open sub-findings
+  in any of them; §1 is closed except for one item.** §4 ("Advertised
+  But Unwired Features") closed with all eight items fixed (SR-4.4
+  done-criteria verification, SR-4.5 self_create_tool honesty, SR-4.3
+  checkpoint resume, SR-4.2 sub-agent delegation, SR-4.7 MCP tool
+  execution, SR-4.1 long-term memory, SR-4.6 OTLP export, SR-4.8
+  provider rotation/fallback). SR-1.1 closed: `AuditLogger` now signs
+  the complete event at the single write chokepoint (not 3 of 8 fields
+  embedded in mutable `detail`), with real `verify_audit_log()` and a
+  new `missy audit verify` CLI command. Remaining: **SR-1.9b** (DNS
+  TOCTOU, substantially harder than SR-1.9a — needs connecting to a
+  pinned policy-verified IP rather than re-resolving at connect time)
+  — the sole remaining numbered SR-x.y item, plus the "harden
+  secondary availability hazards" bullet.
 - **SR-1.7's launcher sub-finding** remains open — `find`/`xargs`/
   `bash`/`sudo` etc. are allowlist-able with only a warning, and
   nested shell commands inside a launcher's quoted arguments are
@@ -1113,12 +1187,20 @@ cooldown tracking, one automatic key-rotation retry on auth failures,
 and budget-gated cross-provider fallback with a full redacted audit
 trail, closing the gap between `ProviderRegistry.rotate_key()`/
 `_get_provider()`'s previously static, start-of-run-only check and the
-mid-run recovery CLAUDE.md always implied existed.
-SR-1.1 (audit signing) and SR-1.9b (DNS TOCTOU) are now the only two
-open items in the security review's numbered SR-x.y list (plus the
-"harden secondary availability hazards" bullet) — the natural next
-continuation now that §2, §3, and §4 are all fully closed. Given how
-the last several checkpoints
+mid-run recovery CLAUDE.md always implied existed; SR-1.1 —
+`AuditLogger._handle_event()` (the one place every event reaches disk)
+now signs the complete canonical record as a top-level
+`identity_signature` field instead of the old 3-field signature
+embedded inside mutable `detail`, with a real `verify_audit_log()` and
+new `missy audit verify` CLI command closing the "nothing ever
+verifies it" gap the review demonstrated with a live PoC (edit a
+`deny` to `allow`, read it back clean) that this checkpoint reproduced
+and then closed.
+**SR-1.9b (DNS TOCTOU) is now the only open item in the security
+review's numbered SR-x.y list** (plus the "harden secondary
+availability hazards" bullet) — the natural next continuation now
+that §1 (except this one item), §2, §3, and §4 are all fully closed.
+Given how the last several checkpoints
 went (SR-3.3 and SR-3.5 were both flagged "likely already fixed" and
 both turned out to hide live, confirmed, previously-undetected bugs;
 SR-2.1, SR-2.2, the SR-3.4 residual, and most SR-4.x fixes this session

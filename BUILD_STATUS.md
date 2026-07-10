@@ -1835,6 +1835,94 @@ session, and closes section 4 ("Advertised But Unwired Features") of
 the security review entirely — all eight SR-4.x items are now fixed.
 Full detail in `AUDIT_SECURITY.md`'s new `### SR-4.8` section.
 
+### Completed This Session, continued: SR-1.1 — audit trail signed only 3 of 8 fields, signature embedded in mutable detail, nothing ever verified it (thirtieth finding, closes §1 except SR-1.9b)
+
+Reachability, matching the review's three specific criticisms: (1)
+the only signing path anywhere
+(`AgentRuntime._emit_event()`) signed just
+`{session_id, task_id, event_type}` — `result` (the field an
+attacker would flip to turn `deny` into `allow`) was completely
+unauthenticated; (2) the signature lived *inside* the mutable
+`detail` dict it was supposedly protecting; (3) only events emitted
+via that one method were signed at all — everything published
+directly via `event_bus.publish()` (the overwhelming majority) was
+never signed. Live-reproduced the review's exact PoC first: signed a
+real `deny` event, hand-edited `result` to `allow` in the persisted
+JSONL, read it back — succeeded cleanly, undetected, exactly as
+described.
+
+Fixed: new `AgentIdentity.load_or_generate()` classmethod (single
+source of truth so `AgentRuntime` and `AuditLogger` always sign with
+the same keypair). `AuditLogger._handle_event()` — the one place
+every published event reaches disk regardless of type — now signs
+the complete canonical record and stores the signature as a
+top-level `identity_signature` field, never nested in `detail`.
+New `verify_audit_log()` re-serializes each line's fields (minus the
+signature) and checks it against the identity's public key,
+reporting valid/tampered/unsigned/malformed. Direct `AuditLogger(...)`
+construction stays unsigned by default (no implicit key I/O for the
+70+ existing test/CLI-reader call sites); `init_audit_logger()` — the
+documented production entry point — signs by default with no call-site
+change needed. Deleted the old narrow 3-field signing block in
+`_emit_event()` (superseded, and a second weaker "signature" beside
+the real one would be actively misleading). New `missy audit verify`
+CLI command surfaces verification with a summary table and exits
+non-zero on any `tampered` line.
+
+Live re-verified: the review's exact PoC now correctly reports
+`tampered`; editing `detail` (not just top-level fields) is caught
+too; deleting the signature entirely reports `unsigned`, not a false
+valid; verifying against the wrong identity's public key fails
+correctly; JSON key reordering on disk does not itself trigger a
+false tamper report (both sides re-normalize via `sort_keys=True`).
+
+Second bug found and fixed along the way: running the broader
+regression suite in a deliberately reordered sequence
+(`observability/security/cli` before `agent`, unlike the alphabetical
+default) exposed 14 failures in `tests/agent/test_runtime.py` —
+`TypeError: expected ... got 'MagicMock'` deep inside
+`censor_response()`. Root cause: those tests never patched
+`get_tool_registry`, implicitly relying on the global `ToolRegistry`
+singleton never being initialised during the session; once populated
+by an earlier test file, `_get_tools()` returned real tools,
+flipping `_run_loop()` to the tool-call loop and hitting an
+unconfigured `provider.complete_with_tools` mock instead of the
+properly-configured `provider.complete` mock these tests actually
+rely on. Not a bug in this checkpoint's production code — a latent,
+pre-existing test-isolation gap that only this checkpoint's own
+out-of-order verification run happened to expose (every prior
+full-suite run this session was accidentally protected by
+`tests/agent/` sorting alphabetically before the polluting
+directories). Fixed with a new autouse fixture in
+`tests/agent/test_runtime.py` patching `get_tool_registry` to raise,
+matching every test in that file's actual single-turn intent.
+
+New `tests/observability/test_audit_signing.py` (19 tests), 3
+rewritten `TestMakeIdentity` tests in
+`tests/agent/test_runtime_coverage_gaps.py`, 4 new `TestAuditVerify`
+CLI tests in `tests/cli/test_cli_commands.py` (real signed log + real
+identity, not mocks). `tests/observability/`+`tests/security/`+
+`tests/cli/`+`tests/agent/` (7,449 tests, 4 skipped) pass with no
+regressions in both normal and deliberately-reordered configurations.
+Full suite: 3 failed (pre-existing `CameraDiscovery` flakes,
+unrelated), 21,055 passed (up from 21,032), 13 skipped in 530.63s.
+Zero regressions.
+
+Residual risk: no hash chain linking consecutive events, so a whole
+line deleted from the middle of the file (or truncation at the end)
+is not currently detectable — the review's own text explicitly noted
+no hash-chain claim exists in the product, so this was out of scope;
+this checkpoint closes exactly the documented gap (unsigned→signed,
+unverified→verified). Key lifecycle (rotation, revocation, multi-key
+trust) is unaddressed — one identity, no rotation path if compromised.
+No `missy doctor` check surfaces signing status yet — small follow-up,
+matching the same gap noted for SR-4.6.
+
+This is the thirtieth independent, confirmed finding/change this
+session, and closes section 1 of the security review except for
+SR-1.9b (DNS TOCTOU) — the last remaining numbered SR-x.y item. Full
+detail in `AUDIT_SECURITY.md`'s new `### SR-1.1` section.
+
 ### Known Pre-Existing Failure (not caused by this session)
 
 `tests/vision/test_discovery_capture_sysfs.py::TestCacheTTL::test_cache_valid_within_ttl`
@@ -1849,18 +1937,18 @@ scoped to FX-A / voice-command work.
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). §2 (Unattended-
-Execution Hazards) and §3 (Data Integrity, Availability, And Cost) are
-now both fully closed — SR-3.4's cross-session-aggregation sub-finding
-is fixed. §4 ("Advertised But Unwired Features") is now **fully
-closed** — all eight items fixed (SR-4.4 done-criteria verification;
-SR-4.5 self_create_tool honesty; SR-4.3 checkpoint resume; SR-4.2
-sub-agent delegation; SR-4.7 MCP tool execution; SR-4.1 long-term
-memory; SR-4.6 OTLP export; SR-4.8 provider rotation/fallback). Current
+Execution Hazards), §3 (Data Integrity, Availability, And Cost), and
+§4 ("Advertised But Unwired Features") are now **all fully closed** —
+§4's eight items: SR-4.4 done-criteria verification; SR-4.5
+self_create_tool honesty; SR-4.3 checkpoint resume; SR-4.2 sub-agent
+delegation; SR-4.7 MCP tool execution; SR-4.1 long-term memory; SR-4.6
+OTLP export; SR-4.8 provider rotation/fallback. §1 now closed except
+SR-1.9b (SR-1.1 audit signing is fixed this session). Current
 remaining priority order:
 
-1. SR-1.1 (audit event signing — larger cross-cutting change) and
-   SR-1.9b (DNS TOCTOU — needs connecting to a pinned policy-verified IP
-   rather than re-resolving at connect time).
+1. SR-1.9b (DNS TOCTOU — the last remaining numbered SR-x.y item;
+   needs connecting to a pinned policy-verified IP rather than
+   re-resolving at connect time, harder than SR-1.9a's fix).
 2. The "harden secondary availability hazards" bullet (circuit-breaker
    half-open single-probe, MCP RPC desync, malformed scheduler record
    isolation, webhook HMAC replay protection, EventBus history bound,
@@ -1880,7 +1968,11 @@ remaining priority order:
    environment; FX-G residual acpx process-group timeout kill; a Web
    TUI browser page for approvals (SR-2.2's REST endpoints are real and
    authenticated but have no browser UI yet); per-provider tunable
-   CircuitBreaker cooldown config (SR-4.8 residual).
+   CircuitBreaker cooldown config (SR-4.8 residual); audit-log hash
+   chain for deletion/reordering detection and key-rotation lifecycle
+   (SR-1.1 residual, explicitly out of scope per the review's own text
+   since no hash-chain claim exists in the product); a `missy doctor`
+   check surfacing audit signing status (SR-1.1/SR-4.6 residual).
 
 ### Blockers
 

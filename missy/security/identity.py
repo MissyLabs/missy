@@ -51,6 +51,34 @@ class AgentIdentity:
             raise TypeError(f"Expected Ed25519 private key, got {type(private_key).__name__}")
         return cls(private_key)
 
+    @classmethod
+    def load_or_generate(cls, path: str | None = None) -> AgentIdentity:
+        """Load the identity at *path*, generating and persisting one if absent.
+
+        Single source of truth for "the" process-level agent identity, so
+        every caller (the agent runtime's own event signing, the audit
+        log's signing/verification) resolves to the *same* keypair rather
+        than each independently reimplementing this load-or-create
+        sequence and risking drift.
+
+        Args:
+            path: PEM key file path. When ``None`` (default),
+                :data:`DEFAULT_KEY_PATH` is looked up dynamically at call
+                time rather than bound once at import time, so
+                monkeypatching the module-level constant (as tests do)
+                takes effect.
+
+        Returns:
+            The loaded or newly generated :class:`AgentIdentity`.
+        """
+        if path is None:
+            path = DEFAULT_KEY_PATH
+        if os.path.exists(path):
+            return cls.from_key_file(path)
+        identity = cls.generate()
+        identity.save(path)
+        return identity
+
     # ------------------------------------------------------------------
     # Persistence
     # ------------------------------------------------------------------

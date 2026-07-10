@@ -2544,6 +2544,194 @@ requirement — do not overwrite, append new entries as work continues.
   speculatively would be unverifiable without a live account
   exhibiting that behavior.
 
+### SR-1.1 — Audit trail was signed for only 3 of 8 fields, the signature lived inside mutable `detail`, and nothing anywhere verified it
+
+- **Status: fixed.** With SR-4.8 closing §4, this closes the last
+  §1 item scoped this session besides SR-1.9b (DNS TOCTOU). Purely
+  mechanical once the design was chosen: move signing to the single
+  chokepoint every published event already passes through, matching
+  the pattern this session already established twice (SR-1.10's
+  redaction, SR-4.6's OTLP export) for "the one place that sees
+  everything."
+- **Reachability found and live-reproduced**, matching the review's
+  own three specific criticisms:
+  1. The only signing path anywhere (`AgentRuntime._emit_event()`)
+     signed a payload of just `{session_id, task_id, event_type}` —
+     3 of `AuditEvent`'s 8 persisted fields. `timestamp`, `category`,
+     `result`, `detail`, and `policy_rule` were completely
+     unauthenticated, including `result` — the exact field an
+     attacker would flip to turn a `deny` into an `allow`.
+  2. The signature was stored *inside* `detail` (`detail =
+     {**detail, "identity_signature": sig.hex()}`) — the same mutable
+     dict being signed contained its own signature as a sibling key,
+     and nothing distinguished "signature over the rest of `detail`"
+     from "signature that happens to also be a `detail` key" at read
+     time.
+  3. This path only ran for events emitted via `_emit_event()`
+     specifically. Every policy engine, tool, scheduler job, and
+     provider that publishes directly via `event_bus.publish()` — the
+     overwhelming majority of events actually on disk — was never
+     signed at all, despite `AuditLogger`'s own docstring already
+     establishing (for SR-1.10) that it is *the* place every event,
+     regardless of origin, actually reaches disk.
+  Live-reproduced the review's exact PoC against current code before
+  fixing: constructed a real `AuditEvent` (`category="shell",
+  result="deny"`, `detail={"command": "rm -rf /"}`), published it
+  through a real `EventBus`, then hand-edited the persisted JSONL
+  line's `result` field from `"deny"` to `"allow"` — reading it back
+  succeeded cleanly with no detection mechanism anywhere in the
+  codebase, exactly as the review described. Separately confirmed
+  `AgentIdentity` (`missy/security/identity.py`) had real `sign()`/
+  `verify()`/Ed25519 primitives already implemented and unit-tested in
+  isolation — the gap was entirely in how (narrowly) and where
+  (wrongly) they were being invoked, not in the cryptography itself.
+- **Fix:** `AgentIdentity.load_or_generate(path=None)` (new classmethod,
+  `missy/security/identity.py`) is now the single source of truth for
+  resolving "the" process-level identity — both
+  `AgentRuntime._make_identity()` and `AuditLogger`'s new default
+  identity resolution delegate to it, so the runtime and the audit
+  sink always sign with the *same* keypair rather than risking two
+  independently-generated ones. (`path` defaults to `None` rather than
+  binding `DEFAULT_KEY_PATH` at function-definition time, specifically
+  so tests can monkeypatch the module-level constant and have it take
+  effect — a real Python default-argument-binding subtlety caught via
+  a live test failure while writing this fix, not a hypothetical.)
+  `AuditLogger` (`missy/observability/audit_logger.py`) gains an
+  `identity` constructor parameter; `_handle_event()` — the one place
+  every published event reaches disk, per its own docstring — now
+  signs the complete canonical record (`sort_keys=True` JSON of every
+  field except the signature itself) and stores the result as a
+  top-level `identity_signature` field, a sibling of `detail`, never
+  nested inside it. New `verify_audit_log(log_path, identity)` (module
+  function) is the verification counterpart the review found entirely
+  absent: re-serializes each persisted line's fields (minus the
+  signature) identically and checks the stored signature against the
+  supplied identity's public key, reporting `valid`/`tampered`/
+  `unsigned`/`malformed` per line. Direct `AuditLogger(...)`
+  construction defaults to `identity=None` (unsigned) so the 70+
+  existing test/CLI-reader call sites across the codebase don't
+  silently start doing real Ed25519 key I/O; `init_audit_logger()` —
+  the documented production entry point per this module's own
+  docstring — resolves and attaches a real identity by default via new
+  `_make_default_identity()`, so the actual running gateway/CLI signs
+  every event without any call-site change needed at
+  `missy/cli/main.py`'s existing `init_audit_logger(cfg.audit_log_path)`
+  call. The old narrow 3-field signing block in
+  `AgentRuntime._emit_event()` was deleted (superseded, not
+  duplicated — a second, weaker "signature" sitting alongside the real
+  one would be actively misleading). New `missy audit verify` CLI
+  command (`missy/cli/main.py`) surfaces `verify_audit_log()` with a
+  per-status summary table and a non-zero exit code specifically when
+  any line reports `tampered` (vs. `unsigned`, which is not itself
+  evidence of tampering — just of a line predating signing, or signing
+  being unavailable at write time).
+- **Live re-verification after the fix:** re-ran the review's exact
+  PoC — sign a real `deny` event, edit `result` to `allow` in the
+  persisted JSONL line exactly as before, call `verify_audit_log()` —
+  now correctly reports `tampered`. Additional live checks: an
+  untampered log verifies `valid` end-to-end through a real
+  `AuditLogger` write and a real `AgentIdentity`-backed
+  `verify_audit_log()` read; editing `detail` (not just top-level
+  `result`) is caught identically, closing the "only 3 fields" gap
+  directly; deleting the `identity_signature` field entirely (rather
+  than forging it) is reported `unsigned`, not misread as trivially
+  valid; verifying against a *different* identity's public key
+  correctly reports `tampered` rather than silently passing; JSON key
+  reordering on disk (e.g. from a downstream reformatting tool) does
+  not itself trigger a false `tampered` result, since both signing and
+  verification re-normalize via `sort_keys=True` — only a change in
+  actual field *values* does. The `missy audit verify` CLI command
+  live-tested end-to-end: clean log reports `valid: N` and exits 0; a
+  tampered log's summary table names the exact line and event type and
+  exits 1.
+- **Second bug found and fixed along the way:** while running the
+  broader regression suite in a deliberately reordered sequence
+  (`tests/observability/ tests/security/ tests/cli/ tests/agent/` —
+  `tests/agent/` *last*, unlike the alphabetical default where it runs
+  *first* in a full-suite invocation), 14 tests in
+  `tests/agent/test_runtime.py` (`TestAgentRuntimeRun`,
+  `TestProviderResolution::test_fallback_to_available_provider`,
+  `TestCompletionErrors`) failed with `TypeError: expected string or
+  bytes-like object, got 'MagicMock'` deep inside
+  `censor_response()`/`SecretsDetector.scan()`. Root cause: none of
+  these tests ever patched `missy.agent.runtime.get_tool_registry`,
+  relying implicitly on the process-global `ToolRegistry` singleton
+  never having been initialised during the test session (in which case
+  `AgentRuntime._get_tools()` catches the resulting `RuntimeError` and
+  returns `[]`). This assumption silently held in every prior
+  full-suite run this session purely because `tests/agent/` sorts
+  alphabetically *before* `tests/cli/`, `tests/observability/`, and
+  `tests/security/` — none of which had, until now, ever run first in
+  the same pytest process. It is not a bug introduced by this
+  checkpoint's production code; it is a latent test-isolation gap that
+  this checkpoint's own verification process (deliberately running
+  directories out of their normal order to stress-test the fix in
+  more than one configuration) happened to expose. When the global
+  registry *is* populated with real tools (as it now can be, from
+  other tests in the same session that exercise real subsystem
+  bootstrapping), `_get_tools()` returns non-empty, flipping
+  `AgentRuntime._run_loop()`'s `use_tool_loop` to `True` and routing
+  through `provider.complete_with_tools()` — a bare, unconfigured
+  `MagicMock()` attribute on these tests' provider mocks — instead of
+  the properly-configured `provider.complete()` mock every one of
+  these tests actually relies on. Fixed with a new autouse
+  `no_tool_registry` fixture in `tests/agent/test_runtime.py` that
+  patches `get_tool_registry` to raise, matching every test in that
+  file's actual single-turn intent; verified the exact previously-
+  failing directory ordering is now clean end-to-end
+  (`tests/observability/ tests/security/ tests/cli/ tests/agent/`:
+  7449 passed, 4 skipped, zero failures) before re-running the full
+  standard suite.
+- **Verification:** new `tests/observability/test_audit_signing.py`
+  (19 tests: top-level-signature placement, full-field coverage
+  including the `result`-flip PoC, unsigned-by-default direct
+  construction, the review's exact tamper reproduction, detail
+  tampering, signature-deletion-reported-as-unsigned, wrong-identity
+  verification failure, malformed/empty/missing-file handling, JSON
+  key-order independence, `init_audit_logger()`'s default-signs
+  behavior, `_make_default_identity()`'s graceful degradation, and
+  `AgentIdentity.load_or_generate()`'s load-vs-generate/shared-keypair
+  behavior), 3 rewritten `TestMakeIdentity` tests in
+  `tests/agent/test_runtime_coverage_gaps.py` (updated to assert
+  delegation to `AgentIdentity.load_or_generate()` instead of the
+  removed inline load-or-generate logic), and 4 new
+  `TestAuditVerify` CLI tests in `tests/cli/test_cli_commands.py`
+  (clean log, the review's tamper PoC via the CLI path specifically,
+  empty/missing log, `--help`) using a real signed audit log and real
+  `AgentIdentity`, not mocks. `tests/observability/`+`tests/security/`+
+  `tests/cli/`+`tests/agent/` (7449 tests, 4 skipped) pass with no
+  regressions in both the normal and the deliberately-reordered
+  configuration. Full suite: 3 failed (pre-existing `CameraDiscovery`
+  cache-TTL flakes, task #11, unrelated), 21055 passed (up from
+  21032), 13 skipped in 530.63s. Zero regressions.
+- **Residual risk, called out explicitly:** the review's SR-1.1 text
+  also asked for "sequence" numbers, "corruption/truncation/reordering
+  detection," "key lifecycle," and "rotation continuity." This
+  checkpoint delivers per-event signature integrity (detects any
+  modification to a signed line) and honest unsigned/malformed
+  reporting, but does *not* implement a hash chain linking consecutive
+  events — so a *whole line* deleted from the middle of the file, or
+  the file truncated at the end, is currently undetectable by
+  `verify_audit_log()` (each line is verified independently; nothing
+  currently proves line N+1 followed line N with no gap). The review's
+  own text explicitly notes "No product claim of a hash chain was
+  located, so this is framed as unsigned/unverified, not a broken
+  chain" — this checkpoint closes exactly that documented gap
+  (unsigned → signed, unverified → verified) without expanding scope
+  to build the harder deletion/reordering-evident hash-chain design
+  the review itself did not find a false claim about. Key lifecycle
+  (rotation, revocation, multi-key trust) is unaddressed — there is
+  still exactly one identity, and if its private key file is lost or
+  compromised, prior signatures cannot be re-verified against a
+  rotated key and an attacker with the compromised key could forge
+  arbitrarily. Secure file permissions on the key itself were already
+  handled pre-existing (`AgentIdentity.save()` writes 0o600 and the
+  parent directory 0o700, unchanged by this checkpoint). No `missy
+  doctor` check currently surfaces signing status (enabled/disabled,
+  which identity, verification summary) — a reasonable, small
+  follow-up matching the same gap noted for SR-4.6's OTLP export
+  status.
+
 ---
 
 - Timestamp: 2026-07-09 15:35:26 (raw grep-scan dump below, preserved

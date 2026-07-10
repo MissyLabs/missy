@@ -24,8 +24,9 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from missy.core.events import AuditEvent, EventBus, event_bus
 from missy.security.censor import censor_response
@@ -91,10 +92,18 @@ class AuditLogger:
         self,
         log_path: str = "~/.missy/audit.jsonl",
         bus: EventBus | None = None,
+        identity: Any | None = None,
     ) -> None:
         self.log_path = Path(log_path).expanduser()
         self.log_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self._bus: EventBus = bus if bus is not None else event_bus
+        # SR-1.1: an AgentIdentity to sign every persisted event with.
+        # Direct construction defaults to unsigned (no implicit key I/O
+        # for the many callers -- CLI read-only viewers, tests -- that
+        # only ever read the log); init_audit_logger(), the documented
+        # production entry point, resolves and passes a real identity by
+        # default so the actual running gateway/CLI signs every event.
+        self._identity = identity
         self._subscribe()
 
     # ------------------------------------------------------------------
@@ -138,6 +147,18 @@ class AuditLogger:
         The line includes all :class:`~missy.core.events.AuditEvent` fields
         with the ``timestamp`` serialised to an ISO-8601 string.
 
+        SR-1.1: when this logger has an :class:`~missy.security.identity.AgentIdentity`
+        (see ``identity``/:func:`init_audit_logger`), every field of the
+        persisted record is signed here -- the one place every published
+        event, of any type, actually reaches disk (this class's whole
+        raison d'etre per its own docstring) -- and the signature is
+        stored as a sibling top-level ``identity_signature`` field, never
+        nested inside the mutable ``detail`` dict. This supersedes the
+        old, narrower signing previously done in
+        ``AgentRuntime._emit_event`` (signed only 3 fields, embedded the
+        signature inside ``detail``, and only covered events emitted via
+        that one method).
+
         Args:
             event: The audit event to persist.
         """
@@ -151,6 +172,16 @@ class AuditLogger:
             "detail": _redact_detail(event.detail),
             "policy_rule": event.policy_rule,
         }
+        if self._identity is not None:
+            try:
+                payload = json.dumps(record, sort_keys=True, default=str).encode("utf-8")
+                record["identity_signature"] = self._identity.sign(payload).hex()
+            except Exception:
+                _module_logger.warning(
+                    "AuditLogger: failed to sign event %r; writing unsigned",
+                    event.event_type,
+                    exc_info=True,
+                )
         try:
             line = json.dumps(record, default=str)
             with self.log_path.open("a", encoding="utf-8") as fh:
@@ -263,20 +294,56 @@ class AuditLogger:
 _audit_logger: AuditLogger | None = None
 
 
-def init_audit_logger(log_path: str = "~/.missy/audit.jsonl") -> AuditLogger:
+def _make_default_identity() -> Any | None:
+    """Resolve the process-level :class:`~missy.security.identity.AgentIdentity`.
+
+    Graceful degradation matching every other ``_make_*`` subsystem
+    factory in this codebase: returns ``None`` (unsigned logging) rather
+    than raising when the identity module or key file is unavailable,
+    but logs loudly at WARNING -- unlike a missing optional subsystem,
+    an audit trail that silently stopped being signed is a security-
+    relevant fact an operator should see.
+    """
+    try:
+        from missy.security.identity import AgentIdentity
+
+        return AgentIdentity.load_or_generate()
+    except Exception:
+        _module_logger.warning(
+            "AuditLogger: agent identity unavailable -- audit events will "
+            "NOT be signed, and integrity cannot be verified.",
+            exc_info=True,
+        )
+        return None
+
+
+def init_audit_logger(
+    log_path: str = "~/.missy/audit.jsonl", identity: Any | None = None
+) -> AuditLogger:
     """Initialise and install the process-level :class:`AuditLogger`.
 
     Calling this function a second time replaces the existing logger with a
-    new one targeting *log_path*.
+    new one targeting *log_path*. This is the documented production entry
+    point (per this module's docstring), so unlike direct
+    :class:`AuditLogger` construction, it resolves and attaches a real
+    signing identity by default (SR-1.1). Pass an already-loaded
+    identity explicitly to reuse one (e.g. the same instance
+    :class:`~missy.agent.runtime.AgentRuntime` uses) instead of
+    resolving a second one independently.
 
     Args:
         log_path: Destination file for audit events.
+        identity: An :class:`~missy.security.identity.AgentIdentity` to
+            sign every persisted event with. When ``None`` (default),
+            one is resolved via :func:`_make_default_identity`.
 
     Returns:
         The newly created :class:`AuditLogger` instance.
     """
     global _audit_logger
-    _audit_logger = AuditLogger(log_path=log_path)
+    if identity is None:
+        identity = _make_default_identity()
+    _audit_logger = AuditLogger(log_path=log_path, identity=identity)
     return _audit_logger
 
 
@@ -295,3 +362,93 @@ def get_audit_logger() -> AuditLogger:
             "Call missy.observability.audit_logger.init_audit_logger() first."
         )
     return _audit_logger
+
+
+# ---------------------------------------------------------------------------
+# SR-1.1: signature verification
+# ---------------------------------------------------------------------------
+
+# Per-line verification outcomes.
+#   "valid"     -- signature present and matches the recomputed payload.
+#   "tampered"  -- signature present but does not match (record was
+#                  edited after signing, or the hex signature itself is
+#                  malformed/truncated).
+#   "unsigned"  -- no identity_signature field at all (written before
+#                  signing was enabled, or with signing unavailable).
+#   "malformed" -- the line is not valid JSON at all.
+VerificationStatus = Literal["valid", "tampered", "unsigned", "malformed"]
+
+
+@dataclass(frozen=True)
+class AuditLineVerification:
+    """The verification outcome for a single audit log line.
+
+    Attributes:
+        line_number: 1-indexed line number within the log file.
+        status: One of :data:`VerificationStatus`.
+        event_type: The record's ``event_type``, when the line parsed as
+            JSON (``None`` for a ``"malformed"`` line).
+    """
+
+    line_number: int
+    status: VerificationStatus
+    event_type: str | None = None
+
+
+def verify_audit_log(log_path: str, identity: Any) -> list[AuditLineVerification]:
+    """Verify every signed line in the audit log at *log_path*.
+
+    Recomputes, for each line, the exact canonical payload
+    :meth:`AuditLogger._handle_event` signed (every field except
+    ``identity_signature`` itself, JSON-serialised with ``sort_keys=True``
+    -- key order in the persisted line doesn't matter, since this
+    normalises it identically regardless) and checks it against the
+    stored signature with *identity*'s public key. This is the
+    verification counterpart the security review found entirely absent:
+    signing without any verification path provides no actual tamper
+    detection, since nothing would ever notice a mismatch.
+
+    Args:
+        log_path: Path to the JSONL audit log file.
+        identity: An :class:`~missy.security.identity.AgentIdentity`
+            (only its public key is used) to verify against -- must be
+            the same identity (or one sharing the same keypair) the log
+            was signed with, or every line will report ``"tampered"``.
+
+    Returns:
+        One :class:`AuditLineVerification` per non-blank line, in file
+        order. Returns an empty list if the file does not exist.
+    """
+    path = Path(log_path).expanduser()
+    if not path.exists():
+        return []
+
+    results: list[AuditLineVerification] = []
+    with path.open("r", encoding="utf-8") as fh:
+        for line_number, raw_line in enumerate(fh, start=1):
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                results.append(AuditLineVerification(line_number, "malformed"))
+                continue
+
+            event_type = record.get("event_type") if isinstance(record, dict) else None
+            sig_hex = record.pop("identity_signature", None) if isinstance(record, dict) else None
+            if sig_hex is None:
+                results.append(AuditLineVerification(line_number, "unsigned", event_type))
+                continue
+
+            try:
+                signature = bytes.fromhex(sig_hex)
+                payload = json.dumps(record, sort_keys=True, default=str).encode("utf-8")
+                valid = identity.verify(payload, signature)
+            except Exception:
+                valid = False
+
+            status: VerificationStatus = "valid" if valid else "tampered"
+            results.append(AuditLineVerification(line_number, status, event_type))
+
+    return results

@@ -1102,6 +1102,78 @@ def audit_recent(ctx: click.Context, limit: int, category: str | None) -> None:
     console.print(table)
 
 
+@audit.command("verify")
+@click.option(
+    "--limit",
+    default=0,
+    show_default=True,
+    help="Show at most this many non-valid lines (0 = show all).",
+)
+@click.pass_context
+def audit_verify(ctx: click.Context, limit: int) -> None:
+    """Verify Ed25519 signatures on every line of the audit log (SR-1.1).
+
+    Recomputes each persisted event's signature against the agent's
+    identity public key and reports "valid" / "tampered" / "unsigned" /
+    "malformed" per line. A "tampered" line means the recorded
+    session_id, task_id, event_type, category, result, detail, or
+    policy_rule was changed after the event was written -- this is the
+    actual detection mechanism the "every audit event signed" claim
+    depends on; signing alone provides no protection without it.
+    """
+    from missy.observability.audit_logger import verify_audit_log
+    from missy.security.identity import AgentIdentity
+
+    cfg = _load_subsystems(ctx.obj["config_path"])
+    try:
+        identity = AgentIdentity.load_or_generate()
+    except Exception as exc:
+        _print_error(f"Could not load agent identity: {exc}")
+        sys.exit(1)
+
+    results = verify_audit_log(cfg.audit_log_path, identity)
+    if not results:
+        console.print("[dim]Audit log is empty or does not exist.[/]")
+        return
+
+    counts: dict[str, int] = {}
+    for r in results:
+        counts[r.status] = counts.get(r.status, 0) + 1
+
+    style_by_status = {
+        "valid": "green",
+        "tampered": "bold red",
+        "unsigned": "yellow",
+        "malformed": "red",
+    }
+    summary = "  ".join(
+        f"[{style_by_status.get(status, 'white')}]{status}: {count}[/]"
+        for status, count in sorted(counts.items())
+    )
+    console.print(f"Verified {len(results)} line(s) — {summary}")
+
+    non_valid = [r for r in results if r.status != "valid"]
+    if not non_valid:
+        _print_success("Every signed line verified intact. No tampering detected.")
+        return
+
+    shown = non_valid if limit <= 0 else non_valid[:limit]
+    table = Table(title="Non-valid lines", show_lines=True)
+    table.add_column("Line", justify="right")
+    table.add_column("Status")
+    table.add_column("Event Type")
+    for r in shown:
+        table.add_row(
+            str(r.line_number),
+            Text(r.status, style=style_by_status.get(r.status, "white")),
+            r.event_type or "",
+        )
+    console.print(table)
+
+    if any(r.status == "tampered" for r in non_valid):
+        sys.exit(1)
+
+
 # ---------------------------------------------------------------------------
 # missy logs
 # ---------------------------------------------------------------------------

@@ -65,6 +65,29 @@ def reset_singleton():
     registry_module._registry = original
 
 
+@pytest.fixture(autouse=True)
+def no_tool_registry():
+    """Every test in this file exercises single-turn provider dispatch
+    with an unconfigured `provider.complete_with_tools` mock -- none
+    intend to exercise the tool-call loop. Without this, whichever test
+    runs first in the full suite determines behavior: if an earlier file
+    (in a different directory, run first alphabetically or via a custom
+    -k/directory selection) has already initialised the real process-
+    global ToolRegistry singleton via init_tool_registry()/
+    register_builtin_tools(), _get_tools() here would suddenly return
+    real tools, flipping AgentRuntime._run_loop's use_tool_loop to True
+    and routing through complete_with_tools() instead of complete() --
+    silently returning a bare MagicMock() (auto-vivified, no configured
+    .return_value) as the response content instead of the configured
+    CompletionResponse. Reproduced live: running
+    `pytest tests/observability/ tests/security/ tests/cli/ tests/agent/`
+    (agent last, unlike the alphabetical default where it runs first)
+    triggered exactly this failure mode across every test in this class.
+    """
+    with patch("missy.agent.runtime.get_tool_registry", side_effect=RuntimeError("no tools")):
+        yield
+
+
 # ---------------------------------------------------------------------------
 # AgentConfig defaults
 # ---------------------------------------------------------------------------

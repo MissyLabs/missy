@@ -786,6 +786,109 @@ class TestAuditRecent:
 
 
 # ===========================================================================
+# missy audit verify (SR-1.1)
+# ===========================================================================
+
+
+class TestAuditVerify:
+    """Real AgentIdentity + real AuditLogger writes, not mocked -- this
+    command's entire purpose is cryptographic verification, so mocking
+    verify_audit_log() would defeat the point of testing it."""
+
+    def _write_signed_log(self, tmp_path, key_path, log_path, events):
+        import json as _json
+
+        from missy.core.events import AuditEvent, EventBus
+        from missy.observability.audit_logger import AuditLogger
+        from missy.security.identity import AgentIdentity
+
+        identity = AgentIdentity.load_or_generate(str(key_path))
+        bus = EventBus()
+        AuditLogger(log_path=str(log_path), bus=bus, identity=identity)
+        for event_type, category, result, detail in events:
+            bus.publish(
+                AuditEvent.now(
+                    session_id="s1",
+                    task_id="t1",
+                    event_type=event_type,
+                    category=category,
+                    result=result,
+                    detail=detail,
+                )
+            )
+        return identity
+
+    def test_verify_clean_log_reports_valid(self, runner: CliRunner, tmp_path, monkeypatch):
+        key_path = tmp_path / "identity.pem"
+        log_path = tmp_path / "audit.jsonl"
+        monkeypatch.setattr("missy.security.identity.DEFAULT_KEY_PATH", str(key_path))
+        self._write_signed_log(
+            tmp_path,
+            key_path,
+            log_path,
+            [("network.request", "network", "allow", {"host": "example.com"})],
+        )
+        cfg_path = _write_temp_config()
+        cfg = _make_mock_config()
+        cfg.audit_log_path = str(log_path)
+
+        with _SubsystemsPatch(cfg):
+            result = runner.invoke(cli, ["--config", cfg_path, "audit", "verify"])
+
+        assert result.exit_code == 0
+        assert "valid: 1" in result.output
+        assert "No tampering detected" in result.output
+
+    def test_verify_tampered_log_exits_nonzero_and_reports_tampered(
+        self, runner: CliRunner, tmp_path, monkeypatch
+    ):
+        import json as _json
+
+        key_path = tmp_path / "identity.pem"
+        log_path = tmp_path / "audit.jsonl"
+        monkeypatch.setattr("missy.security.identity.DEFAULT_KEY_PATH", str(key_path))
+        self._write_signed_log(
+            tmp_path,
+            key_path,
+            log_path,
+            [("shell.exec", "shell", "deny", {"command": "rm -rf /"})],
+        )
+        # Reproduce the review's exact tamper PoC via the CLI path too.
+        record = _json.loads(log_path.read_text().splitlines()[0])
+        record["result"] = "allow"
+        log_path.write_text(_json.dumps(record) + "\n")
+
+        cfg_path = _write_temp_config()
+        cfg = _make_mock_config()
+        cfg.audit_log_path = str(log_path)
+
+        with _SubsystemsPatch(cfg):
+            result = runner.invoke(cli, ["--config", cfg_path, "audit", "verify"])
+
+        assert result.exit_code == 1
+        assert "tampered: 1" in result.output
+        assert "shell.exec" in result.output
+
+    def test_verify_empty_log_message(self, runner: CliRunner, tmp_path, monkeypatch):
+        key_path = tmp_path / "identity.pem"
+        log_path = tmp_path / "does_not_exist.jsonl"
+        monkeypatch.setattr("missy.security.identity.DEFAULT_KEY_PATH", str(key_path))
+        cfg_path = _write_temp_config()
+        cfg = _make_mock_config()
+        cfg.audit_log_path = str(log_path)
+
+        with _SubsystemsPatch(cfg):
+            result = runner.invoke(cli, ["--config", cfg_path, "audit", "verify"])
+
+        assert result.exit_code == 0
+        assert "empty or does not exist" in result.output
+
+    def test_verify_help_exits_zero(self, runner: CliRunner):
+        result = runner.invoke(cli, ["audit", "verify", "--help"])
+        assert result.exit_code == 0
+
+
+# ===========================================================================
 # missy logs
 # ===========================================================================
 

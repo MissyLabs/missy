@@ -1,5 +1,57 @@
 # TEST_RESULTS
 
+## Run: 2026-07-11 05:10 UTC — validation-harness overhaul, SR-1.1 (audit event signing — real signature + verification, closes §1 except SR-1.9b)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Finding: the only signing path (`AgentRuntime._emit_event()`) signed
+  3 of 8 `AuditEvent` fields (excluding `result`, the field an
+  attacker would flip), embedded the signature inside the mutable
+  `detail` dict it was supposedly protecting, and only covered events
+  emitted via that one method — the overwhelming majority published
+  directly via `event_bus.publish()` were never signed. No production
+  code verified any signature.
+- Live PoC reproduction (matching the security review's own
+  demonstration): signed a real `deny` event, hand-edited `result` to
+  `allow` in the persisted JSONL, read it back — succeeded cleanly,
+  undetected, before the fix.
+- Fix: new `AgentIdentity.load_or_generate()` (shared by
+  `AgentRuntime` and `AuditLogger`, same keypair); `AuditLogger._handle_event()`
+  now signs the complete canonical record and stores
+  `identity_signature` as a top-level sibling field; new
+  `verify_audit_log()` recomputes and checks signatures, reporting
+  valid/tampered/unsigned/malformed; new `missy audit verify` CLI
+  command; deleted the old narrow signing block in `_emit_event()`.
+- Command: `pytest tests/observability/test_audit_signing.py -q`
+- Result: `19 passed`
+- Command: `pytest tests/agent/test_runtime_coverage_gaps.py -k MakeIdentity tests/cli/test_cli_commands.py -k AuditVerify -q`
+- Result: `7 passed`
+- Command: `pytest tests/observability/ tests/security/ tests/cli/ tests/agent/ -q -o faulthandler_timeout=120`
+- Result: `7449 passed, 4 skipped` — clean in both normal order and the
+  deliberately-reordered configuration (`observability/security/cli`
+  before `agent`) that exposed and confirmed the fix for a second,
+  independent pre-existing test-isolation bug (see below).
+- Second bug found and fixed: 14 tests in `tests/agent/test_runtime.py`
+  failed with `TypeError: expected string ... got 'MagicMock'` when
+  run in the reordered configuration above — root cause was missing
+  `get_tool_registry` mocking letting an earlier test file's real
+  `ToolRegistry` singleton leak in, flipping `_run_loop()` to the
+  tool-call loop and hitting an unconfigured `provider.complete_with_tools`
+  mock instead of the properly-configured `provider.complete` mock.
+  Not caused by this checkpoint's production code — a latent gap only
+  this checkpoint's own out-of-order verification run happened to
+  expose (every prior full-suite run this session was accidentally
+  protected by `tests/agent/` sorting alphabetically before the
+  polluting directories). Fixed with a new autouse fixture patching
+  `get_tool_registry` to raise, matching the file's actual single-turn
+  test intent.
+- Command: `pytest tests/ -q -o faulthandler_timeout=120`
+- Result: `3 failed, 21055 passed, 13 skipped in 530.63s (0:08:50)` —
+  up from 21032, only the 3 known pre-existing `CameraDiscovery`
+  cache-TTL flakes failing, zero regressions from this checkpoint's
+  changes. This closes section 1 of the security review except for
+  SR-1.9b (DNS TOCTOU), which is now the last remaining numbered
+  SR-x.y item.
+
 ## Run: 2026-07-11 03:50 UTC — validation-harness overhaul, SR-4.8 (provider rotation/fallback wired into production runtime — final §4 item)
 
 - Branch: `overhaul/missy-validation-20260710-031406`

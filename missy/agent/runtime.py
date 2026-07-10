@@ -2618,20 +2618,18 @@ class AgentRuntime:
     def _make_identity() -> Any:
         """Load or generate an Ed25519 agent identity.
 
-        Attempts to load from the default key path; generates and saves
-        a new identity if no key file exists.  Returns ``None`` if the
+        Delegates to :meth:`AgentIdentity.load_or_generate` (the single
+        source of truth for "the" process-level identity, also used by
+        :class:`~missy.observability.audit_logger.AuditLogger` for
+        SR-1.1 full-event signing) so the runtime and the audit sink
+        always sign with the same keypair. Returns ``None`` if the
         identity module is unavailable.
         """
         try:
-            import os
-
             from missy.security.identity import DEFAULT_KEY_PATH, AgentIdentity
 
-            if os.path.exists(DEFAULT_KEY_PATH):
-                return AgentIdentity.from_key_file(DEFAULT_KEY_PATH)
-            identity = AgentIdentity.generate()
-            identity.save(DEFAULT_KEY_PATH)
-            logger.info("Generated new agent identity: %s", identity.public_key_fingerprint())
+            identity = AgentIdentity.load_or_generate(DEFAULT_KEY_PATH)
+            logger.debug("Agent identity ready: %s", identity.public_key_fingerprint())
             return identity
         except Exception:
             logger.debug("Agent identity unavailable; proceeding without it", exc_info=True)
@@ -3236,18 +3234,15 @@ class AgentRuntime:
             detail: Structured event data.
         """
         try:
-            # Sign audit event with agent identity if available
-            identity = getattr(self, "_identity", None)
-            if identity is not None:
-                import json
-
-                event_payload = json.dumps(
-                    {"session_id": session_id, "task_id": task_id, "event_type": event_type},
-                    sort_keys=True,
-                ).encode()
-                sig = identity.sign(event_payload)
-                detail = {**detail, "identity_signature": sig.hex()}
-
+            # SR-1.1: full-event signing now happens once, at the single
+            # AuditLogger write chokepoint every published event passes
+            # through (missy/observability/audit_logger.py), covering all
+            # fields (not just session_id/task_id/event_type) and every
+            # event regardless of whether it was emitted via this method.
+            # Signing here too would be redundant and, worse, misleading:
+            # a partial 3-field signature embedded in the mutable `detail`
+            # dict looks like proof of integrity but neither covers most
+            # of the record nor survives edits to fields outside `detail`.
             event = AuditEvent.now(
                 session_id=session_id,
                 task_id=task_id,

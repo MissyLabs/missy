@@ -802,47 +802,41 @@ class TestMakeDriftDetector:
 
 
 class TestMakeIdentity:
-    def test_key_absent_generates_and_saves_identity(self):
-        """Lines 1720-1723: key file not present → generate() + save() called."""
-        mock_identity = MagicMock()
-        mock_identity.public_key_fingerprint.return_value = "fp:abc123"
+    """SR-1.1: _make_identity() now delegates to AgentIdentity.load_or_generate()
+    (single source of truth shared with AuditLogger's full-event signing)
+    instead of reimplementing the load-or-create sequence inline."""
 
-        mock_module = MagicMock()
-        mock_module.DEFAULT_KEY_PATH = "/fake/.missy/identity.pem"
-        mock_module.AgentIdentity.generate.return_value = mock_identity
-        mock_module.AgentIdentity.from_key_file.return_value = MagicMock()
-
-        with (
-            patch.dict(sys.modules, {"missy.security.identity": mock_module}),
-            patch("os.path.exists", return_value=False),
-        ):
-            result = AgentRuntime._make_identity()
-
-        mock_module.AgentIdentity.generate.assert_called_once()
-        mock_identity.save.assert_called_once_with("/fake/.missy/identity.pem")
-        assert result is mock_identity
-
-    def test_key_present_loads_from_file(self):
-        """Line 1719: key file exists → from_key_file called."""
+    def test_delegates_to_load_or_generate_with_default_key_path(self):
         loaded_identity = MagicMock()
+        loaded_identity.public_key_fingerprint.return_value = "fp:abc123"
 
         mock_module = MagicMock()
         mock_module.DEFAULT_KEY_PATH = "/fake/.missy/identity.pem"
-        mock_module.AgentIdentity.from_key_file.return_value = loaded_identity
+        mock_module.AgentIdentity.load_or_generate.return_value = loaded_identity
 
-        with (
-            patch.dict(sys.modules, {"missy.security.identity": mock_module}),
-            patch("os.path.exists", return_value=True),
-        ):
+        with patch.dict(sys.modules, {"missy.security.identity": mock_module}):
             result = AgentRuntime._make_identity()
 
-        mock_module.AgentIdentity.from_key_file.assert_called_once_with("/fake/.missy/identity.pem")
+        mock_module.AgentIdentity.load_or_generate.assert_called_once_with(
+            "/fake/.missy/identity.pem"
+        )
         assert result is loaded_identity
 
     def test_exception_returns_none(self):
-        """Lines 1724-1726: any exception → None returned."""
+        """Any exception (including a bare AgentIdentity.load_or_generate()
+        failure) → None returned, never propagated."""
         with patch.dict(sys.modules, {"missy.security.identity": None}):
             result = AgentRuntime._make_identity()
+        assert result is None
+
+    def test_load_or_generate_raising_is_swallowed(self):
+        mock_module = MagicMock()
+        mock_module.DEFAULT_KEY_PATH = "/fake/.missy/identity.pem"
+        mock_module.AgentIdentity.load_or_generate.side_effect = OSError("disk full")
+
+        with patch.dict(sys.modules, {"missy.security.identity": mock_module}):
+            result = AgentRuntime._make_identity()
+
         assert result is None
 
 
