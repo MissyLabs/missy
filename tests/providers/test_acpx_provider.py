@@ -1537,6 +1537,29 @@ class TestDelegationEnvelope:
         assert "fresh tool observation" in prompt
 
     @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
+    def test_envelope_forbids_reporting_unobserved_tool_values(self, mock_run):
+        # Task #10 live validation (SH-001-style case) found the delegate
+        # confidently reporting a specific directory listing ("ls returned
+        # no output") with zero tool_call_update events of any kind in the
+        # raw acpx stream -- a fabricated observation, not a denied native
+        # tool attempt, so _stdout_had_denied_native_tool_call's retry
+        # never fires for it. The envelope must explicitly forbid this
+        # exact pattern. (Live re-test after adding this rule showed it
+        # did NOT change the model's behavior for that specific
+        # reproduction -- documented honestly as an attempted, unproven
+        # mitigation, not a confirmed fix.)
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout=json.dumps({"type": "text_delta", "delta": "ok"}) + "\n", stderr=""
+        )
+        p = AcpxProvider(_make_config())
+        p.complete_with_tools([Message(role="user", content="hi")], [_make_mock_tool()])
+
+        prompt = mock_run.call_args[0][0][-1]
+        assert "only a real tool invocation could" in prompt
+        assert "you do not know the" in prompt
+        assert "not reporting a real observation" in prompt
+
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_envelope_incorporates_caller_system_text(self, mock_run):
         mock_run.return_value = MagicMock(
             returncode=0, stdout=json.dumps({"type": "text_delta", "delta": "ok"}) + "\n", stderr=""

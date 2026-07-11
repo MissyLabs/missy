@@ -296,7 +296,19 @@ Rules:
    IP address or ID), and never state that something exists, changed,
    or disappeared without a fresh tool observation from THIS task
    confirming it. If you are not sure, say so explicitly instead of
-   filling the gap with a plausible-sounding answer."""
+   filling the gap with a plausible-sounding answer.
+7. Never report a specific value that only a real tool invocation could
+   have produced -- a directory listing, a file's contents, a command's
+   stdout/stderr, an exact count, an ID, a byte size -- unless you
+   emitted a genuine <tool_call> block for it earlier in THIS response
+   and are now relaying its actual result. If the current task asks you
+   to use a specific named tool (e.g. "using shell_exec, run pwd") and
+   you have not emitted a <tool_call> block for it, you do not know the
+   answer -- say plainly that you have not called the tool yet and are
+   not reporting a real observation, rather than answering as if you
+   had. Knowing a plausible or typical value (a common working
+   directory, a common file layout) is not the same as having observed
+   the actual one this turn."""
 
 
 def _render_delegation_envelope(system: str, tool_instructions: str) -> str:
