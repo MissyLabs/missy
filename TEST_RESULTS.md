@@ -1,5 +1,59 @@
 # TEST_RESULTS
 
+## Run: 2026-07-13 15:45 UTC — round 23 research pass: rate-limiter bypass in AnthropicProvider/OllamaProvider stream(), misleading memory_search schema claim, unbounded screencast SessionManager result growth
+
+- Context: round 23 of the research-pass invitation (rounds 1-22 covered
+  every area listed in the round 22 entry below). This round targeted
+  `missy/memory/sqlite_store.py`'s FTS5 search, `missy/agent/
+  learnings.py`/`missy/agent/done_criteria.py`, `missy/providers/
+  openai_provider.py`/`missy/providers/ollama_provider.py`, and
+  `missy/channels/screencast/`. Schema/migrations/locking/cleanup in
+  `sqlite_store.py`, `done_criteria.py` (already documented as
+  intentionally unwired), `openai_provider.py`, and `screencast/auth.py`
+  all checked out clean. Three genuine bugs fixed, plus one left as an
+  explicit residual (an ambiguous keyword-priority heuristic in
+  `extract_outcome()`, not a clear-cut bug).
+- **Rate-limiter bypass in AnthropicProvider/OllamaProvider stream()**:
+  neither provider's `stream()` called `_acquire_rate_limit()`, unlike
+  `complete()`/`complete_with_tools()` on both (and `OpenAIProvider.stream()`,
+  confirmed already correct) -- entirely bypassing configured throttling
+  for the streaming code path. Fixed by adding the same
+  `_acquire_rate_limit(estimated_tokens=self._estimate_tokens(messages,
+  system))` call OpenAIProvider.stream() already makes.
+- Command: `pytest tests/providers/ -q`
+- Result: all passed. 2 new tests (one per provider) confirmed to
+  genuinely fail pre-fix via `git stash`.
+- **Misleading memory_search tool-schema/docstring claim**: the tool
+  schema and SQLiteMemoryStore.search()'s docstring both claimed
+  AND/OR/prefix FTS5 syntax was supported, but the implementation always
+  wraps the entire query as one literal phrase (intentional, tested
+  security hardening against FTS5 injection) -- a model following the
+  documented contract got a silent, unexplained empty result set. Fixed
+  by correcting both descriptions to state the real, literal-phrase-only
+  behavior.
+- Command: `pytest tests/tools/test_memory_tools.py -q`
+- Result: all passed. 2 new tests confirmed to genuinely fail pre-fix
+  via `git stash`.
+- **Unbounded screencast SessionManager result growth**: `_results` had
+  no bound or eviction across the process lifetime -- every distinct
+  session that ever streamed at least one frame left a permanent dict
+  entry forever, the same class of bug `ScreencastTokenRegistry`
+  (auth.py) was already hardened against for revoked sessions. Fixed by
+  mirroring that eviction pattern: a new `_MAX_TRACKED_RESULT_SESSIONS`
+  cap with least-recently-touched-disconnected-session eviction (active
+  sessions are never evicted).
+- Command: `pytest tests/channels/test_screencast_session.py -q`
+- Result: `14 passed`. 2 new tests confirmed to genuinely fail pre-fix
+  via `git stash`.
+- Command: `pytest tests/providers/ tests/tools/test_memory_tools.py
+  tests/memory/ tests/channels/test_screencast_session.py -q` and
+  `pytest tests/channels/ tests/tools/ -q`
+- Result: `1586 passed, 8 skipped` + `3532 passed, 2 skipped`.
+- Command: `python3 -m pytest tests/ -q`
+  (full suite, background run)
+- Result: `21382 passed, 14 skipped in 747.85s (0:12:27)`. 0 failed, up
+  from 21376. Forty-first consecutive fully green full-suite run.
+
 ## Run: 2026-07-13 15:10 UTC — round 22 research pass: FileReadTool false-truncation bug on multi-byte content, SSE stream hang on run event-queue overflow
 
 - Context: round 22 of the research-pass invitation (rounds 1-21 covered

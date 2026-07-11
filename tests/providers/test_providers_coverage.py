@@ -472,6 +472,26 @@ class TestAnthropicProviderStream:
 
         assert call_kwargs["system"] == "System instructions"
 
+    def test_stream_acquires_rate_limit(self):
+        """stream() must throttle through the same rate limiter complete()
+        and complete_with_tools() already do -- pre-fix, stream() built the
+        request and dispatched it with no call to _acquire_rate_limit() at
+        all, silently bypassing any configured requests_per_minute/
+        tokens_per_minute throttling for the streaming code path.
+        """
+        from missy.providers.anthropic_provider import AnthropicProvider
+
+        sdk_mock = _make_anthropic_sdk()
+        self._make_stream_context(sdk_mock, ["reply"])
+
+        with _patch_anthropic_sdk(sdk_mock):
+            provider = AnthropicProvider(_provider_config())
+            rate_limiter = MagicMock()
+            provider.rate_limiter = rate_limiter
+            list(provider.stream([Message(role="user", content="Hi")]))
+
+        assert rate_limiter.acquire.called
+
     def test_stream_raises_provider_error_when_sdk_unavailable(self):
         import missy.providers.anthropic_provider as mod
         from missy.providers.anthropic_provider import AnthropicProvider

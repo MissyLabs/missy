@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (89 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for forty consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (90 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for forty-one consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -3676,15 +3676,75 @@ genuine bugs fixed.
 Verified: `pytest tests/tools/ tests/api/test_run_stream.py -q`:
 `1575 passed, 2 skipped`. `pytest tests/api/ -q`: `170 passed`.
 
+### Post-backlog (eighty-third checkpoint): round 23 research pass — rate-limiter bypass in AnthropicProvider/OllamaProvider stream(), misleading memory_search schema claim, unbounded screencast SessionManager result growth
+
+Round 23 (rounds 1-22 covered every area listed in the round 22 entry
+above), into `missy/memory/sqlite_store.py`'s FTS5 search, `missy/
+agent/learnings.py`/`missy/agent/done_criteria.py`, `missy/providers/
+openai_provider.py`/`missy/providers/ollama_provider.py`, and
+`missy/channels/screencast/`. `sqlite_store.py`'s schema/migrations/
+locking/cleanup, `done_criteria.py` (already documented as
+intentionally unwired), `openai_provider.py`, and `screencast/auth.py`
+all checked out clean. Three genuine bugs fixed, plus one left as an
+explicit residual.
+
+1. **Rate-limiter bypass in AnthropicProvider/OllamaProvider stream()**:
+   neither provider's `stream()` called `_acquire_rate_limit()`, unlike
+   `complete()`/`complete_with_tools()` on both (and
+   `OpenAIProvider.stream()`, confirmed already correct) -- entirely
+   bypassing configured throttling for the streaming code path.
+   Live-verified with a mocked rate limiter on both providers. Fixed by
+   adding the same `_acquire_rate_limit(estimated_tokens=
+   self._estimate_tokens(messages, system))` call `OpenAIProvider.stream()`
+   already makes. 2 new tests, confirmed to fail pre-fix.
+2. **Misleading memory_search tool-schema/docstring claim**: the tool
+   schema and `SQLiteMemoryStore.search()`'s docstring both claimed
+   AND/OR/prefix FTS5 syntax was supported, but the implementation
+   always wraps the entire query as one literal phrase (intentional,
+   already-tested security hardening against FTS5 injection) -- a model
+   following the documented contract got a silent, unexplained empty
+   result set instead of an error. Not a fix to the quoting itself
+   (correct as-is) but to the schema/docstring text making a false
+   promise about it. 2 new tests, confirmed to fail pre-fix.
+3. **Unbounded screencast SessionManager result growth**: `_results`
+   had no bound or eviction across the process lifetime --
+   `unregister_connection()` intentionally leaves a disconnected
+   session's results in place, but nothing ever removed an entry
+   afterward, so every distinct session that ever streamed at least one
+   frame left a permanent dict entry forever -- the same class of bug
+   `ScreencastTokenRegistry` (auth.py) was already hardened against for
+   revoked sessions but never applied here. Live-reproduced (250
+   sessions: unbounded growth confirmed pre-fix). Fixed by mirroring
+   auth.py's eviction pattern: a new capped, least-recently-touched-
+   disconnected-session eviction (active sessions never evicted). 2 new
+   tests, confirmed to fail pre-fix.
+4. **Left as an explicit residual**: `extract_outcome()` prioritizes a
+   success-keyword match over a failure-keyword match regardless of
+   which better characterizes the response, and this is wired into
+   persisted learnings. Not fixed: the input is genuinely ambiguous and
+   the code already makes an explicit priority choice -- correcting it
+   requires a real product decision about which signal should dominate,
+   not a bounded mechanical fix.
+
+Verified: `pytest tests/providers/ tests/tools/test_memory_tools.py
+tests/memory/ tests/channels/test_screencast_session.py -q`: `1586
+passed, 8 skipped`. `pytest tests/channels/ tests/tools/ -q`: `3532
+passed, 2 skipped`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21376 passed, 14 skipped in 690.13s (0:11:30)
+21382 passed, 14 skipped in 747.85s (0:12:27)
 ```
 
-**Zero failures**, the fortieth consecutive fully green
-full-suite run. Passed count is up from 21373 to 21376 (the round 22
+**Zero failures**, the forty-first consecutive fully green
+full-suite run. Passed count is up from 21376 to 21382 (the round 23
+checkpoint's 6 new tests: 2 provider rate-limiter tests, 2 memory_search
+schema/behavior tests, and 2 screencast SessionManager eviction tests;
+all of the sixty-first through eighty-second checkpoints' fixes are
+confirmed still holding). Passed count is up from 21373 to 21376 (the
+round 22
 checkpoint's 3 new tests: 2 FileReadTool multi-byte-truncation tests
 and 1 SSE queue-overflow terminal-delivery test; all of the sixty-first
 through eighty-first checkpoints' fixes are confirmed still holding).

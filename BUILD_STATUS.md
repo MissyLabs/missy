@@ -6269,6 +6269,105 @@ Verified: `pytest tests/tools/ tests/api/test_run_stream.py -q`:
 `21376 passed, 14 skipped in 690.13s (0:11:30)` — 0 failed, up from
 21373. Fortieth consecutive fully green full-suite run.
 
+### Post-backlog (eighty-third checkpoint): round 23 research pass fixes a rate-limiter bypass in both AnthropicProvider and OllamaProvider's stream(), a misleading memory_search tool-schema/docstring claim, and unbounded SessionManager result growth in the screencast channel
+
+Round 23 (rounds 1-22 covered every area listed in the round 22 entry
+above), this time into `missy/memory/sqlite_store.py`'s FTS5 search,
+`missy/agent/learnings.py`/`missy/agent/done_criteria.py`,
+`missy/providers/openai_provider.py`/`missy/providers/
+ollama_provider.py`, and `missy/channels/screencast/`. Schema/
+migrations/locking/cleanup in `sqlite_store.py`, `done_criteria.py`
+(already documented as intentionally unwired by a prior round),
+`openai_provider.py`, and `screencast/auth.py`'s token handling all
+checked out clean. Three genuine bugs fixed, plus one left as an
+explicit residual.
+
+1. **Both `AnthropicProvider.stream()` and `OllamaProvider.stream()`
+   never called `_acquire_rate_limit()`, entirely bypassing any
+   configured `requests_per_minute`/`tokens_per_minute` throttling for
+   the streaming code path**, while `complete()` and
+   `complete_with_tools()` on both providers (and `OpenAIProvider.stream()`,
+   confirmed already correct) all call it. Live-verified with a mocked
+   `rate_limiter`: `.acquire` was called after `complete()` but never
+   after `stream()` on the same provider instance, for both providers.
+   Fixed by adding the identical `self._acquire_rate_limit(estimated_tokens=
+   self._estimate_tokens(messages, system))` call `OpenAIProvider.stream()`
+   already makes, in the same position (after building the request,
+   before dispatching it) in both `stream()` methods. 2 new tests (one
+   per provider), confirmed via `git stash` to genuinely fail pre-fix.
+   `pytest tests/providers/ -q`: `all passed`.
+2. **The `memory_search` tool's own schema told the calling LLM that
+   `AND`/`OR`/FTS5 syntax were supported** ("Search query (supports FTS5
+   syntax: phrases, AND/OR)"), and `SQLiteMemoryStore.search()`'s
+   docstring made the identical claim ("supports prefix, phrase, and
+   boolean operators") — but the actual implementation always wraps the
+   *entire* query as one literal FTS5 phrase (`'"' + query.replace('"',
+   '""') + '"'`), an intentional, already-tested security hardening
+   against FTS5 syntax injection (confirmed in `tests/security/
+   test_shell_fts5_proactive_scheduler_hardening.py`). Live-verified:
+   searching `"python OR javascript"` against turns containing both
+   words individually returns zero results — not an error, just a
+   silent, unexplained empty set — because the whole string including
+   the literal word "OR" is matched as one phrase. Since the tool's own
+   schema instructs the agent that boolean/prefix syntax works, a model
+   following its documented contract gets its own memory-recall
+   capability silently degraded with no error signal. This is not a fix
+   to the quoting itself (correct and intentionally tested as-is) but to
+   the schema/docstring text making a false promise about it — corrected
+   both the tool schema description and the `search()` docstring to state
+   the real, literal-phrase-only behavior. 2 new tests (schema no longer
+   claims boolean/prefix support; a literal `"kubernetes AND
+   totally_absent_word"` query correctly returns no results rather than
+   being interpreted as a boolean AND), confirmed via `git stash` to
+   genuinely fail pre-fix. `pytest tests/tools/test_memory_tools.py -q`:
+   `all passed`.
+3. **Screencast `SessionManager._results` had no bound or eviction
+   across the process lifetime.** `unregister_connection()` intentionally
+   leaves a disconnected session's results in place (so results remain
+   briefly queryable after disconnect — already tested and intentional
+   per `test_unregister_preserves_results`), but nothing ever removed a
+   `_results` entry afterward: every distinct screencast session that
+   ever streamed at least one frame left a permanent dict entry forever,
+   the exact class of bug `ScreencastTokenRegistry` (`auth.py`) was
+   explicitly hardened against for revoked sessions
+   (`_REVOKED_SESSION_TTL_SECONDS`/`_MAX_TRACKED_SESSIONS`) but which was
+   never applied to `session_manager.py`. Live-reproduced (250 distinct
+   sessions, each disconnected immediately after one result: unbounded
+   growth confirmed pre-fix). Fixed by mirroring `auth.py`'s eviction
+   pattern: a new `_MAX_TRACKED_RESULT_SESSIONS` cap (200) with a
+   `_prune_results()` call after every `store_result()`, evicting the
+   least-recently-touched *disconnected* sessions first (an active
+   session's results are never evicted, confirmed by a dedicated test).
+   2 new tests, confirmed via `git stash` to genuinely fail pre-fix
+   (`ImportError` for the new constant, then bound assertions). `pytest
+   tests/channels/test_screencast_session.py -q`: `14 passed`.
+4. **Left as an explicit residual**: `extract_outcome()`
+   (`missy/agent/learnings.py:106-110`) prioritizes a success-keyword
+   match over a failure-keyword match regardless of which better
+   characterizes the response (e.g. "The build failed, but I
+   successfully installed the dependencies first" is classified
+   `"success"`), and this is wired into persisted learnings via
+   `AgentRuntime._record_learnings`. Live-verified the misclassification
+   reproduces and is genuinely wired into what gets recalled as context
+   for future runs. Not fixed this round: the input itself is genuinely
+   ambiguous (a response can legitimately describe both a partial
+   success and an overall failure), and the code already makes an
+   explicit priority choice rather than failing to consider one
+   direction — correcting it requires a real product decision about
+   which signal should dominate (e.g. weighting failure language higher,
+   or a more structured outcome signal from the agent loop itself)
+   rather than a bounded mechanical fix, matching this session's
+   established scoping discipline for genuine judgment calls.
+
+Verified: `pytest tests/providers/ tests/tools/test_memory_tools.py
+tests/memory/ tests/channels/test_screencast_session.py -q`: `1586
+passed, 8 skipped`. `pytest tests/channels/ tests/tools/ -q`: `3532
+passed, 2 skipped`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21382 passed, 14 skipped in 747.85s (0:12:27)` — 0 failed, up from
+21376. Forty-first consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

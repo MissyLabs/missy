@@ -383,6 +383,8 @@ class OllamaProvider(BaseProvider):
             "stream": True,
         }
 
+        self._acquire_rate_limit(estimated_tokens=self._estimate_tokens(messages, system))
+
         try:
             client = self._make_client()
             response = client.post(

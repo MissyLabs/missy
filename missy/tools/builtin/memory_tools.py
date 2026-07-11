@@ -44,7 +44,13 @@ class MemorySearchTool(BaseTool):
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Search query (supports FTS5 syntax: phrases, AND/OR).",
+                        "description": (
+                            "Search query, matched as a literal phrase. "
+                            "FTS5 boolean/prefix operators (AND, OR, *) are "
+                            "escaped and treated as ordinary text, not query "
+                            "syntax, to prevent injection -- use plain "
+                            "keywords or short phrases."
+                        ),
                     },
                     "scope": {
                         "type": "string",

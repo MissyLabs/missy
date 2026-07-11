@@ -419,6 +419,8 @@ class AnthropicProvider(BaseProvider):
         if system_content:
             call_kwargs["system"] = system_content
 
+        self._acquire_rate_limit(estimated_tokens=self._estimate_tokens(messages, system))
+
         try:
             client = self._make_client()
             with client.messages.stream(**call_kwargs) as stream:

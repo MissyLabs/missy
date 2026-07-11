@@ -119,6 +119,41 @@ class TestMemorySearchTool:
         )
         assert "No results" in result.output
 
+    def test_schema_does_not_claim_boolean_or_prefix_syntax_support(self):
+        """The tool's own schema previously told the calling LLM that
+        AND/OR and FTS5 syntax were supported ("supports FTS5 syntax:
+        phrases, AND/OR"), but SQLiteMemoryStore.search() always wraps the
+        entire query as one literal phrase (intentional -- prevents FTS5
+        syntax injection). A model following the documented schema that
+        sent e.g. "python OR javascript" got a silent, unexplained empty
+        result set. The schema description must not promise behavior the
+        store deliberately disables.
+        """
+        schema = MemorySearchTool().get_schema()
+        query_desc = schema["parameters"]["properties"]["query"]["description"]
+        assert "AND/OR" not in query_desc
+        assert "FTS5 syntax" not in query_desc
+
+    def test_boolean_query_matched_as_literal_phrase_not_silently_empty(
+        self, populated_store
+    ):
+        """A query containing FTS5 boolean syntax is treated as literal
+        text, matching the corrected schema description, rather than being
+        interpreted as a query operator.
+        """
+        store, _, _ = populated_store
+        tool = MemorySearchTool()
+        # The literal phrase "kubernetes AND deploy" won't match content
+        # that only contains "kubernetes" on its own -- confirming AND is
+        # NOT being interpreted as a boolean operator (which would match).
+        result = tool.execute(
+            query="kubernetes AND totally_absent_word_xyz",
+            scope="messages",
+            _memory_store=store,
+        )
+        assert result.success
+        assert "No results" in result.output
+
 
 class TestMemoryDescribeTool:
     def test_describe_summary(self, populated_store):
