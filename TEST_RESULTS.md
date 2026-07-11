@@ -1,5 +1,63 @@
 # TEST_RESULTS
 
+## Run: 2026-07-13 11:55 UTC — round 17 research pass: SecretsDetector pattern-drift gaps (GitHub fine-grained PAT, Discord token snowflake epoch), InteractiveApproval cross-session leak
+
+- Context: round 17 of the research-pass invitation (rounds 1-16:
+  Scheduler/Persona; API server/MessageBus/Screencast; Memory-
+  compaction/GraphMemoryStore/Vault; Config/Vision/CandidateGenerator;
+  MCP-approval-gate+lifecycle/SubAgent/Learnings/Playbook/Attention;
+  Discord-rest+access-control/operator-controls/AuditLogger/behavior;
+  ContextManager/Synthesizer/Watchdog/InteractiveApproval-gateway-
+  wiring; Webhook/ConfigWatcher/ContainerSandbox/MCP-client/Wizard;
+  ToolRegistry/FailureTracker/CircuitBreaker/Checkpoint-full-lifecycle/
+  Discord-REST; VoiceRegistry/VoiceServer/AgentIdentity/TrustScorer;
+  providers/SecurityScanner/LandlockPolicy/SkillDiscovery; vision-
+  capture/CostTracker/CodeEvolutionManager; StructuredOutput/
+  ProactiveManager/SleeptimeWorker/Summarizer; MessageBus-internals/
+  HatchingManager/PersonaManager-backups/BehaviorLayer-tone; api-auth/
+  otel/vector_store/scheduler-parser; graph_store-CRUD/checkpoint-WAL/
+  Discord-access-control/McpManager-lifecycle). This round targeted
+  `missy/agent/interactive_approval.py`'s TUI internals,
+  `missy/security/secrets.py`'s pattern coverage, and
+  `missy/security/drift.py`'s hash mechanics as primary audit subjects
+  from fresh angles. `rate_limiter.py` was re-examined and confirmed
+  clean.
+- **InteractiveApproval cross-session leak**: "allow always" was keyed
+  only on action+detail with no session component, so one Discord
+  user's approval silently applied to every other user sharing the
+  same AgentRuntime. Fixed by threading a session_id parameter through
+  check_remembered()/prompt_user()/_make_key().
+- Command: `pytest tests/agent/test_interactive_approval.py -k leak_across_sessions -v`
+- Result: `1 passed`. Confirmed to genuinely fail against the pre-fix
+  code via `git stash`. 6 pre-existing tests across 4 files needed
+  incidental signature/hash-literal fixes.
+- **GitHub fine-grained PAT gap**: only classic ghp_/ghs_ tokens were
+  detected; the github_pat_ format (standard since 2022) was
+  completely undetected. Fixed with a new pattern.
+- Command: `pytest tests/security/test_secrets_detection_patterns.py -k fine_grained_pat -v`
+- Result: `1 passed`. Confirmed to genuinely fail against the pre-fix
+  code via `git stash`. 3 pre-existing canary tests hardcoding the
+  pattern count (53→54) needed updating.
+- **Discord token snowflake epoch drift**: the pattern only matched
+  tokens starting with M or N; as snowflake IDs grow over time this
+  drifted past real, current tokens (commonly starting with O now).
+  Fixed by dropping the leading-character restriction.
+- Command: `pytest tests/security/test_secrets_detection_patterns.py -k advanced_snowflake -v`
+- Result: `1 passed`. Confirmed to genuinely fail against the pre-fix
+  code via `git stash`.
+- **Deliberately left as documented residuals**: InteractiveApproval's
+  console.input() has no timeout (executor-thread-exhaustion risk
+  under many concurrent unanswered prompts); PromptDriftDetector's real
+  wiring registers and verifies the identical string in the same call,
+  so security.prompt_drift can provably never fire in production. Both
+  require genuine design decisions, not mechanical fixes.
+- Command: `pytest tests/ -q -o faulthandler_timeout=120` (full suite,
+  background run) — first pass caught 2 additional pre-existing tests
+  (a third pattern-count canary, a hardcoded key-format hash literal)
+  missed by the narrower sweeps; fixed and rerun.
+- Result: `21357 passed, 13 skipped in 523.25s (0:08:43)`. 0 failed, up
+  from 21354. Thirty-fifth consecutive fully green full-suite run.
+
 ## Run: 2026-07-13 11:30 UTC — round 16 research pass: MCP auto-restart wiring, Discord thread/allowlist gap, checkpoint abandon_old aging bug, resume_checkpoint TOCTOU race
 
 - Context: round 16 of the research-pass invitation (rounds 1-15:

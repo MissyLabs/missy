@@ -36,6 +36,13 @@ class SecretsDetector:
         "private_key": r"-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----",
         "github_token": r"gh[ps]_[A-Za-z0-9]{36}",
         "github_oauth": r"gho_[A-Za-z0-9]{36}",
+        # GitHub's fine-grained personal access tokens (in wide use since
+        # 2022, format github_pat_<22-char id>_<59-char secret>) matched
+        # neither this pattern nor any other -- only the older classic
+        # gh[ps]_ prefix above was covered, so a bare fine-grained PAT
+        # (e.g. pasted into a log line with no adjacent word like
+        # "token=") was completely undetected/unredacted.
+        "github_fine_grained_pat": r"github_pat_[A-Za-z0-9_]{20,}",
         "password": r'(?i)(password|passwd|pwd)["\s:=]+\S{8,}',
         "token": r'(?i)(token|secret)["\s:=]+[A-Za-z0-9_\-]{20,}',
         "stripe_key": r"[sr]k_(live|test)_[A-Za-z0-9]{24,}",
@@ -44,7 +51,16 @@ class SecretsDetector:
         "anthropic_key": r"sk-ant-[A-Za-z0-9_\-]{20,}",
         "openai_key": r"sk-(?:proj-)?[A-Za-z0-9_\-]{20,}",
         "gcp_key": r"AIza[A-Za-z0-9_\-]{35}",
-        "discord_token": r"[MN][A-Za-z0-9]{23,}\.[A-Za-z0-9_\-]{6}\.[A-Za-z0-9_\-]{27,}",
+        # The leading character of a Discord token's first segment is just
+        # the base64 encoding of a snowflake ID's leading digit(s) -- as
+        # snowflake IDs grow over time, this has already drifted past the
+        # historical "M or N" range (bots created in recent years commonly
+        # start with "O"), so restricting to [MN] silently stopped
+        # detecting real, current tokens. Length/structure (three
+        # dot-separated base64-ish segments of the expected sizes) already
+        # provides the real specificity here; the leading character isn't
+        # a meaningful discriminator and will keep drifting further.
+        "discord_token": r"[A-Za-z0-9_\-]{24,}\.[A-Za-z0-9_\-]{6}\.[A-Za-z0-9_\-]{27,}",
         "gitlab_token": r"glpat-[A-Za-z0-9_\-]{20,}",
         "npm_token": r"npm_[A-Za-z0-9]{36}",
         "pypi_token": r"pypi-[A-Za-z0-9_\-]{50,}",

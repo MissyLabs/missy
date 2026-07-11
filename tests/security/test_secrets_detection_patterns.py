@@ -40,6 +40,38 @@ class TestSecretsDetectionAPIKeys:
         findings = d.scan("gho_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij")
         assert any(f["type"] == "github_oauth" for f in findings)
 
+    def test_detects_github_fine_grained_pat(self) -> None:
+        """Regression: GitHub's fine-grained PAT format
+        (github_pat_<22-char id>_<59-char secret>, in wide use since 2022)
+        matched neither the classic gh[ps]_ pattern nor any other -- a
+        bare fine-grained PAT was completely undetected/unredacted.
+        """
+        from missy.security.secrets import SecretsDetector
+
+        d = SecretsDetector()
+        token = (
+            "github_pat_11ABCDEFG0abcdefghijklmnopqrstuvwxyz0123456789"
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
+        )
+        findings = d.scan(token)
+        assert any(f["type"] == "github_fine_grained_pat" for f in findings)
+
+    def test_detects_discord_token_with_advanced_snowflake_epoch(self) -> None:
+        """Regression: the leading character of a Discord token's first
+        segment is the base64 encoding of a snowflake ID's leading
+        digit(s) -- as snowflake IDs grow over time this drifted past the
+        historical "M or N" range the old pattern restricted to (bots
+        created in recent years commonly start with "O"), so a real,
+        current token starting with a different leading character was
+        silently undetected.
+        """
+        from missy.security.secrets import SecretsDetector
+
+        d = SecretsDetector()
+        token = "OTk1NjcyMzQ1Njc4OTAxMjM0.Gh7abc.abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQR"
+        findings = d.scan(token)
+        assert any(f["type"] == "discord_token" for f in findings)
+
     def test_detects_anthropic_key(self) -> None:
         from missy.security.secrets import SecretsDetector
 

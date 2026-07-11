@@ -1073,7 +1073,7 @@ class TestInteractiveApprovalFlow:
 
         self._use_restrictive()
 
-        def _slow_blocking_prompt(action: str, detail: str) -> bool:
+        def _slow_blocking_prompt(action: str, detail: str, session_id: str = "") -> bool:
             time.sleep(0.4)
             return True
 

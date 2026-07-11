@@ -31,6 +31,32 @@ class TestCheckRemembered:
         result = approval.check_remembered("network_request", "https://example.com")
         assert result is True
 
+    def test_allow_always_does_not_leak_across_sessions(
+        self, approval: InteractiveApproval
+    ) -> None:
+        """Regression: a single InteractiveApproval instance is shared
+        across every Discord user/Web API session an AgentRuntime serves
+        (one AgentRuntime per bot, not per user). Without a session_id
+        component in the remembered-decision key, an operator's one-time
+        "allow always" response to one user's blocked request silently
+        and permanently auto-approved that exact same action/detail for
+        every *other* user of the same process too -- contradicting this
+        class's own "remembered for the duration of the session" contract.
+        """
+        key = approval._make_key("network_request", "https://example.com", "session-A")
+        approval._remembered[key] = True
+
+        # Session A's approval applies to session A.
+        assert approval.check_remembered(
+            "network_request", "https://example.com", "session-A"
+        ) is True
+        # A different session must NOT inherit session A's approval.
+        assert approval.check_remembered(
+            "network_request", "https://example.com", "session-B"
+        ) is None
+        # The default (no session_id passed) is its own distinct scope too.
+        assert approval.check_remembered("network_request", "https://example.com") is None
+
 
 class TestPromptUser:
     """Test the prompt_user method."""

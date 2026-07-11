@@ -254,7 +254,7 @@ class TestOperatorOverridePinning:
             def __init__(self):  # noqa: D107 - test double, no real init needed
                 pass
 
-            def prompt_user(self, action: str, detail: str) -> bool:
+            def prompt_user(self, action: str, detail: str, session_id: str = "") -> bool:
                 return True
 
         set_interactive_approval(_AlwaysApprove())

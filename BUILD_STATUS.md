@@ -5658,6 +5658,123 @@ confirmation:** `python3 -m pytest tests/ -q -o faulthandler_timeout=120`
 → `21354 passed, 13 skipped in 460.33s (0:07:40)` — 0 failed, up from
 21342. Thirty-fourth consecutive fully green full-suite run.
 
+### Post-backlog (seventy-seventh checkpoint): round 17 research pass fixes two SecretsDetector pattern-drift gaps and an InteractiveApproval cross-session "allow always" leak
+
+Round 17 of the research-pass invitation (rounds 1-16: Scheduler/Persona;
+API server/MessageBus/Screencast; Memory-compaction/GraphMemoryStore/
+Vault; Config/Vision/CandidateGenerator; MCP-approval-gate+lifecycle/
+SubAgent/Learnings/Playbook/Attention; Discord-rest+access-control/
+operator-controls/AuditLogger/behavior; ContextManager/Synthesizer/
+Watchdog/InteractiveApproval-gateway-wiring; Webhook/ConfigWatcher/
+ContainerSandbox/MCP-client/Wizard; ToolRegistry/FailureTracker/
+CircuitBreaker/Checkpoint-full-lifecycle/Discord-REST; VoiceRegistry/
+VoiceServer/AgentIdentity/TrustScorer; providers/SecurityScanner/
+LandlockPolicy/SkillDiscovery; vision-capture/CostTracker/
+CodeEvolutionManager; StructuredOutput/ProactiveManager/SleeptimeWorker/
+Summarizer; MessageBus-internals/HatchingManager/PersonaManager-backups/
+BehaviorLayer-tone; api-auth/otel/vector_store/scheduler-parser;
+graph_store-CRUD/checkpoint-WAL/Discord-access-control/McpManager-
+lifecycle), this time into `missy/agent/interactive_approval.py`'s TUI
+internals, `missy/security/secrets.py`'s pattern coverage, and
+`missy/security/drift.py`'s hash mechanics — `rate_limiter.py` was
+re-examined and confirmed clean (already a primary subject in round
+11). Three genuine findings fixed; two more are deliberately left as
+documented residuals rather than force-fixed.
+
+**1. `InteractiveApproval`'s "allow always" ("a") response leaked
+across every Discord user/Web API session sharing one `AgentRuntime`.**
+The class's own docstring promises "session-scoped" decisions
+"remembered for the duration of the session," but `_make_key()` hashed
+only `action + detail` with no session component — and `AgentRuntime`
+(and therefore its single `InteractiveApproval` instance) is explicitly
+shared across every Discord user and Web API session a bot process
+serves (`cli/main.py` constructs exactly one `_discord_agent` for the
+whole bot). An operator's one-time "allow always" response to one
+user's blocked network request silently and permanently auto-approved
+that exact same action/URL for every *other* user of the same process,
+for the life of the runtime — not "for the session" as documented.
+**Live-reproduced**: seeding a remembered decision under one session id
+correctly stayed scoped to that id and did not apply under a different
+session id once the fix's `session_id` component was added; pre-fix,
+`_make_key()` accepted no such parameter at all. Fixed by threading a
+`session_id` parameter through `check_remembered()`/`prompt_user()`/
+`_make_key()` (defaulting to `""` for the single-operator interactive
+CLI case, where there's genuinely only one session), and passing
+`self.session_id` — already available on `PolicyHTTPClient`, the real
+production call site in `gateway/client.py` — through both the sync and
+async approval-prompt paths. 1 new regression test, confirmed via `git
+stash` to genuinely fail pre-fix (`TypeError`: `_make_key()` didn't
+accept a third argument). 6 pre-existing tests across 4 files needed
+incidental fixes unrelated to what they test: 4 test doubles/mocks
+whose `prompt_user()` signature didn't accept the new parameter, and 2
+hardcoded-hash-literal/positional-call assertions that needed updating
+to match the new `"{session_id}:{action}:{detail}"` key format.
+
+**2. `SecretsDetector` never detected GitHub's fine-grained personal
+access tokens (`github_pat_...`), in wide use since 2022.** Only the
+older classic token prefixes (`ghp_`/`ghs_`) were covered by any
+pattern; a bare fine-grained PAT pasted into a log line or tool output
+with no adjacent word like `"token="` was completely undetected and
+therefore never redacted. **Live-reproduced**: `has_secrets()` on a
+realistic `github_pat_<22-char-id>_<59-char-secret>` string returned
+`False`. Fixed by adding a dedicated `github_fine_grained_pat` pattern.
+1 new test, confirmed via `git stash` to genuinely fail pre-fix. 3
+pre-existing tests across 3 files hardcode the exact total pattern
+count as a canary (53 → 54); all three updated.
+
+**3. `SecretsDetector`'s Discord bot-token pattern only matched tokens
+whose first base64 character was `M` or `N`, silently missing tokens
+created in recent years.** The leading character of a Discord token's
+first segment is the base64 encoding of a snowflake ID's leading
+digit(s); as snowflake IDs grow over time this has already drifted past
+the historical M/N range (bots created recently commonly start with
+`O`), so the old `[MN]` restriction silently stopped detecting real,
+current tokens while an otherwise-identical token starting with `M`
+still matched. **Live-reproduced**: an `O`-leading token was
+undetected while an `M`-leading token with the same structure was
+detected. Fixed by dropping the leading-character restriction entirely
+(length/three-dot-separated-segment structure already provides the
+real specificity; the leading character isn't a meaningful
+discriminator and will keep drifting further as snowflake IDs
+continue to grow). 1 new test, confirmed via `git stash` to genuinely
+fail pre-fix.
+
+**Deliberately left as documented residuals, not fixed this
+checkpoint**: (a) `InteractiveApproval.prompt_user()`'s underlying
+`console.input()` call has no timeout — if the operator never responds,
+the executor thread handling it (in the async path, offloaded via
+`run_in_executor`) is held forever; enough concurrent policy-denied
+requests with no operator response could exhaust the default
+`ThreadPoolExecutor`'s bounded worker count. A correct fix requires
+either a `select`-based timeout on stdin or `concurrent.futures.wait(...,
+timeout=N)` machinery that reliably handles a timed-out read without
+losing or corrupting a keystroke the operator types moments later — a
+larger, riskier change than this round's other fixes, and narrower in
+blast radius than the already-fixed event-loop-wide stall from a
+prior checkpoint — matching this session's precedent for
+`LandlockPolicy`/`SleeptimeWorker` concurrency residuals. (b)
+`PromptDriftDetector`'s only real production
+wiring (`AgentRuntime.run()`) calls `register("system_prompt",
+system_prompt)` immediately before `_tool_loop()` verifies that exact
+same, never-reassigned string — so every real `verify()` call compares
+a hash against the identical text it was computed from moments earlier
+in the same call, meaning `security.prompt_drift` can provably never
+fire in production regardless of genuine mid-conversation tampering,
+and any injection that poisons the composed prompt *before*
+registration is silently adopted as the new trusted baseline. A correct
+fix requires identifying a genuinely separate "trusted" registration
+moment (e.g. hashing the underlying persona/config source once, rather
+than the freshly re-composed per-turn prompt) — a real design decision
+about when the "trusted" baseline should be established, not a
+mechanical bug fix, left for a future round.
+
+Verified: `pytest tests/security/ tests/agent/ tests/gateway/ -q`
+(pre-existing, unrelated Hypothesis-deadline flake deselected).
+**Full-suite confirmation:** `python3 -m pytest tests/ -q -o
+faulthandler_timeout=120` → `21357 passed, 13 skipped in 523.25s
+(0:08:43)` — 0 failed, up from 21354. Thirty-fifth consecutive fully
+green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

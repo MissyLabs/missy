@@ -471,7 +471,7 @@ class TestInteractiveApprovalEdgeCases:
         with patch.object(httpx.Client, "get", return_value=mock_resp):
             client.get("https://anything.example.com/path")
         approval.prompt_user.assert_called_once_with(
-            "network_request", "https://anything.example.com/path"
+            "network_request", "https://anything.example.com/path", session_id=""
         )
 
     def test_approval_called_with_full_url(self) -> None:
@@ -484,7 +484,7 @@ class TestInteractiveApprovalEdgeCases:
         mock_resp = _mock_response(200)
         with patch.object(httpx.Client, "get", return_value=mock_resp):
             client.get(url)
-        approval.prompt_user.assert_called_once_with("network_request", url)
+        approval.prompt_user.assert_called_once_with("network_request", url, session_id="")
 
     def test_approval_granted_request_is_executed(self) -> None:
         """After operator approval, the underlying httpx call is made."""

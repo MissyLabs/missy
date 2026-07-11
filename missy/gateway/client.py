@@ -393,7 +393,9 @@ class PolicyHTTPClient:
 
                 if isinstance(
                     _interactive_approval, InteractiveApproval
-                ) and _interactive_approval.prompt_user("network_request", url):
+                ) and _interactive_approval.prompt_user(
+                    "network_request", url, session_id=self.session_id
+                ):
                     logger.info("Operator approved denied network request to %s", host)
                     self._pin_operator_override(host)
                     return  # skip the rest — operator override
@@ -429,7 +431,11 @@ class PolicyHTTPClient:
                 if isinstance(_interactive_approval, InteractiveApproval):
                     loop = asyncio.get_event_loop()
                     approved = await loop.run_in_executor(
-                        None, _interactive_approval.prompt_user, "network_request", url
+                        None,
+                        _interactive_approval.prompt_user,
+                        "network_request",
+                        url,
+                        self.session_id,
                     )
                     if approved:
                         logger.info("Operator approved denied network request to %s", host)

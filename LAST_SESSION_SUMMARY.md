@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (83 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for thirty-four consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (84 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for thirty-five consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -3344,19 +3344,70 @@ checked out clean. Four genuine findings.
 Verified: `pytest tests/agent/ tests/cli/ tests/unit/test_discord_channel.py
 tests/channels/ -q`: `7394 passed, 4 skipped`.
 
+### Post-backlog (seventy-seventh checkpoint): round 17 research pass — SecretsDetector pattern-drift gaps (GitHub fine-grained PAT, Discord token snowflake epoch), InteractiveApproval cross-session leak
+
+Round 17 (rounds 1-16: Scheduler/Persona; API server/MessageBus/
+Screencast; Memory-compaction/GraphMemoryStore/Vault; Config/Vision/
+CandidateGenerator; MCP-approval-gate+lifecycle/SubAgent/Learnings/
+Playbook/Attention; Discord-rest+access-control/operator-controls/
+AuditLogger/behavior; ContextManager/Synthesizer/Watchdog/
+InteractiveApproval-gateway-wiring; Webhook/ConfigWatcher/
+ContainerSandbox/MCP-client/Wizard; ToolRegistry/FailureTracker/
+CircuitBreaker/Checkpoint-full-lifecycle/Discord-REST; VoiceRegistry/
+VoiceServer/AgentIdentity/TrustScorer; providers/SecurityScanner/
+LandlockPolicy/SkillDiscovery; vision-capture/CostTracker/
+CodeEvolutionManager; StructuredOutput/ProactiveManager/SleeptimeWorker/
+Summarizer; MessageBus-internals/HatchingManager/PersonaManager-backups/
+BehaviorLayer-tone; api-auth/otel/vector_store/scheduler-parser;
+graph_store-CRUD/checkpoint-WAL/Discord-access-control/McpManager-
+lifecycle), into `missy/agent/interactive_approval.py`,
+`missy/security/secrets.py`, and `missy/security/drift.py`.
+`rate_limiter.py` re-examined and confirmed clean. Three genuine
+findings fixed; two more deliberately left as documented residuals.
+
+1. **InteractiveApproval cross-session leak**: "allow always" was
+   keyed only on action+detail, so one Discord user's approval
+   silently applied to every other user sharing the same
+   AgentRuntime. Fixed by threading a session_id parameter through
+   the whole approval flow. 1 new test, confirmed to fail pre-fix; 6
+   pre-existing tests needed incidental signature/hash-literal fixes.
+2. **GitHub fine-grained PAT gap**: the github_pat_ format (standard
+   since 2022) was completely undetected. Fixed with a new pattern. 1
+   new test, confirmed to fail pre-fix; 3 pre-existing canary tests
+   hardcoding the pattern count needed updating.
+3. **Discord token snowflake epoch drift**: the pattern only matched
+   tokens starting with M or N, silently missing real, current tokens
+   as snowflake IDs advance past that range. Fixed by dropping the
+   leading-character restriction. 1 new test, confirmed to fail
+   pre-fix.
+
+Deliberately left as documented residuals: InteractiveApproval's
+console.input() has no timeout (executor-thread-exhaustion risk);
+PromptDriftDetector's real wiring registers and verifies the identical
+string in the same call, so security.prompt_drift can provably never
+fire in production. Both require genuine design decisions.
+
+Verified: `pytest tests/security/ tests/agent/ tests/gateway/ -q`
+(pre-existing Hypothesis-deadline flake deselected).
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-21354 passed, 13 skipped in 460.33s (0:07:40)
+21357 passed, 13 skipped in 523.25s (0:08:43)
 ```
 
-**Zero failures**, the thirty-fourth consecutive fully green
-full-suite run. Passed count is up from 21342 to 21354 (the round 16
-checkpoint's 12 new tests: 2 MCP health-check tests, 4 Discord thread-
-allowlist tests, 1 abandon_old aging test, 4 CheckpointManager.claim()
-unit tests, and 1 concurrent-resume end-to-end test — all of the
-sixty-first through seventy-fifth checkpoints' fixes are confirmed
+**Zero failures**, the thirty-fifth consecutive fully green
+full-suite run. Passed count is up from 21354 to 21357 (the round 17
+checkpoint's 3 new tests: 1 InteractiveApproval session-isolation
+test, 1 GitHub fine-grained PAT test, and 1 Discord token snowflake-
+epoch test — all of the sixty-first through seventy-sixth checkpoints'
+fixes are confirmed still holding). Passed count is up from 21342 to
+21354 (the round 16 checkpoint's 12 new tests: 2 MCP health-check
+tests, 4 Discord thread-allowlist tests, 1 abandon_old aging test, 4
+CheckpointManager.claim() unit tests, and 1 concurrent-resume
+end-to-end test — all of the sixty-first through seventy-fifth
+checkpoints' fixes are confirmed
 still holding). Passed count is up from 21326 to 21342 (the round 15
 checkpoint's 16 new tests: 1 background-run redaction test, 1
 vision-memory dict-shape test, 11 crontab-dow-conversion unit tests,

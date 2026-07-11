@@ -100,11 +100,13 @@ class TestNewSecretPatterns:
         assert "ssh_key_content" in types
 
     def test_total_pattern_count(self):
-        """Verify we have 53 secret patterns after SR-1.10 additions
-        (bearer_token, basic_auth_header, aws_presigned_signature)."""
+        """Verify we have 54 secret patterns after SR-1.10 additions
+        (bearer_token, basic_auth_header, aws_presigned_signature) plus
+        github_fine_grained_pat (round-17 checkpoint: GitHub's fine-grained
+        PAT format matched no existing pattern)."""
         from missy.security.secrets import SecretsDetector
 
-        assert len(SecretsDetector.SECRET_PATTERNS) == 53
+        assert len(SecretsDetector.SECRET_PATTERNS) == 54
 
 
 # ===================================================================

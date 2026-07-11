@@ -372,6 +372,8 @@ class TestSecretPatternCount:
     """Verify total secret pattern count after additions."""
 
     def test_total_pattern_count(self):
-        """Should have 53 secret patterns after SR-1.10 additions
-        (bearer_token, basic_auth_header, aws_presigned_signature)."""
-        assert len(SecretsDetector.SECRET_PATTERNS) == 53
+        """Should have 54 secret patterns after SR-1.10 additions
+        (bearer_token, basic_auth_header, aws_presigned_signature) plus
+        github_fine_grained_pat (round-17 checkpoint: GitHub's fine-grained
+        PAT format matched no existing pattern)."""
+        assert len(SecretsDetector.SECRET_PATTERNS) == 54
