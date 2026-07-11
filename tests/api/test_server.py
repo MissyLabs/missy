@@ -232,6 +232,12 @@ class TestOperatorConsole:
         assert 'id="scheduler-form"' in html
         assert 'id="memory-query"' in html
         assert 'id="memory-results"' in html
+        assert 'id="approvals"' in html
+        assert 'id="approvals-health"' in html
+        assert 'id="pairing"' in html
+        assert 'id="pairing-health"' in html
+        assert "Approvals" in html
+        assert "Discord Pairing" in html
 
     def test_console_script_keeps_safe_client_side_escaping_and_control_post(self) -> None:
         script = console_script()
@@ -258,6 +264,21 @@ class TestOperatorConsole:
         assert "data.tools_used" in script
         assert "data.cost" in script
         assert "JSON.stringify({target, confirm: confirmation})" in script
+
+    def test_console_script_includes_approvals_and_pairing_wiring(self) -> None:
+        """Web TUI browser page for /api/v1/approvals and
+        /api/v1/discord/pairing -- both REST endpoints were real and
+        authenticated (SR-2.2, SR-1.12) but had no browser UI; the
+        operator could only inspect/resolve pending requests via
+        `missy approvals`/`missy devices pair` or raw curl."""
+        script = console_script()
+
+        assert "api('/approvals')" in script
+        assert "api('/discord/pairing')" in script
+        assert "approval-action" in script
+        assert "pairing-action" in script
+        assert "/approvals/${encodeURIComponent(approvalId)}/${approve ? 'approve' : 'deny'}" in script
+        assert "/discord/pairing/${encodeURIComponent(userId)}/${approve ? 'approve' : 'deny'}" in script
 
     def test_root_redirects_to_login_without_browser_session(self) -> None:
         port = _free_port()

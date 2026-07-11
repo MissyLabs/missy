@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (60 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for thirteen consecutive checkpoints; the 89-case tool-specific validation backlog is now 100% complete)
+## Changed (61 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for fourteen consecutive checkpoints; the 89-case tool-specific validation backlog is now 100% complete)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -2419,19 +2419,44 @@ tests/channels/ tests/unit/test_discord_config.py
 tests/unit/test_discord_channel.py
 tests/unit/test_discord_commands_coverage.py -q`: 2083 passed.
 
+### Post-backlog (fifty-fifth checkpoint): Web TUI browser pages for approvals and Discord pairing
+
+Next concretely-scoped item from "Remaining Work": both
+`/api/v1/approvals` (SR-2.2) and `/api/v1/discord/pairing` (SR-1.12)
+are real, authenticated REST endpoints an operator could previously
+only reach via the `missy` CLI or raw `curl` — no browser UI existed.
+
+Added two new panels to the Web TUI operator console: **Approvals**
+and **Discord Pairing**, following the exact same panel/list/action
+pattern already used for scheduled jobs and safe controls. Each
+pending item renders with Approve/Deny buttons calling the real
+`POST .../approve|deny` endpoints (already real and tested end-to-end
+against a genuine `ApprovalGate`/pending-pairs state), confirming with
+the operator first, then reloading the console. No new
+fetch/rendering architecture — reused the existing `Promise.all` batch
+and click-delegation pattern.
+
+Added 2 new tests asserting the new panels render and the JS wiring
+references the correct real endpoints.
+
+Verified: `pytest tests/api/test_server.py -q`: 143 passed. Broader:
+`pytest tests/api/ -q`: 164 passed.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-21212 passed, 13 skipped, 1 warning in 617.02s (0:10:17)
+21213 passed, 13 skipped, 1 warning in 606.98s (0:10:06)
 ```
 
-**Zero failures**, the thirteenth consecutive fully green full-suite
-run. Passed count is up from 21191 to 21212, reflecting the new
-DISC-CMD-008 rate-limiting tests (10 standalone unit tests, 9 real
-dispatch-path integration tests, 3 config-parsing tests). The 1 warning
-is a pre-existing, unrelated Hypothesis deprecation notice in
-`test_property_based_fuzz.py`, not something this checkpoint
+**Zero failures**, the fourteenth consecutive fully green full-suite
+run. Passed count is up from 21191 to 21212 (the DISC-CMD-008
+rate-limiting checkpoint: 10 standalone unit tests, 9 real
+dispatch-path integration tests, 3 config-parsing tests) to 21213 (the
+Web TUI approvals/pairing checkpoint's 2 new tests). The 1 warning
+(this run, from `test_policy_property.py`; a different but equally
+pre-existing Hypothesis deprecation notice appeared in the prior run's
+`test_property_based_fuzz.py`) is not something either checkpoint
 introduced.
 Passed count is up from 21071 (SR-1.9b's run) to 21115
 (availability-hardening checkpoint) to 21118 (the acpx `--deny-all`

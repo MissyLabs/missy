@@ -263,6 +263,8 @@ def render_console(*, csrf_token: str) -> str:
         <div class="row"><div class="row-static"><strong>Headers</strong></div><span class="meta" title="CSP, no-store, frame deny">CSP, no-store, frame deny</span></div>
         <div class="row"><div class="row-static"><strong>Network</strong></div><span class="meta" title="Loopback by default">Loopback by default</span></div>
       </div></article>
+      <article class="panel"><div class="panel-head"><div class="panel-id"><span class="mod-code">APR&middot;10</span><h3>Approvals</h3></div><span id="approvals-health" class="pill">Loading</span></div><div id="approvals" class="list list-scroll"></div></article>
+      <article class="panel"><div class="panel-head"><div class="panel-id"><span class="mod-code">PAIR&middot;11</span><h3>Discord Pairing</h3></div><span id="pairing-health" class="pill">Loading</span></div><div id="pairing" class="list list-scroll"></div></article>
     </section>
   </main>
   <div id="inspector-backdrop" class="inspector-backdrop"></div>
@@ -373,8 +375,8 @@ function renderAuditDetail(event) {
 }
 async function loadConsole() {
   try {
-    const [status, providers, tools, sessions, diagnostics, controls, audit, jobs] = await Promise.all([
-      api('/status'), api('/providers'), api('/tools'), api('/sessions?limit=8'), api('/diagnostics'), api('/controls'), api(auditPath()), api('/scheduler/jobs')
+    const [status, providers, tools, sessions, diagnostics, controls, audit, jobs, approvals, pairing] = await Promise.all([
+      api('/status'), api('/providers'), api('/tools'), api('/sessions?limit=8'), api('/diagnostics'), api('/controls'), api(auditPath()), api('/scheduler/jobs'), api('/approvals'), api('/discord/pairing')
     ]);
     const s = status.data;
     setText('runtime-status', 'Runtime online');
@@ -426,6 +428,14 @@ async function loadConsole() {
     });
     renderRows('scheduler-jobs', jobRows, 'No scheduled jobs yet.');
     setText('scheduler-health', jobRows.length ? `${jobRows.length} jobs` : 'Empty');
+
+    const approvalRows = approvals.data.approvals.map(a => `<div class="row row-stack"><div class="row-title"><span class="led warn pulse" aria-hidden="true"></span><strong>${esc(a.action)}</strong></div><span class="meta-line" title="${esc(a.reason || 'No reason given')}">${esc(a.reason || 'No reason given')} &middot; id ${esc(a.id)}</span><div class="row-actions"><button class="secondary approval-action" type="button" data-approval-id="${esc(a.id)}" data-approve="true">Approve</button><button class="secondary danger approval-action" type="button" data-approval-id="${esc(a.id)}" data-approve="false">Deny</button></div></div>`);
+    renderRows('approvals', approvalRows, 'No pending approvals.');
+    setText('approvals-health', approvalRows.length ? `${approvalRows.length} pending` : 'Empty');
+
+    const pairingRows = pairing.data.pending.map(p => `<div class="row"><div class="row-static"><strong>${esc(p.user_id)}</strong></div><div class="row-actions"><span class="meta">${esc(p.account || 'default account')}</span><button class="secondary pairing-action" type="button" data-user-id="${esc(p.user_id)}" data-approve="true">Approve</button><button class="secondary danger pairing-action" type="button" data-user-id="${esc(p.user_id)}" data-approve="false">Deny</button></div></div>`);
+    renderRows('pairing', pairingRows, 'No pending Discord pairing requests.');
+    setText('pairing-health', pairingRows.length ? `${pairingRows.length} pending` : 'Empty');
 
     latestAuditEvents = audit.data.events;
     const auditRows = latestAuditEvents.map(e => {
@@ -561,6 +571,42 @@ document.getElementById('scheduler-jobs').addEventListener('click', async event 
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({confirm: 'remove-job:' + jobId})
   });
+  await loadConsole();
+});
+document.getElementById('approvals').addEventListener('click', async event => {
+  const button = event.target.closest('.approval-action');
+  if (!button || button.disabled) return;
+  const approvalId = button.dataset.approvalId;
+  const approve = button.dataset.approve === 'true';
+  if (!window.confirm(`${approve ? 'Approve' : 'Deny'} pending action ${approvalId}?`)) return;
+  button.disabled = true;
+  try {
+    await api(`/approvals/${encodeURIComponent(approvalId)}/${approve ? 'approve' : 'deny'}`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({})
+    });
+  } catch (error) {
+    window.alert('Could not resolve approval: ' + error.message);
+  }
+  await loadConsole();
+});
+document.getElementById('pairing').addEventListener('click', async event => {
+  const button = event.target.closest('.pairing-action');
+  if (!button || button.disabled) return;
+  const userId = button.dataset.userId;
+  const approve = button.dataset.approve === 'true';
+  if (!window.confirm(`${approve ? 'Approve' : 'Deny'} Discord pairing for user ${userId}?`)) return;
+  button.disabled = true;
+  try {
+    await api(`/discord/pairing/${encodeURIComponent(userId)}/${approve ? 'approve' : 'deny'}`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({})
+    });
+  } catch (error) {
+    window.alert('Could not resolve pairing request: ' + error.message);
+  }
   await loadConsole();
 });
 function memoryRow(turn, index) {

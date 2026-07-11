@@ -1,5 +1,31 @@
 # TEST_RESULTS
 
+## Run: 2026-07-12 02:35 UTC — post-backlog, Web TUI browser pages for approvals and Discord pairing
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Context: next concretely-scoped item from "Remaining Work" —
+  `/api/v1/approvals` and `/api/v1/discord/pairing` are real,
+  authenticated REST endpoints (SR-2.2, SR-1.12) with no browser UI.
+- Added two new panels to `missy/api/web_console.py`'s
+  `render_console()`: Approvals (`APR·10`) and Discord Pairing
+  (`PAIR·11`), following the existing panel/list/action-button
+  pattern. Approve/Deny buttons call the real
+  `POST /api/v1/approvals/{id}/approve|deny` and
+  `POST /api/v1/discord/pairing/{user_id}/approve|deny` endpoints,
+  confirm with the operator first, then reload the console.
+- Added 2 new tests to `TestOperatorConsole` in
+  `tests/api/test_server.py` asserting the new panel IDs/labels render
+  and the new JS wiring references the correct real endpoints.
+- Command: `pytest tests/api/test_server.py -q`
+- Result: `143 passed`.
+- Command: `pytest tests/api/ -q`
+- Result: `164 passed`.
+- Command: `pytest tests/ -q -o faulthandler_timeout=120`
+- Result: `21213 passed, 13 skipped, 1 warning in 606.98s (0:10:06)` —
+  zero failures, fourteenth consecutive fully green full-suite run, up
+  from 21212. The 1 warning is a pre-existing, unrelated Hypothesis
+  deprecation notice, not introduced by this checkpoint.
+
 ## Run: 2026-07-12 02:05 UTC — post-backlog, DISC-CMD-008 fixed — real per-user Discord command rate limiting
 
 - Branch: `overhaul/missy-validation-20260710-031406`

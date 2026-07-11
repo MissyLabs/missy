@@ -3511,6 +3511,38 @@ failed, up from 21191. Thirteenth consecutive fully green full-suite
 run. The 1 warning is a pre-existing, unrelated Hypothesis deprecation
 notice, not introduced by this checkpoint.
 
+### Post-backlog (fifty-fifth checkpoint): Web TUI browser pages for approvals and Discord pairing
+
+Next concretely-scoped item from "Remaining Work": both
+`/api/v1/approvals` (SR-2.2) and `/api/v1/discord/pairing` (SR-1.12)
+are real, authenticated REST endpoints an operator could previously
+only reach via the `missy` CLI or raw `curl` — there was no browser UI
+in the Web TUI operator console to see or resolve pending requests.
+
+Added two new panels to `missy/api/web_console.py`'s `render_console()`:
+**Approvals** (`APR·10`) and **Discord Pairing** (`PAIR·11`), following
+the exact same panel/list/action-button pattern already used for
+scheduled jobs and safe controls. Each pending item renders with
+Approve/Deny buttons; clicking either calls the real
+`POST /api/v1/approvals/{id}/approve|deny` or
+`POST /api/v1/discord/pairing/{user_id}/approve|deny` endpoint (both
+already real and tested — `TestApprovalsEndpoints`/pairing-equivalent
+tests exercise a genuine `ApprovalGate`/pending-pairs state end-to-end),
+confirms with the operator first (`window.confirm`, matching the
+existing job-removal/control-execution UX), then reloads the console.
+Wired into `loadConsole()`'s existing `Promise.all` fetch batch and the
+scheduler-jobs-style click-delegation pattern — no new fetch/rendering
+architecture introduced, reusing what's already there.
+
+Added 2 new tests to `tests/api/test_server.py`'s `TestOperatorConsole`
+asserting the new panel IDs/labels render and the new JS wiring
+references the correct real endpoints and parameter interpolation.
+
+Verified: `pytest tests/api/test_server.py -q`: 143 passed. Broader:
+`pytest tests/api/ -q`: 164 passed. Full suite:
+`21213 passed, 13 skipped, 1 warning in 606.98s (0:10:06)` — 0 failed,
+up from 21212. Fourteenth consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security
@@ -3595,16 +3627,16 @@ path). Current remaining priority order:
    delegate's cooperation, and it found real bugs that live-only
    testing would likely have missed, reserving live delegate spend for
    the genuinely judgment-requiring cases where it mattered most.
-2. Smaller tracked follow-ups: a Web TUI browser page for
-   approvals and Discord pairing (both REST layers are real and
-   authenticated but have no browser UI yet); per-provider tunable
+2. Smaller tracked follow-ups: per-provider tunable
    CircuitBreaker cooldown config (SR-4.8 residual); audit-log hash
    chain for deletion/reordering detection and key-rotation lifecycle
    (SR-1.1 residual, explicitly out of scope per the review's own text
    since no hash-chain claim exists in the product); a `missy doctor`
    check surfacing audit signing status (SR-1.1/SR-4.6 residual); the
    `shell.unrestricted` dead-config-key hygiene gap (no config section
-   warns on unrecognized YAML keys). **DISC-CMD-008's per-user Discord
+   warns on unrecognized YAML keys). **The Web TUI browser page for
+   approvals and Discord pairing is now fixed** — see the
+   fifty-fifth checkpoint above. **DISC-CMD-008's per-user Discord
    rate-limiting gap is now fixed** — see the fifty-fourth checkpoint
    above.
 3. Broader untouched "Product Goal" surface from prompt.md (providers,
