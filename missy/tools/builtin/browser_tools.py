@@ -64,7 +64,7 @@ _SAFE_BROWSER_ENV_VARS = frozenset(
 
 _SESSIONS_DIR = Path("~/.missy/browser_sessions").expanduser()
 _FIREFOX_PREFS = {
-    "browser.sessionstore.resume_from_crash": 0,
+    "browser.sessionstore.resume_from_crash": False,
     "browser.sessionstore.enabled": False,
     "browser.startup.page": 0,
     "browser.tabs.warnOnClose": False,

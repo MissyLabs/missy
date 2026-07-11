@@ -32,12 +32,44 @@ from missy.tools.builtin.browser_tools import (
     BrowserSession,
     _classify_browser_error,
     _err,
+    _FIREFOX_PREFS,
     _page,
     _registry,
     _route_through_network_policy,
     _SessionRegistry,
 )
 from missy.tools.registry import ToolRegistry
+
+# Single persistent worker thread for every live-Playwright call in this
+# file, including the availability probe just below -- see
+# _run_in_thread's docstring for why a fresh/different thread per call
+# doesn't work with Playwright's sync API.
+import concurrent.futures as _concurrent_futures  # noqa: E402
+
+_BROWSER_TEST_THREAD_POOL = _concurrent_futures.ThreadPoolExecutor(max_workers=1)
+
+
+def _probe_playwright_firefox_available() -> bool:
+    """Check availability without ever starting a throwaway sync_playwright()
+    session -- Playwright's sync API can't survive a second, independent
+    session in the same process after an earlier one has fully stopped
+    (a known upstream limitation: the greenlet dispatcher doesn't reset
+    cleanly), so a real probe session here would poison the actual test's
+    later session with "Cannot switch to a different thread"."""
+    try:
+        import playwright  # noqa: F401
+    except ImportError:
+        return False
+    cache_dir = Path("~/.cache/ms-playwright").expanduser()
+    return any(cache_dir.glob("firefox-*/firefox/firefox"))
+
+
+_PLAYWRIGHT_FIREFOX_AVAILABLE = _probe_playwright_firefox_available()
+
+_requires_playwright_firefox = pytest.mark.skipif(
+    not _PLAYWRIGHT_FIREFOX_AVAILABLE,
+    reason="playwright/firefox not installed in this environment",
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -570,20 +602,32 @@ class TestSR16RegistryGatesBrowserNavigate:
         assert result.success is False
 
     def test_navigate_passes_policy_when_domain_allowlisted(self):
+        """Deliberately mocks _page rather than launching a real browser:
+        this test's job is only to prove the registry's policy check runs
+        first and doesn't itself deny -- not to prove a browser can
+        launch (that's covered separately by TestFirefoxPrefsLiveLaunch).
+        A real session here would also leave a live Playwright process
+        dangling in the module-level _registry singleton across tests,
+        which corrupts Playwright's sync API for any real-browser test
+        that runs later in the same process."""
         _init_policy(allowed_domains=["example.com"])
         registry = ToolRegistry()
         registry.register(BrowserNavigateTool())
-        result = registry.execute(
-            "browser_navigate",
-            url="https://example.com/",
-            session_id="s",
-            task_id="t",
-        )
-        # Policy passes; the tool then fails for an unrelated reason (no
-        # playwright/browser available in the test environment) -- proof
-        # policy is what's evaluated first, and it doesn't itself deny.
+        mock_page = MagicMock()
+        mock_page.url = "https://example.com/"
+        mock_page.title.return_value = "Example"
+        with patch(
+            "missy.tools.builtin.browser_tools._page", return_value=mock_page
+        ):
+            result = registry.execute(
+                "browser_navigate",
+                url="https://example.com/",
+                session_id="s",
+                task_id="t",
+            )
         assert "Network access denied" not in (result.error or "")
         assert "not in the allowed" not in (result.error or "")
+        assert result.success is True
 
 
 class TestRouteThroughNetworkPolicy:
@@ -672,3 +716,144 @@ class TestRouteThroughNetworkPolicy:
         route = self._mock_route("https:///path-with-no-host")
         _route_through_network_policy(route)
         route.abort.assert_called_once_with("blockedbyclient")
+
+
+# ---------------------------------------------------------------------------
+# _FIREFOX_PREFS type correctness -- a wrong-typed value here breaks every
+# browser launch. Discovered live: browser.sessionstore.resume_from_crash
+# was set to the Python int 0 instead of the bool False. Playwright writes
+# whatever type is given verbatim into the profile's user.js, which locks
+# that pref's type in Firefox's preference service. Juggler's own
+# Browser.enable handshake (run on every launch_persistent_context() call)
+# then calls setBoolPref on that same pref name and Firefox raises
+# NS_ERROR_UNEXPECTED because the pref is already registered as an Int --
+# the launch fails immediately with a "Protocol error (Browser.enable)"
+# before any page ever loads. This surfaced as an apparent kernel/sandbox
+# limitation (a benign "unshare(CLONE_NEWPID): EPERM" sandbox warning
+# appears in both successful and failing launches) but was actually this
+# type mismatch in Missy's own hardcoded prefs dict.
+# ---------------------------------------------------------------------------
+
+
+class TestFirefoxPrefsTypes:
+    _KNOWN_BOOL_PREFS = frozenset(
+        {
+            "browser.sessionstore.resume_from_crash",
+            "browser.sessionstore.enabled",
+            "browser.tabs.warnOnClose",
+        }
+    )
+    _KNOWN_INT_PREFS = frozenset(
+        {
+            "browser.startup.page",
+            "toolkit.startup.max_resumed_crashes",
+        }
+    )
+
+    def test_all_prefs_are_accounted_for(self):
+        """Guards against a new pref being added to _FIREFOX_PREFS without
+        also being added to one of the type-expectation sets below."""
+        known = self._KNOWN_BOOL_PREFS | self._KNOWN_INT_PREFS
+        assert set(_FIREFOX_PREFS) == known
+
+    def test_known_bool_prefs_are_real_bools_not_ints(self):
+        """isinstance(0, bool) is False and isinstance(False, int) is True
+        in Python -- bool is a subclass of int, so a naive `isinstance(v,
+        int)` check would NOT catch `0` masquerading as a bool pref. This
+        must check the exact type to catch the regression."""
+        for name in self._KNOWN_BOOL_PREFS:
+            value = _FIREFOX_PREFS[name]
+            assert type(value) is bool, (
+                f"{name} must be a real bool (got {value!r}, type "
+                f"{type(value).__name__}) -- Firefox registers this pref's "
+                "type from whatever Playwright writes into user.js, and "
+                "Juggler's Browser.enable handshake calls setBoolPref on "
+                "it during every launch, which raises NS_ERROR_UNEXPECTED "
+                "if the pref was ever declared as an Int."
+            )
+
+    def test_known_int_prefs_are_real_ints_not_bools(self):
+        for name in self._KNOWN_INT_PREFS:
+            value = _FIREFOX_PREFS[name]
+            assert type(value) is int, (
+                f"{name} must be a real int (got {value!r}, type "
+                f"{type(value).__name__})"
+            )
+
+
+def _run_in_thread(fn):
+    """Run fn() in a plain thread with no asyncio event loop of its own.
+
+    The project runs its whole test suite under pytest-asyncio's
+    ``asyncio_mode = "auto"``, which gives every test function a running
+    event loop in the main thread -- and Playwright's *sync* API refuses
+    to start if a loop is already running in the calling thread. Missy's
+    real production dispatch path (BrowserSession._start(), called from
+    ToolRegistry.execute()) has no such loop and works fine; a bare
+    thread reproduces that same no-loop condition for the test.
+
+    Reuses one persistent worker thread (module-level pool, never shut
+    down mid-suite) rather than spinning up a fresh thread per call --
+    Playwright's sync API pins its internal greenlet dispatcher to
+    whichever thread first used it, so handing work to a *second* thread
+    later in the same process raises "Cannot switch to a different
+    thread", even for an entirely separate sync_playwright() session.
+    """
+    return _BROWSER_TEST_THREAD_POOL.submit(fn).result()
+
+
+@_requires_playwright_firefox
+class TestFirefoxPrefsLiveLaunch:
+    """Live, unmocked reproduction through the real production code path
+    (BrowserSession._start(), with the actual _FIREFOX_PREFS dict applied)
+    -- the test that would have caught the resume_from_crash type-mismatch
+    bug. Mocked tests can't: the failure only happens inside Firefox's
+    real preference service during a genuine Juggler handshake.
+
+    Deliberately a single test, not two: Playwright's sync API pins its
+    greenlet-based dispatcher for the life of the process once a
+    sync_playwright() session has fully started and stopped once already,
+    and a second independent session (even in the same worker thread)
+    then fails with "Cannot switch to a different thread". One full,
+    real, end-to-end run through the actual tool dispatch path is a
+    stronger test than a redundant bare-Playwright smoke test anyway.
+    """
+
+    def test_navigate_tool_end_to_end_through_real_registry(self, tmp_path, monkeypatch):
+        """Full WB-002-style reproduction through the real production
+        ToolRegistry dispatch path -- not a mock of BrowserSession."""
+        import missy.tools.builtin.browser_tools as browser_tools_mod
+        from missy.tools.builtin.browser_tools import BrowserCloseTool, BrowserGetUrlTool
+
+        monkeypatch.setattr(browser_tools_mod, "_SESSIONS_DIR", tmp_path)
+        _init_policy()
+
+        registry = ToolRegistry()
+        registry.register(BrowserNavigateTool())
+        registry.register(BrowserGetUrlTool())
+        registry.register(BrowserCloseTool())
+
+        fixture = tmp_path / "page.html"
+        fixture.write_text("<html><head><title>Fixture</title></head><body>hi</body></html>")
+
+        session_id = "live-e2e"
+
+        def _do():
+            try:
+                nav = registry.execute(
+                    "browser_navigate",
+                    url=fixture.as_uri(),
+                    session_id=session_id,
+                    task_id="t",
+                    headless=True,
+                )
+                assert nav.success is True, nav.error
+                geturl = registry.execute(
+                    "browser_get_url", session_id=session_id, task_id="t"
+                )
+                assert geturl.success is True, geturl.error
+                assert "Fixture" in geturl.output
+            finally:
+                registry.execute("browser_close", session_id=session_id, task_id="t")
+
+        _run_in_thread(_do)

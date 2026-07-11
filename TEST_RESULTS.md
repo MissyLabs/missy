@@ -1,5 +1,108 @@
 # TEST_RESULTS
 
+## Run: 2026-07-11 15:10 UTC — validation-harness overhaul, task #16 (Firefox pref type-mismatch broke every browser launch)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Context: resumed task #16 (FX-F bullet 2/4: disposable browser-test
+  environment + rerun WB-002 through WB-007, XT-001). Prior session
+  segments had documented this environment as categorically unable to
+  launch a browser at all (`unshare(CLONE_NEWPID): EPERM`) — that
+  conclusion turned out to be wrong once `playwright`/firefox were
+  actually installed and a live reproduction was attempted.
+- Setup: `pip install -e ".[desktop]" --break-system-packages` +
+  `playwright install firefox` (Firefox 151.0). Started a background
+  `Xvfb :99 -screen 0 1920x1080x24` for headed-mode testing (this
+  sandbox's default `BrowserNavigateTool` headless setting is `False`).
+- Finding 1 (contradicts prior session's conclusion): raw
+  `sync_playwright().firefox.launch(headless=True)` and
+  `launch(headless=False)` (via the new Xvfb display) both succeeded
+  immediately — this sandbox genuinely can launch Firefox.
+- Finding 2: running the exact WB-002 case through Missy's real
+  production path (`ToolRegistry` + `BrowserNavigateTool`/
+  `BrowserGetUrlTool`/`BrowserCloseTool`) still failed, but with a
+  *different* underlying error than a sandbox refusal: `Protocol error
+  (Browser.enable): ... NS_ERROR_UNEXPECTED [nsIPrefBranch.setIntPref]`.
+  The `unshare(CLONE_NEWPID): EPERM` line in the process log — previously
+  assumed to be the fatal cause — is present identically in both
+  successful and failing launches; it's Firefox's content-process
+  sandbox degrading gracefully, not fatal.
+- Live bisection against the real production profile directory
+  (`~/.missy/browser_sessions/default`): raw `launch_persistent_context()`
+  against that exact profile succeeded; adding back Missy's restricted
+  subprocess `env=` allowlist still succeeded; adding back Missy's
+  `firefox_user_prefs=_FIREFOX_PREFS` dict reproduced the exact
+  failure. Removing each of the 5 `_FIREFOX_PREFS` entries one at a
+  time isolated the single culprit: `browser.sessionstore.resume_from_crash`.
+- Root cause: `missy/tools/builtin/browser_tools.py`'s `_FIREFOX_PREFS`
+  declared `"browser.sessionstore.resume_from_crash": 0` — a Python
+  `int`, but this Firefox pref is actually a `bool`. Playwright writes
+  the value verbatim into the profile's `user.js`, locking that pref's
+  type in Firefox's preference service. Juggler's own `Browser.enable`
+  handshake (run on every `launch_persistent_context()` call) then
+  calls `setBoolPref` on that same pref name, which Firefox refuses
+  with `NS_ERROR_UNEXPECTED` once the pref is registered as an Int —
+  failing the launch before any page loads.
+- Fix: `missy/tools/builtin/browser_tools.py` — `"browser.sessionstore
+  .resume_from_crash": 0` → `False`. One line.
+- Live re-verification (3 consecutive runs through the real
+  `ToolRegistry` dispatch path, not a raw script): `browser_navigate` /
+  `browser_get_url` / `browser_close` all succeeded every time,
+  including the exact WB-002 wording end-to-end. The previously
+  separately-flagged-as-unresolved `browser_get_url` "Playwright Sync
+  API inside the asyncio loop" error turned out to be a downstream
+  symptom of the same bug (a half-initialized `sync_playwright()`
+  instance left dangling by the failed `_start()` call) — it did not
+  recur once the underlying launch succeeded.
+- New tests, `tests/tools/test_browser_tools_gaps.py`:
+  `TestFirefoxPrefsTypes` (3 tests) — pins every `_FIREFOX_PREFS` entry
+  to its exact expected type via `type(v) is bool`/`is int` rather than
+  `isinstance()`, since `bool` is an `int` subclass and a naive
+  `isinstance` check would not catch `0` masquerading as a bool.
+  `TestFirefoxPrefsLiveLaunch` (1 test, skips cleanly if
+  playwright/firefox genuinely aren't installed) — runs WB-002's exact
+  sequence through the real `ToolRegistry` with a real Firefox; this is
+  the test that would have caught the original bug.
+- Test-hygiene fix found along the way:
+  `TestSR16RegistryGatesBrowserNavigate::test_navigate_passes_policy_when_domain_allowlisted`
+  had gone stale — its comment claimed the tool "fails for an unrelated
+  reason (no playwright/browser available)," true when written, false
+  now. Left as-is, it silently launched a real, never-closed Firefox
+  session against `example.com` on every test run, which corrupts
+  Playwright's process-global greenlet dispatcher for any later test in
+  the same process attempting a real session (confirmed directly:
+  "Cannot switch to a different thread" reproduces even between two
+  fully independent, correctly-closed, sequential `sync_playwright()`
+  sessions in the same process — a known Playwright Python sync-API
+  limitation, not something closing the session avoids). Fixed by
+  mocking `_page` in that test (its stated job is only to prove the
+  policy check doesn't itself deny), restoring hermeticity.
+- Command: `pytest tests/tools/test_browser_tools_gaps.py -q`
+- Result: `52 passed` (up from 48), run 3× consecutively with zero
+  flakiness.
+- Command: `pytest tests/tools/ -q`
+- Result: `1523 passed, 2 skipped` (pre-existing, unrelated)
+- Command: `pytest tests/ -q -o faulthandler_timeout=120`
+- Result: `21174 passed, 13 skipped in 559.17s (0:09:19)` — 0 failed, up
+  from 21170 (previous checkpoint). Fifth consecutive fully green
+  full-suite run. Zero regressions.
+- Live-attempted, honestly not achieved this checkpoint: rerunning
+  WB-002 through WB-007 + XT-001 through the *full* agentic pipeline
+  (`missy ask` → real acpx delegate → Missy's `<tool_call>` protocol),
+  as opposed to direct `ToolRegistry` dispatch. Ran 3 real, paid
+  `missy ask` calls (WB-002 ×2, WB-003 ×1) with the now-working browser
+  environment in place. All 3 failed to reach Missy's tool-call
+  protocol at all — the delegate either attempted (and was correctly
+  denied) a native tool, or described the situation and asked for
+  permission/clarification without attempting anything. This is
+  task #46's already-documented, already-accepted residual recurring
+  (a persisting LLM instruction-following limitation, not a mechanism
+  defect, and not a new regression) — per that checkpoint's own
+  conclusion (diminishing returns given live-call cost), did not keep
+  retrying for a lucky pass. The portion of FX-F gated on a fixable
+  defect (the browser environment) is now genuinely fixed; the portion
+  gated on acpx delegate reliability remains exactly where task #46
+  left it.
+
 ## Run: 2026-07-11 14:00 UTC — validation-harness overhaul, task #17 (acpx subprocess timeout process-group kill)
 
 - Branch: `overhaul/missy-validation-20260710-031406`
