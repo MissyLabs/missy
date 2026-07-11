@@ -269,6 +269,58 @@ class TestGatewayStartWatchdog:
             _os.unlink(cfg_path)
 
 
+class TestGatewayStartAgentRuntimeShutdown:
+    """Regression: AgentRuntime.shutdown() (which stops the SleeptimeWorker
+    background daemon thread cleanly) had zero call sites anywhere in the
+    codebase -- gateway_start() is the one long-running-process case
+    AgentRuntime.shutdown()'s own docstring names by name as needing this,
+    but its shutdown finally: block stopped voice/screencast/api/proactive/
+    watchdog/config_watcher without ever calling _agent.shutdown() or
+    _discord_agent.shutdown(). In the real long-running gateway process,
+    this left the sleeptime thread to be killed outright (possibly
+    mid-LLM-summarization-call, mid summary/learning write) instead of
+    stopped cleanly.
+    """
+
+    def test_agent_runtimes_shutdown_called_on_exit(self, runner: CliRunner):
+        import os
+        import signal
+
+        cfg_path = _cfg_path()
+        try:
+            mock_config = _make_mock_config()
+            mock_config.discord = None
+            mock_config.providers = {}
+
+            call_count = [0]
+
+            def fake_sleep(t):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    os.kill(os.getpid(), signal.SIGTERM)
+                elif call_count[0] > 5:
+                    raise SystemExit(0)
+
+            with (
+                patch("missy.cli.main._load_subsystems", return_value=mock_config),
+                patch("missy.agent.runtime.AgentRuntime") as mock_agent_runtime_cls,
+                patch("missy.agent.runtime.AgentConfig"),
+                patch("time.sleep", side_effect=fake_sleep),
+                patch("yaml.safe_load", return_value={}),
+            ):
+                result = runner.invoke(cli, ["--config", cfg_path, "gateway", "start"])
+
+            assert result.exit_code == 0
+            # _agent and _discord_agent are both constructed from the same
+            # patched AgentRuntime class, so both shutdown() calls land on
+            # the same .return_value -- once per runtime instance.
+            assert mock_agent_runtime_cls.return_value.shutdown.call_count == 2
+        finally:
+            import os as _os
+
+            _os.unlink(cfg_path)
+
+
 # ---------------------------------------------------------------------------
 # gateway_start — proactive manager exception path (lines 1284-1285)
 # ---------------------------------------------------------------------------

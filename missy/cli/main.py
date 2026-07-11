@@ -2665,6 +2665,21 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
             config_watcher.stop()
         except Exception as _cw_stop_exc:
             logger.debug("config watcher: stop error: %s", _cw_stop_exc)
+        # AgentRuntime.shutdown() stops each runtime's SleeptimeWorker
+        # daemon thread cleanly (join with timeout) rather than letting it
+        # be killed mid-cycle (possibly mid-LLM-call, mid summary/learning
+        # write) whenever the process exits -- gateway_start is exactly the
+        # long-running-process case AgentRuntime.shutdown()'s own docstring
+        # names as needing this.
+        try:
+            _agent.shutdown()
+        except Exception as _agent_shutdown_exc:
+            logger.debug("agent: shutdown error: %s", _agent_shutdown_exc)
+        if _discord_agent is not None:
+            try:
+                _discord_agent.shutdown()
+            except Exception as _discord_agent_shutdown_exc:
+                logger.debug("discord agent: shutdown error: %s", _discord_agent_shutdown_exc)
 
     console.print("[dim]Gateway stopped.[/]")
 

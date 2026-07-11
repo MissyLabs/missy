@@ -5157,6 +5157,130 @@ confirmation:** `python3 -m pytest tests/ -q -o faulthandler_timeout=120`
 → `21318 passed, 13 skipped in 480.69s (0:08:00)` — 0 failed, up from
 21316. Thirtieth consecutive fully green full-suite run.
 
+### Post-backlog (seventy-third checkpoint): round 13 research pass finds a Summarizer content-loss bug, a StructuredOutput JSON-parsing bug, and wires AgentRuntime.shutdown() into gateway_start
+
+Round 13 of the research-pass invitation (rounds 1-12: Scheduler/Persona;
+API/MessageBus/Screencast; Memory-compaction/GraphStore/Vault; Config/
+Vision/CandidateGenerator; MCP/SubAgent/Learnings/Playbook/Attention;
+Discord/operator-controls/AuditLogger/behavior; ContextManager/
+Synthesizer/Watchdog/InteractiveApproval; Webhook/ConfigWatcher/
+ContainerSandbox/MCP-client/Wizard; ToolRegistry/FailureTracker/
+CircuitBreaker/Checkpoint/Discord-rest; VoiceRegistry/VoiceServer/
+AgentIdentity/TrustScorer; providers/SecurityScanner/LandlockPolicy/
+SkillDiscovery; vision/CostTracker/CodeEvolutionManager), this time into
+`missy/agent/structured_output.py`, `missy/agent/proactive.py`,
+`missy/agent/sleeptime.py`, and `missy/agent/summarizer.py` —
+previously-unaudited-as-primary-subject subsystems. Three genuine
+findings fixed; `proactive.py` checked out clean (every trigger type
+uniformly gates through the same cooldown → `ApprovalGate.request()` →
+audit → callback path, with real hysteresis and `requires_confirmation`
+defaulting to `True`). A fourth finding (below) is deliberately left as
+a documented residual rather than force-fixed.
+
+**1. `Summarizer`'s Tier-3 deterministic fallback could silently drop
+100% of the new conversation content it exists to preserve, keeping
+only stale boilerplate.** `_escalate()` received only the fully
+assembled `prompt` string (fixed instructional header + a
+`prior_context` continuity block + the actual new transcript/summaries
+being summarized) and truncated it from the front to `target_tokens *
+4` chars on Tier-3 fallback. Since Tier 1's only size check is
+`result_tokens <= input_tokens` (not `<= target_tokens`), a real prior
+summary threaded forward across a chain of compaction passes can
+legitimately be tens of thousands of characters — easily larger than
+the entire truncation budget on its own — so the truncated result could
+end up being 100% header/prior-summary boilerplate with zero characters
+of the new content, while still being tagged `"[TRUNCATED —
+summarization failed]"` as if it were a normal abbreviated summary.
+**Live-reproduced**: with a ~4,900-char prior summary and a provider
+that always raises (both Tier 1 and Tier 2 exceptions, the real trigger
+condition), `summarize_turns()` returned a 4,835-char string containing
+zero characters of a 20,000-char new turn's content. Real production
+path: `compact_session()` (`missy/agent/compaction.py`, called via
+`_maybe_compact` after every tool round) explicitly threads
+`prior_summary` forward across compaction passes with no
+`target_tokens` override, so a provider outage during a long
+conversation would keep persisting summaries that are just repeated
+stale boilerplate, never capturing new content. Fixed by passing the
+new content (`transcript`/`summaries_text`) into `_escalate()`
+separately from the full `prompt`, so Tier 3 truncates *that* instead —
+guaranteeing at least some new content survives regardless of how large
+the prior-context/header portion is. 1 new test, confirmed via `git
+stash` to genuinely fail pre-fix (new content marker absent from the
+fallback result).
+
+**2. `StructuredOutput`'s raw-JSON extraction had no tolerance for
+trailing content, unlike the "embedded in prose" path a few lines
+below it in the same function.** When a response began directly with
+`{`/`[` — the exact format `to_prompt_instruction()` asks the model to
+produce ("Do not include any text before or after the JSON") —
+`_extract_json()` returned the *entire remaining string* verbatim, with
+no attempt to trim a trailing remark. A model that appends even a short
+acknowledgment after otherwise-valid JSON (very plausible for weaker/
+local models despite instructions not to) makes `json.loads()` raise
+`"Extra data"`, burning one of the limited retry attempts on a response
+that was actually valid — while the very next branch in the same
+function (for JSON embedded in the *middle* of prose) already
+implements the exact fix needed (rfind the matching closer).
+**Live-reproduced**: `schema.parse('{"name": "Alice", "value": 1} - let
+me know if you need anything else!')` returned `success=False,
+"Invalid JSON: Extra data..."` pre-fix. Production reachability:
+`StructuredOutputRunner`/`OutputSchema` currently have zero callers
+outside their own module and test file — this is a real, confirmed bug
+in a documented public API, following this session's established
+practice of fixing genuine bugs in already-built-but-unwired features
+rather than only auditing wired code paths. Fixed by applying the same
+rfind-based trim to the raw-JSON branch. 2 new tests, confirmed via
+`git stash` to genuinely fail pre-fix.
+
+**3. `AgentRuntime.shutdown()` (which stops the `SleeptimeWorker`
+background daemon thread cleanly via `stop()`'s join-with-timeout) had
+zero call sites anywhere in the codebase — including `missy gateway
+start`, the one long-running-process case `AgentRuntime.shutdown()`'s
+own docstring names by name as needing this.** `gateway_start`'s
+`finally:` block stopped `voice_channel`/`screencast_channel`/
+`api_server`/`proactive_manager`/`watchdog`/`config_watcher` on exit,
+but never called `_agent.shutdown()` or `_discord_agent.shutdown()` —
+confirmed via `grep -rn "\.shutdown()"` returning zero hits anywhere in
+`missy/`. Consequence: in the real long-running gateway process, the
+sleeptime thread is simply killed as a daemon thread when the
+interpreter exits — possibly mid-LLM-summarization-call, mid
+summary/learning write — rather than given the chance to stop cleanly.
+Fixed by adding `_agent.shutdown()`/`_discord_agent.shutdown()` calls to
+`gateway_start`'s `finally:` block, matching the exact pattern already
+used for the other five subsystems stopped there. 1 new test
+(`test_agent_runtimes_shutdown_called_on_exit`, mirroring the existing
+`ConfigWatcher`/`Watchdog` wiring-regression test pattern), confirmed
+via `git stash` to genuinely fail pre-fix (`0 == 2` — shutdown never
+called).
+
+**Deliberately left as a documented residual, not fixed this
+checkpoint**: `SleeptimeWorker`'s idle-check happens only once, at the
+top of each wake-up cycle *before* `_process_cycle()` starts — once a
+cycle is running, nothing re-checks `record_activity()`/`is_idle()`
+again until it finishes. A foreground `run()` can start on the same
+session a background cycle is already mid-flight on, and since neither
+side takes a lock before computing "which turns are unsummarised" (read
+existing summaries, then persist a new one), a genuine check-then-act
+race can produce two independent, overlapping summaries for the same
+session under specific timing. The actual harm is bounded to
+duplicate/inflated summary content and doubled LLM cost — not
+corruption, data loss, or a crash (SQLite WAL mode plus thread-local
+connections already handle the raw storage concurrency safely) — and a
+correct fix requires introducing new cross-thread coordination (a
+shared per-session lock plumbed through both `SleeptimeWorker` and
+`AgentRuntime`/`compact_session`, two separate classes/modules with no
+existing shared lock today), which is a larger design decision than a
+bounded bug fix, matching this session's established precedent for
+`TrustScorer`'s provider/MCP wiring and `LandlockPolicy`'s bootstrap
+wiring. Flagged here for a future round rather than risked under time
+pressure.
+
+Verified: `pytest tests/agent/ tests/cli/ -q`: `5340 passed, 4
+skipped`. **Full-suite confirmation:** `python3 -m pytest tests/ -q -o
+faulthandler_timeout=120` → `21322 passed, 13 skipped in 475.97s
+(0:07:55)` — 0 failed, up from 21318. Thirty-first consecutive fully
+green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

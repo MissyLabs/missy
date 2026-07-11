@@ -105,6 +105,31 @@ class TestSummarizeTurns:
         assert "[TRUNCATED" in text
         assert s.tier_counts["fallback"] == 1
 
+    def test_escalation_tier3_preserves_new_content_over_large_prior_summary(self):
+        """Regression: Tier 3 used to truncate the *entire assembled prompt*
+        (fixed instructional header + prior_context + transcript) from the
+        front. A real prior summary threaded forward across a chain of
+        compaction passes can legitimately be tens of thousands of
+        characters -- easily larger than the whole target_tokens*4 budget
+        on its own -- so the truncated result could end up being 100%
+        stale header/prior-summary boilerplate with zero characters of the
+        actual new conversation this call exists to summarize, while still
+        being tagged "[TRUNCATED -- summarization failed]" as if it were a
+        normal (if abbreviated) summary. Must preserve at least some of the
+        new content instead.
+        """
+        provider = _mock_provider()
+        provider.complete.side_effect = RuntimeError("LLM down")
+
+        s = Summarizer(provider)
+        turns = [ConversationTurn.new("sess", role="user", content="X" * 20000)]
+        prior_summary = "P" * 4900
+
+        text, tier = s.summarize_turns(turns, prior_summary=prior_summary, target_tokens=1200)
+
+        assert tier == "fallback"
+        assert "X" in text, "fallback dropped 100% of the new conversation content"
+
     def test_format_turns(self):
         turns = self._make_turns(2)
         result = Summarizer._format_turns(turns)

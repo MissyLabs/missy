@@ -1,5 +1,60 @@
 # TEST_RESULTS
 
+## Run: 2026-07-13 10:15 UTC — round 13 research pass: Summarizer content-loss bug, StructuredOutput JSON-parsing bug, AgentRuntime.shutdown() wiring
+
+- Context: round 13 of the research-pass invitation (rounds 1-12:
+  Scheduler/Persona; API/MessageBus/Screencast; Memory-compaction/
+  GraphStore/Vault; Config/Vision/CandidateGenerator; MCP/SubAgent/
+  Learnings/Playbook/Attention; Discord/operator-controls/
+  AuditLogger/behavior; ContextManager/Synthesizer/Watchdog/
+  InteractiveApproval; Webhook/ConfigWatcher/ContainerSandbox/
+  MCP-client/Wizard; ToolRegistry/FailureTracker/CircuitBreaker/
+  Checkpoint/Discord-rest; VoiceRegistry/VoiceServer/AgentIdentity/
+  TrustScorer; providers/SecurityScanner/LandlockPolicy/
+  SkillDiscovery; vision/CostTracker/CodeEvolutionManager). This round
+  targeted `missy/agent/structured_output.py`, `missy/agent/proactive.py`,
+  `missy/agent/sleeptime.py`, and `missy/agent/summarizer.py` as
+  primary audit subjects for the first time.
+- **Summarizer content-loss bug**: Tier-3 fallback truncated the full
+  assembled prompt (header + prior-summary continuity block + new
+  content) from the front, so a large prior summary could crowd out
+  100% of the new content while the result was still tagged as a
+  normal truncated summary. Fixed by truncating the new content
+  (transcript/summaries_text) directly instead of the full prompt.
+- Command: `pytest tests/agent/test_summarizer.py -k preserves_new_content -v`
+- Result: `1 passed`. Confirmed to genuinely fail against the pre-fix
+  code via `git stash` (new content marker absent from fallback result).
+- **StructuredOutput JSON-parsing bug**: raw-JSON extraction (response
+  starting directly with `{`/`[`) returned the entire remaining string
+  verbatim with no trailing-content trim, unlike the "embedded in
+  prose" branch a few lines below which already handles this via
+  rfind. A trailing model remark after valid JSON burned a retry
+  attempt on an actually-valid response. Fixed by applying the same
+  rfind-based trim to the raw-JSON branch.
+- Command: `pytest tests/agent/test_structured_output.py -k trailing_prose -v`
+- Result: `2 passed`. Both confirmed to genuinely fail against the
+  pre-fix code via `git stash`.
+- **AgentRuntime.shutdown() wiring**: had zero call sites anywhere,
+  including `missy gateway start` (the long-running-process case its
+  own docstring names as needing this) — the SleeptimeWorker daemon
+  thread was simply killed on exit rather than stopped cleanly. Fixed
+  by adding `_agent.shutdown()`/`_discord_agent.shutdown()` to
+  `gateway_start`'s finally: block.
+- Command: `pytest tests/cli/test_cli_main_gaps.py -k AgentRuntimeShutdown -v`
+- Result: `1 passed`. Confirmed to genuinely fail against the pre-fix
+  code via `git stash` (`0 == 2` — shutdown never called).
+- **Deliberately left as a documented residual**: a SleeptimeWorker/
+  foreground-compaction race (duplicate summaries under specific
+  timing) requires new cross-thread coordination between two separate
+  classes with no existing shared lock — a larger design decision than
+  a bounded fix, matching the TrustScorer/LandlockPolicy precedent.
+- Command: `pytest tests/agent/ tests/cli/ -q`
+- Result: `5340 passed, 4 skipped`.
+- Command: `python3 -m pytest tests/ -q -o faulthandler_timeout=120`
+  (full suite, background run)
+- Result: `21322 passed, 13 skipped in 475.97s (0:07:55)`. 0 failed, up
+  from 21318. Thirty-first consecutive fully green full-suite run.
+
 ## Run: 2026-07-13 09:50 UTC — round 12 research pass: CodeEvolutionManager untracked-file revert failure and bogus stash-SHA bug
 
 - Context: round 12 of the research-pass invitation (rounds 1-11:

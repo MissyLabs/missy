@@ -183,8 +183,20 @@ class OutputSchema(Generic[T]):
         if not stripped:
             return None
 
-        # Raw JSON — starts directly with { or [
+        # Raw JSON — starts directly with { or [. Trim any trailing content
+        # the same way the "embedded in prose" branch below already does
+        # (rfind the matching closer) rather than returning the rest of the
+        # string verbatim -- a model that appends even a short trailing
+        # remark after otherwise-valid JSON (e.g. "{...} let me know if you
+        # need anything else!") would otherwise make json.loads() raise
+        # "Extra data", burning a retry attempt on a response that was
+        # actually valid.
         if stripped[0] in ("{", "["):
+            opener = stripped[0]
+            closer = "}" if opener == "{" else "]"
+            end = stripped.rfind(closer)
+            if end > 0:
+                return stripped[: end + 1]
             return stripped
 
         # Fenced code block: ```json ... ``` or ``` ... ```

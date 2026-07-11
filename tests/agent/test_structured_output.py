@@ -164,6 +164,25 @@ class TestExtractJson:
         result = self.schema._extract_json("[1, 2, 3]")
         assert result == "[1, 2, 3]"
 
+    def test_raw_json_with_trailing_prose_is_trimmed(self):
+        """Regression: when a response starts directly with { or [, the old
+        code returned the *entire remaining string* verbatim with no
+        trimming -- unlike the "embedded in prose" branch a few lines
+        below, which already handles trailing content via rfind(closer).
+        A model that appends even a short trailing remark after otherwise-
+        valid JSON (very plausible for weaker/local models despite
+        instructions not to) made json.loads() raise "Extra data",
+        wasting a retry attempt on a response that was actually valid.
+        """
+        text = '{"name": "Alice", "value": 1} - let me know if you need anything else!'
+        result = self.schema._extract_json(text)
+        assert result == '{"name": "Alice", "value": 1}'
+
+    def test_raw_json_array_with_trailing_prose_is_trimmed(self):
+        text = "[1, 2, 3] - hope that helps!"
+        result = self.schema._extract_json(text)
+        assert result == "[1, 2, 3]"
+
     def test_json_code_block(self):
         text = '```json\n{"name": "Bob", "value": 2}\n```'
         result = self.schema._extract_json(text)

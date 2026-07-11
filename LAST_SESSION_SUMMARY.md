@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (79 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for thirty consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (80 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for thirty-one consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -3160,18 +3160,66 @@ Verified: `pytest tests/agent/test_code_evolution.py
 tests/agent/test_code_evolution_coverage.py -v`: `53 passed`; `pytest
 tests/agent/ tests/tools/ -q`: `5811 passed, 6 skipped`.
 
+### Post-backlog (seventy-third checkpoint): round 13 research pass — Summarizer content-loss bug, StructuredOutput JSON-parsing bug, AgentRuntime.shutdown() wiring
+
+Round 13 (rounds 1-12: Scheduler/Persona; API/MessageBus/Screencast;
+Memory-compaction/GraphStore/Vault; Config/Vision/CandidateGenerator;
+MCP/SubAgent/Learnings/Playbook/Attention; Discord/operator-controls/
+AuditLogger/behavior; ContextManager/Synthesizer/Watchdog/
+InteractiveApproval; Webhook/ConfigWatcher/ContainerSandbox/
+MCP-client/Wizard; ToolRegistry/FailureTracker/CircuitBreaker/
+Checkpoint/Discord-rest; VoiceRegistry/VoiceServer/AgentIdentity/
+TrustScorer; providers/SecurityScanner/LandlockPolicy/SkillDiscovery;
+vision/CostTracker/CodeEvolutionManager), into
+`missy/agent/structured_output.py`, `missy/agent/proactive.py`,
+`missy/agent/sleeptime.py`, and `missy/agent/summarizer.py`. Three
+genuine findings fixed; `proactive.py` checked out clean.
+
+1. **Summarizer content-loss bug**: Tier-3 fallback truncated the full
+   assembled prompt (header + prior-summary continuity block + new
+   content) from the front, so a large prior summary could crowd out
+   100% of the new content while still tagged as a normal truncated
+   summary. Fixed by truncating the new content directly instead. 1
+   new test, confirmed to fail pre-fix.
+2. **StructuredOutput JSON-parsing bug**: raw-JSON extraction returned
+   the entire remaining string verbatim with no trailing-content trim,
+   unlike the "embedded in prose" branch a few lines below which
+   already handles this. A trailing model remark burned a retry
+   attempt on an actually-valid response. Fixed with the same
+   rfind-based trim. 2 new tests, confirmed to fail pre-fix.
+3. **AgentRuntime.shutdown() wiring**: had zero call sites anywhere,
+   including `missy gateway start` (the case its own docstring names
+   as needing this) — the SleeptimeWorker thread was simply killed on
+   exit rather than stopped cleanly. Fixed by wiring it into
+   gateway_start's finally: block. 1 new test, confirmed to fail
+   pre-fix.
+
+Deliberately left as a documented residual: a SleeptimeWorker/
+foreground-compaction race (duplicate summaries under specific timing)
+requires new cross-thread coordination between two separate classes —
+a larger design decision than a bounded fix, matching the
+TrustScorer/LandlockPolicy precedent.
+
+Verified: `pytest tests/agent/ tests/cli/ -q`: `5340 passed, 4
+skipped`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-21318 passed, 13 skipped in 480.69s (0:08:00)
+21322 passed, 13 skipped in 475.97s (0:07:55)
 ```
 
-**Zero failures**, the thirtieth consecutive fully green full-suite
-run. Passed count is up from 21316 to 21318 (the round 12 checkpoint's
-2 new tests: 1 untracked-file revert test and 1 bogus-stash-SHA test —
-all of the sixty-first through seventy-first checkpoints' fixes are
-confirmed still holding). Passed count is up from 21311 to 21316 (the
+**Zero failures**, the thirty-first consecutive fully green full-suite
+run. Passed count is up from 21318 to 21322 (the round 13 checkpoint's
+4 new tests: 1 Summarizer content-loss test, 2 StructuredOutput
+trailing-JSON tests, and 1 AgentRuntime.shutdown() wiring test — all of
+the sixty-first through seventy-second checkpoints' fixes are confirmed
+still holding). Passed count is up from 21316 to 21318 (the round 12
+checkpoint's 2 new tests: 1 untracked-file revert test and 1
+bogus-stash-SHA test — all of the sixty-first through seventy-first
+checkpoints' fixes are confirmed still holding). Passed count is up
+from 21311 to 21316 (the
 round 11 checkpoint's 5 new tests: 1 AnthropicProvider key-rotation
 test, 2 SecurityScanner vault-reference tests, and 2 SEC-094
 LandlockPolicy tests — all of the sixty-first through seventieth
