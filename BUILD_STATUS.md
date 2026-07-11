@@ -3116,6 +3116,144 @@ regressions.
 Case count: 70 of 89 run (64 full + 4 partial/mixed + 1 inconclusive
 + 1 counted-via-overlap). ~19 remain.
 
+### Task #10 continued (forty-ninth checkpoint): X11-* series closed out, a second real SR-1.5-class bug found and fixed
+
+Verified the remaining `X11-*` cases against a genuine Xorg session
+(`DISPLAY=:0`, the real vt2 Xorg process — distinct from the disposable
+Xvfb `:99` used by task #16's browser fixtures), with a real
+`gnome-text-editor` window launched for real, through the real
+`ToolRegistry`.
+
+**Real bug found and fixed, same class as SR-1.5.** Every X11 shell
+tool (`X11ScreenshotTool`, `X11ClickTool`, `X11TypeTool`, `X11KeyTool`,
+`X11WindowListTool`, `X11ReadScreenTool`) declares
+`ToolPermissions(shell=True)` but has no `command` kwarg and never
+overrode `resolve_shell_command` — so the registry's default heuristic
+checked the meaningless literal `"shell"` against
+`ShellPolicy.allowed_commands` instead of the real `xdotool`/`wmctrl`/
+`scrot` binary actually invoked. Confirmed live: with a normal, sensible
+`allowed_commands=["xdotool","wmctrl","scrot",...]` policy, every one
+of these 6 tools was unconditionally denied with `"'shell' is not in
+the allowed commands list"`, regardless of what real command it would
+have run — this is the exact bug class SR-1.5 fixed for Incus tools,
+left unfixed here. Fixed in `missy/tools/builtin/x11_tools.py` by
+adding `resolve_shell_command` overrides: `"scrot"` for
+`X11ScreenshotTool`/`X11ReadScreenTool`, `"xdotool"` for
+`X11ClickTool`/`X11TypeTool`/`X11KeyTool`, and `"wmctrl && xdotool"`
+for `X11WindowListTool` (it tries `wmctrl` first and falls back to
+`xdotool` at runtime, so both real candidate programs must be
+individually allow-listed since which one actually executes can't be
+known before `execute()` runs — `ShellPolicyEngine.check_command`
+already splits on chain operators and requires every extracted program
+name to be allowed). None of the pre-existing tests in
+`test_x11_tools_coverage.py` ever caught this because they all call
+`.execute()` directly, bypassing `ToolRegistry` entirely — same
+"mock/direct-call masks reality" pattern as INCUS-015 and SR-3.2. Added
+a new `TestSR15X11ShellPolicyGatesRealHostCommand` class (11 tests)
+asserting real registry-level enforcement and `resolve_shell_command`
+return values for all 6 tools.
+
+**X11-002** (type into window): `x11_window_list` found the real
+`gnome-text-editor` window; `x11_type` correctly dispatched a real
+`xdotool windowfocus` + `type` sequence, returned success. **X11-005**
+(coordinate click fallback): `x11_click` with a genuinely nonexistent
+`window_name` correctly fell back to a raw coordinate click rather
+than failing outright. **X11-004** (read screen, partial):
+`x11_read_screen`'s full pipeline works end-to-end — real `scrot`
+screenshot, real base64 encode, real HTTP POST to a genuinely running
+local Ollama server (`minicpm-v`) via `PolicyHTTPClient`, real JSON
+response surfaced — but the captured screenshot on this specific
+320x200 virtual `:0` display was solid black, so the vision model
+correctly and honestly reported no visible text rather than fabricating
+on-screen content. A real, non-fabricated answer reflecting real (if
+visually blank) screen content — a sandbox display-content limitation,
+not a Missy code bug.
+
+This closes out the entire `X11-*` series (5 of 5 cases now have real
+evidence).
+
+Verified: `pytest tests/tools/test_x11_tools_coverage.py
+tests/tools/test_incus_tools.py -v -o faulthandler_timeout=120`: 208
+passed (66 in `test_x11_tools_coverage.py`, including the 11 new
+SR-1.5-class tests). `pytest tests/tools/ tests/policy/
+tests/security/test_x11_injection.py -q`: 2206 passed, 2 skipped. Full
+suite: `21190 passed, 13 skipped in 567.22s (0:09:27)` — 0 failed, up
+from 21180 (the 11 new `TestSR15X11ShellPolicyGatesRealHostCommand`
+tests, net). Tenth consecutive fully green full-suite run. Zero
+regressions.
+
+Case count: 72 of 89 run (66 full + 4 partial/mixed + 1 inconclusive +
+1 counted-via-overlap). ~17 remain: `AT-003/004`, `VIS-004/005`,
+`AUD-003/004/005`, `XT-001/003/004/005/006`, `SEC-PI-004`,
+`DISC-CMD-004/005/006`.
+
+### Task #10 continued (fiftieth checkpoint): AT-003/004 verified, a second unrelated real bug found and fixed (AT-SPI depth limit)
+
+Constructed a real `ToolRegistry` (shell disabled — AT-SPI tools declare
+`shell=False`, using in-process `pyatspi` bindings rather than
+subprocess) and drove real `gnome-calculator` and `gnome-text-editor`
+windows through the real, running `at-spi2-registryd` bus.
+
+**AT-004 (accessible click) found and fixed a real bug.**
+`_find_element()`'s default `max_depth=10` was one level too shallow
+for a genuine, currently-installed GTK4 application. A live AT-SPI
+tree dump of `gnome-calculator` found its push buttons nested at depth
+11 (application → frame → 9 levels of container panels → push
+button), so `atspi_click`/`atspi_set_value` silently reported "Element
+not found" for real, present, correctly-named/exposed buttons —
+confirmed live before the fix (clicking "5", "+", "3", "=" all
+failed). Fixed by raising the default to `max_depth=20` in
+`missy/tools/builtin/atspi_tools.py` — comfortable real-world headroom
+without meaningfully changing search cost (bounded by actual child
+counts, not exponential in depth). Live re-verified post-fix: clicking
+"5", "+", "3", "=" against the real running calculator all succeeded,
+and reading back the real display via `atspi_get_text(role="text")`
+returned the exact correct result `"8"` — a fully closed-loop,
+non-fabricated confirmation the whole click chain reached the real
+GTK4 widget tree and produced the real expected side effect. Added
+`TestFindElement::test_default_max_depth_reaches_real_world_gtk4_button_depth`
+to `tests/tools/test_atspi_tools_coverage.py`, building an
+11-level-deep mock chain (matching the measured real depth) and
+asserting the target is found under the *default* max_depth so this
+can't silently regress.
+
+**AT-003 (accessible value set)** hit a different, real, but
+out-of-scope limitation: `atspi_set_value` requires a non-empty `name`
+(declared `required: True`, unlike `atspi_click`/`atspi_get_text` which
+also accept `role` alone). A live tree dump of `gnome-text-editor`
+confirmed its real GtkSourceView text-buffer element has role `text`
+with interfaces `['editableText', 'text']` but a genuinely empty
+accessible name — common and expected for GTK text views, which don't
+carry a semantic "name" the way buttons do. `atspi_set_value` therefore
+cannot reach this real, common, unnamed element type by design; adding
+role-only targeting would be a feature addition beyond the discovered
+depth bug, not a fix for it, so this is documented rather than
+silently expanded in scope.
+
+**Incidental side-effect check**: the AT-SPI readback during this
+checkpoint surfaced that X11-002's earlier typed text was still
+present in `gnome-text-editor`'s live *in-memory* buffer for the real,
+pre-existing `~/Downloads/ffxiDownload.sh` file (session-restore
+reopened the same file/tab). Verified the actual file *on disk* was
+never modified — `pkill`ing the editor discarded the unsaved buffer
+without writing it back. No real side effect occurred, but this is a
+reminder that AT-SPI/X11 desktop-automation tests touch a real,
+persistent desktop session, so post-test disk-state verification
+matters here the same as it does for `INCUS-*`.
+
+This closes out the entire `AT-*` series (4 of 4 cases — AT-001/002
+were closed earlier via live delegate safe-fails; AT-003/004 this
+checkpoint via direct verification).
+
+Verified: `pytest tests/tools/test_atspi_tools_coverage.py
+tests/tools/test_x11_tools_coverage.py tests/tools/test_incus_tools.py
+-q`: 251 passed (43 in `test_atspi_tools_coverage.py`, including the 1
+new depth-regression test).
+
+Case count: 73 of 89 run (67 full + 4 partial/mixed + 1 inconclusive +
+1 counted-via-overlap). ~16 remain: `VIS-004/005`, `AUD-003/004/005`,
+`XT-001/003/004/005/006`, `SEC-PI-004`, `DISC-CMD-004/005/006`.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

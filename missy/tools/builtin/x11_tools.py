@@ -145,6 +145,14 @@ class X11ScreenshotTool(BaseTool):
     )
     permissions = ToolPermissions(shell=True, filesystem_write=True)
 
+    def resolve_shell_command(self, kwargs: dict[str, Any]) -> str:
+        # Same declaration/dispatch mismatch class as SR-1.5 (incus_tools.py):
+        # this tool always shells out to `scrot`, never anything named in a
+        # `command` kwarg (it has none), so the registry's default heuristic
+        # would otherwise check the meaningless literal "shell" against
+        # ShellPolicy.allowed_commands instead of the real program invoked.
+        return "scrot"
+
     parameters: dict[str, Any] = {
         "path": {
             "type": "string",
@@ -204,6 +212,12 @@ class X11ClickTool(BaseTool):
         "Supports left/right/double click."
     )
     permissions = ToolPermissions(shell=True)
+
+    def resolve_shell_command(self, kwargs: dict[str, Any]) -> str:
+        # SR-1.5-class declaration/dispatch mismatch: this tool always
+        # shells out to `xdotool` (windowfocus + mousemove/click), never a
+        # `command` kwarg (it has none). See X11ScreenshotTool for detail.
+        return "xdotool"
 
     parameters: dict[str, Any] = {
         "x": {
@@ -280,6 +294,10 @@ class X11TypeTool(BaseTool):
     )
     permissions = ToolPermissions(shell=True)
 
+    def resolve_shell_command(self, kwargs: dict[str, Any]) -> str:
+        # SR-1.5-class declaration/dispatch mismatch — see X11ScreenshotTool.
+        return "xdotool"
+
     parameters: dict[str, Any] = {
         "text": {
             "type": "string",
@@ -350,6 +368,10 @@ class X11KeyTool(BaseTool):
     )
     permissions = ToolPermissions(shell=True)
 
+    def resolve_shell_command(self, kwargs: dict[str, Any]) -> str:
+        # SR-1.5-class declaration/dispatch mismatch — see X11ScreenshotTool.
+        return "xdotool"
+
     parameters: dict[str, Any] = {
         "key": {
             "type": "string",
@@ -398,6 +420,17 @@ class X11WindowListTool(BaseTool):
     permissions = ToolPermissions(shell=True)
 
     parameters: dict[str, Any] = {}
+
+    def resolve_shell_command(self, kwargs: dict[str, Any]) -> str:
+        # SR-1.5-class declaration/dispatch mismatch — see X11ScreenshotTool.
+        # This tool tries `wmctrl` first and falls back to `xdotool` at
+        # runtime depending on which binary is installed; since that choice
+        # can't be known until execute() actually runs, both real programs
+        # must be individually allow-listed rather than checking only
+        # whichever one happens to run. `check_command` splits on chain
+        # operators and requires every extracted program name to be
+        # allowed, so this conservatively demands both.
+        return "wmctrl && xdotool"
 
     def execute(self, **_: Any) -> ToolResult:
         # Prefer wmctrl -l (gives cleaner output); fall back to xdotool.
@@ -459,6 +492,12 @@ class X11ReadScreenTool(BaseTool):
         "read text on screen, or understand application state."
     )
     permissions = ToolPermissions(shell=True, network=True, filesystem_write=True)
+
+    def resolve_shell_command(self, kwargs: dict[str, Any]) -> str:
+        # SR-1.5-class declaration/dispatch mismatch — see X11ScreenshotTool.
+        # The browser-screenshot fallback path (_take_screenshot) never
+        # shells out; only the scrot path does.
+        return "scrot"
 
     parameters: dict[str, Any] = {
         "question": {

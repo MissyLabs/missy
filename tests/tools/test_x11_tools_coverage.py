@@ -33,6 +33,15 @@ from missy.tools.builtin.x11_tools import (
     _get_vision_token,
     _load_oauth_token,
 )
+from missy.config.settings import (
+    FilesystemPolicy,
+    MissyConfig,
+    NetworkPolicy,
+    PluginPolicy,
+    ShellPolicy,
+)
+from missy.policy.engine import init_policy_engine
+from missy.tools.registry import ToolRegistry
 
 # ---------------------------------------------------------------------------
 # _extract_account_id — lines 56-65
@@ -708,3 +717,130 @@ class TestX11ReadScreenToolExecute:
         assert result.success is True
         assert result.output["description"] == "A desktop with Firefox open."
         assert result.output["question"] == "What is on screen?"
+
+
+# ---------------------------------------------------------------------------
+# SR-1.5-class: registry+policy integration -- X11 tools must be gated on
+# the real host command they invoke (xdotool/wmctrl/scrot), not a
+# declaration/dispatch mismatch. Found live during task #10 validation
+# (X11-002/004/005): every one of these tools declares
+# ToolPermissions(shell=True) but has no "command" kwarg and previously did
+# not override resolve_shell_command, so ToolRegistry.execute's default
+# heuristic fell back to checking the meaningless literal "shell" against
+# ShellPolicy.allowed_commands instead of the real xdotool/wmctrl/scrot
+# binary actually invoked -- the same bug class as SR-1.5 (incus_tools.py),
+# left unfixed here. None of the tests above ever caught this because they
+# all call .execute() directly, bypassing ToolRegistry entirely.
+# ---------------------------------------------------------------------------
+def _init_policy(allowed_commands: list[str] | None = None) -> None:
+    init_policy_engine(
+        MissyConfig(
+            network=NetworkPolicy(),
+            filesystem=FilesystemPolicy(allowed_write_paths=["/tmp"], allowed_read_paths=["/tmp"]),
+            shell=ShellPolicy(enabled=True, allowed_commands=allowed_commands or []),
+            plugins=PluginPolicy(),
+            providers={},
+            workspace_path="/tmp/x11-test-ws",
+            audit_log_path="/tmp/x11-test-audit.jsonl",
+        )
+    )
+
+
+class TestSR15X11ShellPolicyGatesRealHostCommand:
+    def test_screenshot_denied_when_only_unrelated_command_allowed(self):
+        _init_policy(allowed_commands=["git"])
+        registry = ToolRegistry()
+        registry.register(X11ScreenshotTool())
+        result = registry.execute("x11_screenshot", path="/tmp/shot.png")
+        assert result.success is False
+        assert "scrot" in result.error
+        assert "not in the allowed commands list" in result.error
+
+    @patch("missy.tools.builtin.x11_tools.subprocess.run")
+    def test_screenshot_allowed_when_scrot_explicitly_allowlisted(self, mock_run: MagicMock):
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        _init_policy(allowed_commands=["scrot"])
+        registry = ToolRegistry()
+        registry.register(X11ScreenshotTool())
+        with patch("os.path.getsize", return_value=100):
+            result = registry.execute("x11_screenshot", path="/tmp/shot.png")
+        assert result.success is True
+        mock_run.assert_called_once()
+
+    def test_click_denied_when_only_unrelated_command_allowed(self):
+        _init_policy(allowed_commands=["git"])
+        registry = ToolRegistry()
+        registry.register(X11ClickTool())
+        result = registry.execute("x11_click", x=1, y=1)
+        assert result.success is False
+        assert "xdotool" in result.error
+
+    def test_type_denied_when_only_unrelated_command_allowed(self):
+        _init_policy(allowed_commands=["git"])
+        registry = ToolRegistry()
+        registry.register(X11TypeTool())
+        result = registry.execute("x11_type", text="hello")
+        assert result.success is False
+        assert "xdotool" in result.error
+
+    def test_key_denied_when_only_unrelated_command_allowed(self):
+        _init_policy(allowed_commands=["git"])
+        registry = ToolRegistry()
+        registry.register(X11KeyTool())
+        result = registry.execute("x11_key", key="Return")
+        assert result.success is False
+        assert "xdotool" in result.error
+
+    def test_window_list_denied_when_only_unrelated_command_allowed(self):
+        _init_policy(allowed_commands=["git"])
+        registry = ToolRegistry()
+        registry.register(X11WindowListTool())
+        result = registry.execute("x11_window_list")
+        assert result.success is False
+        # Both real fallback programs must be individually allow-listed.
+        assert "wmctrl" in result.error or "xdotool" in result.error
+
+    def test_window_list_denied_when_only_wmctrl_allowed(self):
+        """wmctrl alone is insufficient -- the runtime xdotool fallback path
+        must be allow-listed too, since which one actually runs is a
+        runtime fact the registry cannot know before execute() runs."""
+        _init_policy(allowed_commands=["wmctrl"])
+        registry = ToolRegistry()
+        registry.register(X11WindowListTool())
+        result = registry.execute("x11_window_list")
+        assert result.success is False
+        assert "xdotool" in result.error
+
+    @patch("missy.tools.builtin.x11_tools.subprocess.run")
+    def test_window_list_allowed_when_both_wmctrl_and_xdotool_allowlisted(
+        self, mock_run: MagicMock
+    ):
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        _init_policy(allowed_commands=["wmctrl", "xdotool"])
+        registry = ToolRegistry()
+        registry.register(X11WindowListTool())
+        result = registry.execute("x11_window_list")
+        assert result.success is True
+
+    def test_read_screen_denied_when_only_unrelated_command_allowed(self):
+        _init_policy(allowed_commands=["git"])
+        registry = ToolRegistry()
+        registry.register(X11ReadScreenTool())
+        result = registry.execute("x11_read_screen")
+        assert result.success is False
+        assert "scrot" in result.error
+
+    def test_all_x11_shell_tools_resolve_shell_command_to_real_binary(self):
+        expected = {
+            X11ScreenshotTool: "scrot",
+            X11ClickTool: "xdotool",
+            X11TypeTool: "xdotool",
+            X11KeyTool: "xdotool",
+            X11WindowListTool: "wmctrl && xdotool",
+            X11ReadScreenTool: "scrot",
+        }
+        for cls, want in expected.items():
+            tool = cls()
+            assert tool.resolve_shell_command({}) == want, (
+                f"{cls.__name__} must resolve its host command(s) to {want!r}"
+            )

@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (54 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for nine consecutive checkpoints)
+## Changed (56 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eleven consecutive checkpoints)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -2150,14 +2150,124 @@ tests/tools/ -q`: 1523 passed, 2 skipped.
 Case count: 70 of 89 run (64 full + 4 partial/mixed + 1 inconclusive
 + 1 counted-via-overlap). ~19 remain.
 
+### Task #10 continued (forty-ninth checkpoint): X11-* series closed out, a second SR-1.5-class bug found and fixed
+
+Verified the remaining `X11-*` cases against a genuine Xorg session
+(`DISPLAY=:0`, the real vt2 Xorg process — distinct from the disposable
+Xvfb `:99` used by task #16's browser fixtures), with a real
+`gnome-text-editor` window launched for real, through the real
+`ToolRegistry`.
+
+**Found and fixed a second real bug, same class as SR-1.5.** Every X11
+shell tool (`X11ScreenshotTool`, `X11ClickTool`, `X11TypeTool`,
+`X11KeyTool`, `X11WindowListTool`, `X11ReadScreenTool`) declares
+`ToolPermissions(shell=True)` but has no `command` kwarg and never
+overrode `resolve_shell_command` — so the registry's default heuristic
+checked the meaningless literal `"shell"` against
+`ShellPolicy.allowed_commands` instead of the real `xdotool`/`wmctrl`/
+`scrot` binary actually invoked. Confirmed live: with a normal,
+sensible `allowed_commands=["xdotool","wmctrl","scrot",...]` policy,
+every one of these 6 tools was unconditionally denied with `"'shell'
+is not in the allowed commands list"`, regardless of what real command
+it would have run — the exact bug class SR-1.5 fixed for Incus tools,
+left unfixed here. Fixed in `missy/tools/builtin/x11_tools.py` by
+adding `resolve_shell_command` overrides: `"scrot"` for
+`X11ScreenshotTool`/`X11ReadScreenTool`, `"xdotool"` for
+`X11ClickTool`/`X11TypeTool`/`X11KeyTool`, and `"wmctrl && xdotool"`
+for `X11WindowListTool` (tries `wmctrl` first, falls back to `xdotool`
+at runtime, so both real candidate programs must be individually
+allow-listed since which one executes can't be known before
+`execute()` runs). None of the pre-existing tests ever caught this
+because they all call `.execute()` directly, bypassing `ToolRegistry`
+entirely — same "mock/direct-call masks reality" pattern as INCUS-015
+and SR-3.2. Added `TestSR15X11ShellPolicyGatesRealHostCommand` (11
+tests) asserting real registry-level enforcement and
+`resolve_shell_command` return values for all 6 tools.
+
+**X11-002** (type into window): `x11_window_list` found the real
+`gnome-text-editor` window; `x11_type` correctly dispatched a real
+`xdotool windowfocus` + `type` sequence, returned success. **X11-005**
+(coordinate click fallback): `x11_click` with a genuinely nonexistent
+`window_name` correctly fell back to a raw coordinate click rather
+than failing outright. **X11-004** (read screen, partial):
+`x11_read_screen`'s full pipeline works end-to-end — real `scrot`
+screenshot, real base64 encode, real HTTP POST to a genuinely running
+local Ollama server (`minicpm-v`) via `PolicyHTTPClient`, real JSON
+response surfaced — but the captured screenshot on this specific
+320x200 virtual `:0` display was solid black, so the vision model
+correctly and honestly reported no visible text rather than
+fabricating on-screen content. A real, non-fabricated answer, not a
+Missy bug.
+
+This closes out the entire `X11-*` series (5 of 5 cases).
+
+Verified: `pytest tests/tools/test_x11_tools_coverage.py
+tests/tools/test_incus_tools.py -v`: 208 passed (66 in
+`test_x11_tools_coverage.py`, including the 11 new tests). `pytest
+tests/tools/ tests/policy/ tests/security/test_x11_injection.py -q`:
+2206 passed, 2 skipped.
+
+Case count: 72 of 89 run (66 full + 4 partial/mixed + 1 inconclusive +
+1 counted-via-overlap). ~17 remain: `AT-003/004`, `VIS-004/005`,
+`AUD-003/004/005`, `XT-001/003/004/005/006`, `SEC-PI-004`,
+`DISC-CMD-004/005/006`.
+
+### Task #10 continued (fiftieth checkpoint): AT-* series closed out, a second unrelated real bug found and fixed (AT-SPI depth limit)
+
+Verified AT-003/004 against real `gnome-calculator`/`gnome-text-editor`
+windows through the real, running `at-spi2-registryd` bus, via a real
+`ToolRegistry` (AT-SPI tools declare `shell=False` — they use in-process
+`pyatspi` bindings, not subprocess).
+
+**AT-004 found and fixed a real bug.** `_find_element()`'s default
+`max_depth=10` was one level too shallow for a genuine, currently
+installed GTK4 application — a live AT-SPI tree dump of
+`gnome-calculator` found its push buttons nested at depth 11
+(application → frame → 9 levels of container panels → push button),
+so `atspi_click`/`atspi_set_value` silently reported "Element not
+found" for real, present, correctly-named/exposed buttons — confirmed
+live before the fix (clicking "5", "+", "3", "=" all failed). Fixed by
+raising the default to `max_depth=20` in
+`missy/tools/builtin/atspi_tools.py`. Live re-verified post-fix:
+clicking "5", "+", "3", "=" against the real running calculator all
+succeeded, and reading back the real display via
+`atspi_get_text(role="text")` returned the exact correct result `"8"`
+— a fully closed-loop, non-fabricated confirmation. Added a regression
+test building an 11-level-deep mock chain (matching the real measured
+depth) asserting the *default* max_depth finds the target.
+
+**AT-003** hit a different, real, out-of-scope limitation:
+`atspi_set_value` requires a non-empty `name` by its own declared
+parameter contract, but a live tree dump of `gnome-text-editor`
+confirmed its real text-buffer element has a genuinely empty
+accessible name (common/expected for GTK text views) — documented
+rather than fixed, since adding role-only targeting would be new scope
+beyond the discovered depth bug.
+
+Incidentally confirmed the real `~/Downloads/ffxiDownload.sh` file on
+disk was never modified by X11-002's earlier typed text (it only
+persisted in the editor's unsaved in-memory buffer) — a reminder that
+these desktop-automation tests touch a real, persistent session.
+
+This closes out the entire `AT-*` series (4 of 4 cases).
+
+Verified: `pytest tests/tools/test_atspi_tools_coverage.py
+tests/tools/test_x11_tools_coverage.py tests/tools/test_incus_tools.py
+-q`: 251 passed (43 in `test_atspi_tools_coverage.py`, including the 1
+new depth-regression test).
+
+Case count: 73 of 89 run (67 full + 4 partial/mixed + 1 inconclusive +
+1 counted-via-overlap). ~16 remain: `VIS-004/005`, `AUD-003/004/005`,
+`XT-001/003/004/005/006`, `SEC-PI-004`, `DISC-CMD-004/005/006`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-21180 passed, 13 skipped in 542.54s (0:09:02)
+21191 passed, 13 skipped in 622.84s (0:10:22)
 ```
 
-**Zero failures**, the ninth consecutive fully green full-suite run.
+**Zero failures**, the eleventh consecutive fully green full-suite run.
 Passed count is up from 21071 (SR-1.9b's run) to 21115
 (availability-hardening checkpoint) to 21118 (the acpx `--deny-all`
 critical-finding checkpoint) to 21125 (the native-tool denial retry
@@ -2167,9 +2277,11 @@ green run) to 21145 (the Discord pairing endpoint) to 21156
 fix) to 21174 (the Firefox pref-type fix) to 21175 (the envelope
 rule-7 addition) to 21177 (the Discord command-parsing regression
 tests) to 21180 (the `discord_upload_file` registry-enforcement tests,
-unchanged since — this checkpoint corrected an existing Incus test in
-place rather than adding a new one). Zero regressions from this
-checkpoint or any prior one this session. **The security review's
+unchanged after the Incus checkpoint, which corrected an existing test
+in place) to 21190 (the X11-\* checkpoint's 11 new
+`TestSR15X11ShellPolicyGatesRealHostCommand` tests) to 21191 (the
+AT-\* checkpoint's 1 new depth-regression test). Zero regressions from
+this checkpoint or any prior one this session. **The security review's
 entire numbered SR-x.y list and its one remaining unnumbered "harden
 secondary availability hazards" bullet are both fully closed — the
 security review's text has no open items left.** This session's
@@ -2245,7 +2357,31 @@ forty-seventh checkpoint closed out the entire `WB-*` (browser) series
 (bringing the backlog to 62 of 89) via direct production-code
 verification of the real end-to-end tool chain, plus a bonus
 confirmation that `ToolRegistry.execute()` gracefully handles
-malformed/misnamed tool arguments rather than crashing.
+malformed/misnamed tool arguments rather than crashing; the
+forty-eighth checkpoint closed out the entire `INCUS-*` (container)
+series (bringing the backlog to 70 of 89) via direct production-code
+verification against a real, disposable Incus container, finding and
+fixing a real bug in `IncusDeviceTool`'s "list" action along the way
+(an invalid `--format json` flag `incus config device list` doesn't
+actually support, undetected until now because the existing test
+mocked `subprocess.run` and never asserted the real argv); the
+forty-ninth checkpoint closed out the entire `X11-*` series (bringing
+the backlog to 72 of 89) via the same direct-dispatch strategy against
+a genuine Xorg session, finding and fixing a second SR-1.5-class bug —
+every X11 shell tool declared `shell=True` but never overrode
+`resolve_shell_command`, so the registry checked the meaningless
+literal `"shell"` against the allowlist instead of the real
+`xdotool`/`wmctrl`/`scrot` binary invoked, meaning every one of these
+tools was unconditionally denied under any normal, correctly-scoped
+shell policy; the fiftieth checkpoint closed out the entire `AT-*`
+series (bringing the backlog to 73 of 89) via the same strategy
+against real `gnome-calculator`/`gnome-text-editor` windows, finding
+and fixing a third, unrelated real bug — `_find_element`'s default
+`max_depth=10` was one level too shallow for a genuine GTK4 app's real
+button nesting depth (11), silently reporting "Element not found" for
+present, correctly-exposed elements; fixed by raising the default to
+20 and live-verified with a full real button-click chain (5+3=8) read
+back from the actual calculator display.
 
 Full detail in `BUILD_STATUS.md`, `AUDIT_SECURITY.md`, and
 `TEST_RESULTS.md` — each has one dated entry per checkpoint this
@@ -2323,48 +2459,65 @@ three files above.)
   false positives on genuinely fine no-tool-needed answers. See the
   fortieth checkpoint above.
 - **#10** Full 89-case tool-specific validation backlog — in progress,
-  70 of 89 run so far (64 full + 4 partial/mixed + 1 inconclusive + 1
+  73 of 89 run so far (67 full + 4 partial/mixed + 1 inconclusive + 1
   counted-via-overlap) across FS/SH/WB/INCUS/VIS/AUD/MEM/SELF/AT/X11/
-  SEC-SCOPE/SEC-PI/DISC-CMD/DU categories -- the entire `WB-*` and
-  `INCUS-*` series are now closed out (INCUS-015 found and fixed a
-  real bug: `IncusDeviceTool`'s "list" action used an unsupported
-  `--format` flag, masked by a test that mocked `subprocess.run`
-  without asserting the real argv). Results: 2 genuine full
+  SEC-SCOPE/SEC-PI/DISC-CMD/DU categories -- the entire `WB-*`,
+  `INCUS-*`, `X11-*`, and `AT-*` series are now closed out. Three real
+  bugs found and fixed via direct production-code verification this
+  session: **INCUS-015** (`IncusDeviceTool`'s "list" action used an
+  unsupported `--format` flag, masked by a test that mocked
+  `subprocess.run` without asserting the real argv); **X11-\*** (every
+  X11 shell tool declared `shell=True` but never overrode
+  `resolve_shell_command`, so the registry checked the meaningless
+  literal `"shell"` against the allowlist instead of the real
+  `xdotool`/`wmctrl`/`scrot` binary invoked — the same SR-1.5 bug class
+  left unfixed in this file, fixed with `resolve_shell_command`
+  overrides + 11 new registry-level tests); **AT-004** (`_find_element`'s
+  default `max_depth=10` was one level too shallow for a real GTK4
+  app's actual button nesting depth of 11, silently reporting "Element
+  not found" for present, correctly-exposed elements — fixed by
+  raising the default to 20, live-verified with a full real
+  button-click chain reading back the correct arithmetic result from a
+  real calculator display). Results: 2 genuine full
   delegate successes (FS-004, INCUS-011 — the latter also exercising
   `DoneCriteria`'s real reject/retry loop for the first time), 2
   genuine partial/mixed delegate successes (INCUS-009's honest-partial
   recommendation, VIS-002's confirmed real `vision_devices` dispatch),
-  8 safety-property passes (FS-005, SH-004, SH-005, SEC-SCOPE-001
-  through 005 all correctly refused unsafe requests), 10 verified via
+  9 safety-property passes (FS-005, SH-004, SH-005, SEC-SCOPE-001
+  through 005 all correctly refused unsafe requests), 13 verified via
   direct production-code execution instead of the delegate
   (DISC-CMD-001/002/003/007/008, MEM-002, MEM-003, DU-003, SELF-003,
-  SELF-005 — DU-003 closed a real SR-1.4/SR-1.5-pattern
-  registry-enforcement gap with 3 new tests; SELF-003 caught and
-  cleaned up a real side effect in the operator's own
-  `~/.missy/custom-tools/` directory; DISC-CMD-008 surfaced a real,
+  SELF-005, X11-002/004/005, AT-003/004 — DU-003 closed a real
+  SR-1.4/SR-1.5-pattern registry-enforcement gap with 3 new tests;
+  SELF-003 caught and cleaned up a real side effect in the operator's
+  own `~/.missy/custom-tools/` directory; DISC-CMD-008 surfaced a real,
   moderate, non-urgent gap — no per-user Discord command rate
   limiting exists, only the overall `CostTracker` budget as a
   backstop; DISC-CMD-003 verified attachment validation correctly
   rejects spoofed hosts, disguised executables, oversized files, and
-  MIME/extension mismatches), 1 fail that surfaced task #47 (SH-001's
+  MIME/extension mismatches; AT-003 hit a real but out-of-scope
+  limitation — `atspi_set_value` requires a non-empty `name` and can't
+  target GTK text views, which genuinely have no accessible name),
+  1 fail that surfaced task #47 (SH-001's
   fabricated observation), 1 deliberately inconclusive case (DU-001,
   stopped short of forcing a real post to a live Discord channel), 1
-  case counted via overlap (SELF-006 ~ SEC-SCOPE-005), 3 real but
+  case counted via overlap (SELF-006 ~ SEC-SCOPE-005), 5 real but
   out-of-scope observations (`shell.unrestricted` dead config;
   `InputSanitizer` false positive on the operator's own prompt text;
-  no Discord command rate limiting), remainder safe fails matching
-  task #46's residual (including several more
+  no Discord command rate limiting; X11-004's black virtual-display
+  content limit; AT-003's unnamed-element limit), remainder safe fails
+  matching task #46's residual (including several more
   notable-but-non-reproducible wrong-rationalization variants).
   Operator explicitly chose to keep running cases one-by-one despite
   the strength of the failure pattern (asked via AskUserQuestion after
-  5 straight fails) — continuing on that basis. ~19 cases remain.
+  5 straight fails) — continuing on that basis. ~16 cases remain.
   Working principle: prefer direct production-code verification over a
   live delegate call whenever a case tests Missy's own deterministic
   code rather than LLM decision-making — cheaper, more reliable, and
-  has already found real gaps (DU-003, DISC-CMD-008, INCUS-015) and
-  one real self-inflicted side effect to watch for (SELF-003). Treat
-  any case with genuine external-service side effects (real Discord
-  posts, real cloud state changes) with the same
+  has already found real gaps (DU-003, DISC-CMD-008, INCUS-015,
+  X11-\*, AT-004) and one real self-inflicted side effect to watch for
+  (SELF-003). Treat any case with genuine external-service side
+  effects (real Discord posts, real cloud state changes) with the same
   care as any other risky action.
 - **#11 (fixed this checkpoint)** Pre-existing vision `CameraDiscovery`
   cache-TTL flake — two root causes found and fixed (a real `None`-vs-`[]`

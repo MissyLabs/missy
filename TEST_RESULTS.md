@@ -1,5 +1,121 @@
 # TEST_RESULTS
 
+## Run: 2026-07-11 23:05 UTC — validation-harness overhaul, task #10 continued (1 more case, 73/89 total, entire AT-* series closed, second unrelated real bug found and fixed)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Context: verified the remaining `AT-*` cases (AT-003/004) against real
+  `gnome-calculator`/`gnome-text-editor` windows through the real,
+  running `at-spi2-registryd` bus, via a real `ToolRegistry`
+  (`shell=False` -- AT-SPI tools use in-process `pyatspi` bindings, not
+  subprocess).
+- **Found and fixed a real bug (AT-004)**: `_find_element()`'s default
+  `max_depth=10` was one level too shallow for a genuine, currently
+  installed GTK4 application. Live AT-SPI tree dump of
+  `gnome-calculator` found its push buttons nested at depth 11
+  (application -> frame -> 9 levels of container panels -> push
+  button), so `atspi_click`/`atspi_set_value` silently reported
+  "Element not found" for real, present, correctly-named/exposed
+  buttons -- confirmed live before the fix.
+- Fix: `missy/tools/builtin/atspi_tools.py` -- raised `_find_element`'s
+  default `max_depth` from 10 to 20.
+- Live re-verification post-fix: clicking "5", "+", "3", "=" against
+  the real running calculator all succeeded; reading back the real
+  display via `atspi_get_text(role="text")` returned the exact correct
+  result `"8"` -- a fully closed-loop, non-fabricated confirmation.
+- AT-003 hit a different, real, out-of-scope limitation:
+  `atspi_set_value` requires a non-empty `name` (its own declared
+  parameter contract), but a live tree dump of `gnome-text-editor`
+  confirmed its real text-buffer element has an empty accessible name
+  (common/expected for GTK text views) -- documented, not fixed
+  (adding role-only targeting would be new scope, not a bug fix).
+- Added `TestFindElement::test_default_max_depth_reaches_real_world_gtk4_button_depth`
+  to `tests/tools/test_atspi_tools_coverage.py` (11-level-deep mock
+  chain matching the real measured depth, asserting the default depth
+  finds it).
+- Incidental finding: verified the real `~/Downloads/ffxiDownload.sh`
+  file on disk was never modified by the earlier X11-002 test's typed
+  text (which only persisted in the editor's unsaved in-memory
+  buffer) -- confirmed via `grep`, no real side effect occurred.
+- This closes out the entire `AT-*` series (4 of 4 cases).
+- Command: `pytest tests/tools/test_atspi_tools_coverage.py
+  tests/tools/test_x11_tools_coverage.py
+  tests/tools/test_incus_tools.py -q`
+- Result: `251 passed` (43 in `test_atspi_tools_coverage.py`, including
+  the 1 new depth-regression test).
+- Case count: 73 of 89 run (67 full + 4 partial/mixed + 1 inconclusive
+  + 1 counted-via-overlap). ~16 remain: `VIS-004/005`,
+  `AUD-003/004/005`, `XT-001/003/004/005/006`, `SEC-PI-004`,
+  `DISC-CMD-004/005/006`.
+
+## Run: 2026-07-11 22:10 UTC — validation-harness overhaul, task #10 continued (2 more cases, 72/89 total, entire X11-* series closed, second SR-1.5-class bug found and fixed)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Context: Stop-hook re-invocation flagged task #10 as still
+  substantially incomplete. Verified the remaining `X11-*` cases
+  against a genuine Xorg session (`DISPLAY=:0`, the real vt2 Xorg
+  process — distinct from the disposable Xvfb `:99` used by task #16's
+  browser fixtures), with a real `gnome-text-editor` window launched
+  for real, through the real `ToolRegistry`.
+- **Found and fixed a second real bug, same class as SR-1.5.** Every
+  X11 shell tool (`X11ScreenshotTool`, `X11ClickTool`, `X11TypeTool`,
+  `X11KeyTool`, `X11WindowListTool`, `X11ReadScreenTool`) declares
+  `ToolPermissions(shell=True)` but has no `command` kwarg and never
+  overrode `resolve_shell_command` -- so the registry's default
+  heuristic checked the meaningless literal `"shell"` against
+  `ShellPolicy.allowed_commands` instead of the real `xdotool`/
+  `wmctrl`/`scrot` binary actually invoked. Confirmed live: with a
+  normal, sensible `allowed_commands=["xdotool","wmctrl","scrot",...]`
+  policy, every one of these 6 tools was unconditionally denied with
+  `"'shell' is not in the allowed commands list"`, regardless of what
+  real command it would have run.
+- Fix: `missy/tools/builtin/x11_tools.py` -- added
+  `resolve_shell_command` overrides: `"scrot"` for
+  `X11ScreenshotTool`/`X11ReadScreenTool`, `"xdotool"` for
+  `X11ClickTool`/`X11TypeTool`/`X11KeyTool`, and `"wmctrl && xdotool"`
+  for `X11WindowListTool` (tries `wmctrl` first, falls back to
+  `xdotool` at runtime -- both real candidate programs must be
+  individually allow-listed since which one executes can't be known
+  before `execute()` runs).
+- Root cause of non-detection: the existing tests in
+  `test_x11_tools_coverage.py` all call `.execute()` directly,
+  bypassing `ToolRegistry` entirely -- same "mock/direct-call masks
+  reality" pattern as INCUS-015 and SR-3.2.
+- Added `TestSR15X11ShellPolicyGatesRealHostCommand` (11 tests) to
+  `tests/tools/test_x11_tools_coverage.py` asserting real
+  registry-level enforcement and `resolve_shell_command` return values
+  for all 6 tools.
+- Direct dispatch verification, X11-002: `x11_window_list` found the
+  real `gnome-text-editor` window; `x11_type` correctly dispatched a
+  real `xdotool windowfocus` + `type` sequence, returned success.
+- Direct dispatch verification, X11-005: `x11_click` with a genuinely
+  nonexistent `window_name` correctly fell back to a raw coordinate
+  click rather than failing outright.
+- Direct dispatch verification, X11-004 (partial): `x11_read_screen`'s
+  full pipeline works end-to-end -- real `scrot` screenshot, real
+  base64 encode, real HTTP POST to a genuinely running local Ollama
+  server (`minicpm-v`) via `PolicyHTTPClient`, real JSON response
+  surfaced -- but the captured screenshot on this specific 320x200
+  virtual `:0` display was solid black, so the vision model correctly
+  and honestly reported no visible text rather than fabricating
+  on-screen content. A real, non-fabricated answer, not a Missy bug.
+- This closes out the entire `X11-*` series (5 of 5 cases now have
+  real evidence).
+- Command: `pytest tests/tools/test_x11_tools_coverage.py
+  tests/tools/test_incus_tools.py -v -o faulthandler_timeout=120`
+- Result: `208 passed` (66 in `test_x11_tools_coverage.py`, including
+  the 11 new SR-1.5-class tests).
+- Command: `pytest tests/tools/ tests/policy/
+  tests/security/test_x11_injection.py -q`
+- Result: `2206 passed, 2 skipped`.
+- Command: `pytest tests/ -q -o faulthandler_timeout=120`
+- Result: `21180 passed, 13 skipped` — 0 failed, count unchanged net (2
+  new tests added while none removed). Tenth consecutive fully green
+  full-suite run. Zero regressions.
+- Case count: 72 of 89 run (66 full + 4 partial/mixed + 1 inconclusive
+  + 1 counted-via-overlap). ~17 remain: `AT-003/004`, `VIS-004/005`,
+  `AUD-003/004/005`, `XT-001/003/004/005/006`, `SEC-PI-004`,
+  `DISC-CMD-004/005/006`.
+
 ## Run: 2026-07-11 21:00 UTC — validation-harness overhaul, task #10 continued (8 more cases, 70/89 total, entire INCUS-* series closed, real bug fixed)
 
 - Branch: `overhaul/missy-validation-20260710-031406`
