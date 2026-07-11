@@ -144,7 +144,10 @@ def _bare_runtime(provider_name: str = "primary") -> AgentRuntime:
     so _call_provider_with_fallback's own logic is exercised in isolation."""
     rt = AgentRuntime.__new__(AgentRuntime)
     rt.config = AgentConfig(provider=provider_name, max_iterations=1)
-    rt._circuit_breaker = AgentRuntime._make_circuit_breaker(provider_name)
+    # _make_circuit_breaker is an instance method (not a staticmethod) so
+    # it can look up this provider's own registered ProviderConfig
+    # tunables (SR-4.8 residual) -- must be called on the instance.
+    rt._circuit_breaker = rt._make_circuit_breaker(provider_name)
     rt._fallback_breakers = {}
     rt._rate_limiter = None
     rt._drift_detector = None

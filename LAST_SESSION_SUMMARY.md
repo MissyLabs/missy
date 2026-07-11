@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (63 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for sixteen consecutive checkpoints; the 89-case tool-specific validation backlog is now 100% complete)
+## Changed (64 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for seventeen consecutive checkpoints; the 89-case tool-specific validation backlog is now 100% complete)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -2498,24 +2498,74 @@ a missing log file → WARN (not FAIL).
 Verified: `pytest tests/cli/test_cli_commands.py -k AuditSigning -v`:
 4 passed. Broader: `pytest tests/cli/ -q`: 1065 passed.
 
+### Post-backlog (fifty-eighth checkpoint): per-provider tunable CircuitBreaker cooldown config (SR-4.8 residual)
+
+Last concretely-scoped item before only the audit-log hash chain
+(explicitly out of scope) and the unscoped "Product Goal" surface
+remain: every provider previously got a `CircuitBreaker` with the same
+hardcoded threshold/cooldown regardless of its own config.
+
+Added `circuit_breaker_threshold`/`circuit_breaker_cooldown_seconds`
+to `ProviderConfig`, a new `ProviderRegistry.get_config()` accessor,
+and converted `AgentRuntime._make_circuit_breaker` from a
+`@staticmethod` to an instance method that looks up the provider's
+registered config, falling back to `CircuitBreaker`'s own defaults
+otherwise.
+
+**Found and fixed a real regression in the new code before it
+shipped**, caught immediately by the pre-existing test suite: the
+first version let `ProviderRegistry`'s "not initialised" `RuntimeError`
+propagate through one broad except-and-return-NoOp, silently disabling
+circuit-breaking *entirely* for any runtime constructed before
+`init_registry()` had run — a normal, expected ordering the existing
+test suite does constantly. Fixed by scoping the registry lookup's
+exception handling separately from the actual `CircuitBreaker`
+construction.
+
+Converting the method from a staticmethod broke 2 existing tests and
+1 test helper that called it directly on the class — updated all
+three to call via an instance, matching every real production call
+site.
+
+Added 9 new tests total: 3 for `ProviderRegistry.get_config`, 3 for
+config parsing, 3 for `_make_circuit_breaker`'s per-provider lookup
+(including the exact regression case as a permanent guard).
+
+One tangential, unrelated, pre-existing flake noticed in a broader
+sweep: a concurrency stress test failed once with a dict-mutation
+error unrelated to the new `get_config()` method, then passed cleanly
+in isolation and in a full re-run — documented as a rare,
+timing-dependent flake in existing code, not chased further.
+
+Verified: `pytest tests/agent/test_runtime_config_edges.py -k
+MakeCircuitBreaker -v`: 5 passed. `pytest
+tests/providers/test_registry.py -k GetConfig -v`: 3 passed. `pytest
+tests/config/test_settings.py -k "circuit_breaker or
+provider_unknown" -v`: 3 passed. `pytest
+tests/agent/test_provider_fallback.py -q`: 12 passed. Broader:
+`pytest tests/agent/ tests/providers/ tests/config/ -q`: 5569 passed,
+4 skipped.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-21223 passed, 13 skipped, 3 warnings in 616.41s (0:10:16)
+21232 passed, 13 skipped, 1 warning in 614.03s (0:10:14)
 ```
 
-**Zero failures**, the sixteenth consecutive fully green full-suite
+**Zero failures**, the seventeenth consecutive fully green full-suite
 run. Passed count is up from 21191 to 21212 (the DISC-CMD-008
 rate-limiting checkpoint: 10 standalone unit tests, 9 real
 dispatch-path integration tests, 3 config-parsing tests) to 21213 (the
 Web TUI approvals/pairing checkpoint's 2 new tests) to 21219 (the
 `shell.unrestricted` config-hygiene checkpoint's 6 new tests) to 21223
-(the `missy doctor` audit-signing checkpoint's 4 new tests). The
-occasional Hypothesis deprecation warnings seen in some runs of this
-suite (`test_property_based_fuzz.py` and/or `test_policy_property.py`,
-depending on test ordering — this run shows 3) are pre-existing and
-order-dependent, not introduced by any checkpoint this session.
+(the `missy doctor` audit-signing checkpoint's 4 new tests) to 21232
+(the per-provider CircuitBreaker cooldown checkpoint's 9 new tests).
+The occasional Hypothesis deprecation warnings seen in some runs of
+this suite (`test_property_based_fuzz.py` and/or
+`test_policy_property.py`, depending on test ordering — this run shows
+1) are pre-existing and order-dependent, not introduced by any
+checkpoint this session.
 Passed count is up from 21071 (SR-1.9b's run) to 21115
 (availability-hardening checkpoint) to 21118 (the acpx `--deny-all`
 critical-finding checkpoint) to 21125 (the native-tool denial retry

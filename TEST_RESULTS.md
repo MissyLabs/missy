@@ -1,5 +1,54 @@
 # TEST_RESULTS
 
+## Run: 2026-07-12 03:50 UTC — post-backlog, per-provider tunable CircuitBreaker cooldown config added (SR-4.8 residual)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Context: every provider previously got a `CircuitBreaker` with the
+  same hardcoded threshold/cooldown regardless of its own config.
+- Added `circuit_breaker_threshold`/`circuit_breaker_cooldown_seconds`
+  to `ProviderConfig`, a new `ProviderRegistry.get_config()` accessor,
+  and converted `AgentRuntime._make_circuit_breaker` from a
+  `@staticmethod` to an instance method that looks up the provider's
+  registered config.
+- **Found and fixed a real regression before it shipped**: the first
+  version let `ProviderRegistry`'s "not initialised" `RuntimeError`
+  propagate through a broad except-and-return-NoOp, silently disabling
+  circuit-breaking entirely for any runtime constructed before
+  `init_registry()` ran (a normal, expected ordering) -- caught
+  immediately by the pre-existing `test_circuit_breaker_name_matches_provider`
+  test. Fixed by scoping the registry lookup's exception handling
+  separately from the actual `CircuitBreaker` construction.
+- Converting the method from a staticmethod broke 2 existing tests and
+  1 test helper that called it directly on the class -- updated all
+  three to call via an instance.
+- Added 3 tests for `ProviderRegistry.get_config`, 3 for config
+  parsing, 3 for `_make_circuit_breaker`'s per-provider lookup
+  (including the exact regression case as a permanent guard).
+- One tangential, unrelated, pre-existing flake noticed in a broader
+  sweep: `TestConcurrentSetDefault::test_concurrent_register_and_get_available`
+  failed once with `RuntimeError: dictionary changed size during
+  iteration`, then passed 3/3 in isolation and in a full `tests/providers/`
+  re-run -- doesn't touch the new `get_config()` method, reads as a
+  rare timing-dependent concurrency flake in existing code. Documented,
+  not chased.
+- Command: `pytest tests/agent/test_runtime_config_edges.py -k
+  MakeCircuitBreaker -v`
+- Result: `5 passed`.
+- Command: `pytest tests/providers/test_registry.py -k GetConfig -v`
+- Result: `3 passed`.
+- Command: `pytest tests/config/test_settings.py -k "circuit_breaker
+  or provider_unknown" -v`
+- Result: `3 passed`.
+- Command: `pytest tests/agent/test_provider_fallback.py -q`
+- Result: `12 passed`.
+- Command: `pytest tests/agent/ tests/providers/ tests/config/ -q`
+- Result: `5569 passed, 4 skipped`.
+- Command: `pytest tests/ -q -o faulthandler_timeout=120`
+- Result: `21232 passed, 13 skipped, 1 warning in 614.03s (0:10:14)` —
+  zero failures, seventeenth consecutive fully green full-suite run,
+  up from 21223. The 1 warning is a pre-existing, order-dependent
+  Hypothesis deprecation notice, not introduced by this checkpoint.
+
 ## Run: 2026-07-12 03:25 UTC — post-backlog, missy doctor audit signing status check added
 
 - Branch: `overhaul/missy-validation-20260710-031406`

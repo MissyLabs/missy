@@ -2323,12 +2323,23 @@ class AgentRuntime:
     # Lazy subsystem factories
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _make_circuit_breaker(provider_name: str) -> Any:
+    def _make_circuit_breaker(self, provider_name: str) -> Any:
         """Create a :class:`~missy.agent.circuit_breaker.CircuitBreaker`.
 
+        SR-4.8 residual: every provider previously got a breaker with the
+        same hardcoded threshold/cooldown regardless of its own
+        configured ``circuit_breaker_threshold``/
+        ``circuit_breaker_cooldown_seconds`` (a flakier or higher-stakes
+        provider had no way to get a different tolerance). Looks up the
+        named provider's registered :class:`~missy.providers.registry.ProviderConfig`
+        (if any) and uses its tunables; falls back to
+        :class:`CircuitBreaker`'s own defaults when the provider isn't
+        registered with a config, or the config doesn't set these
+        fields (e.g. an older config predating this option).
+
         Args:
-            provider_name: Used as the breaker name for logging.
+            provider_name: Used as the breaker name for logging, and to
+                look up this provider's own tunables.
 
         Returns:
             A :class:`~missy.agent.circuit_breaker.CircuitBreaker` instance,
@@ -2336,8 +2347,33 @@ class AgentRuntime:
         """
         try:
             from missy.agent.circuit_breaker import CircuitBreaker
+        except Exception:
+            return _NoOpCircuitBreaker()
 
-            return CircuitBreaker(name=provider_name)
+        # The process-level ProviderRegistry may not be initialised yet
+        # at the point a runtime is constructed (tests routinely build an
+        # AgentRuntime standalone; some startup orderings do too) -- that
+        # is a normal, expected case, not a reason to silently disable
+        # circuit-breaking altogether by falling through to the no-op
+        # stub. Only missing/failed CircuitBreaker construction itself
+        # should do that.
+        kwargs: dict[str, Any] = {}
+        try:
+            from missy.providers.registry import get_registry
+
+            provider_config = get_registry().get_config(provider_name)
+        except Exception:
+            provider_config = None
+        if provider_config is not None:
+            threshold = getattr(provider_config, "circuit_breaker_threshold", None)
+            cooldown = getattr(provider_config, "circuit_breaker_cooldown_seconds", None)
+            if threshold is not None:
+                kwargs["threshold"] = threshold
+            if cooldown is not None:
+                kwargs["base_timeout"] = cooldown
+
+        try:
+            return CircuitBreaker(name=provider_name, **kwargs)
         except Exception:
             return _NoOpCircuitBreaker()
 

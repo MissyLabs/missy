@@ -218,6 +218,15 @@ class ProviderConfig:
             (0 = unlimited).
         max_wait_seconds: Maximum time :meth:`RateLimiter.acquire` blocks
             waiting for capacity before raising.
+        circuit_breaker_threshold: Consecutive failures before this
+            provider's :class:`~missy.agent.circuit_breaker.CircuitBreaker`
+            opens (SR-4.8 residual — previously hardcoded to the
+            breaker's own default for every provider alike, with no way
+            to give a flakier or higher-stakes provider a different
+            threshold).
+        circuit_breaker_cooldown_seconds: Initial recovery timeout in
+            seconds before this provider's breaker moves from OPEN to
+            HALF_OPEN to probe recovery.
     """
 
     name: str
@@ -232,6 +241,8 @@ class ProviderConfig:
     requests_per_minute: int = 60  # RateLimiter RPM budget (0 = unlimited)
     tokens_per_minute: int = 100_000  # RateLimiter TPM budget (0 = unlimited)
     max_wait_seconds: float = 30.0  # Max blocking wait in RateLimiter.acquire
+    circuit_breaker_threshold: int = 5  # Consecutive failures before opening
+    circuit_breaker_cooldown_seconds: float = 60.0  # OPEN -> HALF_OPEN delay
 
 
 # ---------------------------------------------------------------------------
@@ -689,6 +700,7 @@ def _parse_providers(data: dict[str, Any]) -> dict[str, ProviderConfig]:
             )
         if "model" not in raw:
             raise ConfigurationError(f"Provider '{key}' is missing required field 'model'.")
+        _warn_unknown_keys(f"providers.{key}", raw, ProviderConfig)
         api_keys = list(raw.get("api_keys", []))
         env_key = f"{key.upper().replace('-', '_')}_API_KEY"
         api_key = raw.get("api_key") or os.environ.get(env_key)
@@ -712,6 +724,10 @@ def _parse_providers(data: dict[str, Any]) -> dict[str, ProviderConfig]:
             requests_per_minute=int(raw.get("requests_per_minute", 60)),
             tokens_per_minute=int(raw.get("tokens_per_minute", 100_000)),
             max_wait_seconds=float(raw.get("max_wait_seconds", 30.0)),
+            circuit_breaker_threshold=int(raw.get("circuit_breaker_threshold", 5)),
+            circuit_breaker_cooldown_seconds=float(
+                raw.get("circuit_breaker_cooldown_seconds", 60.0)
+            ),
         )
     return providers
 

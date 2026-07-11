@@ -3623,6 +3623,77 @@ failed, up from 21219. Sixteenth consecutive fully green full-suite
 run. The 3 warnings are pre-existing, order-dependent Hypothesis
 deprecation notices, not introduced by this checkpoint.
 
+### Post-backlog (fifty-eighth checkpoint): per-provider tunable CircuitBreaker cooldown config (SR-4.8 residual)
+
+Last concretely-scoped item from "Remaining Work" before only the
+audit-log hash chain (explicitly out of scope) and the unscoped
+"Product Goal" surface remain: every provider previously got a
+`CircuitBreaker` with the same hardcoded `threshold=5`/
+`base_timeout=60s` regardless of its own config, with no way to give a
+flakier or higher-stakes provider a different tolerance.
+
+Added `circuit_breaker_threshold`/`circuit_breaker_cooldown_seconds`
+fields to `ProviderConfig` (`missy/config/settings.py`), parsed in
+`_parse_providers` with the same `_warn_unknown_keys` hygiene check
+added for the `shell.unrestricted` checkpoint (extended to
+`providers.<name>` sections too). Added a new
+`ProviderRegistry.get_config(name)` accessor (`missy/providers/registry.py`)
+— no public lookup from a provider name back to its `ProviderConfig`
+existed before. Converted `AgentRuntime._make_circuit_breaker` from a
+`@staticmethod` to an instance method that looks up the named
+provider's registered config and uses its tunables, falling back to
+`CircuitBreaker`'s own defaults when the provider isn't registered
+with a config or the fields aren't set.
+
+**Found and fixed a real regression in the new code before it
+shipped**, caught by the pre-existing test suite immediately: the
+first version let `ProviderRegistry`'s "not initialised" `RuntimeError`
+propagate through one broad `except Exception: return
+_NoOpCircuitBreaker()`, silently disabling circuit-breaking *entirely*
+for any runtime constructed before `init_registry()` had run (a normal,
+expected ordering — the existing test suite does this constantly,
+and `test_circuit_breaker_name_matches_provider` caught it
+immediately). Fixed by scoping the registry lookup's exception
+handling separately from the actual `CircuitBreaker` construction, so
+"registry not ready yet" falls back to real defaults rather than the
+no-op stub.
+
+Converting the method from a staticmethod also broke 2 existing tests
+that called it directly on the class
+(`AgentRuntime._make_circuit_breaker(name)`, the old staticmethod
+calling convention) and a test helper in `test_provider_fallback.py`
+doing the same — updated all three to call via an instance, which is
+what every real production call site already did.
+
+Added 3 new tests for `ProviderRegistry.get_config`, 3 new tests for
+the config parsing (default values, explicit override, unknown-key
+warning), and 3 new tests for `_make_circuit_breaker`'s per-provider
+lookup — including the exact regression case (registry uninitialised
+→ real defaults, not the no-op stub) as a permanent regression guard.
+
+One tangential, unrelated, pre-existing flake noticed while re-running
+the broader test sweep: `test_registry_providers_edges.py`'s
+`TestConcurrentSetDefault::test_concurrent_register_and_get_available`
+failed once in a large batch run with `RuntimeError: dictionary
+changed size during iteration`, then passed cleanly 3/3 in isolation
+and in a full re-run of `tests/providers/`. This exercises
+`register()`/`get_available()` concurrently — neither path touches the
+new `get_config()` method at all — so this reads as a rare,
+timing-dependent concurrency flake in existing code, not a regression
+from this checkpoint. Documented, not chased further (out of scope for
+this task).
+
+Verified: `pytest tests/agent/test_runtime_config_edges.py -k
+MakeCircuitBreaker -v`: 5 passed. `pytest
+tests/providers/test_registry.py -k GetConfig -v`: 3 passed. `pytest
+tests/config/test_settings.py -k "circuit_breaker or
+provider_unknown" -v`: 3 passed. `pytest
+tests/agent/test_provider_fallback.py -q`: 12 passed. Broader:
+`pytest tests/agent/ tests/providers/ tests/config/ -q`: 5569 passed,
+4 skipped. Full suite:
+`21232 passed, 13 skipped, 1 warning in 614.03s (0:10:14)` — 0 failed,
+up from 21223. Seventeenth consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security
@@ -3707,18 +3778,20 @@ path). Current remaining priority order:
    delegate's cooperation, and it found real bugs that live-only
    testing would likely have missed, reserving live delegate spend for
    the genuinely judgment-requiring cases where it mattered most.
-2. Smaller tracked follow-ups: per-provider tunable
-   CircuitBreaker cooldown config (SR-4.8 residual); audit-log hash
-   chain for deletion/reordering detection and key-rotation lifecycle
-   (SR-1.1 residual, explicitly out of scope per the review's own text
-   since no hash-chain claim exists in the product).
-   **The `missy doctor` audit signing status check is now added** —
-   see the fifty-seventh checkpoint above. **The `shell.unrestricted`
-   dead-config-key hygiene gap is now fixed** — see the fifty-sixth
-   checkpoint above. **The Web TUI browser page for approvals and
-   Discord pairing is now fixed** — see the fifty-fifth checkpoint
-   above. **DISC-CMD-008's per-user Discord rate-limiting gap is now
-   fixed** — see the fifty-fourth checkpoint above.
+2. Smaller tracked follow-ups: **all fixed.** ~~per-provider tunable
+   CircuitBreaker cooldown config (SR-4.8 residual)~~ — fixed, see the
+   fifty-eighth checkpoint above. The only item left in this bullet is
+   the audit-log hash chain for deletion/reordering detection and
+   key-rotation lifecycle (SR-1.1 residual), which is explicitly out of
+   scope per the review's own text since no hash-chain claim exists in
+   the product — nothing left to fix here. **The `missy doctor` audit
+   signing status check is now added** — see the fifty-seventh
+   checkpoint above. **The `shell.unrestricted` dead-config-key hygiene
+   gap is now fixed** — see the fifty-sixth checkpoint above. **The Web
+   TUI browser page for approvals and Discord pairing is now fixed** —
+   see the fifty-fifth checkpoint above. **DISC-CMD-008's per-user
+   Discord rate-limiting gap is now fixed** — see the fifty-fourth
+   checkpoint above.
 3. Broader untouched "Product Goal" surface from prompt.md (providers,
    tool intelligence, Discord/channels, scheduler/memory/sessions,
    hatching/persona, vision/audio/multimodal, Web TUI, OpenClaw-style

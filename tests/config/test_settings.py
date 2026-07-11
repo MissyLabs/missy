@@ -638,6 +638,60 @@ class TestLoadConfigProviders:
         cfg = load_config(path)
         assert cfg.providers["anthropic"].timeout == 30
 
+    def test_provider_circuit_breaker_tunables_default(self, tmp_path: Path):
+        """SR-4.8 residual: per-provider CircuitBreaker cooldown config.
+        Defaults must match CircuitBreaker's own hardcoded defaults
+        (threshold=5, base_timeout=60.0) exactly, so a config that
+        doesn't set these fields at all behaves identically to before
+        this option existed."""
+        path = _write_yaml(
+            tmp_path,
+            """
+            providers:
+              anthropic:
+                name: anthropic
+                model: "claude-3-5-sonnet-20241022"
+            """,
+        )
+        cfg = load_config(path)
+        assert cfg.providers["anthropic"].circuit_breaker_threshold == 5
+        assert cfg.providers["anthropic"].circuit_breaker_cooldown_seconds == 60.0
+
+    def test_provider_circuit_breaker_tunables_explicit(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            providers:
+              flaky-provider:
+                name: flaky-provider
+                model: "some-model"
+                circuit_breaker_threshold: 2
+                circuit_breaker_cooldown_seconds: 15.0
+            """,
+        )
+        cfg = load_config(path)
+        assert cfg.providers["flaky-provider"].circuit_breaker_threshold == 2
+        assert cfg.providers["flaky-provider"].circuit_breaker_cooldown_seconds == 15.0
+
+    def test_provider_unknown_key_warns(self, tmp_path: Path, caplog):
+        path = _write_yaml(
+            tmp_path,
+            """
+            providers:
+              anthropic:
+                name: anthropic
+                model: "claude-3-5-sonnet-20241022"
+                circuit_breaker_threshhold: 2
+            """,
+        )
+        with caplog.at_level("WARNING", logger="missy.config.settings"):
+            load_config(path)
+
+        assert any(
+            "providers.anthropic" in r.message and "circuit_breaker_threshhold" in r.message
+            for r in caplog.records
+        )
+
     def test_provider_base_url_optional(self, tmp_path: Path):
         path = _write_yaml(
             tmp_path,

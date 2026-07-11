@@ -866,22 +866,109 @@ class TestNoOpCircuitBreaker:
 
 
 # ---------------------------------------------------------------------------
-# 11. _make_circuit_breaker static method
+# 11. _make_circuit_breaker
+#
+# SR-4.8 residual: this became an instance method (not a staticmethod) so
+# it can look up the named provider's own circuit_breaker_threshold/
+# circuit_breaker_cooldown_seconds via the ProviderRegistry, rather than
+# every provider getting the same hardcoded threshold/cooldown.
 # ---------------------------------------------------------------------------
 
 
 class TestMakeCircuitBreaker:
     def test_make_circuit_breaker_returns_object_with_call(self):
-        cb = AgentRuntime._make_circuit_breaker("test_provider")
+        rt = AgentRuntime(AgentConfig(provider="test_provider"))
+        cb = rt._make_circuit_breaker("test_provider")
         assert hasattr(cb, "call")
 
     def test_make_circuit_breaker_different_names(self):
-        cb1 = AgentRuntime._make_circuit_breaker("anthropic")
-        cb2 = AgentRuntime._make_circuit_breaker("openai")
+        rt = AgentRuntime(AgentConfig(provider="anthropic"))
+        cb1 = rt._make_circuit_breaker("anthropic")
+        cb2 = rt._make_circuit_breaker("openai")
         # Both should have a call method; they are separate instances
         assert hasattr(cb1, "call")
         assert hasattr(cb2, "call")
         assert cb1 is not cb2
+
+    def test_uses_registered_provider_config_tunables(self):
+        """SR-4.8 residual: a provider registered with a non-default
+        circuit_breaker_threshold/circuit_breaker_cooldown_seconds must
+        get a breaker actually using those values, not the hardcoded
+        CircuitBreaker defaults every provider previously shared."""
+        from missy.config.settings import ProviderConfig
+        from missy.providers import registry as registry_module
+        from missy.providers.registry import ProviderRegistry
+
+        original = registry_module._registry
+        try:
+            fresh = ProviderRegistry()
+            fresh.register(
+                "flaky",
+                MagicMock(),
+                config=ProviderConfig(
+                    name="flaky",
+                    model="m",
+                    circuit_breaker_threshold=2,
+                    circuit_breaker_cooldown_seconds=5.0,
+                ),
+            )
+            registry_module._registry = fresh
+
+            rt = AgentRuntime(AgentConfig(provider="flaky"))
+            cb = rt._make_circuit_breaker("flaky")
+
+            assert cb._threshold == 2
+            assert cb._base_timeout == 5.0
+        finally:
+            registry_module._registry = original
+
+    def test_falls_back_to_breaker_defaults_when_provider_not_registered(self):
+        """A provider name with no registered ProviderConfig (or one
+        registered without circuit_breaker_* fields set) must fall back
+        to CircuitBreaker's own defaults, not silently degrade to the
+        no-op stub."""
+        from missy.agent.circuit_breaker import CircuitBreaker
+        from missy.providers import registry as registry_module
+        from missy.providers.registry import ProviderRegistry
+
+        original = registry_module._registry
+        try:
+            registry_module._registry = ProviderRegistry()  # empty, but initialised
+
+            rt = AgentRuntime(AgentConfig(provider="unregistered-provider"))
+            cb = rt._make_circuit_breaker("unregistered-provider")
+
+            assert isinstance(cb, CircuitBreaker)
+            assert cb._threshold == 5
+            assert cb._base_timeout == 60.0
+        finally:
+            registry_module._registry = original
+
+    def test_falls_back_to_breaker_defaults_when_registry_uninitialised(self):
+        """Regression: an AgentRuntime constructed before init_registry()
+        has ever run (a normal, expected ordering -- tests routinely do
+        this, and some startup orderings might too) must still get a
+        real, functional CircuitBreaker with default tunables. An
+        earlier version of this per-provider lookup let
+        ProviderRegistry's "not initialised" RuntimeError propagate
+        through a single broad except-and-return-NoOp, silently
+        disabling circuit-breaking entirely rather than just skipping
+        the per-provider tunable lookup."""
+        from missy.agent.circuit_breaker import CircuitBreaker
+        from missy.providers import registry as registry_module
+
+        original = registry_module._registry
+        try:
+            registry_module._registry = None  # uninitialised
+
+            rt = AgentRuntime(AgentConfig(provider="whatever"))
+            cb = rt._make_circuit_breaker("whatever")
+
+            assert isinstance(cb, CircuitBreaker)
+            assert cb._threshold == 5
+            assert cb._base_timeout == 60.0
+        finally:
+            registry_module._registry = original
 
 
 # ---------------------------------------------------------------------------

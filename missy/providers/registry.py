@@ -81,6 +81,24 @@ class ProviderRegistry:
             self._provider_configs[name] = config
             self._key_indices.setdefault(name, 0)
 
+    def get_config(self, provider_name: str) -> ProviderConfig | None:
+        """Return the :class:`ProviderConfig` registered for *provider_name*.
+
+        Used by callers that need per-provider tunables (e.g. the
+        runtime's per-provider :class:`~missy.agent.circuit_breaker.CircuitBreaker`
+        threshold/cooldown, SR-4.8 residual) without duplicating the
+        registry's own config bookkeeping.
+
+        Args:
+            provider_name: Registry key of the provider.
+
+        Returns:
+            The registered :class:`ProviderConfig`, or ``None`` if the
+            provider was registered without one (or isn't registered at
+            all).
+        """
+        return self._provider_configs.get(provider_name)
+
     def rotate_key(self, provider_name: str) -> None:
         """Rotate to the next API key for the named provider (round-robin).
 
