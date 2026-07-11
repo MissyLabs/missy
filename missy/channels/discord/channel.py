@@ -103,6 +103,21 @@ class DiscordChannel(BaseChannel):
         # Enables conversation continuity within Discord threads.
         self._thread_sessions: dict[str, str] = {}
 
+        # Thread-to-parent-channel mapping: thread_id -> parent_channel_id.
+        # A Gateway MESSAGE_CREATE for a message posted inside a thread
+        # carries channel_id = the thread's own snowflake, never the
+        # parent's -- but guild_policy.allowed_channels is naturally
+        # configured with parent-channel IDs/names (operators can't know a
+        # dynamically-created thread's ID ahead of time). Without this,
+        # any message inside a thread this bot created (via
+        # auto_thread_threshold) is silently denied by the channel
+        # allowlist forever, even though its parent channel is allowed.
+        # Populated only for threads this bot itself creates (see
+        # create_thread() below); a thread created by a Discord user
+        # directly is not covered without also handling the Gateway
+        # THREAD_CREATE event, which is a larger, separate effort.
+        self._thread_parents: dict[str, str] = {}
+
         # Message count per channel for auto-thread creation.
         self._channel_message_counts: dict[str, int] = {}
 
@@ -1281,9 +1296,18 @@ class DiscordChannel(BaseChannel):
             channel_name = str(
                 (data.get("channel") or {}).get("name", "") or data.get("channel_name", "")
             )
+            # A message posted inside a thread carries channel_id = the
+            # thread's own snowflake, never its parent's -- but the
+            # allowlist is naturally configured with parent-channel
+            # IDs/names. Check the thread's known parent (if this bot
+            # created the thread) in addition to the raw channel_id, so a
+            # thread under an allowed channel isn't silently denied.
+            parent_channel_id = self._thread_parents.get(channel_id)
             # A message always has channel_id; name may be absent from Gateway events.
-            in_allowlist = channel_id in guild_policy.allowed_channels or (
-                channel_name and channel_name in guild_policy.allowed_channels
+            in_allowlist = (
+                channel_id in guild_policy.allowed_channels
+                or (channel_name and channel_name in guild_policy.allowed_channels)
+                or (parent_channel_id and parent_channel_id in guild_policy.allowed_channels)
             )
             logger.debug(
                 "Discord: channel check guild=%s channel_id=%s channel_name=%r allowlist=%s match=%s",
@@ -1455,6 +1479,8 @@ class DiscordChannel(BaseChannel):
                 message_id=message_id,
             )
             thread_id = str(result.get("id", ""))
+            if thread_id:
+                self._thread_parents[thread_id] = channel_id
             if thread_id and session_id:
                 self._thread_sessions[thread_id] = session_id
             self._emit_audit(

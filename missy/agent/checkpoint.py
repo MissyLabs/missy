@@ -222,6 +222,40 @@ class CheckpointManager:
         )
         conn.commit()
 
+    def claim(self, checkpoint_id: str) -> bool:
+        """Atomically transition a RUNNING checkpoint to COMPLETE.
+
+        Used by :meth:`~missy.agent.runtime.AgentRuntime.resume_checkpoint`
+        to close a TOCTOU race: a plain read-then-later-write (check
+        ``state == "RUNNING"``, do a lot of work, only *then* call
+        :meth:`complete`) lets two concurrent resume attempts against the
+        same checkpoint id (e.g. two ``missy recover --resume <id>``
+        invocations) both pass the check and both proceed to execute the
+        resumed tool loop -- duplicating every subsequent tool call
+        (duplicate shell commands, file writes, sent messages, etc.) for
+        the same task. This performs the state transition immediately, in
+        a single atomic ``UPDATE ... WHERE state = 'RUNNING'``, so only
+        the caller whose update actually changed a row wins the race;
+        every other concurrent caller gets ``False`` and must not proceed.
+
+        Args:
+            checkpoint_id: The checkpoint to claim.
+
+        Returns:
+            ``True`` if this call performed the RUNNING -> COMPLETE
+            transition (i.e. this caller won the race), ``False`` if the
+            checkpoint was not in the ``RUNNING`` state (already resumed
+            by another caller, or never running).
+        """
+        conn = self._connect()
+        cursor = conn.execute(
+            "UPDATE checkpoints SET state = 'COMPLETE', updated_at = ? "
+            "WHERE id = ? AND state = 'RUNNING'",
+            (time.time(), checkpoint_id),
+        )
+        conn.commit()
+        return cursor.rowcount == 1
+
     def complete(self, checkpoint_id: str) -> None:
         """Mark a checkpoint as COMPLETE.
 
@@ -306,12 +340,29 @@ class CheckpointManager:
     # ------------------------------------------------------------------
 
     def abandon_old(self, max_age_seconds: int = _RESTART_THRESHOLD_SECS) -> int:
-        """Set state=ABANDONED for RUNNING checkpoints older than *max_age_seconds*.
+        """Set state=ABANDONED for RUNNING checkpoints inactive for *max_age_seconds*.
+
+        This runs on every :class:`~missy.agent.runtime.AgentRuntime`
+        construction (via :func:`scan_for_recovery`), across a single
+        shared ``checkpoints.db`` -- so a genuinely still-running,
+        long-lived task (plausible under ``gateway start``, which can run
+        for days) must not be abandoned out from under it just because an
+        unrelated, concurrent CLI invocation (``missy ask``, another
+        ``missy recover``, a proactive-trigger runtime) happens to
+        construct a new ``AgentRuntime`` while it's in progress. Filtering
+        on ``created_at`` (the original start time) rather than
+        ``updated_at`` (the last write, refreshed by every call to
+        :meth:`update`) previously did exactly that: a task that had been
+        running and actively checkpointing for >24h had its checkpoint
+        silently flipped to ABANDONED anyway, so if that process later
+        crashed, ``missy recover`` would never offer it for resume even
+        though it was genuinely still in flight at abandon-time.
 
         Args:
-            max_age_seconds: Age cutoff in seconds.  Checkpoints whose
-                ``created_at`` timestamp is older than this are abandoned.
-                Defaults to 86400 (24 hours).
+            max_age_seconds: Inactivity cutoff in seconds. Checkpoints
+                whose ``updated_at`` timestamp (last write, not creation
+                time) is older than this are abandoned. Defaults to 86400
+                (24 hours).
 
         Returns:
             The number of rows updated.
@@ -324,7 +375,7 @@ class CheckpointManager:
                SET state      = 'ABANDONED',
                    updated_at = ?
              WHERE state = 'RUNNING'
-               AND created_at < ?
+               AND updated_at < ?
             """,
             (time.time(), cutoff),
         )

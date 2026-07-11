@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (82 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for thirty-three consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (83 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for thirty-four consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -3299,15 +3299,65 @@ clean. Four genuine findings.
 Verified: `pytest tests/api/ tests/vision/ tests/scheduler/
 tests/observability/ -q`: `3639 passed`.
 
+### Post-backlog (seventy-sixth checkpoint): round 16 research pass — MCP auto-restart wiring, Discord thread/allowlist gap, checkpoint abandon_old aging bug, resume_checkpoint TOCTOU race
+
+Round 16 (rounds 1-15: Scheduler pause/retry+parser; Persona; API
+server auth/ratelimit/censor/MessageBus/Screencast; Memory-compaction/
+GraphMemoryStore pattern-matching/Vault; Config/Vision-session-
+eviction/CandidateGenerator; MCP-approval-gate/SubAgent/Learnings/
+Playbook/Attention; Discord-rest/operator-controls/AuditLogger/
+behavior; ContextManager/Synthesizer/Watchdog/InteractiveApproval;
+Webhook/ConfigWatcher/ContainerSandbox/MCP-client/Wizard; ToolRegistry/
+FailureTracker/CircuitBreaker/Checkpoint-save-resume/Discord-REST;
+VoiceRegistry/VoiceServer/AgentIdentity/TrustScorer; providers/
+SecurityScanner/LandlockPolicy/SkillDiscovery; vision-capture/
+CostTracker/CodeEvolutionManager; StructuredOutput/ProactiveManager/
+SleeptimeWorker/Summarizer; MessageBus-internals/HatchingManager/
+PersonaManager-backups/BehaviorLayer-tone; api-auth/otel/vector_store/
+scheduler-parser), into `missy/memory/graph_store.py`,
+`missy/agent/checkpoint.py`, `missy/channels/discord/channel.py`, and
+`missy/mcp/manager.py`. `graph_store.py`'s CRUD/query correctness
+checked out clean. Four genuine findings.
+
+1. **MCP auto-restart wiring**: `McpManager.health_check()` had zero
+   production callers, matching the Watchdog/ConfigWatcher "advertised
+   but unwired" pattern — a dead MCP server subprocess stayed dead
+   forever. Fixed by registering a periodic Watchdog check in
+   `gateway_start()`. 2 new tests, confirmed to fail pre-fix.
+2. **Discord thread/allowlist gap**: a message inside a thread carries
+   the thread's own channel_id, never the parent's, so it always
+   failed the parent-configured channel allowlist — breaking auto-
+   threading combined with channel restriction. Fixed by tracking each
+   bot-created thread's parent channel. 4 new tests, confirmed to fail
+   pre-fix.
+3. **Checkpoint abandon_old aging bug**: filtered on created_at
+   instead of updated_at, so a genuinely still-running, long-lived
+   task could be silently abandoned by an unrelated concurrent
+   process. Fixed by filtering on updated_at. 1 new test, confirmed to
+   fail pre-fix; 3 pre-existing tests needed both timestamps aged.
+4. **resume_checkpoint TOCTOU race**: two concurrent `missy recover
+   --resume <id>` invocations could both pass the RUNNING check and
+   both execute the resumed tool loop, duplicating every subsequent
+   tool call. Fixed with a new atomic `CheckpointManager.claim()`. 5
+   new tests, confirmed to fail pre-fix.
+
+Verified: `pytest tests/agent/ tests/cli/ tests/unit/test_discord_channel.py
+tests/channels/ -q`: `7394 passed, 4 skipped`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-21342 passed, 13 skipped in 486.26s (0:08:06)
+21354 passed, 13 skipped in 460.33s (0:07:40)
 ```
 
-**Zero failures**, the thirty-third consecutive fully green
-full-suite run. Passed count is up from 21326 to 21342 (the round 15
+**Zero failures**, the thirty-fourth consecutive fully green
+full-suite run. Passed count is up from 21342 to 21354 (the round 16
+checkpoint's 12 new tests: 2 MCP health-check tests, 4 Discord thread-
+allowlist tests, 1 abandon_old aging test, 4 CheckpointManager.claim()
+unit tests, and 1 concurrent-resume end-to-end test — all of the
+sixty-first through seventy-fifth checkpoints' fixes are confirmed
+still holding). Passed count is up from 21326 to 21342 (the round 15
 checkpoint's 16 new tests: 1 background-run redaction test, 1
 vision-memory dict-shape test, 11 crontab-dow-conversion unit tests,
 and 3 end-to-end scheduler fire-date tests — all of the sixty-first

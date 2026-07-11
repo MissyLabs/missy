@@ -2970,10 +2970,22 @@ class AgentRuntime:
         checkpoint = cm.get(checkpoint_id)
         if checkpoint is None:
             raise ValueError(f"No checkpoint found with id {checkpoint_id!r}.")
-        if checkpoint["state"] != "RUNNING":
+
+        # Atomically claim the checkpoint (RUNNING -> COMPLETE) before doing
+        # any further work, closing a TOCTOU race where two concurrent
+        # resume_checkpoint() calls (e.g. two `missy recover --resume <id>`
+        # invocations) could both pass a plain state=='RUNNING' check and
+        # both proceed to execute the resumed tool loop, duplicating every
+        # subsequent tool call for the same task. claim() returns True only
+        # for the single caller whose UPDATE actually flipped the row from
+        # RUNNING; every other concurrent caller sees False and fails
+        # closed here instead.
+        if not cm.claim(checkpoint_id):
+            current = cm.get(checkpoint_id)
+            current_state = current["state"] if current else "unknown"
             raise ValueError(
                 f"Checkpoint {checkpoint_id!r} is not resumable "
-                f"(state={checkpoint['state']!r}); only RUNNING checkpoints "
+                f"(state={current_state!r}); only RUNNING checkpoints "
                 "can be resumed."
             )
 
@@ -3008,10 +3020,10 @@ class AgentRuntime:
         tools = self._get_tools()
 
         # This checkpoint's data has now been consumed and handed off to a
-        # new checkpoint-tracked run (created inside _tool_loop()) -- mark
-        # it complete so it is never offered for resume again, including by
-        # a concurrent `missy recover --resume` invocation.
-        cm.complete(checkpoint_id)
+        # new checkpoint-tracked run (created inside _tool_loop()) -- it
+        # was already atomically marked complete by cm.claim() above, so
+        # it can never be offered for resume again, including by a
+        # concurrent `missy recover --resume` invocation.
 
         self._emit_event(
             session_id=sid,

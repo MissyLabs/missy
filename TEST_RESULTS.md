@@ -1,5 +1,70 @@
 # TEST_RESULTS
 
+## Run: 2026-07-13 11:30 UTC — round 16 research pass: MCP auto-restart wiring, Discord thread/allowlist gap, checkpoint abandon_old aging bug, resume_checkpoint TOCTOU race
+
+- Context: round 16 of the research-pass invitation (rounds 1-15:
+  Scheduler pause/retry+parser; Persona; API server auth/ratelimit/
+  censor/MessageBus/Screencast; Memory-compaction/GraphMemoryStore
+  pattern-matching/Vault; Config/Vision-session-eviction/
+  CandidateGenerator; MCP-approval-gate/SubAgent/Learnings/Playbook/
+  Attention; Discord-rest/operator-controls/AuditLogger/behavior;
+  ContextManager/Synthesizer/Watchdog/InteractiveApproval; Webhook/
+  ConfigWatcher/ContainerSandbox/MCP-client/Wizard; ToolRegistry/
+  FailureTracker/CircuitBreaker/Checkpoint-save-resume/Discord-REST;
+  VoiceRegistry/VoiceServer/AgentIdentity/TrustScorer; providers/
+  SecurityScanner/LandlockPolicy/SkillDiscovery; vision-capture/
+  CostTracker/CodeEvolutionManager; StructuredOutput/ProactiveManager/
+  SleeptimeWorker/Summarizer; MessageBus-internals/HatchingManager/
+  PersonaManager-backups/BehaviorLayer-tone; api-auth/otel/
+  vector_store/scheduler-parser). This round targeted
+  `missy/memory/graph_store.py`, `missy/agent/checkpoint.py`,
+  `missy/channels/discord/channel.py`, and `missy/mcp/manager.py` as
+  primary audit subjects from fresh angles. `graph_store.py`'s CRUD/
+  query correctness checked out clean.
+- **MCP auto-restart wiring**: `McpManager.health_check()` had zero
+  production callers, matching the Watchdog/ConfigWatcher "advertised
+  but unwired" pattern — a dead MCP server subprocess stayed dead
+  forever. Fixed by registering a periodic Watchdog check in
+  `gateway_start()`.
+- Command: `pytest tests/cli/test_cli_main_gaps.py -k McpHealthCheck -v`
+- Result: `2 passed`. Confirmed to genuinely fail against the pre-fix
+  code via `git stash`.
+- **Discord thread/allowlist gap**: a message inside a thread carries
+  the thread's own channel_id, never the parent's, so it always failed
+  the parent-configured channel allowlist — breaking auto-threading
+  combined with channel restriction. Fixed by tracking each
+  bot-created thread's parent channel and checking it too.
+- Command: `pytest tests/unit/test_discord_channel.py -k channel_allowlist -v`
+- Result: `4 passed`. The core regression confirmed to genuinely fail
+  against the pre-fix code via `git stash`.
+- **Checkpoint abandon_old aging bug**: filtered on created_at (start
+  time) instead of updated_at (last write), so a genuinely still-
+  running, long-lived task (plausible under `gateway start`) could be
+  silently abandoned by an unrelated concurrent process. Fixed by
+  filtering on updated_at instead.
+- Command: `pytest tests/agent/test_checkpoint.py -k AbandonOld -v`
+- Result: `4 passed`. The new regression test confirmed to genuinely
+  fail against the pre-fix code via `git stash`. 3 pre-existing tests
+  across two files needed both created_at and updated_at aged, since
+  they only tested the old, incorrect signal.
+- **resume_checkpoint TOCTOU race**: a plain read-then-later-write let
+  two concurrent `missy recover --resume <id>` invocations both pass
+  the RUNNING check and both execute the resumed tool loop, duplicating
+  every subsequent tool call. Fixed with a new atomic
+  `CheckpointManager.claim()` (single `UPDATE ... WHERE state =
+  'RUNNING'`) called immediately, before any further work.
+- Command: `pytest tests/agent/test_checkpoint.py -k TestClaim -v`
+  and `pytest tests/agent/test_runtime_deep.py -k concurrent_resume -v`
+- Result: `4 passed` + `1 passed`. The concurrency test confirmed to
+  genuinely fail against the pre-fix code via `git stash`
+  (`AttributeError` — `claim()` didn't exist).
+- Command: `pytest tests/agent/ tests/cli/ tests/unit/test_discord_channel.py tests/channels/ -q`
+- Result: `7394 passed, 4 skipped`.
+- Command: `python3 -m pytest tests/ -q -o faulthandler_timeout=120`
+  (full suite, background run)
+- Result: `21354 passed, 13 skipped in 460.33s (0:07:40)`. 0 failed, up
+  from 21342. Thirty-fourth consecutive fully green full-suite run.
+
 ## Run: 2026-07-13 11:05 UTC — round 15 research pass: unredacted secret leak in background-run API, broken vector-search integration in vision memory, scheduler day-of-week numbering bug + broken 6-field cron
 
 - Context: round 15 of the research-pass invitation (rounds 1-14:

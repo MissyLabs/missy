@@ -269,6 +269,120 @@ class TestGatewayStartWatchdog:
             _os.unlink(cfg_path)
 
 
+class TestGatewayStartMcpHealthCheck:
+    """Regression: McpManager.health_check() (restarts any dead MCP server
+    via the same digest-verification/approval-annotation path as an
+    initial add_server() call) was fully built and tested but had zero
+    production callers anywhere -- grep confirms no CLI command,
+    scheduler, or background thread ever called it. Once an MCP server
+    subprocess died, it stayed dead for the rest of the process's life:
+    its tools kept being listed/dispatched, simply failing against the
+    dead subprocess forever, with no auto-recovery ever attempted.
+    gateway_start() must register a periodic Watchdog check that calls
+    it.
+    """
+
+    def test_mcp_servers_check_registered(self, runner: CliRunner):
+        import os
+        import signal
+
+        cfg_path = _cfg_path()
+        try:
+            mock_config = _make_mock_config()
+            mock_config.discord = None
+            mock_config.providers = {}
+
+            call_count = [0]
+
+            def fake_sleep(t):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    os.kill(os.getpid(), signal.SIGTERM)
+                elif call_count[0] > 5:
+                    raise SystemExit(0)
+
+            with (
+                patch("missy.cli.main._load_subsystems", return_value=mock_config),
+                patch("missy.agent.runtime.AgentRuntime"),
+                patch("missy.agent.runtime.AgentConfig"),
+                patch("time.sleep", side_effect=fake_sleep),
+                patch("yaml.safe_load", return_value={}),
+                patch("missy.agent.watchdog.Watchdog") as mock_watchdog_cls,
+            ):
+                result = runner.invoke(cli, ["--config", cfg_path, "gateway", "start"])
+
+            assert result.exit_code == 0
+            registered = {
+                call.args[0]: call.args[1]
+                for call in mock_watchdog_cls.return_value.register.call_args_list
+            }
+            assert "mcp_servers" in registered
+        finally:
+            import os as _os
+
+            _os.unlink(cfg_path)
+
+    def test_mcp_servers_check_restarts_dead_servers_and_reports_status(
+        self, runner: CliRunner
+    ):
+        """Extracts the real check-function closure registered under
+        "mcp_servers" (Watchdog itself is mocked, but the closure passed to
+        .register() is the genuine production function) and verifies it
+        actually calls health_check() and reflects post-restart status,
+        rather than just checking it was registered under the right name.
+        """
+        import os
+        import signal
+
+        cfg_path = _cfg_path()
+        try:
+            mock_config = _make_mock_config()
+            mock_config.discord = None
+            mock_config.providers = {}
+
+            call_count = [0]
+
+            def fake_sleep(t):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    os.kill(os.getpid(), signal.SIGTERM)
+                elif call_count[0] > 5:
+                    raise SystemExit(0)
+
+            with (
+                patch("missy.cli.main._load_subsystems", return_value=mock_config),
+                patch("missy.agent.runtime.AgentRuntime") as mock_agent_runtime_cls,
+                patch("missy.agent.runtime.AgentConfig"),
+                patch("time.sleep", side_effect=fake_sleep),
+                patch("yaml.safe_load", return_value={}),
+                patch("missy.agent.watchdog.Watchdog") as mock_watchdog_cls,
+            ):
+                mock_mcp_manager = MagicMock()
+                mock_mcp_manager.list_servers.return_value = [{"name": "s1", "alive": True}]
+                mock_agent_runtime_cls.return_value._mcp_manager = mock_mcp_manager
+
+                result = runner.invoke(cli, ["--config", cfg_path, "gateway", "start"])
+
+                assert result.exit_code == 0
+                registered = {
+                    call.args[0]: call.args[1]
+                    for call in mock_watchdog_cls.return_value.register.call_args_list
+                }
+                check_fn = registered["mcp_servers"]
+
+                assert check_fn() is True
+                mock_mcp_manager.health_check.assert_called()
+
+                # Now simulate a server that's still dead after the
+                # restart attempt.
+                mock_mcp_manager.list_servers.return_value = [{"name": "s1", "alive": False}]
+                assert check_fn() is False
+        finally:
+            import os as _os
+
+            _os.unlink(cfg_path)
+
+
 class TestGatewayStartAgentRuntimeShutdown:
     """Regression: AgentRuntime.shutdown() (which stops the SleeptimeWorker
     background daemon thread cleanly) had zero call sites anywhere in the

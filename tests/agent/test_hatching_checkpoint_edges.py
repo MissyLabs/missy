@@ -936,10 +936,17 @@ class TestScanForRecoveryEdgeCases:
     def test_stale_checkpoint_abandoned_then_not_in_results(self, tmp_db):
         cm = CheckpointManager(db_path=tmp_db)
         cid = cm.create("s", "t", "p")
+        # abandon_old() filters on updated_at (last write), not created_at
+        # (original start time) -- age both so this represents a
+        # checkpoint that's genuinely been inactive, not just old.
         _raw_exec(
             tmp_db,
-            "UPDATE checkpoints SET created_at=? WHERE id=?",
-            (time.time() - 2 * _RESTART_THRESHOLD_SECS, cid),
+            "UPDATE checkpoints SET created_at=?, updated_at=? WHERE id=?",
+            (
+                time.time() - 2 * _RESTART_THRESHOLD_SECS,
+                time.time() - 2 * _RESTART_THRESHOLD_SECS,
+                cid,
+            ),
         )
         results = scan_for_recovery(db_path=tmp_db)
         ids_in_results = [r.checkpoint_id for r in results]
@@ -951,8 +958,12 @@ class TestScanForRecoveryEdgeCases:
         stale_id = cm.create("s-stale", "t-stale", "stale prompt")
         _raw_exec(
             tmp_db,
-            "UPDATE checkpoints SET created_at=? WHERE id=?",
-            (time.time() - 2 * _RESTART_THRESHOLD_SECS, stale_id),
+            "UPDATE checkpoints SET created_at=?, updated_at=? WHERE id=?",
+            (
+                time.time() - 2 * _RESTART_THRESHOLD_SECS,
+                time.time() - 2 * _RESTART_THRESHOLD_SECS,
+                stale_id,
+            ),
         )
         results = scan_for_recovery(db_path=tmp_db)
         ids = [r.checkpoint_id for r in results]

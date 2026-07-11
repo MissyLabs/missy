@@ -494,6 +494,87 @@ class TestGuildPolicy:
         result = channel._check_guild_policy("guild-1", "chan-1", "user-allowed", "hi", {})
         assert result is True
 
+    def test_channel_allowlist_denies_unlisted_channel(self, event_bus_fresh: EventBus) -> None:
+        account = DiscordAccountConfig(
+            account_id="b",
+            guild_policies={
+                "guild-1": DiscordGuildPolicy(enabled=True, allowed_channels=["parent-chan"])
+            },
+        )
+        channel = _make_channel(account, bus=event_bus_fresh)
+        result = channel._check_guild_policy("guild-1", "other-chan", "user-1", "hi", {})
+        assert result is False
+        denied = event_bus_fresh.get_events(result="deny")
+        assert any(e.detail.get("reason") for e in denied if "allowlist" in str(e.event_type))
+
+    def test_channel_allowlist_allows_listed_channel(self) -> None:
+        account = DiscordAccountConfig(
+            account_id="b",
+            guild_policies={
+                "guild-1": DiscordGuildPolicy(enabled=True, allowed_channels=["parent-chan"])
+            },
+        )
+        channel = _make_channel(account)
+        result = channel._check_guild_policy("guild-1", "parent-chan", "user-1", "hi", {})
+        assert result is True
+
+    def test_channel_allowlist_allows_thread_under_allowed_parent(self) -> None:
+        """Regression: a message posted inside a thread carries channel_id
+        = the thread's own snowflake, never its parent's -- but
+        allowed_channels is naturally configured with parent-channel
+        IDs/names (operators can't know a dynamically-created thread's ID
+        ahead of time). Without resolving the thread's parent, a thread
+        the bot itself creates under an allowed channel (e.g. via
+        auto_thread_threshold) is silently denied by the channel
+        allowlist forever, even though its parent channel is allowed.
+        """
+        account = DiscordAccountConfig(
+            account_id="b",
+            guild_policies={
+                "guild-1": DiscordGuildPolicy(enabled=True, allowed_channels=["parent-chan"])
+            },
+        )
+        channel = _make_channel(account)
+        channel._rest = MagicMock()
+        channel._rest.create_thread.return_value = {"id": "thread-under-parent"}
+
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(channel.create_thread("parent-chan", "Auto Thread"))
+        finally:
+            loop.close()
+
+        result = channel._check_guild_policy(
+            "guild-1", "thread-under-parent", "user-1", "hi", {}
+        )
+        assert result is True
+
+    def test_channel_allowlist_denies_thread_under_unlisted_parent(self) -> None:
+        """A thread created under a channel that is NOT in the allowlist
+        must still be denied -- the parent-resolution fix must not
+        accidentally allow every known thread regardless of its parent.
+        """
+        account = DiscordAccountConfig(
+            account_id="b",
+            guild_policies={
+                "guild-1": DiscordGuildPolicy(enabled=True, allowed_channels=["parent-chan"])
+            },
+        )
+        channel = _make_channel(account)
+        channel._rest = MagicMock()
+        channel._rest.create_thread.return_value = {"id": "thread-under-other"}
+
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(channel.create_thread("other-chan", "Auto Thread"))
+        finally:
+            loop.close()
+
+        result = channel._check_guild_policy(
+            "guild-1", "thread-under-other", "user-1", "hi", {}
+        )
+        assert result is False
+
     def test_require_mention_filters_unmention(self, event_bus_fresh: EventBus) -> None:
         account = DiscordAccountConfig(
             account_id="bot-001",

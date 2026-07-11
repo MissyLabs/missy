@@ -2321,9 +2321,28 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
         store.get_session_turns("watchdog-healthcheck", limit=1)
         return True
 
+    def _check_mcp_servers() -> bool:
+        # McpManager.health_check() (restart any dead server, going through
+        # the same digest-verification/approval-annotation path as an
+        # initial add_server() call) was fully built and tested but had
+        # zero production callers anywhere -- once an MCP server subprocess
+        # died (crash, OOM-kill), it stayed dead for the rest of the
+        # process's life: its tools kept being listed via all_tools() and
+        # dispatched via call_tool(), which would simply fail against the
+        # dead subprocess forever, with no auto-recovery ever attempted.
+        # Piggybacking the restart-attempt onto this periodic check (rather
+        # than a bespoke separate thread) reuses the same infrastructure
+        # already wired in for provider_registry/memory_store above.
+        mgr = getattr(_agent, "_mcp_manager", None)
+        if mgr is None:
+            return True  # no MCP servers configured; nothing to monitor
+        mgr.health_check()
+        return all(server["alive"] for server in mgr.list_servers())
+
     watchdog = Watchdog()
     watchdog.register("provider_registry", _check_provider_registry)
     watchdog.register("memory_store", _check_memory_store)
+    watchdog.register("mcp_servers", _check_mcp_servers)
     watchdog.start()
 
     # Config hot-reload. Fully built and tested (missy/config/hotreload.py,

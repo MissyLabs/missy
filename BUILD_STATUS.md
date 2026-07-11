@@ -5526,6 +5526,138 @@ tests/observability/ -q`: `3639 passed`. **Full-suite confirmation:**
 `21342 passed, 13 skipped in 486.26s (0:08:06)` — 0 failed, up from
 21326. Thirty-third consecutive fully green full-suite run.
 
+### Post-backlog (seventy-sixth checkpoint): round 16 research pass wires up MCP auto-restart, fixes a Discord thread/allowlist gap, and closes two checkpoint-recovery races
+
+Round 16 of the research-pass invitation (rounds 1-15: Scheduler
+pause/retry+parser; Persona; API server auth/ratelimit/censor/
+MessageBus/Screencast; Memory-compaction/GraphMemoryStore pattern-
+matching/Vault; Config/Vision-session-eviction/CandidateGenerator;
+MCP-approval-gate/SubAgent/Learnings/Playbook/Attention; Discord-rest/
+operator-controls/AuditLogger/behavior; ContextManager/Synthesizer/
+Watchdog/InteractiveApproval; Webhook/ConfigWatcher/ContainerSandbox/
+MCP-client/Wizard; ToolRegistry/FailureTracker/CircuitBreaker/
+Checkpoint-save-resume/Discord-REST; VoiceRegistry/VoiceServer/
+AgentIdentity/TrustScorer; providers/SecurityScanner/LandlockPolicy/
+SkillDiscovery; vision-capture/CostTracker/CodeEvolutionManager;
+StructuredOutput/ProactiveManager/SleeptimeWorker/Summarizer;
+MessageBus-internals/HatchingManager/PersonaManager-backups/
+BehaviorLayer-tone; api-auth/otel/vector_store/scheduler-parser), this
+time into `missy/memory/graph_store.py` CRUD/query correctness,
+`missy/agent/checkpoint.py`'s WAL mechanics and `missy recover`
+cross-process interaction, `missy/channels/discord/channel.py`'s access
+control (not `rest.py`), and `missy/mcp/manager.py`'s server lifecycle
+(not the approval-gate fix from round 5). `graph_store.py`'s CRUD/query
+correctness held up well (the round-3 merge-crash fix is solid, entity
+deletion never leaves dangling relationship rows, cycle/self-loop
+traversal terminates correctly). Four genuine findings, live-verified
+and fixed.
+
+**1. `McpManager.health_check()` (restarts any dead MCP server via the
+same digest-verification/approval-annotation path as an initial
+`add_server()` call) had zero production callers anywhere — the exact
+"advertised but unwired" pattern already fixed for `Watchdog` (round 7)
+and `ConfigWatcher` (round 8).** Confirmed via `grep -rn
+"\.health_check("` returning zero non-test hits; `gateway_start()`
+registers `Watchdog` checks for `provider_registry`/`memory_store` but
+never for MCP servers, and `_sync_mcp_tools()`'s own docstring in
+`runtime.py` even claims tools are refreshed "via `missy mcp add`/
+`remove` or `McpManager.health_check()`" as if the latter runs live —
+it doesn't. Concrete consequence: once an MCP server subprocess dies
+(crash, OOM-kill), it stays dead for the remaining life of the process
+— its tools keep being listed via `all_tools()` and dispatched via
+`call_tool()`, simply failing against the dead subprocess forever, with
+no auto-recovery ever attempted. Fixed by registering a periodic
+Watchdog check (`_check_mcp_servers`) in `gateway_start()` that calls
+`health_check()` and reports post-restart status, reusing the same
+infrastructure already wired in for the other two subsystem checks. 2
+new tests (one confirming registration, one extracting the real
+closure and exercising its actual restart-and-report behavior),
+confirmed via `git stash` to genuinely fail pre-fix.
+
+**2. Discord's channel allowlist doesn't recognize threads, silently
+denying every message inside a thread under an otherwise-allowed
+parent channel.** A Gateway `MESSAGE_CREATE` for a message posted
+inside a thread carries `channel_id` = the thread's own snowflake,
+never the parent channel's — but `guild_policy.allowed_channels` is
+naturally configured with parent-channel IDs/names (operators can't
+know a dynamically-created thread's ID ahead of time), so any message
+inside a thread — including ones created by the bot's own
+`auto_thread_threshold` feature — failed the allowlist check and was
+silently denied forever. **Concrete failure**: enable both
+`allowed_channels` and `auto_thread_threshold` on the same guild — the
+bot creates a thread as its first reply, then never responds to
+anything posted inside that thread again. Fixed by tracking each
+thread's parent channel at creation time (`self._thread_parents:
+dict[str, str]`, populated in `create_thread()`, which already receives
+the parent `channel_id` as a parameter) and checking it in addition to
+the raw `channel_id`/name in the allowlist evaluation. Scoped
+deliberately to threads this bot itself creates — a thread created
+directly by a Discord user would additionally require handling the
+Gateway `THREAD_CREATE` event, a larger, separate effort left as an
+honest residual. 4 new tests (allowlist-denies-unlisted, allows-listed,
+allows-thread-under-allowed-parent, denies-thread-under-unlisted-parent
+— the last guards against the fix over-permissively allowing any known
+thread regardless of its actual parent), confirmed via `git stash` to
+genuinely fail pre-fix for the core regression case.
+
+**3. `CheckpointManager.abandon_old()` filtered on `created_at` (original
+start time) rather than `updated_at` (last write, refreshed by every
+`update()` call), letting a genuinely still-running, long-lived task get
+silently abandoned by an unrelated concurrent process.** `abandon_old()`
+runs on every `AgentRuntime` construction (via `scan_for_recovery()`),
+across a single shared `~/.missy/checkpoints.db` — not scoped to the
+current process. A legitimately long-running task (plausible under
+`gateway start`, which can run for days) that started over 24h ago but
+is actively checkpointing (e.g. a background/scheduled agent run) had
+its checkpoint silently flipped to `ABANDONED` anyway by any unrelated
+`missy` CLI invocation elsewhere that happened to construct a new
+`AgentRuntime` — since `update()`/`complete()` don't check current state
+before writing, the still-running task kept working fine, but
+`get_incomplete()` would never see it again, so if that process later
+crashed, `missy recover` would silently never offer it for resume even
+though it was genuinely still in flight at abandon-time. **Live-
+reproduced**: a checkpoint created 30 hours ago but updated moments
+ago was correctly left `RUNNING` before the fix's own verification and
+incorrectly flipped to `ABANDONED` when checked against the pre-fix
+code. Fixed by filtering on `updated_at` instead of `created_at` — a
+checkpoint whose last write was recent is clearly still actively
+progressing, no matter how long ago it started. 1 new regression test,
+confirmed via `git stash` to genuinely fail pre-fix. 3 pre-existing
+tests across `test_checkpoint.py`/`test_hatching_checkpoint_edges.py`
+only aged `created_at` (not `updated_at`), matching the old, incorrect
+signal — fixed to age both columns, since their actual intent (a
+checkpoint that's genuinely been inactive, not merely old) is
+unaffected by the correction.
+
+**4. `AgentRuntime.resume_checkpoint()` had a TOCTOU race letting the
+same checkpoint be resumed twice concurrently.** The method read the
+checkpoint and checked `state == "RUNNING"`, then did real, non-trivial
+work (rebuilding the system prompt, re-resolving tools) before finally
+marking it `COMPLETE` at the very end — a comment explicitly claimed
+this protected against "a concurrent `missy recover --resume`
+invocation," but the state was never atomically claimed. Two concurrent
+`missy recover --resume <id>` invocations within that window could both
+pass the RUNNING check and both proceed to execute the resumed tool
+loop, duplicating every subsequent tool call (duplicate shell commands,
+file writes, sent messages, etc.) for the same task. Fixed by adding
+`CheckpointManager.claim()` — a single atomic `UPDATE ... WHERE state =
+'RUNNING'` transitioning straight to `COMPLETE` and returning whether
+*this* call performed the transition — and calling it immediately after
+the initial existence check, before any further work, removing the
+now-redundant `cm.complete()` call at the end. **Live-reproduced**: two
+sequential `claim()` calls against the same checkpoint id returned
+`True` then `False`. 5 new tests (4 unit tests for `claim()` itself, 1
+end-to-end test simulating a second concurrent resume attempt winning
+the race and confirming the loser's tool loop never executes),
+confirmed via `git stash` to genuinely fail pre-fix (the concurrency
+test fails with `AttributeError` since `claim()` didn't exist).
+
+Verified: `pytest tests/agent/ tests/cli/ tests/unit/test_discord_channel.py
+tests/channels/ -q`: `7394 passed, 4 skipped`. **Full-suite
+confirmation:** `python3 -m pytest tests/ -q -o faulthandler_timeout=120`
+→ `21354 passed, 13 skipped in 460.33s (0:07:40)` — 0 failed, up from
+21342. Thirty-fourth consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

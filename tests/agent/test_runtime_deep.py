@@ -1749,6 +1749,46 @@ class TestResumeCheckpoint:
         # The old checkpoint is consumed (never offered for resume again).
         assert cm.get(cid)["state"] == "COMPLETE"
 
+    def test_concurrent_resume_of_same_checkpoint_only_runs_once(self, monkeypatch, tmp_path):
+        """Regression: resume_checkpoint() used to read+check state=='RUNNING'
+        and only mark the checkpoint COMPLETE at the very end, after
+        building a fresh system prompt and re-resolving tools -- a real
+        window of work. Two concurrent resume_checkpoint() calls against
+        the same checkpoint id (e.g. two `missy recover --resume <id>`
+        invocations) could both pass the RUNNING check and both proceed
+        to execute the resumed tool loop, duplicating every subsequent
+        tool call for the same task. cm.claim() now atomically transitions
+        RUNNING -> COMPLETE up front, so only one of two concurrent calls
+        may proceed; the other must fail closed with ValueError instead of
+        re-running the task.
+        """
+        from missy.agent.checkpoint import CheckpointManager
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        provider = _make_provider(reply="done")
+        provider.complete_with_tools.return_value = _make_stop_response("done")
+        registry = _make_registry({"fake": provider})
+
+        cm = CheckpointManager()
+        cid = cm.create("sess-1", "task-1", "prompt")
+        cm.update(cid, [{"role": "user", "content": "prompt"}], [], iteration=0)
+
+        with patch("missy.agent.runtime.get_registry", return_value=registry):
+            rt = AgentRuntime(AgentConfig(provider="fake"))
+            # Simulate a second, concurrent `missy recover --resume <id>`
+            # invocation racing in between: it also sees the checkpoint
+            # (still RUNNING at this exact moment) and attempts to claim
+            # it first.
+            second_cm = CheckpointManager()
+            assert second_cm.claim(cid) is True
+
+            with pytest.raises(ValueError, match="not resumable"):
+                rt.resume_checkpoint(cid)
+
+        # The tool loop must never have executed for the loser of the race.
+        provider.complete_with_tools.assert_not_called()
+
     def test_resume_emits_expected_audit_events(self, monkeypatch, tmp_path):
         from missy.agent.checkpoint import CheckpointManager
         from missy.agent.runtime import AgentConfig, AgentRuntime

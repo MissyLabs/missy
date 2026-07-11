@@ -201,6 +201,34 @@ class TestComplete:
         assert all(c["id"] != cid for c in incomplete)
 
 
+class TestClaim:
+    """Regression: resume_checkpoint() used to read+check state=='RUNNING'
+    and only mark the checkpoint COMPLETE much later, after a real window
+    of work -- a TOCTOU race letting two concurrent resume attempts both
+    proceed. claim() atomically transitions RUNNING -> COMPLETE so only
+    one caller ever wins.
+    """
+
+    def test_claim_running_checkpoint_returns_true(self, cm, tmp_db):
+        cid = cm.create("s", "t", "p")
+        assert cm.claim(cid) is True
+        state = _query_one(tmp_db, "SELECT state FROM checkpoints WHERE id=?", (cid,))[0]
+        assert state == "COMPLETE"
+
+    def test_second_claim_of_same_checkpoint_returns_false(self, cm):
+        cid = cm.create("s", "t", "p")
+        assert cm.claim(cid) is True
+        assert cm.claim(cid) is False
+
+    def test_claim_non_running_checkpoint_returns_false(self, cm):
+        cid = cm.create("s", "t", "p")
+        cm.fail(cid)
+        assert cm.claim(cid) is False
+
+    def test_claim_nonexistent_checkpoint_returns_false(self, cm):
+        assert cm.claim("00000000-0000-0000-0000-000000000000") is False
+
+
 class TestFail:
     def test_sets_state_to_failed(self, cm, tmp_db):
         cid = cm.create("s", "t", "p")
@@ -304,10 +332,13 @@ class TestClassify:
 class TestAbandonOld:
     def test_old_running_becomes_abandoned(self, cm, tmp_db):
         cid = cm.create("s", "t", "p")
+        # abandon_old() filters on updated_at (last write / activity), not
+        # created_at (original start time) -- age both so this represents
+        # a checkpoint that's genuinely been inactive, not just old.
         _execute(
             tmp_db,
-            "UPDATE checkpoints SET created_at=? WHERE id=?",
-            (time.time() - 90000, cid),
+            "UPDATE checkpoints SET created_at=?, updated_at=? WHERE id=?",
+            (time.time() - 90000, time.time() - 90000, cid),
         )
         count = cm.abandon_old(max_age_seconds=86400)
         assert count == 1
@@ -326,12 +357,38 @@ class TestAbandonOld:
         with sqlite3.connect(tmp_db) as conn:
             for cid in ids:
                 conn.execute(
-                    "UPDATE checkpoints SET created_at=? WHERE id=?",
-                    (time.time() - 90000, cid),
+                    "UPDATE checkpoints SET created_at=?, updated_at=? WHERE id=?",
+                    (time.time() - 90000, time.time() - 90000, cid),
                 )
             conn.commit()
         count = cm.abandon_old()
         assert count == 3
+
+    def test_old_created_but_recently_updated_not_abandoned(self, cm, tmp_db):
+        """Regression: abandon_old() previously filtered on created_at (the
+        original start time), not updated_at (last write, refreshed by
+        every update() call) -- so a genuinely still-running, long-lived
+        task (plausible under `gateway start`, which can run for days)
+        that started over 24h ago but is actively checkpointing had its
+        checkpoint silently flipped to ABANDONED anyway, by an unrelated
+        concurrent AgentRuntime construction elsewhere (abandon_old() runs
+        on every AgentRuntime init via scan_for_recovery(), across a
+        single shared checkpoints.db). Must not abandon a checkpoint whose
+        last update was recent, no matter how long ago it started.
+        """
+        cid = cm.create("s", "t", "p")
+        _execute(
+            tmp_db,
+            "UPDATE checkpoints SET created_at=? WHERE id=?",
+            (time.time() - 30 * 3600, cid),
+        )
+        cm.update(cid, loop_messages=[{"role": "user", "content": "hi"}], tool_names_used=[], iteration=1)
+
+        count = cm.abandon_old(max_age_seconds=86400)
+
+        assert count == 0
+        state = _query_one(tmp_db, "SELECT state FROM checkpoints WHERE id=?", (cid,))[0]
+        assert state == "RUNNING"
 
 
 # ---------------------------------------------------------------------------
@@ -443,10 +500,13 @@ class TestScanForRecovery:
     def test_old_checkpoint_is_abandoned_before_scan(self, tmp_db):
         cm = CheckpointManager(db_path=tmp_db)
         cid = cm.create("s", "t", "p")
+        # abandon_old() filters on updated_at (last write), not created_at
+        # (original start time) -- age both so this represents a
+        # checkpoint that's genuinely been inactive, not just old.
         _execute(
             tmp_db,
-            "UPDATE checkpoints SET created_at=? WHERE id=?",
-            (time.time() - 2 * 86400, cid),
+            "UPDATE checkpoints SET created_at=?, updated_at=? WHERE id=?",
+            (time.time() - 2 * 86400, time.time() - 2 * 86400, cid),
         )
         results = scan_for_recovery(db_path=tmp_db)
         # abandon_old should have transitioned it before get_incomplete is called
