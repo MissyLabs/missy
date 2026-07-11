@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (41 checkpoints this session, full suite green after every one — and, as of this checkpoint, the full suite itself has zero failures for the first time)
+## Changed (42 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for two consecutive checkpoints)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -1456,36 +1456,92 @@ across the rest of the suite. `tests/vision/ tests/agent/
 tests/providers/` combined: 8113 passed, 4 pre-existing unrelated
 skips.
 
+### Task #12 (thirty-sixth checkpoint): wired an authenticated Discord pairing approval endpoint
+
+SR-1.12 (earlier this session) closed the in-band DM self-approval
+bypass, but left `DiscordChannel.get_pending_pairs()`/`accept_pair()`/
+`deny_pair()` completely unreachable from anywhere outside the process
+that created them — `grep -rn "accept_pair\|deny_pair\|get_pending_pairs"
+missy/` matched only their own definitions. An operator had no working
+way to actually approve or deny a pairing request at all, exactly as
+task #12 described.
+
+Wired the same authenticated-endpoint pattern SR-2.2 established for
+`ApprovalGate`/`/api/v1/approvals`: `missy/api/server.py`'s
+`ApiServer`/`_make_handler()` gain a `discord_channels: list | None`
+parameter — a *shared, mutable* list, since `DiscordChannel` instances
+are constructed later (inside the async Discord-startup loop in
+`cli/main.py`) than `ApiServer.__init__` runs; the API server reads
+from this same list lazily at request time, so it correctly sees
+channels that didn't exist yet when it started. New `GET
+/api/v1/discord/pairing` (lists pending user IDs across all attached
+channels) and `POST /api/v1/discord/pairing/{user_id}/approve|deny`
+(resolves via the real methods, across every channel where that user
+ID happens to be pending). New `missy discord pairing
+list/approve/deny` CLI commands mirror `missy approvals
+list/approve/deny`'s HTTP-client pattern exactly, reusing the same
+`--host`/`--port`/`--api-key` options and
+`~/.missy/secrets/web_console.key` fallback.
+
+**A real structural issue caught before finalizing:** the shared
+`_APPROVALS_HOST_OPTION`/`_APPROVALS_PORT_OPTION`/
+`_APPROVALS_API_KEY_OPTION`/`_resolve_approvals_api_key` helpers were
+originally defined *after* the `discord` command group in
+`cli/main.py` (in the later `missy approvals` section) — since Python
+evaluates `@decorator` expressions at function-definition time in
+top-to-bottom module-execution order, referencing them as decorators
+on the new `discord pairing` commands (defined earlier in the file)
+would have raised `NameError` at import time. Caught by actually
+importing the module and running `--help` before writing any tests,
+not just visual inspection. Fixed by relocating the four
+definitions to before the `discord` group.
+
+Live-verified through a real `DiscordChannel` instance (constructed
+directly, never connected to Discord's actual gateway — no live bot
+credentials or production Discord access involved) driving a real
+running `ApiServer`: a real `!pair` DM correctly populates
+`_pending_pairs`; the list endpoint surfaces it; approve correctly
+calls the real `accept_pair()` (removes from pending, adds to the real
+`dm_allowlist`); deny correctly calls `deny_pair()` (removes from
+pending, allowlist untouched); unknown user ID and invalid sub-action
+both correctly return 404; no channels attached correctly returns 503;
+unauthenticated requests correctly return 401. Also re-confirmed the
+SR-1.12 in-band rejection is still intact — `!pair accept <id>` sent
+as DM content is still rejected, `_pending_pairs` unchanged.
+
+New tests: `tests/api/test_server.py::TestDiscordPairingEndpoints` (9
+tests) and `tests/cli/test_cli_commands.py::TestDiscordPairingCli` (8
+tests). `tests/api/test_server.py`: 142 passed. `tests/cli/`: 1061
+passed. `tests/api/ tests/channels/` combined: 2101 passed.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-21128 passed, 13 skipped in 547.92s (0:09:07)
+21145 passed, 13 skipped in 556.47s (0:09:16)
 ```
 
-**Zero failures.** This is the first fully green full-suite run this
-session — the 3 pre-existing `CameraDiscovery` cache-TTL flakes
-(`tests/vision/test_discovery_capture_sysfs.py::TestCacheTTL::test_cache_valid_within_ttl`,
-`tests/vision/test_discovery_edge_cases.py::TestPermissionDeniedOnDevice::test_device_that_does_not_exist_is_skipped`,
-`tests/vision/test_discovery_edge_cases.py::TestRapidAddRemove::test_cached_results_returned_within_ttl`)
-that persisted, confirmed-unrelated, through every prior checkpoint
-this session are now genuinely fixed (task #11, thirty-fifth
-checkpoint — see above). Passed count is up from 21071 (SR-1.9b's run)
-to 21115 (availability-hardening checkpoint) to 21118 (the acpx
-`--deny-all` critical-finding checkpoint) to 21125 (the native-tool
-denial retry checkpoint) to 21128 (this checkpoint). Zero regressions
-from this checkpoint or any prior one this session. **The security
-review's entire numbered SR-x.y list and its one remaining unnumbered
-"harden secondary availability hazards" bullet are both fully closed —
-the security review's text has no open items left.** Separately, this
-session's thirty-third checkpoint found and fixed a critical,
-previously-unknown vulnerability outside the review's text (FX-A's
-zero-native-tools enforcement did not actually work against the
-installed acpx binary — see above), discovered via live agent
+**Zero failures**, the second consecutive fully green full-suite run.
+Passed count is up from 21071 (SR-1.9b's run) to 21115
+(availability-hardening checkpoint) to 21118 (the acpx `--deny-all`
+critical-finding checkpoint) to 21125 (the native-tool denial retry
+checkpoint) to 21128 (the vision cache-TTL flake fix, first fully
+green run) to 21145 (this checkpoint's 17 new tests for the Discord
+pairing endpoint). Zero regressions from this checkpoint or any prior
+one this session. **The security review's entire numbered SR-x.y list
+and its one remaining unnumbered "harden secondary availability
+hazards" bullet are both fully closed — the security review's text has
+no open items left.** This session's thirty-third checkpoint found and
+fixed a critical, previously-unknown vulnerability outside the
+review's text (FX-A's zero-native-tools enforcement did not actually
+work against the installed acpx binary), discovered via live agent
 validation while starting task #10; the thirty-fourth checkpoint added
 a real, tested, but honestly incomplete mitigation for the resulting
 delegate-reliability residual (task #46); the thirty-fifth checkpoint
-fixed the last remaining known test failure in the entire suite.
+fixed the last remaining known test failure in the entire suite (task
+#11); the thirty-sixth checkpoint wired the previously-unreachable
+Discord pairing approval flow into a real authenticated endpoint (task
+#12).
 
 Full detail in `BUILD_STATUS.md`, `AUDIT_SECURITY.md`, and
 `TEST_RESULTS.md` — each has one dated entry per checkpoint this
@@ -1563,9 +1619,10 @@ three files above.)
   `/dev/video0` doesn't exist on the host, false in this sandbox). Full
   suite is now 100% green with zero failures for the first time this
   session. See the thirty-fifth checkpoint above.
-- **#12** Wire an authenticated Discord pairing approval endpoint —
-  the SR-1.12 fix removed the vulnerable path but pairing currently has
-  *no* working approval surface at all.
+- **#12 (fixed this checkpoint)** Wired an authenticated Discord
+  pairing approval endpoint — `GET/POST /api/v1/discord/pairing[/...]`
+  plus `missy discord pairing list/approve/deny`, mirroring the SR-2.2
+  `ApprovalGate` pattern. See the thirty-sixth checkpoint above.
 - **#15** `allowed_roles` Discord config field documented but never
   enforced.
 - **#16** FX-F bullets 2/4: build an actual disposable, threat-modeled

@@ -1062,6 +1062,45 @@ class TestApprovalsList:
 
 
 # ===========================================================================
+# missy discord pairing list / approve / deny (task #12)
+# ===========================================================================
+
+
+class TestDiscordPairingCli:
+    def test_pairing_list_exits_zero(self, runner: CliRunner):
+        result = runner.invoke(cli, ["discord", "pairing", "list"])
+        assert result.exit_code == 0
+
+    def test_pairing_list_no_gateway_message(self, runner: CliRunner):
+        result = runner.invoke(cli, ["discord", "pairing", "list"])
+        assert "gateway" in result.output.lower() or "No active" in result.output
+
+    def test_pairing_help_exits_zero(self, runner: CliRunner):
+        result = runner.invoke(cli, ["discord", "pairing", "--help"])
+        assert result.exit_code == 0
+
+    def test_pairing_list_help_exits_zero(self, runner: CliRunner):
+        result = runner.invoke(cli, ["discord", "pairing", "list", "--help"])
+        assert result.exit_code == 0
+
+    def test_pairing_approve_no_gateway_exits_nonzero(self, runner: CliRunner):
+        result = runner.invoke(cli, ["discord", "pairing", "approve", "12345"])
+        assert result.exit_code != 0
+
+    def test_pairing_deny_no_gateway_exits_nonzero(self, runner: CliRunner):
+        result = runner.invoke(cli, ["discord", "pairing", "deny", "12345"])
+        assert result.exit_code != 0
+
+    def test_pairing_approve_help_exits_zero(self, runner: CliRunner):
+        result = runner.invoke(cli, ["discord", "pairing", "approve", "--help"])
+        assert result.exit_code == 0
+
+    def test_pairing_deny_help_exits_zero(self, runner: CliRunner):
+        result = runner.invoke(cli, ["discord", "pairing", "deny", "--help"])
+        assert result.exit_code == 0
+
+
+# ===========================================================================
 # missy patches list / approve / reject
 # ===========================================================================
 

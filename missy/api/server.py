@@ -214,6 +214,7 @@ def _make_handler(
     benchmark_store: BenchmarkStore | None,
     run_registry: RunRegistry,
     approval_gate: Any | None = None,
+    discord_channels: list | None = None,
 ):
     """Return a configured :class:`BaseHTTPRequestHandler` subclass.
 
@@ -379,6 +380,8 @@ def _make_handler(
                 return self._handle_list_controls()
             if method == "GET" and path == f"{_API_PREFIX}/approvals":
                 return self._handle_list_approvals()
+            if method == "GET" and path == f"{_API_PREFIX}/discord/pairing":
+                return self._handle_list_discord_pairing()
             if method == "GET" and path == f"{_API_PREFIX}/tool-candidates":
                 return self._handle_list_tool_candidates(params)
             if method == "GET" and path == f"{_API_PREFIX}/audit":
@@ -449,6 +452,21 @@ def _make_handler(
                     return self._handle_resolve_approval(approval_id, approve=True)
                 if sub == "deny":
                     return self._handle_resolve_approval(approval_id, approve=False)
+                return ApiResponse.error("Not found", 404)
+
+            # Discord pairing item routes — extract {user_id}/approve or /deny
+            pairing_prefix = f"{_API_PREFIX}/discord/pairing/"
+            if method == "POST" and path.startswith(pairing_prefix):
+                rest = path[len(pairing_prefix) :]
+                segments = rest.split("/", 1)
+                pairing_user_id = segments[0]
+                sub = segments[1] if len(segments) > 1 else ""
+                if not pairing_user_id:
+                    return ApiResponse.error("Not found", 404)
+                if sub == "approve":
+                    return self._handle_resolve_discord_pairing(pairing_user_id, approve=True)
+                if sub == "deny":
+                    return self._handle_resolve_discord_pairing(pairing_user_id, approve=False)
                 return ApiResponse.error("Not found", 404)
 
             candidates_prefix = f"{_API_PREFIX}/tool-candidates/"
@@ -990,6 +1008,61 @@ def _make_handler(
             )
             return ApiResponse.ok(
                 {"id": approval_id, "resolved": "approved" if approve else "denied"}
+            )
+
+        def _handle_list_discord_pairing(self) -> tuple[int, dict]:
+            """GET /api/v1/discord/pairing — list pending Discord DM pairing requests.
+
+            SR-1.12: pairing decisions can never be made from in-band DM
+            content (any unpaired stranger could otherwise grant
+            themselves access). This authenticated endpoint is the real
+            approval surface an operator uses instead --
+            ``DiscordChannel.accept_pair()``/``deny_pair()`` were
+            previously unreachable from any process outside the running
+            gateway's own in-memory state.
+            """
+            channels = discord_channels or []
+            pending = []
+            for ch in channels:
+                account_label = getattr(getattr(ch, "account_config", None), "token_env_var", "")
+                for user_id in ch.get_pending_pairs():
+                    pending.append({"account": account_label, "user_id": user_id})
+            return ApiResponse.ok({"pending": pending, "count": len(pending)})
+
+        def _handle_resolve_discord_pairing(
+            self, user_id: str, *, approve: bool
+        ) -> tuple[int, dict]:
+            """POST /api/v1/discord/pairing/{user_id}/approve or /deny."""
+            channels = discord_channels or []
+            if not channels:
+                return ApiResponse.error("No Discord channels attached to this server", 503)
+
+            resolved_any = False
+            for ch in channels:
+                if user_id in ch.get_pending_pairs():
+                    if approve:
+                        ch.accept_pair(user_id)
+                    else:
+                        ch.deny_pair(user_id)
+                    resolved_any = True
+
+            if not resolved_any:
+                return ApiResponse.error(
+                    f"No pending pairing request for user {user_id!r} (already "
+                    "resolved or never requested).",
+                    404,
+                )
+
+            self._emit_web_audit(
+                event_type="web.discord_pairing",
+                result="allow" if approve else "deny",
+                action="approve" if approve else "deny",
+                subsystem="discord",
+                severity="info",
+                user_id=user_id,
+            )
+            return ApiResponse.ok(
+                {"user_id": user_id, "resolved": "approved" if approve else "denied"}
             )
 
         def _handle_list_tool_candidates(self, params: dict) -> tuple[int, dict]:
@@ -1583,6 +1656,7 @@ class ApiServer:
         candidate_store: CandidateStore | None = None,
         benchmark_store: BenchmarkStore | None = None,
         approval_gate: Any | None = None,
+        discord_channels: list | None = None,
     ) -> None:
         self.config = config
         self.runtime = runtime
@@ -1592,6 +1666,12 @@ class ApiServer:
         self.candidate_store = candidate_store
         self.benchmark_store = benchmark_store
         self.approval_gate = approval_gate
+        # SR-1.12/task #12: shared reference to the live DiscordChannel
+        # list. Channels are constructed later (async, after the API
+        # server starts) so this is the *same* list object the caller
+        # keeps appending to -- read lazily at request time rather than
+        # snapshotted here, since it may still be empty at __init__ time.
+        self.discord_channels = discord_channels
 
         self._session_registry = _SessionRegistry()
         self._web_sessions = WebSessionStore(config.web_session_ttl_seconds)
@@ -1646,6 +1726,7 @@ class ApiServer:
             benchmark_store=self.benchmark_store,
             run_registry=self._run_registry,
             approval_gate=self.approval_gate,
+            discord_channels=self.discord_channels,
         )
 
         self._server = ThreadingHTTPServer((self.config.host, self.config.port), handler_class)

@@ -22,6 +22,7 @@ import pytest
 
 from missy.api.server import ApiConfig, ApiResponse, ApiServer, _SessionRegistry
 from missy.api.web_console import console_script, render_console
+from missy.channels.discord.channel import DiscordChannel
 from missy.channels.discord.config import (
     DiscordAccountConfig,
     DiscordConfig,
@@ -2525,5 +2526,113 @@ class TestApprovalsEndpoints:
         try:
             resp = httpx.post(f"{url}/approvals/some-id/not-a-real-action", headers=HEADERS)
             assert resp.status_code == 404
+        finally:
+            srv.stop()
+
+
+class TestDiscordPairingEndpoints:
+    """SR-1.12/task #12: pairing decisions can never be made from in-band
+    DM content (any unpaired stranger could otherwise grant themselves
+    access). ``DiscordChannel.accept_pair()``/``deny_pair()`` were
+    previously unreachable from anywhere -- these are the real
+    authenticated endpoints an operator uses instead, mirroring the
+    ``/approvals`` pattern above but reading/mutating a real
+    ``DiscordChannel`` instance's pairing state.
+    """
+
+    def test_pairing_requires_auth(self, base_url: str) -> None:
+        resp = httpx.get(f"{base_url}/discord/pairing")
+        assert resp.status_code == 401
+
+    def test_list_pairing_empty_when_no_channels_attached(self, base_url: str) -> None:
+        resp = httpx.get(f"{base_url}/discord/pairing", headers=HEADERS)
+        assert resp.status_code == 200
+        assert resp.json()["data"] == {"pending": [], "count": 0}
+
+    def test_resolve_pairing_without_channels_returns_503(self, base_url: str) -> None:
+        resp = httpx.post(f"{base_url}/discord/pairing/12345/approve", headers=HEADERS)
+        assert resp.status_code == 503
+
+    def _start_server_with_discord_channel(self):
+        account = DiscordAccountConfig(
+            token="test-token",
+            dm_policy=DiscordDMPolicy.PAIRING,
+            token_env_var="DISCORD_BOT_TOKEN",
+        )
+        ch = DiscordChannel(account_config=account)
+        # Real pairing-request flow: a DM of "!pair" adds the sender to
+        # _pending_pairs (see DiscordChannel._check_pairing) -- exercised
+        # here directly rather than via a real Discord gateway connection.
+        ch._check_pairing("999888777", "!pair")
+
+        port = _free_port()
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, discord_channels=[ch])
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        return srv, ch, f"http://127.0.0.1:{port}/api/v1"
+
+    def test_list_pending_pairing_via_api(self) -> None:
+        srv, ch, url = self._start_server_with_discord_channel()
+        try:
+            resp = httpx.get(f"{url}/discord/pairing", headers=HEADERS)
+            assert resp.status_code == 200
+            pending = resp.json()["data"]["pending"]
+            assert pending == [{"account": "DISCORD_BOT_TOKEN", "user_id": "999888777"}]
+        finally:
+            srv.stop()
+
+    def test_approve_pairing_via_api_adds_to_allowlist(self) -> None:
+        srv, ch, url = self._start_server_with_discord_channel()
+        try:
+            resp = httpx.post(f"{url}/discord/pairing/999888777/approve", headers=HEADERS)
+            assert resp.status_code == 200
+            assert resp.json()["data"]["resolved"] == "approved"
+
+            # The real effect: no longer pending, and now in the allowlist.
+            assert "999888777" not in ch.get_pending_pairs()
+            assert "999888777" in ch.account_config.dm_allowlist
+        finally:
+            srv.stop()
+
+    def test_deny_pairing_via_api_does_not_add_to_allowlist(self) -> None:
+        srv, ch, url = self._start_server_with_discord_channel()
+        try:
+            resp = httpx.post(f"{url}/discord/pairing/999888777/deny", headers=HEADERS)
+            assert resp.status_code == 200
+            assert resp.json()["data"]["resolved"] == "denied"
+
+            assert "999888777" not in ch.get_pending_pairs()
+            assert "999888777" not in ch.account_config.dm_allowlist
+        finally:
+            srv.stop()
+
+    def test_resolve_unknown_pairing_user_id_returns_404(self) -> None:
+        srv, ch, url = self._start_server_with_discord_channel()
+        try:
+            resp = httpx.post(f"{url}/discord/pairing/no-such-user/approve", headers=HEADERS)
+            assert resp.status_code == 404
+        finally:
+            srv.stop()
+
+    def test_resolve_pairing_invalid_sub_action_returns_404(self) -> None:
+        srv, ch, url = self._start_server_with_discord_channel()
+        try:
+            resp = httpx.post(
+                f"{url}/discord/pairing/999888777/not-a-real-action", headers=HEADERS
+            )
+            assert resp.status_code == 404
+        finally:
+            srv.stop()
+
+    def test_in_band_dm_accept_command_still_never_resolves_pairing(self) -> None:
+        """Belt-and-suspenders: confirm the SR-1.12 in-band-command
+        rejection in DiscordChannel itself is still intact -- the only
+        real path to approval is the authenticated endpoint above."""
+        srv, ch, url = self._start_server_with_discord_channel()
+        try:
+            resolved = ch._check_pairing("999888777", "!pair accept 999888777")
+            assert resolved is False
+            assert "999888777" in ch.get_pending_pairs()
         finally:
             srv.stop()

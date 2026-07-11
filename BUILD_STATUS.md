@@ -2254,6 +2254,66 @@ skips. **Full suite: `21128 passed, 13 skipped in 547.92s (0:09:07)` —
 session — the 3 pre-existing `CameraDiscovery` flakes that persisted
 through every prior checkpoint are now genuinely fixed.
 
+### Task #12: wired an authenticated Discord pairing approval endpoint
+
+SR-1.12 (earlier this session) closed the in-band DM self-approval
+bypass, but left `DiscordChannel.get_pending_pairs()`/`accept_pair()`/
+`deny_pair()` completely unreachable from anywhere outside the process
+that created them (`grep -rn "accept_pair\|deny_pair\|get_pending_pairs"
+missy/` matched only their own definitions) — an operator had no
+working way to actually approve or deny a pairing request at all.
+
+Wired the same authenticated-endpoint pattern SR-2.2 established for
+`ApprovalGate`/`/api/v1/approvals`:
+
+- `missy/api/server.py`: `ApiServer`/`_make_handler()` gain a
+  `discord_channels: list | None` parameter — a *shared, mutable* list
+  object, since `DiscordChannel` instances are constructed later
+  (inside the async Discord setup in `cli/main.py`, after the Web API
+  server has already started) than `ApiServer.__init__` runs. New
+  `GET /api/v1/discord/pairing` (lists pending user IDs across all
+  attached channels/accounts) and `POST
+  /api/v1/discord/pairing/{user_id}/approve|deny` (resolves via the
+  real `accept_pair()`/`deny_pair()` methods, across every channel
+  where that user ID is actually pending, in case of multiple
+  accounts). Both require the same central authentication `_handle()`
+  already enforces for every `/api/v1/*` route.
+- `missy/cli/main.py`: a `discord_channels: list = []` list is created
+  before `ApiServer(...)` is constructed and passed in; the async
+  Discord-channel-startup loop appends each real `DiscordChannel` to
+  the *same* list object once started (and removes it on shutdown) —
+  the API server reads from this list lazily at request time, so it
+  correctly sees channels that didn't exist yet when the server itself
+  started.
+- New `missy discord pairing list/approve/deny` CLI commands, mirroring
+  `missy approvals list/approve/deny`'s HTTP-client pattern exactly
+  (same `--host`/`--port`/`--api-key` options, same
+  `~/.missy/secrets/web_console.key` fallback). Relocated the shared
+  `_APPROVALS_HOST_OPTION`/`_APPROVALS_PORT_OPTION`/`_APPROVALS_API_KEY_OPTION`/
+  `_resolve_approvals_api_key` helpers earlier in `cli/main.py` (they
+  were originally defined after the `discord` command group, which
+  would have raised `NameError` at import time once the new pairing
+  commands referenced them as decorators before their assignment).
+
+Live-verified through a real `DiscordChannel` instance (constructed
+directly, never connected to Discord's actual gateway) driving a real
+running `ApiServer`: a real `!pair` DM correctly populates
+`_pending_pairs`; the list endpoint correctly surfaces it; the approve
+endpoint correctly calls the real `accept_pair()` (removing from
+pending, adding to the real `dm_allowlist`); the deny endpoint
+correctly calls `deny_pair()` (removing from pending, allowlist
+untouched); an unknown user ID or invalid sub-action correctly returns
+404; no channels attached correctly returns 503; unauthenticated
+requests correctly return 401. Also re-confirmed the SR-1.12 in-band
+rejection is still intact — `!pair accept <id>` sent as DM content is
+still rejected, `_pending_pairs` unchanged.
+
+New tests: `tests/api/test_server.py::TestDiscordPairingEndpoints` (9
+tests) and `tests/cli/test_cli_commands.py::TestDiscordPairingCli` (8
+tests). `tests/api/ tests/channels/` combined: 2101 passed.
+`tests/cli/`: 1061 passed. Full suite: `21145 passed, 13 skipped in
+556.47s (0:09:16)` — 0 failed, up from 21128. Zero regressions.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security
@@ -2278,36 +2338,34 @@ SHA-identity. **Also closed this checkpoint: a critical, previously-unknown
 finding discovered via live agent validation (not part of the review's
 text) — FX-A's zero-native-tools enforcement did not actually block
 the acpx delegate's own native filesystem access; fixed via `--deny-all`.**
-Current remaining priority order:
+**Also closed since then:** task #46 (bounded retry for the delegate's
+native-tool-first behavior — real, tested, honestly not 100%
+reliable), task #11 (vision `CameraDiscovery` cache-TTL flake — full
+suite now 100% green), and task #12 (authenticated Discord pairing
+approval endpoint — `/api/v1/discord/pairing` + `missy discord pairing
+list/approve/deny`). Current remaining priority order:
 
-1. Task #46: the delegate's unreliable fallback to Missy's `<tool_call>`
-   protocol (vs. reaching for now-always-denied native tools first) —
-   not a security issue, but blocks meaningful progress on the 89-case
-   validation backlog until addressed, since most agentic cases will
-   fail their first turn otherwise.
-2. Full 89-case tool-specific validation backlog (FS-001–DISC-CMD-008)
-   — in progress (task #10); paused after the first live case
-   surfaced the critical finding above. Operator authorized live acpx
-   delegate runs (real API cost) for this backlog specifically; each
-   case should be live-verified through the real production path per
-   that authorization, once task #46 makes doing so meaningful.
-3. Broader untouched "Product Goal" surface from prompt.md (providers,
-   tool intelligence, Discord/channels, scheduler/memory/sessions,
-   hatching/persona, vision/audio/multimodal, Web TUI, OpenClaw-style
-   architecture, CLI/operations).
-4. Smaller tracked follow-ups: pre-existing vision `CameraDiscovery`
-   cache-TTL flake (3 tests, tracked above); Discord pairing approval
-   endpoint (SR-1.12's fix removed the vulnerable path but no working
-   approval surface exists now); `allowed_roles` Discord guild-policy
-   field never enforced; FX-F bullet 2/4 disposable browser-test
-   environment; FX-G residual acpx process-group timeout kill; a Web
-   TUI browser page for approvals (SR-2.2's REST endpoints are real and
+1. Full 89-case tool-specific validation backlog (FS-001–DISC-CMD-008)
+   — in progress (task #10); resuming from FS-001. Operator authorized
+   live acpx delegate runs (real API cost) for this backlog
+   specifically; expect and record some first-turn failures where the
+   delegate doesn't emit Missy's `<tool_call>` protocol (task #46) as a
+   known, documented constraint, not a surprising per-case bug.
+2. Smaller tracked follow-ups: `allowed_roles` Discord guild-policy
+   field never enforced (task #15); FX-F bullet 2/4 disposable
+   browser-test environment (task #16); FX-G residual acpx
+   process-group timeout kill (task #17); a Web TUI browser page for
+   approvals and Discord pairing (both REST layers are real and
    authenticated but have no browser UI yet); per-provider tunable
    CircuitBreaker cooldown config (SR-4.8 residual); audit-log hash
    chain for deletion/reordering detection and key-rotation lifecycle
    (SR-1.1 residual, explicitly out of scope per the review's own text
    since no hash-chain claim exists in the product); a `missy doctor`
    check surfacing audit signing status (SR-1.1/SR-4.6 residual).
+3. Broader untouched "Product Goal" surface from prompt.md (providers,
+   tool intelligence, Discord/channels, scheduler/memory/sessions,
+   hatching/persona, vision/audio/multimodal, Web TUI, OpenClaw-style
+   architecture, CLI/operations).
 
 ### Blockers
 

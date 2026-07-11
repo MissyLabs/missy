@@ -1,5 +1,46 @@
 # TEST_RESULTS
 
+## Run: 2026-07-11 12:15 UTC — validation-harness overhaul, task #12 (authenticated Discord pairing approval endpoint)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Finding: SR-1.12 (earlier this session) closed the in-band DM
+  self-approval bypass, but `DiscordChannel.get_pending_pairs()`/
+  `accept_pair()`/`deny_pair()` were completely unreachable from
+  anywhere outside the process that created them — no CLI command, no
+  Web API route (`grep -rn "accept_pair\|deny_pair\|get_pending_pairs"
+  missy/` matched only their own definitions).
+- Fix: mirrored the SR-2.2 `ApprovalGate`/`/api/v1/approvals` pattern.
+  `missy/api/server.py`: new `GET /api/v1/discord/pairing` and `POST
+  /api/v1/discord/pairing/{user_id}/approve|deny`, reading/mutating a
+  shared, mutable `discord_channels: list` passed into `ApiServer`
+  before the channels themselves are constructed (they're created
+  later, inside the async Discord-startup loop in `cli/main.py`) and
+  appended to that same list once started. New `missy discord pairing
+  list/approve/deny` CLI commands mirror `missy approvals list/approve/deny`'s
+  HTTP-client pattern exactly.
+- Command: `pytest tests/api/test_server.py -k Pairing -v`
+- Result: `9 passed` — new `TestDiscordPairingEndpoints`, using a real
+  `DiscordChannel` instance (never connected to Discord's actual
+  gateway) driving a real running `ApiServer`: auth required (401), no
+  channels attached (503), empty pending list, a real `!pair` DM
+  correctly populates `_pending_pairs` and is surfaced by the list
+  endpoint, approve correctly calls `accept_pair()` (removes from
+  pending, adds to `dm_allowlist`), deny correctly calls `deny_pair()`
+  (removes from pending, allowlist untouched), unknown user ID and
+  invalid sub-action both return 404, and the SR-1.12 in-band-command
+  rejection is confirmed still intact.
+- Command: `pytest tests/cli/test_cli_commands.py -k Pairing -v`
+- Result: `8 passed` — new `TestDiscordPairingCli`.
+- Command: `pytest tests/api/test_server.py -q`
+- Result: `142 passed`
+- Command: `pytest tests/cli/ -q`
+- Result: `1061 passed`
+- Command: `pytest tests/api/ tests/channels/ -q`
+- Result: `2101 passed`
+- Command: `pytest tests/ -q -o faulthandler_timeout=120`
+- Result: `21145 passed, 13 skipped in 556.47s (0:09:16)` — 0 failed, up
+  from 21128 (previous checkpoint). Zero regressions.
+
 ## Run: 2026-07-11 11:30 UTC — validation-harness overhaul, task #11 (vision CameraDiscovery cache-TTL flake, fixed)
 
 - Branch: `overhaul/missy-validation-20260710-031406`

@@ -1580,6 +1580,33 @@ def plugins_list(ctx: click.Context) -> None:
 # missy discord
 # ---------------------------------------------------------------------------
 
+# Shared by `missy discord pairing ...` and `missy approvals ...` (both talk
+# to the running gateway's Web API from a separate CLI process).
+_APPROVALS_HOST_OPTION = click.option(
+    "--host", default="127.0.0.1", show_default=True, help="Gateway API host."
+)
+_APPROVALS_PORT_OPTION = click.option(
+    "--port", default=8080, type=int, show_default=True, help="Gateway API port."
+)
+_APPROVALS_API_KEY_OPTION = click.option(
+    "--api-key",
+    envvar="MISSY_API_KEY",
+    default="",
+    help="API key for authentication (falls back to ~/.missy/secrets/web_console.key).",
+)
+
+
+def _resolve_approvals_api_key(api_key: str) -> str:
+    if api_key:
+        return api_key
+    try:
+        key_path = Path("~/.missy/secrets/web_console.key").expanduser()
+        if key_path.exists():
+            return key_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        pass
+    return ""
+
 
 @cli.group()
 def discord() -> None:
@@ -2002,6 +2029,125 @@ def discord_audit(ctx: click.Context, limit: int) -> None:
     console.print(table)
 
 
+@discord.group("pairing")
+def discord_pairing() -> None:
+    """Manage pending Discord DM pairing requests (SR-1.12).
+
+    Pairing decisions can never be made from in-band DM content (any
+    unpaired stranger could otherwise grant themselves access by
+    messaging accept/deny commands to the bot). These commands are the
+    real, authenticated approval surface an operator uses instead --
+    they call the running gateway's Web API, since a separate `missy`
+    CLI invocation cannot see the gateway process's in-memory pairing
+    state directly.
+    """
+
+
+@discord_pairing.command("list")
+@_APPROVALS_HOST_OPTION
+@_APPROVALS_PORT_OPTION
+@_APPROVALS_API_KEY_OPTION
+def discord_pairing_list(host: str, port: int, api_key: str) -> None:
+    """List pending Discord DM pairing requests from a running gateway."""
+    import httpx
+
+    resolved_key = _resolve_approvals_api_key(api_key)
+    url = f"http://{host}:{port}/api/v1/discord/pairing"
+    headers = {"X-API-Key": resolved_key} if resolved_key else {}
+
+    try:
+        resp = httpx.get(url, headers=headers, timeout=3.0)
+    except httpx.ConnectError:
+        console.print(
+            f"[dim]No active gateway session at [bold]http://{host}:{port}[/] — "
+            "pairing requests are only visible while `missy gateway start` is running.[/]"
+        )
+        return
+    except Exception as exc:
+        _print_error(f"Could not reach gateway API: {exc}")
+        return
+
+    if resp.status_code == 401:
+        _print_error(
+            "Authentication required.",
+            hint="Pass --api-key or ensure ~/.missy/secrets/web_console.key is readable.",
+        )
+        return
+    if resp.status_code != 200:
+        _print_error(f"Gateway API responded with HTTP {resp.status_code}.")
+        return
+
+    pending = resp.json().get("data", {}).get("pending", [])
+    if not pending:
+        console.print("[dim]No pending Discord pairing requests.[/]")
+        return
+
+    table = Table(title="Pending Discord Pairing Requests", show_lines=True)
+    table.add_column("Account", style="dim")
+    table.add_column("User ID", style="bold")
+    for item in pending:
+        table.add_row(item.get("account", ""), item.get("user_id", ""))
+    console.print(table)
+
+
+def _resolve_discord_pairing(
+    host: str, port: int, api_key: str, user_id: str, *, approve: bool
+) -> None:
+    import httpx
+
+    resolved_key = _resolve_approvals_api_key(api_key)
+    verb = "approve" if approve else "deny"
+    url = f"http://{host}:{port}/api/v1/discord/pairing/{user_id}/{verb}"
+    headers = {"X-API-Key": resolved_key} if resolved_key else {}
+
+    try:
+        resp = httpx.post(url, headers=headers, timeout=3.0)
+    except httpx.ConnectError:
+        _print_error(
+            f"No active gateway session at http://{host}:{port}.",
+            hint="Pairing requests are only processed while `missy gateway start` is running.",
+        )
+        sys.exit(1)
+    except Exception as exc:
+        _print_error(f"Could not reach gateway API: {exc}")
+        sys.exit(1)
+
+    if resp.status_code == 200:
+        _print_success(f"Discord user {user_id!r} pairing {verb}d.")
+    elif resp.status_code == 404:
+        _print_error(f"No pending pairing request for user {user_id!r}.")
+        sys.exit(1)
+    elif resp.status_code == 401:
+        _print_error(
+            "Authentication required.",
+            hint="Pass --api-key or ensure ~/.missy/secrets/web_console.key is readable.",
+        )
+        sys.exit(1)
+    else:
+        _print_error(f"Gateway API responded with HTTP {resp.status_code}.")
+        sys.exit(1)
+
+
+@discord_pairing.command("approve")
+@click.argument("user_id")
+@_APPROVALS_HOST_OPTION
+@_APPROVALS_PORT_OPTION
+@_APPROVALS_API_KEY_OPTION
+def discord_pairing_approve(user_id: str, host: str, port: int, api_key: str) -> None:
+    """Approve a pending Discord DM pairing request (see `missy discord pairing list`)."""
+    _resolve_discord_pairing(host, port, api_key, user_id, approve=True)
+
+
+@discord_pairing.command("deny")
+@click.argument("user_id")
+@_APPROVALS_HOST_OPTION
+@_APPROVALS_PORT_OPTION
+@_APPROVALS_API_KEY_OPTION
+def discord_pairing_deny(user_id: str, host: str, port: int, api_key: str) -> None:
+    """Deny a pending Discord DM pairing request (see `missy discord pairing list`)."""
+    _resolve_discord_pairing(host, port, api_key, user_id, approve=False)
+
+
 # ---------------------------------------------------------------------------
 # missy gateway
 # ---------------------------------------------------------------------------
@@ -2183,6 +2329,13 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
         console.print(f"[yellow]Voice channel failed to start: {_ve}[/]")
         logger.warning("Voice channel startup error: %s", _ve, exc_info=True)
 
+    # SR-1.12/task #12: shared list the Web API's /api/v1/discord/pairing
+    # endpoints read from. DiscordChannel instances are constructed later
+    # (inside the async `_run_discord()` below, after this list is passed
+    # to ApiServer), so this is the same list object both sides share --
+    # appended to once channels exist, read lazily at request time.
+    discord_channels: list = []
+
     # Start screencast channel if configured.
     screencast_channel = None
     try:
@@ -2272,6 +2425,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                 provider_registry=_api_provider_registry,
                 tool_registry=_api_tool_registry,
                 approval_gate=approval_gate,
+                discord_channels=discord_channels,
             )
             api_server.start()
             console.print(
@@ -2403,6 +2557,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                         screencast_channel.set_discord_rest(ch._rest)  # noqa: SLF001
                     await ch.start()
                     channels.append(ch)
+                    discord_channels.append(ch)
                     console.print(f"[green]Discord channel started[/] ({account.token_env_var})")
                     tasks.append(asyncio.create_task(_process_channel(ch)))
                 try:
@@ -2416,6 +2571,8 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                             await t
                     for ch in channels:
                         await ch.stop()
+                        with contextlib.suppress(ValueError):
+                            discord_channels.remove(ch)
 
             asyncio.run(_run_discord())
         else:
@@ -3126,32 +3283,6 @@ def sessions_rename(ctx: click.Context, session_id: str, name: str) -> None:
 @cli.group()
 def approvals() -> None:
     """Approval gate management."""
-
-
-_APPROVALS_HOST_OPTION = click.option(
-    "--host", default="127.0.0.1", show_default=True, help="Gateway API host."
-)
-_APPROVALS_PORT_OPTION = click.option(
-    "--port", default=8080, type=int, show_default=True, help="Gateway API port."
-)
-_APPROVALS_API_KEY_OPTION = click.option(
-    "--api-key",
-    envvar="MISSY_API_KEY",
-    default="",
-    help="API key for authentication (falls back to ~/.missy/secrets/web_console.key).",
-)
-
-
-def _resolve_approvals_api_key(api_key: str) -> str:
-    if api_key:
-        return api_key
-    try:
-        key_path = Path("~/.missy/secrets/web_console.key").expanduser()
-        if key_path.exists():
-            return key_path.read_text(encoding="utf-8").strip()
-    except OSError:
-        pass
-    return ""
 
 
 @approvals.command("list")
