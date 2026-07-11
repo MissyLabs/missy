@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (67 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eighteen consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (68 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eighteen consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -2663,18 +2663,53 @@ delegate-reliability residual), 8 "good, minor issues", 50 "excellent".
 No source code changed (a documentation deliverable, but one
 explicitly named as a required action item in prompt.md's own text).
 
+### Post-backlog (sixty-first checkpoint): three real bugs found via a targeted research pass into previously-unaudited subsystems
+
+With every enumerated `prompt.md` item closed, dispatched a
+research-only agent into subsystems not yet heavily scrutinized this
+session (Scheduler, Persona, Hatching, Behavior). All three findings
+it reported were live-verified and fixed:
+
+1. **`SchedulerManager.pause_job()` didn't stop an already-scheduled
+   retry** (highest severity) — `_run_job()` never checked
+   `job.enabled`, so a job paused while a retry was in flight still ran
+   with full tool access. Live-reproduced against real code. Fixed
+   with an `enabled` guard in `_run_job()` plus explicit removal of
+   pending retry APScheduler entries in `pause_job()`. Defeats
+   pause's emergency-stop semantics and the SR-2.1 `capability_mode`
+   hardening otherwise. 3 new tests, 2 confirmed to genuinely fail
+   pre-fix via `git stash`.
+2. **`PersonaConfig` fields were never type-validated on load** — a
+   `persona.yaml` with `tone: 5` loaded silently, then crashed
+   `missy persona show` with an unhandled `TypeError`. Live-reproduced
+   the exact crash. Fixed by adding type checks to
+   `_persona_from_dict()` that raise `TypeError`, caught by the
+   existing fallback-to-defaults handler. 6 new tests, all confirmed
+   to genuinely fail pre-fix.
+3. **`PersonaManager.rollback()` skipped the 0o600 chmod `save()`
+   enforces** — a missing primary file at rollback time produced a
+   `0o644` file under a standard umask, silently losing the
+   confidentiality guarantee on the recovery path. Live-reproduced.
+   Fixed with the identical chmod call. 1 new test, confirmed to fail
+   pre-fix.
+
+`ModelRouter` (unwired by design, already documented above) was
+correctly NOT re-flagged by the research pass. MCP's HTTP transport
+being unimplemented was also correctly not re-flagged (it already
+fails closed with a clear error and has test coverage).
+
+Verified: `pytest tests/scheduler/ tests/agent/test_persona.py
+tests/agent/test_persona_save_edges.py tests/cli/ -q`: `1599 passed`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-21238 passed, 13 skipped in 610.73s (0:10:10)
+21248 passed, 13 skipped in 608.25s (0:10:08)
 ```
 
-**Zero failures**, the eighteenth consecutive fully green full-suite
-run — and the first full-suite run since the `ProviderRegistry`
-locking fix, confirming it holds under the exact real full-suite
-concurrency that had twice produced the race, without reintroducing
-it. Passed count is up from 21191 to 21212 (the DISC-CMD-008
+**Zero failures**, the nineteenth consecutive fully green full-suite
+run. Passed count is up from 21191 to 21212 (the DISC-CMD-008
 rate-limiting checkpoint: 10 standalone unit tests, 9 real
 dispatch-path integration tests, 3 config-parsing tests) to 21213 (the
 Web TUI approvals/pairing checkpoint's 2 new tests) to 21219 (the
@@ -2684,7 +2719,12 @@ Web TUI approvals/pairing checkpoint's 2 new tests) to 21219 (the
 21238 (the INCUS-006 timeout-recheck checkpoint's 6 new tests; MEM-001
 was verification-only, no new test file added, and the
 ProviderRegistry fix added 0 net new tests but strengthened 1
-existing one).
+existing one; `VALIDATION_HARNESS.md` added 0 new tests, being a
+documentation deliverable) to 21248 (the scheduler pause/retry fix's 3
+new tests, the persona type-validation fix's 6 new tests, and the
+persona rollback permissions fix's 1 new test — the eighteenth green
+run's `ProviderRegistry` fix is confirmed still holding, and the
+scheduler/persona fixes introduced zero regressions).
 The occasional Hypothesis deprecation warnings seen in some runs of
 this suite (`test_property_based_fuzz.py` and/or
 `test_policy_property.py`, depending on test ordering — this run shows

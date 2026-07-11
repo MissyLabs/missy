@@ -298,6 +298,21 @@ class SchedulerManager:
 
         job.enabled = False
         self._save_jobs()
+
+        # Remove any pending retry job(s) for this job (id f"{job_id}_retry_{n}"),
+        # scheduled independently by _run_job() on a prior failure. The
+        # job.enabled check in _run_job() would also prevent one of these from
+        # actually running, but removing the dangling APScheduler entry
+        # outright avoids relying on that as the only line of defense and
+        # keeps the scheduler's job list accurate.
+        for ap_job in self._scheduler.get_jobs():
+            if ap_job.id.startswith(f"{job_id}_retry_"):
+                try:
+                    self._scheduler.remove_job(ap_job.id)
+                    logger.info("Removed pending retry %s for paused job %s.", ap_job.id, job_id)
+                except Exception:
+                    logger.debug("Could not remove pending retry %s", ap_job.id, exc_info=True)
+
         logger.info("Paused job id=%s name=%r.", job_id, job.name)
         self._emit_event(
             event_type="scheduler.job.pause",
@@ -400,6 +415,17 @@ class SchedulerManager:
         job = self._jobs.get(job_id)
         if job is None:
             logger.warning("Scheduled job %r no longer exists; skipping.", job_id)
+            return
+
+        # A retry scheduled by an earlier failed run is a separate APScheduler
+        # job (id f"{job_id}_retry_{n}") that fires independently of the
+        # original trigger. pause_job() only pauses/removes the original
+        # trigger id, so without this check a job paused while a retry is
+        # in flight would still execute -- defeating pause's emergency-stop
+        # semantics and any capability_mode restriction the operator was
+        # trying to enforce by pausing it.
+        if not job.enabled:
+            logger.info("Job %s is paused/disabled; skipping this run (including retries).", job_id)
             return
 
         # ------------------------------------------------------------------

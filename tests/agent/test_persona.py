@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import fields
 
@@ -109,6 +110,59 @@ class TestPersonaFromDict:
         d["future_field"] = "ignored"
         persona = _persona_from_dict(d)
         assert persona.name == "Missy"
+
+    def test_wrong_typed_tone_raises_type_error(self):
+        # PersonaConfig(**kwargs) performs no runtime type validation on its
+        # own -- a malformed value (int instead of a list) would otherwise
+        # load "successfully" into a structurally-broken object that only
+        # fails later (e.g. ", ".join(persona.tone) in `missy persona show`
+        # raising an unhandled TypeError). _persona_from_dict must catch this
+        # itself so PersonaManager._load()'s ValueError/TypeError handler can
+        # fall back to defaults cleanly.
+        d = _persona_to_dict(PersonaConfig())
+        d["tone"] = 5
+        with pytest.raises(TypeError):
+            _persona_from_dict(d)
+
+    def test_tone_list_with_non_string_item_raises_type_error(self):
+        d = _persona_to_dict(PersonaConfig())
+        d["tone"] = ["direct", 42]
+        with pytest.raises(TypeError):
+            _persona_from_dict(d)
+
+    def test_wrong_typed_name_raises_type_error(self):
+        d = _persona_to_dict(PersonaConfig())
+        d["name"] = ["not", "a", "string"]
+        with pytest.raises(TypeError):
+            _persona_from_dict(d)
+
+    def test_wrong_typed_version_raises_type_error(self):
+        d = _persona_to_dict(PersonaConfig())
+        d["version"] = "five"
+        with pytest.raises(TypeError):
+            _persona_from_dict(d)
+
+    def test_wrong_typed_identity_description_raises_type_error(self):
+        d = _persona_to_dict(PersonaConfig())
+        d["identity_description"] = {"not": "a string"}
+        with pytest.raises(TypeError):
+            _persona_from_dict(d)
+
+
+class TestPersonaManagerLoadFallsBackOnTypeMismatch:
+    """PersonaManager._load() must recover from a well-formed-YAML,
+    wrong-typed persona.yaml rather than propagating a crash to the caller
+    (e.g. `missy persona show`)."""
+
+    def test_wrong_typed_tone_field_falls_back_to_defaults(self, tmp_path):
+        path = tmp_path / "persona.yaml"
+        path.write_text("version: 1\ntone: 5\n", encoding="utf-8")
+        pm = PersonaManager(persona_path=path)
+        persona = pm.get_persona()
+        assert persona.name == "Missy"
+        assert persona.tone == list(persona.tone)  # a real list, not an int
+        # The exact crash this regression guards against:
+        assert ", ".join(persona.tone)  # must not raise TypeError
 
 
 # ---------------------------------------------------------------------------
@@ -438,6 +492,31 @@ class TestPersonaRollback:
         pm.rollback()
         # rollback should create a backup of the current state
         assert len(pm.list_backups()) >= count_before
+
+    def test_rollback_restores_0o600_permissions_when_primary_file_missing(self, tmp_path):
+        # save() explicitly chmods 0o600 ("persona may contain sensitive
+        # identity info"). rollback()'s write_text() call preserves an
+        # existing file's mode, but if persona.yaml doesn't exist at
+        # rollback time (deleted/corrupted-and-removed), write_text()
+        # creates a brand-new file subject to the process umask -- silently
+        # losing that confidentiality guarantee on the one path (recovery)
+        # where it matters most.
+        path = tmp_path / "persona.yaml"
+        pm = PersonaManager(persona_path=path)
+        pm.save()  # v2, creates a backup-eligible file
+        pm.update(name="X")
+        pm.save()  # v3, backup of v2 now exists
+        path.unlink()  # simulate the primary file being deleted/corrupted-away
+
+        old_umask = os.umask(0o022)
+        try:
+            pm.rollback()
+        finally:
+            os.umask(old_umask)
+
+        assert path.exists()
+        mode = path.stat().st_mode & 0o777
+        assert mode == 0o600, f"expected 0o600, got {oct(mode)}"
 
 
 class TestPersonaDiff:

@@ -1,5 +1,45 @@
 # TEST_RESULTS
 
+## Run: 2026-07-12 05:05 UTC — three real bugs found and fixed via a targeted research pass (Scheduler pause/retry, Persona type validation, Persona rollback permissions)
+
+- Context: with all enumerated prompt.md items closed, dispatched a
+  research-only agent to scan Scheduler/Persona/Hatching/Behavior
+  (subsystems not yet heavily scrutinized this session) for genuine
+  bugs. All three reported findings were verified live against real
+  code and fixed.
+- **Scheduler**: `pause_job()` didn't stop an already-scheduled retry
+  (`_run_job()` never checked `job.enabled`). Live-reproduced: paused
+  job with a pending retry still ran the agent. Fixed with an
+  `enabled` guard in `_run_job()` plus explicit removal of pending
+  `{job_id}_retry_*` APScheduler entries in `pause_job()`.
+- Command: `pytest tests/scheduler/test_scheduler_extended.py -k
+  PauseJobStopsInFlightRetries -v`
+- Result: `3 passed`. 2 of 3 confirmed to genuinely fail against the
+  pre-fix code via `git stash`.
+- **Persona type validation**: `_persona_from_dict()` performed no
+  runtime type checking; `persona.yaml` with `tone: 5` loaded with zero
+  error and crashed `missy persona show` later with an unhandled
+  `TypeError`. Live-reproduced the exact CLI crash. Fixed by adding
+  explicit type checks raising `TypeError` (caught by `_load()`'s
+  existing handler, falling back to defaults).
+- Command: `pytest tests/agent/test_persona.py -v`
+- Result: `70 passed`. 5 new type-check tests + 1 fallback test, all 6
+  confirmed to genuinely fail against the pre-fix code via `git stash`.
+- **Persona rollback permissions**: `rollback()` didn't chmod 0o600 the
+  way `save()` does; a missing primary file at rollback time produced
+  a `0o644` file under a standard umask. Live-reproduced. Fixed with
+  the identical `chmod(0o600)` call `save()` uses.
+- Command: `pytest tests/agent/test_persona.py -k rollback_restores_0o600 -v`
+- Result: `1 passed`. Confirmed to genuinely fail (`0o644` observed)
+  against the pre-fix code via `git stash`.
+- Command: `pytest tests/scheduler/ tests/agent/test_persona.py
+  tests/agent/test_persona_save_edges.py tests/cli/ -q`
+- Result: `1599 passed`.
+- Command: `python3 -m pytest tests/ -q -o faulthandler_timeout=120`
+  (full suite, background run)
+- Result: `21248 passed, 13 skipped in 608.25s (0:10:08)`. 0 failed, up
+  from 21238. Nineteenth consecutive fully green full-suite run.
+
 ## Run: 2026-07-12 04:15 UTC — post-backlog, reconciled against prompt.md's own checklist, closed INCUS-006 timeout recheck + MEM-001 relevance gap
 
 - Branch: `overhaul/missy-validation-20260710-031406`

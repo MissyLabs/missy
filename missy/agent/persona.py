@@ -141,14 +141,51 @@ def _persona_to_dict(persona: PersonaConfig) -> dict[str, Any]:
     return ordered
 
 
+_PERSONA_LIST_FIELDS = (
+    "tone",
+    "personality_traits",
+    "behavioral_tendencies",
+    "response_style_rules",
+    "boundaries",
+)
+
+
 def _persona_from_dict(data: dict[str, Any]) -> PersonaConfig:
     """Build a :class:`PersonaConfig` from a raw YAML-loaded mapping.
 
     Unknown keys are silently ignored so that future schema additions do not
-    break older installs reading a newer file.
+    break older installs reading a newer file. Known keys are type-checked
+    against the dataclass's actual field types: a plain ``PersonaConfig(**kwargs)``
+    call performs no runtime validation, so a malformed value (e.g. ``tone: 5``
+    instead of a list) would otherwise load "successfully" into a
+    structurally-broken object that only fails later, at first use (e.g.
+    ``", ".join(persona.tone)`` in ``missy persona show`` raising an unhandled
+    ``TypeError``). Raising here instead lets the caller's existing
+    ValueError/TypeError handler fall back to defaults cleanly.
     """
     known = {f.name for f in fields(PersonaConfig)}
     filtered = {k: v for k, v in data.items() if k in known}
+
+    if "name" in filtered and not isinstance(filtered["name"], str):
+        raise TypeError(f"persona 'name' must be a string, got {type(filtered['name']).__name__}")
+    if "identity_description" in filtered and not isinstance(
+        filtered["identity_description"], str
+    ):
+        raise TypeError(
+            "persona 'identity_description' must be a string, got "
+            f"{type(filtered['identity_description']).__name__}"
+        )
+    if "version" in filtered and not isinstance(filtered["version"], int):
+        raise TypeError(
+            f"persona 'version' must be an int, got {type(filtered['version']).__name__}"
+        )
+    for key in _PERSONA_LIST_FIELDS:
+        if key not in filtered:
+            continue
+        value = filtered[key]
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            raise TypeError(f"persona {key!r} must be a list of strings, got {value!r}")
+
     return PersonaConfig(**filtered)
 
 
@@ -451,6 +488,13 @@ class PersonaManager:
             self._create_backup()
 
         self._path.write_text(restore_content, encoding="utf-8")
+        # Restrict file permissions -- persona may contain sensitive identity
+        # info. write_text() preserves an existing file's mode, but if
+        # self._path didn't already exist (deleted/corrupted-and-removed), it
+        # creates a brand-new file subject to the process umask, silently
+        # losing the confidentiality guarantee save() establishes.
+        with contextlib.suppress(OSError):
+            self._path.chmod(0o600)
         self._persona = self._load()
         self._audit("rollback", {"from_backup": latest.name})
         logger.info(

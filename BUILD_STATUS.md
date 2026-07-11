@@ -3858,6 +3858,87 @@ unaffected; last confirmed run remains the eighteenth consecutive green
 full-suite run (21238 passed, 13 skipped, 0 failed) from the prior
 checkpoint.
 
+### Post-backlog (sixty-first checkpoint): three real bugs found in previously-unaudited subsystems (Scheduler, Persona)
+
+With every enumerated `prompt.md` checklist item closed (including the
+harness-record deliverable above), continued the standing invitation
+in item 3 below: searched subsystems that had not yet been heavily
+scrutinized this session (Scheduler, Persona, Hatching, Behavior) via
+a dedicated research pass, then live-verified and fixed the credible
+findings.
+
+**1. `SchedulerManager.pause_job()` did not stop an already-scheduled
+retry — the highest-severity finding.** `_run_job()` schedules a
+*separate* APScheduler job (id `f"{job_id}_retry_{n}"`) when a job
+fails and is eligible for retry. `pause_job()` only paused/removed the
+*original* trigger id and set `job.enabled = False`, but `_run_job()`
+never checked `job.enabled` anywhere in its execution path. **Live
+reproduced** against real `SchedulerManager` code: triggered a failure
+to queue a retry, called `pause_job()` (confirmed `job.enabled` became
+`False`), then invoked the exact call the pending retry's callback
+makes — the agent ran anyway, with full tool access, exactly as if the
+job were still enabled. This defeats `pause_job`'s emergency-stop
+semantics and the SR-2.1 `capability_mode` hardening already done this
+session: pausing a misbehaving job is not sufficient to actually stop
+it if a retry is in flight. Fixed two ways in
+`missy/scheduler/manager.py`: (a) `_run_job()` now checks `job.enabled`
+immediately after loading the job and returns early if the job is
+paused/disabled — the durable fix that closes the hole regardless of
+how a stray retry got scheduled; (b) `pause_job()` additionally removes
+any pending `{job_id}_retry_*` APScheduler entries outright, so the
+scheduler's own job list stays accurate rather than relying solely on
+(a). 3 new tests in `tests/scheduler/test_scheduler_extended.py`
+(`TestPauseJobStopsInFlightRetries`), 2 of which were confirmed to
+genuinely fail against the pre-fix code via `git stash`.
+
+**2. `PersonaConfig` fields loaded from YAML were never type-validated
+— a live, reproducible crash in `missy persona show`.**
+`_persona_from_dict()` only filtered unknown keys before calling
+`PersonaConfig(**filtered)`; a plain dataclass performs no runtime type
+checking, so a `persona.yaml` with e.g. `tone: 5` instead of a list
+loaded with **zero error** — `PersonaManager._load()`'s
+`except (yaml.YAMLError, ValueError, TypeError)` handler never fired,
+because construction itself didn't raise. **Live reproduced**: wrote
+`~/.missy/persona.yaml` with `tone: 5`, ran `missy persona show`,
+got an unhandled `TypeError: can only join an iterable` from
+`", ".join(p.tone)` in `cli/main.py`. Fixed by adding explicit type
+checks to `_persona_from_dict()` (`missy/agent/persona.py`) for `name`,
+`identity_description`, `version`, and the five list-of-string fields,
+raising `TypeError` on mismatch so `_load()`'s existing handler falls
+back to defaults cleanly instead of the caller crashing. 6 new tests in
+`tests/agent/test_persona.py`, all 6 confirmed to genuinely fail
+against the pre-fix code via `git stash`.
+
+**3. `PersonaManager.rollback()` did not enforce the same 0o600
+permission hardening `save()` does.** `save()` explicitly
+`chmod(0o600)`s the persona file ("persona may contain sensitive
+identity info"). `rollback()`'s plain `write_text()` call preserves an
+*existing* file's mode, but if `persona.yaml` is missing at rollback
+time (deleted, corrupted-and-removed), `write_text()` creates a
+brand-new file subject to the process umask — **live reproduced**:
+under `umask 0o022`, deleted `persona.yaml` before calling
+`rollback()`, resulting file was mode `0o644`, not `0o600`. This is
+exactly the scenario `save()`'s chmod was added to prevent, but the
+recovery path didn't inherit it. Fixed by adding the identical
+`chmod(0o600)` call (wrapped in the same `contextlib.suppress(OSError)`
+pattern `save()` uses) immediately after `rollback()`'s `write_text()`.
+1 new test, confirmed to genuinely fail against the pre-fix code via
+`git stash` (`0o644` observed instead of `0o600`).
+
+None of these three were previously documented as accepted residuals
+in this file or `AUDIT_SECURITY.md` — confirmed via grep before
+investigating, to avoid re-flagging an already-decided item (as
+happened correctly for `ModelRouter`, which the research pass
+correctly did NOT re-flag, since it's already documented above as
+"intentionally unwired... scoped out per the operator's chosen scope").
+
+Verified: `pytest tests/scheduler/ tests/agent/test_persona.py
+tests/agent/test_persona_save_edges.py tests/cli/ -q`: `1599 passed`.
+**Full-suite confirmation:** `python3 -m pytest tests/ -q
+-o faulthandler_timeout=120` → `21248 passed, 13 skipped in 608.25s
+(0:10:08)` — 0 failed, up from 21238. Nineteenth consecutive fully
+green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security
