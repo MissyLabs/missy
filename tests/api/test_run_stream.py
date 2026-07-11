@@ -274,6 +274,59 @@ class TestLateJoin:
         assert events[-1]["data"]["response"] == "42"
 
 
+class TestQueueOverflowTerminalDelivery:
+    """A run's per-handle event queue is bounded (_MAX_QUEUE_EVENTS); push()
+    silently drops on queue.Full, including the terminal __done__/
+    _STREAM_DONE markers _execute()'s finally block relies on. A client
+    actively streaming an in-flight run must still reach a terminal event
+    (via the handle.status fallback in stream()'s polling loop) even if
+    those markers were dropped -- not hang forever on "ping" keepalives.
+    """
+
+    def test_stream_reaches_terminal_event_when_terminal_markers_are_dropped(
+        self, registry: RunRegistry
+    ) -> None:
+        import contextlib
+        import queue
+
+        from missy.api.run_stream import _MAX_QUEUE_EVENTS, _STREAM_DONE, RunHandle
+
+        handle = RunHandle(run_id="r1", session_id="s1", provider="mock", message="hi")
+        registry._runs["r1"] = handle
+        handle.status = "running"
+
+        # A client connects while the run is still in flight.
+        gen = registry.stream("r1", timeout=0.05)
+        first = next(gen)
+        assert first == {"event": "ping", "data": {}}
+
+        # Fill the queue to capacity with non-terminal events.
+        for i in range(_MAX_QUEUE_EVENTS):
+            handle.push({"event": "tool.request", "data": {"i": i}})
+
+        # The run finishes, but the queue is already full: both terminal
+        # markers are silently dropped by push()'s queue.Full suppression.
+        handle.status = "complete"
+        handle.response = "done"
+        handle.finished_at = "2026-01-01T00:00:00+00:00"
+        with contextlib.suppress(queue.Full):
+            handle.push({"event": "__done__", "data": {}})
+        with contextlib.suppress(queue.Full):
+            handle._queue.put_nowait(_STREAM_DONE)
+
+        events = [first]
+        for ev in gen:
+            events.append(ev)
+            if len(events) > _MAX_QUEUE_EVENTS + 10:
+                pytest.fail(
+                    "stream() never reached a terminal event -- it is "
+                    "stuck emitting pings forever"
+                )
+
+        assert events[-1]["event"] == "run.complete"
+        assert events[-1]["data"]["response"] == "done"
+
+
 # ---------------------------------------------------------------------------
 # Listing
 # ---------------------------------------------------------------------------

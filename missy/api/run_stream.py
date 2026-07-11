@@ -306,6 +306,25 @@ class RunRegistry:
             try:
                 item = handle._queue.get(timeout=timeout)
             except queue.Empty:
+                if handle.status in _TERMINAL_STATUSES:
+                    # The run finished, but the terminal queue marker
+                    # (__done__ / _STREAM_DONE) may have been silently
+                    # dropped by push()'s queue.Full suppression if the
+                    # queue was already at capacity when _execute()'s
+                    # finally block tried to enqueue it (e.g. a
+                    # tool-call-heavy run outpacing this consumer).
+                    # Fall back to handle.status -- the same signal the
+                    # late-join fast path above already trusts -- instead
+                    # of pinging forever.
+                    while True:
+                        try:
+                            queued = handle._queue.get_nowait()
+                        except queue.Empty:
+                            break
+                        if queued is not _STREAM_DONE and queued.get("event") != "__done__":
+                            yield queued
+                    yield _terminal_event(handle)
+                    return
                 yield {"event": "ping", "data": {}}
                 continue
             if item is _STREAM_DONE:

@@ -6196,6 +6196,79 @@ environment used for this full-suite run, which has no `faiss-cpu`
 installed; it passes for real under `~/.venv`, confirmed above).
 Thirty-ninth consecutive fully green full-suite run.
 
+### Post-backlog (eighty-second checkpoint): round 22 research pass fixes a FileReadTool false-truncation bug on multi-byte content and an SSE stream that could hang forever when a run's event queue overflowed
+
+Round 22 (rounds 1-21 covered every area listed in the round 21 entry
+above), this time into `missy/tools/builtin/` (the built-in tools'
+own logic, not the registry/policy layer around them), `missy/agent/
+context.py`'s token-budget arithmetic, fresh angles in `missy/agent/
+runtime.py`'s control flow, and `missy/api/` request-handling edge
+cases. `calculator.py`, `file_write.py`/`file_delete.py`/
+`list_files.py`'s symlink-TOCTOU protections, `web_fetch.py`,
+`shell_exec.py`, `ContextManager`'s reserve-fraction arithmetic,
+`runtime.py`'s tool-loop/message-history folding, `webhook.py`, and
+`audit_browser.py`/`web_sessions.py` all checked out clean. Two
+genuine bugs fixed.
+
+1. **`FileReadTool` reported a false "Truncated" notice for multi-byte
+   UTF-8 content, and separately could silently return more bytes than
+   its own documented `max_bytes` contract.** `fh.read(max_bytes)` on a
+   text-mode file handle reads up to `max_bytes` *characters*, not
+   bytes, while the truncation decision (`size > max_bytes`) compared
+   against the file's *byte* size. For any file with multi-byte UTF-8
+   content, the character count is smaller than the byte count, so the
+   entire file could be read in full while the tool still appended a
+   "Truncated" notice claiming otherwise — misleading the calling agent
+   into believing content was incomplete when it was not. Live-verified
+   with a 30,000-emoji file (120,000 bytes / 30,000 chars): reading with
+   `max_bytes=65,536` returned the *entire* file's content (all 30,000
+   chars) yet still appended `[Truncated: 120,000 bytes total, showing
+   first 65,536]`. Fixed by reading in binary mode up to `max_bytes`
+   *bytes* and decoding only that byte slice (`errors="replace"` handles
+   any multi-byte character split at the boundary), making the
+   byte-based truncation check and the actual bytes read consistent
+   with each other and with the tool's own documented contract
+   ("Maximum number of bytes to read"). 2 new tests (truncated and
+   not-truncated multi-byte cases), confirmed via `git stash` to
+   genuinely fail pre-fix. `pytest tests/tools/test_builtin_tools.py::
+   TestFileReadTool -q`: `20 passed`.
+2. **A background run's SSE event stream could hang forever if the
+   per-run event queue overflowed at the moment the run finished.**
+   `RunHandle.push()` silently drops on `queue.Full`
+   (`contextlib.suppress(queue.Full)`), including the two terminal
+   markers (`__done__`, `_STREAM_DONE`) `_execute()`'s `finally` block
+   relies on to signal stream completion. `RunRegistry.stream()`'s main
+   polling loop (entered by a client connected *while* the run is still
+   in flight) only checked `handle.status` once, at the very top,
+   before entering the loop — once inside, it relied solely on reading
+   one of those two markers from the queue, with no other way to detect
+   completion. A tool-call-heavy run (e.g. >500 tool events, the
+   queue's `_MAX_QUEUE_EVENTS` cap) outpacing an actively-streaming but
+   comparatively slow consumer fills the queue before the run finishes,
+   silently dropping both terminal markers — the client then never
+   receives `run.complete`/`run.error`, looping on `ping` keepalives
+   forever, even though `GET /api/v1/runs/{run_id}` would correctly
+   report the run as finished. Live-reproduced end-to-end (queue filled
+   to capacity while a real `stream()` generator was mid-poll, terminal
+   markers dropped exactly as `push()` would drop them): confirmed the
+   stream looped indefinitely pre-fix. Fixed by checking `handle.status`
+   in the polling loop's `queue.Empty` (timeout) branch too — the same
+   signal the late-join fast path at the top of `stream()` already
+   trusts — draining any remaining non-terminal queued events first,
+   then yielding the synthesized terminal event and returning; this
+   bounds the worst case to one `_SSE_KEEPALIVE_SECONDS` (15s) tick
+   instead of hanging indefinitely. 1 new test, confirmed via `git
+   stash` to genuinely fail pre-fix (bailout after >510 events with
+   "stream() never reached a terminal event"). `pytest tests/api/ -q`:
+   `170 passed`.
+
+Verified: `pytest tests/tools/ tests/api/test_run_stream.py -q`:
+`1575 passed, 2 skipped`. `pytest tests/api/ -q`: `170 passed`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21376 passed, 14 skipped in 690.13s (0:11:30)` — 0 failed, up from
+21373. Fortieth consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

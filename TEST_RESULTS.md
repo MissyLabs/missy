@@ -1,5 +1,52 @@
 # TEST_RESULTS
 
+## Run: 2026-07-13 15:10 UTC — round 22 research pass: FileReadTool false-truncation bug on multi-byte content, SSE stream hang on run event-queue overflow
+
+- Context: round 22 of the research-pass invitation (rounds 1-21 covered
+  every area listed in the round 21 entry below). This round targeted
+  `missy/tools/builtin/` (the built-in tools' own logic, not the
+  registry/policy layer), `missy/agent/context.py`'s token-budget
+  arithmetic, fresh angles in `missy/agent/runtime.py`'s control flow,
+  and `missy/api/` request-handling edge cases. `calculator.py`,
+  `file_write.py`/`file_delete.py`/`list_files.py`'s symlink-TOCTOU
+  protections, `web_fetch.py`, `shell_exec.py`, `ContextManager`'s
+  reserve-fraction arithmetic, `runtime.py`'s tool-loop/message-history
+  folding, `webhook.py`, and `audit_browser.py`/`web_sessions.py` all
+  checked out clean. Two genuine bugs fixed.
+- **FileReadTool false-truncation bug**: a text-mode `fh.read(max_bytes)`
+  reads up to `max_bytes` *characters*, not bytes, while the truncation
+  check compared against the file's *byte* size -- for multi-byte UTF-8
+  content, the whole file could be read in full while a false
+  "Truncated" notice was still appended. Fixed by reading in binary mode
+  up to `max_bytes` bytes and decoding only that slice, making the
+  byte-based check and the actual bytes read consistent.
+- Command: `pytest tests/tools/test_builtin_tools.py::TestFileReadTool -v`
+- Result: `20 passed`. 2 new tests confirmed to genuinely fail pre-fix
+  via `git stash` (asserted the returned body differs from the full
+  file content when genuinely truncated; pre-fix it was identical to
+  the full content despite the "Truncated" notice).
+- **SSE stream hang on run event-queue overflow**: `RunHandle.push()`
+  silently drops on `queue.Full`, including the two terminal markers
+  `_execute()`'s `finally` block relies on to signal stream completion.
+  A client streaming an in-flight run only checked `handle.status` once
+  at the very top of `stream()`, before entering its polling loop --
+  once inside, a queue overflow that dropped both terminal markers left
+  the client looping on `ping` keepalives forever. Fixed by also
+  checking `handle.status` in the polling loop's `queue.Empty` (timeout)
+  branch, falling back to the synthesized terminal event within one
+  keepalive tick (15s) instead of hanging indefinitely.
+- Command: `pytest tests/api/test_run_stream.py::TestQueueOverflowTerminalDelivery -v`
+- Result: `1 passed`. Confirmed to genuinely fail pre-fix via `git
+  stash` (bailout after >510 events: "stream() never reached a
+  terminal event").
+- Command: `pytest tests/tools/ tests/api/test_run_stream.py -q` and
+  `pytest tests/api/ -q`
+- Result: `1575 passed, 2 skipped` + `170 passed`.
+- Command: `python3 -m pytest tests/ -q`
+  (full suite, background run)
+- Result: `21376 passed, 14 skipped in 690.13s (0:11:30)`. 0 failed, up
+  from 21373. Fortieth consecutive fully green full-suite run.
+
 ## Run: 2026-07-13 14:20 UTC — round 21 research pass: VectorMemoryStore dimension-mismatch crash, ContainerSandbox false-success cleanup log, FasterWhisperSTT odd-length multichannel crash
 
 - Context: round 21 of the research-pass invitation (rounds 1-20 covered

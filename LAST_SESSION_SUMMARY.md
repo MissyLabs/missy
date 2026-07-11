@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (88 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for thirty-nine consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (89 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for forty consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -3629,15 +3629,66 @@ tests/unit/test_container_progress_edges.py tests/channels/voice/ -q`:
 `514 passed`. `pytest tests/memory/ tests/vision/ -q` (run under
 `~/.venv` for `faiss-cpu`): `607 passed` + `2966 passed`.
 
+### Post-backlog (eighty-second checkpoint): round 22 research pass — FileReadTool false-truncation bug on multi-byte content, SSE stream hang on run event-queue overflow
+
+Round 22 (rounds 1-21 covered every area listed in the round 21 entry
+above), into `missy/tools/builtin/` (the built-in tools' own logic,
+not the registry/policy layer), `missy/agent/context.py`'s
+token-budget arithmetic, fresh angles in `missy/agent/runtime.py`'s
+control flow, and `missy/api/` request-handling edge cases.
+`calculator.py`, `file_write.py`/`file_delete.py`/`list_files.py`'s
+symlink-TOCTOU protections, `web_fetch.py`, `shell_exec.py`,
+`ContextManager`'s reserve-fraction arithmetic, `runtime.py`'s
+tool-loop/message-history folding, `webhook.py`, and
+`audit_browser.py`/`web_sessions.py` all checked out clean. Two
+genuine bugs fixed.
+
+1. **FileReadTool false-truncation bug**: a text-mode
+   `fh.read(max_bytes)` reads up to `max_bytes` *characters*, not
+   bytes, while the truncation check compared against the file's
+   *byte* size -- for multi-byte UTF-8 content, the whole file could be
+   read in full while a false "Truncated" notice was still appended,
+   misleading the calling agent into believing content was incomplete.
+   Live-verified with a 30,000-emoji file (120,000 bytes / 30,000
+   chars): reading at `max_bytes=65,536` returned the entire file yet
+   still claimed truncation. Fixed by reading in binary mode up to
+   `max_bytes` bytes and decoding only that slice, making the
+   byte-based check and the actual bytes read consistent with each
+   other and with the tool's own documented byte-limit contract. 2 new
+   tests, confirmed to fail pre-fix.
+2. **SSE stream hang on run event-queue overflow**: `RunHandle.push()`
+   silently drops on `queue.Full`, including the two terminal markers
+   `_execute()`'s `finally` block relies on to signal stream
+   completion. A client streaming an in-flight run only checked
+   `handle.status` once at the very top of `stream()`, before entering
+   its polling loop -- once inside, a queue overflow (e.g. a
+   tool-call-heavy run with >500 events outpacing a slower consumer)
+   that dropped both terminal markers left the client looping on `ping`
+   keepalives forever, even though the run had genuinely finished.
+   Live-reproduced end-to-end with a real `stream()` generator mid-poll
+   and the queue filled to capacity. Fixed by also checking
+   `handle.status` in the polling loop's `queue.Empty` (timeout) branch
+   -- the same signal the late-join fast path already trusts -- falling
+   back to the synthesized terminal event within one keepalive tick
+   (15s) instead of hanging indefinitely. 1 new test, confirmed to fail
+   pre-fix.
+
+Verified: `pytest tests/tools/ tests/api/test_run_stream.py -q`:
+`1575 passed, 2 skipped`. `pytest tests/api/ -q`: `170 passed`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21373 passed, 14 skipped in 616.07s (0:10:16)
+21376 passed, 14 skipped in 690.13s (0:11:30)
 ```
 
-**Zero failures**, the thirty-ninth consecutive fully green
-full-suite run. Passed count is up from 21371 to 21373 (the round 21
+**Zero failures**, the fortieth consecutive fully green
+full-suite run. Passed count is up from 21373 to 21376 (the round 22
+checkpoint's 3 new tests: 2 FileReadTool multi-byte-truncation tests
+and 1 SSE queue-overflow terminal-delivery test; all of the sixty-first
+through eighty-first checkpoints' fixes are confirmed still holding).
+Passed count is up from 21371 to 21373 (the round 21
 checkpoint's 2 new tests that run under the standard system-Python
 environment: 1 ContainerSandbox false-success-log test and 1
 FasterWhisperSTT odd-length-multichannel test; the third new test,
