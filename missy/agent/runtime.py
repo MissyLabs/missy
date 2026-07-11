@@ -2053,7 +2053,30 @@ class AgentRuntime:
         try:
             from missy.memory.synthesizer import MemorySynthesizer
 
-            synth = MemorySynthesizer()
+            # Reconcile with ContextManager's own token budget.
+            # build_messages() reserves memory_fraction + learnings_fraction
+            # of the available budget (subtracted from history_budget)
+            # specifically for injected memory/learnings -- but this
+            # synthesized block is appended to the system prompt string
+            # *after* build_messages() already ran, entirely outside its
+            # accounting (no production caller ever passes memory_results/
+            # learnings into build_messages() itself). MemorySynthesizer's
+            # own independent default max_tokens (4500) had no relationship
+            # to that reservation: the reserved budget went completely
+            # unused while the actually-appended block could still push the
+            # real final prompt over the configured TokenBudget.total.
+            # Deriving max_tokens from the same reservation keeps the two
+            # budgets in sync instead of silently disagreeing.
+            max_tokens = 4500
+            if self._context_manager is not None:
+                budget = getattr(self._context_manager, "_budget", None)
+                if budget is not None:
+                    max_tokens = max(
+                        1,
+                        int(budget.total * (budget.memory_fraction + budget.learnings_fraction)),
+                    )
+
+            synth = MemorySynthesizer(max_tokens=max_tokens)
             has_content = False
 
             if learnings:

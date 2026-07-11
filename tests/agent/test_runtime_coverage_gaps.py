@@ -693,6 +693,46 @@ class TestSynthesizeMemory:
 
         assert result == ""
 
+    def test_max_tokens_derived_from_context_manager_budget(self):
+        """Regression: MemorySynthesizer's own independent default
+        max_tokens (4500) had no relationship to the memory_fraction +
+        learnings_fraction ContextManager.build_messages() reserves (and
+        subtracts from history_budget) for exactly this purpose -- the
+        reserved budget went completely unused while the actually
+        appended synthesized block could still push the real final
+        prompt over the configured TokenBudget.total. max_tokens must now
+        be derived from that same reservation.
+        """
+        from missy.agent.context import ContextManager, TokenBudget
+
+        rt, _ = _build_runtime()
+        rt._context_manager = ContextManager(
+            TokenBudget(total=10_000, memory_fraction=0.15, learnings_fraction=0.05)
+        )
+
+        mock_synth_cls = MagicMock()
+        mock_synth_cls.return_value.synthesize.return_value = "block"
+        with patch("missy.memory.synthesizer.MemorySynthesizer", mock_synth_cls):
+            result = rt._synthesize_memory(
+                learnings=["L1"], summary_texts=[], playbook_texts=[], query="q"
+            )
+
+        mock_synth_cls.assert_called_once_with(max_tokens=2000)  # 10_000 * (0.15 + 0.05)
+        assert result == "block"
+
+    def test_max_tokens_falls_back_to_default_without_context_manager(self):
+        rt, _ = _build_runtime()
+        assert rt._context_manager is None
+
+        mock_synth_cls = MagicMock()
+        mock_synth_cls.return_value.synthesize.return_value = "block"
+        with patch("missy.memory.synthesizer.MemorySynthesizer", mock_synth_cls):
+            rt._synthesize_memory(
+                learnings=["L1"], summary_texts=[], playbook_texts=[], query="q"
+            )
+
+        mock_synth_cls.assert_called_once_with(max_tokens=4500)
+
 
 # ---------------------------------------------------------------------------
 # Lines 1394-1432: _intercept_large_content — all three paths

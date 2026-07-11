@@ -4461,6 +4461,127 @@ skipped`. **Full-suite confirmation:** `python3 -m pytest tests/ -q
 (0:07:57)` — 0 failed, up from 21278. Twenty-fourth consecutive fully
 green full-suite run.
 
+### Post-backlog (sixty-seventh checkpoint): round 7 research pass finds an asyncio event-loop-blocking bug, a token-budget composition gap, and wires up Watchdog
+
+Round 7 of the research-pass invitation (rounds 1-6: Scheduler/Persona;
+API/MessageBus/Screencast; Memory-compaction/GraphStore/Vault; Config/
+Vision/CandidateGenerator; MCP/SubAgent/Learnings/Playbook/Attention;
+Discord/operator-controls/AuditLogger/behavior), this time into
+`missy/agent/context.py`, `missy/agent/consolidation.py`,
+`missy/memory/synthesizer.py`, `missy/agent/proactive.py`,
+`missy/agent/watchdog.py`, `missy/agent/interactive_approval.py`, and
+`missy/scheduler/parser.py`. Three genuine findings, live-verified and
+fixed; `ProactiveManager`'s cooldown/lock/approval-gate wiring, the
+rest of `Watchdog`'s internal health-check logic, and
+`scheduler/parser.py`'s regex/validation paths were all investigated
+and found clean.
+
+**1. `InteractiveApproval.prompt_user()` blocked the entire asyncio
+event loop with no timeout whenever triggered from an async gateway
+call — highest severity.** `_do_prompt()` calls a blocking, un-timed
+`console.input()`; `missy/gateway/client.py`'s `aget`/`apost`/`adelete`/
+`apatch`/`aput`/`ahead` all called the *synchronous* `_check_url`
+directly from inside their `async def` bodies, with no `await` or
+executor offload. **Live-reproduced with real wall-clock timing** (not
+just call-count assertions, which are vacuous here since
+`asyncio.gather()` waits for both tasks regardless of ordering): a
+0.3s blocking prompt running concurrently with a 0.2s ticker coroutine
+took 0.615s total pre-fix (sequential — the ticker couldn't make any
+progress until the blocking call released the thread) vs. under 0.45s
+post-fix (genuinely concurrent). Since `_load_subsystems()`/
+`AgentRuntime.__init__` install this as a process-wide singleton by
+default whenever a TTY is attached, any policy-denied async request
+(Discord REST calls, `web_fetch` tool calls, API-server async traffic)
+while interactive approval is active would freeze the Discord gateway
+heartbeat (risking disconnect) and all other concurrent async work in
+the process for however long the operator took to respond — unlike
+`ApprovalGate.request()`'s 60s default timeout in this same codebase.
+Fixed by extracting the shared policy-check logic into
+`_validate_and_pin()`/`_pin_operator_override()` and adding a new
+`_check_url_async()` that offloads the blocking prompt call to a
+thread executor via `loop.run_in_executor(...)`, used by all six async
+methods instead of the synchronous `_check_url`. 3 new tests (async
+approve/deny paths plus the timing-based concurrency regression test),
+the concurrency test confirmed to genuinely fail (0.615s, sequential)
+against the pre-fix code via `git stash`.
+
+**2. `ContextManager`'s token budget and `MemorySynthesizer`'s output
+cap were completely unreconciled with each other.**
+`build_messages()` reserves `memory_fraction + learnings_fraction`
+(default 20%) of the available budget and subtracts it from
+`history_budget` — but no production caller ever passes
+`memory_results`/`learnings` into that call (verified via repo-wide
+grep), so that reservation is silently wasted every time. Meanwhile,
+the *actual* memory injection mechanism (`_synthesize_memory` +
+`MemorySynthesizer`) appends its block to the system prompt string
+*after* `build_messages()` already returned, entirely outside
+`TokenBudget` accounting, using `MemorySynthesizer`'s own independent
+hardcoded default (`max_tokens=4500`) with no relationship to the
+configured `TokenBudget.total`. **Live-reproduced** (per the research
+agent's report): with a realistic enriched system prompt plus a
+saturated history and a near-cap synthesized-memory block, actual
+total tokens sent reached 30,191 against a configured 30,000 budget.
+Fixed by deriving `MemorySynthesizer`'s `max_tokens` from
+`ContextManager`'s own `(memory_fraction + learnings_fraction) *
+total` reservation instead of an independent hardcoded default,
+keeping the two budgets in sync. 2 new tests (derived-from-budget and
+falls-back-to-default-without-a-context-manager), the first confirmed
+to genuinely fail against the pre-fix code via `git stash`.
+
+**3. `Watchdog` (background subsystem health monitor) was fully built
+and tested but never instantiated anywhere in production.** A
+repo-wide grep confirmed `Watchdog(`/`from missy.agent.watchdog
+import` appeared only in the module itself and its own unit tests — no
+CLI command or bootstrap path ever called `.register()`/`.start()` on
+it, so the "background subsystem health monitor" this module's own
+docstring advertises was inert in every real deployment: no operator
+ever saw a `watchdog.health_check` audit event or an ERROR-level
+"unhealthy" log for a real subsystem, silently, with no error
+anywhere. Fixed by constructing and starting a `Watchdog` in
+`gateway_start()` (`missy/cli/main.py`) right after the shared
+`AgentRuntime` is built, registering two real, meaningful checks
+(`provider_registry`: `get_registry().get_available()` is non-empty;
+`memory_store`: a real, cheap, read-only `get_session_turns()` query
+doesn't raise), and stopping it cleanly in the existing shutdown
+`finally:` block alongside the other subsystems. 1 new test asserting
+`start()`/`stop()`/both check registrations, confirmed to genuinely
+fail (`start` called 0 times) against the pre-fix code via
+`git stash`.
+
+`MemoryConsolidator`'s `should_consolidate()`/`consolidate()` (the
+advertised "80%-threshold Sleep Mode" trigger) were found to have the
+same "zero production callers" shape as finding #3 — but left as an
+honest, documented residual rather than force-fixed this checkpoint: a
+different, fully independent, functioning compaction mechanism
+(`missy/agent/compaction.py`'s `compact_if_needed()`, already wired
+into production via `_maybe_compact`) already runs in its place, so
+there is no silent user-visible regression, only a misleading
+docstring/API surface. Switching production to use
+`MemoryConsolidator` instead would be an architectural decision (which
+mechanism should be authoritative) beyond a bounded bug fix, not a
+narrow wiring gap like `Watchdog`'s.
+
+Verified: `pytest tests/agent/ tests/gateway/
+tests/memory/test_synthesizer.py -q`: `4657 passed, 4 skipped`.
+Separately: `pytest tests/cli/ -q`: `1068 passed`.
+
+**A real regression was caught by this checkpoint's own full-suite run
+(exactly the discipline this is for)**: 8 tests outside `tests/gateway/`
+— `tests/security/test_gateway_async_put_head_sanitizer_patterns.py`
+(6 tests) and `tests/unit/test_gateway_response_size_limits.py` (2
+tests) — mocked the *synchronous* `client._check_url` on `aput`/
+`ahead`/`aget`/`apost` test cases, an implementation detail that
+finding #1's fix intentionally changed (those async methods now call
+`_check_url_async`). Fixed by updating the 8 tests to mock
+`_check_url_async` (as an `AsyncMock`) instead, matching the semantic
+change; re-ran the full `tests/agent/ tests/gateway/
+tests/memory/test_synthesizer.py tests/cli/ tests/security/ tests/unit/
+tests/policy/ tests/integration/` sweep clean (`11208 passed, 4
+skipped`) before re-running the full suite. **Full-suite confirmation:**
+`python3 -m pytest tests/ -q -o faulthandler_timeout=120` → `21287
+passed, 13 skipped in 479.20s (0:07:59)` — 0 failed, up from 21281.
+Twenty-fifth consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

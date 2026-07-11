@@ -118,7 +118,7 @@ class TestGatewayMethodIntegration:
         client = self._make_client_with_mocked_transport()
         mock_response = httpx.Response(200, headers={"content-length": "200"})
 
-        with patch.object(client, "_check_url"):
+        with patch.object(client, "_check_url_async"):
             mock_async_client = MagicMock()
             mock_async_client.get = AsyncMock(return_value=mock_response)
             with (
@@ -132,7 +132,7 @@ class TestGatewayMethodIntegration:
         client = self._make_client_with_mocked_transport()
         mock_response = httpx.Response(200, headers={"content-length": "200"})
 
-        with patch.object(client, "_check_url"):
+        with patch.object(client, "_check_url_async"):
             mock_async_client = MagicMock()
             mock_async_client.post = AsyncMock(return_value=mock_response)
             with (

@@ -167,6 +167,57 @@ class TestGatewayStartSignalHandler:
             _os.unlink(cfg_path)
 
 
+class TestGatewayStartWatchdog:
+    """Regression: Watchdog (missy/agent/watchdog.py) was fully built and
+    tested but had zero production callers anywhere -- no CLI command or
+    bootstrap path ever called .register()/.start() on it. gateway_start()
+    (the long-lived service-mode entry point) must construct and start it,
+    and stop it cleanly on shutdown.
+    """
+
+    def test_watchdog_started_and_stopped(self, runner: CliRunner):
+        import os
+        import signal
+
+        cfg_path = _cfg_path()
+        try:
+            mock_config = _make_mock_config()
+            mock_config.discord = None
+            mock_config.providers = {}
+
+            call_count = [0]
+
+            def fake_sleep(t):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    os.kill(os.getpid(), signal.SIGTERM)
+                elif call_count[0] > 5:
+                    raise SystemExit(0)
+
+            with (
+                patch("missy.cli.main._load_subsystems", return_value=mock_config),
+                patch("missy.agent.runtime.AgentRuntime"),
+                patch("missy.agent.runtime.AgentConfig"),
+                patch("time.sleep", side_effect=fake_sleep),
+                patch("yaml.safe_load", return_value={}),
+                patch("missy.agent.watchdog.Watchdog") as mock_watchdog_cls,
+            ):
+                result = runner.invoke(cli, ["--config", cfg_path, "gateway", "start"])
+
+            assert result.exit_code == 0
+            mock_watchdog_cls.return_value.start.assert_called_once()
+            mock_watchdog_cls.return_value.stop.assert_called_once()
+            registered_names = {
+                call.args[0] for call in mock_watchdog_cls.return_value.register.call_args_list
+            }
+            assert "provider_registry" in registered_names
+            assert "memory_store" in registered_names
+        finally:
+            import os as _os
+
+            _os.unlink(cfg_path)
+
+
 # ---------------------------------------------------------------------------
 # gateway_start — proactive manager exception path (lines 1284-1285)
 # ---------------------------------------------------------------------------

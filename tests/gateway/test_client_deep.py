@@ -8,6 +8,7 @@ lifecycle, the interactive approval flow, and the create_client factory.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Generator
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1024,6 +1025,88 @@ class TestInteractiveApprovalFlow:
         with patch.object(httpx.Client, "get") as mock_get, pytest.raises(PolicyViolationError):
             client.get("https://denied.example.com/")
         mock_get.assert_not_called()
+
+    async def test_operator_approves_allows_async_request(self) -> None:
+        self._use_restrictive()
+        approval = self._make_approval(prompt_returns=True)
+        set_interactive_approval(approval)
+
+        client = PolicyHTTPClient()
+        mock_resp = _mock_response(200)
+        with patch.object(httpx.AsyncClient, "get", new_callable=AsyncMock, return_value=mock_resp):
+            resp = await client.aget("https://operator-approved.example.com/")
+        assert resp.status_code == 200
+        approval.prompt_user.assert_called_once()
+
+    async def test_operator_denies_async_raises_policy_violation(self) -> None:
+        self._use_restrictive()
+        approval = self._make_approval(prompt_returns=False)
+        set_interactive_approval(approval)
+
+        client = PolicyHTTPClient()
+        with pytest.raises(PolicyViolationError):
+            await client.aget("https://denied.example.com/")
+        approval.prompt_user.assert_called_once()
+
+    async def test_async_prompt_does_not_block_the_event_loop(self) -> None:
+        """Regression: InteractiveApproval.prompt_user() is a blocking,
+        un-timed call (console.input()). Every async gateway method
+        previously called the *synchronous* _check_url directly from a
+        coroutine, so a policy-denied async request with interactive
+        approval active froze the entire event loop for however long the
+        prompt call took -- stalling all other concurrent async work
+        (e.g. the Discord gateway heartbeat) with no timeout. The fix
+        offloads the blocking prompt to a thread executor via
+        _check_url_async(), so other coroutines keep making progress
+        while it's pending.
+
+        Measures real wall-clock time rather than final tick count: since
+        asyncio.gather() awaits full completion of both coroutines
+        regardless of ordering, a naive "did the ticker eventually finish"
+        check passes either way. The real signal is whether the ticker's
+        work happens CONCURRENTLY with the blocking prompt (total elapsed
+        time ~= max(prompt_duration, ticker_duration), the loop stayed
+        responsive) or SEQUENTIALLY after it (total elapsed time ~=
+        prompt_duration + ticker_duration, the loop was frozen).
+        """
+        import time
+
+        self._use_restrictive()
+
+        def _slow_blocking_prompt(action: str, detail: str) -> bool:
+            time.sleep(0.3)
+            return True
+
+        from missy.agent.interactive_approval import InteractiveApproval
+
+        approval = MagicMock(spec=InteractiveApproval)
+        approval.prompt_user.side_effect = _slow_blocking_prompt
+        set_interactive_approval(approval)
+
+        client = PolicyHTTPClient()
+        mock_resp = _mock_response(200)
+
+        ticks = 0
+
+        async def _ticker() -> None:
+            nonlocal ticks
+            for _ in range(20):
+                await asyncio.sleep(0.01)
+                ticks += 1
+
+        start = time.monotonic()
+        with patch.object(httpx.AsyncClient, "get", new_callable=AsyncMock, return_value=mock_resp):
+            await asyncio.gather(
+                client.aget("https://operator-approved.example.com/"), _ticker()
+            )
+        elapsed = time.monotonic() - start
+
+        assert ticks == 20
+        approval.prompt_user.assert_called_once()
+        # Sequential (blocked loop) would take ~0.3 + 0.2 = ~0.5s;
+        # concurrent (loop stayed responsive) takes ~max(0.3, 0.2) = ~0.3s.
+        # 0.45s is a generous cutoff that clearly distinguishes the two.
+        assert elapsed < 0.45, f"expected concurrent execution, took {elapsed:.3f}s"
 
     def test_set_interactive_approval_stores_instance(self) -> None:
         from missy.agent.interactive_approval import InteractiveApproval

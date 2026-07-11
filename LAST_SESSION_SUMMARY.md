@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (73 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eighteen consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (74 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eighteen consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -2878,14 +2878,61 @@ Verified: `pytest tests/unit/test_discord_channel.py tests/channels/
 tests/api/ tests/agent/ tests/observability/ -q`: `6596 passed, 4
 skipped`.
 
+### Post-backlog (sixty-seventh checkpoint): round 7 research pass — asyncio event-loop blocking bug, token-budget composition gap, Watchdog wiring
+
+Round 7 (rounds 1-6: Scheduler/Persona; API/MessageBus/Screencast;
+Memory-compaction/GraphStore/Vault; Config/Vision/CandidateGenerator;
+MCP/SubAgent/Learnings/Playbook/Attention; Discord/operator-controls/
+AuditLogger/behavior), into `ContextManager`, `MemoryConsolidator`,
+`MemorySynthesizer`, `ProactiveManager`, `Watchdog`,
+`InteractiveApproval`, and the scheduler parser. Three genuine
+findings.
+
+1. **Asyncio event-loop blocking bug** (highest severity):
+   `InteractiveApproval.prompt_user()`'s blocking `console.input()` was
+   called synchronously from inside the gateway client's async
+   methods, freezing the entire event loop (Discord heartbeat, all
+   concurrent async work) for however long the operator took to
+   respond, with no timeout. Live-reproduced with real wall-clock
+   timing (0.615s sequential pre-fix vs under 0.45s concurrent
+   post-fix). Fixed with a thread-executor-offloaded async check path.
+   3 new tests, the timing-based one confirmed to fail pre-fix.
+2. **Token-budget composition gap**: `ContextManager`'s reserved
+   memory/learnings fraction was never actually used, while the real
+   memory-injection mechanism used its own unreconciled hardcoded
+   token cap — live-reproduced an actual overflow to 30,191 tokens
+   against a configured 30,000 budget. Fixed by deriving the
+   synthesizer's cap from the same reservation. 2 new tests, confirmed
+   to fail pre-fix.
+3. **Watchdog wiring**: the background subsystem health monitor had
+   zero production callers. Fixed by constructing and starting it in
+   `gateway_start()` with two real health checks. 1 new test,
+   confirmed to fail pre-fix (`start` called 0 times).
+
+`MemoryConsolidator`'s equivalent dead-code shape was left as an
+honest residual — a different, working compaction mechanism already
+runs in its place, so switching would be an architectural decision
+beyond a bounded fix.
+
+Verified: `pytest tests/agent/ tests/gateway/
+tests/memory/test_synthesizer.py -q`: `4657 passed, 4 skipped`.
+Separately: `pytest tests/cli/ -q`: `1068 passed`.
+
+**A real regression was caught by this checkpoint's own full-suite
+run**: 8 tests outside `tests/gateway/` mocked the synchronous
+`_check_url` on async test cases — an implementation detail finding
+#1's fix intentionally changed. Fixed by updating them to mock
+`_check_url_async` instead; re-verified clean (`11208 passed, 4
+skipped`) before re-running the full suite.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-21281 passed, 13 skipped in 477.29s (0:07:57)
+21287 passed, 13 skipped in 479.20s (0:07:59)
 ```
 
-**Zero failures**, the twenty-fourth consecutive fully green full-suite
+**Zero failures**, the twenty-fifth consecutive fully green full-suite
 run. Passed count is up from 21191 to 21212 (the DISC-CMD-008
 rate-limiting checkpoint: 10 standalone unit tests, 9 real
 dispatch-path integration tests, 3 config-parsing tests) to 21213 (the
@@ -2914,9 +2961,12 @@ wiring's 9 new tests, and the AttentionSystem wiring's 2 new tests) to
 21281 (the operator-controls falsy-zero fix's 1 new test, the
 AuditLogger reconfigure fix's 1 rewritten test, the BehaviorLayer
 topic-wiring fix's 1 new test, and the Discord auto-thread fix's 1 new
-test — the eighteenth green run's `ProviderRegistry` fix, and all of
-the sixty-first through sixty-fifth checkpoints' fixes, are confirmed
-still holding).
+test) to 21287 (the asyncio event-loop-blocking fix's 3 new tests, the
+token-budget composition fix's 2 new tests, the Watchdog wiring's 1
+new test, and 8 pre-existing async-gateway tests updated to match the
+intentional `_check_url` → `_check_url_async` change — the eighteenth
+green run's `ProviderRegistry` fix, and all of the sixty-first through
+sixty-sixth checkpoints' fixes, are confirmed still holding).
 The occasional Hypothesis deprecation warnings seen in some runs of
 this suite (`test_property_based_fuzz.py` and/or
 `test_policy_property.py`, depending on test ordering — this run shows

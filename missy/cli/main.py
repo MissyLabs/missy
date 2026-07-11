@@ -2298,6 +2298,34 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
     )
     _discord_agent = AgentRuntime(_discord_agent_cfg)
 
+    # Background subsystem health monitor. Fully built and tested
+    # (missy/agent/watchdog.py), but had zero production callers anywhere
+    # -- no CLI command or bootstrap path ever called .register()/.start()
+    # on it, so the "background subsystem health monitor" this module's own
+    # docstring advertises was inert in every real deployment: no operator
+    # ever saw a watchdog.health_check audit event or an ERROR-level
+    # "unhealthy" log for a real subsystem, silently, with no error
+    # anywhere. Registers real, meaningful checks against the objects this
+    # function already constructed.
+    from missy.agent.watchdog import Watchdog
+
+    def _check_provider_registry() -> bool:
+        from missy.providers.registry import get_registry
+
+        return bool(get_registry().get_available())
+
+    def _check_memory_store() -> bool:
+        store = getattr(_agent, "_memory_store", None)
+        if store is None:
+            return True  # no memory store configured; nothing to monitor
+        store.get_session_turns("watchdog-healthcheck", limit=1)
+        return True
+
+    watchdog = Watchdog()
+    watchdog.register("provider_registry", _check_provider_registry)
+    watchdog.register("memory_store", _check_memory_store)
+    watchdog.start()
+
     # Start voice channel if configured.
     voice_channel = None
     try:
@@ -2615,6 +2643,10 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                 proactive_manager.stop()
             except Exception as _stop_exc:
                 logger.debug("proactive: stop error: %s", _stop_exc)
+        try:
+            watchdog.stop()
+        except Exception as _wd_stop_exc:
+            logger.debug("watchdog: stop error: %s", _wd_stop_exc)
 
     console.print("[dim]Gateway stopped.[/]")
 

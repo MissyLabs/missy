@@ -1,5 +1,76 @@
 # TEST_RESULTS
 
+## Run: 2026-07-12 09:10 UTC — round 7 research pass: asyncio event-loop blocking bug, token-budget composition gap, Watchdog wiring
+
+- Context: round 7 of the research-pass invitation (rounds 1-6:
+  Scheduler/Persona; API/MessageBus/Screencast; Memory-compaction/
+  GraphStore/Vault; Config/Vision/CandidateGenerator; MCP/SubAgent/
+  Learnings/Playbook/Attention; Discord/operator-controls/
+  AuditLogger/behavior). This round targeted `missy/agent/context.py`,
+  `missy/agent/consolidation.py`, `missy/memory/synthesizer.py`,
+  `missy/agent/proactive.py`, `missy/agent/watchdog.py`,
+  `missy/agent/interactive_approval.py`, and
+  `missy/scheduler/parser.py`.
+- **Asyncio event-loop blocking bug** (highest severity):
+  `InteractiveApproval.prompt_user()`'s blocking `console.input()` was
+  called synchronously from inside `gateway/client.py`'s async
+  `aget`/`apost`/etc. methods, with no await/executor offload.
+  Live-reproduced with real wall-clock timing (call-count assertions
+  are vacuous here since `asyncio.gather()` waits for both tasks
+  regardless of ordering): 0.615s (sequential) pre-fix vs under 0.45s
+  (concurrent) post-fix for a 0.3s blocking prompt racing a 0.2s
+  ticker. Fixed with a new `_check_url_async()` using
+  `loop.run_in_executor(...)`.
+- Command: `pytest tests/gateway/test_client_deep.py -k InteractiveApprovalFlow -v`
+- Result: `9 passed`. The timing-based concurrency test confirmed to
+  genuinely fail (0.615s, sequential) against the pre-fix code via
+  `git stash`.
+- **Token-budget composition gap**: `ContextManager`'s
+  memory_fraction/learnings_fraction reservation was never actually
+  used by any production caller, while the real memory-injection
+  mechanism (`MemorySynthesizer`) used its own independent hardcoded
+  max_tokens (4500), unreconciled with `TokenBudget.total` --
+  live-reproduced total tokens reaching 30,191 against a configured
+  30,000 budget. Fixed by deriving `MemorySynthesizer`'s max_tokens
+  from the same reservation.
+- Command: `pytest tests/agent/test_runtime_coverage_gaps.py -k SynthesizeMemory -v`
+- Result: `8 passed`. The new test confirmed to genuinely fail against
+  the pre-fix code via `git stash`.
+- **Watchdog wiring**: the background subsystem health monitor had
+  zero production callers anywhere (confirmed via repo-wide grep).
+  Fixed by constructing and starting it in `gateway_start()` with two
+  real checks (provider registry, memory store), stopped cleanly in
+  the existing shutdown path.
+- Command: `pytest tests/cli/test_cli_main_gaps.py -k Watchdog -v`
+- Result: `3 passed`. The new test confirmed to genuinely fail
+  (`start` called 0 times) against the pre-fix code via `git stash`.
+- `MemoryConsolidator`'s should_consolidate()/consolidate() found to
+  have the same zero-callers shape, but left as an honest residual: a
+  different, working compaction mechanism already runs in production,
+  so switching would be an architectural decision beyond a bounded fix.
+- Command: `pytest tests/agent/ tests/gateway/
+  tests/memory/test_synthesizer.py -q`
+- Result: `4657 passed, 4 skipped`.
+- Command: `pytest tests/cli/ -q`
+- Result: `1068 passed`.
+- **Real regression caught by this checkpoint's own first full-suite
+  run**: 8 tests outside `tests/gateway/` mocked the synchronous
+  `_check_url` on async method test cases (`aput`/`ahead`/`aget`/
+  `apost`), an implementation detail finding #1's fix intentionally
+  changed. Fixed by updating them to mock `_check_url_async` (as an
+  `AsyncMock`) instead:
+  `tests/security/test_gateway_async_put_head_sanitizer_patterns.py`
+  (6 tests), `tests/unit/test_gateway_response_size_limits.py` (2
+  tests).
+- Command: `pytest tests/agent/ tests/gateway/
+  tests/memory/test_synthesizer.py tests/cli/ tests/security/
+  tests/unit/ tests/policy/ tests/integration/ -q`
+- Result: `11208 passed, 4 skipped`.
+- Command: `python3 -m pytest tests/ -q -o faulthandler_timeout=120`
+  (full suite, background run, post-regression-fix)
+- Result: `21287 passed, 13 skipped in 479.20s (0:07:59)`. 0 failed, up
+  from 21281. Twenty-fifth consecutive fully green full-suite run.
+
 ## Run: 2026-07-12 08:30 UTC — round 6 research pass: operator-controls falsy-zero bug, AuditLogger re-init contract violation, dead behavior/Discord config options
 
 - Context: round 6 of the research-pass invitation (rounds 1-5:
