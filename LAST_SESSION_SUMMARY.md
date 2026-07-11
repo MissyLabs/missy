@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (52 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eight consecutive checkpoints)
+## Changed (53 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eight consecutive checkpoints)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -2081,6 +2081,38 @@ No code changes this checkpoint. Full suite unchanged (`21180 passed,
 Case count: 57 of 89 run (52 full + 3 partial/mixed + 1 inconclusive
 + 1 counted-via-overlap). ~32 remain.
 
+### Task #10 continued (forty-seventh checkpoint): the whole WB-* series closed out, a bonus registry-robustness confirmation
+
+**WB-003**: live delegate attempt safe-failed as usual; verified the
+actual property directly instead — the full `browser_navigate` →
+`browser_fill` → `browser_click` → `browser_wait` →
+`browser_get_content` → `browser_close` chain succeeded end-to-end
+against a real form fixture, retrieving the exact confirmation text
+byte-for-byte. **WB-005**: verified `browser_get_content` correctly
+extracts only visible main-content text from a fixture with a hidden,
+planted injection payload — the hidden text never appeared in output.
+**WB-006**: verified `browser_evaluate` correctly returns real DOM
+query results. **Bonus finding**: an initial test call using the wrong
+parameter name triggered a `TypeError` that `ToolRegistry.execute()`
+caught gracefully, returning a clean error result rather than a raw
+crash — confirms real robustness against malformed delegate arguments.
+**WB-007**: verified `browser_wait` correctly waits for a real
+4-second JS timer change, and correctly times out at a finite 30s
+(not indefinitely) when the condition is never satisfied. **WB-004**
+(capture portion only): verified `browser_screenshot` produces a real
+PNG on disk; deliberately did not test the Discord-upload half of this
+case for the same reason as DU-001/DU-002/XT-002.
+
+This closes out the entire `WB-*` series (7 of 7 cases now have real
+evidence, most via direct production-code verification given task
+#46's delegate-reliability constraint on live testing).
+
+No code changes this checkpoint. Full suite unchanged (`21180 passed,
+13 skipped`).
+
+Case count: 62 of 89 run (56 full + 4 partial/mixed + 1 inconclusive
++ 1 counted-via-overlap). ~27 remain.
+
 ## Verification
 
 ```text
@@ -2170,7 +2202,12 @@ underlying safety property still holds regardless; the forty-sixth
 checkpoint ran 8 more cases (bringing the backlog to 57 of 89) and
 verified Discord attachment handling directly against 5 real,
 attack-shaped inputs (spoofed host, disguised executable, oversized
-file, MIME/extension mismatch — all correctly rejected).
+file, MIME/extension mismatch — all correctly rejected); the
+forty-seventh checkpoint closed out the entire `WB-*` (browser) series
+(bringing the backlog to 62 of 89) via direct production-code
+verification of the real end-to-end tool chain, plus a bonus
+confirmation that `ToolRegistry.execute()` gracefully handles
+malformed/misnamed tool arguments rather than crashing.
 
 Full detail in `BUILD_STATUS.md`, `AUDIT_SECURITY.md`, and
 `TEST_RESULTS.md` — each has one dated entry per checkpoint this
@@ -2248,9 +2285,10 @@ three files above.)
   false positives on genuinely fine no-tool-needed answers. See the
   fortieth checkpoint above.
 - **#10** Full 89-case tool-specific validation backlog — in progress,
-  57 of 89 run so far (52 full + 3 partial/mixed + 1 inconclusive + 1
+  62 of 89 run so far (56 full + 4 partial/mixed + 1 inconclusive + 1
   counted-via-overlap) across FS/SH/WB/INCUS/VIS/AUD/MEM/SELF/AT/X11/
-  SEC-SCOPE/SEC-PI/DISC-CMD/DU categories. Results: 2 genuine full
+  SEC-SCOPE/SEC-PI/DISC-CMD/DU categories -- the entire `WB-*` series
+  is now closed out. Results: 2 genuine full
   delegate successes (FS-004, INCUS-011 — the latter also exercising
   `DoneCriteria`'s real reject/retry loop for the first time), 2
   genuine partial/mixed delegate successes (INCUS-009's honest-partial
@@ -2278,7 +2316,7 @@ three files above.)
   notable-but-non-reproducible wrong-rationalization variants).
   Operator explicitly chose to keep running cases one-by-one despite
   the strength of the failure pattern (asked via AskUserQuestion after
-  5 straight fails) — continuing on that basis. ~32 cases remain.
+  5 straight fails) — continuing on that basis. ~27 cases remain.
   Working principle: prefer direct production-code verification over a
   live delegate call whenever a case tests Missy's own deterministic
   code rather than LLM decision-making — cheaper, more reliable, and
