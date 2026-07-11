@@ -3582,6 +3582,47 @@ UnknownConfigKey -v`: 6 passed. Broader: `pytest tests/config/ -q`:
 `21219 passed, 13 skipped in 607.61s (0:10:07)` — 0 failed, up from
 21213. Fifteenth consecutive fully green full-suite run.
 
+### Post-backlog (fifty-seventh checkpoint): `missy doctor` audit signing status check added
+
+Next concretely-scoped item from "Remaining Work" (SR-1.1/SR-4.6
+residual): `missy doctor` only checked whether the audit log *file*
+existed, saying nothing about whether it's actually tamper-evident.
+`missy audit verify` already existed for real cryptographic
+verification, but an operator had to know to run it separately —
+`doctor` (the "am I healthy" command) gave no hint anything needed
+checking.
+
+Added a new "audit signing" row to `missy doctor`'s table in
+`missy/cli/main.py`, calling the same real
+`verify_audit_log()`/`AgentIdentity.load_or_generate()` machinery
+`missy audit verify` uses. Reports **OK** when every line verifies as
+`valid`, **WARN** when some lines are `unsigned` (predate signing or
+were written with no identity configured) or the log is empty, and
+**FAIL** when any line is `tampered` or `malformed`. Read-only, never
+fails `doctor` itself.
+
+**Live-verified against the real, production `~/.missy/audit.jsonl`**
+(106,565 lines from this session's own activity): correctly reported
+**WARN** with `unsigned=55316, valid=51249` — the unsigned count
+reflects every event written before this session's SR-1.1 checkpoint
+enabled signing, and zero `tampered`/`malformed` lines confirm the
+signed portion is intact.
+
+Added 4 new tests (`TestDoctorAuditSigning` in
+`tests/cli/test_cli_commands.py`) exercising the real `AuditLogger`
+write path and real Ed25519 signing/verification (not mocks — mocking
+`verify_audit_log()` would defeat the point): all-valid → OK,
+a tampered line (flipping a real `deny` to `allow`, reproducing the
+security review's original attack) → FAIL, unsigned lines → WARN, and
+a missing log file → WARN (not FAIL).
+
+Verified: `pytest tests/cli/test_cli_commands.py -k AuditSigning -v`:
+4 passed. Broader: `pytest tests/cli/ -q`: 1065 passed. Full suite:
+`21223 passed, 13 skipped, 3 warnings in 616.41s (0:10:16)` — 0
+failed, up from 21219. Sixteenth consecutive fully green full-suite
+run. The 3 warnings are pre-existing, order-dependent Hypothesis
+deprecation notices, not introduced by this checkpoint.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security
@@ -3670,14 +3711,14 @@ path). Current remaining priority order:
    CircuitBreaker cooldown config (SR-4.8 residual); audit-log hash
    chain for deletion/reordering detection and key-rotation lifecycle
    (SR-1.1 residual, explicitly out of scope per the review's own text
-   since no hash-chain claim exists in the product); a `missy doctor`
-   check surfacing audit signing status (SR-1.1/SR-4.6 residual).
-   **The `shell.unrestricted` dead-config-key hygiene gap is now
-   fixed** — see the fifty-sixth checkpoint above. **The Web TUI
-   browser page for approvals and Discord pairing is now fixed** — see
-   the fifty-fifth checkpoint above. **DISC-CMD-008's per-user Discord
-   rate-limiting gap is now fixed** — see the fifty-fourth checkpoint
-   above.
+   since no hash-chain claim exists in the product).
+   **The `missy doctor` audit signing status check is now added** —
+   see the fifty-seventh checkpoint above. **The `shell.unrestricted`
+   dead-config-key hygiene gap is now fixed** — see the fifty-sixth
+   checkpoint above. **The Web TUI browser page for approvals and
+   Discord pairing is now fixed** — see the fifty-fifth checkpoint
+   above. **DISC-CMD-008's per-user Discord rate-limiting gap is now
+   fixed** — see the fifty-fourth checkpoint above.
 3. Broader untouched "Product Goal" surface from prompt.md (providers,
    tool intelligence, Discord/channels, scheduler/memory/sessions,
    hatching/persona, vision/audio/multimodal, Web TUI, OpenClaw-style

@@ -2402,3 +2402,142 @@ class TestDoctorBranches:
             ):
                 result = runner.invoke(cli, ["--config", cfg_path, "doctor"])
         assert result.exit_code == 0
+
+
+# ===========================================================================
+# missy doctor — audit signing status (SR-1.1/SR-4.6 residual)
+#
+# Previously `missy doctor` only checked whether the audit log *file*
+# existed, saying nothing about whether it's actually tamper-evident.
+# `missy audit verify` already existed for this, but an operator had to
+# know to run it separately -- `doctor` (the "am I healthy" command) gave
+# no hint anything needed checking. These tests exercise the real
+# AuditLogger write path and real AgentIdentity Ed25519 signing/
+# verification, not mocks -- mocking verify_audit_log() would defeat the
+# point of testing this row.
+# ===========================================================================
+
+
+class TestDoctorAuditSigning:
+    def _write_signed_log(self, key_path, log_path, events):
+        from missy.core.events import AuditEvent, EventBus
+        from missy.observability.audit_logger import AuditLogger
+        from missy.security.identity import AgentIdentity
+
+        identity = AgentIdentity.load_or_generate(str(key_path))
+        bus = EventBus()
+        AuditLogger(log_path=str(log_path), bus=bus, identity=identity)
+        for event_type, category, result, detail in events:
+            bus.publish(
+                AuditEvent.now(
+                    session_id="s1",
+                    task_id="t1",
+                    event_type=event_type,
+                    category=category,
+                    result=result,
+                    detail=detail,
+                )
+            )
+        return identity
+
+    def _invoke_doctor(self, runner, cfg_path, cfg):
+        mock_registry = MagicMock()
+        mock_registry.list_providers.return_value = []
+        mock_mgr = MagicMock()
+        mock_mgr.list_jobs.return_value = []
+        with (
+            _SubsystemsPatch(cfg),
+            patch("missy.providers.registry.get_registry", return_value=mock_registry),
+            patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr),
+        ):
+            return runner.invoke(cli, ["--config", cfg_path, "doctor"])
+
+    def test_all_lines_signed_and_valid_shows_ok(self, runner: CliRunner, tmp_path, monkeypatch):
+        key_path = tmp_path / "identity.pem"
+        log_path = tmp_path / "audit.jsonl"
+        monkeypatch.setattr("missy.security.identity.DEFAULT_KEY_PATH", str(key_path))
+        self._write_signed_log(
+            key_path,
+            log_path,
+            [("network.request", "network", "allow", {"host": "example.com"})],
+        )
+        cfg_path = _write_temp_config()
+        cfg = _make_mock_config()
+        cfg.audit_log_path = str(log_path)
+
+        result = self._invoke_doctor(runner, cfg_path, cfg)
+
+        assert result.exit_code == 0
+        assert "audit signing" in result.output.lower()
+        assert "valid=1" in result.output
+
+    def test_tampered_line_shows_fail(self, runner: CliRunner, tmp_path, monkeypatch):
+        import json as _json
+
+        key_path = tmp_path / "identity.pem"
+        log_path = tmp_path / "audit.jsonl"
+        monkeypatch.setattr("missy.security.identity.DEFAULT_KEY_PATH", str(key_path))
+        self._write_signed_log(
+            key_path,
+            log_path,
+            [("shell.exec", "shell", "deny", {"command": "rm -rf /"})],
+        )
+        # Tamper: flip the recorded result from deny to allow after signing,
+        # reproducing the exact attack the security review demonstrated.
+        lines = log_path.read_text().splitlines()
+        record = _json.loads(lines[0])
+        record["result"] = "allow"
+        log_path.write_text(_json.dumps(record) + "\n")
+
+        cfg_path = _write_temp_config()
+        cfg = _make_mock_config()
+        cfg.audit_log_path = str(log_path)
+
+        result = self._invoke_doctor(runner, cfg_path, cfg)
+
+        assert result.exit_code == 0  # doctor reports, never crashes/exits nonzero
+        assert "audit signing" in result.output.lower()
+        assert "tampered=1" in result.output
+        assert "FAIL" in result.output
+
+    def test_unsigned_lines_show_warn(self, runner: CliRunner, tmp_path, monkeypatch):
+        """A log written before signing was enabled (or with no identity
+        configured) must not be silently reported as healthy -- it
+        provides no tamper evidence at all."""
+        from missy.core.events import AuditEvent, EventBus
+        from missy.observability.audit_logger import AuditLogger
+
+        key_path = tmp_path / "identity.pem"
+        log_path = tmp_path / "audit.jsonl"
+        monkeypatch.setattr("missy.security.identity.DEFAULT_KEY_PATH", str(key_path))
+
+        bus = EventBus()
+        AuditLogger(log_path=str(log_path), bus=bus, identity=None)  # no identity => unsigned
+        bus.publish(
+            AuditEvent.now(
+                session_id="s1", task_id="t1", event_type="network.request",
+                category="network", result="allow", detail={},
+            )
+        )
+
+        cfg_path = _write_temp_config()
+        cfg = _make_mock_config()
+        cfg.audit_log_path = str(log_path)
+
+        result = self._invoke_doctor(runner, cfg_path, cfg)
+
+        assert result.exit_code == 0
+        assert "audit signing" in result.output.lower()
+        assert "unsigned=1" in result.output
+        assert "WARN" in result.output
+
+    def test_missing_audit_log_shows_warn_not_fail(self, runner: CliRunner):
+        cfg_path = _write_temp_config()
+        cfg = _make_mock_config()
+        cfg.audit_log_path = "/nonexistent/audit.jsonl"
+
+        result = self._invoke_doctor(runner, cfg_path, cfg)
+
+        assert result.exit_code == 0
+        assert "audit signing" in result.output.lower()
+        assert "WARN" in result.output

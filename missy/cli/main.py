@@ -2710,6 +2710,42 @@ def doctor(ctx: click.Context) -> None:
     else:
         table.add_row("audit log", warn, f"not found: {audit_path}")
 
+    # 2b. Audit signing status (SR-1.1/SR-4.6 residual): a quick,
+    # read-only glance at whether the audit trail is actually
+    # tamper-evident, without requiring the operator to separately run
+    # `missy audit verify`. Signing without verification provides no
+    # real tamper detection, so this surfaces the same
+    # valid/tampered/unsigned/malformed breakdown that command reports,
+    # scoped down to a single doctor row.
+    if audit_path.exists():
+        try:
+            from missy.observability.audit_logger import verify_audit_log
+            from missy.security.identity import AgentIdentity
+
+            identity = AgentIdentity.load_or_generate()
+            results = verify_audit_log(cfg.audit_log_path, identity)
+        except Exception as exc:
+            table.add_row("audit signing", warn, f"could not verify: {exc}")
+        else:
+            counts: dict[str, int] = {}
+            for r in results:
+                counts[r.status] = counts.get(r.status, 0) + 1
+            summary = ", ".join(f"{status}={count}" for status, count in sorted(counts.items()))
+            if not results:
+                table.add_row("audit signing", warn, "log is empty — nothing to verify yet")
+            elif counts.get("tampered") or counts.get("malformed"):
+                table.add_row("audit signing", fail, f"integrity issue found: {summary}")
+            elif counts.get("unsigned"):
+                table.add_row(
+                    "audit signing",
+                    warn,
+                    f"some lines predate signing or were written unsigned: {summary}",
+                )
+            else:
+                table.add_row("audit signing", ok, f"all lines verified: {summary}")
+    else:
+        table.add_row("audit signing", warn, "no audit log to verify yet")
+
     app_log_path = _app_log_path(cfg)
     if app_log_path.exists():
         table.add_row("application log", ok, str(app_log_path))

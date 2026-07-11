@@ -1,5 +1,31 @@
 # TEST_RESULTS
 
+## Run: 2026-07-12 03:25 UTC — post-backlog, missy doctor audit signing status check added
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Context: `missy doctor` only checked whether the audit log file
+  existed, saying nothing about tamper-evidence (SR-1.1/SR-4.6
+  residual). `missy audit verify` already existed but required the
+  operator to know to run it separately.
+- Added a new "audit signing" row to `missy doctor`'s table calling
+  the same real `verify_audit_log()`/`AgentIdentity.load_or_generate()`
+  machinery `missy audit verify` uses -- OK (all valid), WARN (some
+  unsigned / empty log), FAIL (any tampered/malformed).
+- **Live-verified against the real production `~/.missy/audit.jsonl`**:
+  correctly reported WARN with `unsigned=55316, valid=51249` -- zero
+  tampered/malformed.
+- Added 4 new tests (`TestDoctorAuditSigning`) using real signing/
+  tampering, not mocks.
+- Command: `pytest tests/cli/test_cli_commands.py -k AuditSigning -v`
+- Result: `4 passed`.
+- Command: `pytest tests/cli/ -q`
+- Result: `1065 passed`.
+- Command: `pytest tests/ -q -o faulthandler_timeout=120`
+- Result: `21223 passed, 13 skipped, 3 warnings in 616.41s (0:10:16)` —
+  zero failures, sixteenth consecutive fully green full-suite run, up
+  from 21219. The 3 warnings are pre-existing, order-dependent
+  Hypothesis deprecation notices, not introduced by this checkpoint.
+
 ## Run: 2026-07-12 03:00 UTC — post-backlog, shell.unrestricted dead-config-key hygiene gap fixed
 
 - Branch: `overhaul/missy-validation-20260710-031406`

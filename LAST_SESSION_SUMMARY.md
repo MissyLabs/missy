@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (62 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for fifteen consecutive checkpoints; the 89-case tool-specific validation backlog is now 100% complete)
+## Changed (63 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for sixteen consecutive checkpoints; the 89-case tool-specific validation backlog is now 100% complete)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -2468,23 +2468,54 @@ Verified: `pytest tests/config/test_settings.py -k UnknownConfigKey -v`:
 6 passed. Broader: `pytest tests/config/ -q`: 396 passed. `pytest
 tests/ -k "config or settings" -q`: 1662 passed, 19570 deselected.
 
+### Post-backlog (fifty-seventh checkpoint): `missy doctor` audit signing status check added
+
+Next concretely-scoped item (SR-1.1/SR-4.6 residual): `missy doctor`
+only checked whether the audit log *file* existed, saying nothing
+about whether it's actually tamper-evident. `missy audit verify`
+already existed for real cryptographic verification, but an operator
+had to know to run it separately.
+
+Added a new "audit signing" row to `missy doctor`'s table, calling the
+same real `verify_audit_log()`/`AgentIdentity.load_or_generate()`
+machinery `missy audit verify` uses. Reports OK (all valid), WARN
+(some unsigned, or empty log), or FAIL (any tampered/malformed).
+Read-only, never fails `doctor` itself.
+
+**Live-verified against the real, production `~/.missy/audit.jsonl`**
+(106,565 lines from this session's own activity): correctly reported
+WARN with `unsigned=55316, valid=51249` — the unsigned count reflects
+every event written before this session's own SR-1.1 checkpoint
+enabled signing, and zero tampered/malformed lines confirm the signed
+portion is intact.
+
+Added 4 new tests exercising the real `AuditLogger` write path and
+real Ed25519 signing/verification (not mocks): all-valid → OK, a
+tampered line (flipping a real `deny` to `allow`, reproducing the
+security review's original attack) → FAIL, unsigned lines → WARN, and
+a missing log file → WARN (not FAIL).
+
+Verified: `pytest tests/cli/test_cli_commands.py -k AuditSigning -v`:
+4 passed. Broader: `pytest tests/cli/ -q`: 1065 passed.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-21219 passed, 13 skipped in 607.61s (0:10:07)
+21223 passed, 13 skipped, 3 warnings in 616.41s (0:10:16)
 ```
 
-**Zero failures**, the fifteenth consecutive fully green full-suite
+**Zero failures**, the sixteenth consecutive fully green full-suite
 run. Passed count is up from 21191 to 21212 (the DISC-CMD-008
 rate-limiting checkpoint: 10 standalone unit tests, 9 real
 dispatch-path integration tests, 3 config-parsing tests) to 21213 (the
 Web TUI approvals/pairing checkpoint's 2 new tests) to 21219 (the
-`shell.unrestricted` config-hygiene checkpoint's 6 new tests). The
-occasional Hypothesis deprecation warning seen in some runs of this
-suite (`test_property_based_fuzz.py` or `test_policy_property.py`,
-depending on test ordering) is pre-existing and order-dependent, not
-introduced by any checkpoint this session — this run shows none.
+`shell.unrestricted` config-hygiene checkpoint's 6 new tests) to 21223
+(the `missy doctor` audit-signing checkpoint's 4 new tests). The
+occasional Hypothesis deprecation warnings seen in some runs of this
+suite (`test_property_based_fuzz.py` and/or `test_policy_property.py`,
+depending on test ordering — this run shows 3) are pre-existing and
+order-dependent, not introduced by any checkpoint this session.
 Passed count is up from 21071 (SR-1.9b's run) to 21115
 (availability-hardening checkpoint) to 21118 (the acpx `--deny-all`
 critical-finding checkpoint) to 21125 (the native-tool denial retry
