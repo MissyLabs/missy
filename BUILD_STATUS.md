@@ -6805,6 +6805,109 @@ pass count as the prior checkpoint (this round fixed 2 pre-existing
 tests' assertions rather than adding new ones). Forty-seventh
 consecutive fully green full-suite run.
 
+### Round 30 (research-only, no findings): re-hunted cross-module string-literal/contract mismatches
+
+Round 30 explicitly re-hunted the round-26-29 cross-module contract
+mismatch pattern across `missy/api/web_console.py`'s JS `fetch()` calls
+vs `missy/api/server.py`'s actual routes, `missy/channels/voice/
+server.py`'s WebSocket protocol vs `edge_client.py`'s message-type
+literals, `missy/agent/summarizer.py`/`missy/agent/condensers.py`'s
+cross-references, and `missy/observability/audit_logger.py`/`missy/
+api/audit_browser.py`'s field-name contract. All four checked out
+clean — every endpoint path/method/body-field, every WebSocket message
+type, and every audit field name matches exactly on both sides, backed
+by real end-to-end test coverage (not hand-mocked). Two cosmetic,
+zero-impact dead-code notes only (a `missy-edge` protocol constant with
+no current sender/receiver on either side; a stale content-prefix
+check in `consolidation.py` for a summary format string nothing emits
+any more) — neither elevated to a fix given no observable behavior
+depends on either. No checkpoint recorded; no code changed.
+
+### Post-backlog (ninetieth checkpoint): round 31 research pass fixes an intent-classifier greeting override, a tone-analysis punctuation gap, and a SecurityScanner false positive on ordinary apex domains
+
+Round 31 went deep on `missy/agent/structured_output.py`'s retry/
+validation loop, `missy/agent/behavior.py`'s tone-analysis and
+intent-classification logic, `missy/security/scanner.py`'s SEC-xxx
+detection logic, and `missy/agent/proactive.py`'s trigger-evaluation
+math. `structured_output.py`'s retry/re-prompt loop and
+`proactive.py`'s cooldown/threshold-comparison math (live-driven
+through the real `_threshold_loop` method, not a re-derived duplicate)
+both checked out clean. Three genuine bugs fixed, plus one dormant
+docstring/behavior mismatch corrected.
+
+1. **`SecurityScanner`'s SEC-013 check flagged ordinary, fully-specific
+   apex domains (e.g. `"anthropic.com"`) as "matching almost any public
+   hostname."** `NetworkPolicyEngine._check_domain()` (the actual
+   enforcement code) documents the real semantics: a bare entry is an
+   *exact match only*; only a `"*."`-prefixed entry is a wildcard. The
+   scanner's heuristic (`endswith(".com")` etc. with `count(".") <= 1`)
+   ignored this and flagged every single-level, textbook-correct
+   apex-domain allowlist entry at HIGH severity, while not even
+   checking for the actual `"*."` wildcard prefix that signals real
+   risk. Live-reproduced: `allowed_domains=["anthropic.com"]` (an
+   operator doing the correct, narrow thing) triggered a spurious HIGH
+   finding. Fixed by only flagging genuine `"*."`-prefixed wildcards
+   over a bare broad TLD (e.g. `"*.com"`, which per the real matching
+   code does match an unbounded set of hosts). The pre-existing
+   `test_sec_013_broad_domain_high` test used `[".com"]` as its "broad"
+   case — updated to `["*.com"]`, the actually-broad pattern under real
+   semantics — and a new test confirms `"anthropic.com"` is no longer
+   flagged. Confirmed via `git stash` to genuinely fail pre-fix.
+2. **`BehaviorLayer.analyze_user_tone()` silently dropped keyword
+   matches on any word with trailing punctuation.** `combined.split()`
+   never strips punctuation, so `"thanks,"`, `"kindly."` etc. never
+   equal the bare keyword in `_CASUAL_SIGNALS`/`_FORMAL_SIGNALS`/
+   `_TECHNICAL_SIGNALS`, silently dropping out of the set intersection
+   used to score tone. Live-reproduced: a message where every formal
+   signal word happens to be followed by a comma (extremely common
+   natural phrasing) lost all its formal-tone credit, misclassifying as
+   `"casual"` instead of `"formal"` — directly affecting real
+   prompt-shaping guidance. Fixed by tokenizing with
+   `re.findall(r"[a-z']+", combined)` instead of `.split()`. 1 new
+   test, confirmed via `git stash` to genuinely fail pre-fix.
+3. **`IntentInterpreter.classify_intent()`'s greeting pattern
+   unconditionally overrode troubleshooting/question/command detection
+   for any message that merely opened with a greeting word.**
+   `_GREETING_PATTERNS` anchors only on the leading word(s), with no
+   check that the rest of the message is actually just a plain
+   greeting — so realistic messages opening with "hey"/"hi"/"hello"
+   (extremely common in natural chat) were unconditionally classified
+   as `"greeting"` regardless of content, up to and including urgent
+   technical troubleshooting requests. Live-reproduced 3 realistic
+   examples (a crash report, an urgent production-outage question, and
+   the module's own docstring worked example) all misclassifying as
+   `"greeting"` instead of substantive content driving classification.
+   Fixed by only treating a greeting-prefixed message as a bare
+   greeting when 3 or fewer words remain after the matched greeting
+   phrase; otherwise falling through to the real content-driven checks
+   (a short greeting like `"hey there friend"` is unaffected). This
+   exposed a pre-existing test
+   (`test_greeting_plus_question_resolves_to_greeting` in
+   `test_hatching_persona_stress.py`) that had explicitly codified the
+   identical bug as intentional ("Greeting takes highest priority even
+   when a question mark is present") — corrected to assert the fixed,
+   correct classification. 4 new tests, confirmed via `git stash` to
+   genuinely fail pre-fix.
+4. **`OutputSchema.strict`'s docstring claimed a behavior Pydantic's
+   `strict=` flag does not actually provide** (forbidding extra/unknown
+   response fields) — real Pydantic semantics: `strict=True` only
+   disables lax type coercion, unrelated to extra-field handling
+   (confirmed live: a model validated with `strict=True` and an
+   unexpected extra field still succeeded, extra field silently
+   accepted). No current production caller passes `strict=True`
+   (dormant, zero live impact today), so corrected the docstring to
+   accurately describe Pydantic's real behavior rather than changing
+   runtime behavior for an unused parameter.
+
+Verified: `pytest tests/agent/test_behavior.py tests/security/
+test_scanner.py tests/agent/test_structured_output.py -q`: `305
+passed`. `pytest tests/security/ tests/agent/ -q`: `6336 passed, 4
+skipped`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21401 passed, 14 skipped in 647.74s (0:10:47)` — 0 failed, up from
+21395. Forty-eighth consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

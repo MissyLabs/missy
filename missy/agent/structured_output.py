@@ -67,9 +67,13 @@ class OutputSchema(Generic[T]):
             prompt instruction.  Defaults to the model's docstring.
         max_retries: Maximum number of additional provider calls made after
             the first attempt when validation fails (default ``2``).
-        strict: When ``True``, extra fields in the response are forbidden.
-            Passed to :meth:`pydantic.BaseModel.model_validate` as
-            ``strict=True``.
+        strict: Passed through to :meth:`pydantic.BaseModel.model_validate`
+            as ``strict=True``, which disables Pydantic's default lax type
+            coercion (e.g. the string ``"1"`` is no longer accepted for an
+            ``int`` field). It does **not** forbid extra/unknown fields in
+            the response -- that is controlled separately by the model's
+            own ``model_config = ConfigDict(extra="forbid")``, which this
+            class does not set.
 
     Example::
 

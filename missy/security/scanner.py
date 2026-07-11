@@ -643,12 +643,24 @@ class SecurityScanner:
             )
 
         # SEC-013: Wildcard domains too broad
-        _VERY_BROAD = {".com", ".net", ".org", ".io", ".co"}
+        #
+        # NetworkPolicyEngine._check_domain() (missy/policy/network.py) only
+        # treats a "*."-prefixed entry as a wildcard; a bare entry like
+        # "anthropic.com" is an EXACT match only and never matches any other
+        # host. The previous heuristic here (endswith(".com") etc. with
+        # count(".") <= 1) flagged every ordinary, fully-specific apex
+        # domain -- e.g. "anthropic.com" or "github.com" -- as "matching
+        # almost any public hostname", which is simply false under the
+        # actual matching semantics: only a genuine wildcard entry over a
+        # bare TLD (e.g. "*.com") actually matches an unbounded set of
+        # hosts. Live-verified: a config with allowed_domains=["anthropic.com"]
+        # (textbook-correct, narrow allowlisting) triggered a HIGH-severity
+        # false positive under the old logic.
+        _VERY_BROAD_SUFFIXES = {"com", "net", "org", "io", "co"}
         broad_domains = [
             d
             for d in net.allowed_domains
-            if any(d == suffix or d.endswith(suffix) for suffix in _VERY_BROAD)
-            and d.count(".") <= 1
+            if d.lower().startswith("*.") and d.lower()[2:] in _VERY_BROAD_SUFFIXES
         ]
         if broad_domains:
             self._add(

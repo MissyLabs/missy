@@ -1,5 +1,62 @@
 # TEST_RESULTS
 
+## Run: 2026-07-13 18:35 UTC — round 31 research pass: intent-classifier greeting override, tone-analysis punctuation gap, SecurityScanner apex-domain false positive (round 30 was research-only, no findings)
+
+- Context: round 30 explicitly re-hunted the round-26-29 cross-module
+  contract mismatch pattern (Web TUI fetch() calls vs server.py routes,
+  voice WebSocket protocol vs edge_client.py, summarizer/condenser
+  cross-references, audit_logger/audit_browser field contract) and came
+  back completely clean -- no findings, no checkpoint. Round 31 went
+  deep on structured_output.py's retry loop, behavior.py's tone/intent
+  logic, scanner.py's SEC-xxx detection logic, and proactive.py's
+  trigger math. structured_output.py's retry loop and proactive.py's
+  cooldown/threshold math (live-driven through the real method) both
+  checked out clean. Three genuine bugs fixed, plus one dormant
+  docstring correction.
+- **SecurityScanner SEC-013 false positive on ordinary apex domains**:
+  the heuristic flagged every single-level domain (e.g.
+  "anthropic.com") as "matching almost any public hostname" at HIGH
+  severity, but NetworkPolicyEngine._check_domain()'s real semantics
+  treat a bare entry as an EXACT match only -- only a "*."-prefixed
+  entry is a wildcard. Fixed by only flagging genuine "*."-prefixed
+  wildcards over a bare broad TLD.
+- Command: `pytest tests/security/test_scanner.py -k sec_013 -v`
+- Result: `3 passed`. New test confirmed to genuinely fail pre-fix via
+  `git stash`; pre-existing "broad" test case updated from `[".com"]`
+  to `["*.com"]` (the actually-broad pattern under real semantics).
+- **Tone-analysis punctuation gap**: `analyze_user_tone()`'s
+  `combined.split()` never stripped trailing punctuation, so
+  `"thanks,"`/`"kindly."` never matched the bare keyword sets,
+  silently under-counting formal/technical signals relative to casual
+  ones. Fixed by tokenizing with `re.findall(r"[a-z']+", combined)`.
+- Command: `pytest tests/agent/test_behavior.py -k Formal -v`
+- Result: `2 passed`. New test confirmed to genuinely fail pre-fix via
+  `git stash` (misclassified "casual" instead of "formal").
+- **Intent-classifier greeting override**: `_GREETING_PATTERNS` only
+  anchors on the leading word(s), with no check that the rest of the
+  message is actually a plain greeting, so any realistic message
+  opening with "hey"/"hi"/"hello" was unconditionally classified as
+  "greeting" regardless of content -- including urgent troubleshooting
+  requests. Fixed by only treating a greeting-prefixed message as a
+  bare greeting when 3 or fewer words remain after the matched phrase.
+- Command: `pytest tests/agent/test_behavior.py -k GreetingPrefix -v`
+- Result: `4 passed`. All confirmed to genuinely fail pre-fix via `git
+  stash`. A pre-existing test in test_hatching_persona_stress.py had
+  explicitly codified the identical bug as intentional -- corrected.
+- **OutputSchema.strict docstring/behavior mismatch**: claimed
+  `strict=True` forbids extra response fields; real Pydantic semantics
+  only disable lax type coercion. No current caller passes
+  `strict=True` (dormant, zero live impact) -- corrected the docstring
+  rather than changing runtime behavior for an unused parameter.
+- Command: `pytest tests/agent/test_behavior.py tests/security/test_scanner.py tests/agent/test_structured_output.py -q`
+- Result: `305 passed`.
+- Command: `pytest tests/security/ tests/agent/ -q`
+- Result: `6336 passed, 4 skipped`.
+- Command: `python3 -m pytest tests/ -q`
+  (full suite, background run)
+- Result: `21401 passed, 14 skipped in 647.74s (0:10:47)`. 0 failed, up
+  from 21395. Forty-eighth consecutive fully green full-suite run.
+
 ## Run: 2026-07-13 18:15 UTC — round 29 research pass: dead SSE event-name mismatch (`run.started` vs `run.start`) between run_stream.py and the Web TUI
 
 - Context: round 29 continued explicitly re-hunting the round-26/27/28

@@ -421,7 +421,10 @@ class TestCheckNetworkPolicy:
         assert "SEC-012" not in ids
 
     def test_sec_013_broad_domain_high(self, tmp_path):
-        cfg = _make_config(allowed_domains=[".com"])
+        """A genuine wildcard over a bare TLD (matching NetworkPolicyEngine's
+        real "*."-prefix wildcard semantics) is the actually-broad case.
+        """
+        cfg = _make_config(allowed_domains=["*.com"])
         scanner = _scanner(config=cfg, tmp_path=tmp_path / ".missy")
         result = scanner.scan_all()
         ids = [f.id for f in result.findings]
@@ -431,6 +434,19 @@ class TestCheckNetworkPolicy:
 
     def test_sec_013_specific_domain_not_flagged(self, tmp_path):
         cfg = _make_config(allowed_domains=["api.anthropic.com"])
+        scanner = _scanner(config=cfg, tmp_path=tmp_path / ".missy")
+        result = scanner.scan_all()
+        ids = [f.id for f in result.findings]
+        assert "SEC-013" not in ids
+
+    def test_sec_013_exact_apex_domain_not_flagged(self, tmp_path):
+        """A bare, non-wildcard apex domain (e.g. "anthropic.com") is an
+        EXACT match only under NetworkPolicyEngine._check_domain() -- it
+        never matches any other host, so it must not be flagged as "very
+        broad". Pre-fix, the heuristic (endswith(".com") + count(".") <= 1)
+        flagged every ordinary, fully-specific apex domain this way.
+        """
+        cfg = _make_config(allowed_domains=["anthropic.com"])
         scanner = _scanner(config=cfg, tmp_path=tmp_path / ".missy")
         result = scanner.scan_all()
         ids = [f.id for f in result.findings]

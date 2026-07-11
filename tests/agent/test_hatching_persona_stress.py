@@ -735,10 +735,25 @@ class TestBehaviorToneAnalysisStability:
 class TestIntentClassifierBoundaryCases:
     """Messages that match multiple intent patterns; ordering must be consistent."""
 
-    def test_greeting_plus_question_resolves_to_greeting(self) -> None:
-        """Greeting takes highest priority even when a question mark is present."""
+    def test_greeting_plus_substantive_question_resolves_to_question(self) -> None:
+        """A greeting-prefixed message with real question content is a
+        question, not a bare greeting -- this test previously asserted the
+        opposite ("Greeting takes highest priority even when a question
+        mark is present"), codifying the same greeting-override bug found
+        and fixed elsewhere: _GREETING_PATTERNS only anchors on the leading
+        word(s), with no check that the rest of the message is actually
+        just a plain greeting, so realistic messages that happen to open
+        with "hey"/"hi"/"hello" were unconditionally classified as
+        "greeting" regardless of substantive content (up to and including
+        urgent technical troubleshooting requests -- see
+        TestClassifyIntentGreetingPrefixWithSubstantiveContent in
+        test_behavior.py for the live-reproduced worse cases that surfaced
+        this). A short, genuinely bare greeting ("hey there friend") still
+        classifies as "greeting"; this one has real question content and
+        should not.
+        """
         interp = IntentInterpreter()
-        assert interp.classify_intent("hey, how does this work?") == "greeting"
+        assert interp.classify_intent("hey, how does this work?") == "question"
 
     def test_farewell_plus_question_resolves_to_farewell(self) -> None:
         """Farewell pattern wins over question when present."""

@@ -398,7 +398,13 @@ class BehaviorLayer:
             return "casual"
 
         combined = " ".join(user_texts).lower()
-        words = combined.split()
+        # combined.split() previously left trailing punctuation attached
+        # (e.g. "thanks," or "kindly."), so a keyword immediately followed
+        # by a comma/period/exclamation mark -- extremely common in
+        # realistic phrasing -- never equaled the bare signal word and
+        # silently dropped out of the set intersection below, systematically
+        # under-counting formal/technical signals relative to casual ones.
+        words = re.findall(r"[a-z']+", combined)
         word_set = frozenset(words)
 
         # Frustration takes priority — it overrides tone when clearly present
@@ -655,8 +661,21 @@ class IntentInterpreter:
         """
         text = user_input.strip()
 
-        if _GREETING_PATTERNS.match(text):
-            return "greeting"
+        greeting_match = _GREETING_PATTERNS.match(text)
+        if greeting_match:
+            # _GREETING_PATTERNS only anchors on the leading word(s), with no
+            # check that the REST of the message is actually just a plain
+            # greeting -- so any realistic message that happens to open with
+            # "hey"/"hi"/"hello" (extremely common in natural chat) was
+            # unconditionally classified as "greeting" regardless of
+            # content, including urgent technical troubleshooting requests
+            # (e.g. "hello, my server keeps crashing, please help asap").
+            # Only treat this as a bare greeting when little else remains
+            # after the greeting phrase; otherwise fall through so the
+            # message's real content drives classification.
+            remainder_words = re.findall(r"[a-z']+", text[greeting_match.end() :].lower())
+            if len(remainder_words) <= 3:
+                return "greeting"
 
         if _FAREWELL_PATTERNS.search(text):
             return "farewell"

@@ -163,6 +163,21 @@ class TestAnalyzeUserToneFormal:
         )
         assert layer.analyze_user_tone(msgs) == "formal"
 
+    def test_formal_keywords_with_trailing_punctuation_still_count(self):
+        """combined.split() previously left trailing punctuation attached
+        (e.g. "kindly," or "thanks."), so a keyword immediately followed by
+        a comma/period -- extremely common in realistic phrasing -- never
+        equaled the bare signal word and silently dropped out of the tone
+        scoring, systematically under-counting formal signals relative to
+        casual ones.
+        """
+        layer = BehaviorLayer()
+        msgs = _user_messages(
+            "kindly, furthermore, therefore, nevertheless, accordingly, "
+            "please, respectfully, review the matter thoroughly for us thanks"
+        )
+        assert layer.analyze_user_tone(msgs) == "formal"
+
 
 class TestAnalyzeUserToneFrustrated:
     def test_wrong_triggers_frustrated(self):
@@ -406,6 +421,42 @@ class TestClassifyIntentGreeting:
     def test_howdy_is_greeting(self):
         interpreter = IntentInterpreter()
         assert interpreter.classify_intent("howdy partner") == "greeting"
+
+
+class TestClassifyIntentGreetingPrefixWithSubstantiveContent:
+    """_GREETING_PATTERNS only anchors on the leading word(s), with no
+    check that the rest of the message is actually just a plain greeting.
+    Pre-fix, ANY realistic message opening with "hey"/"hi"/"hello" --
+    extremely common in natural chat -- was unconditionally classified as
+    "greeting" regardless of substantive content, including urgent
+    technical troubleshooting requests. A greeting-prefixed message with
+    more than a few trailing words must fall through to real content
+    classification instead.
+    """
+
+    def test_greeting_prefixed_crash_report_is_not_greeting(self):
+        interpreter = IntentInterpreter()
+        result = interpreter.classify_intent(
+            "hello, my server keeps crashing, please help asap"
+        )
+        assert result != "greeting"
+
+    def test_greeting_prefixed_urgent_question_is_not_greeting(self):
+        interpreter = IntentInterpreter()
+        result = interpreter.classify_intent(
+            "hi, can you help me fix this urgent production outage?"
+        )
+        assert result != "greeting"
+
+    def test_greeting_prefixed_technical_question_is_not_greeting(self):
+        """This is the module's own docstring worked example."""
+        interpreter = IntentInterpreter()
+        result = interpreter.classify_intent("hey, quick q — how do i restart nginx?")
+        assert result != "greeting"
+
+    def test_short_greeting_with_a_couple_trailing_words_still_greeting(self):
+        interpreter = IntentInterpreter()
+        assert interpreter.classify_intent("hey there friend") == "greeting"
 
 
 class TestClassifyIntentCommand:
