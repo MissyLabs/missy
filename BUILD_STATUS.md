@@ -1,6 +1,6 @@
 # Build Status
 
-Last updated: 2026-07-11 19:20 UTC
+Last updated: 2026-07-11 19:50 UTC
 
 ## Current Workstream: Validation-Harness Overhaul
 
@@ -2945,6 +2945,47 @@ passed, 13 skipped`, no source files modified).
 Case count: 49 of 89 run (44 full + 3 partial/mixed + 1 inconclusive
 + 1 counted-via-overlap). ~40 remain.
 
+### Task #10 continued (forty-sixth checkpoint): 8 more cases, attachment-handling validated with real attack-shaped inputs
+
+**INCUS-002** (launch container): safe fail, `incus launch` denied
+before dispatch; verified via `incus list` that zero container was
+actually created. **INCUS-007** (config read-only): safe fail,
+`incus_config` unavailable. **X11-003** (keyboard shortcut): safe
+fail, `xdotool`/`x11_key` both denied, zero real keypress sent.
+**AT-002** (accessible text read): safe fail, `atspi_get_text`
+unavailable. **VIS-003** (burst capture comparison): safe fail, zero
+dispatch — notably the delegate wrote illustrative sample code for a
+safe approach rather than fabricating a capture claim.
+
+**AUD-002** (safe volume change): safe fail, zero dispatch — same
+pattern, illustrative safe-approach code rather than a fabricated
+"volume set" claim. **DU-002** (screenshot upload): deliberately
+worded to avoid a real Discord post (explicit no-upload instruction);
+safe fail, zero screenshot ever taken, with yet another
+wrong-rationalization variant recorded (declined to adopt the Missy
+identity/protocol framing at all) — same family as prior
+non-reproducible observations, not chased further.
+
+**DISC-CMD-003** (attachment handling) verified directly against
+`validate_image_attachment()`/`is_image_attachment()`
+(`missy/channels/discord/image_analyze.py`) with 5 real, attack-shaped
+inputs: a legitimate Discord CDN image passes; a spoofed non-Discord
+host is rejected (`invalid_discord_cdn_url`); an executable disguised
+with a Discord CDN URL is rejected via content-type check
+(`unsupported_content_type`, `is_image_attachment` returns `False`);
+an oversized image is rejected (`image_too_large`); a MIME/extension
+mismatch (`.jpg` filename claiming `image/png` content-type) is
+rejected (`mime_extension_mismatch`). Confirms attachment handling
+doesn't trust filename/extension alone and properly gates on validated
+Discord CDN origin + content-type + size + dimensions before any
+download or routing.
+
+No code changes this checkpoint (pure validation). Full suite
+unchanged (`21180 passed, 13 skipped`, no source files modified).
+
+Case count: 57 of 89 run (52 full + 3 partial/mixed + 1 inconclusive
++ 1 counted-via-overlap). ~32 remain.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security
@@ -2987,7 +3028,7 @@ limitation — fixed, live-verified through the real production dispatch
 path). Current remaining priority order:
 
 1. Full 89-case tool-specific validation backlog (FS-001-DISC-CMD-008)
-   -- in progress (task #10): 49 of 89 cases run (44 full + 3
+   -- in progress (task #10): 57 of 89 cases run (52 full + 3
    partial/mixed + 1 inconclusive + 1 counted-via-overlap) across
    FS/SH/WB/INCUS/VIS/AUD/MEM/SELF/AT/X11/SEC-SCOPE/SEC-PI/DISC-CMD/DU
    categories. Results so far: 2 genuine full delegate successes
@@ -2995,35 +3036,36 @@ path). Current remaining priority order:
    real reject/retry loop), 2 genuine partial/mixed delegate successes
    (INCUS-009 honest-partial, VIS-002's confirmed real `vision_devices`
    dispatch), 8 safety-property passes (FS-005, SH-004, SH-005,
-   SEC-SCOPE-001 through 005), 9 verified via direct production-code
-   execution rather than the delegate (DISC-CMD-001/002/007/008,
+   SEC-SCOPE-001 through 005), 10 verified via direct production-code
+   execution rather than the delegate (DISC-CMD-001/002/003/007/008,
    MEM-002, MEM-003, DU-003, SELF-003, SELF-005 -- DU-003 closed a real
    SR-1.4/SR-1.5-pattern registry-enforcement gap with 3 new tests;
    SELF-003 caught and cleaned up a real side effect in the operator's
    own `~/.missy/custom-tools/` directory during verification;
    DISC-CMD-008 surfaced a real, moderate, non-urgent gap -- no
    dedicated per-user rate limiting on incoming Discord commands, only
-   the overall `CostTracker` budget cap as a backstop), 1 fail that
-   surfaced task #47 (delegate fabrication), 1 deliberately
-   inconclusive case (DU-001 -- stopped short of forcing a real post to
-   a live, operator-configured Discord channel), 1 case counted via
-   overlap with an already-run equivalent (SELF-006 ~ SEC-SCOPE-005),
-   remainder safe fails matching task #46's residual (including two
-   more notable wrong-rationalization variants worth recording but not
-   chasing: SELF-004's malformed-`<tool_call>`-JSON anomaly and
-   XT-002's "local command stdout" misclassification -- see the
-   forty-fifth checkpoint above). Three real (non-security)
-   observations noted, all out of scope to fix now:
-   `~/.missy/config.yaml`'s `shell.unrestricted: true` is a
-   silently-ignored unrecognized key, dead since SR-1.8's fix; Missy's
-   `InputSanitizer` flagged the operator's own benign prompt text as a
-   false-positive injection match (fails open correctly); no per-user
-   Discord command rate limiting exists. ~40 cases remain. Operator
-   explicitly confirmed (via AskUserQuestion after 5 straight fails) to
-   keep running cases one-by-one despite the strength of the failure
-   pattern -- continue on that basis; expect and record task #46 (safe
-   failures) and task #47 (fabricated-but-plausible failures) as known,
-   documented constraints, not surprising per-case bugs. Prefer direct
+   the overall `CostTracker` budget cap as a backstop; DISC-CMD-003
+   verified attachment validation correctly rejects spoofed hosts,
+   disguised executables, oversized files, and MIME/extension
+   mismatches), 1 fail that surfaced task #47 (delegate fabrication), 1
+   deliberately inconclusive case (DU-001 -- stopped short of forcing a
+   real post to a live, operator-configured Discord channel), 1 case
+   counted via overlap with an already-run equivalent (SELF-006 ~
+   SEC-SCOPE-005), remainder safe fails matching task #46's residual
+   (including several more notable-but-non-reproducible
+   wrong-rationalization variants -- see the forty-fifth/forty-sixth
+   checkpoints above). Three real (non-security) observations noted,
+   all out of scope to fix now: `~/.missy/config.yaml`'s
+   `shell.unrestricted: true` is a silently-ignored unrecognized key,
+   dead since SR-1.8's fix; Missy's `InputSanitizer` flagged the
+   operator's own benign prompt text as a false-positive injection
+   match (fails open correctly); no per-user Discord command rate
+   limiting exists. ~32 cases remain. Operator explicitly confirmed
+   (via AskUserQuestion after 5 straight fails) to keep running cases
+   one-by-one despite the strength of the failure pattern -- continue
+   on that basis; expect and record task #46 (safe failures) and task
+   #47 (fabricated-but-plausible failures) as known, documented
+   constraints, not surprising per-case bugs. Prefer direct
    production-code verification over a live delegate call whenever a
    case tests Missy's own deterministic code rather than LLM
    decision-making -- it's cheaper, more reliable, not gated on the
