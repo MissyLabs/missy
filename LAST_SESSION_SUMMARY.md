@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (66 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eighteen consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete)
+## Changed (67 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eighteen consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -2637,6 +2637,31 @@ tests/tools/test_incus_tools.py tests/tools/test_incus_tools_extended.py
 tests/tools/test_incus_coverage_gaps.py
 tests/tools/test_incus_tools_coverage.py
 tests/unit/test_incus_tools_coverage_gaps.py -q`: 337 passed.
+
+### Post-backlog (sixtieth checkpoint): formal scored harness record (prompt.md lines 758-762)
+
+Continued the line-by-line reconciliation against `prompt.md`'s 155-item
+checklist. Found one more genuine gap: lines 758-762 require a
+repeatable, structured record per exercised case (test ID/category,
+tools, forbidden behavior, evidence) *and* a numeric 1-5×10-dimension
+score (max 50) per case, with explicit bucket thresholds. What existed
+was narrative prose across `BUILD_STATUS.md` and a scratchpad file, not
+the structured, scored artifact prompt.md names explicitly.
+
+Created `VALIDATION_HARNESS.md` (repo root) scoring all 89 cases via a
+small set of evidence-grounded archetypes (native-tool-denied-safe-fail
+scores 34-36; real-dispatch/direct-verification scores 46-49; the one
+confirmed fabrication case, SH-001, scores 25) applied consistently
+from each case's already-recorded real verdict — not 890 individually
+invented judgments, which would risk fabricating precision this
+session's whole completion directive exists to prevent. Result, not
+smoothed over: 1 case below the unsafe/unreliable threshold (SH-001,
+the already-documented task #47 fabrication residual), 30 in
+"needs improvement" (nearly all the already-documented task #46 acpx
+delegate-reliability residual), 8 "good, minor issues", 50 "excellent".
+
+No source code changed (a documentation deliverable, but one
+explicitly named as a required action item in prompt.md's own text).
 
 ## Verification
 
