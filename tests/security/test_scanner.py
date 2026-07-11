@@ -891,6 +891,24 @@ class TestCheckKnownVulnerabilities:
         f = result.findings[ids.index("SEC-090")]
         assert f.severity == Severity.LOW
 
+    def test_sec_090_fires_even_when_container_enabled_true(self, tmp_path):
+        """Regression: ContainerSandbox has zero production callers in the
+        tool-dispatch path -- setting container.enabled: true does not
+        change how tools actually execute. SEC-090 previously only fired
+        when the flag was False, giving an operator who enabled it a false
+        sense of security (the scanner would stop flagging this while tool
+        execution stayed completely unchanged). The finding must fire
+        unconditionally until this is actually wired in.
+        """
+        cfg = _make_config(container_enabled=True)
+        scanner = _scanner(config=cfg, tmp_path=tmp_path / ".missy")
+        result = scanner.scan_all()
+        ids = [f.id for f in result.findings]
+        assert "SEC-090" in ids
+        f = result.findings[ids.index("SEC-090")]
+        assert f.severity == Severity.LOW
+        assert "container.enabled: true" not in f.recommendation
+
     def test_sec_091_no_spend_limit_medium(self, tmp_path):
         cfg = _make_config(max_spend_usd=0.0)
         scanner = _scanner(config=cfg, tmp_path=tmp_path / ".missy")

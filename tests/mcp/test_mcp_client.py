@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -242,6 +243,52 @@ class TestMcpClientTimeoutTeardown:
             )
             resp = c._rpc("tools/list", timeout=2.0)
             assert resp["result"] == {"ok": True}
+        finally:
+            if c._proc is not None:
+                c._proc.kill()
+                c._proc.wait(timeout=5)
+
+    def test_real_server_partial_response_then_stall_times_out(self, tmp_path):
+        """Regression: select()-readiness only proves *some* bytes are
+        available, not a full line. A server that writes a partial
+        response (no trailing newline) and then stalls previously caused
+        the bare readline() call to block indefinitely, still holding
+        self._lock, with no way back -- the process stays alive
+        (is_alive()/poll() both true), so McpManager's health_check()
+        auto-recovery never kicks in. _read_line_with_deadline() must
+        bound this within the requested timeout, not hang.
+        """
+        import textwrap
+
+        server_script = tmp_path / "partial_response_server.py"
+        server_script.write_text(
+            textwrap.dedent(
+                """
+                import sys, time
+
+                line = sys.stdin.readline()  # consume the one request
+                # Write a syntactically-valid JSON *prefix*, deliberately
+                # never send the trailing newline, then stall.
+                sys.stdout.write('{"jsonrpc": "2.0", "id": "x"')
+                sys.stdout.flush()
+                time.sleep(10)
+                """
+            )
+        )
+        c = McpClient(name="partial-fake", command=f"python3 {server_script}")
+        c._proc = subprocess.Popen(
+            ["python3", str(server_script)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        try:
+            start = time.monotonic()
+            with pytest.raises(TimeoutError):
+                c._rpc("whatever", timeout=1.0)
+            elapsed = time.monotonic() - start
+            assert elapsed < 5.0, f"expected to time out near 1.0s, took {elapsed:.1f}s"
+            assert c.is_alive() is False
         finally:
             if c._proc is not None:
                 c._proc.kill()

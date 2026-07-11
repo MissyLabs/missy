@@ -316,7 +316,7 @@ def _build_config_yaml(
         "  allowed_hosts:",
     ]
     for host in remaining_hosts:
-        lines.append(f'    - "{host}"')
+        lines.append(f"    - {_yaml_safe_value(host)}")
     if not remaining_hosts:
         lines.append("    []")
 
@@ -324,10 +324,10 @@ def _build_config_yaml(
         "",
         "filesystem:",
         "  allowed_write_paths:",
-        f'    - "{workspace}"',
+        f"    - {_yaml_safe_value(workspace)}",
         '    - "~/.missy"',
         "  allowed_read_paths:",
-        f'    - "{workspace}"',
+        f"    - {_yaml_safe_value(workspace)}",
         '    - "~/.missy"',
         '    - "/tmp"',
         "",
@@ -369,24 +369,24 @@ def _build_config_yaml(
         if discord_cfg.get("dm_allowlist"):
             lines.append("      dm_allowlist:")
             for uid in discord_cfg["dm_allowlist"]:
-                lines.append(f'        - "{uid}"')
+                lines.append(f"        - {_yaml_safe_value(uid)}")
         else:
             lines.append("      dm_allowlist: []")
         if discord_cfg.get("ack_reaction"):
-            lines.append(f'      ack_reaction: "{discord_cfg["ack_reaction"]}"')
+            lines.append(f"      ack_reaction: {_yaml_safe_value(discord_cfg['ack_reaction'])}")
         lines.append(f"      ignore_bots: {str(discord_cfg.get('ignore_bots', True)).lower()}")
         guild_policies = discord_cfg.get("guild_policies", [])
         if guild_policies:
             lines.append("      guild_policies:")
             for gp in guild_policies:
-                lines.append(f'        "{gp["guild_id"]}":')
+                lines.append(f"        {_yaml_safe_value(gp['guild_id'])}:")
                 lines.append("          enabled: true")
                 lines.append(f"          require_mention: {str(gp['require_mention']).lower()}")
                 lines.append(f"          mode: {gp['mode']}")
                 if gp.get("allowed_channels"):
                     lines.append("          allowed_channels:")
                     for ch in gp["allowed_channels"]:
-                        lines.append(f'            - "{ch}"')
+                        lines.append(f"            - {_yaml_safe_value(ch)}")
                 else:
                     lines.append("          allowed_channels: []")
         else:
@@ -394,7 +394,7 @@ def _build_config_yaml(
 
     lines += [
         "",
-        f'workspace_path: "{workspace}"',
+        f"workspace_path: {_yaml_safe_value(workspace)}",
         'audit_log_path: "~/.missy/audit.jsonl"',
         "",
         "heartbeat:",

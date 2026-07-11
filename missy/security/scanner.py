@@ -1205,29 +1205,43 @@ class SecurityScanner:
         if self.config is None:
             return
 
-        # SEC-090: Container sandbox disabled
-        container_enabled = False
-        if self.config.container is not None:
-            container_enabled = getattr(self.config.container, "enabled", False)
-        if not container_enabled:
-            self._add(
-                Finding(
-                    id="SEC-090",
-                    title="Container sandbox is disabled",
-                    description=(
-                        "container.enabled is false, so tool execution runs in the "
-                        "host process with full user permissions.  A container "
-                        "sandbox isolates tool execution with no network, limited "
-                        "memory, and a restricted filesystem."
-                    ),
-                    severity=Severity.LOW,
-                    category="config",
-                    recommendation=(
-                        "Enable Docker sandboxing: set `container.enabled: true` "
-                        "and install Docker.  Run `missy sandbox status` to verify."
-                    ),
-                )
+        # SEC-090: Container sandbox not wired into tool execution.
+        #
+        # ContainerSandbox (missy/security/container.py) has zero production
+        # callers anywhere in the tool-dispatch path -- shell_exec and every
+        # other builtin tool always run in the host process regardless of
+        # this config flag; ToolRegistry never routes through
+        # ContainerSandbox.execute(). The finding previously recommended
+        # "set container.enabled: true" as if that alone changed how tools
+        # execute -- it does not. Reporting it as fixed by that config
+        # change would give the operator a false sense of security (the
+        # scanner would stop flagging this while tool execution is
+        # completely unchanged), so this finding is now unconditional and
+        # honest about the actual, current state rather than gated on the
+        # config value.
+        self._add(
+            Finding(
+                id="SEC-090",
+                title="Container sandbox is not wired into tool execution",
+                description=(
+                    "Tool execution always runs in the host process with full "
+                    "user permissions, regardless of the `container.enabled` "
+                    "config value -- ContainerSandbox exists but is not called "
+                    "from the tool-dispatch path in this version. Setting "
+                    "`container.enabled: true` does not change how tools "
+                    "actually execute."
+                ),
+                severity=Severity.LOW,
+                category="config",
+                recommendation=(
+                    "Do not rely on `container.enabled` for isolation in this "
+                    "version. If host-process tool execution is a concern, run "
+                    "Missy itself inside an external sandbox (container, VM, "
+                    "restricted user account) until this is wired into "
+                    "tool dispatch."
+                ),
             )
+        )
 
         # SEC-091: max_spend not configured
         if self.config.max_spend_usd == 0.0:

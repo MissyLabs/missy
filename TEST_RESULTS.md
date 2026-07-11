@@ -1,5 +1,71 @@
 # TEST_RESULTS
 
+## Run: 2026-07-12 09:55 UTC — round 8 research pass: MCP client hang, misleading scanner recommendation, ConfigWatcher wiring, wizard YAML-injection bug
+
+- Context: round 8 of the research-pass invitation (rounds 1-7:
+  Scheduler/Persona; API/MessageBus/Screencast; Memory-compaction/
+  GraphStore/Vault; Config/Vision/CandidateGenerator; MCP/SubAgent/
+  Learnings/Playbook/Attention; Discord/operator-controls/
+  AuditLogger/behavior; ContextManager/Synthesizer/Watchdog/
+  InteractiveApproval). This round targeted `missy/channels/webhook.py`,
+  `missy/config/hotreload.py`, `missy/security/container.py`,
+  `missy/mcp/client.py`, and `missy/cli/wizard.py`.
+- **MCP client hang**: `_rpc()`'s `select()`-based timeout only proved
+  some bytes were available, not a full line, before handing off to an
+  un-timed `readline()`. A stalled server with a partial response
+  (no trailing newline) hung the call forever. Live-reproduced with a
+  real subprocess: the regression test genuinely hung and had to be
+  killed via an external `timeout` wrapper against the pre-fix code.
+  Fixed with `_read_line_with_deadline()`, a single-deadline-bounded
+  select()+read1() loop.
+- Command: `pytest tests/mcp/test_mcp_client.py -k partial_response -v`
+- Result: `1 passed` (in ~1.7s, bounded near the requested 1.0s
+  timeout). Confirmed to genuinely hang indefinitely against the
+  pre-fix code (had to be killed via `timeout 8`).
+- **Misleading scanner recommendation**: SEC-090 told operators that
+  `container.enabled: true` fixes host-process tool execution, but
+  `ContainerSandbox` has zero production callers in the tool-dispatch
+  path -- enabling it does nothing. Fixed by making the finding fire
+  unconditionally with an honest description.
+- Command: `pytest tests/security/test_scanner.py -k sec_090 -v`
+- Result: `2 passed`. The new test confirmed to genuinely fail
+  (finding absent when enabled) against the pre-fix code via
+  `git stash`.
+- **ConfigWatcher wiring**: config hot-reload had zero production
+  callers despite README/docs/CLAUDE.md all describing it as active.
+  Fixed by wiring the module's own ready-made `_apply_config()`
+  callback into a real `ConfigWatcher` in `gateway_start()`.
+- Command: `pytest tests/cli/test_cli_main_gaps.py -k ConfigWatcher -v`
+- Result: `1 passed`. Confirmed to genuinely fail (`ConfigWatcher`
+  called 0 times) against the pre-fix code via `git stash`.
+- **Wizard YAML-injection bug**: `workspace` and several Discord fields
+  bypassed the module's own `_yaml_safe_value()` escaping helper,
+  letting a double-quote in a legal Linux path silently corrupt
+  `config.yaml` (real `yaml.parser.ParserError` on next load). Fixed
+  by routing all affected fields through the existing helper.
+- Command: `pytest tests/cli/test_wizard_deep.py -k BuildConfigYaml -v`
+- Result: `27 passed`. 5 of 6 new tests confirmed to genuinely fail
+  with real YAML parse errors against the pre-fix code via `git stash`.
+- Command: `pytest tests/mcp/ tests/security/ tests/cli/
+  tests/config/ -q`
+- Result: `3902 passed`.
+- **Timing-margin flake caught by this checkpoint's own first
+  full-suite run** (not a real regression): the prior checkpoint's
+  `test_async_prompt_does_not_block_the_event_loop` failed once at
+  0.461s against a 0.45s cutoff under full-suite thread contention.
+  Widened the test's durations (0.3s/0.2s → 0.4s/0.4s) and cutoff
+  (0.45s → 0.65s) for a much larger safety margin. Re-verified against
+  the genuine pre-fix `gateway/client.py` (via `git show
+  <parent-commit>:path`, since the fix predates this checkpoint's
+  uncommitted diff): still correctly fails at 0.947s pre-fix, passed
+  cleanly across 3 repeated runs post-fix.
+- Command: `python3 -m pytest tests/ -q -o faulthandler_timeout=120`
+  (full suite, background run, post-flake-fix)
+- Result: `21296 passed, 13 skipped, 1 warning in 472.43s (0:07:52)`. 0
+  failed, up from 21287. Twenty-sixth consecutive fully green
+  full-suite run. The 1 warning is a pre-existing, order-dependent
+  Hypothesis deprecation notice.
+
 ## Run: 2026-07-12 09:10 UTC — round 7 research pass: asyncio event-loop blocking bug, token-budget composition gap, Watchdog wiring
 
 - Context: round 7 of the research-pass invitation (rounds 1-6:

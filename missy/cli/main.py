@@ -2326,6 +2326,20 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
     watchdog.register("memory_store", _check_memory_store)
     watchdog.start()
 
+    # Config hot-reload. Fully built and tested (missy/config/hotreload.py,
+    # including its symlink/ownership/permission safety checks before
+    # reload), but had zero production callers anywhere -- editing
+    # config.yaml while gateway_start() was running (the long-lived service
+    # mode where hot-reload matters most) had no effect whatsoever, despite
+    # README.md/docs/architecture.md/CLAUDE.md all describing it as an
+    # active running control. _apply_config() (this same module) already
+    # exists as the ready-made reload callback -- it was simply never
+    # wired to an actual ConfigWatcher instance.
+    from missy.config.hotreload import ConfigWatcher, _apply_config
+
+    config_watcher = ConfigWatcher(ctx.obj["config_path"], reload_fn=_apply_config)
+    config_watcher.start()
+
     # Start voice channel if configured.
     voice_channel = None
     try:
@@ -2647,6 +2661,10 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
             watchdog.stop()
         except Exception as _wd_stop_exc:
             logger.debug("watchdog: stop error: %s", _wd_stop_exc)
+        try:
+            config_watcher.stop()
+        except Exception as _cw_stop_exc:
+            logger.debug("config watcher: stop error: %s", _cw_stop_exc)
 
     console.print("[dim]Gateway stopped.[/]")
 

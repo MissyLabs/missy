@@ -167,6 +167,57 @@ class TestGatewayStartSignalHandler:
             _os.unlink(cfg_path)
 
 
+class TestGatewayStartConfigWatcher:
+    """Regression: ConfigWatcher (missy/config/hotreload.py) was fully
+    built and tested, including its own symlink/ownership/permission
+    safety checks before reload, but had zero production callers anywhere.
+    Editing config.yaml while gateway_start() ran had no effect whatsoever
+    despite README.md/docs/architecture.md/CLAUDE.md all describing
+    hot-reload as an active running control. gateway_start() must actually
+    construct and start it (using the ready-made _apply_config() reload
+    callback), and stop it cleanly on shutdown.
+    """
+
+    def test_config_watcher_started_and_stopped(self, runner: CliRunner):
+        import os
+        import signal
+
+        cfg_path = _cfg_path()
+        try:
+            mock_config = _make_mock_config()
+            mock_config.discord = None
+            mock_config.providers = {}
+
+            call_count = [0]
+
+            def fake_sleep(t):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    os.kill(os.getpid(), signal.SIGTERM)
+                elif call_count[0] > 5:
+                    raise SystemExit(0)
+
+            with (
+                patch("missy.cli.main._load_subsystems", return_value=mock_config),
+                patch("missy.agent.runtime.AgentRuntime"),
+                patch("missy.agent.runtime.AgentConfig"),
+                patch("time.sleep", side_effect=fake_sleep),
+                patch("yaml.safe_load", return_value={}),
+                patch("missy.config.hotreload.ConfigWatcher") as mock_watcher_cls,
+            ):
+                result = runner.invoke(cli, ["--config", cfg_path, "gateway", "start"])
+
+            assert result.exit_code == 0
+            mock_watcher_cls.assert_called_once()
+            assert mock_watcher_cls.call_args.args[0] == cfg_path
+            mock_watcher_cls.return_value.start.assert_called_once()
+            mock_watcher_cls.return_value.stop.assert_called_once()
+        finally:
+            import os as _os
+
+            _os.unlink(cfg_path)
+
+
 class TestGatewayStartWatchdog:
     """Regression: Watchdog (missy/agent/watchdog.py) was fully built and
     tested but had zero production callers anywhere -- no CLI command or

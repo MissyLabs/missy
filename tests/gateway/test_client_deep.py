@@ -1074,7 +1074,7 @@ class TestInteractiveApprovalFlow:
         self._use_restrictive()
 
         def _slow_blocking_prompt(action: str, detail: str) -> bool:
-            time.sleep(0.3)
+            time.sleep(0.4)
             return True
 
         from missy.agent.interactive_approval import InteractiveApproval
@@ -1091,7 +1091,7 @@ class TestInteractiveApprovalFlow:
         async def _ticker() -> None:
             nonlocal ticks
             for _ in range(20):
-                await asyncio.sleep(0.01)
+                await asyncio.sleep(0.02)
                 ticks += 1
 
         start = time.monotonic()
@@ -1103,10 +1103,15 @@ class TestInteractiveApprovalFlow:
 
         assert ticks == 20
         approval.prompt_user.assert_called_once()
-        # Sequential (blocked loop) would take ~0.3 + 0.2 = ~0.5s;
-        # concurrent (loop stayed responsive) takes ~max(0.3, 0.2) = ~0.3s.
-        # 0.45s is a generous cutoff that clearly distinguishes the two.
-        assert elapsed < 0.45, f"expected concurrent execution, took {elapsed:.3f}s"
+        # Sequential (blocked loop) would take ~0.4 + 0.4 = ~0.8s;
+        # concurrent (loop stayed responsive) takes ~max(0.4, 0.4) = ~0.4s.
+        # 0.65s sits roughly in the middle, with generous headroom on both
+        # sides to absorb scheduling jitter under real system load (e.g. a
+        # full-suite run with thousands of other tests contending for
+        # threads) without either masking a real regression or flaking on
+        # a healthy pass -- a prior 0.3/0.2s, 0.45s-cutoff version of this
+        # test flaked once at 0.461s under exactly that kind of load.
+        assert elapsed < 0.65, f"expected concurrent execution, took {elapsed:.3f}s"
 
     def test_set_interactive_approval_stores_instance(self) -> None:
         from missy.agent.interactive_approval import InteractiveApproval

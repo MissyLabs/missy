@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (74 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eighteen consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (75 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eighteen consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -2925,14 +2925,58 @@ run**: 8 tests outside `tests/gateway/` mocked the synchronous
 `_check_url_async` instead; re-verified clean (`11208 passed, 4
 skipped`) before re-running the full suite.
 
+### Post-backlog (sixty-eighth checkpoint): round 8 research pass — MCP client hang, misleading scanner recommendation, ConfigWatcher wiring, wizard YAML-injection bug
+
+Round 8 (rounds 1-7: Scheduler/Persona; API/MessageBus/Screencast;
+Memory-compaction/GraphStore/Vault; Config/Vision/CandidateGenerator;
+MCP/SubAgent/Learnings/Playbook/Attention; Discord/operator-controls/
+AuditLogger/behavior; ContextManager/Synthesizer/Watchdog/
+InteractiveApproval), into `WebhookChannel`, `ConfigWatcher`,
+`ContainerSandbox`, the MCP client, and the setup wizard. Four genuine
+findings.
+
+1. **MCP client hang**: `_rpc()`'s timeout only proved some bytes were
+   available before handing off to an un-timed `readline()` — a
+   stalled server with a partial response hung the call (and the
+   process) forever, with no auto-recovery since the stalled process
+   stays "alive." Live-reproduced: the test genuinely hung and had to
+   be killed via an external `timeout` wrapper pre-fix. Fixed with a
+   single-deadline-bounded read loop.
+2. **Misleading scanner recommendation**: SEC-090 told operators
+   enabling `container.enabled` fixes host-process tool execution —
+   `ContainerSandbox` has zero callers in the dispatch path, so it does
+   nothing. Fixed by making the finding honest and unconditional.
+3. **ConfigWatcher wiring**: hot-reload had zero production callers
+   despite being documented as active everywhere. Fixed by wiring the
+   module's own ready-made reload callback into `gateway_start()`.
+4. **Wizard YAML-injection bug**: `workspace` and several Discord
+   fields bypassed the wizard's own escaping helper, letting a
+   double-quote in a legal path silently corrupt `config.yaml`. Fixed
+   by routing them through the existing helper.
+
+All four live-reproduced before fixing, with regression tests
+confirmed to genuinely fail (or hang) against the pre-fix code via
+`git stash`. `WebhookChannel` and `core/session.py` checked out clean.
+
+Verified: `pytest tests/mcp/ tests/security/ tests/cli/
+tests/config/ -q`: `3902 passed`.
+
+**A timing-margin flake (not a real regression) was caught by this
+checkpoint's own full-suite run**: the prior checkpoint's asyncio
+event-loop-blocking regression test failed once at 0.461s against a
+0.45s cutoff under full-suite thread contention. Widened the test's
+timing parameters for a much larger safety margin; re-verified against
+the genuine pre-fix code (via `git show`, since that fix predates this
+checkpoint) that it still correctly fails (0.947s) pre-fix.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-21287 passed, 13 skipped in 479.20s (0:07:59)
+21296 passed, 13 skipped, 1 warning in 472.43s (0:07:52)
 ```
 
-**Zero failures**, the twenty-fifth consecutive fully green full-suite
+**Zero failures**, the twenty-sixth consecutive fully green full-suite
 run. Passed count is up from 21191 to 21212 (the DISC-CMD-008
 rate-limiting checkpoint: 10 standalone unit tests, 9 real
 dispatch-path integration tests, 3 config-parsing tests) to 21213 (the
@@ -2964,9 +3008,13 @@ topic-wiring fix's 1 new test, and the Discord auto-thread fix's 1 new
 test) to 21287 (the asyncio event-loop-blocking fix's 3 new tests, the
 token-budget composition fix's 2 new tests, the Watchdog wiring's 1
 new test, and 8 pre-existing async-gateway tests updated to match the
-intentional `_check_url` → `_check_url_async` change — the eighteenth
-green run's `ProviderRegistry` fix, and all of the sixty-first through
-sixty-sixth checkpoints' fixes, are confirmed still holding).
+intentional `_check_url` → `_check_url_async` change) to 21296 (the
+MCP client hang fix's 1 new test, the scanner recommendation fix's 1
+new test, the ConfigWatcher wiring's 1 new test, the wizard
+YAML-injection fix's 6 new tests, and the asyncio timing-margin flake
+fix's widened test parameters — the eighteenth green run's
+`ProviderRegistry` fix, and all of the sixty-first through
+sixty-seventh checkpoints' fixes, are confirmed still holding).
 The occasional Hypothesis deprecation warnings seen in some runs of
 this suite (`test_property_based_fuzz.py` and/or
 `test_policy_property.py`, depending on test ordering — this run shows

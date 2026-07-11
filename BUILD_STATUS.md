@@ -4582,6 +4582,129 @@ skipped`) before re-running the full suite. **Full-suite confirmation:**
 passed, 13 skipped in 479.20s (0:07:59)` — 0 failed, up from 21281.
 Twenty-fifth consecutive fully green full-suite run.
 
+### Post-backlog (sixty-eighth checkpoint): round 8 research pass finds an MCP client hang, a misleading scanner recommendation, wires up ConfigWatcher, and closes a wizard YAML-injection bug
+
+Round 8 of the research-pass invitation (rounds 1-7: Scheduler/Persona;
+API/MessageBus/Screencast; Memory-compaction/GraphStore/Vault; Config/
+Vision/CandidateGenerator; MCP/SubAgent/Learnings/Playbook/Attention;
+Discord/operator-controls/AuditLogger/behavior; ContextManager/
+Synthesizer/Watchdog/InteractiveApproval), this time into
+`missy/channels/webhook.py`, `missy/config/hotreload.py`,
+`missy/security/container.py`, `missy/mcp/client.py`, and
+`missy/cli/wizard.py`. Four genuine findings, live-verified and fixed;
+`WebhookChannel`'s replay/rate-limit tracking and `core/session.py`
+were both investigated and found clean beyond an inherent,
+too-marginal eviction-cap edge case.
+
+**1. `McpClient._rpc()`'s timeout did not actually bound a stalled
+partial response — a misbehaving server hung the call, and the process,
+forever.** The `select.select([self._proc.stdout], ..., timeout)` call
+only proves *some* bytes are available, not a full line; the code then
+called the plain, un-timed `self._proc.stdout.readline(...)`. A server
+that writes a syntactically-valid JSON *prefix* (no trailing newline)
+and then stalls causes `readline()` to block indefinitely, still
+holding `self._lock`. **Live-reproduced with a real subprocess**: a
+script writing `{"jsonrpc": "2.0", "id": "x"` then `sleep(10)` left a
+call with `timeout=1.0` still blocked 5+ seconds later; the regression
+test had to be run under an external `timeout` wrapper since it
+genuinely hung indefinitely against the pre-fix code. Worse than a
+missed timeout: the stalled process stays *alive* (`is_alive()`/
+`poll()` both true), so `McpManager.health_check()`'s dead-server
+auto-recovery never triggers — there was no path back. Fixed by adding
+`_read_line_with_deadline()`, which reads via `select()` +
+`stream.read1()` in a loop bounded by a single deadline computed from
+the requested timeout (instead of handing off to an un-timed
+`readline()` once any bytes arrive), tearing the connection down (same
+response-stream-desync rationale as the existing "no bytes at all"
+timeout path) if the deadline passes mid-read. 1 new test using a real
+subprocess that writes a partial response and stalls, confirmed to
+genuinely hang (had to be killed via an external `timeout` wrapper)
+against the pre-fix code via `git stash`.
+
+**2. `missy/security/scanner.py`'s SEC-090 finding actively told
+operators that enabling `container.enabled: true` fixes host-process
+tool execution — it does not, and never did.** `ContainerSandbox`
+(`missy/security/container.py`) has zero production callers anywhere
+in the tool-dispatch path (confirmed via repo-wide grep: only its own
+file, the scanner, and `missy sandbox status`'s
+`is_available()`-only display reference it); real shell-tool execution
+routes through a completely separate module,
+`missy/security/sandbox.py`. SEC-090 previously only fired when
+`container.enabled` was `false`, so an operator who followed the
+scanner's own recommendation and enabled it got a false sense of
+security: `missy scan` would stop flagging the issue while tool
+execution stayed completely unchanged. Fixed by making SEC-090 fire
+unconditionally with an honest description/recommendation that doesn't
+claim the config flag changes anything, until the feature is actually
+wired into tool dispatch (a separate, larger effort, not a bounded bug
+fix). 1 new test asserting the finding still fires when
+`container.enabled: true`, confirmed to genuinely fail (finding
+absent) against the pre-fix code via `git stash`.
+
+**3. `ConfigWatcher` (config hot-reload) was fully built and tested,
+including its own symlink/ownership/permission safety checks, but had
+zero production callers anywhere.** Editing `config.yaml` while
+`gateway_start()` ran had no effect whatsoever, despite README.md,
+`docs/architecture.md`, and CLAUDE.md all describing hot-reload as an
+active running control (`docs/architecture.md` even places
+"`ConfigWatcher starts hot-reload monitoring`" as step 2 of the
+standard bootstrap sequence). The module already contained a
+ready-made `_apply_config()` reload callback — it was simply never
+wired to an actual `ConfigWatcher` instance. Fixed by constructing and
+starting a `ConfigWatcher(config_path, reload_fn=_apply_config)` in
+`gateway_start()` (matching this checkpoint's `Watchdog` precedent from
+the prior round), stopped cleanly in the existing shutdown path. 1 new
+test, confirmed to genuinely fail (`ConfigWatcher` called 0 times)
+against the pre-fix code via `git stash`.
+
+**4. `missy/cli/wizard.py`'s `_build_config_yaml()` bypassed its own
+`_yaml_safe_value()` escaping helper for several user-supplied
+fields, letting a value with a double-quote silently corrupt
+`config.yaml`.** `_yaml_safe_value()` exists specifically "to prevent
+YAML injection through special characters ... in user-supplied
+values" and is applied consistently to provider `model`/`api_key`/
+`base_url` and Discord `bot_token` — but `workspace` (entered
+interactively or via `run_wizard_noninteractive`), `allowed_hosts`
+entries, Discord's `ack_reaction`/`dm_allowlist` entries/`guild_id`/
+`allowed_channels` were all spliced in via a raw f-string with no
+escaping at all. **Live-reproduced**: `_build_config_yaml(workspace='/home/user/my"workspace', ...)`
+— a perfectly legal Linux directory name — produced a `config.yaml`
+that fails to parse as YAML (`yaml.parser.ParserError`), with the
+wizard reporting "Configuration written" success while silently
+leaving the operator with a broken config that fails on next load.
+Fixed by routing all of these fields through the existing
+`_yaml_safe_value()` helper instead of manual f-string quoting
+(including as a YAML mapping key for `guild_id`, which
+`_yaml_safe_value()`'s quoting already produces valid syntax for). 6
+new tests covering workspace, allowed_hosts, and all four Discord
+fields, 5 of 6 confirmed to genuinely fail with real
+`yaml.parser.ParserError`s against the pre-fix code via `git stash`
+(the 6th's specific character combination happened to still parse
+under double-quotes, which is fine — it wasn't required to catch the
+bug, only some cases needed to).
+
+Verified: `pytest tests/mcp/ tests/security/ tests/cli/
+tests/config/ -q`: `3902 passed`.
+
+**A timing-margin flake (not a real regression) was caught by this
+checkpoint's own full-suite run**: the prior checkpoint's
+`test_async_prompt_does_not_block_the_event_loop` (the asyncio
+event-loop-blocking regression test) failed once at 0.461s against a
+0.45s cutoff — under a busy full-suite run's thread contention, the
+concurrent case's real overhead exceeded the original margin, even
+though the underlying fix was never in question. Widened the test's
+timing parameters (0.3s/0.2s → 0.4s/0.4s prompt/ticker durations,
+0.45s → 0.65s cutoff) for a much larger absolute safety margin on both
+sides. Re-verified against the genuine pre-fix `gateway/client.py`
+(via `git show <parent-commit>:path > file`, since that fix was
+already committed in the prior checkpoint and had no working-tree diff
+to `git stash`): the widened test still correctly fails at 0.947s
+(clearly sequential) pre-fix, and passed cleanly across 3 repeated
+runs post-fix. **Full-suite confirmation:** `python3 -m pytest tests/
+-q -o faulthandler_timeout=120` → `21296 passed, 13 skipped, 1
+warning in 472.43s (0:07:52)` — 0 failed, up from 21287. Twenty-sixth
+consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security
