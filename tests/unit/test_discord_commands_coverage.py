@@ -142,6 +142,49 @@ class TestHandleAsk:
 
         assert "error" in result.lower() or "agent exploded" in result
 
+    @pytest.mark.asyncio
+    async def test_ask_preserves_whitespace_multiline_and_quotes_verbatim(self):
+        """DISC-CMD-001/002 (task #10 validation): a prompt with extra
+        leading/trailing whitespace, embedded blank lines, a quoted
+        phrase, and a tab character must reach agent.run() byte-for-byte
+        -- no trimming, no silent truncation, no mangling. Discord's
+        slash-command UI collects the whole `prompt` option as one
+        opaque string; there is no free-text tokenizer in this path to
+        misparse whitespace/quotes, but nothing should alter the value
+        either."""
+        raw_prompt = (
+            "   leading/trailing whitespace   \n\n"
+            'multiline\ncontent   with "quoted phrase" and \tembedded tab'
+        )
+        interaction = _make_interaction("ask", options=[{"name": "prompt", "value": raw_prompt}])
+        channel = _make_mock_channel()
+
+        mock_agent = MagicMock()
+        mock_agent.run.return_value = "ok"
+        channel._agent_runtime = mock_agent
+
+        await _handle_ask(interaction, channel)
+
+        assert mock_agent.run.call_args[0][0] == raw_prompt
+
+    @pytest.mark.asyncio
+    async def test_ask_preserves_long_multi_requirement_prompt_without_truncation(self):
+        """DISC-CMD-002: a long, multi-requirement brief must not be
+        silently dropped or truncated before it reaches the agent."""
+        long_prompt = "Requirement 1: do X.\n" * 200 + "Final constraint: never do Y."
+        interaction = _make_interaction("ask", options=[{"name": "prompt", "value": long_prompt}])
+        channel = _make_mock_channel()
+
+        mock_agent = MagicMock()
+        mock_agent.run.return_value = "ok"
+        channel._agent_runtime = mock_agent
+
+        await _handle_ask(interaction, channel)
+
+        forwarded = mock_agent.run.call_args[0][0]
+        assert forwarded == long_prompt
+        assert "Final constraint: never do Y." in forwarded
+
 
 # ---------------------------------------------------------------------------
 # _interaction_author_id / per-user session scoping (SR-1.13 critical fix)
