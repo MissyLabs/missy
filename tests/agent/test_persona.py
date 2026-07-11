@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import time
 from dataclasses import fields
+from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 import yaml
@@ -418,6 +420,45 @@ class TestPersonaBackup:
         path = tmp_path / "persona.yaml"
         pm = PersonaManager(persona_path=path)
         assert pm.list_backups() == []
+
+    def test_list_backups_tolerates_file_vanishing_mid_scan(self, tmp_path):
+        """Regression: list_backups() called p.stat().st_mtime as a bare
+        sort key with no exception handling. Multiple PersonaManager
+        instances share no lock, so one instance's _prune_backups()
+        unlinking a backup file concurrently with another instance's
+        list_backups() iterdir()-then-stat() scan is a real TOCTOU race
+        (exposed more often after fixing the same-second backup-filename
+        collision, since threads no longer short-circuit via
+        shutil.SameFileError before reaching this code as often). Must
+        skip a file that vanishes between listing and stat()'ing it,
+        not propagate FileNotFoundError.
+        """
+        path = tmp_path / "persona.yaml"
+        pm = PersonaManager(persona_path=path)
+        pm.save()
+        pm.update(name="V2")
+        pm.save()
+        backups = pm.list_backups()
+        assert len(backups) == 1
+
+        # Simulate another instance's _prune_backups() deleting the backup
+        # file after this call's iterdir() would have seen it but before
+        # its stat() call -- monkeypatch Path.stat to unlink-then-raise
+        # exactly like the real race would produce.
+        real_stat = Path.stat
+        triggered = False
+
+        def _flaky_stat(self, *args, **kwargs):
+            nonlocal triggered
+            if not triggered and self.name.startswith("persona.yaml."):
+                triggered = True
+                self.unlink()
+                raise FileNotFoundError(2, "No such file or directory", str(self))
+            return real_stat(self, *args, **kwargs)
+
+        with patch.object(Path, "stat", _flaky_stat):
+            result = pm.list_backups()
+        assert result == []
 
     def test_multiple_saves_create_multiple_backups(self, tmp_path, monkeypatch):
         call_count = 0

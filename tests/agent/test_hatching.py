@@ -471,6 +471,36 @@ class TestHatchingManagerReset:
         mgr.reset()
         assert mgr.needs_hatching()
 
+    def test_reset_then_rehatch_does_not_duplicate_welcome_memory_turn(
+        self, tmp_path, monkeypatch
+    ):
+        """Regression: reset() only deletes hatching.yaml -- memory.db,
+        persona.yaml, and config.yaml are all left untouched, so a reset()
+        + re-hatch cycle (the documented, supported way to force a
+        re-hatch) re-runs every step from scratch. Unlike every sibling
+        step (_initialize_config/_generate_persona both check their target
+        file's existence first), _seed_memory had no such guard and
+        ConversationTurn.new() always generates a fresh UUID with no dedup
+        at the storage layer -- so each re-hatch inserted another welcome
+        turn into the same "hatching" session. Uses the real (unmocked)
+        SQLiteMemoryStore/PersonaManager to catch this, since a mocked
+        store can't exhibit real duplicate-row behavior.
+        """
+        _patch_module_paths(monkeypatch, tmp_path)
+        import missy.agent.hatching as hatching_mod
+        from missy.memory.sqlite_store import SQLiteMemoryStore
+
+        mgr = _make_manager(tmp_path)
+        mgr.run_hatching(interactive=False)
+        mgr.reset()
+        mgr.run_hatching(interactive=False)
+
+        store = SQLiteMemoryStore(db_path=hatching_mod._MEMORY_DB_PATH)
+        turns = store.get_session_turns("hatching", limit=10)
+        assert len(turns) == 1, (
+            f"expected exactly 1 welcome turn after reset+re-hatch, found {len(turns)}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # HatchingManager — get_hatching_log

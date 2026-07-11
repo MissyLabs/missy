@@ -1,5 +1,64 @@
 # TEST_RESULTS
 
+## Run: 2026-07-13 10:40 UTC — round 14 research pass: PersonaManager backup collision (+ list_backups race it exposed), HatchingManager memory-seeding idempotency gap, ResponseShaper code corruption
+
+- Context: round 14 of the research-pass invitation (rounds 1-13:
+  Scheduler/Persona; API/MessageBus/Screencast; Memory-compaction/
+  GraphStore/Vault; Config/Vision/CandidateGenerator; MCP/SubAgent/
+  Learnings/Playbook/Attention; Discord/operator-controls/
+  AuditLogger/behavior; ContextManager/Synthesizer/Watchdog/
+  InteractiveApproval; Webhook/ConfigWatcher/ContainerSandbox/
+  MCP-client/Wizard; ToolRegistry/FailureTracker/CircuitBreaker/
+  Checkpoint/Discord-rest; VoiceRegistry/VoiceServer/AgentIdentity/
+  TrustScorer; providers/SecurityScanner/LandlockPolicy/
+  SkillDiscovery; vision/CostTracker/CodeEvolutionManager;
+  StructuredOutput/ProactiveManager/SleeptimeWorker/Summarizer). This
+  round targeted MessageBus internal correctness, HatchingManager step
+  idempotency, PersonaManager backup/rollback/audit mechanics, and
+  BehaviorLayer tone/intent/response-shaping internals.
+  `message_bus.py` checked out clean.
+- **PersonaManager backup collision**: `_create_backup()` had the
+  identical same-second filename-collision bug already fixed for
+  `config/plan.py`'s `backup_config()` in round 4. Fixed with the same
+  numeric-suffix disambiguation.
+- Command: `pytest tests/agent/test_hatching_persona_stress.py -k same_second -v`
+- Result: `1 passed`. Confirmed to genuinely fail against the pre-fix
+  code via `git stash`.
+- **list_backups() TOCTOU race (exposed by the fix above)**: fixing the
+  collision let concurrent threads reach `_prune_backups()` more often,
+  surfacing a previously-masked race in `list_backups()`'s bare
+  `.stat()` call racing against another instance's concurrent unlink.
+  Fixed by skipping entries that raise `FileNotFoundError` mid-scan.
+- Command: `pytest tests/agent/test_persona.py -k vanishing_mid_scan -v`
+- Result: `1 passed`. Confirmed to genuinely fail against the pre-fix
+  code via `git stash`. The pre-existing
+  `test_audit_log_survives_concurrent_appends` stress test now passes
+  reliably across 5 repeated runs (previously flaky against the
+  intermediate fix, before this second race was found and fixed).
+- **HatchingManager memory-seeding idempotency gap**: `_seed_memory()`
+  had no existence guard unlike its sibling steps, so a `reset()` +
+  re-hatch cycle inserted a duplicate welcome turn. Fixed by checking
+  `get_session_turns()` before inserting.
+- Command: `pytest tests/agent/test_hatching.py -k duplicate_welcome -v`
+- Result: `1 passed`. Confirmed to genuinely fail against the pre-fix
+  code via `git stash` (2 turns instead of 1). Two pre-existing tests
+  needed an incidental `get_session_turns.return_value = []` mock fix
+  (MagicMock auto-truthy gotcha), unrelated to what they test.
+- **ResponseShaper code corruption**: an unterminated/truncated
+  triple-backtick fence (e.g. a response cut off at max_tokens) left
+  its code content unstashed, so it fell through unprotected into the
+  robotic-phrase stripping pass, mangling real code content. Fixed by
+  detecting and stashing a remaining unpaired fence.
+- Command: `pytest tests/agent/test_behavior.py -k unterminated -v`
+- Result: `1 passed`. Confirmed to genuinely fail against the pre-fix
+  code via `git stash` (code content visibly mangled).
+- Command: `pytest tests/agent/ -q` (run 3 times)
+- Result: `4268 passed, 4 skipped` each run.
+- Command: `python3 -m pytest tests/ -q -o faulthandler_timeout=120`
+  (full suite, background run)
+- Result: `21326 passed, 13 skipped in 492.11s (0:08:12)`. 0 failed, up
+  from 21322. Thirty-second consecutive fully green full-suite run.
+
 ## Run: 2026-07-13 10:15 UTC — round 13 research pass: Summarizer content-loss bug, StructuredOutput JSON-parsing bug, AgentRuntime.shutdown() wiring
 
 - Context: round 13 of the research-pass invitation (rounds 1-12:

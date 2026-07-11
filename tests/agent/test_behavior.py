@@ -667,6 +667,29 @@ class TestShapeResponsePreservesCodeBlocks:
         assert "```bash" in result
         assert "```yaml" in result
 
+    def test_unterminated_code_block_preserved(self):
+        """Regression: _CODE_BLOCK_RE only matches *paired* triple-backtick
+        fences. A response cut off at max_tokens before the closing ```
+        (or a model that simply forgets to close the fence) left that
+        trailing code content completely unstashed, so it fell through
+        unprotected into the robotic-phrase-stripping pass -- directly
+        violating this class's own documented guarantee that it never
+        modifies code-block content. Here the code contains a substring
+        that happens to match one of the robotic-phrase patterns
+        ("As an AI") to prove the content was actually mangled, not just
+        coincidentally left alone.
+        """
+        shaper = ResponseShaper()
+        raw = (
+            "Here's the function:\n"
+            "```python\n"
+            "def greet():\n"
+            '    return "As an AI, I cannot help further."\n'
+        )
+        result = shaper.shape_response(raw, persona=None, context={})
+        assert 'return "As an AI, I cannot help further."' in result
+        assert "```python" in result
+
 
 class TestShapeResponseEdgeCases:
     def test_empty_string_returns_empty(self):

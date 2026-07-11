@@ -730,6 +730,24 @@ class HatchingManager:
             )
 
             store = SQLiteMemoryStore(db_path=_MEMORY_DB_PATH)
+            # Unlike every sibling step (_initialize_config checks
+            # _CONFIG_PATH.exists(), _generate_persona checks
+            # _PERSONA_PATH.exists()), this step had no existence guard --
+            # reset() only deletes hatching.yaml, leaving memory.db
+            # untouched, so a reset() + re-hatch cycle (the documented,
+            # supported way to force a re-hatch) re-ran every step, and
+            # since ConversationTurn.new() always generates a fresh UUID
+            # with no dedup at the storage layer, it inserted a second
+            # welcome turn into the same "hatching" session every time.
+            if store.get_session_turns("hatching", limit=1):
+                self._log.log(
+                    "seed_memory",
+                    "ok",
+                    f"Memory store already seeded at {_MEMORY_DB_PATH}",
+                )
+                state.memory_seeded = True
+                return
+
             welcome_turn = ConversationTurn.new(
                 session_id="hatching",
                 role="system",

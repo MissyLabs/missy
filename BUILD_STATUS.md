@@ -5281,6 +5281,132 @@ faulthandler_timeout=120` → `21322 passed, 13 skipped in 475.97s
 (0:07:55)` — 0 failed, up from 21318. Thirty-first consecutive fully
 green full-suite run.
 
+### Post-backlog (seventy-fourth checkpoint): round 14 research pass finds a PersonaManager backup-collision bug (plus a second race it exposed), a HatchingManager memory-seeding idempotency gap, and a ResponseShaper code-corruption bug
+
+Round 14 of the research-pass invitation (rounds 1-13: Scheduler/Persona;
+API/MessageBus/Screencast; Memory-compaction/GraphStore/Vault; Config/
+Vision/CandidateGenerator; MCP/SubAgent/Learnings/Playbook/Attention;
+Discord/operator-controls/AuditLogger/behavior; ContextManager/
+Synthesizer/Watchdog/InteractiveApproval; Webhook/ConfigWatcher/
+ContainerSandbox/MCP-client/Wizard; ToolRegistry/FailureTracker/
+CircuitBreaker/Checkpoint/Discord-rest; VoiceRegistry/VoiceServer/
+AgentIdentity/TrustScorer; providers/SecurityScanner/LandlockPolicy/
+SkillDiscovery; vision/CostTracker/CodeEvolutionManager;
+StructuredOutput/ProactiveManager/SleeptimeWorker/Summarizer), this
+time into `missy/core/message_bus.py`'s internal correctness,
+`missy/agent/hatching.py`'s step idempotency, `missy/agent/persona.py`'s
+backup/rollback/audit mechanics, and `missy/agent/behavior.py`'s
+tone/intent/response-shaping internals — none of which had been the
+primary subject of a dedicated audit round from these specific angles
+before (MessageBus's production wiring was checked in round 2; Persona's
+editing bugs in round 1; BehaviorLayer's topic-wiring in round 6 — all
+distinct from this round's focus). `message_bus.py`'s internal
+correctness checked out clean (~150+ existing dedicated tests already
+probe fnmatch wildcards, priority-queue ordering, and worker lifecycle;
+production only ever uses synchronous `publish()`). Three genuine
+findings, live-verified and fixed — one of which uncovered a second,
+previously-masked race while fixing it.
+
+**1. `PersonaManager._create_backup()` had the identical same-second
+backup-filename-collision bug already found and fixed for
+`missy/config/plan.py`'s `backup_config()` in round 4, never applied to
+this parallel implementation.** `time.strftime("%Y%m%d_%H%M%S")` has
+one-second resolution, and `shutil.copy2()` silently overwrites an
+existing file of the same name — so any two `save()` calls (or a
+`save()` immediately followed by `rollback()`, which also calls
+`_create_backup()`) within the same wall-clock second produced an
+identical backup filename, and the second call's copy destroyed the
+first backup's content with zero error. **Live-reproduced**: three
+successive `update()`+`save()` calls in one process produced only 1
+backup file on disk, containing the second save's content — the backup
+that should have held the first version's content was silently
+clobbered, directly breaking the property `rollback()` depends on.
+Fixed with the exact same numeric-suffix disambiguation
+(`persona.yaml.<timestamp>_1`, `_2`, ...) already applied in
+`config/plan.py`. 1 new test, confirmed via `git stash` to genuinely
+fail pre-fix (two same-second backups collided onto the identical
+filename).
+
+Fixing this exposed a **second, previously-masked race in
+`PersonaManager.list_backups()`**: multiple `PersonaManager` instances
+share no lock, and `list_backups()`'s `sorted(..., key=lambda p:
+p.stat().st_mtime)` had no protection against a file vanishing between
+`iterdir()` listing it and this `.stat()` call — a real TOCTOU race
+against another instance's concurrent `_prune_backups()` unlinking the
+same file. This race pre-existed independently of the collision fix
+above, but was rarely reachable in practice because concurrent threads
+usually short-circuited via `shutil.SameFileError` (from the
+now-fixed collision) *before* ever reaching the prune/list step. Once
+the collision fix let threads proceed further, this second race started
+firing reliably (reproduced the existing
+`test_audit_log_survives_concurrent_appends` stress test failing
+deterministically post-fix, 3/3 runs, after passing reliably pre-fix
+3/3 — the pre-fix passes were the collision bug itself accidentally
+masking this second bug, not evidence of correctness). Root-caused via
+full traceback to `list_backups()`'s bare `.stat()` call; fixed by
+skipping any entry that raises `FileNotFoundError` during the stat
+(mirroring `_prune_backups()`'s own existing tolerance for the
+symmetric case). 1 new targeted unit test plus the pre-existing stress
+test now passing reliably across 5 repeated runs (previously flaky
+under my initial fix in isolation); confirmed via `git stash` that the
+targeted test genuinely fails pre-fix.
+
+**2. `HatchingManager._seed_memory()` is not idempotent across a
+`reset()` + re-hatch cycle, unlike every sibling step.**
+`_initialize_config` checks `_CONFIG_PATH.exists()` and
+`_generate_persona` checks `_PERSONA_PATH.exists()` before writing, but
+`_seed_memory` unconditionally inserted a new row via
+`store.add_turn()` with no existence guard, and `ConversationTurn.new()`
+always generates a fresh UUID with no dedup at the storage layer.
+`reset()` (the documented, supported way to force a re-hatch) only
+deletes `hatching.yaml` — `memory.db` is left untouched — so a `reset()`
++ re-hatch cycle re-runs every step from scratch, and every other step
+correctly detects its pre-existing artifact and skips regeneration while
+`_seed_memory` blindly inserts a second welcome turn. **Live-reproduced**
+(real `SQLiteMemoryStore`, no mocks): a full hatch → reset → re-hatch
+cycle left 2 rows in the `hatching` session instead of 1. Fixed by
+checking `store.get_session_turns("hatching", limit=1)` before inserting,
+matching the sibling steps' established pattern. 1 new test using the
+real (unmocked) storage layer — a mocked store can't exhibit real
+duplicate-row behavior — confirmed via `git stash` to genuinely fail
+pre-fix (2 turns instead of 1). Two pre-existing tests
+(`test_hatching_coverage_gaps.py`, `test_hatching_state_edges.py`) needed
+an incidental `mock_store.get_session_turns.return_value = []` fix: a
+bare `MagicMock()`'s auto-created attribute access is truthy by default,
+which would make the new idempotency guard treat an unconfigured mock
+store as "already seeded" and return before ever reaching the
+`add_turn()` exception path those two tests actually exercise —
+unrelated to what they test, fixed without weakening their intent.
+
+**3. `ResponseShaper.shape_response()` corrupts real code content
+inside an unterminated/truncated triple-backtick fence.** `_CODE_BLOCK_RE`
+only matches *paired* ` ``` ... ``` ` fences; a response cut off at
+`max_tokens` before the closing fence (a genuinely common occurrence for
+code-heavy responses), or a model that simply forgets to close it,
+left that trailing code content completely unstashed — falling through
+unprotected into the `_ROBOTIC_PHRASES` stripping pass, directly
+violating the class's own documented guarantee ("never modifies content
+inside fenced or inline code blocks"). **Live-reproduced**: a Python
+string literal containing `"As an AI, I cannot help further."` inside
+an unterminated code fence was silently mangled to `"I cannot help
+further."` — actual code content changed, not just prose. Confirmed
+wired into the real production path (`missy/agent/runtime.py`'s
+`_response_shaper.shape_response()` call on every non-streaming agent
+turn's final response). Fixed by detecting a remaining unpaired
+` ``` ` after the paired-fence pass (every paired fence has already
+been replaced by a placeholder containing no backticks, so any ` ``` `
+still present must belong to an unpaired opening fence) and stashing
+everything from there to the end of the string as one more code block.
+1 new test, confirmed via `git stash` to genuinely fail pre-fix (code
+content visibly mangled).
+
+Verified: `pytest tests/agent/ -q` (run 3 times to confirm the
+concurrency fixes are stable, not flaky): `4268 passed, 4 skipped` each
+run. **Full-suite confirmation:** `python3 -m pytest tests/ -q -o
+faulthandler_timeout=120` → `21326 passed, 13 skipped in 492.11s
+(0:08:12)` — 0 failed, up from 21322. Thirty-second consecutive fully
+green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

@@ -671,6 +671,14 @@ class TestSeedMemory:
         mock_turn = MagicMock()
         mock_turn.id = "turn-1"
         mock_store = MagicMock()
+        # A bare MagicMock's get_session_turns(...) call auto-creates a
+        # truthy return value, which would make _seed_memory's idempotency
+        # guard (added to fix reset()+re-hatch inserting a duplicate
+        # welcome turn) treat this as "already seeded" and return before
+        # ever reaching add_turn() -- explicitly configure it to look like
+        # a fresh, unseeded store so this test still exercises the
+        # add_turn() exception path it's actually testing.
+        mock_store.get_session_turns.return_value = []
         mock_store.add_turn.side_effect = RuntimeError("database locked")
 
         with (

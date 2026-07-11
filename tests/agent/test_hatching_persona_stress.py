@@ -1405,6 +1405,39 @@ class TestPersonaManagerFieldIsolation:
         names = [b.name for b in backups]
         assert len(set(names)) == 2
 
+    def test_same_second_backups_do_not_clobber_each_other(self, tmp_path: Path) -> None:
+        """Regression: _create_backup() used time.strftime("%Y%m%d_%H%M%S")
+        (one-second resolution) as the backup filename with no collision
+        check, and shutil.copy2() silently overwrites an existing file --
+        so two _create_backup() calls within the same real wall-clock
+        second (very plausible: two rapid save() calls, or a save()
+        immediately followed by rollback(), which also backs up first)
+        produced the identical filename and the second call destroyed the
+        first backup's content with zero error. This is the identical root
+        cause already found and fixed for missy/config/plan.py's
+        backup_config(). Calls _create_backup() directly, back-to-back,
+        with the real (unmocked) clock -- these two calls are fast enough
+        to reliably land in the same second on any real machine.
+        """
+        pm = PersonaManager(persona_path=tmp_path / "persona.yaml")
+        pm.update(name="V1")
+        pm.save()  # creates the file, no backup yet (nothing to back up)
+
+        pm.update(name="V2")
+        pm._path.write_text(yaml.dump({"name": "V2"}))
+        first_backup = pm._create_backup()
+
+        pm._path.write_text(yaml.dump({"name": "V3"}))
+        second_backup = pm._create_backup()
+
+        assert first_backup != second_backup, (
+            "two same-second backups collided onto the same filename"
+        )
+        assert "V2" in first_backup.read_text(), (
+            "first backup's content was clobbered by the second backup"
+        )
+        assert "V3" in second_backup.read_text()
+
 
 class TestResponseShaperCodeBlockStash:
     """Verify that the stash/restore mechanism handles edge cases."""

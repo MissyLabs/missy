@@ -441,6 +441,20 @@ class PersonaManager:
         bdir.mkdir(parents=True, exist_ok=True, mode=0o700)
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         backup_path = bdir / f"persona.yaml.{timestamp}"
+        # Two _create_backup() calls within the same wall-clock second (the
+        # timestamp's resolution) previously produced the identical
+        # filename, and shutil.copy2() overwrites an existing file with no
+        # collision check -- the second call silently destroyed the first
+        # backup's content, with no error raised (the identical root cause
+        # already found and fixed for missy/config/plan.py's
+        # backup_config() -- same numeric-suffix disambiguation applied
+        # here). Two successive save() calls, or a save() immediately
+        # followed by rollback() (which also calls _create_backup()), are
+        # both realistic same-second scenarios.
+        suffix = 1
+        while backup_path.exists():
+            backup_path = bdir / f"persona.yaml.{timestamp}_{suffix}"
+            suffix += 1
         shutil.copy2(str(self._path), str(backup_path))
         self._prune_backups()
         logger.debug("Persona backup created: %s", backup_path)
@@ -465,10 +479,24 @@ class PersonaManager:
         bdir = self.backup_dir
         if not bdir.exists():
             return []
-        return sorted(
-            [p for p in bdir.iterdir() if p.name.startswith("persona.yaml.")],
-            key=lambda p: p.stat().st_mtime,
-        )
+        entries: list[tuple[Path, float]] = []
+        for p in bdir.iterdir():
+            if not p.name.startswith("persona.yaml."):
+                continue
+            try:
+                entries.append((p, p.stat().st_mtime))
+            except FileNotFoundError:
+                # Another PersonaManager instance's concurrent
+                # _prune_backups() unlinked this file between iterdir()
+                # listing it and this stat() call -- multiple instances
+                # share no lock, so this TOCTOU race is expected under
+                # concurrent access. Skip it rather than letting the whole
+                # call raise; _prune_backups() already tolerates the
+                # symmetric case (unlink() racing against another
+                # instance's concurrent removal of the same file).
+                continue
+        entries.sort(key=lambda entry: entry[1])
+        return [p for p, _ in entries]
 
     def rollback(self) -> Path | None:
         """Restore the latest backup, backing up the current persona first.

@@ -759,6 +759,23 @@ class ResponseShaper:
 
         working = _CODE_BLOCK_RE.sub(_stash_block, response)
 
+        # An unterminated/truncated triple-backtick fence -- e.g. a
+        # code-heavy response cut off at max_tokens before the closing ```,
+        # or the model simply forgetting to close it -- has no match in
+        # _CODE_BLOCK_RE above, which only pairs complete ``` ... ```
+        # blocks. Every *paired* fence has already been replaced by a
+        # placeholder (containing no backticks) by the .sub() call above,
+        # so any ``` still present in `working` at this point must belong
+        # to an unpaired opening fence. Stash everything from there to the
+        # end of the string as one more code block -- otherwise this
+        # content falls through unprotected into the robotic-phrase
+        # stripping below, directly violating this class's own documented
+        # guarantee that it never modifies code-block content.
+        unterminated_start = working.find("```")
+        if unterminated_start != -1:
+            stash.append(working[unterminated_start:])
+            working = working[:unterminated_start] + f"\x00CODE_BLOCK_{len(stash) - 1}\x00"
+
         # Strip robotic phrases
         for pattern in _ROBOTIC_PHRASES:
             working = pattern.sub("", working)

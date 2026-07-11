@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (80 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for thirty-one consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (81 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for thirty-two consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -3203,15 +3203,69 @@ TrustScorer/LandlockPolicy precedent.
 Verified: `pytest tests/agent/ tests/cli/ -q`: `5340 passed, 4
 skipped`.
 
+### Post-backlog (seventy-fourth checkpoint): round 14 research pass — PersonaManager backup collision (+ list_backups race it exposed), HatchingManager memory-seeding idempotency gap, ResponseShaper code corruption
+
+Round 14 (rounds 1-13: Scheduler/Persona; API/MessageBus/Screencast;
+Memory-compaction/GraphStore/Vault; Config/Vision/CandidateGenerator;
+MCP/SubAgent/Learnings/Playbook/Attention; Discord/operator-controls/
+AuditLogger/behavior; ContextManager/Synthesizer/Watchdog/
+InteractiveApproval; Webhook/ConfigWatcher/ContainerSandbox/
+MCP-client/Wizard; ToolRegistry/FailureTracker/CircuitBreaker/
+Checkpoint/Discord-rest; VoiceRegistry/VoiceServer/AgentIdentity/
+TrustScorer; providers/SecurityScanner/LandlockPolicy/SkillDiscovery;
+vision/CostTracker/CodeEvolutionManager; StructuredOutput/
+ProactiveManager/SleeptimeWorker/Summarizer), into
+`missy/core/message_bus.py` internals, `missy/agent/hatching.py` step
+idempotency, `missy/agent/persona.py` backup/rollback mechanics, and
+`missy/agent/behavior.py` tone/intent/response-shaping internals.
+`message_bus.py` checked out clean. Three genuine findings, one of
+which uncovered a second, previously-masked race while fixing it.
+
+1. **PersonaManager backup collision**: `_create_backup()` had the
+   identical same-second filename-collision bug already fixed for
+   `config/plan.py`'s `backup_config()` in round 4, never applied here
+   — two saves within the same second silently clobbered the first
+   backup's content. Fixed with the same numeric-suffix
+   disambiguation. 1 new test, confirmed to fail pre-fix.
+2. **list_backups() TOCTOU race (exposed by fixing #1)**: once threads
+   no longer short-circuited via `shutil.SameFileError`, a
+   previously-masked race in `list_backups()`'s bare `.stat()` call
+   (racing against another instance's concurrent `_prune_backups()`
+   unlink) started firing reliably. Fixed by skipping entries that
+   vanish mid-scan. 1 new test, confirmed to fail pre-fix; the
+   pre-existing concurrent-stress test now passes reliably across 5
+   repeated runs.
+3. **HatchingManager memory-seeding idempotency gap**: `_seed_memory()`
+   had no existence guard unlike its sibling steps, so a `reset()` +
+   re-hatch cycle inserted a duplicate welcome turn. Fixed by checking
+   existing turns before inserting. 1 new test using the real
+   (unmocked) storage layer, confirmed to fail pre-fix. Two
+   pre-existing tests needed an incidental MagicMock-auto-truthy fix.
+4. **ResponseShaper code corruption**: an unterminated/truncated
+   triple-backtick fence left its code content unstashed, so it fell
+   through unprotected into the robotic-phrase stripping pass,
+   mangling real code content — confirmed wired into the real
+   production path via `runtime.py`'s `shape_response()` call. Fixed
+   by detecting and stashing a remaining unpaired fence. 1 new test,
+   confirmed to fail pre-fix (code content visibly mangled).
+
+Verified: `pytest tests/agent/ -q` (3 repeated runs to confirm the
+concurrency fixes are stable): `4268 passed, 4 skipped` each run.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-21322 passed, 13 skipped in 475.97s (0:07:55)
+21326 passed, 13 skipped in 492.11s (0:08:12)
 ```
 
-**Zero failures**, the thirty-first consecutive fully green full-suite
-run. Passed count is up from 21318 to 21322 (the round 13 checkpoint's
+**Zero failures**, the thirty-second consecutive fully green
+full-suite run. Passed count is up from 21322 to 21326 (the round 14
+checkpoint's 4 new tests: 1 PersonaManager backup-collision test, 1
+list_backups() TOCTOU-race test, 1 HatchingManager idempotency test,
+and 1 ResponseShaper unterminated-fence test — all of the sixty-first
+through seventy-third checkpoints' fixes are confirmed still holding).
+Passed count is up from 21318 to 21322 (the round 13 checkpoint's
 4 new tests: 1 Summarizer content-loss test, 2 StructuredOutput
 trailing-JSON tests, and 1 AgentRuntime.shutdown() wiring test — all of
 the sixty-first through seventy-second checkpoints' fixes are confirmed
