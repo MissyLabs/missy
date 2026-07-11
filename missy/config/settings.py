@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from dataclasses import fields as dataclass_fields
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -423,7 +424,46 @@ class MissyConfig:
 # ---------------------------------------------------------------------------
 
 
+def _warn_unknown_keys(section: str, data: dict[str, Any], schema: type) -> None:
+    """Warn when a YAML config section has keys its dataclass doesn't define.
+
+    Config parsing has historically been silently forgiving of typos or
+    stale/renamed keys -- e.g. a real operator config carried
+    ``shell.unrestricted: true`` for a field ``ShellPolicy`` never had,
+    dead since a stricter fail-closed rewrite made an empty
+    ``allowed_commands`` deny everything regardless. The operator had no
+    signal that the key they added did nothing. This never fails config
+    loading (a stricter posture would be a breaking change for anyone
+    with genuinely-extra keys); it only logs a visible warning so a typo
+    or a config written against a different Missy version doesn't
+    silently produce a different security posture than the operator
+    believes they configured.
+
+    The known-key set is derived directly from *schema*'s own
+    dataclass fields rather than a separately maintained list, so it
+    can never drift out of sync as fields are added, renamed, or
+    removed.
+
+    Args:
+        section: Human-readable name of the YAML section (e.g. ``"shell"``).
+        data: The raw dict parsed from that YAML section.
+        schema: The dataclass type the section is parsed into.
+    """
+    known = {f.name for f in dataclass_fields(schema)}
+    unknown = set(data.keys()) - known
+    if unknown:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "Config section '%s' has unrecognized key(s) (ignored): %s -- "
+            "check for typos or a field renamed/removed in this Missy version.",
+            section,
+            ", ".join(sorted(unknown)),
+        )
+
+
 def _parse_network(data: dict[str, Any]) -> NetworkPolicy:
+    _warn_unknown_keys("network", data, NetworkPolicy)
     presets = list(data.get("presets", []))
     allowed_hosts = list(data.get("allowed_hosts", []))
     allowed_domains = list(data.get("allowed_domains", []))
@@ -470,6 +510,7 @@ def _parse_network(data: dict[str, Any]) -> NetworkPolicy:
 
 
 def _parse_filesystem(data: dict[str, Any]) -> FilesystemPolicy:
+    _warn_unknown_keys("filesystem", data, FilesystemPolicy)
     return FilesystemPolicy(
         allowed_write_paths=list(data.get("allowed_write_paths", [])),
         allowed_read_paths=list(data.get("allowed_read_paths", [])),
@@ -477,6 +518,7 @@ def _parse_filesystem(data: dict[str, Any]) -> FilesystemPolicy:
 
 
 def _parse_shell(data: dict[str, Any]) -> ShellPolicy:
+    _warn_unknown_keys("shell", data, ShellPolicy)
     return ShellPolicy(
         enabled=bool(data.get("enabled", False)),
         allowed_commands=list(data.get("allowed_commands", [])),
@@ -484,6 +526,7 @@ def _parse_shell(data: dict[str, Any]) -> ShellPolicy:
 
 
 def _parse_plugins(data: dict[str, Any]) -> PluginPolicy:
+    _warn_unknown_keys("plugins", data, PluginPolicy)
     return PluginPolicy(
         enabled=bool(data.get("enabled", False)),
         allowed_plugins=list(data.get("allowed_plugins", [])),

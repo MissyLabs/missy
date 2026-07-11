@@ -440,6 +440,132 @@ class TestLoadConfigFilesystem:
 
 
 # ---------------------------------------------------------------------------
+# Config-hygiene gap: unrecognized keys in a policy section are silently
+# dropped, with no signal to the operator that a typo or a stale/renamed
+# field means the config isn't doing what they think it's doing. Found
+# live during task #10 validation: a real operator config carried
+# `shell.unrestricted: true`, which ShellPolicy never had a field for and
+# which was silently ignored -- SR-1.8's fail-closed rewrite (an empty
+# allowed_commands always denies regardless of "unrestricted") happened
+# to make this safe in practice, but the operator had no way to know
+# their config key was inert.
+# ---------------------------------------------------------------------------
+
+
+class TestUnknownConfigKeyWarnings:
+    def test_shell_unrestricted_dead_key_warns(self, tmp_path: Path, caplog):
+        path = _write_yaml(
+            tmp_path,
+            """
+            shell:
+              enabled: true
+              allowed_commands: ["ls"]
+              unrestricted: true
+            """,
+        )
+        with caplog.at_level("WARNING", logger="missy.config.settings"):
+            cfg = load_config(path)
+
+        assert cfg.shell.enabled is True
+        assert cfg.shell.allowed_commands == ["ls"]
+        assert any(
+            "shell" in r.message and "unrestricted" in r.message for r in caplog.records
+        )
+
+    def test_network_unknown_key_warns(self, tmp_path: Path, caplog):
+        path = _write_yaml(
+            tmp_path,
+            """
+            network:
+              default_deny: true
+              allowed_domain: "api.example.com"
+            """,
+        )
+        with caplog.at_level("WARNING", logger="missy.config.settings"):
+            load_config(path)
+
+        # "allowed_domain" (singular, a plausible typo for the real
+        # "allowed_domains") must be flagged, not silently accepted as
+        # if it configured anything.
+        assert any(
+            "network" in r.message and "allowed_domain" in r.message for r in caplog.records
+        )
+
+    def test_filesystem_unknown_key_warns(self, tmp_path: Path, caplog):
+        path = _write_yaml(
+            tmp_path,
+            """
+            filesystem:
+              allowed_read_paths: ["/tmp"]
+              readonly_paths: ["/etc"]
+            """,
+        )
+        with caplog.at_level("WARNING", logger="missy.config.settings"):
+            load_config(path)
+
+        assert any(
+            "filesystem" in r.message and "readonly_paths" in r.message
+            for r in caplog.records
+        )
+
+    def test_plugins_unknown_key_warns(self, tmp_path: Path, caplog):
+        path = _write_yaml(
+            tmp_path,
+            """
+            plugins:
+              enabled: false
+              whitelist: ["foo"]
+            """,
+        )
+        with caplog.at_level("WARNING", logger="missy.config.settings"):
+            load_config(path)
+
+        assert any(
+            "plugins" in r.message and "whitelist" in r.message for r in caplog.records
+        )
+
+    def test_no_warning_for_recognized_keys_only(self, tmp_path: Path, caplog):
+        path = _write_yaml(
+            tmp_path,
+            """
+            network:
+              default_deny: true
+              allowed_domains: ["api.example.com"]
+            shell:
+              enabled: true
+              allowed_commands: ["ls"]
+            filesystem:
+              allowed_read_paths: ["/tmp"]
+              allowed_write_paths: ["/tmp"]
+            plugins:
+              enabled: false
+              allowed_plugins: []
+            """,
+        )
+        with caplog.at_level("WARNING", logger="missy.config.settings"):
+            load_config(path)
+
+        assert not any("unrecognized key" in r.message for r in caplog.records)
+
+    def test_unknown_keys_are_ignored_not_fatal(self, tmp_path: Path):
+        """The warning is visibility-only -- an unrecognized key must
+        never raise or otherwise fail config loading, since that would
+        be a breaking change for any operator with genuinely-extra keys
+        (e.g. comments-as-keys, keys meant for a newer/older version)."""
+        path = _write_yaml(
+            tmp_path,
+            """
+            shell:
+              enabled: true
+              allowed_commands: ["ls"]
+              unrestricted: true
+            """,
+        )
+        cfg = load_config(path)  # must not raise
+        assert isinstance(cfg, MissyConfig)
+
+
+# ---------------------------------------------------------------------------
 # load_config — providers
 # ---------------------------------------------------------------------------
 

@@ -1,5 +1,33 @@
 # TEST_RESULTS
 
+## Run: 2026-07-12 03:00 UTC — post-backlog, shell.unrestricted dead-config-key hygiene gap fixed
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Context: unrecognized YAML config keys were silently dropped with no
+  signal to the operator -- the documented instance being a real
+  operator config carrying `shell.unrestricted: true`, a key
+  `ShellPolicy` never had.
+- Added `_warn_unknown_keys(section, data, schema)` to
+  `missy/config/settings.py` -- derives known keys directly from the
+  target dataclass's own `dataclasses.fields()`, no separately
+  maintained list to drift. Wired into
+  `_parse_network`/`_parse_filesystem`/`_parse_shell`/`_parse_plugins`.
+  Visibility-only: logs a warning, never fails config loading.
+- Added 6 new tests (`TestUnknownConfigKeyWarnings` in
+  `tests/config/test_settings.py`): the exact `shell.unrestricted`
+  case, one plausible-typo case per wired section, a clean-config case
+  (no warning fires), and a case confirming loading never fails.
+- Command: `pytest tests/config/test_settings.py -k UnknownConfigKey -v`
+- Result: `6 passed`.
+- Command: `pytest tests/config/ -q`
+- Result: `396 passed`.
+- Command: `pytest tests/ -k "config or settings" -q`
+- Result: `1662 passed, 19570 deselected`.
+- Command: `pytest tests/ -q -o faulthandler_timeout=120`
+- Result: `21219 passed, 13 skipped in 607.61s (0:10:07)` — zero
+  failures, fifteenth consecutive fully green full-suite run, up from
+  21213.
+
 ## Run: 2026-07-12 02:35 UTC — post-backlog, Web TUI browser pages for approvals and Discord pairing
 
 - Branch: `overhaul/missy-validation-20260710-031406`

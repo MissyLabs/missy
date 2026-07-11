@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (61 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for fourteen consecutive checkpoints; the 89-case tool-specific validation backlog is now 100% complete)
+## Changed (62 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for fifteen consecutive checkpoints; the 89-case tool-specific validation backlog is now 100% complete)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -2442,22 +2442,49 @@ references the correct real endpoints.
 Verified: `pytest tests/api/test_server.py -q`: 143 passed. Broader:
 `pytest tests/api/ -q`: 164 passed.
 
+### Post-backlog (fifty-sixth checkpoint): `shell.unrestricted` dead-config-key hygiene gap fixed
+
+Next concretely-scoped item: unrecognized YAML config keys were
+silently dropped with no signal to the operator — the documented
+instance being a real operator config carrying
+`shell.unrestricted: true`, a key `ShellPolicy` never had (dead since
+an earlier fail-closed rewrite made an empty `allowed_commands` deny
+everything regardless).
+
+Added `_warn_unknown_keys(section, data, schema)` to
+`missy/config/settings.py` — derives known keys directly from the
+target dataclass's own `dataclasses.fields()`, so it can never drift
+out of sync as fields change. Wired into
+`_parse_network`/`_parse_filesystem`/`_parse_shell`/`_parse_plugins`.
+Visibility-only: logs a warning, never fails config loading — a
+stricter posture would break anyone with genuinely-extra keys.
+
+Added 6 new tests: the exact `shell.unrestricted` case, one
+plausible-typo case per wired section, a clean-config case (no warning
+fires), and a case confirming loading never fails on an unrecognized
+key.
+
+Verified: `pytest tests/config/test_settings.py -k UnknownConfigKey -v`:
+6 passed. Broader: `pytest tests/config/ -q`: 396 passed. `pytest
+tests/ -k "config or settings" -q`: 1662 passed, 19570 deselected.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-21213 passed, 13 skipped, 1 warning in 606.98s (0:10:06)
+21219 passed, 13 skipped in 607.61s (0:10:07)
 ```
 
-**Zero failures**, the fourteenth consecutive fully green full-suite
+**Zero failures**, the fifteenth consecutive fully green full-suite
 run. Passed count is up from 21191 to 21212 (the DISC-CMD-008
 rate-limiting checkpoint: 10 standalone unit tests, 9 real
 dispatch-path integration tests, 3 config-parsing tests) to 21213 (the
-Web TUI approvals/pairing checkpoint's 2 new tests). The 1 warning
-(this run, from `test_policy_property.py`; a different but equally
-pre-existing Hypothesis deprecation notice appeared in the prior run's
-`test_property_based_fuzz.py`) is not something either checkpoint
-introduced.
+Web TUI approvals/pairing checkpoint's 2 new tests) to 21219 (the
+`shell.unrestricted` config-hygiene checkpoint's 6 new tests). The
+occasional Hypothesis deprecation warning seen in some runs of this
+suite (`test_property_based_fuzz.py` or `test_policy_property.py`,
+depending on test ordering) is pre-existing and order-dependent, not
+introduced by any checkpoint this session — this run shows none.
 Passed count is up from 21071 (SR-1.9b's run) to 21115
 (availability-hardening checkpoint) to 21118 (the acpx `--deny-all`
 critical-finding checkpoint) to 21125 (the native-tool denial retry

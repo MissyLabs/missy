@@ -3543,6 +3543,45 @@ Verified: `pytest tests/api/test_server.py -q`: 143 passed. Broader:
 `21213 passed, 13 skipped, 1 warning in 606.98s (0:10:06)` — 0 failed,
 up from 21212. Fourteenth consecutive fully green full-suite run.
 
+### Post-backlog (fifty-sixth checkpoint): `shell.unrestricted` dead-config-key hygiene gap fixed
+
+Next concretely-scoped item from "Remaining Work": unrecognized YAML
+config keys were silently dropped with no signal to the operator that
+a typo or a stale/renamed field meant their config wasn't doing what
+they thought — the specific documented instance being a real operator
+config carrying `shell.unrestricted: true`, which `ShellPolicy` never
+had a field for (dead since an earlier fail-closed rewrite made an
+empty `allowed_commands` deny everything regardless).
+
+Added `_warn_unknown_keys(section, data, schema)` to
+`missy/config/settings.py` — derives the known-key set directly from
+the target dataclass's own `dataclasses.fields()` rather than a
+separately maintained list, so it can never drift out of sync as
+fields are added, renamed, or removed. Wired into
+`_parse_network`/`_parse_filesystem`/`_parse_shell`/`_parse_plugins`
+(the core security-policy sections, where a silently-dropped key could
+give an operator false confidence about their security posture).
+Visibility-only: logs a warning, never fails config loading — a
+stricter posture would be a breaking change for anyone with
+genuinely-extra keys (config meant for a different Missy version,
+etc.).
+
+Added 6 new tests (`TestUnknownConfigKeyWarnings` in
+`tests/config/test_settings.py`): the exact documented
+`shell.unrestricted` case, one more per wired section (a plausible
+typo each — `allowed_domain` for `allowed_domains`, `readonly_paths`
+for `allowed_read_paths`, `whitelist` for `allowed_plugins`), a
+clean-config case asserting no warning fires when only recognized keys
+are present, and a case confirming an unrecognized key never fails
+config loading.
+
+Verified: `pytest tests/config/test_settings.py -k
+UnknownConfigKey -v`: 6 passed. Broader: `pytest tests/config/ -q`:
+396 passed. `pytest tests/ -k "config or settings" -q`: 1662 passed,
+19570 deselected. Full suite:
+`21219 passed, 13 skipped in 607.61s (0:10:07)` — 0 failed, up from
+21213. Fifteenth consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security
@@ -3632,11 +3671,11 @@ path). Current remaining priority order:
    chain for deletion/reordering detection and key-rotation lifecycle
    (SR-1.1 residual, explicitly out of scope per the review's own text
    since no hash-chain claim exists in the product); a `missy doctor`
-   check surfacing audit signing status (SR-1.1/SR-4.6 residual); the
-   `shell.unrestricted` dead-config-key hygiene gap (no config section
-   warns on unrecognized YAML keys). **The Web TUI browser page for
-   approvals and Discord pairing is now fixed** — see the
-   fifty-fifth checkpoint above. **DISC-CMD-008's per-user Discord
+   check surfacing audit signing status (SR-1.1/SR-4.6 residual).
+   **The `shell.unrestricted` dead-config-key hygiene gap is now
+   fixed** — see the fifty-sixth checkpoint above. **The Web TUI
+   browser page for approvals and Discord pairing is now fixed** — see
+   the fifty-fifth checkpoint above. **DISC-CMD-008's per-user Discord
    rate-limiting gap is now fixed** — see the fifty-fourth checkpoint
    above.
 3. Broader untouched "Product Goal" surface from prompt.md (providers,
