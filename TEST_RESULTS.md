@@ -1,4 +1,38 @@
-# TEST_RESULTS
+## Run: 2026-07-13 17:35 UTC — round 27 research pass: `missy mcp list`/`add`/`remove` never loaded existing config — `add` silently destroyed every other configured server
+
+- Context: round 27 was explicitly targeted at re-hunting the round-26
+  bug class (CLI/caller code calling a method that doesn't match the
+  real production class's actual API, undetected because the only test
+  coverage hand-mocks that dependency): `missy mcp add/remove/pin`,
+  `missy skills scan`, `missy sessions list/rename/cleanup`, `missy
+  cost`, `missy recover`, and Discord's cross-module calls. `mcp pin`,
+  `skills scan`, `sessions list/rename/cleanup`, `cost`, `recover`, and
+  every Discord cross-module call all checked out clean. One severe
+  bug found, matching round 26's exact pattern.
+- **`missy mcp list`/`add`/`remove` never called `connect_all()`
+  first**: `McpManager()` starts with an empty in-memory client dict,
+  populated only by `connect_all()` loading `~/.missy/mcp.json`.
+  Without it, `mcp list` always reported "No MCP servers configured"
+  regardless of actual state, `mcp remove` was a silent no-op that
+  never touched `mcp.json`, and worst of all `mcp add NEW` silently
+  destroyed every other configured server (since `_save_config()`
+  rewrites the file entirely from only the in-memory clients). `mcp
+  pin` already correctly calls `connect_all()` first, proving the
+  pattern was known but inconsistently applied. Live-reproduced all
+  three bugs. Fixed by adding `connect_all()`/`shutdown()` to all three
+  commands, matching `mcp pin`'s pattern. Every existing test passed
+  throughout (both before and after) because they hand-mock
+  `McpManager` itself.
+- Command: `pytest tests/cli/test_cli_commands.py::TestMcpRealManagerEndToEnd -v`
+- Result: `3 passed`. All 3 new tests (exercising the real, unmocked
+  `McpManager` against a real `mcp.json` file) confirmed to genuinely
+  fail pre-fix via `git stash`.
+- Command: `pytest tests/cli/ -k Mcp tests/integration/test_mcp_skills_integration.py -q`
+- Result: `102 passed`.
+- Command: `python3 -m pytest tests/ -q`
+  (full suite, background run)
+- Result: `21393 passed, 14 skipped in 768.16s (0:12:48)`. 0 failed, up
+  from 21390. Forty-fifth consecutive fully green full-suite run.
 
 ## Run: 2026-07-13 17:15 UTC — round 26 research pass: entire `missy devices`/`missy voice` CLI command group crashed on every invocation; memory_search session override silently non-functional
 

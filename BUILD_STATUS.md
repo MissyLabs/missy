@@ -6623,6 +6623,69 @@ passed`.
 `21390 passed, 14 skipped in 711.07s (0:11:51)` — 0 failed, up from
 21386. Forty-fourth consecutive fully green full-suite run.
 
+### Post-backlog (eighty-seventh checkpoint): round 27 research pass fixes `missy mcp list`/`add`/`remove` never loading existing config — `add` silently destroyed every other configured server
+
+Round 27 was explicitly targeted at re-hunting the round-26 bug class
+(CLI/caller code calling a method that doesn't match the real
+production class's actual API, undetected because the only test
+coverage hand-mocks that dependency): `missy mcp add/remove/pin`,
+`missy skills scan`, `missy sessions list/rename/cleanup`, `missy
+cost`, `missy recover`, and `missy/channels/discord/`'s cross-module
+calls into `DeviceRegistry`/`SQLiteMemoryStore`/other classes. `mcp
+pin`, `skills scan`, `sessions list/rename/cleanup`, `cost`, `recover`,
+and every Discord cross-module call (`DiscordVoiceManager`,
+`ScreencastChannel`, `DiscordRestClient`, `ProviderRegistry`,
+`CodeEvolutionManager`) all checked out clean — their method calls
+match the real classes' actual signatures exactly. One severe bug
+found, matching round 26's exact pattern.
+
+1. **`missy mcp list`, `missy mcp add`, and `missy mcp remove` never
+   called `McpManager.connect_all()` before operating — `mcp add`
+   silently destroyed every other previously-configured MCP server in
+   the process.** `McpManager()` starts with an empty in-memory
+   `self._clients` dict; it's populated only by `connect_all()` loading
+   and connecting every server declared in `~/.missy/mcp.json`. `mcp
+   pin` (a fourth `mcp` subcommand) already correctly calls
+   `connect_all()` first, proving the pattern was known but
+   inconsistently applied to the other three. Without it:
+   `list_servers()` only reflects `self._clients`, so `mcp list` always
+   reported "No MCP servers configured" regardless of actual state;
+   `remove_server()` is a silent no-op unless the name is already in
+   `self._clients` (which it never is on a fresh CLI process), so `mcp
+   remove NAME` never touched `mcp.json` at all; and worst of all,
+   `add_server()`'s `_save_config()` rewrites `mcp.json` **entirely**
+   from only the currently in-memory clients, so `mcp add NEW` silently
+   replaced the whole file with just the one newly-added server,
+   destroying every other configured server with no warning. Live-
+   reproduced all three: `mcp list` reporting "No MCP servers
+   configured" against a real, populated `mcp.json`; `mcp remove`
+   leaving the file byte-for-byte unchanged; `mcp add newserver`
+   reducing a file that had `existing-server` down to only
+   `newserver`. Fixed by adding `mgr.connect_all()` before each
+   command's operation and `mgr.shutdown()` afterward, matching `mcp
+   pin`'s already-correct pattern exactly. **Every existing test for
+   these three commands passed throughout, both before and after this
+   fix** — the exact round-26 pattern: each test hand-mocks
+   `McpManager` itself and sets `mock_mgr.list_servers.return_value`/
+   `mock_mgr.add_server.return_value` directly, which passes regardless
+   of whether `connect_all()` was ever called. Added a new
+   `TestMcpRealManagerEndToEnd` class exercising the real, unmocked
+   `McpManager` against a real `mcp.json` file (mocking only
+   `McpClient`, since a genuine MCP server handshake isn't needed to
+   verify persistence correctness) — 3 new tests, confirmed via `git
+   stash` to genuinely fail pre-fix (list showing nothing, remove
+   leaving the file unchanged, add reducing the file to just the new
+   entry). `pytest tests/cli/ -k Mcp tests/integration/
+   test_mcp_skills_integration.py -q`: `102 passed`.
+
+Verified: `pytest tests/cli/ -k Mcp tests/integration/
+test_mcp_skills_integration.py -q`: `102 passed`. `pytest tests/cli/ -q`:
+`1086 passed`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21393 passed, 14 skipped in 768.16s (0:12:48)` — 0 failed, up from
+21390. Forty-fifth consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

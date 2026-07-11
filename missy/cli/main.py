@@ -3805,9 +3805,17 @@ def mcp_list(ctx: click.Context) -> None:
 
     _load_subsystems(ctx.obj["config_path"])
     mgr = McpManager()
+    # McpManager() starts with an empty in-memory client dict -- list_servers()
+    # only reflects self._clients, which stays empty until connect_all() loads
+    # and connects every server declared in mcp.json. Without this call, `missy
+    # mcp list` always reported "No MCP servers configured" regardless of
+    # actual state (matching the pattern already correctly applied by `mcp
+    # pin`, below).
+    mgr.connect_all()
     servers = mgr.list_servers()
     if not servers:
         console.print("[dim]No MCP servers configured. Add one with missy mcp add.[/]")
+        mgr.shutdown()
         return
     table = Table(title="MCP Servers", show_lines=True)
     table.add_column("Name", style="bold")
@@ -3817,6 +3825,7 @@ def mcp_list(ctx: click.Context) -> None:
         alive = Text("yes", style="green") if s["alive"] else Text("no", style="red")
         table.add_row(s["name"], alive, str(s["tools"]))
     console.print(table)
+    mgr.shutdown()
 
 
 @mcp.command("add")
@@ -3830,12 +3839,19 @@ def mcp_add(ctx: click.Context, name: str, command: str | None, url: str | None)
 
     _load_subsystems(ctx.obj["config_path"])
     mgr = McpManager()
+    # add_server() persists via _save_config(), which rewrites mcp.json from
+    # scratch using only the currently in-memory self._clients -- without
+    # first loading every already-configured server via connect_all(), adding
+    # one new server silently destroyed every previously-configured one.
+    mgr.connect_all()
     try:
         client = mgr.add_server(name, command=command, url=url)
         _print_success(f"Connected to MCP server [bold]{name}[/] ({len(client.tools)} tools).")
     except Exception as exc:
         _print_error(f"Failed to connect: {exc}")
         sys.exit(1)
+    finally:
+        mgr.shutdown()
 
 
 @mcp.command("remove")
@@ -3847,7 +3863,12 @@ def mcp_remove_cmd(ctx: click.Context, name: str) -> None:
 
     _load_subsystems(ctx.obj["config_path"])
     mgr = McpManager()
+    # remove_server() is a no-op unless `name` is already in self._clients --
+    # without connect_all() first, self._clients is always empty on a fresh
+    # CLI process, so this was silently doing nothing to mcp.json.
+    mgr.connect_all()
     mgr.remove_server(name)
+    mgr.shutdown()
     _print_success(f"MCP server [bold]{name}[/] removed.")
 
 

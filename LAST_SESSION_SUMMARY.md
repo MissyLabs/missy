@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (93 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for forty-four consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (94 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for forty-five consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -3858,15 +3858,51 @@ Verified: `pytest tests/cli/ -q`: `1083 passed`. `pytest tests/agent/
 test_memory_tool_dispatch_wiring.py tests/agent/ -k memory -q`: `80
 passed`.
 
+### Post-backlog (eighty-seventh checkpoint): round 27 research pass — `missy mcp list`/`add`/`remove` never loaded existing config, `add` silently destroyed every other configured server
+
+Round 27 was explicitly targeted at re-hunting the round-26 bug class
+(CLI/caller code calling a method that doesn't match the real
+production class's actual API, undetected because the only test
+coverage hand-mocks that dependency): `missy mcp add/remove/pin`,
+`missy skills scan`, `missy sessions list/rename/cleanup`, `missy
+cost`, `missy recover`, and Discord's cross-module calls. `mcp pin`,
+`skills scan`, `sessions list/rename/cleanup`, `cost`, `recover`, and
+every Discord cross-module call all checked out clean. One severe bug
+found, matching round 26's exact pattern.
+
+1. **`missy mcp list`/`add`/`remove` never called `connect_all()`
+   first**: `McpManager()` starts with an empty in-memory client dict,
+   populated only by `connect_all()` loading `~/.missy/mcp.json`.
+   Without it, `mcp list` always reported "No MCP servers configured"
+   regardless of actual state, `mcp remove` was a silent no-op that
+   never touched `mcp.json`, and worst of all `mcp add NEW` silently
+   destroyed every other configured server (since `_save_config()`
+   rewrites the file entirely from only the in-memory clients). `mcp
+   pin` already correctly calls `connect_all()` first, proving the
+   pattern was known but inconsistently applied. Live-reproduced all
+   three bugs against a real `mcp.json`. Fixed by adding
+   `connect_all()`/`shutdown()` to all three commands, matching `mcp
+   pin`'s pattern. Every existing test passed throughout (both before
+   and after) because they hand-mock `McpManager` itself -- added a new
+   test class exercising the real, unmocked `McpManager` against a real
+   `mcp.json` file, 3 new tests confirmed to genuinely fail pre-fix.
+
+Verified: `pytest tests/cli/ -k Mcp tests/integration/
+test_mcp_skills_integration.py -q`: `102 passed`. `pytest tests/cli/
+-q`: `1086 passed`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21390 passed, 14 skipped in 711.07s (0:11:51)
+21393 passed, 14 skipped in 768.16s (0:12:48)
 ```
 
-**Zero failures**, the forty-fourth consecutive fully green
-full-suite run. Passed count is up from 21386 to 21390 (the round 26
+**Zero failures**, the forty-fifth consecutive fully green
+full-suite run. Passed count is up from 21390 to 21393 (the round 27
+checkpoint's 3 new tests in `TestMcpRealManagerEndToEnd`; all of the
+sixty-first through eighty-sixth checkpoints' fixes are confirmed still
+holding). Passed count is up from 21386 to 21390 (the round 26
 checkpoint's 4 new tests: the real-registry devices/voice end-to-end
 tests in `TestDevicesAndVoiceRealRegistryEndToEnd`; all of the
 sixty-first through eighty-fifth checkpoints' fixes are confirmed still

@@ -22,7 +22,9 @@ tests do not require a real config file or running services.
 
 from __future__ import annotations
 
+import json
 import tempfile
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1334,6 +1336,106 @@ class TestMcpRemove:
     def test_mcp_remove_help_exits_zero(self, runner: CliRunner):
         result = runner.invoke(cli, ["mcp", "remove", "--help"])
         assert result.exit_code == 0
+
+
+class TestMcpRealManagerEndToEnd:
+    """The tests above all mock McpManager itself by hand, setting
+    mock_mgr.list_servers.return_value/mock_mgr.add_server.return_value
+    directly -- this passes regardless of whether connect_all() was ever
+    called, so it cannot catch the real bug: McpManager() starts with an
+    empty in-memory self._clients dict, populated only by connect_all()
+    loading ~/.missy/mcp.json. Without calling connect_all() first,
+    `mcp list` always reported "No MCP servers configured" even with a
+    populated mcp.json, `mcp remove NAME` was a silent no-op (never
+    touched mcp.json), and worst of all `mcp add NEW` silently destroyed
+    every previously-configured server, since add_server()'s
+    _save_config() rewrites mcp.json from scratch using only the
+    currently in-memory clients. These tests exercise the real,
+    unmocked McpManager against a real mcp.json file (only McpClient
+    itself is mocked, since it would otherwise need a live MCP server
+    subprocess) -- the only way to catch a bug like this.
+    """
+
+    def _mock_client_factory(self, name, command=None, url=None):
+        client = MagicMock()
+        client.name = name
+        client._command = command
+        client._url = url
+        client.tools = []
+        client.alive = True
+        return client
+
+    def _set_up(self, monkeypatch: pytest.MonkeyPatch, tmp_path, mcp_entries: list[dict]) -> str:
+        monkeypatch.setenv("HOME", str(tmp_path))
+        missy_dir = tmp_path / ".missy"
+        missy_dir.mkdir(parents=True, exist_ok=True)
+        mcp_json = missy_dir / "mcp.json"
+        mcp_json.write_text(json.dumps(mcp_entries))
+        mcp_json.chmod(0o600)
+        return str(mcp_json)
+
+    def test_mcp_list_shows_existing_servers(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        cfg_path = _write_temp_config()
+        self._set_up(monkeypatch, tmp_path, [{"name": "real-server", "command": "cat"}])
+
+        with (
+            _SubsystemsPatch(),
+            patch("missy.mcp.manager.McpClient", side_effect=self._mock_client_factory),
+        ):
+            result = runner.invoke(cli, ["--config", cfg_path, "mcp", "list"])
+
+        assert result.exit_code == 0
+        assert result.exception is None
+        assert "real-server" in result.output
+
+    def test_mcp_add_preserves_existing_servers(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        cfg_path = _write_temp_config()
+        mcp_json = self._set_up(
+            monkeypatch, tmp_path, [{"name": "existing-server", "command": "cat"}]
+        )
+
+        with (
+            _SubsystemsPatch(),
+            patch("missy.mcp.manager.McpClient", side_effect=self._mock_client_factory),
+        ):
+            result = runner.invoke(
+                cli, ["--config", cfg_path, "mcp", "add", "newserver", "--command", "echo hi"]
+            )
+
+        assert result.exit_code == 0
+        assert result.exception is None
+        saved = json.loads(Path(mcp_json).read_text())
+        names = {entry["name"] for entry in saved}
+        assert names == {"existing-server", "newserver"}
+
+    def test_mcp_remove_actually_modifies_config(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        cfg_path = _write_temp_config()
+        mcp_json = self._set_up(
+            monkeypatch,
+            tmp_path,
+            [
+                {"name": "keep-me", "command": "cat"},
+                {"name": "remove-me", "command": "cat"},
+            ],
+        )
+
+        with (
+            _SubsystemsPatch(),
+            patch("missy.mcp.manager.McpClient", side_effect=self._mock_client_factory),
+        ):
+            result = runner.invoke(cli, ["--config", cfg_path, "mcp", "remove", "remove-me"])
+
+        assert result.exit_code == 0
+        assert result.exception is None
+        saved = json.loads(Path(mcp_json).read_text())
+        names = {entry["name"] for entry in saved}
+        assert names == {"keep-me"}
 
 
 # ===========================================================================
