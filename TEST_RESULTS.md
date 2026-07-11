@@ -1,5 +1,56 @@
 # TEST_RESULTS
 
+## Run: 2026-07-12 06:20 UTC — round 3 research pass: compaction continuity bug, graph-merge crash, severe Vault concurrent-write data loss
+
+- Context: round 3 of the research-pass invitation (round 1: Scheduler/
+  Persona; round 2: API/MessageBus/Screencast). This round targeted
+  `missy/memory/vector_store.py`/`graph_store.py`,
+  `missy/agent/condensers.py`/`compaction.py`,
+  `missy/security/vault.py`/`landlock.py`/`scanner.py`, voice-channel
+  presence/concurrency, and `missy/agent/checkpoint.py`/`watchdog.py`.
+- **Compaction continuity bug**: `get_summaries(depth=0, limit=1)`
+  orders `ASC` by `created_at` (no `DESC`), so it always returned the
+  oldest leaf summary, not the newest, contradicting the code's own
+  comment. Live-reproduced: pass 2 of a growing session's continuity
+  context was anchored to the very first summary ever created, not the
+  actual most recent one from pass 1. Fixed by reusing the
+  already-fetched summaries list and taking its last element.
+- Command: `pytest tests/agent/test_compaction.py -v`
+- Result: `12 passed`. The new test confirmed to genuinely fail
+  against the pre-fix code via `git stash`.
+- **Graph-merge crash**: `GraphMemoryStore.merge_entities()` raised
+  `sqlite3.IntegrityError` whenever the keeper entity already had an
+  equivalent relationship to/from the same third entity — exactly the
+  scenario the docs name as the feature's purpose. Live-reproduced the
+  crash. Fixed by deleting the now-redundant row first via a
+  correlated EXISTS subquery before the reassignment UPDATE.
+- Command: `pytest tests/memory/test_graph_store.py -k MergeEntities -v`
+- Result: `8 passed`. 2 new tests confirmed to genuinely fail
+  (real `sqlite3.IntegrityError`) against the pre-fix code via
+  `git stash`.
+- **Vault concurrent-write data loss** (most severe): `set()`/
+  `delete()` had no lock around their read-modify-write cycle. 30
+  threads concurrently calling `set()` against a fresh vault left only
+  1 of 30 keys surviving, zero exceptions raised. Fixed with a
+  `flock()`-based lock around the critical section (correctly
+  serializes both same-process threads and separate processes).
+  Strengthened the two existing concurrency tests, which had
+  previously only asserted "no exceptions"/"at least one survivor" —
+  neither caught the true severity.
+- Command: `pytest tests/security/test_vault_trust_edges.py
+  tests/security/test_vault_permissions_edges.py -k concurr -v`
+- Result: `7 passed`. Both strengthened tests confirmed to genuinely
+  fail against the pre-fix code via `git stash` (1 of 30, and roughly
+  half of 30, keys surviving respectively).
+- Command: `pytest tests/security/ tests/memory/
+  tests/agent/test_compaction.py tests/agent/test_compaction_extended.py
+  tests/agent/test_compaction_context_edges.py -q`
+- Result: `2716 passed, 7 skipped`.
+- Command: `python3 -m pytest tests/ -q -o faulthandler_timeout=120`
+  (full suite, background run)
+- Result: `21258 passed, 13 skipped in 611.87s (0:10:11)`. 0 failed, up
+  from 21255. Twenty-first consecutive fully green full-suite run.
+
 ## Run: 2026-07-12 05:45 UTC — round 2 research pass: MessageBus never wired into production, plus two smaller real bugs (API N+1 query, Screencast session leak)
 
 - Context: round 2 of the research-pass invitation (round 1: Scheduler/

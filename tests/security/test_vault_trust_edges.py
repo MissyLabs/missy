@@ -359,10 +359,16 @@ class TestVaultConcurrency:
             t.join()
 
         assert not errors, f"Thread errors: {errors}"
-        # Every key must be readable; the exact subset depends on ordering,
-        # but at a minimum one full set of writes must have succeeded.
+        # Regression: set()/delete() previously had no lock around their
+        # read-modify-write cycle, so concurrent writers each loaded the same
+        # pre-write snapshot and the last rename silently clobbered all the
+        # others' changes -- live-reproduced as only 1 of 30 keys surviving.
+        # Every single writer's key must now be present, not just "at least
+        # one" survivor.
         keys = set(vault.list_keys())
-        # At minimum, the last writer must have left its key intact.
+        assert keys == {f"KEY_{i}" for i in range(n_threads)}, (
+            f"expected all {n_threads} keys to survive concurrent writes, got {sorted(keys)}"
+        )
         for k in keys:
             idx = int(k.split("_")[1])
             assert vault.get(k) == f"value_{idx}"

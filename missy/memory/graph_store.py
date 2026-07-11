@@ -1046,7 +1046,41 @@ class GraphMemoryStore:
         if not keep or not going:
             return
 
-        # Reassign relationships
+        # Reassign relationships. If the keeper already has an equivalent
+        # relationship (same target/relation_type, or same source/relation_type)
+        # -- exactly the documented use case of merging two spellings of the
+        # same entity that were both independently observed relating to the
+        # same third entity -- a plain UPDATE would collide with
+        # relationships' UNIQUE(source_id, target_id, relation_type)
+        # constraint and raise sqlite3.IntegrityError. Drop the now-redundant
+        # merge_id-side row first so the UPDATE is collision-free; the
+        # keeper's existing equivalent row is preserved.
+        conn.execute(
+            """
+            DELETE FROM relationships
+            WHERE source_id = ?
+              AND EXISTS (
+                  SELECT 1 FROM relationships AS r2
+                  WHERE r2.source_id = ?
+                    AND r2.target_id = relationships.target_id
+                    AND r2.relation_type = relationships.relation_type
+              )
+            """,
+            (merge_id, keep_id),
+        )
+        conn.execute(
+            """
+            DELETE FROM relationships
+            WHERE target_id = ?
+              AND EXISTS (
+                  SELECT 1 FROM relationships AS r2
+                  WHERE r2.target_id = ?
+                    AND r2.source_id = relationships.source_id
+                    AND r2.relation_type = relationships.relation_type
+              )
+            """,
+            (merge_id, keep_id),
+        )
         conn.execute(
             "UPDATE relationships SET source_id = ? WHERE source_id = ?",
             (keep_id, merge_id),

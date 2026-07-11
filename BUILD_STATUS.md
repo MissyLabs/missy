@@ -4030,6 +4030,112 @@ tests/ -q -o faulthandler_timeout=120` → `21255 passed, 13 skipped, 1
 warning in 605.13s (0:10:05)` — 0 failed, up from 21248. Twentieth
 consecutive fully green full-suite run.
 
+### Post-backlog (sixty-third checkpoint): round 3 research pass finds a compaction continuity bug, a graph-merge crash, and severe Vault data loss under concurrency
+
+Round 3 of the research-pass invitation (round 1: Scheduler/Persona;
+round 2: API/MessageBus/Screencast), this time into
+`missy/memory/vector_store.py`/`graph_store.py`,
+`missy/agent/condensers.py`/`compaction.py`,
+`missy/security/vault.py`/`landlock.py`/`scanner.py`, voice-channel
+presence/concurrency, and `missy/agent/checkpoint.py`/`watchdog.py`.
+Three genuine findings, live-verified and fixed; several other
+candidate leads were investigated and correctly ruled out (Landlock's
+syscall numbers are the correct generic-ABI values shared across
+architectures, not an architecture bug; `ContextManager`'s truncation
+never actually has tool_call/tool_result pairs to break since only
+final-response turns are persisted; `condensers.py`'s pairing-breaking
+paths have zero production callers today; `CheckpointManager`'s WAL
+mode held up fine under a real 20-thread × 100-update stress test;
+`scanner.py`'s checks all fire correctly; `VoiceServer` allowing
+duplicate `node_id` connections only causes harmless bookkeeping
+drift, no real state corruption).
+
+**1. `compact_session()` always fed the *oldest* leaf summary as
+continuity context, never the most recent one.**
+`missy/agent/compaction.py`'s comment said "Get most recent existing
+summary for continuity," but `get_summaries(depth=0, limit=1)`'s
+underlying query (`missy/memory/sqlite_store.py`) orders `ASC` by
+`created_at` with no `DESC` — so `limit=1` always returned the single
+*oldest* summary, and the `[-1]` indexing on a list that can only ever
+have 0 or 1 elements was a no-op. **Live-reproduced**: ran
+`compact_session()` twice on a growing session (pass 1 created leaf
+summaries covering turns 0-9 and 9-13; pass 2 added 30 more turns) —
+the first new chunk in pass 2 received `"summary starting at turn
+index Turn 0"` (the very first summary ever created) as its
+continuity context, not `"...Turn 9"` (the actual most recent one from
+pass 1). Every compaction pass on a long-lived session re-anchored to
+the first-ever summary forever, degrading narrative continuity exactly
+as a session grows and needs it most — this runs in production after
+every tool round via `_maybe_compact` in `runtime.py`. Fixed by reusing
+the already-fetched `existing_leaf_summaries` list (needed anyway for
+`existing_leaf_turn_ids`) and taking its last element directly, instead
+of a second, differently-broken query — also removes a redundant
+query. 1 new test in `tests/agent/test_compaction.py`
+(`test_second_pass_continuity_uses_most_recent_prior_summary`),
+confirmed to genuinely fail against the pre-fix code via `git stash`.
+
+**2. `GraphMemoryStore.merge_entities()` crashed with
+`sqlite3.IntegrityError` on exactly the scenario its own docs describe
+as its purpose.** `relationships` has `UNIQUE(source_id, target_id,
+relation_type)`; `merge_entities()` reassigned relationship rows from
+`merge_id` to `keep_id` via a plain `UPDATE`, which collides whenever
+the keeper already has an equivalent relationship to the same target
+(or from the same source) with the same `relation_type` —
+`docs/memory-and-persistence.md` explicitly names this as the
+intended use case ("collapses duplicate entities discovered later,
+e.g. two spellings of the same file path"). **Live-reproduced**: added
+`keep_ent --related_to--> third_ent` and `merge_ent --related_to-->
+third_ent`, then called `merge_entities(keep_id, merge_id)` — raised
+`sqlite3.IntegrityError: UNIQUE constraint failed`. Fixed by deleting
+the now-redundant `merge_id`-side row first (via a correlated
+`EXISTS` subquery checking whether the keeper already has an
+equivalent row) before running the reassignment `UPDATE`s, so they
+become collision-free; the keeper's existing row is preserved rather
+than duplicated. Note: `merge_entities` currently has zero callers
+anywhere in production code (no CLI/tool/skill invokes it yet), so
+this wasn't reachable today, but it's a documented public method on a
+class (`GraphMemoryStore`) that *is* live in production via
+`ingest_turn`/`get_context_subgraph` — a latent crash waiting for
+whoever wires up the documented dedup feature. 2 new tests in
+`tests/memory/test_graph_store.py` (outbound and inbound collision
+variants), both confirmed to genuinely fail (real
+`sqlite3.IntegrityError`) against the pre-fix code via `git stash`.
+
+**3. `Vault.set()`/`delete()` had no write-write locking — concurrent
+writes silently lost nearly all data, with zero errors raised.**
+`missy/security/vault.py`'s read-modify-write cycle
+(`_load_store()` → mutate dict → `_save_store()`) had no lock or CAS
+check; `_save_store()`'s temp-file-plus-rename is atomic for a single
+write, but two concurrent writers both load the same pre-write
+snapshot and the second `rename()` silently clobbers the first's
+changes. **Live-reproduced**: 30 threads each calling
+`vault.set(f"key{i}", ...)` concurrently against a fresh vault left
+only **1 of 30** keys surviving, with zero exceptions raised — a
+severe, silent secret-loss bug in a component whose entire purpose is
+durable secret storage. The two existing concurrency tests
+(`test_vault_trust_edges.py`, `test_vault_permissions_edges.py`) had
+already anticipated *some* loss and only asserted "no exceptions" /
+"at least one key survives," so neither caught the true severity.
+Fixed by adding a `flock()`-based lock (`vault.lock`, opened fresh per
+call) around the whole read-modify-write cycle in `set()`/`delete()`:
+`flock()` locks are associated with the open file description (`man 2
+flock`), so this correctly serializes both same-process threads and
+genuinely separate processes (e.g. two overlapping `missy vault set`
+CLI invocations) — a plain `threading.Lock` would only have covered
+the former. Strengthened both existing tests to assert *all* keys
+survive concurrent writes (not just "at least one" or "no exceptions")
+— both confirmed to genuinely fail against the pre-fix code via `git
+stash` (1 of 30 keys, and roughly half of 30 keys, surviving
+respectively in the two tests).
+
+Verified: `pytest tests/security/ tests/memory/
+tests/agent/test_compaction.py tests/agent/test_compaction_extended.py
+tests/agent/test_compaction_context_edges.py -q`: `2716 passed, 7
+skipped`. **Full-suite confirmation:** `python3 -m pytest tests/ -q
+-o faulthandler_timeout=120` → `21258 passed, 13 skipped in 611.87s
+(0:10:11)` — 0 failed, up from 21255. Twenty-first consecutive fully
+green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

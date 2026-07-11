@@ -13,6 +13,7 @@ Usage::
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import json
 import os
 import secrets
@@ -39,6 +40,7 @@ class Vault:
 
     KEY_FILE = "vault.key"
     VAULT_FILE = "vault.enc"
+    LOCK_FILE = "vault.lock"
 
     def __init__(self, vault_dir: str = "~/.missy/secrets"):
         if not _CRYPTO_AVAILABLE:
@@ -50,7 +52,33 @@ class Vault:
         self._dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         self._key_path = self._dir / self.KEY_FILE
         self._vault_path = self._dir / self.VAULT_FILE
+        self._lock_path = self._dir / self.LOCK_FILE
         self._key = self._load_or_create_key()
+
+    @contextlib.contextmanager
+    def _locked(self):
+        """Serialize read-modify-write cycles across threads AND processes.
+
+        set()/delete() previously did a plain read-modify-write with no lock
+        or CAS check: two concurrent writers both load the same pre-write
+        snapshot, and the second writer's atomic rename in _save_store()
+        silently clobbers the first's changes, with no error raised.
+        Live-reproduced: 30 threads each calling set() concurrently against a
+        fresh vault left only 1 of 30 keys surviving. flock() locks are
+        associated with the open file description (man 2 flock), so a fresh
+        open() + LOCK_EX here correctly blocks both other threads in this
+        process and other processes holding a separate fd on the same lock
+        file -- unlike a plain threading.Lock, which only protects
+        same-process callers (and wouldn't catch two overlapping
+        `missy vault set` CLI invocations).
+        """
+        fd = os.open(str(self._lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
 
     def _load_or_create_key(self) -> bytes:
         # Try atomic exclusive create first to avoid TOCTOU race.
@@ -137,9 +165,10 @@ class Vault:
 
     def set(self, key: str, value: str) -> None:
         """Store an encrypted secret."""
-        store = self._load_store()
-        store[key] = value
-        self._save_store(store)
+        with self._locked():
+            store = self._load_store()
+            store[key] = value
+            self._save_store(store)
 
     def get(self, key: str) -> str | None:
         """Retrieve a secret; returns None if not found."""
@@ -148,12 +177,13 @@ class Vault:
 
     def delete(self, key: str) -> bool:
         """Delete a secret. Returns True if it existed."""
-        store = self._load_store()
-        if key in store:
-            del store[key]
-            self._save_store(store)
-            return True
-        return False
+        with self._locked():
+            store = self._load_store()
+            if key in store:
+                del store[key]
+                self._save_store(store)
+                return True
+            return False
 
     def list_keys(self) -> list[str]:
         """Return all stored key names (not values)."""

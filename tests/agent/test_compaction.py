@@ -90,6 +90,48 @@ class TestCompactSession:
         # Second pass should find nothing new to summarize
         assert stats2["leaf_summaries_created"] == 0
 
+    def test_second_pass_continuity_uses_most_recent_prior_summary(
+        self, memory_store, summarizer
+    ):
+        """Regression: the second (and every later) compaction pass must pass
+        the MOST RECENTLY created leaf summary as continuity context, not the
+        oldest one.
+
+        get_summaries(depth=0, limit=1) orders ascending by created_at (no
+        DESC), so it always returned the single oldest summary -- silently
+        re-anchoring every pass on a long-lived session to the very first
+        summary ever created instead of the most recent one.
+        """
+        summarizer.summarize_turns = MagicMock(
+            side_effect=lambda chunk, prior_summary="": (
+                f"summary starting at turn index {chunk[0].content.split(':')[0]}",
+                "haiku",
+            )
+        )
+
+        _add_turns(memory_store, "sess1", 30, content_size=200)
+        compact_session(
+            "sess1", memory_store, summarizer, fresh_tail_count=16, leaf_chunk_tokens=500
+        )
+        first_pass_summaries = memory_store.get_summaries("sess1", depth=0, limit=10_000)
+        assert len(first_pass_summaries) >= 2  # need >=2 chunks to distinguish oldest vs newest
+        most_recent_after_pass_1 = first_pass_summaries[-1].content
+        oldest_after_pass_1 = first_pass_summaries[0].content
+        assert most_recent_after_pass_1 != oldest_after_pass_1
+        calls_in_pass_1 = len(summarizer.summarize_turns.call_args_list)
+
+        _add_turns(memory_store, "sess1", 30, content_size=200)
+        compact_session(
+            "sess1", memory_store, summarizer, fresh_tail_count=16, leaf_chunk_tokens=500
+        )
+
+        # The first NEW chunk processed in pass 2 (i.e. the call right after
+        # all of pass 1's calls) must have received the most recently created
+        # leaf summary from pass 1 as prior_summary -- not the oldest one.
+        pass_2_first_call = summarizer.summarize_turns.call_args_list[calls_in_pass_1]
+        assert pass_2_first_call.kwargs["prior_summary"] == most_recent_after_pass_1
+        assert pass_2_first_call.kwargs["prior_summary"] != oldest_after_pass_1
+
     def test_condensation_triggers_at_fanout(self, memory_store, summarizer):
         # Add enough turns to create >= 4 leaf summaries
         _add_turns(memory_store, "sess1", 100, content_size=2000)

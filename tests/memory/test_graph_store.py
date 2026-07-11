@@ -765,6 +765,53 @@ class TestMergeEntities:
         # Should not raise
         store.merge_entities("ent_fake_1", "ent_fake_2")
 
+    def test_merge_with_duplicate_outbound_relationship_does_not_raise(
+        self, store: GraphMemoryStore
+    ):
+        """Regression: merging two entities that both already relate to the
+        same third entity via the same relation_type must not crash.
+
+        relationships has UNIQUE(source_id, target_id, relation_type). A
+        plain UPDATE reassigning merge_id's rows to keep_id previously
+        collided with an equivalent row keep_id already had, raising an
+        unhandled sqlite3.IntegrityError -- exactly the documented use case
+        (merging two spellings of the same entity, e.g. a file path,
+        discovered relating to the same target).
+        """
+        keep_id = store.add_entity(Entity.new("keep_ent", "concept"))
+        merge_id = store.add_entity(Entity.new("merge_ent", "concept"))
+        third_id = store.add_entity(Entity.new("third_ent", "concept"))
+
+        store.add_relationship(Relationship.new(keep_id, third_id, "related_to"))
+        store.add_relationship(Relationship.new(merge_id, third_id, "related_to"))
+
+        # Must not raise sqlite3.IntegrityError.
+        store.merge_entities(keep_id, merge_id)
+
+        rels = store.get_relationships(keep_id, direction="outbound")
+        matching = [r for r in rels if r.target_id == third_id and r.relation_type == "related_to"]
+        assert len(matching) == 1  # the duplicate was dropped, not left dangling
+        assert store.get_entity(merge_id) is None  # merge succeeded fully
+
+    def test_merge_with_duplicate_inbound_relationship_does_not_raise(
+        self, store: GraphMemoryStore
+    ):
+        """Same collision, but on the target_id side (both entities are the
+        target of an equivalent relationship from the same source)."""
+        keep_id = store.add_entity(Entity.new("keep_ent", "concept"))
+        merge_id = store.add_entity(Entity.new("merge_ent", "concept"))
+        third_id = store.add_entity(Entity.new("third_ent", "concept"))
+
+        store.add_relationship(Relationship.new(third_id, keep_id, "related_to"))
+        store.add_relationship(Relationship.new(third_id, merge_id, "related_to"))
+
+        store.merge_entities(keep_id, merge_id)
+
+        rels = store.get_relationships(keep_id, direction="inbound")
+        matching = [r for r in rels if r.source_id == third_id and r.relation_type == "related_to"]
+        assert len(matching) == 1
+        assert store.get_entity(merge_id) is None
+
 
 # ---------------------------------------------------------------------------
 # GraphMemoryStore — stats

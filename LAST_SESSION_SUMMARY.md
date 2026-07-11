@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (69 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eighteen consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (70 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eighteen consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -2733,14 +2733,51 @@ on close reading — the bug was entirely the missing call site.
 Verified: `pytest tests/api/ tests/cli/ tests/channels/ tests/core/
 -q`: `3553 passed`.
 
+### Post-backlog (sixty-third checkpoint): round 3 research pass — compaction continuity bug, graph-merge crash, severe Vault data loss
+
+Round 3 (round 1: Scheduler/Persona; round 2: API/MessageBus/
+Screencast), into `missy/memory/`, `missy/agent/compaction.py`,
+`missy/security/vault.py`/`landlock.py`/`scanner.py`, voice-channel
+concurrency, and checkpoint/watchdog. Three genuine findings, plus
+several leads correctly ruled out after investigation (Landlock
+syscall numbers, condensers' unreachable pairing-breaking paths,
+CheckpointManager's WAL mode holding up fine under real stress).
+
+1. **Compaction continuity bug**: `get_summaries(depth=0, limit=1)`
+   ordered ascending, always returning the oldest summary despite the
+   code's own comment claiming "most recent." Every compaction pass on
+   a long session re-anchored to the very first summary forever — this
+   runs in production after every tool round. Live-reproduced, fixed
+   by reusing an already-fetched list instead of a second, differently
+   broken query. 1 new test, confirmed to fail pre-fix.
+2. **Graph-merge crash**: `GraphMemoryStore.merge_entities()` raised
+   `sqlite3.IntegrityError` on exactly the scenario its own docs
+   describe as its purpose (merging two entities that share a
+   relationship to the same target). Currently has zero production
+   callers, but a latent crash on a documented, live-in-production
+   class. Fixed by deleting the redundant row before reassignment. 2
+   new tests, both confirmed to fail pre-fix.
+3. **Vault concurrent-write data loss** (most severe): 30 threads
+   calling `set()` concurrently left only 1 of 30 keys surviving, zero
+   exceptions raised — a silent secret-loss bug. Existing tests had
+   already anticipated *some* loss and didn't catch the true severity.
+   Fixed with a `flock()`-based lock (correctly serializes both
+   threads and separate processes). Strengthened both existing tests
+   to assert all keys survive; both confirmed to fail pre-fix.
+
+Verified: `pytest tests/security/ tests/memory/
+tests/agent/test_compaction.py tests/agent/test_compaction_extended.py
+tests/agent/test_compaction_context_edges.py -q`: `2716 passed, 7
+skipped`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-21255 passed, 13 skipped, 1 warning in 605.13s (0:10:05)
+21258 passed, 13 skipped in 611.87s (0:10:11)
 ```
 
-**Zero failures**, the twentieth consecutive fully green full-suite
+**Zero failures**, the twenty-first consecutive fully green full-suite
 run. Passed count is up from 21191 to 21212 (the DISC-CMD-008
 rate-limiting checkpoint: 10 standalone unit tests, 9 real
 dispatch-path integration tests, 3 config-parsing tests) to 21213 (the
@@ -2756,10 +2793,12 @@ documentation deliverable) to 21248 (the scheduler pause/retry fix's 3
 new tests, the persona type-validation fix's 6 new tests, and the
 persona rollback permissions fix's 1 new test) to 21255 (the
 MessageBus wiring fix's 2 new tests, the API N+1-query fix's 1 new
-test, and the screencast session-pruning fix's 4 new tests — the
-eighteenth green run's `ProviderRegistry` fix, and all of the
-sixty-first checkpoint's scheduler/persona fixes, are confirmed still
-holding).
+test, and the screencast session-pruning fix's 4 new tests) to 21258
+(the compaction continuity fix's 1 new test, the graph-merge crash
+fix's 2 new tests, and the Vault concurrent-write fix's 0 net new
+tests but 2 existing tests strengthened — the eighteenth green run's
+`ProviderRegistry` fix, and all of the sixty-first/sixty-second
+checkpoints' fixes, are confirmed still holding).
 The occasional Hypothesis deprecation warnings seen in some runs of
 this suite (`test_property_based_fuzz.py` and/or
 `test_policy_property.py`, depending on test ordering — this run shows
