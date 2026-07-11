@@ -1496,7 +1496,12 @@ class IncusDeviceTool(_IncusHostCommandMixin, BaseTool):
                 error=f"Invalid action '{action}'. Must be one of: {', '.join(sorted(valid))}",
             )
         if action == "list":
-            args = ["config", "device", "list", instance, "--format", "json"]
+            # `incus config device list` has no --format flag (unlike most
+            # other incus subcommands) -- it always prints one device name
+            # per line as plain text. Passing --format json here made
+            # every "list" call fail with "Error: unknown flag: --format",
+            # found via live validation against a real Incus instance.
+            args = ["config", "device", "list", instance]
         elif action == "show":
             if not device_name:
                 return ToolResult(

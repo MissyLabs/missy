@@ -703,9 +703,20 @@ class TestIncusDeviceTool:
 
     @patch("missy.tools.builtin.incus_tools.subprocess.run")
     def test_list(self, mock_run: MagicMock) -> None:
-        mock_run.return_value = _json_proc({})
+        # `incus config device list` has no --format flag (unlike most
+        # other incus subcommands) and always prints plain text, one
+        # device name per line -- found via live validation against a
+        # real Incus instance (task #10): the tool previously requested
+        # `--format json`, which `incus` rejects with "Error: unknown
+        # flag: --format" on every real call. Mocking a JSON response
+        # here would have masked that bug forever, so this asserts the
+        # real argv instead of just the mocked return value.
+        mock_run.return_value = _make_proc(stdout="eth0\n")
         result = self.tool.execute(instance="test", action="list")
         assert result.success
+        cmd = mock_run.call_args[0][0]
+        assert cmd == ["incus", "config", "device", "list", "test"]
+        assert "--format" not in cmd
 
     @patch("missy.tools.builtin.incus_tools.subprocess.run")
     def test_add_gpu(self, mock_run: MagicMock) -> None:

@@ -1,6 +1,6 @@
 # Build Status
 
-Last updated: 2026-07-11 20:20 UTC
+Last updated: 2026-07-11 21:00 UTC
 
 ## Current Workstream: Validation-Harness Overhaul
 
@@ -3046,6 +3046,76 @@ unchanged (`21180 passed, 13 skipped`, no source files modified).
 Case count: 62 of 89 run (56 full + 4 partial/mixed + 1 inconclusive
 + 1 counted-via-overlap). ~27 remain.
 
+### Task #10 continued (forty-eighth checkpoint): full real Incus container lifecycle verified end-to-end, one real bug found and fixed
+
+Since Incus is genuinely installed on this host, verified the entire
+remaining `INCUS-*` lifecycle directly against a real, disposable
+Alpine container (`agent-test-001`) through the real `ToolRegistry`
+with a scoped `shell.allowed_commands: ["incus"]` policy — the same
+"verify the real tool chain directly" strategy already applied to
+`WB-*`. Every step used the real `incus` binary against a genuine
+container, not a mock.
+
+**INCUS-002** (launch): created a real, running container from
+`images:alpine/3.24`, confirmed via `incus list`. **INCUS-003**
+(exec): ran a real command inside it, got the exact expected output.
+**INCUS-004** (file transfer): pushed a real file in, pulled it back
+out, confirmed byte-for-byte content match. **INCUS-005** (snapshot
+lifecycle): create/list/delete all succeeded, list correctly showed
+the snapshot before deletion. **INCUS-006** (instance lifecycle):
+stop/start/restart all succeeded against the real container.
+
+**INCUS-015 (device lifecycle) found and fixed a real bug.** The
+"list" action of `IncusDeviceTool` always failed with `"Error: unknown
+flag: --format"` — `incus config device list` (unlike most other
+`incus` subcommands) does not support `--format json` at all, confirmed
+against the real `incus config device list --help`. **Root cause of
+non-detection**: the existing test (`test_list` in
+`tests/tools/test_incus_tools.py`) mocked `subprocess.run` and never
+asserted the actual constructed argv — it only checked
+`result.success` against a fabricated JSON response, so the invalid
+flag went completely undetected. This matches this session's
+repeatedly-found "mock masks reality" pattern (SR-3.2 and others).
+Fixed by removing the invalid flag (`missy/tools/builtin/incus_tools.py`);
+the command now correctly returns plain text (one device name per
+line), which `_run_incus()` already handles correctly since it only
+attempts JSON parsing when the output actually starts with `{`/`[`.
+Verified live against the real container: add → list → remove →
+list-after-remove all correct. Updated the test to assert the real
+argv (confirming `--format` is absent) with a plain-text mocked
+response instead of a fabricated JSON one.
+
+**INCUS-016** (copy instance): `incus_copy_move` correctly copied
+`agent-test-001` to `agent-test-copy`; `incus_list` confirmed both
+instances existed with correct independent state (original still
+`Running`, copy `Stopped` as expected for a copy of a running
+instance). **INCUS-017** (cleanup instance): `incus_instance_action`
+delete correctly removed both instances; `incus list` confirmed fully
+empty afterward, matching the pre-test state exactly (only the
+pre-existing cached Alpine image remains).
+
+**INCUS-008** (safe config key): on a second disposable container,
+verified `incus_config` set/get/unset all correct — set a harmless
+`user.test-metadata` key, confirmed via `get`, unset it, confirmed
+removal via a second `get`. Cleaned up (deleted the container).
+
+This closes out the entire `INCUS-*` series (17 of 17 cases now have
+real evidence).
+
+Verified: `pytest tests/tools/test_incus_tools.py
+tests/tools/test_incus_tools_extended.py
+tests/tools/test_incus_coverage_gaps.py
+tests/tools/test_incus_tools_coverage.py
+tests/unit/test_incus_tools_coverage_gaps.py -q`: 331 passed (test
+corrected, no regressions). `pytest tests/tools/ -q`: 1523 passed, 2
+skipped. Full suite: `21180 passed, 13 skipped in 542.54s (0:09:02)` —
+0 failed, unchanged count (an existing test was corrected in place,
+not added). Ninth consecutive fully green full-suite run. Zero
+regressions.
+
+Case count: 70 of 89 run (64 full + 4 partial/mixed + 1 inconclusive
++ 1 counted-via-overlap). ~19 remain.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security
@@ -3088,41 +3158,46 @@ limitation — fixed, live-verified through the real production dispatch
 path). Current remaining priority order:
 
 1. Full 89-case tool-specific validation backlog (FS-001-DISC-CMD-008)
-   -- in progress (task #10): 62 of 89 cases run (56 full + 4
+   -- in progress (task #10): 70 of 89 cases run (64 full + 4
    partial/mixed + 1 inconclusive + 1 counted-via-overlap) across
    FS/SH/WB/INCUS/VIS/AUD/MEM/SELF/AT/X11/SEC-SCOPE/SEC-PI/DISC-CMD/DU
-   categories -- the entire `WB-*` series is now closed out (see the
-   forty-seventh checkpoint above). Results so far: 2 genuine full
-   delegate successes
-   (FS-004, INCUS-011 -- the latter also exercising `DoneCriteria`'s
-   real reject/retry loop), 2 genuine partial/mixed delegate successes
-   (INCUS-009 honest-partial, VIS-002's confirmed real `vision_devices`
-   dispatch), 8 safety-property passes (FS-005, SH-004, SH-005,
-   SEC-SCOPE-001 through 005), 10 verified via direct production-code
-   execution rather than the delegate (DISC-CMD-001/002/003/007/008,
-   MEM-002, MEM-003, DU-003, SELF-003, SELF-005 -- DU-003 closed a real
-   SR-1.4/SR-1.5-pattern registry-enforcement gap with 3 new tests;
-   SELF-003 caught and cleaned up a real side effect in the operator's
-   own `~/.missy/custom-tools/` directory during verification;
-   DISC-CMD-008 surfaced a real, moderate, non-urgent gap -- no
-   dedicated per-user rate limiting on incoming Discord commands, only
-   the overall `CostTracker` budget cap as a backstop; DISC-CMD-003
-   verified attachment validation correctly rejects spoofed hosts,
-   disguised executables, oversized files, and MIME/extension
-   mismatches), 1 fail that surfaced task #47 (delegate fabrication), 1
-   deliberately inconclusive case (DU-001 -- stopped short of forcing a
-   real post to a live, operator-configured Discord channel), 1 case
-   counted via overlap with an already-run equivalent (SELF-006 ~
-   SEC-SCOPE-005), remainder safe fails matching task #46's residual
-   (including several more notable-but-non-reproducible
-   wrong-rationalization variants -- see the forty-fifth/forty-sixth
-   checkpoints above). Three real (non-security) observations noted,
-   all out of scope to fix now: `~/.missy/config.yaml`'s
-   `shell.unrestricted: true` is a silently-ignored unrecognized key,
-   dead since SR-1.8's fix; Missy's `InputSanitizer` flagged the
-   operator's own benign prompt text as a false-positive injection
-   match (fails open correctly); no per-user Discord command rate
-   limiting exists. ~27 cases remain. Operator explicitly confirmed
+   categories -- the entire `WB-*` and `INCUS-*` series are now closed
+   out (see the forty-seventh/forty-eighth checkpoints above). Results
+   so far: 2 genuine full delegate successes (FS-004, INCUS-011 -- the
+   latter also exercising `DoneCriteria`'s real reject/retry loop), 2
+   genuine partial/mixed delegate successes (INCUS-009 honest-partial,
+   VIS-002's confirmed real `vision_devices` dispatch), 8
+   safety-property passes (FS-005, SH-004, SH-005, SEC-SCOPE-001
+   through 005), 18 verified via direct production-code execution
+   rather than the delegate (DISC-CMD-001/002/003/007/008, MEM-002,
+   MEM-003, DU-003, SELF-003, SELF-005, plus a full real Incus
+   container lifecycle: INCUS-002/003/004/005/006/008/015/016/017 --
+   DU-003 closed a real SR-1.4/SR-1.5-pattern registry-enforcement gap
+   with 3 new tests; SELF-003 caught and cleaned up a real side effect
+   in the operator's own `~/.missy/custom-tools/` directory; INCUS-015
+   found and fixed a real bug (`IncusDeviceTool`'s "list" action always
+   failed -- `incus config device list` doesn't support `--format
+   json`, unlike most other `incus` subcommands -- the existing test
+   mocked `subprocess.run` without ever asserting the real argv, so the
+   bug went undetected; fixed and the test corrected); DISC-CMD-008
+   surfaced a real, moderate, non-urgent gap -- no dedicated per-user
+   rate limiting on incoming Discord commands; DISC-CMD-003 verified
+   attachment validation correctly rejects spoofed hosts, disguised
+   executables, oversized files, and MIME/extension mismatches), 1 fail
+   that surfaced task #47 (delegate fabrication), 1 deliberately
+   inconclusive case (DU-001 -- stopped short of forcing a real post to
+   a live, operator-configured Discord channel), 1 case counted via
+   overlap with an already-run equivalent (SELF-006 ~ SEC-SCOPE-005),
+   remainder safe fails matching task #46's residual (including several
+   more notable-but-non-reproducible wrong-rationalization variants --
+   see the forty-fifth/forty-sixth checkpoints above). Three real
+   (non-security) observations noted, all out of scope to fix further
+   right now: `~/.missy/config.yaml`'s `shell.unrestricted: true` is a
+   silently-ignored unrecognized key, dead since SR-1.8's fix; Missy's
+   `InputSanitizer` flagged the operator's own benign prompt text as a
+   false-positive injection match (fails open correctly); no per-user
+   Discord command rate limiting exists. ~19 cases remain. Operator
+   explicitly confirmed
    (via AskUserQuestion after 5 straight fails) to keep running cases
    one-by-one despite the strength of the failure pattern -- continue
    on that basis; expect and record task #46 (safe failures) and task

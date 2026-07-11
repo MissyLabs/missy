@@ -1,5 +1,82 @@
 # TEST_RESULTS
 
+## Run: 2026-07-11 21:00 UTC — validation-harness overhaul, task #10 continued (8 more cases, 70/89 total, entire INCUS-* series closed, real bug fixed)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Context: Stop-hook re-invocation flagged task #10 as still
+  substantially incomplete. Since Incus is genuinely installed,
+  verified the entire remaining `INCUS-*` lifecycle directly against a
+  real, disposable Alpine container through the real `ToolRegistry`
+  with a scoped `shell.allowed_commands: ["incus"]` policy -- same
+  strategy already applied to `WB-*`. Every step used the real `incus`
+  binary against a genuine container, not a mock.
+- Direct dispatch verification, INCUS-002: `incus_launch` created a
+  real, running `agent-test-001` container from `images:alpine/3.24`,
+  confirmed via `incus list`.
+- Direct dispatch verification, INCUS-003: `incus_exec` ran `echo
+  hello-from-container` inside the real container, got the exact
+  expected output.
+- Direct dispatch verification, INCUS-004: `incus_file` push+pull
+  round-tripped a real file; pulled content byte-for-byte matched the
+  original.
+- Direct dispatch verification, INCUS-005: `incus_snapshot`
+  create/list/delete all succeeded against the real container; list
+  correctly showed the created snapshot before deletion.
+- Direct dispatch verification, INCUS-006: `incus_instance_action`
+  stop/start/restart all succeeded against the real container.
+- Direct dispatch verification, INCUS-015, **found and fixed a real
+  bug**: `IncusDeviceTool`'s "list" action always failed with `"Error:
+  unknown flag: --format"`. Confirmed against the real `incus config
+  device list --help`: unlike most other `incus` subcommands, this one
+  does not support `--format json` at all -- it always prints plain
+  text, one device name per line. **Root cause of non-detection**: the
+  existing test (`test_list` in `tests/tools/test_incus_tools.py`)
+  mocked `subprocess.run` and never asserted the actual constructed
+  argv, only `result.success` against a fabricated JSON response --
+  matches this session's repeatedly-found "mock masks reality" pattern
+  (SR-3.2 and others).
+- Fix: `missy/tools/builtin/incus_tools.py` -- removed the invalid
+  `--format json` flag from `IncusDeviceTool.execute()`'s "list"
+  action construction. `_run_incus()` already handles plain-text
+  output correctly (it only attempts JSON parsing when output starts
+  with `{`/`[`), so no other change was needed.
+- Live re-verification against the real container: add → list →
+  remove → list-after-remove all correct post-fix.
+  `tests/tools/test_incus_tools.py::TestIncusDeviceTool::test_list`
+  updated to assert the real argv (confirming `--format` is absent)
+  with a plain-text mocked response instead of a fabricated JSON one.
+- Command: `pytest tests/tools/test_incus_tools.py
+  tests/tools/test_incus_tools_extended.py
+  tests/tools/test_incus_coverage_gaps.py
+  tests/tools/test_incus_tools_coverage.py
+  tests/unit/test_incus_tools_coverage_gaps.py -q`
+- Result: `331 passed` (test corrected, no regressions).
+- Direct dispatch verification, INCUS-016: `incus_copy_move` correctly
+  copied `agent-test-001` to `agent-test-copy`; `incus_list` confirmed
+  both instances existed with correct independent state (original
+  still `Running`, copy `Stopped` as expected for a copy of a running
+  instance).
+- Direct dispatch verification, INCUS-017: `incus_instance_action`
+  delete correctly removed both instances; `incus list` confirmed
+  fully empty afterward, matching the pre-test state exactly (only the
+  pre-existing cached Alpine image remains).
+- Direct dispatch verification, INCUS-008 (on a second disposable
+  container): `incus_config` set/get/unset all correct -- set a
+  harmless `user.test-metadata` key, confirmed via `get`, unset it,
+  confirmed removal via a second `get`. Cleaned up (deleted the
+  container).
+- This closes out the entire `INCUS-*` series (17 of 17 cases now have
+  real evidence).
+- Command: `pytest tests/tools/ -q`
+- Result: `1523 passed, 2 skipped`.
+- Command: `pytest tests/ -q -o faulthandler_timeout=120`
+- Result: `21180 passed, 13 skipped in 542.54s (0:09:02)` — 0 failed,
+  unchanged count from the prior checkpoint (an existing test was
+  corrected in place, not added). Ninth consecutive fully green
+  full-suite run. Zero regressions.
+- Case count: 70 of 89 run (64 full + 4 partial/mixed + 1 inconclusive
+  + 1 counted-via-overlap). ~19 remain.
+
 ## Run: 2026-07-11 20:20 UTC — validation-harness overhaul, task #10 continued (5 more cases, 62/89 total, entire WB-* series closed)
 
 - Branch: `overhaul/missy-validation-20260710-031406`

@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (53 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eight consecutive checkpoints)
+## Changed (54 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for nine consecutive checkpoints)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -2113,14 +2113,51 @@ No code changes this checkpoint. Full suite unchanged (`21180 passed,
 Case count: 62 of 89 run (56 full + 4 partial/mixed + 1 inconclusive
 + 1 counted-via-overlap). ~27 remain.
 
+### Task #10 continued (forty-eighth checkpoint): full real Incus container lifecycle verified end-to-end, one real bug found and fixed
+
+Since Incus is genuinely installed, verified the entire remaining
+`INCUS-*` lifecycle directly against a real, disposable Alpine
+container through the real `ToolRegistry` — same strategy as `WB-*`.
+**INCUS-002/003/004/005/006**: launch, exec, file push/pull, snapshot
+create/list/delete, and instance stop/start/restart all succeeded
+against a genuine running container, with results verified against
+real command output (exact echo text, byte-for-byte file round-trip,
+snapshot list contents).
+
+**INCUS-015 found and fixed a real bug**: `IncusDeviceTool`'s "list"
+action always failed with `"Error: unknown flag: --format"` —
+`incus config device list` (unlike most other `incus` subcommands)
+doesn't support `--format json` at all. Root cause of non-detection:
+the existing test mocked `subprocess.run` and never asserted the real
+argv, only checking `result.success` against a fabricated JSON
+response — the same "mock masks reality" pattern found repeatedly this
+session (SR-3.2 and others). Fixed by removing the invalid flag;
+verified live against the real container (add/list/remove/list-after)
+and corrected the test to assert the real argv.
+
+**INCUS-016/017**: copy correctly produced an independent second
+instance with correct state; cleanup correctly removed both, confirmed
+via `incus list` returning to the exact pre-test empty state.
+**INCUS-008** (on a second disposable container): config set/get/unset
+all correct.
+
+This closes out the entire `INCUS-*` series (17 of 17 cases).
+
+Verified: `pytest tests/tools/test_incus_tools.py` (+4 related files)
+`-q`: 331 passed (test corrected, no regressions). `pytest
+tests/tools/ -q`: 1523 passed, 2 skipped.
+
+Case count: 70 of 89 run (64 full + 4 partial/mixed + 1 inconclusive
++ 1 counted-via-overlap). ~19 remain.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-21180 passed, 13 skipped in 565.02s (0:09:25)
+21180 passed, 13 skipped in 542.54s (0:09:02)
 ```
 
-**Zero failures**, the eighth consecutive fully green full-suite run.
+**Zero failures**, the ninth consecutive fully green full-suite run.
 Passed count is up from 21071 (SR-1.9b's run) to 21115
 (availability-hardening checkpoint) to 21118 (the acpx `--deny-all`
 critical-finding checkpoint) to 21125 (the native-tool denial retry
@@ -2129,8 +2166,9 @@ green run) to 21145 (the Discord pairing endpoint) to 21156
 (`allowed_roles` enforcement) to 21170 (the acpx process-group-kill
 fix) to 21174 (the Firefox pref-type fix) to 21175 (the envelope
 rule-7 addition) to 21177 (the Discord command-parsing regression
-tests) to 21180 (this checkpoint's 3 net-new registry-enforcement
-tests for `discord_upload_file`). Zero regressions from this
+tests) to 21180 (the `discord_upload_file` registry-enforcement tests,
+unchanged since — this checkpoint corrected an existing Incus test in
+place rather than adding a new one). Zero regressions from this
 checkpoint or any prior one this session. **The security review's
 entire numbered SR-x.y list and its one remaining unnumbered "harden
 secondary availability hazards" bullet are both fully closed — the
@@ -2285,10 +2323,13 @@ three files above.)
   false positives on genuinely fine no-tool-needed answers. See the
   fortieth checkpoint above.
 - **#10** Full 89-case tool-specific validation backlog — in progress,
-  62 of 89 run so far (56 full + 4 partial/mixed + 1 inconclusive + 1
+  70 of 89 run so far (64 full + 4 partial/mixed + 1 inconclusive + 1
   counted-via-overlap) across FS/SH/WB/INCUS/VIS/AUD/MEM/SELF/AT/X11/
-  SEC-SCOPE/SEC-PI/DISC-CMD/DU categories -- the entire `WB-*` series
-  is now closed out. Results: 2 genuine full
+  SEC-SCOPE/SEC-PI/DISC-CMD/DU categories -- the entire `WB-*` and
+  `INCUS-*` series are now closed out (INCUS-015 found and fixed a
+  real bug: `IncusDeviceTool`'s "list" action used an unsupported
+  `--format` flag, masked by a test that mocked `subprocess.run`
+  without asserting the real argv). Results: 2 genuine full
   delegate successes (FS-004, INCUS-011 — the latter also exercising
   `DoneCriteria`'s real reject/retry loop for the first time), 2
   genuine partial/mixed delegate successes (INCUS-009's honest-partial
@@ -2316,14 +2357,14 @@ three files above.)
   notable-but-non-reproducible wrong-rationalization variants).
   Operator explicitly chose to keep running cases one-by-one despite
   the strength of the failure pattern (asked via AskUserQuestion after
-  5 straight fails) — continuing on that basis. ~27 cases remain.
+  5 straight fails) — continuing on that basis. ~19 cases remain.
   Working principle: prefer direct production-code verification over a
   live delegate call whenever a case tests Missy's own deterministic
   code rather than LLM decision-making — cheaper, more reliable, and
-  has already found real gaps (DU-003, DISC-CMD-008, DISC-CMD-003
-  confirmed correct) and one real self-inflicted side effect to watch
-  for (SELF-003). Treat any case with genuine external-service side
-  effects (real Discord posts, real cloud state changes) with the same
+  has already found real gaps (DU-003, DISC-CMD-008, INCUS-015) and
+  one real self-inflicted side effect to watch for (SELF-003). Treat
+  any case with genuine external-service side effects (real Discord
+  posts, real cloud state changes) with the same
   care as any other risky action.
 - **#11 (fixed this checkpoint)** Pre-existing vision `CameraDiscovery`
   cache-TTL flake — two root causes found and fixed (a real `None`-vs-`[]`
