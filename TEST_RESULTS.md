@@ -1,5 +1,41 @@
 # TEST_RESULTS
 
+## Run: 2026-07-12 00:20 UTC — validation-harness overhaul, task #10 continued (3 more cases, 77/89 total, entire AUD-* series closed, no bug found — pure re-confirmation)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Context: verified the remaining `AUD-*` cases directly rather than
+  via live Discord, since actually joining a real voice channel would
+  repeat a disruptive, audible real-world action the original
+  historical harness run already exercised (and fixed two real regex
+  bugs for, confirmed still present and correct on current code).
+- AUD-003 (text to speech): invoked the real Piper TTS subprocess
+  directly -- `PiperTTS(voice="en_US-lessac-medium").synthesize(...)`
+  produced a real 120,992-byte WAV file with a genuine RIFF header and
+  a real computed duration (2743ms). Fully genuine, non-mocked
+  synthesis.
+- AUD-004 (Discord voice status, join portion) / AUD-005 (Discord
+  voice say and leave): verified `parse_voice_intent()` directly --
+  "join the General voice channel" (with/without trailing punctuation,
+  politeness-stripped) correctly parses to
+  `VoiceIntent(action="join", channel_name="General")`; "say hello
+  everyone in voice" / "tell voice channel the weather is nice today"
+  correctly parse to `VoiceIntent(action="say", speech=...)`; "leave
+  the voice channel" / "leave voice" / "disconnect from the voice
+  channel" all correctly parse to `VoiceIntent(action="leave")`. All
+  match the two historical bug fixes (trailing-comma capture,
+  trailing-punctuation tolerance) already applied to
+  `voice_commands.py`. AUD-004's status-query half has no fast-path
+  parser and falls to the LLM path, gated by task #46's
+  already-documented residual -- not re-tested live for the reason
+  above.
+- This closes out the entire `AUD-*` series (5 of 5 cases).
+- No code changes this checkpoint (pure re-verification, no bug
+  found). No new test run needed -- `test_voice_commands.py`'s
+  existing 43 tests already cover this parser and were unaffected.
+- Case count: 77 of 89 run (70 full + 5 partial/mixed + 1 inconclusive
+  + 1 counted-via-overlap). ~12 remain: `XT-001/003/004/005/006`,
+  `SEC-PI-004`, `DISC-CMD-004/005/006`.
+
 ## Run: 2026-07-11 23:50 UTC — validation-harness overhaul, task #10 continued (2 more cases, 74/89 total, entire VIS-* series closed, a real test-isolation bug found and fixed)
 
 - Branch: `overhaul/missy-validation-20260710-031406`

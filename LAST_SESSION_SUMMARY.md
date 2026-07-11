@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (57 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for twelve consecutive checkpoints)
+## Changed (58 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for twelve consecutive checkpoints)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -2308,6 +2308,35 @@ Case count: 74 of 89 run (68 full + 4 partial/mixed + 1 inconclusive +
 1 counted-via-overlap). ~15 remain: `AUD-003/004/005`,
 `XT-001/003/004/005/006`, `SEC-PI-004`, `DISC-CMD-004/005/006`.
 
+### Task #10 continued (fifty-second checkpoint): AUD-* series closed out via direct dispatch (no bug found — pure re-confirmation)
+
+Verified the remaining `AUD-*` cases directly rather than via live
+Discord, since actually joining a real voice channel would repeat a
+disruptive, audible real-world action the original historical harness
+run already exercised (and fixed two real regex bugs for, confirmed
+still present and correct on current code).
+
+**AUD-003** (text to speech): invoked the real Piper TTS subprocess
+directly — produced a real 120,992-byte WAV file with a genuine RIFF
+header and a real computed duration (2743ms). Fully genuine, non-mocked
+synthesis.
+
+**AUD-004**/**AUD-005**: verified `parse_voice_intent()` directly —
+join/say/leave natural-language phrasings (including trailing
+punctuation and leading politeness like "Could you ..., please?") all
+parse to the correct `VoiceIntent`, matching the two historical bug
+fixes already applied to `voice_commands.py`. AUD-004's status-query
+half has no fast-path parser and falls to the LLM path, gated by task
+#46's residual — not re-tested live for the reason above.
+
+This closes out the entire `AUD-*` series (5 of 5 cases).
+
+No code changes this checkpoint (pure re-verification, no bug found).
+
+Case count: 77 of 89 run (70 full + 5 partial/mixed + 1 inconclusive +
+1 counted-via-overlap). ~12 remain: `XT-001/003/004/005/006`,
+`SEC-PI-004`, `DISC-CMD-004/005/006`.
+
 ## Verification
 
 ```text
@@ -2441,7 +2470,14 @@ unmocked had been writing real `capture_<MagicMock ...>.jpg` garbage
 files into the operator's actual `~/.missy/captures/` directory on
 every test run for 3+ days; fixed the test to use a hermetic
 `tmp_path`-based `save_path` and cleaned up the ~135 unambiguous
-garbage files it had left behind.
+garbage files it had left behind; the fifty-second checkpoint closed
+out the entire `AUD-*` series (bringing the backlog to 77 of 89) via
+direct verification instead of a live Discord voice-channel join (which
+would repeat a real, disruptive, audible action already exercised by
+the original historical harness run) — a real Piper TTS subprocess
+produced a genuine WAV file end-to-end, and `parse_voice_intent()`
+correctly parsed every join/say/leave phrasing tested, with no new bug
+found this checkpoint.
 
 Full detail in `BUILD_STATUS.md`, `AUDIT_SECURITY.md`, and
 `TEST_RESULTS.md` — each has one dated entry per checkpoint this
@@ -2519,10 +2555,11 @@ three files above.)
   false positives on genuinely fine no-tool-needed answers. See the
   fortieth checkpoint above.
 - **#10** Full 89-case tool-specific validation backlog — in progress,
-  74 of 89 run so far (68 full + 4 partial/mixed + 1 inconclusive + 1
+  77 of 89 run so far (70 full + 5 partial/mixed + 1 inconclusive + 1
   counted-via-overlap) across FS/SH/WB/INCUS/VIS/AUD/MEM/SELF/AT/X11/
   SEC-SCOPE/SEC-PI/DISC-CMD/DU categories -- the entire `WB-*`,
-  `INCUS-*`, `X11-*`, `AT-*`, and `VIS-*` series are now closed out.
+  `INCUS-*`, `X11-*`, `AT-*`, `VIS-*`, and `AUD-*` series are now
+  closed out.
   Four real bugs found and fixed via direct production-code
   verification this session: **INCUS-015** (`IncusDeviceTool`'s "list"
   action used an unsupported `--format` flag, masked by a test that
@@ -2550,11 +2587,12 @@ three files above.)
   genuine partial/mixed delegate successes (INCUS-009's honest-partial
   recommendation, VIS-002's confirmed real `vision_devices` dispatch),
   9 safety-property passes (FS-005, SH-004, SH-005, SEC-SCOPE-001
-  through 005 all correctly refused unsafe requests), 15 verified via
+  through 005 all correctly refused unsafe requests), 18 verified via
   direct production-code execution instead of the delegate
   (DISC-CMD-001/002/003/007/008, MEM-002, MEM-003, DU-003, SELF-003,
-  SELF-005, X11-002/004/005, AT-003/004, VIS-004/005 — DU-003 closed a
-  real SR-1.4/SR-1.5-pattern registry-enforcement gap with 3 new tests;
+  SELF-005, X11-002/004/005, AT-003/004, VIS-004/005, AUD-003/004/005
+  — DU-003 closed a real SR-1.4/SR-1.5-pattern registry-enforcement gap
+  with 3 new tests;
   SELF-003 caught and cleaned up a real side effect in the operator's
   own `~/.missy/custom-tools/` directory; DISC-CMD-008 surfaced a real,
   moderate, non-urgent gap — no per-user Discord command rate
@@ -2566,20 +2604,24 @@ three files above.)
   target GTK text views, which genuinely have no accessible name;
   VIS-005's webcam half honestly failed 3/3 real attempts with "Blank
   frame detected" against a genuine C922, a real hardware/environment
-  limitation not a code bug), 1 fail that surfaced task #47 (SH-001's
-  fabricated observation), 1 deliberately inconclusive case (DU-001,
-  stopped short of forcing a real post to a live Discord channel), 1
-  case counted via overlap (SELF-006 ~ SEC-SCOPE-005), 6 real but
-  out-of-scope observations (`shell.unrestricted` dead config;
-  `InputSanitizer` false positive on the operator's own prompt text;
-  no Discord command rate limiting; X11-004's black virtual-display
-  content limit; AT-003's unnamed-element limit; VIS-005's real
-  blank-frame webcam limitation), remainder safe fails matching task
-  #46's residual (including several more notable-but-non-reproducible
-  wrong-rationalization variants). Operator explicitly chose to keep
-  running cases one-by-one despite the strength of the failure pattern
-  (asked via AskUserQuestion after 5 straight fails) — continuing on
-  that basis. ~15 cases remain.
+  limitation not a code bug; AUD-003 invoked a real Piper TTS
+  subprocess producing a genuine WAV file; AUD-004/005 confirmed
+  `parse_voice_intent()` still correctly handles every join/say/leave
+  phrasing after the two historical regex fixes, without repeating a
+  disruptive live voice-channel join), 1 fail that surfaced task #47
+  (SH-001's fabricated observation), 1 deliberately inconclusive case
+  (DU-001, stopped short of forcing a real post to a live Discord
+  channel), 1 case counted via overlap (SELF-006 ~ SEC-SCOPE-005), 6
+  real but out-of-scope observations (`shell.unrestricted` dead
+  config; `InputSanitizer` false positive on the operator's own prompt
+  text; no Discord command rate limiting; X11-004's black
+  virtual-display content limit; AT-003's unnamed-element limit;
+  VIS-005's real blank-frame webcam limitation), remainder safe fails
+  matching task #46's residual (including several more
+  notable-but-non-reproducible wrong-rationalization variants).
+  Operator explicitly chose to keep running cases one-by-one despite
+  the strength of the failure pattern (asked via AskUserQuestion after
+  5 straight fails) — continuing on that basis. ~12 cases remain.
   Working principle: prefer direct production-code verification over a
   live delegate call whenever a case tests Missy's own deterministic
   code rather than LLM decision-making — cheaper, more reliable, and

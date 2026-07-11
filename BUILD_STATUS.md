@@ -3312,6 +3312,50 @@ Case count: 74 of 89 run (68 full + 4 partial/mixed + 1 inconclusive +
 1 counted-via-overlap). ~15 remain: `AUD-003/004/005`,
 `XT-001/003/004/005/006`, `SEC-PI-004`, `DISC-CMD-004/005/006`.
 
+### Task #10 continued (fifty-second checkpoint): AUD-003/004/005 verified via direct dispatch (no bug found — pure re-confirmation)
+
+Verified the remaining `AUD-*` cases directly rather than via live
+Discord, since actually joining a real voice channel would repeat a
+disruptive, audible real-world action the original historical harness
+run already exercised (and fixed two real regex bugs for, still
+present and correct on current code).
+
+**AUD-003** (text to speech): invoked the real Piper TTS subprocess
+directly — `PiperTTS(voice="en_US-lessac-medium").synthesize(...)`
+produced a real 120,992-byte WAV file with a genuine RIFF header and a
+real computed duration (2743ms) for a non-trivial sentence. Fully
+genuine, non-mocked synthesis, confirming the whole local TTS pipeline
+(piper binary + real ONNX voice model + PCM→WAV wrapping) works
+end-to-end.
+
+**AUD-004** (Discord voice status, join portion) and **AUD-005**
+(Discord voice say and leave): verified `parse_voice_intent()` directly
+against natural-language inputs — "join the General voice channel"
+(with/without trailing punctuation, and with leading politeness like
+"Could you ... , please?" stripped) correctly parses to
+`VoiceIntent(action="join", channel_name="General")`; "say hello
+everyone in voice" / "tell voice channel the weather is nice today"
+correctly parse to `VoiceIntent(action="say", speech=...)`; "leave the
+voice channel" / "leave voice" / "disconnect from the voice channel"
+all correctly parse to `VoiceIntent(action="leave")`. All match the
+two historical bug fixes (trailing-comma capture, trailing-punctuation
+tolerance) already applied to `voice_commands.py`, confirmed still
+correct on current code. AUD-004's status-query half has no fast-path
+parser and falls to the LLM path, gated by task #46's already-documented
+residual — not re-tested live for the reason above.
+
+This closes out the entire `AUD-*` series (5 of 5 cases — AUD-001/002
+were closed earlier this session via live delegate; AUD-003/004/005
+this checkpoint via direct verification).
+
+No code changes this checkpoint (pure re-verification, no bug found).
+No new test run needed since `test_voice_commands.py`'s existing 43
+tests already cover this parser and were unaffected.
+
+Case count: 77 of 89 run (70 full + 5 partial/mixed + 1 inconclusive +
+1 counted-via-overlap). ~12 remain: `XT-001/003/004/005/006`,
+`SEC-PI-004`, `DISC-CMD-004/005/006`.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security
