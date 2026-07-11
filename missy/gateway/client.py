@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import posixpath
 from typing import Any
 from urllib.parse import urlparse
 
@@ -345,7 +346,21 @@ class PolicyHTTPClient:
         from missy.gateway.pinned_transport import pin_host
 
         pin_host(host, resolved_ip)
-        return host, (parsed.path or "/")
+        # RestPolicy.check() (and its fnmatch-based glob matching) operates
+        # on this path as a literal string with no dot-segment resolution
+        # -- but httpx normalizes "/a/../b" -> "/b" (RFC 3986) before
+        # actually sending the request. Without matching that
+        # normalization here, a narrow deny rule for a sensitive subpath
+        # (e.g. "/repos/secret/**") could be silently bypassed by a
+        # request to ".../repos/foo/../secret/token": the unnormalized
+        # literal path fails to match the deny glob and falls through to
+        # a broader allow rule, while the actual bytes sent on the wire
+        # target exactly the path the deny rule was meant to block.
+        raw_path = parsed.path or "/"
+        path = posixpath.normpath(raw_path)
+        if raw_path.endswith("/") and not path.endswith("/"):
+            path += "/"
+        return host, path
 
     @staticmethod
     def _pin_operator_override(host: str) -> None:

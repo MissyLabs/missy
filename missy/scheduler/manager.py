@@ -356,6 +356,26 @@ class SchedulerManager:
         """
         return list(self._jobs.values())
 
+    def load_jobs(self) -> list[ScheduledJob]:
+        """Read persisted jobs from disk and return them, without starting APScheduler.
+
+        ``list_jobs()`` only reflects whatever is already in :attr:`_jobs`,
+        which stays empty until :meth:`start` calls the private
+        :meth:`_load_jobs`. Read-only diagnostics (``missy schedule list``,
+        ``missy doctor``) need the persisted job list but must not pay
+        :meth:`start`'s side effects: it registers every job with a live
+        APScheduler ``BackgroundScheduler`` and starts its thread, so a job
+        due to fire in the read/stop window could actually run before
+        :meth:`stop` shuts it down. This method calls the same
+        :meth:`_load_jobs` file-read :meth:`start` uses, without touching
+        APScheduler at all.
+
+        Returns:
+            A new list of :class:`ScheduledJob` instances.
+        """
+        self._load_jobs()
+        return self.list_jobs()
+
     def list_jobs_with_details(self) -> list[ScheduledJob]:
         """Return full :class:`ScheduledJob` objects for all registered jobs.
 

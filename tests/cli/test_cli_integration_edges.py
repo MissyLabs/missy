@@ -526,6 +526,7 @@ class TestDoctor:
         mock_job = MagicMock()
         mock_mgr = MagicMock()
         mock_mgr.list_jobs.return_value = [mock_job, mock_job, mock_job]
+        mock_mgr.load_jobs.return_value = [mock_job, mock_job, mock_job]
 
         with (
             _SubsystemsPatch(),
@@ -544,6 +545,7 @@ class TestDoctor:
         mock_registry.list_providers.return_value = []
         mock_mgr = MagicMock()
         mock_mgr.list_jobs.return_value = []
+        mock_mgr.load_jobs.return_value = []
 
         with (
             _SubsystemsPatch() as cfg,
@@ -1021,6 +1023,7 @@ class TestScheduleList:
         cfg_path = _write_temp_config()
         mock_mgr = MagicMock()
         mock_mgr.list_jobs.return_value = []
+        mock_mgr.load_jobs.return_value = []
 
         with (
             _SubsystemsPatch(),
@@ -1052,6 +1055,7 @@ class TestScheduleList:
 
         mock_mgr = MagicMock()
         mock_mgr.list_jobs.return_value = [job]
+        mock_mgr.load_jobs.return_value = [job]
 
         with (
             _SubsystemsPatch(),
@@ -1083,6 +1087,7 @@ class TestScheduleList:
 
         mock_mgr = MagicMock()
         mock_mgr.list_jobs.return_value = [job]
+        mock_mgr.load_jobs.return_value = [job]
 
         with (
             _SubsystemsPatch(),
@@ -1117,6 +1122,7 @@ class TestScheduleList:
         jobs = [make_job("Task A", "every 5 minutes"), make_job("Task B", "daily at 08:00")]
         mock_mgr = MagicMock()
         mock_mgr.list_jobs.return_value = jobs
+        mock_mgr.load_jobs.return_value = jobs
 
         with (
             _SubsystemsPatch(),

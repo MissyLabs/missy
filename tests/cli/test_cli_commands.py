@@ -170,6 +170,7 @@ class TestDoctor:
             mock_registry.list_providers.return_value = []
             mock_mgr = MagicMock()
             mock_mgr.list_jobs.return_value = [job, job]
+            mock_mgr.load_jobs.return_value = [job, job]
             with (
                 patch("missy.providers.registry.get_registry", return_value=mock_registry),
                 patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr),

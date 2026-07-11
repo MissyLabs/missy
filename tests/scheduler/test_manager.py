@@ -200,6 +200,55 @@ class TestListJobs:
         assert a is not b
 
 
+class TestLoadJobs:
+    """Regression tests for the read-only ``load_jobs()`` diagnostic path.
+
+    ``missy schedule list`` and ``missy doctor`` construct a fresh
+    ``SchedulerManager`` and only want to read the persisted job list --
+    they must not call ``start()``, since that registers every job with a
+    live APScheduler ``BackgroundScheduler`` and starts its thread, risking
+    a due job actually firing before ``stop()`` shuts it down.
+    """
+
+    def test_list_jobs_is_empty_before_any_load(self, tmp_jobs_file: str):
+        job = ScheduledJob(name="persisted", schedule="every 10 minutes", task="hello")
+        jobs_path = Path(tmp_jobs_file)
+        jobs_path.parent.mkdir(parents=True, exist_ok=True)
+        jobs_path.write_text(json.dumps([job.to_dict()]), encoding="utf-8")
+        jobs_path.chmod(0o600)
+
+        mgr = SchedulerManager(jobs_file=tmp_jobs_file)
+        # Without start() or load_jobs(), _jobs was never populated from disk.
+        assert mgr.list_jobs() == []
+
+    def test_load_jobs_reads_persisted_jobs_without_starting_scheduler(
+        self, tmp_jobs_file: str
+    ):
+        job = ScheduledJob(name="persisted", schedule="every 10 minutes", task="hello")
+        jobs_path = Path(tmp_jobs_file)
+        jobs_path.parent.mkdir(parents=True, exist_ok=True)
+        jobs_path.write_text(json.dumps([job.to_dict()]), encoding="utf-8")
+        jobs_path.chmod(0o600)
+
+        mgr = SchedulerManager(jobs_file=tmp_jobs_file)
+        jobs = mgr.load_jobs()
+
+        assert len(jobs) == 1
+        assert jobs[0].id == job.id
+        assert mgr._scheduler.running is False
+
+    def test_load_jobs_matches_subsequent_list_jobs(self, tmp_jobs_file: str):
+        job = ScheduledJob(name="persisted", schedule="every 10 minutes", task="hello")
+        jobs_path = Path(tmp_jobs_file)
+        jobs_path.parent.mkdir(parents=True, exist_ok=True)
+        jobs_path.write_text(json.dumps([job.to_dict()]), encoding="utf-8")
+        jobs_path.chmod(0o600)
+
+        mgr = SchedulerManager(jobs_file=tmp_jobs_file)
+        mgr.load_jobs()
+        assert [j.id for j in mgr.list_jobs()] == [job.id]
+
+
 class TestLoadSave:
     def test_malformed_jobs_file_logs_and_skips(self, tmp_jobs_file: str):
         Path(tmp_jobs_file).parent.mkdir(parents=True, exist_ok=True)

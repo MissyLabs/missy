@@ -883,7 +883,7 @@ def schedule_list(ctx: click.Context) -> None:
 
     _load_subsystems(ctx.obj["config_path"])
     mgr = SchedulerManager()
-    jobs = mgr.list_jobs()
+    jobs = mgr.load_jobs()
 
     if not jobs:
         console.print("[dim]No scheduled jobs.[/]")
@@ -2953,7 +2953,7 @@ def doctor(ctx: click.Context) -> None:
 
     # 9. Scheduler jobs
     mgr = SchedulerManager()
-    jobs = mgr.list_jobs()
+    jobs = mgr.load_jobs()
     table.add_row("scheduled jobs", ok, f"{len(jobs)} job(s) defined")
 
     # 10. Discord

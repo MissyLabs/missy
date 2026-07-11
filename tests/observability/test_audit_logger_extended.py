@@ -229,6 +229,45 @@ class TestLogRotation:
         for f in rotated:
             assert stat.S_IMODE(f.stat().st_mode) == 0o600
 
+    def test_same_second_rotations_do_not_clobber_each_other(
+        self, log_path: Path, bus: EventBus
+    ):
+        """Regression: the rotated filename used only 1-second
+        (int(time.time())) granularity with no collision check --
+        os.rename() silently overwrites an existing destination on
+        POSIX, so two rotations within the same wall-clock second
+        produced the identical filename and the second rotation
+        permanently and silently destroyed the first burst's audit
+        records with no error anywhere. The pre-existing
+        test_old_rotations_pruned_beyond_max_rotated_files test above
+        works around this exact issue with an explicit
+        time.sleep(0.002) "to ensure distinct rotation timestamps"
+        rather than proving (or requiring) that a same-second collision
+        is handled safely -- this test forces the real collision
+        directly via a frozen clock.
+        """
+        al = AuditLogger(log_path=str(log_path), bus=bus)
+        al._MAX_LOG_SIZE_BYTES = 10
+
+        with patch("time.time", return_value=1234567890.0):
+            log_path.write_text("BURST_ONE\n" * 100)
+            al._rotate_if_needed()
+            first_rotated = sorted(log_path.parent.glob(f"{log_path.name}.*"))
+            assert len(first_rotated) == 1
+            first_content = first_rotated[0].read_text()
+
+            log_path.write_text("BURST_TWO\n" * 100)
+            al._rotate_if_needed()
+            second_rotated = sorted(log_path.parent.glob(f"{log_path.name}.*"))
+
+        # Both bursts must survive as distinct files -- neither
+        # overwrites the other.
+        assert len(second_rotated) == 2
+        contents = {p.read_text() for p in second_rotated}
+        assert first_content in contents
+        assert any("BURST_TWO" in c for c in contents)
+        assert any("BURST_ONE" in c for c in contents)
+
     def test_old_rotations_pruned_beyond_max_rotated_files(self, log_path: Path, bus: EventBus):
         import time as _time
 

@@ -297,6 +297,33 @@ class TestRESTLPolicyEnforcementConfigDriven:
             client.post("https://api.github.com/admin/secret")
         mock_post.assert_not_called()
 
+    def test_dot_segment_path_cannot_bypass_narrow_deny_rule(self) -> None:
+        """Regression: RestPolicy.check() matches the raw, unnormalized URL
+        path via fnmatch (pure literal string matching, no dot-segment
+        resolution) -- but httpx normalizes "/a/../b" -> "/b" (RFC 3986)
+        before actually sending the request. Without matching that
+        normalization in _validate_and_pin(), a request to
+        ".../repos/foo/../secret/token" would fail to match a narrow deny
+        rule for "/repos/secret/**" (literal string mismatch) and fall
+        through to a broader "/repos/**" allow rule, while the actual
+        bytes sent on the wire target exactly the denied resource.
+        """
+        self._use_restrictive_with_rest(
+            [
+                {
+                    "host": "api.github.com",
+                    "method": "*",
+                    "path": "/repos/secret/**",
+                    "action": "deny",
+                },
+                {"host": "api.github.com", "method": "*", "path": "/repos/**", "action": "allow"},
+            ]
+        )
+        client = PolicyHTTPClient()
+        with patch.object(httpx.Client, "get") as mock_get, pytest.raises(PolicyViolationError):
+            client.get("https://api.github.com/repos/foo/../secret/token")
+        mock_get.assert_not_called()
+
     def test_rest_policy_none_result_passes_through(self) -> None:
         """When no REST rule matches, the request proceeds (None = pass-through)."""
         self._use_restrictive_with_rest(

@@ -5974,6 +5974,115 @@ pytest tests/ -q -o faulthandler_timeout=120` → `21366 passed, 13
 skipped in 524.47s (0:08:44)` — 0 failed, up from 21362. Thirty-seventh
 consecutive fully green full-suite run.
 
+### Post-backlog (eightieth checkpoint): round 20 research pass fixes an RFC-3986 path-normalization bypass in RestPolicy enforcement, an AuditLogger same-second rotation collision, and a scheduler diagnostic that always reported 0 jobs
+
+Round 20 (rounds 1-19 covered Scheduler, Persona, API server,
+MessageBus, Screencast, Memory-compaction, GraphMemoryStore, Vault,
+Config, Vision, CandidateGenerator, MCP-manager, SubAgentRunner,
+Learnings, Playbook, AttentionSystem, Discord-channel, operator-
+controls, AuditLogger, BehaviorLayer, ContextManager, MemorySynthesizer,
+Watchdog, InteractiveApproval, WebhookChannel, ConfigWatcher,
+ContainerSandbox, MCP-client, setup-wizard, ToolRegistry-execute-path,
+FailureTracker, CircuitBreaker, Checkpoint, Discord-REST-client,
+DeviceRegistry, VoiceServer, AgentIdentity, TrustScorer, providers,
+SecurityScanner, LandlockPolicy, SkillDiscovery, vision-capture,
+CostTracker, CodeEvolutionManager, StructuredOutput, ProactiveManager,
+SleeptimeWorker, Summarizer, HatchingManager, PersonaManager,
+BehaviorLayer-tone, api-auth, otel, vector_store, scheduler-parser,
+graph_store-CRUD, checkpoint-WAL, McpManager-lifecycle, interactive_
+approval-TUI, secrets-patterns, drift-mechanics, web_console.py,
+SessionManager, CondenserPipeline, code_evolve.py's exclusion list,
+ToolRegistry's listing/metadata surface), this time into
+`missy/gateway/client.py`'s REST-policy path-resolution step,
+`missy/observability/audit_logger.py`'s rotation logic, and
+`missy/scheduler/manager.py`/`missy/cli/main.py`'s `doctor`/`schedule
+list` diagnostics. `missy sessions cleanup` was also targeted and
+checked out clean (its date-arithmetic and dry-run gating both matched
+their tests exactly; no finding). Three genuine findings fixed.
+
+1. **`RestPolicy.check()`'s fnmatch-based glob matching operates on the
+   literal, un-normalized request path, but httpx normalizes dot-segments
+   (`/a/../b` -> `/b`, RFC 3986) before actually sending the request over
+   the wire.** `PolicyHTTPClient._validate_and_pin()` (both the sync and
+   async variants) built its `(host, path)` tuple straight from
+   `urlparse(url).path`, which — like `fnmatch.fnmatch()` — has no
+   concept of dot-segment resolution. A narrow deny rule for a sensitive
+   subpath (e.g. `host=api.github.com, method=DELETE, path=/repos/secret/**,
+   action=deny`) could be silently bypassed by requesting
+   `.../repos/foo/../secret/token`: the unnormalized literal path fails
+   the deny glob and falls through to a broader allow rule, while the
+   actual bytes sent on the wire target exactly the path the deny rule
+   was meant to block. Live-verified all three pieces of the exploit
+   mechanics together (fnmatch's literal matching, urlparse's
+   non-normalization, httpx's real RFC-3986 normalization) before fixing.
+   Fixed by normalizing the resolved path with `posixpath.normpath()`
+   before it reaches `RestPolicy.check()`, with manual trailing-slash
+   preservation (`normpath` strips a trailing `/`, which httpx's own
+   normalization does not) — confirmed byte-identical to httpx's actual
+   normalization across 6 representative test cases before committing to
+   the approach. 1 new test
+   (`test_dot_segment_path_cannot_bypass_narrow_deny_rule`), confirmed
+   via `git stash` to genuinely fail pre-fix (`Failed: DID NOT RAISE
+   PolicyViolationError`). `pytest tests/gateway/ tests/policy/ -q`:
+   `1045 passed`.
+2. **`AuditLogger._rotate_if_needed()` built its rotated filename from a
+   whole-second `time.time()` timestamp with no collision handling — two
+   rotations inside the same wall-clock second silently clobbered each
+   other,** losing the first rotation's audit events permanently (the
+   `os.rename()` target already existed and was overwritten). This is
+   the same numeric-suffix-collision bug class found twice before this
+   session in `missy/config/plan.py`'s `backup_config()` (round 4) and
+   `missy/agent/persona.py`'s `_create_backup()` (round 14) — fixed with
+   the identical pattern each time: compute the timestamp once, then loop
+   `suffix = 1; while rotated_path.exists(): ...; suffix += 1` before
+   `os.rename()`. 1 new test
+   (`test_same_second_rotations_do_not_clobber_each_other`), confirmed
+   via `git stash` to genuinely fail pre-fix (`AssertionError: assert 1
+   == 2`). `pytest tests/observability/ -q`: `141 passed`.
+3. **`missy doctor`'s "scheduled jobs" check and `missy schedule list`
+   always reported 0 jobs regardless of the actual persisted state,**
+   because both construct a fresh `SchedulerManager()` and call
+   `.list_jobs()` directly — `list_jobs()` only returns whatever is
+   already in the in-memory `_jobs` dict, which stays empty until
+   `_load_jobs()` (a private method) reads `~/.missy/jobs.json`, and the
+   *only* place that happens in production is inside `.start()`. Every
+   other scheduler subcommand (`add`/`pause`/`resume`/`remove`) already
+   correctly calls `mgr.start()` before mutating and `mgr.stop()` after
+   — confirmed by reading all four call sites — but the two read-only
+   diagnostics never did. Calling full `start()`/`stop()` purely to list
+   jobs was rejected as the fix: `start()` registers every enabled job
+   with a live, ticking APScheduler `BackgroundScheduler` and starts its
+   thread, so a job due to fire in the brief read/stop window could
+   actually run its full agent-task callback before `stop()` shuts it
+   down — an inappropriate side effect for a read-only diagnostic.
+   Live-reproduced (`list_jobs()` returns `[]` on a fresh manager backed
+   by a real `jobs.json` with one job; a manual `_load_jobs()` call
+   populates it correctly, and `_scheduler.running` stays `False`
+   throughout). Fixed by adding a new public `SchedulerManager.load_jobs()`
+   method that calls the existing `_load_jobs()` file-read and returns
+   the list, without touching APScheduler at all, and switching both
+   `missy/cli/main.py` call sites (`schedule_list`, `doctor`) from
+   `.list_jobs()` to `.load_jobs()`. 3 new tests in a new `TestLoadJobs`
+   class, confirmed via `git stash` to genuinely fail pre-fix
+   (`AttributeError: 'SchedulerManager' object has no attribute
+   'load_jobs'`). This call-site change broke 7 pre-existing tests across
+   `tests/cli/test_main.py`, `tests/cli/test_cli_integration_edges.py`,
+   and `tests/cli/test_cli_commands.py` that mocked `SchedulerManager`
+   and configured `mock_mgr.list_jobs.return_value` but not
+   `mock_mgr.load_jobs.return_value` — the now-familiar
+   `MagicMock`-auto-truthy gotcha (an unconfigured `mock_mgr.load_jobs()`
+   call returns a fresh child `MagicMock`, whose default `__bool__` is
+   `True` and `__len__`/`__iter__` are `0`/empty, so "no jobs" assertions
+   coincidentally still passed but nonzero-count and "No scheduled jobs"
+   text assertions did not); fixed by adding the matching
+   `load_jobs.return_value` alongside each pre-existing
+   `list_jobs.return_value` in all 7 tests. `pytest tests/cli/ -q`:
+   `1079 passed`. `pytest tests/scheduler/ -q`: `369 passed`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21371 passed, 13 skipped in 575.04s (0:09:35)` — 0 failed, up from
+21366. Thirty-eighth consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

@@ -1,5 +1,76 @@
 # TEST_RESULTS
 
+## Run: 2026-07-13 13:20 UTC — round 20 research pass: RestPolicy dot-segment path-normalization bypass, AuditLogger same-second rotation collision, scheduler doctor/list always reporting 0 jobs
+
+- Context: round 20 of the research-pass invitation (rounds 1-19 covered
+  Scheduler, Persona, API server, MessageBus, Screencast, Memory-
+  compaction, GraphMemoryStore, Vault, Config, Vision, CandidateGenerator,
+  MCP-manager, SubAgentRunner, Learnings, Playbook, AttentionSystem,
+  Discord-channel, operator-controls, AuditLogger, BehaviorLayer,
+  ContextManager, MemorySynthesizer, Watchdog, InteractiveApproval,
+  WebhookChannel, ConfigWatcher, ContainerSandbox, MCP-client, setup-
+  wizard, ToolRegistry-execute-path, FailureTracker, CircuitBreaker,
+  Checkpoint, Discord-REST-client, DeviceRegistry, VoiceServer,
+  AgentIdentity, TrustScorer, providers, SecurityScanner, LandlockPolicy,
+  SkillDiscovery, vision-capture, CostTracker, CodeEvolutionManager,
+  StructuredOutput, ProactiveManager, SleeptimeWorker, Summarizer,
+  HatchingManager, PersonaManager, BehaviorLayer-tone, api-auth, otel,
+  vector_store, scheduler-parser, graph_store-CRUD, checkpoint-WAL,
+  McpManager-lifecycle, interactive_approval-TUI, secrets-patterns,
+  drift-mechanics, web_console.py, SessionManager, CondenserPipeline,
+  code_evolve.py's exclusion list, ToolRegistry's listing/metadata
+  surface). This round targeted `missy/gateway/client.py`'s REST-policy
+  path resolution, `missy/observability/audit_logger.py`'s rotation
+  logic, and `missy/scheduler/manager.py`/`missy/cli/main.py`'s
+  `doctor`/`schedule list` diagnostics. `missy sessions cleanup` also
+  checked out clean. Three genuine findings fixed.
+- **RestPolicy dot-segment path-normalization bypass**: fnmatch-based
+  glob matching operated on the literal, un-normalized request path, but
+  httpx normalizes dot-segments (RFC 3986) before sending the request —
+  a narrow deny rule for a sensitive subpath could be silently bypassed
+  via `.../foo/../secret/token`. Fixed by normalizing the resolved path
+  with `posixpath.normpath()` (plus manual trailing-slash preservation)
+  before it reaches `RestPolicy.check()`, confirmed byte-identical to
+  httpx's own normalization across 6 test cases.
+- Command: `pytest tests/gateway/ tests/policy/ -q`
+- Result: `1045 passed`. New test confirmed to genuinely fail pre-fix via
+  `git stash` (`Failed: DID NOT RAISE PolicyViolationError`).
+- **AuditLogger same-second rotation collision**: `_rotate_if_needed()`
+  built its rotated filename from a whole-second timestamp with no
+  collision handling, so two rotations in the same second clobbered each
+  other via `os.rename()`, silently losing the first rotation's audit
+  events. Same bug class as round 4's `config/plan.py` and round 14's
+  `persona.py` backup collisions — fixed with the identical
+  numeric-suffix-disambiguation loop.
+- Command: `pytest tests/observability/ -q`
+- Result: `141 passed`. New test confirmed to genuinely fail pre-fix via
+  `git stash` (`AssertionError: assert 1 == 2`).
+- **Scheduler doctor/list always reporting 0 jobs**: both `missy doctor`
+  and `missy schedule list` construct a fresh `SchedulerManager()` and
+  call `.list_jobs()` directly, but `list_jobs()` only reflects the
+  in-memory `_jobs` dict, which stays empty until `.start()` calls the
+  private `_load_jobs()` to read `~/.missy/jobs.json` — the only
+  scheduler subcommands that populate it. Calling full `start()`/`stop()`
+  purely to list jobs was rejected (it would register every job with a
+  live APScheduler thread, risking a due job actually firing before
+  `stop()`). Fixed by adding a new public `SchedulerManager.load_jobs()`
+  method — the same file-read `_load_jobs()` without touching
+  APScheduler at all — and switching both CLI call sites to use it.
+- Command: `pytest tests/scheduler/test_manager.py -k TestLoadJobs -v`
+- Result: `3 passed`. All confirmed to genuinely fail pre-fix via
+  `git stash` (`AttributeError: 'SchedulerManager' object has no
+  attribute 'load_jobs'`). The call-site change broke 7 pre-existing
+  tests across `test_main.py`, `test_cli_integration_edges.py`, and
+  `test_cli_commands.py` that mocked `SchedulerManager.list_jobs` but
+  not `.load_jobs` (the MagicMock-auto-truthy gotcha again); fixed by
+  adding the matching `load_jobs.return_value` alongside each.
+- Command: `pytest tests/cli/ -q` and `pytest tests/scheduler/ -q`
+- Result: `1079 passed` + `369 passed`.
+- Command: `python3 -m pytest tests/ -q`
+  (full suite, background run)
+- Result: `21371 passed, 13 skipped in 575.04s (0:09:35)`. 0 failed, up
+  from 21366. Thirty-eighth consecutive fully green full-suite run.
+
 ## Run: 2026-07-13 12:45 UTC — round 19 research pass: ToolRegistry disable()/is_enabled() wiring, GET /api/v1/tools disabled-tool leak
 
 - Context: round 19 of the research-pass invitation (rounds 1-18 covered

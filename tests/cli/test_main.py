@@ -552,6 +552,7 @@ class TestScheduleList:
                 with patch("missy.scheduler.manager.SchedulerManager") as mock_mgr_cls:
                     mock_mgr = MagicMock()
                     mock_mgr.list_jobs.return_value = []
+                    mock_mgr.load_jobs.return_value = []
                     mock_mgr_cls.return_value = mock_mgr
 
                     result = runner.invoke(cli, ["--config", cfg_path, "schedule", "list"])
@@ -572,6 +573,7 @@ class TestScheduleList:
                 with patch("missy.scheduler.manager.SchedulerManager") as mock_mgr_cls:
                     mock_mgr = MagicMock()
                     mock_mgr.list_jobs.return_value = []
+                    mock_mgr.load_jobs.return_value = []
                     mock_mgr_cls.return_value = mock_mgr
 
                     result = runner.invoke(cli, ["--config", cfg_path, "schedule", "list"])
@@ -603,6 +605,7 @@ class TestScheduleList:
                 with patch("missy.scheduler.manager.SchedulerManager") as mock_mgr_cls:
                     mock_mgr = MagicMock()
                     mock_mgr.list_jobs.return_value = [job]
+                    mock_mgr.load_jobs.return_value = [job]
                     mock_mgr_cls.return_value = mock_mgr
 
                     result = runner.invoke(cli, ["--config", cfg_path, "schedule", "list"])

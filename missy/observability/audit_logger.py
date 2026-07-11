@@ -274,7 +274,21 @@ class AuditLogger:
                 return
             if self.log_path.stat().st_size < self._MAX_LOG_SIZE_BYTES:
                 return
-            rotated_path = self.log_path.with_name(f"{self.log_path.name}.{int(time.time())}")
+            timestamp = int(time.time())
+            rotated_path = self.log_path.with_name(f"{self.log_path.name}.{timestamp}")
+            # Two rotations within the same wall-clock second (the
+            # timestamp's resolution) previously produced the identical
+            # filename, and os.rename() silently overwrites an existing
+            # destination on POSIX -- the second rotation's rename target
+            # collided with the first's, permanently and silently
+            # destroying the first burst's audit records with no error.
+            # This is the same root cause already found and fixed this
+            # session for missy/config/plan.py's backup_config() and
+            # missy/agent/persona.py's _create_backup(); same fix here.
+            suffix = 1
+            while rotated_path.exists():
+                rotated_path = self.log_path.with_name(f"{self.log_path.name}.{timestamp}_{suffix}")
+                suffix += 1
             os.rename(self.log_path, rotated_path)
             self._prune_rotated_logs()
         except Exception:
