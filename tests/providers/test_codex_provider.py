@@ -115,6 +115,18 @@ class TestExtractAccountId:
         token = _make_jwt_token(payload)
         assert _extract_account_id(token) == "user-xyz"
 
+    def test_null_auth_namespace_falls_back_to_sub(self):
+        """payload.get(key, {}) only substitutes {} when the key is
+        ABSENT -- a claim explicitly present but set to `null` (valid
+        JWT/JSON) previously made `ns` None, raising AttributeError on
+        `ns.get(...)` instead of falling through to `sub`.
+        """
+        from missy.providers.codex_provider import _extract_account_id
+
+        payload = {"https://api.openai.com/auth": None, "sub": "user123"}
+        token = _make_jwt_token(payload)
+        assert _extract_account_id(token) == "user123"
+
     def test_returns_empty_string_for_token_with_one_part(self):
         from missy.providers.codex_provider import _extract_account_id
 
@@ -691,6 +703,16 @@ class TestCodexProviderStream:
     def test_raises_provider_error_on_error_event(self):
         lines = _sse({"type": "error", "error": {"message": "internal error"}})
         with _mock_sse_stream(lines), pytest.raises(ProviderError, match="internal error"):
+            list(self.provider.stream(self._messages()))
+
+    def test_error_event_with_null_error_field_raises_provider_error(self):
+        """event.get("error", {}) only substitutes {} when "error" is
+        ABSENT -- an event shaped like {"type": "error", "error": null}
+        (no top-level "message" either) made `.get("message", ...)` raise
+        AttributeError on None instead of falling through to "unknown".
+        """
+        lines = _sse({"type": "error", "error": None})
+        with _mock_sse_stream(lines), pytest.raises(ProviderError, match="unknown"):
             list(self.provider.stream(self._messages()))
 
     def test_raises_provider_error_on_http_status_error(self):

@@ -6460,6 +6460,66 @@ test_infrastructure.py -q`: `4817 passed, 4 skipped`.
 `21384 passed, 14 skipped in 591.81s (0:09:51)` — 0 failed, up from
 21382. Forty-second consecutive fully green full-suite run.
 
+### Post-backlog (eighty-fifth checkpoint): round 25 research pass fixes two `.get(key, default)`-on-explicit-null crashes in CodexProvider
+
+Round 25 (rounds 1-24 covered every area listed in the round 24 entry
+above), this time into `missy/providers/codex_provider.py` and
+`missy/providers/acpx_provider.py` (neither previously a *primary*
+deep-audit target the way Anthropic/OpenAI/Ollama were),
+`missy/core/message_bus.py`'s internal pub/sub dispatch correctness
+(not just wiring), `missy/security/drift.py`'s hashing/verification
+mechanics beyond the already-documented round-17 design flaw, and
+`missy/agent/sub_agent.py`'s dependency-resolution/concurrency
+scheduling internals (not just `delegate_task` wiring). `MessageBus`'s
+priority-queue ordering/wildcard matching/worker lifecycle,
+`SubAgentRunner`'s wave-based scheduling and `ThreadPoolExecutor`
+concurrency caps, and `acpx_provider.py`'s tool-call round-trip/native-
+tool-denial-retry logic all checked out clean (already thoroughly
+tested at the internal-correctness level, not just wiring, by prior
+rounds' and pre-existing test suites). `PromptDriftDetector`'s
+`get_drift_report()` was found to have a docstring/implementation
+mismatch (claims `actual_hash`/`drifted` keys the implementation never
+returns) but has zero production callers and no test asserts on the
+promised-but-missing fields -- noted as a minor loose end, not elevated
+to a fix. Two genuine bugs fixed, both the identical `dict.get(key,
+default)`-only-substitutes-on-absent-key pitfall.
+
+1. **`CodexProvider._extract_account_id()` crashed with an unhandled
+   `AttributeError` when a JWT claim was explicitly present but set to
+   `null`.** `payload.get("https://api.openai.com/auth", {})` only
+   substitutes `{}` when the key is *absent* -- a payload shaped like
+   `{"https://api.openai.com/auth": null, "sub": "user123"}` (valid
+   JSON/JWT) makes `ns` `None`, and the subsequent `ns.get(...)` raised
+   `AttributeError` instead of falling through to `sub`. This function
+   is called unconditionally from both `stream()` and
+   `complete_with_tools()` before every provider call, and since
+   `AgentRuntime._call_provider_with_fallback` only catches
+   `except ProviderError`, the uncaught `AttributeError` bypassed the
+   entire SR-4.8 fallback/key-rotation safety net -- no fallback
+   provider tried, no key rotation attempted, the run simply failed
+   outright. Live-reproduced directly against the function. Fixed with
+   `payload.get(key) or {}` instead of `payload.get(key, {})`. 1 new
+   test, confirmed via `git stash` to genuinely fail pre-fix.
+2. **The identical pitfall in `_stream_sse()`'s error-event handling**:
+   `event.get("error", {}).get("message", "unknown")` crashed the same
+   way on an SSE event shaped like `{"type": "error", "error": null}`
+   (no top-level `"message"` either) -- `event.get("error", {})` returns
+   `None` when `"error"` is present-but-null, and `.get("message", ...)`
+   on `None` raises `AttributeError` instead of producing the intended
+   `ProviderError("... unknown")`. Same downstream effect as finding #1:
+   bypasses the fallback/key-rotation safety net entirely. Live-verified
+   end-to-end through the real `_stream_sse()` generator (not just the
+   isolated expression) with a mocked SSE response. Fixed by extracting
+   `error_obj = event.get("error") or {}` before calling `.get("message", ...)`
+   on it. 1 new test, confirmed via `git stash` to genuinely fail
+   pre-fix.
+
+Verified: `pytest tests/providers/ -q`: `943 passed`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21386 passed, 14 skipped in 650.42s (0:10:50)` — 0 failed, up from
+21384. Forty-third consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

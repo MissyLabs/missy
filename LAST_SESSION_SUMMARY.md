@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (91 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for forty-two consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (92 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for forty-three consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -3778,15 +3778,49 @@ fixed.
 Verified: `pytest tests/config/ tests/agent/ tests/unit/
 test_infrastructure.py -q`: `4817 passed, 4 skipped`.
 
+### Post-backlog (eighty-fifth checkpoint): round 25 research pass — two dict.get(key, default)-on-explicit-null crashes in CodexProvider
+
+Round 25 (rounds 1-24 covered every area listed in the round 24 entry
+above), into `missy/providers/codex_provider.py`/`missy/providers/
+acpx_provider.py`, `missy/core/message_bus.py`'s internal dispatch
+correctness, `missy/security/drift.py`'s hashing/verification
+mechanics, and `missy/agent/sub_agent.py`'s scheduling internals.
+`MessageBus`, `SubAgentRunner`, and `acpx_provider.py` all checked out
+clean (already thoroughly tested at the internal-correctness level).
+`PromptDriftDetector.get_drift_report()` has a docstring/implementation
+mismatch (claims fields it never returns) but zero production callers
+-- noted, not fixed. Two genuine bugs fixed, both the identical
+`dict.get(key, default)`-only-substitutes-on-absent-key pitfall.
+
+1. **`CodexProvider._extract_account_id()` crash on explicit-null JWT
+   claim**: `payload.get(key, {})` only substitutes `{}` when the key is
+   absent, not when it's present-but-null -- a JWT payload with
+   `"https://api.openai.com/auth": null` crashed with `AttributeError`
+   instead of falling through to `sub`, bypassing the entire SR-4.8
+   fallback/key-rotation safety net (which only catches
+   `ProviderError`). Live-reproduced directly. Fixed with `payload.get(key)
+   or {}`. 1 new test, confirmed to fail pre-fix.
+2. **Identical pitfall in `_stream_sse()`'s error-event handling**:
+   `event.get("error", {}).get("message", ...)` crashed the same way on
+   `{"type": "error", "error": null}`. Live-verified end-to-end through
+   the real generator. Fixed by extracting `error_obj = event.get("error")
+   or {}` first. 1 new test, confirmed to fail pre-fix.
+
+Verified: `pytest tests/providers/ -q`: `943 passed`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21384 passed, 14 skipped in 591.81s (0:09:51)
+21386 passed, 14 skipped in 650.42s (0:10:50)
 ```
 
-**Zero failures**, the forty-second consecutive fully green
-full-suite run. Passed count is up from 21382 to 21384 (the round 24
+**Zero failures**, the forty-third consecutive fully green
+full-suite run. Passed count is up from 21384 to 21386 (the round 25
+checkpoint's 2 new tests: 1 CodexProvider._extract_account_id
+null-claim test and 1 _stream_sse null-error-field test; all of the
+sixty-first through eighty-fourth checkpoints' fixes are confirmed
+still holding). Passed count is up from 21382 to 21384 (the round 24
 checkpoint's 2 new tests: 1 Playbook cross-instance-eviction test and 1
 ConfigWatcher partial-application test; all of the sixty-first through
 eighty-third checkpoints' fixes are confirmed still holding). Passed

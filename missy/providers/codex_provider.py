@@ -72,7 +72,13 @@ def _extract_account_id(token: str) -> str:
     payload = _decode_jwt_payload(token)
     if not payload:
         return ""
-    ns = payload.get("https://api.openai.com/auth", {})
+    # dict.get(key, {}) only substitutes the default when the key is
+    # ABSENT -- a JWT claim explicitly present but set to `null` (valid
+    # JSON) makes `ns` None, and `.get()` on it raises AttributeError
+    # instead of falling through to `sub`. Uncaught, this bypasses
+    # AgentRuntime._call_provider_with_fallback's fallback/key-rotation
+    # safety net entirely (it only catches ProviderError).
+    ns = payload.get("https://api.openai.com/auth") or {}
     return ns.get("chatgpt_account_id", "") or payload.get("sub", "")
 
 
@@ -310,7 +316,13 @@ class CodexProvider(BaseProvider):
                     continue
                 etype = event.get("type", "")
                 if etype in ("response.failed", "error"):
-                    msg = event.get("message") or event.get("error", {}).get("message", "unknown")
+                    # event.get("error", {}) only substitutes {} when the
+                    # "error" key is ABSENT -- an event shaped like
+                    # {"type": "error", "error": null} makes this None,
+                    # and .get("message", ...) on it raises AttributeError
+                    # instead of falling through to "unknown".
+                    error_obj = event.get("error") or {}
+                    msg = event.get("message") or error_obj.get("message", "unknown")
                     raise ProviderError(f"openai-codex stream error: {msg}")
                 yield event
         finally:

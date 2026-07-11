@@ -1,5 +1,44 @@
 # TEST_RESULTS
 
+## Run: 2026-07-13 16:55 UTC — round 25 research pass: two dict.get(key, default)-on-explicit-null crashes in CodexProvider
+
+- Context: round 25 of the research-pass invitation (rounds 1-24 covered
+  every area listed in the round 24 entry below). This round targeted
+  `missy/providers/codex_provider.py`/`missy/providers/acpx_provider.py`
+  (neither previously a primary deep-audit target), `missy/core/
+  message_bus.py`'s internal dispatch correctness, `missy/security/
+  drift.py`'s hashing/verification mechanics, and `missy/agent/
+  sub_agent.py`'s scheduling internals. MessageBus, SubAgentRunner, and
+  acpx_provider.py all checked out clean (already thoroughly tested at
+  the internal-correctness level). PromptDriftDetector's
+  get_drift_report() has a docstring/implementation mismatch but zero
+  production callers -- noted, not fixed. Two genuine bugs fixed, both
+  the identical dict.get(key, default)-only-substitutes-on-absent-key
+  pitfall.
+- **CodexProvider._extract_account_id() crash on explicit-null JWT
+  claim**: `payload.get(key, {})` only substitutes `{}` when the key is
+  absent, not when it's present-but-null -- a JWT payload with
+  `"https://api.openai.com/auth": null` crashed with AttributeError
+  instead of falling through to `sub`, bypassing the entire SR-4.8
+  fallback/key-rotation safety net (which only catches ProviderError).
+  Fixed with `payload.get(key) or {}`.
+- Command: `pytest tests/providers/test_codex_provider.py::TestExtractAccountId -v`
+- Result: `9 passed`. New test confirmed to genuinely fail pre-fix via
+  `git stash`.
+- **Identical pitfall in _stream_sse()'s error-event handling**:
+  `event.get("error", {}).get("message", ...)` crashed the same way on
+  `{"type": "error", "error": null}`. Fixed by extracting
+  `error_obj = event.get("error") or {}` first.
+- Command: `pytest tests/providers/test_codex_provider.py -k error_event -v`
+- Result: `3 passed`. New test confirmed to genuinely fail pre-fix via
+  `git stash`.
+- Command: `pytest tests/providers/ -q`
+- Result: `943 passed`.
+- Command: `python3 -m pytest tests/ -q`
+  (full suite, background run)
+- Result: `21386 passed, 14 skipped in 650.42s (0:10:50)`. 0 failed, up
+  from 21384. Forty-third consecutive fully green full-suite run.
+
 ## Run: 2026-07-13 16:20 UTC — round 24 research pass: Playbook cross-instance lost-update race, ConfigWatcher partial-application inconsistency on reload failure
 
 - Context: round 24 of the research-pass invitation (rounds 1-23 covered
