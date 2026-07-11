@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
+import signal
 import subprocess
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -14,10 +17,12 @@ from missy.providers.acpx_provider import (
     AcpxProvider,
     _find_close_match,
     _generate_tool_call_id,
+    _kill_process_group,
     _parse_tool_calls_from_text,
     _render_tool_instructions,
     _render_tool_schema_compact,
     _render_tool_schema_full,
+    _run_subprocess_with_group_kill,
     _strip_leaked_transcript_markers,
     _validate_tool_calls,
 )
@@ -111,6 +116,119 @@ class TestAcpxInit:
     def test_provider_name(self):
         p = AcpxProvider(_make_config())
         assert p.name == "acpx"
+
+
+# ------------------------------------------------------------------
+# Process-group-aware subprocess execution (FX-G residual)
+# ------------------------------------------------------------------
+
+
+class TestKillProcessGroup:
+    def test_sends_sigkill_by_default(self):
+        proc = MagicMock()
+        proc.pid = 12345
+        with (
+            patch("missy.providers.acpx_provider.os.getpgid", return_value=999) as mock_getpgid,
+            patch("missy.providers.acpx_provider.os.killpg") as mock_killpg,
+        ):
+            _kill_process_group(proc)
+        mock_getpgid.assert_called_once_with(12345)
+        mock_killpg.assert_called_once_with(999, signal.SIGKILL)
+
+    def test_sends_sigterm_when_force_false(self):
+        proc = MagicMock()
+        proc.pid = 12345
+        with (
+            patch("missy.providers.acpx_provider.os.getpgid", return_value=999),
+            patch("missy.providers.acpx_provider.os.killpg") as mock_killpg,
+        ):
+            _kill_process_group(proc, force=False)
+        mock_killpg.assert_called_once_with(999, signal.SIGTERM)
+
+    def test_already_exited_process_is_a_silent_no_op(self):
+        proc = MagicMock()
+        proc.pid = 12345
+        with (
+            patch(
+                "missy.providers.acpx_provider.os.getpgid",
+                side_effect=ProcessLookupError,
+            ),
+            patch("missy.providers.acpx_provider.os.killpg") as mock_killpg,
+        ):
+            _kill_process_group(proc)  # must not raise
+        mock_killpg.assert_not_called()
+
+    def test_killpg_permission_error_is_suppressed(self):
+        proc = MagicMock()
+        proc.pid = 12345
+        with (
+            patch("missy.providers.acpx_provider.os.getpgid", return_value=999),
+            patch(
+                "missy.providers.acpx_provider.os.killpg",
+                side_effect=PermissionError,
+            ),
+        ):
+            _kill_process_group(proc)  # must not raise
+
+
+class TestRunSubprocessWithGroupKill:
+    """Live, real-subprocess tests -- not mocked -- proving the actual
+    FX-G residual fix: a process killed on timeout must not leave its
+    own child process running as an orphan (the old subprocess.run()
+    behavior only ever killed the immediate PID)."""
+
+    def test_successful_command_returns_completed_process(self):
+        result = _run_subprocess_with_group_kill(["echo", "hello"], "/tmp", 5)
+        assert isinstance(result, subprocess.CompletedProcess)
+        assert result.returncode == 0
+        assert result.stdout.strip() == "hello"
+
+    def test_nonexistent_binary_raises_file_not_found(self):
+        with pytest.raises(FileNotFoundError):
+            _run_subprocess_with_group_kill(["/no/such/binary-xyz"], "/tmp", 5)
+
+    def test_popen_started_with_its_own_process_group(self):
+        with patch("missy.providers.acpx_provider.subprocess.Popen") as mock_popen:
+            mock_proc = mock_popen.return_value
+            mock_proc.communicate.return_value = ("ok", "")
+            mock_proc.returncode = 0
+            _run_subprocess_with_group_kill(["echo", "hi"], "/tmp", 5)
+        assert mock_popen.call_args.kwargs["start_new_session"] is True
+
+    def test_timeout_kills_the_process_group_not_just_the_child(self, tmp_path):
+        # A real child process (not mocked) that outlives the parent
+        # shell -- this is exactly the scenario acpx's own descendant
+        # process represents. Before the fix, only the immediate PID
+        # (the parent shell) was killed on timeout, leaving this real
+        # child running as an orphan; after the fix, os.killpg() takes
+        # down the whole group.
+        pid_file = tmp_path / "child.pid"
+        script = tmp_path / "spawn_child.sh"
+        script.write_text(
+            f"sleep 30 &\necho $! > {pid_file}\nsleep 30\n"
+        )
+        script.chmod(0o755)
+
+        with pytest.raises(subprocess.TimeoutExpired):
+            _run_subprocess_with_group_kill(["bash", str(script)], str(tmp_path), 1)
+
+        # Give the child a brief moment to actually receive SIGKILL.
+        deadline = time.monotonic() + 3.0
+        child_pid = None
+        while time.monotonic() < deadline:
+            if pid_file.exists():
+                child_pid = int(pid_file.read_text().strip())
+                break
+            time.sleep(0.05)
+        assert child_pid is not None, "child process never started"
+
+        time.sleep(0.3)
+        with pytest.raises(ProcessLookupError):
+            os.kill(child_pid, 0)  # signal 0: raises iff the process is dead
+
+    def test_timeout_reraises_timeout_expired(self):
+        with pytest.raises(subprocess.TimeoutExpired):
+            _run_subprocess_with_group_kill(["sleep", "5"], "/tmp", 0.2)
 
 
 # ------------------------------------------------------------------
@@ -231,7 +349,7 @@ class TestAcpxComplete:
     def _ndjson(self, *events: dict) -> str:
         return "\n".join(json.dumps(e) for e in events) + "\n"
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_successful_completion(self, mock_run):
         stdout = self._ndjson(
             {"type": "text_delta", "delta": "Hello "},
@@ -246,21 +364,21 @@ class TestAcpxComplete:
         assert resp.model == "claude"
         assert resp.finish_reason == "stop"
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_plain_text_fallback(self, mock_run):
         mock_run.return_value = MagicMock(returncode=0, stdout="Just plain text\n", stderr="")
         p = AcpxProvider(_make_config())
         resp = p.complete([Message(role="user", content="Hi")])
         assert resp.content == "Just plain text"
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_nonzero_exit_raises(self, mock_run):
         mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="error: auth failed")
         p = AcpxProvider(_make_config())
         with pytest.raises(ProviderError, match="exit.*1"):
             p.complete([Message(role="user", content="Hi")])
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_nonzero_exit_with_recoverable_text_does_not_raise(self, mock_run):
         # Live-reproduced behavior: with --deny-all enforcing zero native
         # tool access, acpx exits nonzero (observed: code 5) whenever a
@@ -277,7 +395,7 @@ class TestAcpxComplete:
         resp = p.complete([Message(role="user", content="Read a file")])
         assert resp.content == "The user denied the Read tool. I cannot access the file."
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_nonzero_exit_with_no_recoverable_text_still_raises(self, mock_run):
         # If nothing usable can be parsed from stdout, the nonzero exit
         # must still be treated as a real failure.
@@ -286,14 +404,14 @@ class TestAcpxComplete:
         with pytest.raises(ProviderError, match="exit.*5"):
             p.complete([Message(role="user", content="Hi")])
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_timeout_raises(self, mock_run):
         mock_run.side_effect = subprocess.TimeoutExpired(cmd="acpx", timeout=120)
         p = AcpxProvider(_make_config())
         with pytest.raises(ProviderError, match="timed out"):
             p.complete([Message(role="user", content="Hi")])
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_timeout_error_states_outcome_is_unknown(self, mock_run):
         # FX-G: on timeout the caller must be told the outcome is
         # unverified, not silently treated as "nothing happened."
@@ -306,14 +424,14 @@ class TestAcpxComplete:
         assert "idempotent" in message
         assert "fresh" in message.lower()
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_binary_not_found_raises(self, mock_run):
         mock_run.side_effect = FileNotFoundError("acpx")
         p = AcpxProvider(_make_config())
         with pytest.raises(ProviderError, match="not found"):
             p.complete([Message(role="user", content="Hi")])
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_message_event_type(self, mock_run):
         stdout = self._ndjson({"type": "message", "content": "Done!"})
         mock_run.return_value = MagicMock(returncode=0, stdout=stdout, stderr="")
@@ -321,7 +439,7 @@ class TestAcpxComplete:
         resp = p.complete([Message(role="user", content="Hi")])
         assert resp.content == "Done!"
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_result_event_type(self, mock_run):
         stdout = self._ndjson({"type": "result", "text": "Final answer"})
         mock_run.return_value = MagicMock(returncode=0, stdout=stdout, stderr="")
@@ -329,7 +447,7 @@ class TestAcpxComplete:
         resp = p.complete([Message(role="user", content="Hi")])
         assert resp.content == "Final answer"
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_extra_flags_appended(self, mock_run):
         mock_run.return_value = MagicMock(returncode=0, stdout="ok\n", stderr="")
         p = AcpxProvider(_make_config(base_url="--verbose"))
@@ -340,7 +458,7 @@ class TestAcpxComplete:
         assert "--format" in cmd
         assert "json" in cmd
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_approve_all_flag_never_reaches_subprocess(self, mock_run):
         # --approve-all is a security-critical flag (FX-A); even if
         # supplied via base_url it must never appear in the actual
@@ -352,7 +470,7 @@ class TestAcpxComplete:
         cmd = mock_run.call_args[0][0]
         assert "--approve-all" not in cmd
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_exec_subcommand_used(self, mock_run):
         mock_run.return_value = MagicMock(returncode=0, stdout="ok\n", stderr="")
         p = AcpxProvider(_make_config())
@@ -367,7 +485,7 @@ class TestAcpxComplete:
         assert "exec" in cmd
         assert "Hello" in cmd
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_multi_message_prompt_flattening(self, mock_run):
         mock_run.return_value = MagicMock(returncode=0, stdout="ok\n", stderr="")
         p = AcpxProvider(_make_config())
@@ -388,7 +506,7 @@ class TestAcpxComplete:
         assert "[Assistant]: Hello!" in prompt
         assert "[User]: More" in prompt
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_single_user_message_no_prefix(self, mock_run):
         mock_run.return_value = MagicMock(returncode=0, stdout="ok\n", stderr="")
         p = AcpxProvider(_make_config())
@@ -863,7 +981,7 @@ class TestCompleteWithTools:
     def _ndjson(self, text: str) -> str:
         return json.dumps({"type": "text_delta", "delta": text}) + "\n"
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_no_tool_calls_returns_stop(self, mock_run):
         mock_run.return_value = MagicMock(
             returncode=0, stdout=self._ndjson("Just text, no tools."), stderr=""
@@ -875,7 +993,7 @@ class TestCompleteWithTools:
         assert resp.tool_calls == []
         assert "Just text, no tools." in resp.content
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_tool_call_parsed_and_returned(self, mock_run):
         response_text = (
             "Let me calculate that.\n\n"
@@ -896,7 +1014,7 @@ class TestCompleteWithTools:
         assert "Let me calculate" in resp.content
         assert "<tool_call>" not in resp.content
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_multiple_tool_calls(self, mock_run):
         response_text = (
             "<tool_call>\n"
@@ -915,7 +1033,7 @@ class TestCompleteWithTools:
         assert resp.finish_reason == "tool_calls"
         assert len(resp.tool_calls) == 2
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_invalid_tool_name_filtered_out(self, mock_run):
         response_text = '<tool_call>\n{"name": "nonexistent_tool", "arguments": {}}\n</tool_call>'
         mock_run.return_value = MagicMock(
@@ -927,7 +1045,7 @@ class TestCompleteWithTools:
         # Invalid tool filtered → falls through to stop
         assert resp.finish_reason == "stop"
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_tool_instructions_injected_into_prompt(self, mock_run):
         mock_run.return_value = MagicMock(returncode=0, stdout=self._ndjson("ok"), stderr="")
         p = AcpxProvider(_make_config())
@@ -940,7 +1058,7 @@ class TestCompleteWithTools:
         assert "<tool_call>" in prompt
         assert "Be helpful" in prompt
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_system_prompt_augmented_not_replaced(self, mock_run):
         mock_run.return_value = MagicMock(returncode=0, stdout=self._ndjson("ok"), stderr="")
         p = AcpxProvider(_make_config())
@@ -954,7 +1072,7 @@ class TestCompleteWithTools:
         assert "Original system" in prompt
         assert "Available Tools" in prompt
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_tool_results_in_history_passed_through(self, mock_run):
         mock_run.return_value = MagicMock(
             returncode=0, stdout=self._ndjson("The answer is 4."), stderr=""
@@ -974,7 +1092,7 @@ class TestCompleteWithTools:
         assert "[Tool result for calculator]: 4" in prompt
         assert resp.content == "The answer is 4."
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_subprocess_error_propagates(self, mock_run):
         mock_run.side_effect = subprocess.TimeoutExpired(cmd="acpx", timeout=120)
         p = AcpxProvider(_make_config())
@@ -1056,7 +1174,7 @@ class TestStdoutHadDeniedNativeToolCall:
 
 
 class TestNativeToolDenialRetry:
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_retries_once_after_denied_native_tool_and_uses_second_response(self, mock_run):
         # First call: delegate tries a native tool, gets denied, gives up.
         # Second call (after the correction is appended): delegate
@@ -1085,7 +1203,7 @@ class TestNativeToolDenialRetry:
         second_prompt = second_call_cmd[-1]
         assert "was just attempted and denied" in second_prompt
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_gives_up_after_max_retries_and_returns_final_text(self, mock_run):
         # Every attempt denies a native tool and never emits a Missy
         # tool_call -- must not retry forever; must still return the
@@ -1103,7 +1221,7 @@ class TestNativeToolDenialRetry:
         assert resp.finish_reason == "stop"
         assert "I still cannot access that file." in resp.content
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_no_retry_for_genuine_plain_text_response(self, mock_run):
         # No denied-tool-call signal at all -- a real plain-text answer
         # that never touched any tool. Must not trigger a retry.
@@ -1122,6 +1240,90 @@ class TestNativeToolDenialRetry:
         assert mock_run.call_count == 1
         assert resp.finish_reason == "stop"
         assert resp.content == "The capital is Paris."
+
+
+# ===========================================================================
+# stream (FX-G residual: process-group-aware cleanup)
+# ===========================================================================
+
+
+def _make_streaming_popen(lines: list[str], returncode: int = 0) -> MagicMock:
+    """Build a Popen mock whose .stdout iterates over `lines`."""
+    mock_proc = MagicMock()
+    mock_proc.stdout = iter(lines)
+    mock_proc.returncode = returncode
+    mock_proc.poll.return_value = returncode  # already exited by default
+    mock_proc.stderr.read.return_value = ""
+    return mock_proc
+
+
+class TestAcpxStream:
+    @patch("missy.providers.acpx_provider.subprocess.Popen")
+    def test_popen_started_with_its_own_process_group(self, mock_popen):
+        mock_popen.return_value = _make_streaming_popen(
+            [json.dumps({"type": "text_delta", "delta": "hi"})]
+        )
+        p = AcpxProvider(_make_config())
+        list(p.stream([Message(role="user", content="hello")]))
+        assert mock_popen.call_args.kwargs["start_new_session"] is True
+
+    @patch("missy.providers.acpx_provider.subprocess.Popen")
+    def test_yields_text_from_ndjson_events(self, mock_popen):
+        mock_popen.return_value = _make_streaming_popen(
+            [
+                json.dumps({"type": "text_delta", "delta": "Hello "}),
+                json.dumps({"type": "text_delta", "delta": "world!"}),
+            ]
+        )
+        p = AcpxProvider(_make_config())
+        chunks = list(p.stream([Message(role="user", content="hi")]))
+        assert "".join(chunks) == "Hello world!"
+
+    @patch("missy.providers.acpx_provider.subprocess.Popen")
+    def test_nonexistent_binary_raises_provider_error(self, mock_popen):
+        mock_popen.side_effect = FileNotFoundError
+        p = AcpxProvider(_make_config())
+        with pytest.raises(ProviderError, match="not found"):
+            list(p.stream([Message(role="user", content="hi")]))
+
+    @patch("missy.providers.acpx_provider._kill_process_group")
+    @patch("missy.providers.acpx_provider.subprocess.Popen")
+    def test_exception_during_streaming_kills_process_group(
+        self, mock_popen, mock_kill_group
+    ):
+        mock_proc = MagicMock()
+
+        def _bad_stdout():
+            yield json.dumps({"type": "text_delta", "delta": "partial"})
+            raise OSError("pipe broke")
+
+        mock_proc.stdout = _bad_stdout()
+        mock_proc.poll.return_value = None  # still "running" in the finally check
+        mock_popen.return_value = mock_proc
+
+        p = AcpxProvider(_make_config())
+        with pytest.raises(ProviderError, match="acpx stream failed"):
+            list(p.stream([Message(role="user", content="hi")]))
+
+        # Once from the except-Exception cleanup (force SIGKILL), once
+        # from the finally block (force=False, SIGTERM) since poll()
+        # still reports the process as running.
+        assert mock_kill_group.call_count == 2
+        first_call, second_call = mock_kill_group.call_args_list
+        assert first_call.kwargs == {} or first_call.args == (mock_proc,)
+        assert second_call.kwargs.get("force") is False
+
+    @patch("missy.providers.acpx_provider._kill_process_group")
+    @patch("missy.providers.acpx_provider.subprocess.Popen")
+    def test_finally_leaves_already_exited_process_alone(self, mock_popen, mock_kill_group):
+        mock_popen.return_value = _make_streaming_popen(
+            [json.dumps({"type": "text_delta", "delta": "ok"})]
+        )
+        p = AcpxProvider(_make_config())
+        list(p.stream([Message(role="user", content="hi")]))
+        # poll() reports the process already exited (returncode 0) --
+        # the finally block's cleanup must not fire at all.
+        mock_kill_group.assert_not_called()
 
 
 # ===========================================================================
@@ -1162,7 +1364,7 @@ class TestAcpxGetToolSchema:
 
 
 class TestZeroNativeToolsEnforcement:
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_complete_always_passes_zero_native_tools_flags(self, mock_run):
         mock_run.return_value = MagicMock(returncode=0, stdout="ok\n", stderr="")
         p = AcpxProvider(_make_config())
@@ -1178,7 +1380,7 @@ class TestZeroNativeToolsEnforcement:
         # --non-interactive-permissions deny alone does not.
         assert "--deny-all" in cmd
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_complete_with_tools_always_passes_zero_native_tools_flags(self, mock_run):
         mock_run.return_value = MagicMock(
             returncode=0, stdout=json.dumps({"type": "text_delta", "delta": "ok"}) + "\n", stderr=""
@@ -1193,7 +1395,7 @@ class TestZeroNativeToolsEnforcement:
         assert cmd[idx2 + 1] == "deny"
         assert "--deny-all" in cmd
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_operator_cannot_reintroduce_native_tools_via_base_url(self, mock_run):
         # Even if base_url tries to sneak --allowed-tools back in after
         # the sanitizer (belt and suspenders): the hardcoded flags are
@@ -1210,7 +1412,7 @@ class TestZeroNativeToolsEnforcement:
         last_idx = len(cmd) - 1 - cmd[::-1].index("--allowed-tools")
         assert cmd[last_idx + 1] == ""
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_deny_all_and_approve_reads_stripped_from_base_url(self, mock_run):
         mock_run.return_value = MagicMock(returncode=0, stdout="ok\n", stderr="")
         p = AcpxProvider(_make_config(base_url="--deny-all --approve-reads"))
@@ -1218,7 +1420,7 @@ class TestZeroNativeToolsEnforcement:
 
 
 class TestIsolatedCwd:
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_default_cwd_is_not_repository_cwd(self, mock_run, tmp_path, monkeypatch):
         monkeypatch.setenv("HOME", str(tmp_path))
         mock_run.return_value = MagicMock(returncode=0, stdout="ok\n", stderr="")
@@ -1229,9 +1431,12 @@ class TestIsolatedCwd:
         idx = cmd.index("--cwd")
         resolved_cwd = cmd[idx + 1]
         assert resolved_cwd == str(tmp_path / ".missy" / "acpx_sandbox")
-        assert mock_run.call_args.kwargs["cwd"] == resolved_cwd
+        # _run_subprocess_with_group_kill(cmd, cwd, timeout) takes cwd
+        # positionally, not as a kwarg (unlike the old subprocess.run(...,
+        # cwd=...) call it replaced).
+        assert mock_run.call_args[0][1] == resolved_cwd
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_isolated_cwd_created_on_disk(self, mock_run, tmp_path, monkeypatch):
         monkeypatch.setenv("HOME", str(tmp_path))
         mock_run.return_value = MagicMock(returncode=0, stdout="ok\n", stderr="")
@@ -1241,7 +1446,7 @@ class TestIsolatedCwd:
         sandbox = tmp_path / ".missy" / "acpx_sandbox"
         assert sandbox.is_dir()
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_explicit_cwd_kwarg_still_honored(self, mock_run, tmp_path):
         mock_run.return_value = MagicMock(returncode=0, stdout="ok\n", stderr="")
         p = AcpxProvider(_make_config())
@@ -1255,7 +1460,7 @@ class TestIsolatedCwd:
         idx = cmd.index("--cwd")
         assert cmd[idx + 1] == custom_dir
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_cwd_reused_across_calls(self, mock_run, tmp_path, monkeypatch):
         monkeypatch.setenv("HOME", str(tmp_path))
         mock_run.return_value = MagicMock(returncode=0, stdout="ok\n", stderr="")
@@ -1263,12 +1468,12 @@ class TestIsolatedCwd:
         p.complete([Message(role="user", content="hi")])
         p.complete([Message(role="user", content="hi again")])
 
-        cwds = [call.kwargs["cwd"] for call in mock_run.call_args_list]
+        cwds = [call.args[1] for call in mock_run.call_args_list]
         assert cwds[0] == cwds[1]
 
 
 class TestApproveAllRemoved:
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_approve_all_kwarg_ignored_with_warning(self, mock_run, caplog):
         mock_run.return_value = MagicMock(returncode=0, stdout="ok\n", stderr="")
         p = AcpxProvider(_make_config())
@@ -1281,7 +1486,7 @@ class TestApproveAllRemoved:
 
 
 class TestDelegationEnvelope:
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_envelope_version_present(self, mock_run):
         mock_run.return_value = MagicMock(
             returncode=0, stdout=json.dumps({"type": "text_delta", "delta": "ok"}) + "\n", stderr=""
@@ -1292,7 +1497,7 @@ class TestDelegationEnvelope:
         prompt = mock_run.call_args[0][0][-1]
         assert "[missy-acpx-envelope/1]" in prompt
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_envelope_forbids_independent_identity(self, mock_run):
         mock_run.return_value = MagicMock(
             returncode=0, stdout=json.dumps({"type": "text_delta", "delta": "ok"}) + "\n", stderr=""
@@ -1304,7 +1509,7 @@ class TestDelegationEnvelope:
         assert "NOT operating as an independent" in prompt
         assert "Never claim to be Claude Code" in prompt
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_envelope_forbids_fabricated_turns(self, mock_run):
         mock_run.return_value = MagicMock(
             returncode=0, stdout=json.dumps({"type": "text_delta", "delta": "ok"}) + "\n", stderr=""
@@ -1315,7 +1520,7 @@ class TestDelegationEnvelope:
         prompt = mock_run.call_args[0][0][-1]
         assert "self-authored score" in prompt
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_envelope_forbids_fabricating_structured_data(self, mock_run):
         # FX-C: the validation harness observed an invented "lo" network
         # and an incorrect bridge address reported for real Incus tool
@@ -1331,7 +1536,7 @@ class TestDelegationEnvelope:
         assert "never add" in prompt.lower() or "never invent" in prompt.lower()
         assert "fresh tool observation" in prompt
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_envelope_incorporates_caller_system_text(self, mock_run):
         mock_run.return_value = MagicMock(
             returncode=0, stdout=json.dumps({"type": "text_delta", "delta": "ok"}) + "\n", stderr=""
@@ -1365,7 +1570,7 @@ class TestLeakedTranscriptMarkerDefense:
         assert leaked is False
         assert text == "Just a normal answer with no markers."
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_complete_with_tools_strips_fabricated_followup_turn(self, mock_run):
         # Reproduces DISC-CMD-006: correct answer to the current request,
         # followed by a hallucinated future exchange and self-authored
@@ -1387,7 +1592,7 @@ class TestLeakedTranscriptMarkerDefense:
         assert "25/25 PASS" not in resp.content
         assert "[User]:" not in resp.content
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_complete_strips_fabricated_followup_turn(self, mock_run):
         fabricated = "Real answer.\n[User]: another question\n[Assistant]: fabricated reply"
         mock_run.return_value = MagicMock(returncode=0, stdout=fabricated, stderr="")
@@ -1395,7 +1600,7 @@ class TestLeakedTranscriptMarkerDefense:
         resp = p.complete([Message(role="user", content="hi")])
         assert resp.content == "Real answer."
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_tool_call_after_leaked_marker_is_not_returned(self, mock_run):
         # A tool_call block appearing only after a fabricated turn marker
         # must not be extracted and executed -- the marker truncation
@@ -1419,7 +1624,7 @@ class TestLeakedTranscriptMarkerDefense:
         assert resp.tool_calls == []
         assert "Here is the answer." in resp.content
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_complete_with_tools_fails_closed_when_response_is_entirely_fabricated(self, mock_run):
         # FX-D: when stripping the leaked marker leaves nothing legitimate
         # behind, silently returning an empty "successful" response would
@@ -1437,7 +1642,7 @@ class TestLeakedTranscriptMarkerDefense:
                 [Message(role="user", content="what is 42+8?")], [_make_mock_tool()]
             )
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_complete_fails_closed_when_response_is_entirely_fabricated(self, mock_run):
         fabricated = "[User]: are you sure?\n[Assistant]: yes, 100% certain."
         mock_run.return_value = MagicMock(returncode=0, stdout=fabricated, stderr="")
@@ -1445,7 +1650,7 @@ class TestLeakedTranscriptMarkerDefense:
         with pytest.raises(ProviderError, match="fabricated transcript"):
             p.complete([Message(role="user", content="hi")])
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_complete_with_tools_does_not_fail_closed_for_partial_leak(self, mock_run):
         # A leak that still leaves legitimate content behind must not
         # raise -- only a totally empty result after stripping does.
@@ -1516,7 +1721,7 @@ class TestCurrentTurnBoundary:
         prompt = p._build_prompt([Message(role="user", content="just this")])
         assert prompt == "just this"
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_boundary_present_in_real_complete_with_tools_call(self, mock_run):
         mock_run.return_value = MagicMock(
             returncode=0, stdout=json.dumps({"type": "text_delta", "delta": "ok"}) + "\n", stderr=""
@@ -1546,7 +1751,7 @@ class TestQuotedTranscriptTextInUserInput:
     scrubs the *delegate's own generated output*.
     """
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_quoted_marker_in_current_request_reaches_the_prompt_intact(self, mock_run):
         mock_run.return_value = MagicMock(
             returncode=0, stdout=json.dumps({"type": "text_delta", "delta": "ok"}) + "\n", stderr=""
@@ -1577,7 +1782,7 @@ class TestQuotedTranscriptTextInUserInput:
 
 
 class TestMultilineAndLongHistoryRequests:
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_multiline_current_request_stays_after_boundary(self, mock_run):
         mock_run.return_value = MagicMock(
             returncode=0, stdout=json.dumps({"type": "text_delta", "delta": "ok"}) + "\n", stderr=""
@@ -1609,7 +1814,7 @@ class TestMultilineAndLongHistoryRequests:
 
 
 class TestMaliciousHistoryInstructions:
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_injected_instruction_in_history_lands_before_boundary(self, mock_run):
         # A prior (attacker-controlled or compromised) turn tries to
         # smuggle an instruction. It must be structurally confined to the
@@ -1639,7 +1844,7 @@ class TestMaliciousHistoryInstructions:
         current_request_pos = prompt.index("what is the weather like today?")
         assert injected_pos < boundary_pos < current_request_pos
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_envelope_explicitly_labels_history_as_not_instructions(self, mock_run):
         mock_run.return_value = MagicMock(
             returncode=0, stdout=json.dumps({"type": "text_delta", "delta": "ok"}) + "\n", stderr=""
@@ -1657,7 +1862,7 @@ class TestDiscCmd006EndToEndWithBoundary:
     """Full reproduction of the DISC-CMD-006 shape with both defenses
     (structural boundary + leaked-marker stripping) active together."""
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_correct_answer_survives_fabricated_followup_is_stripped(self, mock_run):
         fabricated = (
             "42 + 8 = 50\n"
@@ -1686,7 +1891,7 @@ class TestDiscCmd006EndToEndWithBoundary:
         assert resp.content == "42 + 8 = 50"
         assert "25/25 PASS" not in resp.content
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_report_followup_scope_scenario(self, mock_run):
         # A second scenario shape: the delegate correctly completes a
         # report-generation request, then tries to continue with an
@@ -1713,7 +1918,7 @@ class TestDiscCmd006EndToEndWithBoundary:
 
 
 class TestSessionContinuityAcrossToolLoopRounds:
-    @patch("missy.providers.acpx_provider.subprocess.run")
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_each_round_gets_a_fresh_boundary_over_growing_transcript(self, mock_run):
         # Simulates three rounds of a tool loop: each call must mark the
         # newly-appended message as current, with everything before it

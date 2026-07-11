@@ -1,5 +1,55 @@
 # TEST_RESULTS
 
+## Run: 2026-07-11 14:00 UTC — validation-harness overhaul, task #17 (acpx subprocess timeout process-group kill)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Context: previously deferred earlier this session after an initial
+  attempt broke ~136 test references mocking `subprocess.run` and
+  caused real subprocess spawning during the test run. This checkpoint
+  completed the full migration rather than deferring again.
+- Finding: `_run_acpx()`/`stream()` used `subprocess.run()`/`Popen()`
+  without `start_new_session=True`; Python's own `TimeoutExpired`
+  handling (and `Popen.kill()`/`.terminate()`) only signals the
+  immediate PID, so a descendant process acpx spawns (the underlying
+  claude/codex CLI) could be orphaned and keep running after Missy
+  gives up on a timed-out call.
+- Live reproduction (real bash script backgrounding a `sleep 30` child,
+  no mocks): `subprocess.run(["bash", script], timeout=2)` — after the
+  `TimeoutExpired`, `os.kill(child_pid, 0)` succeeded, confirming the
+  child was still alive (orphaned).
+- Fix: new `_kill_process_group()`/`_run_subprocess_with_group_kill()`
+  in `missy/providers/acpx_provider.py` — `Popen(..., start_new_session=True)`
+  + `os.killpg()` on timeout, returning a `subprocess.CompletedProcess`
+  so `_run_acpx()`'s downstream logic needed no changes. `stream()`
+  gained `start_new_session=True` and switched its cleanup paths to
+  the same group-kill helper.
+- Re-reproduction (identical script, same real child-spawning setup):
+  `_run_subprocess_with_group_kill(["bash", script], "/tmp", 2)` — after
+  the `TimeoutExpired`, `os.kill(child_pid, 0)` raised
+  `ProcessLookupError`, confirming the child was dead.
+- Command: `pytest tests/providers/test_acpx_provider.py -k "KillProcessGroup or RunSubprocessWithGroupKill" -v`
+- Result: `9 passed` — including the 2 live, unmocked-subprocess tests
+  reproducing the exact scenario above as permanent regression
+  coverage.
+- Command: `pytest tests/providers/test_acpx_provider.py -k TestAcpxStream -v`
+- Result: `5 passed` — new coverage for `stream()`, which had zero
+  prior tests of any kind.
+- Command: `pytest tests/providers/test_acpx_provider.py -q`
+- Result: `165 passed` (up from 151), completing in ~2.4s (confirming
+  no real subprocess calls linger in the suite after the full
+  `@patch("...subprocess.run")` → `@patch("..._run_subprocess_with_group_kill")`
+  migration across 61 occurrences, with 8 correctly reverted back to
+  `subprocess.run` for `TestAcpxAvailability`'s tests of
+  `is_available()`'s own, separate, short-lived health-check calls).
+- Command: `pytest tests/providers/ -q`
+- Result: `934 passed`
+- Command: `pytest tests/agent/ -q`
+- Result: `4229 passed, 4 skipped` (pre-existing, unrelated)
+- Command: `pytest tests/ -q -o faulthandler_timeout=120`
+- Result: `21170 passed, 13 skipped in 581.84s (0:09:41)` — 0 failed, up
+  from 21156 (previous checkpoint). Fourth consecutive fully green
+  full-suite run. Zero regressions.
+
 ## Run: 2026-07-11 13:05 UTC — validation-harness overhaul, task #15 (allowed_roles Discord guild-policy enforcement)
 
 - Branch: `overhaul/missy-validation-20260710-031406`

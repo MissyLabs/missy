@@ -64,12 +64,14 @@ Configure in ``config.yaml``::
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
 import os
 import re
 import shutil
+import signal
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
@@ -764,6 +766,92 @@ def _find_close_match(name: str, candidates: list[str], threshold: float = 0.6) 
 
 
 # ---------------------------------------------------------------------------
+# Process-group-aware subprocess execution (FX-G residual)
+#
+# subprocess.run()'s own TimeoutExpired handling, and Popen.kill()/
+# .terminate() called directly on the immediate child, only ever signal
+# that one process. acpx can spawn descendant processes (the underlying
+# claude/codex/etc. CLI it wraps); killing only the immediate PID can
+# leave those descendants running as orphans after Missy gives up on the
+# call. Every acpx subprocess is therefore started with
+# start_new_session=True (its own process group) so a timeout/cleanup
+# path can signal the whole group via os.killpg(), not just the one PID.
+# ---------------------------------------------------------------------------
+
+
+def _kill_process_group(proc: subprocess.Popen, *, force: bool = True) -> None:
+    """Signal *proc* and every process in its process group.
+
+    Requires *proc* to have been started with ``start_new_session=True``
+    (its own process group ID, equal to its own PID). Silently returns
+    if the process has already exited or the group can no longer be
+    signalled (e.g. insufficient permissions) -- this is always a
+    best-effort cleanup path, never something a caller should depend on
+    succeeding.
+
+    Args:
+        proc: The subprocess to signal.
+        force: ``True`` sends ``SIGKILL`` (immediate, unblockable);
+            ``False`` sends ``SIGTERM`` (graceful, ignorable).
+    """
+    try:
+        pgid = os.getpgid(proc.pid)
+    except ProcessLookupError:
+        return
+    sig = signal.SIGKILL if force else signal.SIGTERM
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        os.killpg(pgid, sig)
+
+
+def _run_subprocess_with_group_kill(
+    cmd: list[str], cwd: str, timeout: float
+) -> subprocess.CompletedProcess:
+    """Run *cmd* via ``Popen``, killing its whole process group on timeout.
+
+    A drop-in replacement for ``subprocess.run(cmd, capture_output=True,
+    text=True, timeout=timeout, cwd=cwd)`` that additionally starts the
+    child in its own process group and, if it doesn't finish within
+    *timeout*, kills that entire group rather than just the immediate
+    child (see module note above).
+
+    Args:
+        cmd: Argv list.
+        cwd: Working directory for the subprocess.
+        timeout: Seconds to wait before killing the process group.
+
+    Returns:
+        A :class:`subprocess.CompletedProcess` with ``returncode``,
+        ``stdout``, and ``stderr`` populated, matching
+        ``subprocess.run()``'s return shape.
+
+    Raises:
+        subprocess.TimeoutExpired: If *cmd* doesn't finish within
+            *timeout*. The process group has already been killed by the
+            time this is raised.
+        FileNotFoundError: If *cmd*'s binary doesn't exist (raised by
+            ``Popen`` itself, before any process starts).
+    """
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=cwd,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_process_group(proc)
+        # Reap the now-killed process so it doesn't linger as a zombie;
+        # best-effort, the group kill above is what actually matters.
+        with contextlib.suppress(Exception):
+            proc.communicate(timeout=5)
+        raise
+    return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+
+
+# ---------------------------------------------------------------------------
 # Provider implementation
 # ---------------------------------------------------------------------------
 
@@ -1173,11 +1261,18 @@ class AcpxProvider(BaseProvider):
         cmd.extend([self._agent, "exec", prompt])
 
         try:
+            # FX-G residual: start_new_session=True gives this process
+            # its own process group, so the cleanup paths below can kill
+            # the whole group (via _kill_process_group) rather than just
+            # this one PID -- acpx can spawn a descendant process (the
+            # underlying claude/codex CLI it wraps) that would otherwise
+            # be orphaned and keep running after this stream gives up.
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                start_new_session=True,
             )
         except FileNotFoundError as exc:
             raise ProviderError(
@@ -1210,11 +1305,11 @@ class AcpxProvider(BaseProvider):
         except ProviderError:
             raise
         except Exception as exc:
-            proc.kill()
+            _kill_process_group(proc)
             raise ProviderError(f"acpx stream failed: {exc}") from exc
         finally:
             if proc.poll() is None:
-                proc.terminate()
+                _kill_process_group(proc, force=False)
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -1262,13 +1357,7 @@ class AcpxProvider(BaseProvider):
         cmd.extend([self._agent, "exec", prompt])
 
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=self._timeout,
-                cwd=resolved_cwd,
-            )
+            result = _run_subprocess_with_group_kill(cmd, resolved_cwd, self._timeout)
         except subprocess.TimeoutExpired as exc:
             self._emit_event(session_id, task_id, "error", "subprocess timed out")
             # FX-G: on timeout, any effect this call may have triggered
@@ -1277,6 +1366,12 @@ class AcpxProvider(BaseProvider):
             # succeeded. Callers must not assume the action did or didn't
             # happen -- verify with a fresh read-only check before
             # retrying, and make any retry idempotent.
+            # FX-G residual: _run_subprocess_with_group_kill() has already
+            # killed the entire process group (not just the immediate
+            # acpx PID) by the time this exception is raised, so a
+            # descendant process (the underlying claude/codex CLI acpx
+            # wraps) can no longer be orphaned and left running after
+            # Missy gives up on this call.
             raise ProviderError(
                 f"acpx subprocess timed out after {self._timeout}s. The outcome of "
                 "this call is UNKNOWN -- it was not confirmed to succeed or fail. "

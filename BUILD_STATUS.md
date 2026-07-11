@@ -2356,6 +2356,91 @@ passed. `tests/channels/`: 1949 passed. Full suite: `21156 passed, 13
 skipped in 558.25s (0:09:18)` — 0 failed, up from 21145. Third
 consecutive fully green full-suite run. Zero regressions.
 
+### Task #17: acpx subprocess timeout now kills the whole process group, not just the immediate PID
+
+Previously deferred: an earlier attempt this session (Popen +
+`start_new_session=True` + `os.killpg` on timeout) was reverted after
+it broke ~136 pre-existing test references mocking `subprocess.run`
+directly and, worse, caused *real* subprocess spawning during the test
+run (the mocks stopped intercepting anything). This checkpoint did the
+full migration properly rather than deferring again.
+
+`missy/providers/acpx_provider.py::_run_acpx()` and `stream()` both
+called `subprocess.run()`/`subprocess.Popen()` without
+`start_new_session=True`. Python's own `TimeoutExpired` handling (and
+`Popen.kill()`/`.terminate()` called on the immediate child) only ever
+signals that one PID. Since acpx can spawn a descendant process — the
+underlying `claude`/`codex`/etc. CLI it wraps — killing only the
+immediate acpx PID on timeout can leave that descendant running as an
+orphan indefinitely after Missy gives up on the call.
+
+Fixed with two new module-level helpers: `_kill_process_group(proc,
+force=True)` (signals the whole process group via `os.killpg`,
+`SIGKILL` by default, silently a no-op if the process already exited
+or the group can't be signalled) and `_run_subprocess_with_group_kill(cmd,
+cwd, timeout)` (a drop-in replacement for `subprocess.run(...,
+capture_output=True, text=True, timeout=..., cwd=...)` that starts the
+child with `start_new_session=True` and kills its whole group on
+timeout, returning a `subprocess.CompletedProcess` with the same shape
+so the rest of `_run_acpx()`'s logic needed zero changes). `stream()`
+gained `start_new_session=True` on its own `Popen()` call, with its
+`except Exception`/`finally` cleanup paths switched from
+`proc.kill()`/`proc.terminate()` to `_kill_process_group(proc)`/
+`_kill_process_group(proc, force=False)`.
+
+**Live-reproduced the actual bug and the fix**, not just unit-tested
+the mechanism: wrote a real bash script that backgrounds a `sleep 30`
+child and then itself sleeps, ran it through the *old*
+`subprocess.run(..., timeout=2)` pattern, and confirmed the
+backgrounded child was still alive (`os.kill(child_pid, 0)` succeeded)
+well after the parent's timeout fired — a live-reproduced orphan. Ran
+the identical script through the new `_run_subprocess_with_group_kill`
+and confirmed the child was dead shortly after the timeout.
+
+**Full migration of the affected test file**, not a partial patch:
+`tests/providers/test_acpx_provider.py` had 61 `@patch("...subprocess.run")`
+decorators. Migrated all 61 to `@patch("...\_run_subprocess_with_group_kill")` —
+except the 8 in `TestAcpxAvailability`, which test `is_available()`'s
+own two `subprocess.run()` calls (`acpx --version`/`--help`, unrelated
+to the long-running delegate call and deliberately left as plain
+`subprocess.run()`, no descendant-spawning concern there). Two tests
+asserting on `mock_run.call_args.kwargs["cwd"]` were updated to
+positional-arg access (`_run_subprocess_with_group_kill(cmd, cwd,
+timeout)` takes `cwd` positionally, unlike `subprocess.run(...,
+cwd=...)`'s kwarg). **A real regression caught mid-migration:** running
+the naive globally-migrated test file hung/timed out — the sed had
+also (incorrectly) re-targeted the 8 `TestAcpxAvailability` tests,
+whose mocks then no longer intercepted `is_available()`'s real
+`subprocess.run()` calls at all; several of those tests were passing
+for the *wrong* reason (the real, unmocked call raised a genuine
+`FileNotFoundError` against a fake path, which coincidentally matched
+the expected "provider unavailable" result). Caught by actually running
+the suite (which hung) rather than trusting a clean diff, then
+reverted those 8 specifically back to mocking `subprocess.run`.
+
+New tests: `TestKillProcessGroup` (4 tests: SIGKILL by default, SIGTERM
+when `force=False`, already-exited process is a silent no-op,
+`PermissionError` from `killpg` is suppressed) and
+`TestRunSubprocessWithGroupKill` (5 tests, including the 2 real
+unmocked-subprocess live reproductions described above: successful
+command returns a `CompletedProcess`, nonexistent binary raises
+`FileNotFoundError`, `Popen` is called with `start_new_session=True`,
+timeout kills the real process group not just the child, timeout
+re-raises `TimeoutExpired`). `TestAcpxStream` (5 new tests, since
+`stream()` had zero prior test coverage of any kind: `Popen` started
+with its own process group, NDJSON events correctly yielded as text,
+nonexistent binary raises `ProviderError`, an exception mid-stream
+correctly kills the process group via both the except and finally
+cleanup paths, an already-exited process is left alone in `finally`).
+
+Verified: `tests/providers/test_acpx_provider.py`: 165 passed (up from
+151), completing in ~2.4s (confirming no real subprocess calls linger
+anywhere in the suite). `tests/providers/`: 934 passed.
+`tests/agent/`: 4229 passed, 4 pre-existing unrelated skips. Full
+suite: `21170 passed, 13 skipped in 581.84s (0:09:41)` — 0 failed, up
+from 21156. Fourth consecutive fully green full-suite run. Zero
+regressions.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security
@@ -2385,10 +2470,14 @@ native-tool-first behavior — real, tested, honestly not 100%
 reliable), task #11 (vision `CameraDiscovery` cache-TTL flake — full
 suite now 100% green), task #12 (authenticated Discord pairing
 approval endpoint — `/api/v1/discord/pairing` + `missy discord pairing
-list/approve/deny`), and task #15 (`allowed_roles` Discord guild-policy
+list/approve/deny`), task #15 (`allowed_roles` Discord guild-policy
 field — was documented and loaded from config but never checked; now
 enforced via role-ID-to-name resolution against a cached
-`GET /guilds/{id}/roles` lookup). Current remaining priority order:
+`GET /guilds/{id}/roles` lookup), and task #17 (acpx subprocess timeout
+now kills the whole process group via `os.killpg`, not just the
+immediate PID — live-reproduced the orphaned-descendant bug with a
+real spawned child process before and after). Current remaining
+priority order:
 
 1. Full 89-case tool-specific validation backlog (FS-001–DISC-CMD-008)
    — in progress (task #10); resuming from FS-001. Operator authorized
@@ -2397,8 +2486,7 @@ enforced via role-ID-to-name resolution against a cached
    delegate doesn't emit Missy's `<tool_call>` protocol (task #46) as a
    known, documented constraint, not a surprising per-case bug.
 2. Smaller tracked follow-ups: FX-F bullet 2/4 disposable
-   browser-test environment (task #16); FX-G residual acpx
-   process-group timeout kill (task #17); a Web TUI browser page for
+   browser-test environment (task #16); a Web TUI browser page for
    approvals and Discord pairing (both REST layers are real and
    authenticated but have no browser UI yet); per-provider tunable
    CircuitBreaker cooldown config (SR-4.8 residual); audit-log hash

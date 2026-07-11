@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (43 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for three consecutive checkpoints)
+## Changed (44 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for four consecutive checkpoints)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -1557,37 +1557,142 @@ ignored rather than crashing. New
 tests) for the REST method itself. `tests/channels/discord/`: 306
 passed. `tests/channels/`: 1949 passed.
 
+### Task #17 (thirty-eighth checkpoint): acpx subprocess timeout now kills the whole process group
+
+Previously deferred earlier this session: an initial attempt (Popen +
+`start_new_session=True` + `os.killpg` on timeout) was reverted after
+it broke ~136 pre-existing test references mocking `subprocess.run`
+directly and caused *real* subprocess spawning during the test run
+(since the mocks stopped intercepting anything once the production
+code called a different function). This checkpoint completed the full
+migration properly instead of deferring again.
+
+`missy/providers/acpx_provider.py`'s `_run_acpx()` and `stream()` both
+called `subprocess.run()`/`Popen()` without `start_new_session=True`.
+Python's own `TimeoutExpired` handling, and `Popen.kill()`/
+`.terminate()` called directly on the immediate child, only ever
+signal that one process — since acpx can spawn a descendant (the
+underlying `claude`/`codex`/etc. CLI it wraps), killing only the
+immediate acpx PID on timeout could leave that descendant running as
+an orphan indefinitely after Missy gives up on the call.
+
+**Live-reproduced the actual bug before fixing it**, not just reasoned
+about it: wrote a real (disposable) bash script that backgrounds a
+`sleep 30` child process and then itself sleeps; ran it through the
+*old* pattern — `subprocess.run(["bash", script], timeout=2)` — and
+confirmed via `os.kill(child_pid, 0)` that the backgrounded child was
+still alive well after the parent's timeout fired. A genuine,
+live-confirmed orphan, not a theoretical concern.
+
+Fixed with two new module-level helpers:
+`_kill_process_group(proc, force=True)` (signals the whole process
+group via `os.killpg`, `SIGKILL` by default, silently a no-op if the
+process already exited or the group can't be signalled — always a
+best-effort cleanup path) and `_run_subprocess_with_group_kill(cmd,
+cwd, timeout)` (a drop-in replacement for `subprocess.run(cmd,
+capture_output=True, text=True, timeout=timeout, cwd=cwd)` that starts
+the child with `start_new_session=True` and kills its whole group on
+timeout, returning a `subprocess.CompletedProcess` with the exact same
+shape so `_run_acpx()`'s downstream logic needed zero changes beyond
+the one call site). `stream()` gained `start_new_session=True` on its
+own `Popen()` call, with its `except Exception`/`finally` cleanup
+paths switched from `proc.kill()`/`proc.terminate()` to
+`_kill_process_group(proc)`/`_kill_process_group(proc, force=False)`.
+
+Re-ran the identical live reproduction against the fix
+(`_run_subprocess_with_group_kill(["bash", script], "/tmp", 2)`) and
+confirmed the same background child was dead shortly after the
+timeout — the exact before/after evidence this session's discipline
+requires, not just a passing unit test.
+
+**Full migration of the affected test file, not a partial patch:**
+`tests/providers/test_acpx_provider.py` had 61
+`@patch("...subprocess.run")` decorators. Migrated all 61 to
+`@patch("..._run_subprocess_with_group_kill")` — except the 8 in
+`TestAcpxAvailability`, which test `is_available()`'s own two separate
+`subprocess.run()` calls (`acpx --version`/`--help`, short-lived
+health checks unrelated to the long-running delegate call,
+deliberately left unmigrated since they have no descendant-spawning
+concern). Two tests asserting `mock_run.call_args.kwargs["cwd"]` were
+updated to positional-arg access, since
+`_run_subprocess_with_group_kill(cmd, cwd, timeout)` takes `cwd`
+positionally unlike `subprocess.run(..., cwd=...)`'s kwarg form.
+
+**A real regression caught mid-migration, exactly the kind this
+session has repeatedly found:** running the naively-globally-migrated
+test file hung and had to be killed — the mechanical sed had also
+(incorrectly) re-targeted the 8 `TestAcpxAvailability` tests, whose
+mocks then no longer intercepted `is_available()`'s real
+`subprocess.run()` calls. Several of *those* tests were passing for the
+wrong reason even before this checkpoint touched them: the real,
+unmocked `subprocess.run(["/usr/bin/acpx", "--version"], ...)` call
+against a `shutil.which`-mocked but nonexistent path raised a genuine
+`FileNotFoundError`, which `is_available()`'s own `except Exception:
+return False` caught — coincidentally producing the exact `False`
+several tests expected, masking that the mock wasn't actually being
+exercised. Caught by actually running the suite (which hung, not just
+diffing cleanly) rather than trusting the migration was complete;
+fixed by reverting those 8 specifically back to mocking
+`subprocess.run`.
+
+New tests: `TestKillProcessGroup` (4 tests: SIGKILL by default, SIGTERM
+when `force=False`, already-exited process is a silent no-op,
+`PermissionError` from `killpg` is suppressed) and
+`TestRunSubprocessWithGroupKill` (5 tests, including the 2 real
+unmocked-subprocess live reproductions described above as permanent
+regression coverage: successful command returns a `CompletedProcess`,
+nonexistent binary raises `FileNotFoundError`, `Popen` is called with
+`start_new_session=True`, timeout kills the real process group not
+just the child, timeout re-raises `TimeoutExpired`). `TestAcpxStream`
+(5 new tests — `stream()` had zero prior test coverage of any kind:
+`Popen` started with its own process group, NDJSON events correctly
+yielded as text, nonexistent binary raises `ProviderError`, an
+exception mid-stream correctly kills the process group via both the
+except and finally cleanup paths, an already-exited process is left
+alone in `finally`).
+
+Verified: `tests/providers/test_acpx_provider.py`: 165 passed (up from
+151), completing in ~2.4s — confirming no real subprocess calls linger
+anywhere in the suite after the migration. `tests/providers/`: 934
+passed. `tests/agent/`: 4229 passed, 4 pre-existing unrelated skips.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-21156 passed, 13 skipped in 558.25s (0:09:18)
+21170 passed, 13 skipped in 581.84s (0:09:41)
 ```
 
-**Zero failures**, the third consecutive fully green full-suite run.
+**Zero failures**, the fourth consecutive fully green full-suite run.
 Passed count is up from 21071 (SR-1.9b's run) to 21115
 (availability-hardening checkpoint) to 21118 (the acpx `--deny-all`
 critical-finding checkpoint) to 21125 (the native-tool denial retry
 checkpoint) to 21128 (the vision cache-TTL flake fix, first fully
-green run) to 21145 (the Discord pairing endpoint) to 21156 (this
-checkpoint's 11 new tests for `allowed_roles` enforcement). Zero
-regressions from this checkpoint or any prior one this session. **The
-security review's entire numbered SR-x.y list and its one remaining
-unnumbered "harden secondary availability hazards" bullet are both
-fully closed — the security review's text has no open items left.**
-This session's thirty-third checkpoint found and fixed a critical,
-previously-unknown vulnerability outside the review's text (FX-A's
-zero-native-tools enforcement did not actually work against the
-installed acpx binary), discovered via live agent validation while
-starting task #10; the thirty-fourth checkpoint added a real, tested,
-but honestly incomplete mitigation for the resulting
-delegate-reliability residual (task #46); the thirty-fifth checkpoint
-fixed the last remaining known test failure in the entire suite (task
-#11); the thirty-sixth checkpoint wired the previously-unreachable
-Discord pairing approval flow into a real authenticated endpoint (task
-#12); the thirty-seventh checkpoint closed the gap between
-`allowed_roles`'s documented contract and its (previously nonexistent)
-enforcement (task #15).
+green run) to 21145 (the Discord pairing endpoint) to 21156
+(`allowed_roles` enforcement) to 21170 (this checkpoint's 14 new tests
+for the acpx process-group-kill fix). Zero regressions from this
+checkpoint or any prior one this session. **The security review's
+entire numbered SR-x.y list and its one remaining unnumbered "harden
+secondary availability hazards" bullet are both fully closed — the
+security review's text has no open items left.** This session's
+thirty-third checkpoint found and fixed a critical, previously-unknown
+vulnerability outside the review's text (FX-A's zero-native-tools
+enforcement did not actually work against the installed acpx binary),
+discovered via live agent validation while starting task #10; the
+thirty-fourth checkpoint added a real, tested, but honestly incomplete
+mitigation for the resulting delegate-reliability residual (task #46);
+the thirty-fifth checkpoint fixed the last remaining known test
+failure in the entire suite (task #11); the thirty-sixth checkpoint
+wired the previously-unreachable Discord pairing approval flow into a
+real authenticated endpoint (task #12); the thirty-seventh checkpoint
+closed the gap between `allowed_roles`'s documented contract and its
+(previously nonexistent) enforcement (task #15); the thirty-eighth
+checkpoint completed a previously-deferred fix (acpx subprocess
+timeout now kills the whole process group via `os.killpg`, not just
+the immediate PID), live-reproducing the orphaned-descendant bug with
+a real spawned child process both before and after, and migrating all
+61 affected test mocks in the same checkpoint rather than leaving the
+suite in a broken intermediate state (task #17).
 
 Full detail in `BUILD_STATUS.md`, `AUDIT_SECURITY.md`, and
 `TEST_RESULTS.md` — each has one dated entry per checkpoint this
@@ -1679,10 +1784,10 @@ three files above.)
   against it. This dev sandbox cannot launch a browser at all (no
   playwright installed) — confirmed live, matching the harness's own
   observation.
-- **#17** FX-G process-group cleanup on acpx timeout — implementation
-  works but needs the test-suite migration from mocking
-  `subprocess.run` to `subprocess.Popen` done carefully in its own
-  session.
+- **#17 (fixed this checkpoint)** FX-G process-group cleanup on acpx
+  timeout — completed the previously-deferred migration; all 61
+  affected test mocks migrated in the same checkpoint. See the
+  thirty-eighth checkpoint above.
 - **Lesson worth remembering for future test-double changes** (from
   the SR-3.2 checkpoint): a bare `MagicMock()` with no `spec`
   auto-vivifies any attribute access, so a test that mocks a
@@ -1789,12 +1894,11 @@ count it as a Missy security or policy failure — the security property
 (no native access ever succeeds) holds regardless.
 
 If live acpx delegate runs become unavailable or cost-prohibited again,
-fall back to the concrete scoped tasks (#12 Discord pairing approval
-endpoint, #15 `allowed_roles` enforcement, #16 disposable browser-test
-environment, #17 acpx process-group cleanup — #11's vision
-`CameraDiscovery` flake is now fixed, see this checkpoint), all
-self-contained and not requiring a live delegate. A Web TUI browser
-page for the `/api/v1/approvals` endpoints is also a reasonable,
+fall back to the remaining concrete scoped task (#16 disposable
+browser-test environment) — #11, #12, #15, and #17 are all now fixed,
+see the later checkpoints above. A Web TUI browser page for the
+`/api/v1/approvals` and `/api/v1/discord/pairing` endpoints is also a
+reasonable,
 self-contained follow-up (the REST layer is done and tested; only the
 browser UI is missing).
 
