@@ -1133,6 +1133,62 @@ class TestRuntimeDictsToMessages:
         assert messages[0].role == "system"
         assert messages[0].content == "my system"
 
+    def test_tool_call_only_assistant_turn_never_has_empty_content(self):
+        """Claude (and other providers) frequently emit a tool_use block
+        with no accompanying text -- behavior.py explicitly tells the model
+        to avoid preamble -- so an assistant turn's "content" is
+        legitimately "" while "tool_calls" is populated. The Anthropic
+        Messages API rejects any non-final message with empty content, so
+        re-serializing this turn verbatim on the next tool-loop round would
+        send an invalid request and abort the whole multi-round task --
+        not an edge case, since a tool-call-only assistant turn is the
+        common case for Claude.
+        """
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        runtime = AgentRuntime(AgentConfig())
+        dicts = [
+            {"role": "user", "content": "List files in /tmp"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "toolu_01", "name": "shell_exec", "arguments": {"command": "ls /tmp"}}
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "toolu_01",
+                "name": "shell_exec",
+                "content": "a.txt",
+                "is_error": False,
+            },
+        ]
+        messages = runtime._dicts_to_messages("sys", dicts)
+
+        assert not any(m.content == "" for m in messages)
+        assistant_msg = next(m for m in messages if m.role == "assistant")
+        assert "shell_exec" in assistant_msg.content
+
+    def test_assistant_turn_with_real_content_and_tool_calls_unaffected(self):
+        """When the assistant turn already has real text alongside its
+        tool_calls, the placeholder substitution must not kick in and
+        overwrite it.
+        """
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        runtime = AgentRuntime(AgentConfig())
+        dicts = [
+            {
+                "role": "assistant",
+                "content": "Let me check that for you.",
+                "tool_calls": [{"id": "toolu_02", "name": "shell_exec", "arguments": {}}],
+            },
+        ]
+        messages = runtime._dicts_to_messages("sys", dicts)
+        assistant_msg = next(m for m in messages if m.role == "assistant")
+        assert assistant_msg.content == "Let me check that for you."
+
 
 class TestRuntimeBuildContextMessages:
     """Tests for _build_context_messages (lines 776-787)."""

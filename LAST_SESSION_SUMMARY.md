@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (98 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for forty-nine consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (99 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for fifty consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -4044,15 +4044,51 @@ test_graph_store.py tests/agent/ -k learnings -q`: `237 passed`.
 `pytest tests/memory/ tests/agent/ tests/integration/ -q`: `5428
 passed, 12 skipped`.
 
+### Post-backlog (ninety-second checkpoint): round 33 research pass — Anthropic-rejected empty-content assistant message in the multi-round tool loop
+
+Round 33 went deep on `FailureTracker`/`CircuitBreaker`'s realistic-
+sequence behavior, `DoneCriteria`'s `make_verification_prompt()`,
+`self_create_tool.py`'s validation, and `Checkpoint`'s resume-state
+round-trip fidelity. `FailureTracker`/`CircuitBreaker` checked out
+clean; `make_verification_prompt()` is a static string with no
+computable logic; `self_create_tool.py`'s validation is advisory-only
+(confirmed nothing ever loads/executes what it writes);
+`checkpoint.py`'s JSON round-trip mechanics are correct. Digging into
+what happens after a round-tripped conversation reaches a provider
+surfaced one severe bug.
+
+1. **Anthropic-rejected empty-content assistant message**:
+   `AgentRuntime._dicts_to_messages()` (used by every provider except
+   OpenAI) converted a tool-call-only assistant turn (legitimately
+   `content=""` -- Claude frequently emits a tool_use block with no
+   accompanying text) straight to an empty-content `Message` with no
+   non-emptiness check. Anthropic's API rejects any non-final message
+   with empty content, so the next round of a multi-round tool-calling
+   task sent an invalid request and aborted the whole task -- not an
+   edge case, since this is the common case for Claude. Also interacts
+   with checkpoint resume, faithfully round-tripping the broken state.
+   Live-reproduced end-to-end with the real
+   `AgentRuntime._dicts_to_messages()` and real
+   `AnthropicProvider.complete_with_tools()`. Fixed by substituting a
+   placeholder describing the call(s) whenever content is empty but
+   `tool_calls` is populated. 2 new tests, confirmed to fail pre-fix.
+
+Verified: `pytest tests/agent/test_coverage_gaps.py tests/agent/
+test_runtime_deep.py tests/providers/ -q`: `1178 passed`. `pytest
+tests/agent/ -q`: `4290 passed, 4 skipped`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21406 passed, 14 skipped in 724.52s (0:12:04)
+21408 passed, 14 skipped in 759.33s (0:12:39)
 ```
 
-**Zero failures**, the forty-ninth consecutive fully green
-full-suite run. Passed count is up from 21401 to 21406 (the round 32
+**Zero failures**, the fiftieth consecutive fully green
+full-suite run. Passed count is up from 21406 to 21408 (the round 33
+checkpoint's 2 new tests in `TestRuntimeDictsToMessages`; all of the
+sixty-first through ninety-first checkpoints' fixes are confirmed
+still holding). Passed count is up from 21401 to 21406 (the round 32
 checkpoint's 5 new tests: 1 GraphMemoryStore ranking test, 4
 extract_task_type() filesystem-tool tests; all of the sixty-first
 through ninetieth checkpoints' fixes are confirmed still holding).

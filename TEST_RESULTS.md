@@ -1,5 +1,44 @@
 # TEST_RESULTS
 
+## Run: 2026-07-13 19:20 UTC — round 33 research pass: Anthropic-rejected empty-content assistant message in the multi-round tool loop
+
+- Context: round 33 went deep on FailureTracker/CircuitBreaker's
+  realistic-sequence behavior, DoneCriteria's make_verification_prompt(),
+  self_create_tool.py's validation, and Checkpoint's resume-state
+  round-trip fidelity. FailureTracker/CircuitBreaker checked out clean;
+  make_verification_prompt() is a static string with no computable
+  logic; self_create_tool.py's validation is advisory-only (confirmed
+  nothing ever loads/executes what it writes); checkpoint.py's JSON
+  round-trip mechanics are correct. Digging into what happens after a
+  round-tripped conversation reaches a provider surfaced one severe bug.
+- **Anthropic-rejected empty-content assistant message**:
+  `AgentRuntime._dicts_to_messages()` (used by every provider except
+  OpenAI) converted a tool-call-only assistant turn (legitimately
+  content="" -- Claude frequently emits a tool_use block with no
+  accompanying text) straight to an empty-content Message with no
+  non-emptiness check. Anthropic's API rejects any non-final message
+  with empty content, so the next round of a multi-round tool-calling
+  task sent an invalid request and aborted the whole task -- not an
+  edge case, since this is the common case for Claude. Also interacts
+  with checkpoint resume: validate_loop_messages() never checks
+  assistant-content non-emptiness, so a checkpoint saved right after
+  such a round faithfully round-trips the broken state. Live-reproduced
+  end-to-end with the real AgentRuntime._dicts_to_messages() and real
+  AnthropicProvider.complete_with_tools(). Fixed by substituting a
+  placeholder describing the call(s) whenever content is empty but
+  tool_calls is populated.
+- Command: `pytest tests/agent/test_coverage_gaps.py::TestRuntimeDictsToMessages -v`
+- Result: `6 passed`. 2 new tests confirmed to genuinely fail pre-fix
+  via `git stash`.
+- Command: `pytest tests/agent/test_coverage_gaps.py tests/agent/test_runtime_deep.py tests/providers/ -q`
+- Result: `1178 passed`.
+- Command: `pytest tests/agent/ -q`
+- Result: `4290 passed, 4 skipped`.
+- Command: `python3 -m pytest tests/ -q`
+  (full suite, background run)
+- Result: `21408 passed, 14 skipped in 759.33s (0:12:39)`. 0 failed, up
+  from 21406. Fiftieth consecutive fully green full-suite run.
+
 ## Run: 2026-07-13 19:00 UTC — round 32 research pass: GraphMemoryStore query-relevance ranking bug, extract_task_type() missing filesystem tools
 
 - Context: round 32 went deep on ContextManager's token-counting/pruning

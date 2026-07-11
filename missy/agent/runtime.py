@@ -2462,7 +2462,26 @@ class AgentRuntime:
                     content_str = f"[Tool error for {d.get('name', 'unknown')}]: {content}"
                 result.append(Message(role="user", content=content_str))
             elif role in ("user", "assistant"):
-                result.append(Message(role=role, content=str(content)))
+                content_str = str(content)
+                if not content_str and role == "assistant" and d.get("tool_calls"):
+                    # Claude (and other providers) frequently emit a
+                    # tool_use block with no accompanying text -- behavior.py
+                    # explicitly tells the model to avoid preamble -- so
+                    # this dict's "content" is legitimately "". But the
+                    # Anthropic Messages API rejects any non-final message
+                    # with empty content ("all messages must have
+                    # non-empty content except for the optional final
+                    # assistant message"), so re-serializing this turn
+                    # verbatim on the next tool-loop round sent an invalid
+                    # request and aborted the entire multi-round task --
+                    # not an edge case, since a tool-call-only assistant
+                    # turn is the common case. Substitute a placeholder
+                    # describing the call(s) instead of an empty string.
+                    tool_names = [
+                        str(tc.get("name", "tool")) for tc in d["tool_calls"] if isinstance(tc, dict)
+                    ]
+                    content_str = f"[Called tool: {', '.join(tool_names)}]" if tool_names else "[Tool call]"
+                result.append(Message(role=role, content=content_str))
         return result
 
     def _dicts_to_native_messages(

@@ -6988,6 +6988,70 @@ passed, 12 skipped`.
 `21406 passed, 14 skipped in 724.52s (0:12:04)` — 0 failed, up from
 21401. Forty-ninth consecutive fully green full-suite run.
 
+### Post-backlog (ninety-second checkpoint): round 33 research pass fixes an Anthropic-rejected empty-content assistant message in the multi-round tool loop
+
+Round 33 went deep on `missy/agent/failure_tracker.py`/`missy/agent/
+circuit_breaker.py`'s behavior under realistic interleaved failure
+sequences, `missy/agent/done_criteria.py`'s `make_verification_prompt()`,
+`missy/tools/builtin/self_create_tool.py`'s validation logic, and
+`missy/agent/checkpoint.py`'s resume-state round-trip fidelity for
+realistic multi-tool-call histories. `FailureTracker`/`CircuitBreaker`
+both checked out clean under realistic interleaved sequences (different
+tool names interleaved, failure→success→failure);
+`make_verification_prompt()` is a static, argument-free string with no
+computable logic to get wrong; `self_create_tool.py`'s pattern-matching
+is trivially bypassable but is confirmed advisory-only (nothing in the
+codebase ever loads or executes what it writes), so a bypass isn't a
+live vulnerability against its actual, documented threat model;
+`checkpoint.py`'s JSON round-trip mechanics themselves (ordering,
+`tool_call_id`/`name`/`arguments` field survival) are correct. Digging
+into what happens *after* a faithfully round-tripped conversation
+reaches a provider surfaced one severe, previously-undiscovered bug.
+
+1. **`AgentRuntime._dicts_to_messages()` (used by every provider except
+   OpenAI — Anthropic, Ollama, Codex, ACPX) could produce an
+   assistant message with empty content that the real Anthropic API
+   rejects, aborting the entire multi-round tool-calling task.** Claude
+   frequently emits a `tool_use` block with no accompanying text
+   (`behavior.py` explicitly instructs the model to avoid preamble), so
+   the loop-message dict for that turn is legitimately
+   `{"role": "assistant", "content": "", "tool_calls": [...]}`.
+   `_dicts_to_messages()` converted this straight to
+   `Message(role="assistant", content="")` with no non-emptiness check,
+   and `AnthropicProvider.complete_with_tools()` forwards it verbatim
+   into the `messages=` payload. Anthropic's Messages API requires
+   every non-final message to have non-empty content, so the very next
+   round of the tool loop sends an invalid request and the real API
+   rejects it — not an edge case, since a tool-call-only assistant turn
+   is the *common* case for Claude, not a rare one. This also
+   interacted with checkpoint resume: `validate_loop_messages()` never
+   checks assistant-content non-emptiness, so a checkpoint saved right
+   after such a round faithfully round-trips the broken state and
+   `resume_checkpoint()` hits the identical failure on the very first
+   resumed round. Live-reproduced end-to-end with the real
+   `AgentRuntime._dicts_to_messages()` and real
+   `AnthropicProvider.complete_with_tools()` (only the network
+   transport stubbed): confirmed the exact empty-content payload that
+   would be sent to the real API. Fixed by substituting a placeholder
+   describing the call(s) (e.g. `"[Called tool: shell_exec]"`) whenever
+   an assistant dict's content is empty but `tool_calls` is populated,
+   applied at the shared `_dicts_to_messages()` level so it benefits
+   every affected provider uniformly, not just Anthropic. 2 new tests
+   (the tool-call-only case, and confirming a turn with genuine
+   existing text is left untouched), confirmed via `git stash` to
+   genuinely fail pre-fix. `pytest tests/agent/test_coverage_gaps.py
+   tests/agent/test_runtime_deep.py tests/providers/ -q`: `1178
+   passed`.
+
+Verified: `pytest tests/agent/test_coverage_gaps.py tests/agent/
+test_runtime_deep.py tests/providers/test_anthropic_provider.py
+tests/providers/ -q`: `1178 passed`. `pytest tests/agent/ -q`: `4290
+passed, 4 skipped`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21408 passed, 14 skipped in 759.33s (0:12:39)` — 0 failed, up from
+21406. Fiftieth consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security
