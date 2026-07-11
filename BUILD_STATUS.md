@@ -2314,6 +2314,48 @@ tests). `tests/api/ tests/channels/` combined: 2101 passed.
 `tests/cli/`: 1061 passed. Full suite: `21145 passed, 13 skipped in
 556.47s (0:09:16)` — 0 failed, up from 21128. Zero regressions.
 
+### Task #15: enforced the `allowed_roles` Discord guild-policy field
+
+`DiscordGuildPolicy.allowed_roles` was a real dataclass field, loaded
+from config, documented in `docs/discord.md` and
+`docs/configuration.md` as "role names required to interact," but
+`_check_guild_policy()` never checked it at all — `grep` confirmed
+`enabled`, `allowed_channels`, `allowed_users`, and `require_mention`
+were all enforced, `allowed_roles` never was.
+
+Discord's Gateway `message.member.roles` field only carries role ID
+snowflakes, but `allowed_roles` is configured as role *names* — closing
+the gap required resolving IDs to names, not just adding a membership
+check. Implemented:
+
+- New `DiscordRestClient.get_guild_roles(guild_id)` (`missy/channels/discord/rest.py`) —
+  `GET /guilds/{id}/roles`, routed through the existing
+  `PolicyHTTPClient` like every other Discord REST call.
+- New `DiscordChannel._resolve_role_names(guild_id, role_ids)`
+  (`missy/channels/discord/channel.py`) — resolves role IDs to names
+  via a per-guild cache (`_GUILD_ROLES_CACHE_TTL_SECONDS = 300`) so a
+  normal message doesn't need its own REST round trip; **fails closed**
+  on a REST error (returns an empty set — an unresolvable role can
+  never satisfy an allowlist) rather than failing open.
+- `_check_guild_policy()` now checks `allowed_roles` (when configured)
+  between the user-allowlist and mention-requirement checks, denying
+  with a new `role_not_in_allowlist` audit reason when the resolved
+  role names don't intersect the configured allowlist.
+
+Verified: `tests/channels/discord/test_discord_channel_integration.py::TestCheckGuildPolicy` —
+8 new tests (matching role allows, non-matching role denies, no roles
+at all denies, empty allowlist means no restriction *and* skips the
+REST call entirely, a REST failure fails closed, repeated calls within
+the TTL reuse the cache — exactly 1 REST call for 2 messages, the
+cache correctly refetches once artificially aged past the TTL, an
+unrecognized/stale role ID is ignored rather than crashing).
+`tests/channels/test_discord_protocol_deep.py::TestGetGuildRoles` — 3
+new tests for the REST method itself (correct URL, returns the role
+list, invalid snowflake raises). `tests/channels/discord/`: 306
+passed. `tests/channels/`: 1949 passed. Full suite: `21156 passed, 13
+skipped in 558.25s (0:09:18)` — 0 failed, up from 21145. Third
+consecutive fully green full-suite run. Zero regressions.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security
@@ -2341,9 +2383,12 @@ the acpx delegate's own native filesystem access; fixed via `--deny-all`.**
 **Also closed since then:** task #46 (bounded retry for the delegate's
 native-tool-first behavior — real, tested, honestly not 100%
 reliable), task #11 (vision `CameraDiscovery` cache-TTL flake — full
-suite now 100% green), and task #12 (authenticated Discord pairing
+suite now 100% green), task #12 (authenticated Discord pairing
 approval endpoint — `/api/v1/discord/pairing` + `missy discord pairing
-list/approve/deny`). Current remaining priority order:
+list/approve/deny`), and task #15 (`allowed_roles` Discord guild-policy
+field — was documented and loaded from config but never checked; now
+enforced via role-ID-to-name resolution against a cached
+`GET /guilds/{id}/roles` lookup). Current remaining priority order:
 
 1. Full 89-case tool-specific validation backlog (FS-001–DISC-CMD-008)
    — in progress (task #10); resuming from FS-001. Operator authorized
@@ -2351,8 +2396,7 @@ list/approve/deny`). Current remaining priority order:
    specifically; expect and record some first-turn failures where the
    delegate doesn't emit Missy's `<tool_call>` protocol (task #46) as a
    known, documented constraint, not a surprising per-case bug.
-2. Smaller tracked follow-ups: `allowed_roles` Discord guild-policy
-   field never enforced (task #15); FX-F bullet 2/4 disposable
+2. Smaller tracked follow-ups: FX-F bullet 2/4 disposable
    browser-test environment (task #16); FX-G residual acpx
    process-group timeout kill (task #17); a Web TUI browser page for
    approvals and Discord pairing (both REST layers are real and

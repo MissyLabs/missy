@@ -1,5 +1,43 @@
 # TEST_RESULTS
 
+## Run: 2026-07-11 13:05 UTC — validation-harness overhaul, task #15 (allowed_roles Discord guild-policy enforcement)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Finding: `DiscordGuildPolicy.allowed_roles` was a real dataclass
+  field, loaded from config, documented in `docs/discord.md`/
+  `docs/configuration.md` — but `_check_guild_policy()` never checked
+  it; `enabled`, `allowed_channels`, `allowed_users`, and
+  `require_mention` were all enforced, `allowed_roles` never was.
+- Fix: Discord's Gateway `message.member.roles` carries only role ID
+  snowflakes, but `allowed_roles` is configured as role names, so
+  closing the gap required ID-to-name resolution, not just a
+  membership check. New `DiscordRestClient.get_guild_roles(guild_id)`
+  (`GET /guilds/{id}/roles`, routed through the existing
+  `PolicyHTTPClient`); new `DiscordChannel._resolve_role_names()`
+  resolves via a per-guild cache (`_GUILD_ROLES_CACHE_TTL_SECONDS =
+  300`), failing closed (empty set) on a REST error rather than open;
+  `_check_guild_policy()` now checks `allowed_roles` between the
+  user-allowlist and mention-requirement checks.
+- Command: `pytest tests/channels/discord/test_discord_channel_integration.py -k role_allowlist -v`
+- Result: `8 passed` — matching role allows, non-matching role denies,
+  no roles at all denies, empty allowlist means no restriction *and*
+  skips the REST call entirely, a REST failure fails closed, repeated
+  calls within the TTL reuse the cache (exactly 1 REST call for 2
+  messages), the cache correctly refetches once artificially aged past
+  the TTL, an unrecognized/stale role ID is ignored rather than
+  crashing.
+- Command: `pytest tests/channels/test_discord_protocol_deep.py -k GetGuildRoles -v`
+- Result: `3 passed` — new REST-method tests (correct URL, returns the
+  role list, invalid snowflake raises).
+- Command: `pytest tests/channels/discord/ -q`
+- Result: `306 passed`
+- Command: `pytest tests/channels/ -q`
+- Result: `1949 passed`
+- Command: `pytest tests/ -q -o faulthandler_timeout=120`
+- Result: `21156 passed, 13 skipped in 558.25s (0:09:18)` — 0 failed, up
+  from 21145 (previous checkpoint). Third consecutive fully green
+  full-suite run. Zero regressions.
+
 ## Run: 2026-07-11 12:15 UTC — validation-harness overhaul, task #12 (authenticated Discord pairing approval endpoint)
 
 - Branch: `overhaul/missy-validation-20260710-031406`

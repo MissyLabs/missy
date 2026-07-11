@@ -11,7 +11,8 @@ Access-control pipeline (evaluated in order):
    ``allow_bots_if_mention_only`` before deciding whether to drop.
 3. For DMs (``guild_id`` absent): apply :class:`~.config.DiscordDMPolicy`.
 4. For guild messages: look up :class:`~.config.DiscordGuildPolicy` and
-   apply channel allowlist, user allowlist, and mention requirement.
+   apply channel allowlist, user allowlist, role allowlist, and mention
+   requirement.
 
 Audit events are emitted for every allow/deny decision.
 
@@ -34,6 +35,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 from typing import Any
 
 from missy.channels.base import BaseChannel, ChannelMessage
@@ -43,6 +45,10 @@ from missy.channels.discord.rest import DiscordRestClient
 from missy.core.events import AuditEvent, event_bus
 
 logger = logging.getLogger(__name__)
+
+#: How long a guild's resolved role-ID-to-name map stays cached before
+#: being re-fetched from Discord's REST API (allowed_roles enforcement).
+_GUILD_ROLES_CACHE_TTL_SECONDS = 300.0
 
 
 class DiscordSendError(Exception):
@@ -105,6 +111,11 @@ class DiscordChannel(BaseChannel):
 
         # Pending evolution reactions: message_id -> proposal_id
         self._pending_evolutions: dict[str, str] = {}
+
+        # allowed_roles enforcement: cache of guild_id -> (fetched_at,
+        # {role_id: role_name}), refreshed via the REST API on a TTL so
+        # every message doesn't need its own round trip to Discord.
+        self._guild_roles_cache: dict[str, tuple[float, dict[str, str]]] = {}
 
         # Optional voice manager (lazy import so text-only deployments don't need voice deps)
         self._voice = None
@@ -1227,6 +1238,26 @@ class DiscordChannel(BaseChannel):
             )
             return False
 
+        # Role allowlist check. The Gateway's message `member` object
+        # carries the author's role IDs (snowflakes); allowed_roles is
+        # documented and configured as role *names*, so the IDs are
+        # resolved via a cached guild role lookup before comparing.
+        if guild_policy.allowed_roles:
+            member = data.get("member") or {}
+            member_role_ids = member.get("roles") or []
+            member_role_names = self._resolve_role_names(guild_id, member_role_ids)
+            if not member_role_names & set(guild_policy.allowed_roles):
+                self._emit_audit(
+                    "discord.channel.allowlist_denied",
+                    "deny",
+                    {
+                        "reason": "role_not_in_allowlist",
+                        "guild_id": guild_id,
+                        "author_id": author_id,
+                    },
+                )
+                return False
+
         # Mention requirement check.
         if guild_policy.require_mention and not skip_mention_check:
             own_id = self.bot_user_id or self.account_config.account_id
@@ -1246,6 +1277,50 @@ class DiscordChannel(BaseChannel):
                 return False
 
         return True
+
+    def _resolve_role_names(self, guild_id: str, role_ids: list[str]) -> set[str]:
+        """Resolve role ID snowflakes to role names for ``guild_id``.
+
+        Discord's Gateway ``message.member.roles`` field only carries
+        role ID snowflakes, but ``DiscordGuildPolicy.allowed_roles`` is
+        documented and configured as human-readable role *names* — this
+        bridges the two via a cached (TTL
+        ``_GUILD_ROLES_CACHE_TTL_SECONDS``) call to
+        ``GET /guilds/{id}/roles``, so a normal message doesn't need its
+        own REST round trip.
+
+        Args:
+            guild_id: The guild the message was sent in.
+            role_ids: Role ID snowflakes from the message's ``member``
+                object.
+
+        Returns:
+            The set of role names corresponding to ``role_ids``.  On a
+            REST failure, returns an empty set (fail closed — an
+            unresolvable role can never satisfy an allowlist).
+        """
+        if not role_ids:
+            return set()
+
+        now = time.monotonic()
+        cached = self._guild_roles_cache.get(guild_id)
+        if cached is None or (now - cached[0]) >= _GUILD_ROLES_CACHE_TTL_SECONDS:
+            try:
+                roles = self._rest.get_guild_roles(guild_id)
+                role_map = {str(r["id"]): str(r["name"]) for r in roles}
+            except Exception:
+                logger.warning(
+                    "Discord: failed to fetch guild roles for %s -- "
+                    "allowed_roles check fails closed for this message.",
+                    guild_id,
+                    exc_info=True,
+                )
+                return set()
+            self._guild_roles_cache[guild_id] = (now, role_map)
+            cached = self._guild_roles_cache[guild_id]
+
+        role_map = cached[1]
+        return {role_map[rid] for rid in role_ids if rid in role_map}
 
     # ------------------------------------------------------------------
     # Pairing management

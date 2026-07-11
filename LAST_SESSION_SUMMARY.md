@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (42 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for two consecutive checkpoints)
+## Changed (43 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for three consecutive checkpoints)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -1514,34 +1514,80 @@ tests) and `tests/cli/test_cli_commands.py::TestDiscordPairingCli` (8
 tests). `tests/api/test_server.py`: 142 passed. `tests/cli/`: 1061
 passed. `tests/api/ tests/channels/` combined: 2101 passed.
 
+### Task #15 (thirty-seventh checkpoint): enforced the `allowed_roles` Discord guild-policy field
+
+`DiscordGuildPolicy.allowed_roles` was a real dataclass field, loaded
+from config, documented in `docs/discord.md`/`docs/configuration.md`
+as "role names required to interact; empty means all roles" — but
+`_check_guild_policy()` never checked it at all. Confirmed via direct
+code reading: `enabled`, `allowed_channels`, `allowed_users`, and
+`require_mention` were all real enforcement branches in that method;
+`allowed_roles` had none, matching the task's own description exactly.
+
+Discord's Gateway `message.member.roles` field only carries role ID
+snowflakes, but `allowed_roles` is configured and documented as
+human-readable role *names* — so closing this gap required resolving
+IDs to names via Discord's REST API, not just adding a membership
+check against data already on the message. Implemented: new
+`DiscordRestClient.get_guild_roles(guild_id)`
+(`missy/channels/discord/rest.py`) — `GET /guilds/{id}/roles`, routed
+through the existing `PolicyHTTPClient` like every other Discord REST
+call in this codebase; new
+`DiscordChannel._resolve_role_names(guild_id, role_ids)`
+(`missy/channels/discord/channel.py`) resolves IDs to names via a
+per-guild cache (`_GUILD_ROLES_CACHE_TTL_SECONDS = 300`) so a normal
+incoming message doesn't need its own REST round trip, and **fails
+closed** on a REST error (returns an empty set, so an unresolvable role
+can never satisfy an allowlist) rather than failing open and admitting
+everyone. `_check_guild_policy()` now checks `allowed_roles` (only
+when configured — an empty allowlist skips role resolution entirely,
+matching every other allowlist field's "empty means unrestricted"
+semantics) between the user-allowlist and mention-requirement checks,
+denying with a new `role_not_in_allowlist` audit reason.
+
+Verified: `tests/channels/discord/test_discord_channel_integration.py::TestCheckGuildPolicy` —
+8 new tests covering matching-role allow, non-matching-role deny,
+no-roles-at-all deny, empty-allowlist-skips-the-REST-call-entirely
+(asserted via `mock_rest.get_guild_roles.assert_not_called()`),
+REST-failure-fails-closed, cache reuse across 2 messages within the
+TTL (exactly 1 REST call), cache correctly refetches once artificially
+aged past the TTL, and an unrecognized/stale role ID is silently
+ignored rather than crashing. New
+`tests/channels/test_discord_protocol_deep.py::TestGetGuildRoles` (3
+tests) for the REST method itself. `tests/channels/discord/`: 306
+passed. `tests/channels/`: 1949 passed.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-21145 passed, 13 skipped in 556.47s (0:09:16)
+21156 passed, 13 skipped in 558.25s (0:09:18)
 ```
 
-**Zero failures**, the second consecutive fully green full-suite run.
+**Zero failures**, the third consecutive fully green full-suite run.
 Passed count is up from 21071 (SR-1.9b's run) to 21115
 (availability-hardening checkpoint) to 21118 (the acpx `--deny-all`
 critical-finding checkpoint) to 21125 (the native-tool denial retry
 checkpoint) to 21128 (the vision cache-TTL flake fix, first fully
-green run) to 21145 (this checkpoint's 17 new tests for the Discord
-pairing endpoint). Zero regressions from this checkpoint or any prior
-one this session. **The security review's entire numbered SR-x.y list
-and its one remaining unnumbered "harden secondary availability
-hazards" bullet are both fully closed — the security review's text has
-no open items left.** This session's thirty-third checkpoint found and
-fixed a critical, previously-unknown vulnerability outside the
-review's text (FX-A's zero-native-tools enforcement did not actually
-work against the installed acpx binary), discovered via live agent
-validation while starting task #10; the thirty-fourth checkpoint added
-a real, tested, but honestly incomplete mitigation for the resulting
+green run) to 21145 (the Discord pairing endpoint) to 21156 (this
+checkpoint's 11 new tests for `allowed_roles` enforcement). Zero
+regressions from this checkpoint or any prior one this session. **The
+security review's entire numbered SR-x.y list and its one remaining
+unnumbered "harden secondary availability hazards" bullet are both
+fully closed — the security review's text has no open items left.**
+This session's thirty-third checkpoint found and fixed a critical,
+previously-unknown vulnerability outside the review's text (FX-A's
+zero-native-tools enforcement did not actually work against the
+installed acpx binary), discovered via live agent validation while
+starting task #10; the thirty-fourth checkpoint added a real, tested,
+but honestly incomplete mitigation for the resulting
 delegate-reliability residual (task #46); the thirty-fifth checkpoint
 fixed the last remaining known test failure in the entire suite (task
 #11); the thirty-sixth checkpoint wired the previously-unreachable
 Discord pairing approval flow into a real authenticated endpoint (task
-#12).
+#12); the thirty-seventh checkpoint closed the gap between
+`allowed_roles`'s documented contract and its (previously nonexistent)
+enforcement (task #15).
 
 Full detail in `BUILD_STATUS.md`, `AUDIT_SECURITY.md`, and
 `TEST_RESULTS.md` — each has one dated entry per checkpoint this
@@ -1623,8 +1669,11 @@ three files above.)
   pairing approval endpoint — `GET/POST /api/v1/discord/pairing[/...]`
   plus `missy discord pairing list/approve/deny`, mirroring the SR-2.2
   `ApprovalGate` pattern. See the thirty-sixth checkpoint above.
-- **#15** `allowed_roles` Discord config field documented but never
-  enforced.
+- **#15 (fixed this checkpoint)** `allowed_roles` Discord config field
+  was documented and loaded but never enforced — now checked via
+  role-ID-to-name resolution against a cached `GET /guilds/{id}/roles`
+  lookup, failing closed on a REST error. See the thirty-seventh
+  checkpoint above.
 - **#16** FX-F bullets 2/4: build an actual disposable, threat-modeled
   browser-test environment and rerun WB-002 through WB-007 + XT-001
   against it. This dev sandbox cannot launch a browser at all (no

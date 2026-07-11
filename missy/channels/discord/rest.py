@@ -452,6 +452,26 @@ class DiscordRestClient:
         response.raise_for_status()
         return response.json()
 
+    def get_guild_roles(self, guild_id: str) -> list[dict[str, Any]]:
+        """Fetch the list of roles defined in a guild.
+
+        Used to resolve the role ID snowflakes carried on a message's
+        ``member.roles`` field to the human-readable role names that
+        ``DiscordGuildPolicy.allowed_roles`` is configured with (task
+        #12/allowed_roles enforcement).
+
+        Args:
+            guild_id: The guild snowflake ID.
+
+        Returns:
+            A list of Discord Role objects (each with ``id``/``name``).
+        """
+        _validate_snowflake(guild_id, "guild_id")
+        url = f"{BASE}/guilds/{guild_id}/roles"
+        response = self._http.get(url, headers=self._headers())
+        response.raise_for_status()
+        return response.json()
+
     def send_interaction_response(
         self,
         interaction_id: str,
