@@ -239,12 +239,16 @@ class ContainerSandbox:
         self._container_id = None
 
         try:
-            subprocess.run(
+            result = subprocess.run(
                 ["docker", "rm", "-f", cid],
                 capture_output=True,
                 timeout=15,
             )
-            logger.info("Container removed: %s", cid[:12])
+            if result.returncode != 0:
+                err = result.stderr.decode("utf-8", errors="replace").strip()
+                logger.error("Failed to remove container %s: %s", cid[:12], err)
+            else:
+                logger.info("Container removed: %s", cid[:12])
         except (subprocess.TimeoutExpired, OSError) as exc:
             logger.error("Failed to remove container %s: %s", cid[:12], exc)
 

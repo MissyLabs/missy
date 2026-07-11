@@ -152,6 +152,32 @@ class TestVectorMemoryStoreWithFaiss:
         store.load()  # Should not raise
         assert store.count() == 0
 
+    def test_load_rebuilds_index_on_dimension_mismatch(self, tmp_path: Path) -> None:
+        """A saved index at one dimension, loaded with a different configured
+        dimension (e.g. across an upgrade that changes the default), must not
+        crash on the next add()/search() -- it should transparently rebuild.
+        """
+        index_path = str(tmp_path / "mismatch.faiss")
+
+        store64 = VectorMemoryStore(dimension=64, index_path=index_path)
+        store64.add("hello world", {"category": "greeting"})
+        store64.add("the deployment failed", {"category": "solution"})
+        store64.save()
+
+        store384 = VectorMemoryStore(dimension=384, index_path=index_path)
+        store384.load()
+
+        assert store384._index.d == 384
+        assert store384.count() == 2
+
+        # Must not raise (pre-fix: FAISS AssertionError on shape mismatch).
+        store384.add("another entry")
+        assert store384.count() == 3
+
+        results = store384.search("deployment", top_k=2)
+        texts = {r["text"] for r in results}
+        assert "the deployment failed" in texts
+
 
 # ---------------------------------------------------------------------------
 # Graceful degradation without FAISS

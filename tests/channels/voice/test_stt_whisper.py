@@ -193,6 +193,32 @@ class TestFasterWhisperSTTTranscribe:
             result = await engine.transcribe(pcm, channels=2)
             assert result.text == "stereo"
 
+    @pytest.mark.asyncio
+    async def test_transcribe_multichannel_odd_length_drops_trailing_sample(self):
+        """A buffer whose sample count isn't an exact multiple of channels
+        (e.g. a network frame split mid-sample) must not crash -- pre-fix,
+        numpy's reshape() raised an unhandled ValueError in this case."""
+        pytest.importorskip("numpy")
+        mock_whisper_module = MagicMock()
+        mock_model = MagicMock()
+        segments = [MockSegment(text=" stereo")]
+        info = MockTranscribeInfo()
+        mock_model.transcribe.return_value = (iter(segments), info)
+        mock_whisper_module.WhisperModel.return_value = mock_model
+
+        with patch.dict("sys.modules", {"faster_whisper": mock_whisper_module}):
+            from missy.channels.voice.stt.whisper import FasterWhisperSTT
+
+            engine = FasterWhisperSTT(device="cpu", compute_type="int8")
+            engine.load()
+
+            import struct
+
+            # 5 int16 samples with channels=2: not evenly divisible.
+            pcm = struct.pack("<5h", *([0] * 5))
+            result = await engine.transcribe(pcm, channels=2)
+            assert result.text == "stereo"
+
 
 class TestSTTEngineIsAbstract:
     def test_cannot_instantiate(self):

@@ -1,5 +1,67 @@
 # TEST_RESULTS
 
+## Run: 2026-07-13 14:20 UTC — round 21 research pass: VectorMemoryStore dimension-mismatch crash, ContainerSandbox false-success cleanup log, FasterWhisperSTT odd-length multichannel crash
+
+- Context: round 21 of the research-pass invitation (rounds 1-20 covered
+  every area listed in the round 20 entry below, plus RestPolicy path
+  normalization, AuditLogger rotation, and SchedulerManager job-loading
+  lifecycle). This round targeted `missy/memory/vector_store.py`,
+  `missy/security/container.py`'s own internal logic (not its
+  already-documented zero-callers gap), `missy/channels/voice/stt/
+  whisper.py`, and `missy/agent/attention.py`'s scoring math. `PiperTTS`,
+  `ContainerSandbox`'s other methods, `VectorMemoryStore` concurrency,
+  and 3 of the 5 attention subsystems' math all checked out clean.
+  Three genuine code bugs fixed, plus a stale docstring worked-example
+  corrected.
+- **VectorMemoryStore dimension-mismatch crash**: `load()` never checked
+  that a loaded index's dimensionality matched the store's configured
+  `dimension`, crashing with an unhandled FAISS `AssertionError` on the
+  next `add()`/`search()`. Fixed by rebuilding a fresh index at the
+  configured dimension on mismatch, re-embedding the already-loaded
+  entries' text rather than crashing or losing them.
+- Command: `pytest tests/memory/ -q` (run under `~/.venv`, which has
+  `faiss-cpu` installed)
+- Result: `607 passed`. New test confirmed to genuinely fail pre-fix via
+  `git stash` (`AssertionError`). A pre-existing test double
+  (`FakeIndex` in `test_vector_store_coverage.py`) stored the dimension
+  as `.dim` instead of the real FAISS API's `.d` — corrected to match.
+- **ContainerSandbox false-success cleanup log**: `stop()` ignored
+  `docker rm`'s return code entirely, logging "Container removed" even
+  when removal failed with a nonzero exit code. Fixed by checking
+  `result.returncode` the same way `start()` already does.
+- Command: `pytest tests/security/test_container_config_edges.py
+  tests/unit/test_container_progress_edges.py -q`
+- Result: all passed. New test confirmed to genuinely fail pre-fix via
+  `git stash` (misleading "removed" log was present when it should not
+  have been).
+- **FasterWhisperSTT odd-length multichannel crash**: `transcribe()`
+  crashed with an unhandled `numpy.ValueError` on a PCM buffer whose
+  sample count wasn't an exact multiple of `channels`. Fixed by dropping
+  the trailing incomplete frame (with a warning log) before reshaping.
+- Command: `pytest tests/channels/voice/ -q`
+- Result: all passed. New test confirmed to genuinely fail pre-fix via
+  `git stash` (`ValueError: cannot reshape array of size 5 into shape
+  (2)`).
+- **AlertingAttention docstring correction**: the module docstring's
+  worked example claimed a specific urgent sentence triggers
+  `priority_tools == ["shell_exec", "file_read"]`, but the real,
+  length-normalized urgency score for that sentence is below the
+  escalation threshold. Confirmed this is the deliberate, already-tested
+  design (not a scoring bug) — corrected the docstring to state the
+  real, verified output instead of changing the formula.
+- Command: `pytest tests/agent/test_attention.py tests/agent/
+  test_attention_consolidation_edges.py tests/agent/
+  test_attention_state_edges.py -q`
+- Result: all passed (no behavior change, docstring-only correction).
+- Command: `python3 -m pytest tests/ -q`
+  (full suite, background run)
+- Result: `21373 passed, 14 skipped in 616.07s (0:10:16)`. 0 failed, up
+  from 21371 passed / 13 skipped (the new dimension-mismatch test is
+  `@needs_faiss`-marked and skips under the standard system-Python
+  environment with no `faiss-cpu` installed; verified passing for real
+  under `~/.venv` above). Thirty-ninth consecutive fully green
+  full-suite run.
+
 ## Run: 2026-07-13 13:20 UTC — round 20 research pass: RestPolicy dot-segment path-normalization bypass, AuditLogger same-second rotation collision, scheduler doctor/list always reporting 0 jobs
 
 - Context: round 20 of the research-pass invitation (rounds 1-19 covered

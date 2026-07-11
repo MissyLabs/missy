@@ -212,6 +212,32 @@ class VectorMemoryStore:
         with open(self._metadata_path, encoding="utf-8") as f:
             self._entries = json.load(f)
 
+        if self._index.d != self.dimension:
+            # A dimension mismatch (e.g. the configured default changed
+            # across an upgrade while an old index remained on disk) would
+            # otherwise surface as an unhandled AssertionError deep inside
+            # FAISS on the next add()/search() call. Rebuild a fresh index
+            # at the configured dimension and re-embed the already-loaded
+            # entries' text rather than crashing or silently discarding them.
+            logger.warning(
+                "Vector index dimension mismatch (index=%d, configured=%d) "
+                "-- rebuilding index from %d persisted entries at the "
+                "configured dimension.",
+                self._index.d,
+                self.dimension,
+                len(self._entries),
+            )
+            import numpy as np
+
+            rebuilt = faiss.IndexFlatL2(self.dimension)
+            if self._entries:
+                vectors = np.array(
+                    [self._vectorizer.encode(e["text"]) for e in self._entries],
+                    dtype=np.float32,
+                )
+                rebuilt.add(vectors)
+            self._index = rebuilt
+
         logger.info("Vector index loaded: %d entries", len(self._entries))
 
     def count(self) -> int:

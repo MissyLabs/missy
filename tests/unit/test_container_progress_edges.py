@@ -347,6 +347,27 @@ class TestStopEdgeCases:
         # container_id was already None when docker rm ran
         assert call_log == [None]
 
+    @patch("missy.security.container.subprocess.run")
+    def test_stop_logs_error_not_success_when_docker_rm_returns_nonzero(
+        self, mock_run: MagicMock, caplog: Any
+    ) -> None:
+        """docker rm exiting nonzero without raising must not be logged as a
+        success -- pre-fix, stop() ignored result.returncode entirely and
+        always logged "Container removed", even when removal actually failed
+        (e.g. permission denied, container busy)."""
+        mock_run.return_value = MagicMock(
+            returncode=1, stdout=b"", stderr=b"permission denied"
+        )
+        sb = _started_sb("failrm")
+        with caplog.at_level("INFO", logger="missy.security.container"):
+            sb.stop()
+
+        assert not any("removed" in rec.message.lower() for rec in caplog.records)
+        assert any(
+            rec.levelname == "ERROR" and "permission denied" in rec.message
+            for rec in caplog.records
+        )
+
 
 class TestContextManagerEdgeCases:
     """__enter__ / __exit__ guarantee cleanup even on exceptions."""

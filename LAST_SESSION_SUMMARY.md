@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (87 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for thirty-eight consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (88 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for thirty-nine consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -3566,15 +3566,87 @@ Verified: `pytest tests/gateway/ tests/policy/ -q`: `1045 passed`.
 `pytest tests/observability/ -q`: `141 passed`. `pytest tests/cli/ -q`:
 `1079 passed`. `pytest tests/scheduler/ -q`: `369 passed`.
 
+### Post-backlog (eighty-first checkpoint): round 21 research pass — VectorMemoryStore dimension-mismatch crash, ContainerSandbox false-success cleanup log, FasterWhisperSTT odd-length multichannel crash
+
+Round 21 (rounds 1-20 covered every area listed in the round 20 entry
+above, plus RestPolicy path normalization, AuditLogger rotation, and
+SchedulerManager job-loading lifecycle), into
+`missy/memory/vector_store.py`, `missy/security/container.py`'s own
+internal logic (not its already-documented zero-callers gap), `missy/
+channels/voice/stt/whisper.py`, and `missy/agent/attention.py`'s
+scoring math. `PiperTTS`, `ContainerSandbox`'s other methods,
+`VectorMemoryStore` concurrency, and 3 of the 5 attention subsystems'
+math all checked out clean. Three genuine code bugs fixed, plus a
+stale docstring worked-example corrected.
+
+1. **VectorMemoryStore dimension-mismatch crash**: `load()` never
+   checked that a loaded index's dimensionality matched the store's
+   configured `dimension`, crashing with an unhandled FAISS
+   `AssertionError` on the next `add()`/`search()` -- reachable
+   whenever a store is constructed with a different dimension than
+   whatever created the on-disk index (e.g. across a version upgrade
+   that changes the default). Live-reproduced with real `faiss-cpu`.
+   Fixed by rebuilding a fresh index at the configured dimension on
+   mismatch, re-embedding the already-loaded entries' text rather than
+   crashing or losing them. 1 new test, confirmed to fail pre-fix. Also
+   fixed a pre-existing test double (`FakeIndex` in
+   `test_vector_store_coverage.py`) that stored the dimension as `.dim`
+   instead of the real FAISS API's `.d`.
+2. **ContainerSandbox false-success cleanup log**: `stop()` ignored
+   `docker rm`'s return code entirely, unconditionally logging
+   "Container removed" even when removal failed with a nonzero exit
+   code -- and since `_container_id` is already cleared before the
+   `docker rm` call (intentional, so a second `stop()` from `__exit__`
+   is a no-op), a failed removal left the container leaked with no way
+   to retry via this object. Fixed by checking `result.returncode` the
+   same way `start()` already does. 1 new test, confirmed to fail
+   pre-fix.
+3. **FasterWhisperSTT odd-length multichannel crash**: `transcribe()`
+   crashed with an unhandled `numpy.ValueError` on a PCM buffer whose
+   sample count wasn't an exact multiple of `channels` (client-supplied,
+   clamped but not guaranteed even). Mitigated in practice by the voice
+   server's broad exception handling, but `transcribe()` itself had no
+   defensive handling. Fixed by dropping the trailing incomplete frame
+   (with a warning log) before reshaping. 1 new test, confirmed to fail
+   pre-fix.
+4. **AlertingAttention docstring correction**: the module docstring's
+   worked example claimed a specific urgent sentence triggers
+   `priority_tools == ["shell_exec", "file_read"]`, but the real,
+   length-normalized urgency score for that sentence (0.286) is below
+   the 0.5 escalation threshold. Confirmed this is the deliberate,
+   already-extensively-tested scoring design, not a formula bug --
+   changing it would ripple through existing tests that assert this
+   exact word-count-sensitive behavior as wanted, and amounts to a
+   product-policy tuning decision rather than a bounded fix (left as an
+   explicit residual, matching this session's established scoping
+   discipline). Corrected the docstring to state the real, verified
+   output instead.
+
+Verified: `pytest tests/agent/test_attention.py tests/agent/
+test_attention_consolidation_edges.py tests/agent/
+test_attention_state_edges.py tests/security/test_container_config_edges.py
+tests/unit/test_container_progress_edges.py tests/channels/voice/ -q`:
+`514 passed`. `pytest tests/memory/ tests/vision/ -q` (run under
+`~/.venv` for `faiss-cpu`): `607 passed` + `2966 passed`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21371 passed, 13 skipped in 575.04s (0:09:35)
+21373 passed, 14 skipped in 616.07s (0:10:16)
 ```
 
-**Zero failures**, the thirty-eighth consecutive fully green
-full-suite run. Passed count is up from 21366 to 21371 (the round 20
+**Zero failures**, the thirty-ninth consecutive fully green
+full-suite run. Passed count is up from 21371 to 21373 (the round 21
+checkpoint's 2 new tests that run under the standard system-Python
+environment: 1 ContainerSandbox false-success-log test and 1
+FasterWhisperSTT odd-length-multichannel test; the third new test,
+VectorMemoryStore's dimension-mismatch test, is `@needs_faiss`-marked
+and skips here since this environment has no `faiss-cpu` installed --
+it passes for real under `~/.venv`, confirmed above -- accounting for
+the skip count going from 13 to 14; all of the sixty-first through
+eightieth checkpoints' fixes are confirmed still holding). Passed
+count is up from 21366 to 21371 (the round 20
 checkpoint's 5 new tests: 1 RestPolicy dot-segment-normalization test,
 1 AuditLogger same-second-rotation test, and 3 SchedulerManager
 load_jobs() tests — all of the sixty-first through seventy-ninth

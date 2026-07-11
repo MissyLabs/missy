@@ -6083,6 +6083,119 @@ their tests exactly; no finding). Three genuine findings fixed.
 `21371 passed, 13 skipped in 575.04s (0:09:35)` — 0 failed, up from
 21366. Thirty-eighth consecutive fully green full-suite run.
 
+### Post-backlog (eighty-first checkpoint): round 21 research pass fixes a VectorMemoryStore dimension-mismatch crash, a ContainerSandbox false-success log on failed cleanup, and an STT reshape crash on odd-length multichannel audio
+
+Round 21 (rounds 1-20 covered the full list from the prior checkpoint
+plus RestPolicy path normalization, AuditLogger rotation, and
+SchedulerManager job-loading lifecycle), this time into
+`missy/memory/vector_store.py` (`VectorMemoryStore`/FAISS), `missy/
+security/container.py` (`ContainerSandbox`'s own internal logic, not
+its already-documented zero-callers gap), `missy/channels/voice/stt/
+whisper.py` (`FasterWhisperSTT`), and `missy/agent/attention.py`'s 5
+subsystems' actual scoring math. `PiperTTS`, `ContainerSandbox.execute()`/
+`copy_in()`/`copy_out()`/`start()`/`is_available()`, `VectorMemoryStore`
+concurrency (no locking exists, but the class is used single-threaded
+by its only caller), and `OrientingAttention`/`SustainedAttention`/
+`SelectiveAttention`'s math all checked out clean. Three genuine code
+bugs fixed, plus one stale docstring worked-example corrected to match
+already-well-tested, intentional scoring behavior.
+
+1. **`VectorMemoryStore.load()` had no dimension-mismatch handling,
+   crashing on the next `add()`/`search()` call with an unhandled FAISS
+   `AssertionError`.** No check existed that a loaded index's
+   dimensionality (`self._index.d`) matched the store's configured
+   `dimension` — reachable whenever a store is constructed with a
+   different `dimension` than whatever created the on-disk index (e.g.
+   across a version upgrade that changes the default 384, while an old
+   index remains on disk). `missy/vision/vision_memory.py` constructs
+   `VectorMemoryStore()` with defaults, so bumping the default dimension
+   in a future release would break every vision-memory `add`/`search`
+   call for any user with a pre-existing index. Live-reproduced with
+   real `faiss-cpu` (not mocks): a 64-dim saved index loaded by a
+   384-dim store crashed with `AssertionError` on the next `add()`.
+   Fixed by detecting the mismatch in `load()` and rebuilding a fresh
+   index at the configured dimension, re-embedding the
+   already-loaded entries' text via the existing `SimpleVectorizer`
+   rather than crashing or silently discarding the persisted memory. 1
+   new test, confirmed via `git stash` to genuinely fail pre-fix
+   (`AssertionError`, then the fix's own `assert store384._index.d ==
+   384` failing pre-fix). Fixing this exposed a pre-existing gap in the
+   test suite's own `FakeIndex` test double
+   (`tests/memory/test_vector_store_coverage.py`): it stored the
+   dimension as `self.dim` instead of the real FAISS API's `self.d`,
+   an attribute nothing had ever previously read — corrected to `self.d`
+   so the fake matches the real library shape. `pytest tests/memory/ -q`
+   (run under `~/.venv` where `faiss-cpu` is installed): `607 passed`.
+2. **`ContainerSandbox.stop()` ignored `docker rm`'s return code
+   entirely and unconditionally logged "Container removed" even when
+   removal failed.** Unlike `start()` (which checks
+   `result.returncode != 0`) and `copy_in`/`copy_out` (which pass
+   `check=True`), `stop()` never inspected the result at all — a
+   `docker rm -f` failure that exits nonzero without raising (permission
+   denied, container busy, transient daemon error) was logged as a false
+   success, and since `_container_id` is already cleared before the
+   `docker rm` call runs (intentional, per the existing
+   `test_stop_clears_container_id_before_docker_call` test, so a second
+   `stop()` from `__exit__` is a no-op), the container is leaked with no
+   way to retry cleanup via this object. Live-reproduced with a mocked
+   nonzero-returncode `subprocess.run`. Fixed by checking
+   `result.returncode` the same way `start()` already does, logging an
+   accurate `ERROR` with the real stderr instead of a false `INFO`
+   success. 1 new test, confirmed via `git stash` to genuinely fail
+   pre-fix (asserted the misleading "removed" log was absent; it was
+   present). `pytest tests/security/test_container_config_edges.py
+   tests/unit/test_container_progress_edges.py -q`: `all passed`.
+3. **`FasterWhisperSTT.transcribe()` crashed on an odd-length
+   multichannel PCM buffer.** `audio_array.reshape(-1, channels)` had no
+   check that the sample count divides evenly by `channels` — a buffer
+   whose length isn't an exact multiple (e.g. a network audio frame
+   split mid-sample; `channels` is client-supplied, clamped but not
+   guaranteed even) raised an unhandled `numpy.ValueError`.
+   `missy/channels/voice/server.py` wraps the `transcribe()` call in a
+   broad `try/except Exception`, so this degraded to a generic "Speech
+   recognition failed" response rather than crashing the server, but
+   `transcribe()` itself had no defensive handling. Live-reproduced with
+   a 5-sample buffer at `channels=2`. Fixed by detecting the remainder
+   and dropping the trailing incomplete frame (with a warning log)
+   before reshaping. 1 new test, confirmed via `git stash` to genuinely
+   fail pre-fix (`ValueError: cannot reshape array of size 5 into shape
+   (2)`). `pytest tests/channels/voice/ -q`: `all passed`.
+4. **`AlertingAttention`'s module docstring worked example was
+   factually wrong**: it claimed `attn.process("The server is down! Fix
+   it immediately!")` yields `priority_tools == ["shell_exec",
+   "file_read"]`, but live-verified the real computed urgency for that
+   exact sentence is `0.286` (2 of 7 words match urgency keywords),
+   below `ExecutiveAttention`'s `0.5` escalation threshold, so
+   `priority_tools` is actually `[]`. This is *not* a scoring-formula
+   bug: the length-normalized ratio (`matched keywords / total words`)
+   is the deliberate, already-extensively-tested design — multiple
+   existing tests (`test_single_urgency_keyword_in_long_text_gives_
+   partial_score`, `test_multiple_urgency_keywords_in_long_text`) assert
+   this exact word-count-sensitive behavior as *wanted*, not incidental.
+   Changing the formula would ripple through that already-validated test
+   coverage and amounts to a product-policy decision about
+   urgency-sensitivity tuning, not a bounded bug fix — left as an
+   explicit residual per this session's established scoping discipline
+   (matching e.g. round 13's `SleeptimeWorker` race, round 17's
+   `InteractiveApproval` timeout). Fixed the narrower, unambiguous
+   defect instead: corrected the docstring's worked example to state the
+   real, verified output.
+
+Verified: `pytest tests/agent/test_attention.py tests/agent/
+test_attention_consolidation_edges.py tests/agent/
+test_attention_state_edges.py tests/security/test_container_config_edges.py
+tests/unit/test_container_progress_edges.py tests/channels/voice/ -q`:
+`514 passed`. `pytest tests/memory/ tests/vision/ -q` (run under
+`~/.venv` for `faiss-cpu`): `607 passed` + `2966 passed`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21373 passed, 14 skipped in 616.07s (0:10:16)` — 0 failed, up from
+21371 passed / 13 skipped (the new dimension-mismatch test is
+`@needs_faiss`-marked and skips under the standard system-Python
+environment used for this full-suite run, which has no `faiss-cpu`
+installed; it passes for real under `~/.venv`, confirmed above).
+Thirty-ninth consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security
