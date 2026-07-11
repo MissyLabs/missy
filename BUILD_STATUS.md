@@ -5775,6 +5775,117 @@ faulthandler_timeout=120` → `21357 passed, 13 skipped in 523.25s
 (0:08:43)` — 0 failed, up from 21354. Thirty-fifth consecutive fully
 green full-suite run.
 
+### Post-backlog (seventy-eighth checkpoint): round 18 research pass fixes a real CostTracker billing overcharge, a SkillDiscovery silent data-loss bug, and a web console escaping-convention gap
+
+Round 18 of the research-pass invitation (rounds 1-17: Scheduler/Persona;
+API server auth/ratelimit/censor/MessageBus/Screencast; Memory-
+compaction/GraphMemoryStore/Vault; Config/Vision/CandidateGenerator;
+MCP-approval-gate+lifecycle/SubAgent/Learnings/Playbook/Attention;
+Discord-rest+access-control/operator-controls/AuditLogger/behavior;
+ContextManager/Synthesizer/Watchdog/InteractiveApproval; Webhook/
+ConfigWatcher/ContainerSandbox/MCP-client/Wizard; ToolRegistry/
+FailureTracker/CircuitBreaker/Checkpoint-full-lifecycle/Discord-REST;
+VoiceRegistry/VoiceServer/AgentIdentity/TrustScorer; providers/
+SecurityScanner/LandlockPolicy/SkillDiscovery-wiring-only; vision-
+capture/CostTracker-budget-check-only/CodeEvolutionManager;
+StructuredOutput/ProactiveManager/SleeptimeWorker/Summarizer;
+MessageBus-internals/HatchingManager/PersonaManager-backups/
+BehaviorLayer-tone; api-auth/otel/vector_store/scheduler-parser;
+graph_store-CRUD/checkpoint-WAL/Discord-access-control/McpManager-
+lifecycle; interactive_approval-TUI/secrets-patterns/drift-mechanics),
+this time into `missy/skills/discovery.py`'s YAML frontmatter parsing,
+`missy/agent/cost_tracker.py`'s pricing/accumulation arithmetic, and
+`missy/api/web_console.py`'s HTML/JS generation for XSS — none of
+which had been audited from these specific angles before.
+`message_bus.py`'s topic-usage correctness (checked across every real
+publisher/subscriber for redaction gaps, distinct from round 14's
+internal-mechanics audit) checked out clean. Three genuine findings,
+live-verified and fixed.
+
+**1. `CostTracker`'s pricing table matched `gpt-4.1-mini`/`gpt-4.1-nano`
+to the base `gpt-4.1` rate — a real 5x/20x billing overcharge on two
+shipping models.** The table is checked in list order with the first
+prefix match winning, and the bare `"gpt-4.1"` entry appeared *before*
+the more-specific `"gpt-4.1-mini"`/`"gpt-4.1-nano"` entries — since
+`"gpt-4.1-mini".startswith("gpt-4.1")` is `True`, every call on these
+two models matched the base entry `(0.002, 0.008)` instead of their own,
+cheaper rates `(0.0004, 0.0016)`/`(0.0001, 0.0004)`. **Live-reproduced**:
+`_lookup_pricing("gpt-4.1-mini")` and `_lookup_pricing("gpt-4.1-nano")`
+both returned the base rate pre-fix. This directly inflates every
+turn's billed cost on these models and can trigger a spurious
+`BudgetExceededError` well before the user's actual configured spend
+limit is reached. Every other prefix pair in the table (e.g.
+`gpt-4o-mini`/`gpt-4o`, `o3-mini`/`o3`) was already correctly ordered
+more-specific-first — only this one group violated the rule the rest of
+the table follows. Fixed by reordering the two specific entries ahead
+of the base entry. 3 new tests, confirmed via `git stash` to genuinely
+fail pre-fix. A **pre-existing test file had explicitly codified this
+exact bug as intentional, documented behavior** (`tests/agent/
+test_cost_tracker.py`'s `TestPricingTablePrefixMatching` class,
+including a test literally named
+`test_gpt4_1_mini_matches_gpt4_1_entry_due_to_table_order` with a
+comment reading "The table is NOT ordered most-specific-first for this
+group") — corrected all 4 affected assertions/comments in that class to
+reflect the fixed, correct behavior rather than leaving stale
+documentation of a real billing bug in the test suite.
+
+**2. `SkillDiscovery`'s minimal YAML frontmatter parser silently
+mangled the standard multi-line block-list syntax, quietly emptying a
+skill's declared `tools` list with no error, warning, or log line
+anywhere.** `_parse_yaml` only understood single-line `key: value`
+pairs and inline lists (`[a, b, c]`); any line without a `:` (e.g. a
+`- item` list entry) was silently discarded, and a `key:` line with
+nothing after the colon was simply treated as an empty string. This is
+not a hypothetical format — it's the standard YAML block-list style
+(`tools:\n  - web_fetch\n  - shell_exec`) used by real, currently-present
+SKILL.md files on this machine, and is exactly the syntax the module's
+own docstring claims to support ("the SKILL.md open standard for
+cross-agent skill portability"). **Live-reproduced**: parsing a SKILL.md
+with a block-list `tools:` field returned `tools == []` instead of the
+declared list, with zero indication anything went wrong — quieter and
+arguably worse than the "one bad file crashes discovery" failure mode
+this round's brief specifically asked about (that path was already
+fine; `scan_directory` catches per-file exceptions). Fixed by extending
+`_parse_yaml` to detect a `key:` line with an empty value, then collect
+subsequent indented `- item` lines as that key's list value — scoped to
+the block-list case specifically, since that's the one form mapping
+directly to `SkillManifest.tools` (the only list field this class
+actually consumes); full arbitrary nested-mapping support (a different,
+non-standard third-party dialect referenced in the research report) was
+judged out of scope, since no field on `SkillManifest` depends on it and
+an unknown flattened key is already harmlessly ignored. 1 new test,
+confirmed via `git stash` to genuinely fail pre-fix (`tools == []`
+instead of the declared two-item list); existing inline-list and plain
+key:value parsing confirmed unaffected.
+
+**3. `web_console.py`'s `memoryRow()` was the one row-renderer in the
+file that skipped its own established escaping convention.** Every
+other composite "meta" string built from server-supplied fields
+elsewhere in this file (the session row's provider, the controls row's
+title, the diagnostics row's summary) is passed through `esc()` before
+insertion into `innerHTML` — `memoryRow()` alone inserted its composed
+`role`/`provider`/`timestamp` string raw via `${meta}` with no `esc()`
+call at all, while `turn.content` (the actual free-text memory content,
+the highest-value XSS vector) was already correctly escaped both here
+and in the per-item inspector. Concrete risk is currently low in
+practice — tracing the real data path, `role` is a fixed
+program-controlled string (`"user"`/`"assistant"`/`"tool"`) and
+`provider` comes from a fixed per-class string literal, neither
+attacker-influenced under normal operation — but this is a genuine
+escaping-convention violation and a latent gap for any future code path
+that stores a memory turn with attacker-influenced role/provider
+metadata, or a misconfigured custom provider whose name contains HTML
+metacharacters. Fixed by escaping each of the three fields individually
+before joining with the middot separator, matching the file's
+established pattern exactly. 1 new test, confirmed via `git stash` to
+genuinely fail pre-fix.
+
+Verified: `pytest tests/agent/ tests/skills/ tests/api/ -q`: `4631
+passed, 4 skipped`. **Full-suite confirmation:** `python3 -m pytest
+tests/ -q -o faulthandler_timeout=120` → `21362 passed, 13 skipped in
+521.98s (0:08:41)` — 0 failed, up from 21357. Thirty-sixth consecutive
+fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

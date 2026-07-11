@@ -1,5 +1,58 @@
 # TEST_RESULTS
 
+## Run: 2026-07-13 12:20 UTC — round 18 research pass: CostTracker pricing-table overcharge, SkillDiscovery block-list data loss, web console escaping gap
+
+- Context: round 18 of the research-pass invitation (rounds 1-17:
+  Scheduler/Persona; API server auth/ratelimit/censor/MessageBus/
+  Screencast; Memory-compaction/GraphMemoryStore/Vault; Config/Vision/
+  CandidateGenerator; MCP-approval-gate+lifecycle/SubAgent/Learnings/
+  Playbook/Attention; Discord-rest+access-control/operator-controls/
+  AuditLogger/behavior; ContextManager/Synthesizer/Watchdog/
+  InteractiveApproval; Webhook/ConfigWatcher/ContainerSandbox/
+  MCP-client/Wizard; ToolRegistry/FailureTracker/CircuitBreaker/
+  Checkpoint-full-lifecycle/Discord-REST; VoiceRegistry/VoiceServer/
+  AgentIdentity/TrustScorer; providers/SecurityScanner/LandlockPolicy/
+  SkillDiscovery-wiring-only; vision-capture/CostTracker-budget-check-
+  only/CodeEvolutionManager; StructuredOutput/ProactiveManager/
+  SleeptimeWorker/Summarizer; MessageBus-internals/HatchingManager/
+  PersonaManager-backups/BehaviorLayer-tone; api-auth/otel/
+  vector_store/scheduler-parser; graph_store-CRUD/checkpoint-WAL/
+  Discord-access-control/McpManager-lifecycle; interactive_approval-
+  TUI/secrets-patterns/drift-mechanics). This round targeted
+  `missy/skills/discovery.py`, `missy/agent/cost_tracker.py`, and
+  `missy/api/web_console.py` as primary audit subjects from fresh
+  angles. `message_bus.py`'s topic-usage correctness checked out clean.
+- **CostTracker pricing-table overcharge**: gpt-4.1-mini/-nano matched
+  the base gpt-4.1 entry due to list ordering (first-match-wins), a
+  real 5x/20x overcharge on two shipping models. Fixed by reordering
+  the more-specific entries first.
+- Command: `pytest tests/agent/test_cost_failure_edges.py -k gpt4_1 -v`
+- Result: `3 passed`. Confirmed to genuinely fail against the pre-fix
+  code via `git stash`. A pre-existing test file
+  (`test_cost_tracker.py`) had explicitly codified this exact bug as
+  intentional behavior in its own comments/test names; corrected.
+- **SkillDiscovery block-list data loss**: the minimal YAML parser
+  silently discarded standard multi-line block-list syntax
+  (`tools:\n  - item`), quietly emptying the tools field with no error.
+  Fixed by extending the parser to collect indented `- item` lines
+  following an empty-valued key.
+- Command: `pytest tests/skills/test_discovery.py -k block_list -v`
+- Result: `1 passed`. Confirmed to genuinely fail against the pre-fix
+  code via `git stash` (`tools == []`).
+- **web console escaping gap**: memoryRow() was the one row-renderer
+  that skipped esc() on its composed role/provider/timestamp string,
+  unlike every other composite meta string in the file. Fixed by
+  escaping each field before joining.
+- Command: `pytest tests/api/test_server.py -k memory_row_escapes -v`
+- Result: `1 passed`. Confirmed to genuinely fail against the pre-fix
+  code via `git stash`.
+- Command: `pytest tests/agent/ tests/skills/ tests/api/ -q`
+- Result: `4631 passed, 4 skipped`.
+- Command: `python3 -m pytest tests/ -q -o faulthandler_timeout=120`
+  (full suite, background run)
+- Result: `21362 passed, 13 skipped in 521.98s (0:08:41)`. 0 failed, up
+  from 21357. Thirty-sixth consecutive fully green full-suite run.
+
 ## Run: 2026-07-13 11:55 UTC — round 17 research pass: SecretsDetector pattern-drift gaps (GitHub fine-grained PAT, Discord token snowflake epoch), InteractiveApproval cross-session leak
 
 - Context: round 17 of the research-pass invitation (rounds 1-16:

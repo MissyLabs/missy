@@ -52,9 +52,14 @@ _PRICING: list[tuple[str, float, float]] = [
     ("claude-3-sonnet", 0.003, 0.015),
     ("claude-3-haiku", 0.00025, 0.00125),
     # OpenAI
-    ("gpt-4.1", 0.002, 0.008),
+    # gpt-4.1-mini/-nano must be checked before the bare "gpt-4.1" prefix:
+    # "gpt-4.1-mini".startswith("gpt-4.1") is True, so if the base entry
+    # came first every -mini/-nano call would match it instead and be
+    # billed at the base rate (previously a real 5x/20x overcharge on
+    # these two shipping models).
     ("gpt-4.1-mini", 0.0004, 0.0016),
     ("gpt-4.1-nano", 0.0001, 0.0004),
+    ("gpt-4.1", 0.002, 0.008),
     ("gpt-4o-mini", 0.00015, 0.0006),
     ("gpt-4o", 0.0025, 0.01),
     ("gpt-4-turbo", 0.01, 0.03),

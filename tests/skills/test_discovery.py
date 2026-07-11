@@ -68,6 +68,36 @@ class TestParseSkillMd:
         manifest = discovery.parse_skill_md(str(skill_file))
         assert manifest.tools == ["web_fetch", "shell_exec", "file_read"]
 
+    def test_parse_multiline_block_list_tools(
+        self, discovery: SkillDiscovery, tmp_path: Path
+    ) -> None:
+        """Regression: the standard YAML block-list syntax used by real
+        SKILL.md files (e.g. the SKILL.md open standard's own
+        ``allowed-tools:`` field) was silently mangled -- a ``tools:``
+        line with nothing after the colon was treated as an empty value,
+        and the following ``- item`` lines (no ``:`` on them) were
+        silently discarded, so ``tools`` came out as ``[]`` with no
+        error or warning anywhere.
+        """
+        content = (
+            "---\n"
+            "name: block-list-tools\n"
+            "description: Uses the standard block-list YAML syntax\n"
+            "version: 1.0.0\n"
+            "author: Test\n"
+            "tools:\n"
+            "  - web_fetch\n"
+            "  - shell_exec\n"
+            "---\n"
+            "\n"
+            "# Instructions\n"
+        )
+        skill_file = tmp_path / "SKILL.md"
+        skill_file.write_text(content)
+
+        manifest = discovery.parse_skill_md(str(skill_file))
+        assert manifest.tools == ["web_fetch", "shell_exec"]
+
     def test_parse_minimal_frontmatter(self, discovery: SkillDiscovery, tmp_path: Path) -> None:
         content = "---\nname: minimal\n---\n\nBody text.\n"
         skill_file = tmp_path / "SKILL.md"

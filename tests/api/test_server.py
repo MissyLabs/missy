@@ -248,6 +248,20 @@ class TestOperatorConsole:
         assert "data-control-label" in script
         assert "data-target-label" in script
 
+    def test_memory_row_escapes_role_provider_timestamp_meta(self) -> None:
+        """Regression: every other composite "meta" string built from
+        server-supplied fields in this file is passed through esc() before
+        being inserted into innerHTML (e.g. the session row's provider,
+        the controls row's title, the diagnostics row's summary) --
+        memoryRow() was the one place that inserted its composed
+        role/provider/timestamp string raw via `${meta}` with no esc()
+        call at all, unlike turn.content (the actual free-text memory
+        content), which was already correctly escaped both here and in
+        the per-item inspector.
+        """
+        script = console_script()
+        assert ".filter(Boolean).map(esc).join(' &middot; ')" in script
+
     def test_console_script_includes_scheduler_and_memory_wiring(self) -> None:
         script = console_script()
 

@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (84 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for thirty-five consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (85 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for thirty-six consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -3390,15 +3390,60 @@ fire in production. Both require genuine design decisions.
 Verified: `pytest tests/security/ tests/agent/ tests/gateway/ -q`
 (pre-existing Hypothesis-deadline flake deselected).
 
+### Post-backlog (seventy-eighth checkpoint): round 18 research pass — CostTracker pricing-table overcharge, SkillDiscovery block-list data loss, web console escaping gap
+
+Round 18 (rounds 1-17: Scheduler/Persona; API server auth/ratelimit/
+censor/MessageBus/Screencast; Memory-compaction/GraphMemoryStore/
+Vault; Config/Vision/CandidateGenerator; MCP-approval-gate+lifecycle/
+SubAgent/Learnings/Playbook/Attention; Discord-rest+access-control/
+operator-controls/AuditLogger/behavior; ContextManager/Synthesizer/
+Watchdog/InteractiveApproval; Webhook/ConfigWatcher/ContainerSandbox/
+MCP-client/Wizard; ToolRegistry/FailureTracker/CircuitBreaker/
+Checkpoint-full-lifecycle/Discord-REST; VoiceRegistry/VoiceServer/
+AgentIdentity/TrustScorer; providers/SecurityScanner/LandlockPolicy/
+SkillDiscovery-wiring-only; vision-capture/CostTracker-budget-check-
+only/CodeEvolutionManager; StructuredOutput/ProactiveManager/
+SleeptimeWorker/Summarizer; MessageBus-internals/HatchingManager/
+PersonaManager-backups/BehaviorLayer-tone; api-auth/otel/vector_store/
+scheduler-parser; graph_store-CRUD/checkpoint-WAL/Discord-access-
+control/McpManager-lifecycle; interactive_approval-TUI/secrets-
+patterns/drift-mechanics), into `missy/skills/discovery.py`,
+`missy/agent/cost_tracker.py`, and `missy/api/web_console.py`.
+`message_bus.py`'s topic-usage correctness checked out clean. Three
+genuine findings.
+
+1. **CostTracker pricing-table overcharge**: gpt-4.1-mini/-nano matched
+   the base gpt-4.1 entry due to list ordering, a real 5x/20x
+   overcharge on two shipping models. Fixed by reordering the more-
+   specific entries first. 3 new tests, confirmed to fail pre-fix. A
+   pre-existing test file had explicitly codified this exact bug as
+   intentional behavior; corrected.
+2. **SkillDiscovery block-list data loss**: the minimal YAML parser
+   silently discarded standard multi-line block-list syntax, quietly
+   emptying a skill's tools field with no error anywhere. Fixed by
+   extending the parser to collect indented list items. 1 new test,
+   confirmed to fail pre-fix.
+3. **web console escaping gap**: memoryRow() was the one row-renderer
+   that skipped esc() on its composed meta string, unlike every other
+   composite meta string in the file. Fixed by escaping each field
+   before joining. 1 new test, confirmed to fail pre-fix.
+
+Verified: `pytest tests/agent/ tests/skills/ tests/api/ -q`: `4631
+passed, 4 skipped`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-21357 passed, 13 skipped in 523.25s (0:08:43)
+21362 passed, 13 skipped in 521.98s (0:08:41)
 ```
 
-**Zero failures**, the thirty-fifth consecutive fully green
-full-suite run. Passed count is up from 21354 to 21357 (the round 17
+**Zero failures**, the thirty-sixth consecutive fully green
+full-suite run. Passed count is up from 21357 to 21362 (the round 18
+checkpoint's 5 new tests: 3 CostTracker pricing tests, 1 SkillDiscovery
+block-list test, and 1 web-console escaping test — all of the
+sixty-first through seventy-seventh checkpoints' fixes are confirmed
+still holding). Passed count is up from 21354 to 21357 (the round 17
 checkpoint's 3 new tests: 1 InteractiveApproval session-isolation
 test, 1 GitHub fine-grained PAT test, and 1 Discord token snowflake-
 epoch test — all of the sixty-first through seventy-sixth checkpoints'

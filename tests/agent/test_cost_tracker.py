@@ -908,19 +908,21 @@ class TestPricingTablePrefixMatching:
             ("claude-3-sonnet-20240229", 0.003, 0.015),
             ("claude-3-haiku-20240307", 0.00025, 0.00125),
             # OpenAI — dated and variant names
-            # Note: the pricing table lists "gpt-4.1" before "gpt-4.1-mini" / "gpt-4.1-nano",
-            # so any model whose name starts with "gpt-4.1" matches the gpt-4.1 entry (0.002).
-            # Models with a more-specific prefix that appear AFTER a shorter prefix in the
-            # table will fall through to that shorter prefix match.
+            # The pricing table lists "gpt-4.1-mini"/"gpt-4.1-nano" BEFORE the
+            # bare "gpt-4.1" entry (round-18 checkpoint fix -- it used to be
+            # ordered the other way around, which meant every gpt-4.1-mini/
+            # -nano call was silently billed at the base gpt-4.1 rate, a real
+            # 5x/20x overcharge on two shipping models). More-specific
+            # prefixes are checked first throughout this table.
             ("gpt-4o-2024-08-06", 0.0025, 0.01),
             ("gpt-4o-mini-2024-07-18", 0.00015, 0.0006),
             ("gpt-4-turbo-2024-04-09", 0.01, 0.03),
-            # gpt-4.1-preview starts with "gpt-4.1" → matches gpt-4.1 entry ($0.002)
+            # gpt-4.1-preview starts with "gpt-4.1" (no -mini/-nano) → base entry
             ("gpt-4.1-preview", 0.002, 0.008),
-            # gpt-4.1-mini-preview also starts with "gpt-4.1" → matches gpt-4.1 entry
-            ("gpt-4.1-mini-preview", 0.002, 0.008),
-            # gpt-4.1-nano-preview also starts with "gpt-4.1" → matches gpt-4.1 entry
-            ("gpt-4.1-nano-preview", 0.002, 0.008),
+            # gpt-4.1-mini-preview matches the more-specific gpt-4.1-mini entry
+            ("gpt-4.1-mini-preview", 0.0004, 0.0016),
+            # gpt-4.1-nano-preview matches the more-specific gpt-4.1-nano entry
+            ("gpt-4.1-nano-preview", 0.0001, 0.0004),
             ("gpt-3.5-turbo-0125", 0.0005, 0.0015),
             # Ollama local models — zero cost
             ("llama3.2:3b", 0.0, 0.0),
@@ -954,18 +956,23 @@ class TestPricingTablePrefixMatching:
         assert inp == pytest.approx(0.002)
         assert out == pytest.approx(0.008)
 
-    def test_gpt4_1_mini_matches_gpt4_1_entry_due_to_table_order(self):
-        """gpt-4.1-mini starts with 'gpt-4.1', which appears first in the table.
-        The table is NOT ordered most-specific-first for this group, so gpt-4.1-mini
-        falls through to the gpt-4.1 entry ($0.002 input).
+    def test_gpt4_1_mini_matches_its_own_entry_not_the_base_gpt4_1_entry(self):
+        """Regression: gpt-4.1-mini starts with 'gpt-4.1', so when the base
+        entry appeared before the more-specific gpt-4.1-mini/-nano entries
+        in the table, every gpt-4.1-mini call fell through to the base
+        gpt-4.1 rate ($0.002 input) instead of its own, cheaper rate --
+        a real 5x overcharge. The table is now ordered most-specific-first
+        for this group, matching every other prefix pair in the table.
         """
         inp, _ = _lookup_pricing("gpt-4.1-mini")
-        assert inp == pytest.approx(0.002)
+        assert inp == pytest.approx(0.0004)
 
-    def test_gpt4_1_nano_matches_gpt4_1_entry_due_to_table_order(self):
-        """Same table-order behaviour: gpt-4.1-nano hits gpt-4.1 entry."""
+    def test_gpt4_1_nano_matches_its_own_entry_not_the_base_gpt4_1_entry(self):
+        """Same fix as gpt-4.1-mini above, but for gpt-4.1-nano -- a real
+        20x overcharge pre-fix.
+        """
         inp, _ = _lookup_pricing("gpt-4.1-nano")
-        assert inp == pytest.approx(0.002)
+        assert inp == pytest.approx(0.0001)
 
 
 # ---------------------------------------------------------------------------

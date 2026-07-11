@@ -216,12 +216,30 @@ class SkillDiscovery:
     def _parse_yaml(text: str) -> dict:
         """Minimal YAML-subset parser for frontmatter.
 
-        Handles simple ``key: value`` pairs and inline lists
-        (``[a, b, c]``).  Does NOT require PyYAML to be installed.
+        Handles simple ``key: value`` pairs, inline lists (``[a, b, c]``),
+        and the standard multi-line block-list form::
+
+            tools:
+              - web_fetch
+              - shell_exec
+
+        Does NOT require PyYAML to be installed. Multi-line block lists
+        are the common, standard YAML syntax used by real SKILL.md files
+        (e.g. the SKILL.md open standard's own ``allowed-tools:`` field) --
+        without support for this form, a ``key:`` line with nothing after
+        the colon was silently treated as an empty string, and the
+        following ``- item`` lines (having no ``:``) were silently
+        discarded entirely, so a skill's ``tools:`` list quietly came out
+        as ``[]`` with no error, warning, or log line anywhere.
         """
         result: dict[str, str | list[str]] = {}
-        for line in text.splitlines():
-            line = line.strip()
+        lines = text.splitlines()
+        i = 0
+        n = len(lines)
+        while i < n:
+            raw_line = lines[i]
+            line = raw_line.strip()
+            i += 1
             if not line or line.startswith("#"):
                 continue
             if ":" not in line:
@@ -229,6 +247,30 @@ class SkillDiscovery:
             key, _, value = line.partition(":")
             key = key.strip()
             value = value.strip()
+
+            if not value:
+                # Possible block-list: collect subsequent "- item" lines
+                # that are indented relative to this key.
+                items: list[str] = []
+                while i < n:
+                    next_raw = lines[i]
+                    next_stripped = next_raw.strip()
+                    if not next_stripped:
+                        i += 1
+                        continue
+                    is_indented = next_raw[:1] in (" ", "\t")
+                    if is_indented and next_stripped.startswith("-"):
+                        item = next_stripped[1:].strip().strip("\"'")
+                        if item:
+                            items.append(item)
+                        i += 1
+                        continue
+                    break
+                if items:
+                    result[key] = items
+                else:
+                    result[key] = value
+                continue
 
             # Inline list: [a, b, c]
             if value.startswith("[") and value.endswith("]"):

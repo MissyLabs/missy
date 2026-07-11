@@ -611,7 +611,7 @@ document.getElementById('pairing').addEventListener('click', async event => {
 });
 function memoryRow(turn, index) {
   const pinned = turn.pinned;
-  const meta = [turn.role, turn.provider, turn.timestamp].filter(Boolean).join(' &middot; ');
+  const meta = [turn.role, turn.provider, turn.timestamp].filter(Boolean).map(esc).join(' &middot; ');
   const preview = String(turn.content || '').slice(0, 120);
   return `<div class="row"><button class="row-title" type="button" data-memory-index="${index}">${pinned ? '<span class="pin-marker">&#9733;</span> ' : ''}<strong>${esc(preview)}</strong></button><div class="row-actions"><span>${meta}</span><button class="secondary memory-pin" type="button" data-turn-id="${esc(turn.id)}" data-pinned="${pinned ? '1' : '0'}">${pinned ? 'Unpin' : 'Pin'}</button><button class="secondary danger memory-delete" type="button" data-turn-id="${esc(turn.id)}">Delete</button></div></div>`;
 }
