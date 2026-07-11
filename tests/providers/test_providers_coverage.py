@@ -1833,6 +1833,43 @@ class TestProviderRegistryRotateKey:
         registry.rotate_key("anthropic")
         assert provider._api_key == "key2"
 
+    def test_rotate_invalidates_cached_sdk_client(self):
+        """Regression: AnthropicProvider._make_client() caches its SDK
+        client (`if self._client is None`), and rotate_key() used to only
+        ever mutate provider._api_key directly (no api_key property
+        existed), never invalidating that cache. Since the Anthropic SDK
+        reads its API key off the *client* object at request time, a
+        rotation followed by a retry against the same provider instance
+        (the real path in AgentRuntime._call_provider_with_fallback() on
+        an auth failure) silently kept using the stale, already-failed
+        key -- the rotation had no real effect despite the registry
+        logging it as a successful key rotation.
+        """
+        from missy.providers.anthropic_provider import AnthropicProvider
+        from missy.providers.registry import ProviderRegistry
+
+        registry = ProviderRegistry()
+        config = ProviderConfig(
+            name="anthropic",
+            model="claude-3-5-sonnet-20241022",
+            api_key="key1",
+            api_keys=["key1", "key2", "key3"],
+            timeout=30,
+        )
+        provider = AnthropicProvider(config)
+        registry.register("anthropic", provider, config=config)
+
+        client_before = provider._make_client()
+        assert client_before.api_key == "key1"
+
+        registry.rotate_key("anthropic")
+
+        client_after = provider._make_client()
+        assert client_after.api_key == "key2", (
+            f"cached SDK client still reports {client_after.api_key!r} "
+            "after rotation -- the client was not rebuilt with the new key"
+        )
+
     def test_rotate_wraps_around_to_first_key(self):
         from missy.providers.anthropic_provider import AnthropicProvider
         from missy.providers.registry import ProviderRegistry

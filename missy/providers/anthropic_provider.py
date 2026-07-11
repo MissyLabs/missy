@@ -65,6 +65,30 @@ class AnthropicProvider(BaseProvider):
         self._timeout: int = config.timeout
         self._client: Any | None = None
 
+    @property
+    def api_key(self) -> str | None:
+        """Return the active API key, if one is configured directly."""
+        return self._api_key
+
+    @api_key.setter
+    def api_key(self, value: str | None) -> None:
+        """Update the API key and force the SDK client to be rebuilt.
+
+        ``ProviderRegistry.rotate_key()`` prefers this property (via
+        ``hasattr(provider, "api_key")``) over setting ``_api_key``
+        directly. Without it, rotation silently mutated ``_api_key`` while
+        ``_make_client()``'s ``if self._client is None`` cache kept serving
+        the already-built client constructed with the *old* key -- the
+        Anthropic SDK reads its API key off the cached client at request
+        time, not off this provider object, so a rotation-then-retry (the
+        real path in ``AgentRuntime._call_provider_with_fallback()`` on an
+        auth failure) resent the request with the same failed key and the
+        rotation had no real effect despite emitting a
+        ``agent.provider.key_rotated`` audit event claiming success.
+        """
+        self._api_key = value
+        self._client = None
+
     # ------------------------------------------------------------------
     # BaseProvider interface
     # ------------------------------------------------------------------

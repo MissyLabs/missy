@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from missy.config.settings import MissyConfig
@@ -331,6 +331,16 @@ class SecurityScanner:
         self.config_path = Path(config_path).expanduser()
         self.missy_dir = Path(missy_dir).expanduser()
         self._findings: list[Finding] = []
+        # Raw (pre-vault-resolution) provider api_key/api_keys strings, keyed
+        # by provider name -- populated by _try_load_config() from the raw
+        # YAML file. load_config() resolves "vault://KEY"/"$ENV" references
+        # into the actual secret before constructing ProviderConfig, so by
+        # the time self.config.providers[...].api_key is inspected it's
+        # already plaintext, indistinguishable from a key typed directly
+        # into config.yaml -- see SEC-002/SEC-060 below. Empty when a config
+        # was passed in directly (no file to re-read raw), which preserves
+        # prior behavior for that construction path.
+        self._raw_provider_keys: dict[str, dict[str, Any]] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -402,6 +412,7 @@ class SecurityScanner:
             from missy.config.settings import load_config
 
             self.config = load_config(str(self.config_path))
+            self._load_raw_provider_keys()
         except Exception as exc:
             self._add(
                 Finding(
@@ -417,6 +428,31 @@ class SecurityScanner:
                     details={"path": str(self.config_path), "error": str(exc)},
                 )
             )
+
+    def _load_raw_provider_keys(self) -> None:
+        """Populate ``self._raw_provider_keys`` from the raw YAML file.
+
+        Best-effort: any failure here just leaves ``_raw_provider_keys``
+        empty, which makes SEC-002/SEC-060 fall back to inspecting the
+        already-resolved ``ProviderConfig.api_key`` (the pre-existing
+        behavior) rather than raising or blocking the rest of the scan.
+        """
+        try:
+            import yaml
+
+            with open(self.config_path, encoding="utf-8") as fh:
+                raw_data = yaml.safe_load(fh) or {}
+            raw_providers = raw_data.get("providers") or {}
+            if not isinstance(raw_providers, dict):
+                return
+            for name, raw_cfg in raw_providers.items():
+                if isinstance(raw_cfg, dict):
+                    self._raw_provider_keys[str(name)] = {
+                        "api_key": raw_cfg.get("api_key"),
+                        "api_keys": raw_cfg.get("api_keys") or [],
+                    }
+        except Exception:
+            logger.debug("Could not read raw provider keys from config file", exc_info=True)
 
     # ------------------------------------------------------------------
     # Check: config security (SEC-001 .. SEC-004)
@@ -470,7 +506,14 @@ class SecurityScanner:
 
         # SEC-002: Plaintext API keys in config
         for provider_name, provider_cfg in self.config.providers.items():
-            raw_key = provider_cfg.api_key or ""
+            # Prefer the raw, pre-vault-resolution reference string when
+            # available (real file load) -- load_config() already resolved
+            # provider_cfg.api_key into the actual secret, so checking that
+            # directly would flag every correctly-vaulted key as plaintext.
+            # Falls back to provider_cfg.api_key when no raw file was read
+            # (e.g. a MissyConfig constructed and passed in directly).
+            raw_entry = self._raw_provider_keys.get(provider_name)
+            raw_key = (raw_entry["api_key"] if raw_entry else provider_cfg.api_key) or ""
             # Only flag real keys — skip vault/env references and short tokens.
             if raw_key and not raw_key.startswith(("vault://", "$")) and len(raw_key.strip()) > 10:
                 self._add(
@@ -983,12 +1026,23 @@ class SecurityScanner:
 
         # SEC-060: Vault not enabled but API keys are configured
         if has_providers and not vault_enabled:
-            # Only flag this if at least one provider has an API key not from vault
+            # Only flag this if at least one provider has an API key not from
+            # vault. As with SEC-002, prefer the raw pre-resolution
+            # reference string when available (real file load) rather than
+            # the already-resolved ProviderConfig.api_key, which would
+            # otherwise flag every correctly-vaulted key as plaintext.
+            def _raw_keys_for(name: str, p: Any) -> tuple[str | None, list[str]]:
+                raw_entry = self._raw_provider_keys.get(name)
+                if raw_entry is not None:
+                    return raw_entry["api_key"], list(raw_entry["api_keys"])
+                return p.api_key, list(p.api_keys or [])
+
             has_plain_key = any(
-                (p.api_key and not (p.api_key.startswith(("vault://", "$"))))
-                or any(not k.startswith(("vault://", "$")) for k in (p.api_keys or []))
-                for p in self.config.providers.values()
-                if p.api_key or p.api_keys
+                (raw_key and not raw_key.startswith(("vault://", "$")))
+                or any(not k.startswith(("vault://", "$")) for k in raw_keys)
+                for name, p in self.config.providers.items()
+                for raw_key, raw_keys in [_raw_keys_for(name, p)]
+                if raw_key or raw_keys
             )
             if has_plain_key:
                 self._add(
@@ -1304,6 +1358,56 @@ class SecurityScanner:
                     recommendation=(
                         "Run Missy in a terminal (TTY) to enable the interactive "
                         "approval TUI, which prompts on policy-sensitive operations."
+                    ),
+                )
+            )
+
+        # SEC-094: Landlock LSM available but never applied.
+        #
+        # LandlockPolicy/apply_landlock_from_config (missy/security/landlock.py)
+        # is fully implemented and documented (README.md, docs/threat-model.md)
+        # as an active kernel-level filesystem enforcement layer
+        # "complementing" and even surviving a bypass of the userspace
+        # FilesystemPolicyEngine -- but has zero production callers anywhere
+        # in the codebase. No CLI command, config flag, or runtime bootstrap
+        # path ever calls apply_landlock_from_config(), so on a kernel that
+        # supports it just as much as one that doesn't, this defense-in-depth
+        # layer provides zero actual protection today. Mirrors SEC-090's
+        # honest, unconditional treatment of ContainerSandbox's identical
+        # "documented as active, zero callers" gap -- only fires when the
+        # kernel actually supports Landlock (>= 5.13), since flagging an
+        # unusable feature on an unsupported kernel would just be noise.
+        try:
+            from missy.security.landlock import LandlockPolicy
+
+            landlock_available = LandlockPolicy.is_available()
+        except Exception:
+            landlock_available = False
+        if landlock_available:
+            self._add(
+                Finding(
+                    id="SEC-094",
+                    title="Landlock LSM is supported but never applied",
+                    description=(
+                        "This kernel supports Landlock (>= 5.13), and "
+                        "missy/security/landlock.py implements a full "
+                        "ruleset builder for it, but nothing in Missy's "
+                        "startup path ever calls "
+                        "apply_landlock_from_config() -- the kernel-level "
+                        "filesystem enforcement layer described in the "
+                        "project's documentation is not actually active on "
+                        "any real Missy invocation."
+                    ),
+                    severity=Severity.LOW,
+                    category="config",
+                    recommendation=(
+                        "Do not rely on Landlock for defense-in-depth in "
+                        "this version. If kernel-level filesystem "
+                        "enforcement beyond the userspace policy engine is "
+                        "needed, call "
+                        "missy.security.landlock.apply_landlock_from_config() "
+                        "explicitly at process startup until this is wired "
+                        "into a supported CLI/runtime bootstrap path."
                     ),
                 )
             )

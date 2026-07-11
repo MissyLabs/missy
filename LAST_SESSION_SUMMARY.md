@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (77 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for twenty-eight consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (78 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for twenty-nine consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -3071,16 +3071,65 @@ genuine findings, live-verified and fixed.
 Verified: `pytest tests/agent/ tests/tools/ tests/security/ -q`:
 `7854 passed, 6 skipped`; `pytest tests/channels/ -q`: `1975 passed`.
 
+### Post-backlog (seventy-first checkpoint): round 11 research pass — AnthropicProvider key-rotation caching bug, SecurityScanner vault-reference false positive, SEC-094 for unwired LandlockPolicy
+
+Round 11 (rounds 1-10: Scheduler/Persona; API/MessageBus/Screencast;
+Memory-compaction/GraphStore/Vault; Config/Vision/CandidateGenerator;
+MCP/SubAgent/Learnings/Playbook/Attention; Discord/operator-controls/
+AuditLogger/behavior; ContextManager/Synthesizer/Watchdog/
+InteractiveApproval; Webhook/ConfigWatcher/ContainerSandbox/
+MCP-client/Wizard; ToolRegistry/FailureTracker/CircuitBreaker/
+Checkpoint/Discord-rest; VoiceRegistry/VoiceServer/AgentIdentity/
+TrustScorer), into `missy/providers/`, `missy/security/scanner.py`,
+`missy/security/landlock.py`, and `missy/skills/discovery.py` — all
+previously-unaudited-as-primary-subject subsystems. Three genuine
+findings; `rate_limiter.py`, `health.py`, and `skills/discovery.py`
+checked out clean.
+
+1. **AnthropicProvider key-rotation caching bug**: `_make_client()`
+   caches its SDK client and never exposed an `api_key` property, so
+   `ProviderRegistry.rotate_key()` mutated `provider._api_key` directly
+   without invalidating the cache — the SDK reads its key off the
+   cached client at request time, so rotation was a silent no-op for
+   Anthropic, with the registry still logging it as a success. Fixed
+   with an `api_key` property/setter mirroring `OpenAIProvider`'s. 1
+   new test, confirmed to fail pre-fix.
+2. **SecurityScanner vault-reference false positive**: `load_config()`
+   resolves `vault://`/`$ENV` references into the actual secret before
+   the scanner sees `ProviderConfig.api_key`, so SEC-002/SEC-060
+   flagged every correctly-vaulted key as plaintext with no way for an
+   operator to satisfy the check. Fixed by re-reading the raw YAML
+   file for the pre-resolution reference string. 2 new tests, one
+   confirmed to fail pre-fix, one confirming the true-positive case
+   still works.
+3. **SEC-094 for unwired LandlockPolicy**: `LandlockPolicy`/
+   `apply_landlock_from_config` is fully implemented and documented as
+   active kernel-level filesystem enforcement but has zero production
+   callers. Wiring it in was judged too large a blast-radius change
+   (irrevocable filesystem restriction) for a bounded fix — matching
+   the `SEC-090`/`ContainerSandbox` precedent, added an honest,
+   unconditional scanner finding instead, plus a `CLAUDE.md`
+   correction. 2 new tests, one confirmed to fail pre-fix.
+
+Verified: `pytest tests/providers/ tests/security/
+tests/agent/test_provider_fallback.py -q` (one pre-existing, unrelated
+Hypothesis-deadline flake deselected, confirmed via `git stash` to fail
+identically pre-round-11): `2999 passed, 1 deselected`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-21311 passed, 13 skipped in 476.87s (0:07:56)
+21316 passed, 13 skipped in 486.87s (0:08:06)
 ```
 
-**Zero failures**, the twenty-eighth consecutive fully green full-suite
-run. Passed count is up from 21304 to 21311 (the round 10 checkpoint's
-7 new tests: 1 voice-registry timing test, 1 voice-server
+**Zero failures**, the twenty-ninth consecutive fully green full-suite
+run. Passed count is up from 21311 to 21316 (the round 11 checkpoint's
+5 new tests: 1 AnthropicProvider key-rotation test, 2 SecurityScanner
+vault-reference tests, and 2 SEC-094 LandlockPolicy tests — all of the
+sixty-first through seventieth checkpoints' fixes are confirmed still
+holding). Passed count is up from 21304 to 21311 (the round 10
+checkpoint's 7 new tests: 1 voice-registry timing test, 1 voice-server
 event-loop-blocking test, 2 AgentIdentity symlink/permission tests, 2
 ToolRegistry policy_denied tests, and 1 runtime record_violation test —
 all of the sixty-first through sixty-ninth checkpoints' fixes are

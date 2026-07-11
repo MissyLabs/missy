@@ -4949,6 +4949,123 @@ faulthandler_timeout=120` → `21311 passed, 13 skipped in 476.87s
 (0:07:56)` — 0 failed, up from 21304. Twenty-eighth consecutive fully
 green full-suite run.
 
+### Post-backlog (seventy-first checkpoint): round 11 research pass finds an AnthropicProvider key-rotation caching bug, a SecurityScanner vault-reference false positive, and adds an honest SEC-094 finding for LandlockPolicy's unwired state
+
+Round 11 of the research-pass invitation (rounds 1-10: Scheduler/Persona;
+API/MessageBus/Screencast; Memory-compaction/GraphStore/Vault; Config/
+Vision/CandidateGenerator; MCP/SubAgent/Learnings/Playbook/Attention;
+Discord/operator-controls/AuditLogger/behavior; ContextManager/
+Synthesizer/Watchdog/InteractiveApproval; Webhook/ConfigWatcher/
+ContainerSandbox/MCP-client/Wizard; ToolRegistry/FailureTracker/
+CircuitBreaker/Checkpoint/Discord-rest; VoiceRegistry/VoiceServer/
+AgentIdentity/TrustScorer), this time into `missy/providers/` (registry,
+rate_limiter, health, and each concrete provider), `missy/security/scanner.py`,
+`missy/security/landlock.py`, and `missy/skills/discovery.py` — all
+previously-unaudited-as-primary-subject subsystems. Three genuine
+findings, live-verified and fixed; `rate_limiter.py`, `health.py`, and
+`skills/discovery.py` checked out clean (the latter independently
+re-confirmed a round-2 finding: `SkillDiscovery` is wired only to the
+read-only `missy skills scan` CLI listing command, never into agent
+execution, so no path-traversal/validation gap is reachable).
+
+**1. `AnthropicProvider` caches its SDK client, so `ProviderRegistry.rotate_key()`
+was a silent no-op for Anthropic once a request had been made.** `_make_client()`
+only builds a new SDK client `if self._client is None` and never exposed
+an `api_key` property (unlike `OpenAIProvider`, which has one that resets
+`self._client = None` on assignment) — so `ProviderRegistry.rotate_key()`
+fell into its `elif hasattr(provider, "_api_key")` branch, mutating
+`provider._api_key` directly without ever invalidating the already-cached
+client. **Live-reproduced** (real classes, no mocks): after rotation,
+`provider._api_key` correctly showed the new key, but the cached SDK
+client's own `.api_key` attribute still read the old one — since the
+Anthropic SDK reads its API key off the *client* object at request time,
+not off the provider, the real production retry path in
+`AgentRuntime._call_provider_with_fallback()` (which calls
+`registry.rotate_key()` then retries the *same* provider instance on an
+auth failure) silently resent the request with the same already-failed
+key, while the registry still logged `"agent.provider.key_rotated"` as if
+rotation had succeeded. Fixed by adding an `api_key` property/setter to
+`AnthropicProvider` mirroring `OpenAIProvider`'s exactly, invalidating
+`self._client` on write. 1 new test
+(`test_rotate_invalidates_cached_sdk_client`), confirmed via `git stash`
+to genuinely fail pre-fix (cached client still reported the old key
+after rotation).
+
+**2. `SecurityScanner`'s SEC-002/SEC-060 always false-positived on
+properly vault-referenced API keys.** `load_config()` (the real path
+`missy security scan` actually uses) resolves `vault://KEY`/`$ENV`
+references into the actual secret *before* constructing `ProviderConfig`
+— so by the time the scanner's `if raw_key and not
+raw_key.startswith(("vault://", "$"))` check ran, `provider_cfg.api_key`
+was already plaintext, indistinguishable from a key typed directly into
+config.yaml. **Live-reproduced** (real `load_config()` → real
+`SecurityScanner`, no mocks): a config with `api_key: vault://ANTHROPIC_KEY`
+resolved to a real secret string, and SEC-002 fired anyway — meaning
+every operator who did exactly what the scanner's own SEC-002
+recommendation told them to do got permanently flagged with no way to
+satisfy the check, burying the real positive case (an actual plaintext
+key) in unavoidable noise. The pre-existing
+`test_sec_002_vault_ref_not_flagged` test constructed a `ProviderConfig`
+directly in memory with the unresolved `"vault://..."` string, bypassing
+`load_config()`/`_resolve_vault_ref()` entirely, so it could never have
+caught this. Fixed by having `SecurityScanner._try_load_config()`
+additionally parse the raw YAML file (`_load_raw_provider_keys()`) to
+recover the pre-resolution `api_key`/`api_keys` strings per provider,
+and having SEC-002/SEC-060 prefer that raw reference when available
+(falling back to the resolved `ProviderConfig.api_key` when no file was
+read — e.g. a `MissyConfig` passed in directly, preserving the existing
+test's behavior for that construction path unchanged). 2 new tests
+(`test_sec_002_vault_ref_not_flagged_via_real_load_config`,
+`test_sec_002_real_plaintext_key_still_flagged_via_real_load_config`),
+the first confirmed via `git stash` to genuinely fail pre-fix (SEC-002
+present when it shouldn't be), the second confirming the true-positive
+case still works correctly both before and after.
+
+**3. `LandlockPolicy`/`apply_landlock_from_config` (kernel-level Landlock
+LSM filesystem enforcement) is fully implemented and documented
+(README.md, `docs/threat-model.md`) as an active security control
+"complementing" — and even surviving a bypass of — the userspace
+`FilesystemPolicyEngine`, but has zero production callers anywhere.**
+`grep -rln "landlock" missy/ --include=*.py` returns only `landlock.py`
+itself: no CLI command, no config flag, no runtime bootstrap path ever
+calls `apply_landlock_from_config()`. Unlike `ContainerSandbox`'s
+identical "documented as active, zero callers" gap (whose misleading
+scanner recommendation was already fixed in checkpoint 68 via SEC-090),
+nothing previously told an operator this gap exists for Landlock.
+Live-confirmed on this session's own kernel (6.17, Landlock-capable)
+that `LandlockPolicy.is_available()` returns `True` while the feature is
+never applied on any real Missy invocation. Given wiring Landlock into a
+real bootstrap path would *irrevocably restrict* the process's
+filesystem access for its entire lifetime — a materially higher-risk,
+larger-blast-radius change than this round's other two fixes, and the
+same category of decision this session has consistently treated as
+requiring explicit product/config-surface design rather than a bounded
+bug fix (see `ModelRouter`, and `ContainerSandbox` itself, which remains
+similarly unwired and gated behind its own explicit
+`container.enabled` opt-in that still doesn't route tool execution
+through it) — the responsible, precedent-matching fix here is the same
+one already applied to `ContainerSandbox`: a new, honest, unconditional
+`SEC-094` finding (mirroring `SEC-090`'s exact treatment) that fires
+whenever the kernel supports Landlock, telling the operator plainly that
+it is not actually protecting them in this version, rather than
+force-wiring irrevocable filesystem restrictions into every real
+invocation without a config gate or operator sign-off. Also corrected
+`CLAUDE.md`'s `LandlockPolicy` bullet, which previously read as if this
+were active. 2 new tests
+(`test_sec_094_landlock_available_but_unwired`,
+`test_sec_094_not_flagged_when_landlock_unavailable`), the first
+confirmed via `git stash` to genuinely fail pre-fix (SEC-094 absent).
+
+Verified: `pytest tests/providers/ tests/security/ tests/agent/test_provider_fallback.py -q`
+(one pre-existing, unrelated Hypothesis-deadline flake in
+`test_property_based_fuzz.py` deselected — confirmed via `git stash` to
+fail identically against the pristine pre-round-11 code, i.e. genuinely
+pre-existing and order/load-dependent, not introduced by this round):
+`2999 passed, 1 deselected`. **Full-suite confirmation:** `python3 -m
+pytest tests/ -q -o faulthandler_timeout=120` → `21316 passed, 13
+skipped in 486.87s (0:08:06)` — 0 failed, up from 21311. Twenty-ninth
+consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

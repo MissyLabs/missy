@@ -1,5 +1,59 @@
 # TEST_RESULTS
 
+## Run: 2026-07-13 09:26 UTC — round 11 research pass: AnthropicProvider key-rotation caching bug, SecurityScanner vault-reference false positive, SEC-094 for unwired LandlockPolicy
+
+- Context: round 11 of the research-pass invitation (rounds 1-10:
+  Scheduler/Persona; API/MessageBus/Screencast; Memory-compaction/
+  GraphStore/Vault; Config/Vision/CandidateGenerator; MCP/SubAgent/
+  Learnings/Playbook/Attention; Discord/operator-controls/
+  AuditLogger/behavior; ContextManager/Synthesizer/Watchdog/
+  InteractiveApproval; Webhook/ConfigWatcher/ContainerSandbox/
+  MCP-client/Wizard; ToolRegistry/FailureTracker/CircuitBreaker/
+  Checkpoint/Discord-rest; VoiceRegistry/VoiceServer/AgentIdentity/
+  TrustScorer). This round targeted `missy/providers/`,
+  `missy/security/scanner.py`, `missy/security/landlock.py`, and
+  `missy/skills/discovery.py` as primary audit subjects for the first
+  time.
+- **AnthropicProvider key-rotation caching bug**: `_make_client()`
+  caches its SDK client and never exposed an `api_key` property, so
+  `ProviderRegistry.rotate_key()` mutated `provider._api_key` directly
+  without invalidating the cached client — the SDK reads its key off
+  the client at request time, so rotation was a silent no-op for
+  Anthropic. Fixed by adding an `api_key` property/setter mirroring
+  `OpenAIProvider`'s, invalidating `self._client` on write.
+- Command: `pytest tests/providers/test_providers_coverage.py -k test_rotate_invalidates_cached_sdk_client -v`
+- Result: `1 passed`. Confirmed to genuinely fail against the pre-fix
+  code via `git stash` (cached client still reported the old key).
+- **SecurityScanner vault-reference false positive**: `load_config()`
+  resolves `vault://KEY`/`$ENV` references into the actual secret
+  before the scanner ever sees `ProviderConfig.api_key`, so SEC-002/
+  SEC-060 flagged every correctly-vaulted key as plaintext. Fixed by
+  re-reading the raw YAML file for the pre-resolution reference string
+  and preferring it when available.
+- Command: `pytest tests/security/test_scanner.py -k real_load_config -v`
+- Result: `2 passed`. The vault-ref-not-flagged test confirmed to
+  genuinely fail against the pre-fix code via `git stash`; the
+  true-positive (real plaintext key) test confirms no over-suppression.
+- **SEC-094 for unwired LandlockPolicy**: `LandlockPolicy`/
+  `apply_landlock_from_config` is fully implemented and documented as
+  an active kernel-level filesystem enforcement layer but has zero
+  production callers. Wiring it in was judged too large a blast-radius
+  change (irrevocable filesystem restriction) for a bounded fix, so —
+  matching the `SEC-090`/`ContainerSandbox` precedent — added an
+  honest, unconditional scanner finding instead.
+- Command: `pytest tests/security/test_scanner.py -k sec_094 -v`
+- Result: `2 passed`. The available-but-unwired test confirmed to
+  genuinely fail against the pre-fix code via `git stash`.
+- Command: `pytest tests/providers/ tests/security/ tests/agent/test_provider_fallback.py -q`
+  (one pre-existing Hypothesis-deadline flake in
+  `test_property_based_fuzz.py` deselected, confirmed via `git stash`
+  to fail identically pre-round-11)
+- Result: `2999 passed, 1 deselected`.
+- Command: `python3 -m pytest tests/ -q -o faulthandler_timeout=120`
+  (full suite, background run)
+- Result: `21316 passed, 13 skipped in 486.87s (0:08:06)`. 0 failed, up
+  from 21311. Twenty-ninth consecutive fully green full-suite run.
+
 ## Run: 2026-07-13 09:05 UTC — round 10 research pass: voice-registry timing oracle + event-loop-blocking DoS, AgentIdentity key-file hardening, TrustScorer record_violation() wiring
 
 - Context: round 10 of the research-pass invitation (rounds 1-9:

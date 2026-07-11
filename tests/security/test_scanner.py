@@ -290,6 +290,59 @@ class TestCheckConfigSecurity:
         ids = [f.id for f in result.findings]
         assert "SEC-002" not in ids
 
+    def test_sec_002_vault_ref_not_flagged_via_real_load_config(self, tmp_path, monkeypatch):
+        """Regression: load_config() (the real path `missy security scan`
+        actually uses, not a directly-constructed MissyConfig) resolves
+        "vault://KEY" into the actual secret *before* SecurityScanner ever
+        sees it, so provider_cfg.api_key was already plaintext by the time
+        the old SEC-002 check ran -- every correctly-vaulted key was
+        permanently flagged as if typed directly into config.yaml, with no
+        way for an operator to satisfy the check. Must not flag a properly
+        vault-referenced key when loaded through the real config path.
+        """
+        monkeypatch.setattr(
+            "missy.security.vault.Vault.resolve",
+            lambda self, ref: "sk-ant-actualsecretvalue1234567890",
+        )
+        cfg_path = tmp_path / "config.yaml"
+        cfg_path.write_text(
+            "providers:\n"
+            "  anthropic:\n"
+            "    model: claude-sonnet-4-6\n"
+            "    api_key: vault://ANTHROPIC_KEY\n"
+            "vault:\n"
+            "  enabled: true\n"
+        )
+        scanner = SecurityScanner(config_path=str(cfg_path), missy_dir=str(tmp_path / ".missy"))
+        result = scanner.scan_all()
+        # Confirm the resolution actually happened (i.e. we're testing the
+        # real bug scenario, not a no-op).
+        assert scanner.config.providers["anthropic"].api_key == "sk-ant-actualsecretvalue1234567890"
+        ids = [f.id for f in result.findings]
+        assert "SEC-002" not in ids
+        assert "SEC-060" not in ids
+
+    def test_sec_002_real_plaintext_key_still_flagged_via_real_load_config(self, tmp_path):
+        """A genuinely plaintext key (no vault:// or $ reference at all)
+        must still be flagged when loaded through the real load_config()
+        path -- confirms the raw-file fallback doesn't blanket-suppress
+        SEC-002/SEC-060 for the true-positive case.
+        """
+        cfg_path = tmp_path / "config.yaml"
+        cfg_path.write_text(
+            "providers:\n"
+            "  anthropic:\n"
+            "    model: claude-sonnet-4-6\n"
+            "    api_key: sk-ant-actualsecretvalue1234567890\n"
+            "vault:\n"
+            "  enabled: false\n"
+        )
+        scanner = SecurityScanner(config_path=str(cfg_path), missy_dir=str(tmp_path / ".missy"))
+        result = scanner.scan_all()
+        ids = [f.id for f in result.findings]
+        assert "SEC-002" in ids
+        assert "SEC-060" in ids
+
     def test_sec_003_old_config_version(self, tmp_path):
         cfg = _make_config(config_version=0)
         scanner = _scanner(config=cfg, tmp_path=tmp_path / ".missy")
@@ -949,6 +1002,41 @@ class TestCheckKnownVulnerabilities:
         assert "SEC-093" in ids
         f = result.findings[ids.index("SEC-093")]
         assert f.severity == Severity.INFO
+
+    def test_sec_094_landlock_available_but_unwired(self, tmp_path, monkeypatch):
+        """Regression: LandlockPolicy/apply_landlock_from_config
+        (missy/security/landlock.py) is fully implemented and documented
+        (README.md, docs/threat-model.md) as an active kernel-level
+        filesystem enforcement layer, but has zero production callers
+        anywhere in the codebase -- no CLI command, config flag, or
+        runtime bootstrap path ever applies it. On a kernel that supports
+        Landlock, this must be surfaced so an operator isn't misled into
+        thinking it's actually protecting them.
+        """
+        monkeypatch.setattr(
+            "missy.security.landlock.LandlockPolicy.is_available", staticmethod(lambda: True)
+        )
+        cfg = _make_config()
+        scanner = _scanner(config=cfg, tmp_path=tmp_path / ".missy")
+        result = scanner.scan_all()
+        ids = [f.id for f in result.findings]
+        assert "SEC-094" in ids
+        f = result.findings[ids.index("SEC-094")]
+        assert f.severity == Severity.LOW
+
+    def test_sec_094_not_flagged_when_landlock_unavailable(self, tmp_path, monkeypatch):
+        """Flagging an operator for not using a kernel feature their kernel
+        doesn't even support would just be noise -- must not fire when
+        Landlock is unavailable (old kernel, non-Linux, etc.).
+        """
+        monkeypatch.setattr(
+            "missy.security.landlock.LandlockPolicy.is_available", staticmethod(lambda: False)
+        )
+        cfg = _make_config()
+        scanner = _scanner(config=cfg, tmp_path=tmp_path / ".missy")
+        result = scanner.scan_all()
+        ids = [f.id for f in result.findings]
+        assert "SEC-094" not in ids
 
 
 # ---------------------------------------------------------------------------
