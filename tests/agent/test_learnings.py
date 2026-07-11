@@ -86,6 +86,30 @@ class TestExtractOutcome:
     def test_empty_string(self):
         assert extract_outcome("") == "partial"
 
+    def test_words_containing_done_as_substring_are_not_misread_as_success(self):
+        """Regression: plain "done" in low substring matching previously
+        misclassified any response containing "abandoned", "undone", or
+        "condone" (all contain "done" as a literal substring) as a false
+        "success" -- even when the surrounding text clearly describes a
+        failure. This is wired into production learnings persistence, so a
+        genuine failure phrased this way was actively teaching the agent a
+        false lesson that a failed approach worked.
+        """
+        assert (
+            extract_outcome(
+                "I abandoned the task because the deployment failed and the server is down"
+            )
+            == "failure"
+        )
+        assert extract_outcome("The undone work needs revisiting") == "partial"
+        assert extract_outcome("I condone this approach for future tasks") == "partial"
+
+    def test_words_containing_worked_as_substring_are_not_misread_as_success(self):
+        assert (
+            extract_outcome("The service is networked and overworked but still running")
+            == "partial"
+        )
+
 
 class TestExtractLearnings:
     def test_success_learning(self):

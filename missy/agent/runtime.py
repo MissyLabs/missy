@@ -677,10 +677,12 @@ class AgentRuntime:
 
         # Attention system: process input to get urgency, topics, priorities
         attention_query = user_input
+        priority_tools: list[str] = []
         if self._attention is not None:
             try:
                 attn_state = self._attention.process(user_input, history)
                 attention_query = " ".join(attn_state.topics) if attn_state.topics else user_input
+                priority_tools = attn_state.priority_tools
                 logger.debug(
                     "Attention state: urgency=%.2f topics=%s focus=%d priority=%s",
                     attn_state.urgency,
@@ -725,6 +727,7 @@ class AgentRuntime:
                 task_id=task_id,
                 user_input=user_input,
                 _delegation_depth=_delegation_depth,
+                priority_tools=priority_tools,
             )
         except ProviderError as exc:
             self._emit_event(
@@ -919,6 +922,7 @@ class AgentRuntime:
         task_id: str,
         user_input: str = "",
         _delegation_depth: int = 0,
+        priority_tools: list[str] | None = None,
     ) -> tuple[str, list[str]]:
         """Execute the multi-step provider loop.
 
@@ -936,11 +940,24 @@ class AgentRuntime:
                 checkpointing.
             _delegation_depth: SR-4.2 -- internal, forwarded to
                 :meth:`_tool_loop`. See :meth:`run`.
+            priority_tools: Tool names the :class:`~missy.agent.attention.AttentionSystem`
+                flagged as most relevant to this turn. Previously computed
+                every turn and only ever logged at DEBUG level -- the whole
+                point of "prioritising" tools (as README.md advertises) was
+                never actually acted on anywhere. Tools named here are moved
+                to the front of the definitions sent to the provider
+                (order can influence which tool an LLM reaches for first),
+                without changing which tools are allowed/available.
 
         Returns:
             A 2-tuple of ``(final_response_text, list_of_tool_names_used)``.
         """
         tools = self._get_tools()
+        if priority_tools:
+            priority_set = set(priority_tools)
+            prioritised = [t for t in tools if getattr(t, "name", None) in priority_set]
+            rest = [t for t in tools if getattr(t, "name", None) not in priority_set]
+            tools = prioritised + rest
         use_tool_loop = bool(tools) and self.config.max_iterations > 1
 
         if use_tool_loop:
@@ -2217,6 +2234,27 @@ class AgentRuntime:
             )
             if self._memory_store is not None:
                 self._memory_store.save_learning(learning)
+
+            # Playbook.record() (the "auto-capture successful tool
+            # patterns" half of the advertised feature) previously had zero
+            # production callers anywhere -- get_relevant()'s read side
+            # always worked, but nothing ever wrote a pattern, so
+            # get_promotable()/mark_promoted() (auto-promotion to skill
+            # proposals after 3+ successes) were permanently inert too.
+            # Only record genuine tool-augmented successes; a "success"
+            # with no tools used isn't a reusable tool-sequence pattern.
+            if learning.outcome == "success" and learning.approach:
+                try:
+                    from missy.agent.playbook import Playbook
+
+                    Playbook().record(
+                        task_type=learning.task_type,
+                        description=learning.lesson,
+                        tool_sequence=learning.approach,
+                        prompt_hint=prompt[:200],
+                    )
+                except Exception:
+                    logger.debug("Failed to record playbook pattern", exc_info=True)
         except Exception as exc:
             logger.debug("Failed to extract/persist learnings: %s", exc)
 
@@ -2399,10 +2437,16 @@ class AgentRuntime:
             A string block to append to the system prompt, or ``None``.
         """
         try:
-            from missy.agent.playbook import Playbook
+            from missy.agent.playbook import Playbook, classify_task_type
 
             playbook = Playbook()
-            entries = playbook.get_relevant(task_type=user_input, top_k=3)
+            # get_relevant() matches on an exact coarse category (e.g.
+            # "shell", "file") -- passing the raw, arbitrary user_input
+            # here could never match any recorded pattern in principle,
+            # since Playbook.record() is only ever keyed on that same
+            # small coarse vocabulary. classify_task_type() guesses the
+            # likely category before any tools have actually run this turn.
+            entries = playbook.get_relevant(task_type=classify_task_type(user_input), top_k=3)
             if not entries:
                 return None
             lines = ["\n\n[Playbook — proven patterns]"]

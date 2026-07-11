@@ -19,6 +19,7 @@ Example::
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -74,10 +75,18 @@ def extract_task_type(tool_names_used: list[str]) -> str:
     return "chat"
 
 
+_SUCCESS_WORD_RE = re.compile(
+    r"\b(?:successfully|completed|done|finished|worked)\b", re.IGNORECASE
+)
+_FAILURE_WORD_RE = re.compile(
+    r"\b(?:failed|error|unable|couldn't|cannot)\b", re.IGNORECASE
+)
+
+
 def extract_outcome(final_response: str) -> str:
     """Infer task outcome from the model's final response text.
 
-    Checks for success/failure keywords via simple case-insensitive substring
+    Checks for success/failure keywords via case-insensitive whole-word
     matching.
 
     Args:
@@ -86,10 +95,17 @@ def extract_outcome(final_response: str) -> str:
     Returns:
         One of ``"success"``, ``"failure"``, or ``"partial"``.
     """
-    low = final_response.lower()
-    if any(w in low for w in ("successfully", "completed", "done", "finished", "worked")):
+    # Plain substring matching (e.g. "done" in low) previously misclassified
+    # any response containing "abandoned", "undone", or "condone" (all
+    # contain "done" as a literal substring) -- and "worked" similarly
+    # matched inside "networked"/"overworked" -- as a false "success", even
+    # when the surrounding text clearly describes a failure. This is wired
+    # into production learnings persistence (runtime.py's _record_learnings),
+    # so a genuine failure phrased with "abandoned"/"undone" was actively
+    # teaching the agent a false lesson that a failed approach worked.
+    if _SUCCESS_WORD_RE.search(final_response):
         return "success"
-    if any(w in low for w in ("failed", "error", "unable", "couldn't", "cannot")):
+    if _FAILURE_WORD_RE.search(final_response):
         return "failure"
     return "partial"
 

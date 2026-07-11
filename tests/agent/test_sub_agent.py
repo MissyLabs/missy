@@ -164,6 +164,37 @@ class TestSubAgentRunner:
         second_call_prompt = runtime.run.call_args_list[1][0][0]
         assert "result_1" in second_call_prompt
 
+    def test_dependent_task_context_surfaces_failed_dependency(self):
+        """Regression: a dependency's .result is only set on success (a
+        failure sets .error instead), and the prior context builder's
+        "if ... .result" filter silently omitted failed dependencies from
+        context entirely -- not even an error placeholder. A dependent
+        step then ran with no indication its dependency had failed,
+        potentially taking action based on a false assumption that
+        upstream work completed.
+        """
+
+        def _run(prompt, session_id="", _delegation_depth=0):
+            if "first" in prompt:
+                raise RuntimeError("could not find the file")
+            return "ok"
+
+        runtime = MagicMock()
+        runtime.run.side_effect = _run
+        runner = SubAgentRunner(runtime=runtime, session_id="sess-1", depth=0)
+        tasks = [
+            SubTask(id=0, description="first: search for file"),
+            SubTask(id=1, description="second: delete the file found", depends_on=[0]),
+        ]
+        runner.run_all(tasks)
+
+        assert tasks[0].error is not None
+        assert tasks[0].result is None
+
+        second_call_prompt = runtime.run.call_args_list[1][0][0]
+        assert "FAILED" in second_call_prompt
+        assert "could not find the file" in second_call_prompt
+
     def test_run_all_caps_at_max_total(self):
         runtime = self._mock_runtime("ok")
         runner = SubAgentRunner(runtime=runtime, session_id="sess-1", depth=0)

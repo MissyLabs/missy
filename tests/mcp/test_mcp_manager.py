@@ -108,7 +108,10 @@ class TestRestartServer:
         manager._clients["srv"] = old_client
 
         new_client = MagicMock()
+        new_client._command = "echo old"
+        new_client._url = None
         new_client.tools = [{"name": "new_tool"}]
+        new_client.tool_annotations = {}
         new_client.is_alive.return_value = True
         with patch("missy.mcp.manager.McpClient", return_value=new_client):
             manager.restart_server("srv")
@@ -118,6 +121,63 @@ class TestRestartServer:
 
     def test_restart_nonexistent_is_safe(self, manager):
         manager.restart_server("nonexistent")  # no error
+
+    def test_restart_reregisters_tool_annotations(self, manager):
+        """Regression: restart_server() previously swapped in a bare new
+        McpClient without going through add_server()'s annotation
+        registration, so a tool that appears (or changes) after a restart
+        was never registered in self._annotation_registry -- meaning
+        call_tool()'s SR-4.7 approval gate (get_annotation() returning None
+        is treated as "no gate") silently no-op'd for it.
+        """
+        from missy.mcp.annotations import ToolAnnotation
+
+        old_client = MagicMock()
+        old_client._command = "echo old"
+        old_client._url = None
+        old_client.tools = []
+        manager._clients["srv"] = old_client
+
+        new_client = MagicMock()
+        new_client._command = "echo old"
+        new_client._url = None
+        new_client.tools = [{"name": "delete_everything"}]
+        new_client.tool_annotations = {
+            "delete_everything": ToolAnnotation(requires_approval=True)
+        }
+        new_client.is_alive.return_value = True
+        with patch("missy.mcp.manager.McpClient", return_value=new_client):
+            manager.restart_server("srv")
+
+        annotation = manager.get_annotation("srv__delete_everything")
+        assert annotation is not None
+        assert annotation.to_policy_hints()["requires_approval"] is True
+
+    def test_restart_reverifies_pinned_digest(self, manager, tmp_config):
+        """Regression: restart_server() previously skipped digest
+        verification entirely, unlike add_server()."""
+        Path(tmp_config).write_text(
+            json.dumps([{"name": "srv", "command": "echo old", "digest": "deadbeef" * 8}])
+        )
+
+        old_client = MagicMock()
+        old_client._command = "echo old"
+        old_client._url = None
+        old_client.tools = []
+        manager._clients["srv"] = old_client
+
+        new_client = MagicMock()
+        new_client._command = "echo old"
+        new_client._url = None
+        new_client.tools = [{"name": "totally_different_tool"}]
+        new_client.tool_annotations = {}
+        new_client.is_alive.return_value = True
+        with (
+            patch("missy.mcp.manager.McpClient", return_value=new_client),
+            pytest.raises(ValueError, match="digest mismatch"),
+        ):
+            manager.restart_server("srv")
+        new_client.disconnect.assert_called_once()
 
 
 class TestHealthCheck:

@@ -1,5 +1,67 @@
 # TEST_RESULTS
 
+## Run: 2026-07-12 07:45 UTC — round 5 research pass: MCP approval-gate bypass on restart, sub-agent context-drop, learnings misclassification, Playbook and AttentionSystem wiring
+
+- Context: round 5 of the research-pass invitation (rounds 1-4:
+  Scheduler/Persona; API/MessageBus/Screencast; Memory-compaction/
+  GraphStore/Vault; Config/Vision/CandidateGenerator). This round
+  targeted `missy/agent/attention.py`/`playbook.py`/`done_criteria.py`/
+  `learnings.py`, `missy/observability/otel.py`, `missy/mcp/manager.py`,
+  and `missy/agent/sub_agent.py`.
+- **MCP approval-gate bypass on restart** (highest severity):
+  `restart_server()` swapped in a bare new client without going
+  through `add_server()`'s digest verification or annotation
+  re-registration, so `call_tool()`'s SR-4.7 approval gate silently
+  no-op'd for any tool introduced/changed after an auto-restart.
+  Live-reproduced: a restarted server's new `requires_approval=True`
+  tool executed with the approval gate never consulted. Fixed by
+  having `restart_server()` reuse `add_server()`'s full connection
+  path directly.
+- Command: `pytest tests/mcp/test_mcp_manager.py -k Restart -v`
+- Result: `6 passed`. 2 new tests confirmed to genuinely fail against
+  the pre-fix code via `git stash`.
+- **Sub-agent context-drop**: a failed dependency was silently omitted
+  from a dependent subtask's context entirely (not even an error
+  placeholder), so the dependent step ran with no indication anything
+  upstream failed. Live-reproduced: dependent step's prompt was the
+  raw unmodified description. Fixed by surfacing failed dependencies
+  explicitly.
+- Command: `pytest tests/agent/test_sub_agent.py -v`
+- Result: `25 passed`. The new test confirmed to genuinely fail
+  against the pre-fix code via `git stash`.
+- **Learnings misclassification**: `extract_outcome()`'s naive
+  substring matching misclassified "abandoned"/"undone"/"condone"
+  (containing "done") and "networked"/"overworked" (containing
+  "worked") as false successes. Live-reproduced. Fixed with
+  whole-word regex matching.
+- Command: `pytest tests/agent/test_learnings.py -v`
+- Result: `24 passed`. 2 new tests confirmed to genuinely fail
+  against the pre-fix code via `git stash`.
+- **Playbook wiring**: `record()` had zero production callers
+  (confirmed via repo-wide grep), and the sole retrieval call site
+  passed the raw user message as an exact-match task_type that could
+  never match anything. Fixed both halves: added
+  `classify_task_type()` and wired `record()` into
+  `_record_learnings()` for genuine tool-augmented successes.
+- Command: `pytest tests/agent/test_playbook.py -v`
+- Result: `23 passed`.
+- Command: `pytest tests/agent/test_coverage_gaps.py -k RecordLearnings -v`
+- Result: `8 passed`. The 2 new Playbook-wiring tests confirmed to
+  genuinely fail against the pre-fix code via `git stash`.
+- **AttentionSystem wiring**: `priority_tools` was computed every turn
+  but only ever logged, never acted on. Fixed by threading it through
+  `_run_loop()` to reorder the tool definitions sent to the provider.
+- Command: `pytest tests/agent/test_coverage_gaps.py -k PriorityTools -v`
+- Result: `2 passed`. Confirmed to genuinely fail
+  (`TypeError: unexpected keyword argument`) against the pre-fix code
+  via `git stash`.
+- Command: `pytest tests/agent/ tests/mcp/ -q`
+- Result: `4637 passed, 4 skipped`.
+- Command: `python3 -m pytest tests/ -q -o faulthandler_timeout=120`
+  (full suite, background run)
+- Result: `21278 passed, 13 skipped in 563.66s (0:09:23)`. 0 failed, up
+  from 21262. Twenty-third consecutive fully green full-suite run.
+
 ## Run: 2026-07-12 07:00 UTC — round 4 research pass: config backup collision, vision session eviction miscount, candidate-generator permission bypass
 
 - Context: round 4 of the research-pass invitation (round 1:

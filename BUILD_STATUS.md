@@ -4224,6 +4224,122 @@ tests/ -q -o faulthandler_timeout=120` → `21262 passed, 13 skipped, 2
 warnings in 564.27s (0:09:24)` — 0 failed, up from 21258. Twenty-second
 consecutive fully green full-suite run.
 
+### Post-backlog (sixty-fifth checkpoint): round 5 research pass finds an MCP approval-gate bypass on auto-restart, a sub-agent context-drop, a learnings misclassification, and wires up two previously-dead "advertised but unwired" features
+
+Round 5 of the research-pass invitation (round 1: Scheduler/Persona;
+round 2: API/MessageBus/Screencast; round 3: Memory-compaction/
+GraphStore/Vault; round 4: Config/Vision/CandidateGenerator), this
+time into `missy/agent/attention.py`, `playbook.py`, `done_criteria.py`/
+`learnings.py`, `missy/observability/otel.py`, `missy/mcp/manager.py`,
+and `missy/agent/sub_agent.py`. Five genuine findings, live-verified
+and fixed; `done_criteria.py` and `otel.py` beyond the already-fixed
+SR-4.6 items were both checked and found clean.
+
+**1. `McpManager.restart_server()` silently bypassed the SR-4.7
+approval gate for any tool introduced or changed after an auto-restart
+— highest severity.** `add_server()` performs digest verification and
+registers the new client's `tool_annotations` into
+`self._annotation_registry`, but `restart_server()` (called by
+`health_check()`'s dead-server auto-recovery) built a bare `McpClient`
+directly and swapped it in, doing neither. `call_tool()`'s approval
+gate is a silent no-op whenever `get_annotation()` returns `None` (an
+unregistered tool). **Live-reproduced**: connected a server, simulated
+it dying and `health_check()` auto-restarting it with a manifest now
+exposing a new `delete_everything` tool marked
+`requires_approval=True` by the server itself — after the restart,
+`get_annotation("srv__delete_everything")` returned `None` and
+`call_tool()` executed it immediately, with `approval_gate.request`
+never called. This is exactly the scenario a compromised/respawned MCP
+server would exploit: die, come back with a widened/destructive tool,
+get auto-restarted with no re-vetting; a narrower symptom is that
+`all_tools()` also discloses the new tool to the LLM before any digest
+check ever runs (a "tool poisoning" vector). Fixed by having
+`restart_server()` reuse `add_server()`'s full connection path
+directly (disconnect, drop the stale `_clients` entry, then
+`self.add_server(name, command=cmd, url=url)`) instead of re-deriving
+a partial subset of its logic, keeping both paths in sync by
+construction. 2 new tests plus one existing test updated (its mocks
+needed `_command`/`_url`/`tool_annotations` configured to match the
+now-shared code path), both new tests confirmed to genuinely fail
+against the pre-fix code via `git stash`.
+
+**2. `SubAgentRunner.run_all()` silently dropped all context when a
+dependency step failed, so dependent steps ran blind.** A dependency's
+`.result` is only ever set on success (`run_subtask()` sets `.error`
+instead on failure); the context builder's `if ... .result` filter
+meant a failed dependency was omitted from context entirely — not even
+an error placeholder — while the dependent step still ran regardless.
+**Live-reproduced**: chained subtasks ("first: search for file" →
+fails; "second: delete the file found", depending on it) — the
+dependent step's prompt sent to the runtime was the literal,
+unmodified `"second: delete the file found"`, zero indication step 0
+failed. Since `delegate_task` is documented for exactly this kind of
+sequential decomposition including destructive follow-ups, a dependent
+sub-agent could confidently act on a false assumption that upstream
+work completed (the top-level tool result does mark the failed step,
+so the *parent* isn't fooled — but the dependent sub-agent's own turn
+runs blind). Fixed by surfacing failed dependencies explicitly
+(`"Step N FAILED and did not complete: <error>"`) instead of silently
+omitting them. 1 new test, confirmed to genuinely fail (raw
+unmodified prompt, no FAILED marker) against the pre-fix code via
+`git stash`.
+
+**3. `extract_outcome()` misclassified failure responses as success via
+naive substring matching.** Checking `"done" in low` (among other
+words) matches any response containing "abandoned", "undone", or
+"condone" (all contain "done" as a literal substring); "worked"
+similarly matched inside "networked"/"overworked". **Live-reproduced**:
+`extract_outcome("I abandoned the task because the deployment failed
+and the server is down")` returned `"success"`. This is wired into
+production learnings persistence (SR-4.1's fix), so a genuine failure
+phrased this way was actively teaching the agent a false lesson that a
+failed approach worked, later reinjected into future runs' context via
+`get_learnings(limit=5)`. Fixed by switching to whole-word regex
+matching (`\b...\b`). 2 new tests, both confirmed to genuinely fail
+against the pre-fix code via `git stash`.
+
+**4. `Playbook.record()` — the entire "auto-capture" half of the
+advertised AI Playbook feature — had zero production callers.**
+Confirmed via repo-wide grep: `record()` was never called anywhere;
+the only production use of `Playbook` was a read-only
+`get_relevant()` call in `_get_playbook_patterns()`, which additionally
+passed the *raw user message* as `task_type` — since `get_relevant()`
+matches on an exact small coarse-category vocabulary (`"shell"`,
+`"file"`, etc.) that only `record()` would ever populate, this query
+could never match anything even in principle. Since nothing ever
+called `record()`, `get_promotable()`/`mark_promoted()` (auto-promotion
+of 3+-success patterns to skill proposals, advertised in README.md)
+were also permanently inert. Fixed both halves: added a
+`classify_task_type()` keyword-based guesser to `missy/agent/
+playbook.py` (mirroring `extract_task_type()`'s coarse vocabulary) used
+by `_get_playbook_patterns()` instead of the raw user message; and
+wired `Playbook().record(...)` into `_record_learnings()` for genuine
+tool-augmented successes (`learning.outcome == "success" and
+learning.approach`), reusing the already-computed `TaskLearning`
+fields. 9 new tests total (7 for `classify_task_type`/`get_relevant`
+matching, 2 for the `record()` wiring — one asserting success writes a
+pattern, one asserting failure does not), the wiring tests confirmed
+to genuinely fail against the pre-fix code via `git stash`.
+
+**5. `AttentionSystem`'s tool-prioritization output was computed every
+turn but never consumed.** `ExecutiveAttention.prioritise()` correctly
+computes `priority_tools` every turn, but the only production call
+site (`run()`) only ever passed it to a `logger.debug(...)` call —
+README.md explicitly advertises this subsystem as one that
+"prioritize[s] tools," but nothing downstream ever acted on it. Fixed
+by threading `priority_tools` through `_run_loop()`, which now moves
+matching tools to the front of the definitions sent to the provider
+(tool order can influence which tool an LLM reaches for first; this
+changes ordering only, never which tools are allowed/available). 2 new
+tests, one confirmed to genuinely fail (`TypeError: unexpected keyword
+argument`) against the pre-fix code via `git stash`.
+
+Verified: `pytest tests/agent/ tests/mcp/ -q`: `4637 passed, 4
+skipped`. **Full-suite confirmation:** `python3 -m pytest tests/ -q
+-o faulthandler_timeout=120` → `21278 passed, 13 skipped in 563.66s
+(0:09:23)` — 0 failed, up from 21262. Twenty-third consecutive fully
+green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

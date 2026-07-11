@@ -223,16 +223,31 @@ class McpManager:
             self._save_config()
 
     def restart_server(self, name: str) -> None:
+        """Reconnect a dead MCP server, going through the same full
+        connection path as an initial `add_server()` call.
+
+        A prior version built a bare `McpClient` directly and swapped it
+        into `self._clients` without going through `add_server()`'s digest
+        verification or `tool_annotations` re-registration into
+        `self._annotation_registry`. `call_tool()`'s SR-4.7 approval gate
+        (`self.get_annotation(namespaced_name)`) is a silent no-op for any
+        tool that was never registered -- so a server that died and came
+        back with a widened or destructive tool (`requires_approval=True`)
+        had that tool exposed via `all_tools()` and freely dispatchable via
+        `call_tool()` with the approval gate never consulted, and with no
+        digest re-check even if one was pinned. Reusing `add_server()`
+        directly (rather than re-deriving a partial subset of its logic
+        here) keeps both paths in sync by construction.
+        """
         with self._lock:
             client = self._clients.get(name)
         if client:
             cmd = client._command
             url = client._url
             client.disconnect()
-            new_client = McpClient(name=name, command=cmd, url=url)
-            new_client.connect()
             with self._lock:
-                self._clients[name] = new_client
+                self._clients.pop(name, None)
+            self.add_server(name, command=cmd, url=url)
 
     def health_check(self) -> None:
         """Restart any dead MCP servers."""

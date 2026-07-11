@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (71 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eighteen consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (72 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eighteen consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -2803,14 +2803,53 @@ and all four providers' streaming/error paths checked out clean.
 Verified: `pytest tests/config/ tests/vision/ tests/tools/ -q`: `4907
 passed, 2 skipped`.
 
+### Post-backlog (sixty-fifth checkpoint): round 5 research pass — MCP approval-gate bypass, sub-agent context-drop, learnings misclassification, Playbook/AttentionSystem wiring
+
+Round 5 (rounds 1-4: Scheduler/Persona; API/MessageBus/Screencast;
+Memory-compaction/GraphStore/Vault; Config/Vision/CandidateGenerator),
+into `missy/agent/attention.py`/`playbook.py`/`learnings.py`,
+`missy/mcp/manager.py`, and `missy/agent/sub_agent.py`. Five genuine
+findings; `done_criteria.py` and `otel.py` beyond already-fixed items
+checked out clean.
+
+1. **MCP approval-gate bypass on restart** (highest severity):
+   `restart_server()` swapped in a bare client without digest
+   verification or annotation re-registration, so the SR-4.7 approval
+   gate silently no-op'd for any tool introduced after an auto-restart
+   — exactly what a compromised/respawned MCP server would exploit.
+   Fixed by reusing `add_server()`'s full connection path. 2 new
+   tests, confirmed to fail pre-fix.
+2. **Sub-agent context-drop**: a failed dependency was silently
+   omitted from a dependent subtask's context (not even an error
+   placeholder), so the dependent step ran blind on a false assumption
+   upstream work completed. Fixed by surfacing failures explicitly. 1
+   new test, confirmed to fail pre-fix.
+3. **Learnings misclassification**: substring matching on "done"/
+   "worked" misclassified "abandoned"/"undone"/"networked" as false
+   successes, actively teaching the agent false lessons via production
+   learnings persistence. Fixed with whole-word regex matching. 2 new
+   tests, confirmed to fail pre-fix.
+4. **Playbook wiring**: `record()` had zero production callers, and
+   the retrieval call site's raw-user-message task_type could never
+   match anything. Fixed both halves (added a classifier, wired
+   `record()` into successful tool-augmented runs). 9 new tests, the
+   wiring ones confirmed to fail pre-fix.
+5. **AttentionSystem wiring**: `priority_tools` was computed every
+   turn but only ever logged. Fixed by threading it through to reorder
+   tool definitions sent to the provider. 2 new tests, confirmed to
+   fail pre-fix.
+
+Verified: `pytest tests/agent/ tests/mcp/ -q`: `4637 passed, 4
+skipped`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-21262 passed, 13 skipped, 2 warnings in 564.27s (0:09:24)
+21278 passed, 13 skipped in 563.66s (0:09:23)
 ```
 
-**Zero failures**, the twenty-second consecutive fully green full-suite
+**Zero failures**, the twenty-third consecutive fully green full-suite
 run. Passed count is up from 21191 to 21212 (the DISC-CMD-008
 rate-limiting checkpoint: 10 standalone unit tests, 9 real
 dispatch-path integration tests, 3 config-parsing tests) to 21213 (the
@@ -2832,8 +2871,12 @@ fix's 2 new tests, and the Vault concurrent-write fix's 0 net new
 tests but 2 existing tests strengthened) to 21262 (the config
 backup-collision fix's 1 new test, the vision eviction-miscount fix's
 1 new test, and the candidate-generator permission-bypass fix's 2 new
-tests — the eighteenth green run's `ProviderRegistry` fix, and all of
-the sixty-first through sixty-third checkpoints' fixes, are confirmed
+tests) to 21278 (the MCP approval-gate-bypass fix's 2 new tests plus 1
+existing test updated, the sub-agent context-drop fix's 1 new test,
+the learnings-misclassification fix's 2 new tests, the Playbook
+wiring's 9 new tests, and the AttentionSystem wiring's 2 new tests —
+the eighteenth green run's `ProviderRegistry` fix, and all of the
+sixty-first through sixty-fourth checkpoints' fixes, are confirmed
 still holding).
 The occasional Hypothesis deprecation warnings seen in some runs of
 this suite (`test_property_based_fuzz.py` and/or

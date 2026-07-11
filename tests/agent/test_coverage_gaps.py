@@ -676,6 +676,75 @@ class TestRuntimeCapabilityMode:
         assert tools == []
 
 
+class TestRunLoopPriorityTools:
+    """Regression: the AttentionSystem's ExecutiveAttention.prioritise()
+    computed priority_tools every turn, but the only production call site
+    (run()) previously only logged it at DEBUG level -- nothing downstream
+    ever acted on it, despite README.md advertising this subsystem as one
+    that "prioritizes tools." _run_loop() must now move priority_tools to
+    the front of the tool definitions sent to the provider.
+    """
+
+    def test_priority_tools_moved_to_front(self):
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        provider = _make_provider()
+        reg = _make_registry({"fake": provider})
+
+        tool_a, tool_b, tool_c = MagicMock(), MagicMock(), MagicMock()
+        tool_a.name, tool_b.name, tool_c.name = "tool_a", "tool_b", "tool_c"
+
+        with patch("missy.agent.runtime.get_registry", return_value=reg):
+            runtime = AgentRuntime(AgentConfig(provider="fake", max_iterations=3))
+            with (
+                patch.object(runtime, "_get_tools", return_value=[tool_a, tool_b, tool_c]),
+                patch.object(
+                    runtime, "_tool_loop", return_value=("done", [])
+                ) as mock_tool_loop,
+            ):
+                runtime._run_loop(
+                    provider=provider,
+                    system_prompt="sys",
+                    messages=[],
+                    session_id="s",
+                    task_id="t",
+                    priority_tools=["tool_c"],
+                )
+
+        ordered_names = [t.name for t in mock_tool_loop.call_args.kwargs["tools"]]
+        assert ordered_names[0] == "tool_c"
+        assert set(ordered_names) == {"tool_a", "tool_b", "tool_c"}
+
+    def test_no_priority_tools_leaves_order_unchanged(self):
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        provider = _make_provider()
+        reg = _make_registry({"fake": provider})
+
+        tool_a, tool_b = MagicMock(), MagicMock()
+        tool_a.name, tool_b.name = "tool_a", "tool_b"
+
+        with patch("missy.agent.runtime.get_registry", return_value=reg):
+            runtime = AgentRuntime(AgentConfig(provider="fake", max_iterations=3))
+            with (
+                patch.object(runtime, "_get_tools", return_value=[tool_a, tool_b]),
+                patch.object(
+                    runtime, "_tool_loop", return_value=("done", [])
+                ) as mock_tool_loop,
+            ):
+                runtime._run_loop(
+                    provider=provider,
+                    system_prompt="sys",
+                    messages=[],
+                    session_id="s",
+                    task_id="t",
+                    priority_tools=None,
+                )
+
+        ordered_names = [t.name for t in mock_tool_loop.call_args.kwargs["tools"]]
+        assert ordered_names == ["tool_a", "tool_b"]
+
+
 class TestRuntimeExecuteTool:
     """Tests for _execute_tool error paths (lines 706-750)."""
 
@@ -1343,6 +1412,56 @@ class TestRuntimeRecordLearnings:
         lessons = store.get_learnings(limit=5)
         assert len(lessons) == 1
         assert "shell" in lessons[0]
+
+    def test_record_learnings_writes_a_real_playbook_pattern_on_success(self, tmp_path):
+        """Regression: Playbook.record() (the "auto-capture successful
+        tool patterns" half of the advertised AI Playbook feature) had
+        zero production callers anywhere -- get_relevant()'s read side
+        always worked, but nothing ever wrote a pattern, so the on-disk
+        store stayed permanently empty and get_promotable()/mark_promoted()
+        (auto-promotion after 3+ successes) were permanently inert too.
+        """
+        from missy.agent.playbook import Playbook
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        provider = _make_provider()
+        reg = _make_registry({"fake": provider})
+        playbook_path = tmp_path / "playbook.json"
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.playbook.Playbook", lambda: Playbook(store_path=str(playbook_path))),
+        ):
+            runtime = AgentRuntime(AgentConfig(provider="fake"))
+            runtime._record_learnings(
+                ["shell_exec", "file_write"], "Successfully deployed the app.", "deploy the app"
+            )
+
+        pb = Playbook(store_path=str(playbook_path))
+        entries = pb.get_relevant("shell+file")
+        assert len(entries) == 1
+        assert entries[0].tool_sequence == ["shell_exec", "file_write"]
+        assert entries[0].success_count == 1
+
+    def test_record_learnings_does_not_write_playbook_pattern_on_failure(self, tmp_path):
+        from missy.agent.playbook import Playbook
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        provider = _make_provider()
+        reg = _make_registry({"fake": provider})
+        playbook_path = tmp_path / "playbook.json"
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.playbook.Playbook", lambda: Playbook(store_path=str(playbook_path))),
+        ):
+            runtime = AgentRuntime(AgentConfig(provider="fake"))
+            runtime._record_learnings(
+                ["shell_exec"], "The command failed with an error.", "run something"
+            )
+
+        pb = Playbook(store_path=str(playbook_path))
+        assert pb.get_relevant("shell") == []
 
 
 class TestRuntimeAcquireRateLimit:

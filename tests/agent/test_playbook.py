@@ -6,7 +6,45 @@ import threading
 
 import pytest
 
-from missy.agent.playbook import Playbook, _compute_pattern_id
+from missy.agent.playbook import Playbook, _compute_pattern_id, classify_task_type
+
+
+class TestClassifyTaskType:
+    """Regression: get_relevant() matches on an exact coarse category, but
+    the only production call site previously passed the raw, arbitrary user
+    message as task_type -- since Playbook.record() only ever stores a
+    small fixed vocabulary of categories, that query could never match any
+    recorded pattern in principle. classify_task_type() guesses the likely
+    category from keywords, mirroring extract_task_type()'s vocabulary.
+    """
+
+    def test_shell_keywords(self):
+        assert classify_task_type("please run this shell command") == "shell"
+
+    def test_web_keywords(self):
+        assert classify_task_type("fetch this url for me") == "web"
+
+    def test_file_keywords(self):
+        assert classify_task_type("write to this file") == "file"
+
+    def test_shell_and_web_keywords(self):
+        assert classify_task_type("run a script to fetch this url") == "shell+web"
+
+    def test_shell_and_file_keywords(self):
+        assert classify_task_type("run a script and save the file") == "shell+file"
+
+    def test_no_keywords_falls_back_to_chat(self):
+        assert classify_task_type("what's the weather like today?") == "chat"
+
+    def test_matches_a_recorded_pattern_end_to_end(self, tmp_path):
+        """The whole point: a category guessed from a request before any
+        tools run must actually be able to match a pattern recorded from a
+        real prior successful run of the same kind of task."""
+        pb = Playbook(store_path=str(tmp_path / "playbook.json"))
+        pb.record("shell", "deploy app", ["shell_exec", "file_write"], "use rsync")
+
+        guessed = classify_task_type("run the deploy script please")
+        assert pb.get_relevant(guessed) != []
 
 
 class TestRecordNewPattern:

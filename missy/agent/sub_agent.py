@@ -206,11 +206,28 @@ class SubAgentRunner:
                     ready = remaining
 
                 def _run_one(task: SubTask) -> SubTask:
-                    context = "\n".join(
-                        f"Result of step {dep_id}: {(by_id[dep_id].result or '')[:200]}"
-                        for dep_id in task.depends_on
-                        if dep_id in by_id and by_id[dep_id].result
-                    )
+                    # A dependency's .result is only ever set on success
+                    # (run_subtask() sets .error, not .result, on failure).
+                    # The prior version's "if ... .result" filter silently
+                    # OMITTED any failed dependency from context entirely --
+                    # not even an error placeholder -- so a dependent step
+                    # ran with the false impression an upstream failure had
+                    # never happened, potentially taking a destructive
+                    # action based on a made-up assumption about work that
+                    # never actually completed. Surface failed dependencies
+                    # explicitly instead.
+                    context_lines = []
+                    for dep_id in task.depends_on:
+                        dep = by_id.get(dep_id)
+                        if dep is None:
+                            continue
+                        if dep.result:
+                            context_lines.append(f"Result of step {dep_id}: {dep.result[:200]}")
+                        elif dep.error:
+                            context_lines.append(
+                                f"Step {dep_id} FAILED and did not complete: {dep.error[:200]}"
+                            )
+                    context = "\n".join(context_lines)
                     # Capture run_subtask()'s actual return value (including
                     # the "[Error in subtask N: ...]" wrapper on failure) --
                     # reconstructing this from task.result/.error afterwards

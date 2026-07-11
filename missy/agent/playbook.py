@@ -58,6 +58,38 @@ class PlaybookEntry:
             self.created_at = datetime.now(UTC).isoformat()
 
 
+def classify_task_type(text: str) -> str:
+    """Best-effort guess at the coarse task-type category a request will
+    likely fall into, for prospective playbook retrieval before any tools
+    have actually run this turn.
+
+    :meth:`Playbook.record` itself is keyed on the more accurate
+    ``extract_task_type()`` from :mod:`missy.agent.learnings`, computed from
+    the tools *actually* used during a completed run. This function mirrors
+    the same category vocabulary (``shell+web``, ``shell+file``, ``shell``,
+    ``web``, ``file``, ``chat``) via lightweight keyword matching, so a
+    caller retrieving relevant patterns *before* running (when actual tool
+    usage isn't known yet) has a real chance of matching an already-recorded
+    pattern instead of querying with an arbitrary raw string that could
+    never match a recorded coarse category.
+    """
+    low = text.lower()
+    has_shell = any(kw in low for kw in ("run", "execute", "shell", "command", "bash", "script"))
+    has_web = any(kw in low for kw in ("fetch", "download", "url", "http", "website", "webpage"))
+    has_file = any(kw in low for kw in ("file", "read", "write", "save", "edit"))
+    if has_shell and has_web:
+        return "shell+web"
+    if has_shell and has_file:
+        return "shell+file"
+    if has_shell:
+        return "shell"
+    if has_web:
+        return "web"
+    if has_file:
+        return "file"
+    return "chat"
+
+
 def _compute_pattern_id(task_type: str, tool_sequence: list[str]) -> str:
     """Compute a deterministic pattern ID from task type and tool sequence.
 
