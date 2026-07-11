@@ -4705,6 +4705,109 @@ runs post-fix. **Full-suite confirmation:** `python3 -m pytest tests/
 warning in 472.43s (0:07:52)` — 0 failed, up from 21287. Twenty-sixth
 consecutive fully green full-suite run.
 
+### Post-backlog (sixty-ninth checkpoint): round 9 research pass finds an SR-1.5-class gap in 3 audio tools, a Discord retry-exhaustion masking bug, and a multi-tool-call strategy-rotation drop
+
+Round 9 of the research-pass invitation (rounds 1-8: Scheduler/Persona;
+API/MessageBus/Screencast; Memory-compaction/GraphStore/Vault; Config/
+Vision/CandidateGenerator; MCP/SubAgent/Learnings/Playbook/Attention;
+Discord/operator-controls/AuditLogger/behavior; ContextManager/
+Synthesizer/Watchdog/InteractiveApproval; Webhook/ConfigWatcher/
+ContainerSandbox/MCP-client/Wizard), this time into
+`missy/tools/registry.py`, `missy/agent/failure_tracker.py`,
+`missy/agent/circuit_breaker.py`, `missy/agent/checkpoint.py`, and
+`missy/channels/discord/rest.py` — all central, frequently-exercised
+subsystems that had never been the primary subject of a dedicated audit
+round. Three genuine findings, live-verified and fixed;
+`circuit_breaker.py`'s state machine/backoff/thread-safety and
+`checkpoint.py`'s save/resume/schema-validation logic were both
+investigated as primary subjects for the first time and found correct
+(the one theoretical `circuit_breaker.py` wrinkle — a probe raising
+`BaseException` rather than `Exception` leaving `_probe_in_flight`
+stuck — was judged too thin an edge case to report as a finding).
+
+**1. `TTSSpeakTool`, `AudioListDevicesTool`, and `AudioSetVolumeTool`
+all declared `shell=True` but were checked against the meaningless
+literal `"shell"`, never the real binary — the exact SR-1.5-class bug
+already fixed this session for `incus_tools.py`/`x11_tools.py`, just
+not applied to these three.** None of the three take a `command`
+kwarg (they take `text`/`speed`/`voice`, nothing, or `volume`/
+`device_id`), so `ToolRegistry`'s default heuristic always checked
+`"shell"` against `ShellPolicy.allowed_commands` instead of the real
+subprocesses invoked internally (`piper`, `espeak-ng`,
+`gst-launch-1.0` for TTS; `wpctl`/`aplay` for device listing;
+`wpctl` for volume). **Live-reproduced**: under a normal, sane
+allowlist naming the real binaries (`["piper", "espeak-ng",
+"gst-launch-1.0"]`, `["wpctl", "aplay"]`, `["wpctl"]` respectively —
+never `"shell"`), every one of these three tools was unconditionally
+denied with `'shell' is not in the allowed commands list`, regardless
+of what it would actually run — the feature is unusable under exactly
+the config an operator is expected to set. Fixed by adding
+`resolve_shell_command()` overrides to all three, using the same
+`"&&"`-chained convention established earlier this session for tools
+whose actual invoked binary can't be known before `execute()` runs
+(TTS: piper `&&` espeak-ng `&&` gst-launch-1.0; device listing: wpctl
+`&&` aplay; volume: wpctl alone, no fallback). 6 new tests via a real
+`ToolRegistry`, 3 of which (the "allowed" cases) confirmed to
+genuinely fail with the exact `'shell' is not in the allowed commands
+list'` error against the pre-fix code via `git stash`.
+
+**2. Discord's `send_message` retry-exhaustion path was silently
+skipped whenever a persistent 429 carried a valid `Retry-After`
+header, producing a bare, uninformative error instead of the real,
+logged failure every other exhaustion path produces.** The exhaustion
+check (`if attempt >= len(backoffs): response.raise_for_status()`)
+was nested inside `if delay is None:` — but a 429 with a valid
+`Retry-After` header sets `delay` from that header (not `None`), so on
+the final allotted attempt the code just slept and looped one more
+time; the `for` loop then ended with no more attempts, and execution
+fell through to a bare `raise RuntimeError("Discord send_message
+failed without exception")`, never calling `_log_final_failure`
+(which logs `channel_id`, `status_code`, response body, payload
+preview) and never raising the real `httpx.HTTPStatusError` other
+exhaustion paths raise. **Live-reproduced**: a bot under sustained
+rate-limiting (a very plausible real condition) that keeps getting
+429s with `Retry-After` on every attempt gets a diagnostically-empty
+error instead of a properly logged one, complicating on-call debugging
+of a live-production Discord integration. Fixed by moving the
+exhaustion check to run unconditionally, regardless of where `delay`
+came from. 1 new test, confirmed to genuinely fail with the exact bare
+`"Discord send_message failed without exception"` message against the
+pre-fix code via `git stash`.
+
+**3. The strategy-rotation prompt (an anti-repetition mechanism: "you've
+failed 3 times, try 3 alternatives") was silently dropped whenever the
+failing tool wasn't the LAST tool call processed in a multi-tool-call
+round.** In the per-round tool-execution loop, `should_inject` was a
+single boolean *overwritten* (not accumulated) on every iteration —
+explicitly reset to `False` on any tool call's success, or set from
+`failure_tracker.record_failure(...)` on any tool call's failure. If an
+earlier tool call in a round crossed its failure threshold but a later
+one in the *same* round succeeded (or simply didn't itself cross
+threshold), the `True` flag from the earlier call was clobbered by the
+later call's `False` — even though `FailureTracker`'s own per-tool
+state correctly recorded the threshold crossing. Providers that support
+parallel tool calling make this a real, not merely theoretical,
+scenario. **Live-reproduced** via a 3-round mocked-provider test (round
+3: `shell_exec` reaches its 3rd consecutive failure, ordered before
+`read_file`, which succeeds, in the same round) — the round-4 prompt
+sent to the provider never contained the strategy-rotation message for
+`shell_exec`, only the separate, already-working mutation-fingerprint
+`lastToolError` injection (a different feature). Fixed by replacing the
+single `should_inject` bool with a `strategy_rotation_targets: list[tuple[str,
+str]]` accumulated across the whole round, then injecting (and
+emitting an audit event and running evolution analysis for) every
+entry after the loop, not just whichever tool call happened to be
+last. 1 new test using the same real multi-round `_tool_loop` harness
+pattern established earlier this session, confirmed to genuinely fail
+(strategy-rotation prompt absent, only the unrelated `lastToolError`
+messages present) against the pre-fix code via `git stash`.
+
+Verified: `pytest tests/agent/ tests/tools/ tests/channels/ -q`:
+`7779 passed, 6 skipped`. **Full-suite confirmation:** `python3 -m
+pytest tests/ -q -o faulthandler_timeout=120` → `21304 passed, 13
+skipped in 478.42s (0:07:58)` — 0 failed, up from 21296. Twenty-seventh
+consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

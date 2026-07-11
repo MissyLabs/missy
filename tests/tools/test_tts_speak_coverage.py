@@ -19,6 +19,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from missy.tools.builtin.tts_speak import (
+    AudioListDevicesTool,
     AudioSetVolumeTool,
     TTSSpeakTool,
     _ensure_runtime_dir,
@@ -505,3 +506,116 @@ class TestAudioSetVolumeToolValueError:
 
         assert result.success is False
         assert "timed out" in result.error.lower()
+
+
+# ---------------------------------------------------------------------------
+# SR-1.5-class: real ToolRegistry shell-policy enforcement
+# ---------------------------------------------------------------------------
+
+
+class TestSR15AudioToolsShellPolicyGatesRealHostCommand:
+    """Regression: TTSSpeakTool/AudioListDevicesTool/AudioSetVolumeTool all
+    declare ToolPermissions(shell=True) but take no `command` kwarg (they
+    take text/speed/voice, nothing, or volume/device_id respectively), so
+    ToolRegistry's default heuristic checked the meaningless literal
+    "shell" against ShellPolicy instead of the real binaries actually
+    invoked (piper/espeak-ng/gst-launch-1.0, wpctl/aplay, wpctl) -- the same
+    SR-1.5-class bug already fixed this session for incus_tools.py/
+    x11_tools.py. Under a normal, sane allowlist naming the real binaries
+    (never "shell"), every one of these tools was unconditionally denied
+    regardless of what it would actually run; conversely an operator who
+    added "shell" to the allowlist would get the real command never
+    validated at all.
+    """
+
+    @staticmethod
+    def _init_policy(allowed_commands):
+        from missy.config.settings import (
+            FilesystemPolicy,
+            MissyConfig,
+            NetworkPolicy,
+            PluginPolicy,
+            ShellPolicy,
+        )
+        from missy.policy.engine import init_policy_engine
+
+        init_policy_engine(
+            MissyConfig(
+                network=NetworkPolicy(),
+                filesystem=FilesystemPolicy(
+                    allowed_write_paths=["/tmp"], allowed_read_paths=["/tmp"]
+                ),
+                shell=ShellPolicy(enabled=True, allowed_commands=allowed_commands or []),
+                plugins=PluginPolicy(),
+                providers={},
+                workspace_path="/tmp/audio-test-ws",
+                audit_log_path="/tmp/audio-test-audit.jsonl",
+            )
+        )
+
+    def test_tts_speak_denied_when_only_unrelated_command_allowed(self):
+        from missy.tools.registry import ToolRegistry
+
+        self._init_policy(["git"])
+        registry = ToolRegistry()
+        registry.register(TTSSpeakTool())
+        result = registry.execute("tts_speak", text="hello")
+        assert result.success is False
+        assert "not in the allowed commands list" in result.error
+
+    def test_tts_speak_allowed_when_real_binaries_allowlisted(self):
+        from missy.tools.registry import ToolRegistry
+
+        self._init_policy(["piper", "espeak-ng", "gst-launch-1.0"])
+        registry = ToolRegistry()
+        registry.register(TTSSpeakTool())
+        with patch(
+            "missy.tools.builtin.tts_speak._synth_piper", return_value="piper unavailable"
+        ), patch(
+            "missy.tools.builtin.tts_speak._synth_espeak", return_value="espeak-ng unavailable"
+        ):
+            result = registry.execute("tts_speak", text="hello")
+        # Reaches real tool logic (fails on synthesis, not on policy denial).
+        assert "not in the allowed commands list" not in (result.error or "")
+
+    def test_audio_list_devices_denied_when_only_unrelated_command_allowed(self):
+        from missy.tools.registry import ToolRegistry
+
+        self._init_policy(["git"])
+        registry = ToolRegistry()
+        registry.register(AudioListDevicesTool())
+        result = registry.execute("audio_list_devices")
+        assert result.success is False
+        assert "not in the allowed commands list" in result.error
+
+    def test_audio_list_devices_allowed_when_real_binaries_allowlisted(self):
+        from missy.tools.registry import ToolRegistry
+
+        self._init_policy(["wpctl", "aplay"])
+        registry = ToolRegistry()
+        registry.register(AudioListDevicesTool())
+        with patch("subprocess.run", side_effect=FileNotFoundError("wpctl")):
+            result = registry.execute("audio_list_devices")
+        # Reaches real tool logic (fails on missing binaries, not on policy denial).
+        assert "not in the allowed commands list" not in (result.error or "")
+
+    def test_audio_set_volume_denied_when_only_unrelated_command_allowed(self):
+        from missy.tools.registry import ToolRegistry
+
+        self._init_policy(["git"])
+        registry = ToolRegistry()
+        registry.register(AudioSetVolumeTool())
+        result = registry.execute("audio_set_volume", volume="50%")
+        assert result.success is False
+        assert "not in the allowed commands list" in result.error
+
+    def test_audio_set_volume_allowed_when_wpctl_allowlisted(self):
+        from missy.tools.registry import ToolRegistry
+
+        self._init_policy(["wpctl"])
+        registry = ToolRegistry()
+        registry.register(AudioSetVolumeTool())
+        with patch("subprocess.run", side_effect=FileNotFoundError("wpctl")):
+            result = registry.execute("audio_set_volume", volume="50%")
+        assert result.success is False
+        assert "wpctl not found" in result.error

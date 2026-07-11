@@ -970,6 +970,30 @@ class TestRestSendMessageRetry:
         with patch("time.sleep"), pytest.raises(Exception, match="429"):
             client.send_message("100000000000000001", "hello")
 
+    def test_exhausted_retries_on_persistent_429_with_retry_after_header_raises(self):
+        """Regression: when every 429 response carries a valid Retry-After
+        header, `delay` is set from it (not None) -- the exhaustion check
+        was previously nested inside `if delay is None:`, so it never ran.
+        The loop just slept and looped one more time on the final attempt;
+        the for-loop then ended and execution fell through to a bare,
+        uninformative "failed without exception" RuntimeError instead of
+        the real, logged httpx.HTTPStatusError every other exhaustion path
+        produces.
+        """
+        client, mock_http = _make_rest()
+
+        rate_limit_resp = MagicMock()
+        rate_limit_resp.status_code = 429
+        rate_limit_resp.headers = {"Retry-After": "0.01"}
+        rate_limit_resp.raise_for_status.side_effect = Exception("429 Too Many Requests")
+
+        mock_http.post.return_value = rate_limit_resp
+
+        with patch("time.sleep"), pytest.raises(Exception, match="429"):
+            client.send_message("100000000000000001", "hello")
+
+        rate_limit_resp.raise_for_status.assert_called_once()
+
     def test_exception_in_send_retries_then_reraises(self):
         client, mock_http = _make_rest()
 

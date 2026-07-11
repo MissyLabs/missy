@@ -230,9 +230,24 @@ class DiscordRestClient:
                                 delay = float(ra)
                             except Exception:
                                 delay = None
+
+                    # Exhaustion check must happen regardless of where
+                    # *delay* came from. Previously this was nested inside
+                    # `if delay is None:`, so a delay sourced from a real
+                    # Retry-After header (the common case under sustained
+                    # 429 rate-limiting) skipped it entirely even on the
+                    # final allotted attempt -- the loop just slept and
+                    # looped one more time, the for-loop then ended, and
+                    # execution fell through to a bare, uninformative
+                    # "failed without exception" RuntimeError instead of
+                    # the real, logged httpx.HTTPStatusError every other
+                    # exhaustion path produces (and instead of ever calling
+                    # _log_final_failure at all).
+                    if attempt >= len(backoffs):
+                        _log_final_failure(response=response, exc=None, attempt_index=attempt_count)
+                        response.raise_for_status()
+
                     if delay is None:
-                        if attempt >= len(backoffs):
-                            response.raise_for_status()
                         delay = backoffs[attempt]
 
                     delay = float(delay) + secrets.SystemRandom().uniform(0.0, 0.25)

@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (75 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eighteen consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (76 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eighteen consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -2969,14 +2969,47 @@ timing parameters for a much larger safety margin; re-verified against
 the genuine pre-fix code (via `git show`, since that fix predates this
 checkpoint) that it still correctly fails (0.947s) pre-fix.
 
+### Post-backlog (sixty-ninth checkpoint): round 9 research pass — SR-1.5-class audio-tools gap, Discord retry-exhaustion masking bug, multi-tool-call strategy-rotation drop
+
+Round 9 (rounds 1-8: Scheduler/Persona; API/MessageBus/Screencast;
+Memory-compaction/GraphStore/Vault; Config/Vision/CandidateGenerator;
+MCP/SubAgent/Learnings/Playbook/Attention; Discord/operator-controls/
+AuditLogger/behavior; ContextManager/Synthesizer/Watchdog/
+InteractiveApproval; Webhook/ConfigWatcher/ContainerSandbox/
+MCP-client/Wizard), into `ToolRegistry`, `FailureTracker`,
+`CircuitBreaker`, `Checkpoint`, and the Discord REST client — all
+central subsystems audited as primary subjects for the first time.
+Three genuine findings; `CircuitBreaker`'s state machine and
+`Checkpoint`'s save/resume logic both checked out correct.
+
+1. **SR-1.5-class gap in 3 audio tools**: `TTSSpeakTool`/
+   `AudioListDevicesTool`/`AudioSetVolumeTool` all declared
+   `shell=True` with no `command` kwarg, so the registry checked the
+   literal `"shell"` instead of the real binaries — unusable under any
+   sane real-binary allowlist. Fixed with `resolve_shell_command()`
+   overrides. 6 new tests, 3 confirmed to fail pre-fix.
+2. **Discord retry-exhaustion masking bug**: a persistent 429 with a
+   valid `Retry-After` header on every attempt skipped the exhaustion
+   check entirely, producing a bare uninformative error instead of the
+   real, logged failure. Fixed by running the check unconditionally. 1
+   new test, confirmed to fail pre-fix.
+3. **Multi-tool-call strategy-rotation drop**: a single bool
+   overwritten per tool call in a round silently dropped an earlier
+   failing tool's threshold-crossing when a later tool in the same
+   round succeeded. Fixed by accumulating all threshold-crossing tools
+   per round. 1 new test, confirmed to fail pre-fix.
+
+Verified: `pytest tests/agent/ tests/tools/ tests/channels/ -q`:
+`7779 passed, 6 skipped`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-21296 passed, 13 skipped, 1 warning in 472.43s (0:07:52)
+21304 passed, 13 skipped in 478.42s (0:07:58)
 ```
 
-**Zero failures**, the twenty-sixth consecutive fully green full-suite
+**Zero failures**, the twenty-seventh consecutive fully green full-suite
 run. Passed count is up from 21191 to 21212 (the DISC-CMD-008
 rate-limiting checkpoint: 10 standalone unit tests, 9 real
 dispatch-path integration tests, 3 config-parsing tests) to 21213 (the
@@ -3012,9 +3045,12 @@ intentional `_check_url` → `_check_url_async` change) to 21296 (the
 MCP client hang fix's 1 new test, the scanner recommendation fix's 1
 new test, the ConfigWatcher wiring's 1 new test, the wizard
 YAML-injection fix's 6 new tests, and the asyncio timing-margin flake
-fix's widened test parameters — the eighteenth green run's
-`ProviderRegistry` fix, and all of the sixty-first through
-sixty-seventh checkpoints' fixes, are confirmed still holding).
+fix's widened test parameters) to 21304 (the SR-1.5-class audio-tools
+fix's 6 new tests, the Discord retry-exhaustion fix's 1 new test, and
+the multi-tool-call strategy-rotation fix's 1 new test — the
+eighteenth green run's `ProviderRegistry` fix, and all of the
+sixty-first through sixty-eighth checkpoints' fixes, are confirmed
+still holding).
 The occasional Hypothesis deprecation warnings seen in some runs of
 this suite (`test_property_based_fuzz.py` and/or
 `test_policy_property.py`, depending on test ordering — this run shows

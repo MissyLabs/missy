@@ -1163,6 +1163,20 @@ class AgentRuntime:
                 if response.finish_reason == "tool_calls" and response.tool_calls:
                     # Execute each tool call
                     tool_results: list[ToolResult] = []
+                    # Feature #7: which tools crossed the failure threshold
+                    # THIS round. Previously a single `should_inject` bool was
+                    # overwritten (not accumulated) on every iteration, so if
+                    # an earlier tool call in a multi-tool-call round crossed
+                    # its failure threshold but a later one in the same round
+                    # succeeded (or simply didn't itself cross threshold),
+                    # the True flag from the earlier call was silently
+                    # clobbered by the later call's False -- the
+                    # strategy-rotation prompt was never injected for that
+                    # round even though FailureTracker's own per-tool state
+                    # correctly recorded the threshold crossing. Providers
+                    # that support parallel tool calling make this a real,
+                    # not merely theoretical, scenario.
+                    strategy_rotation_targets: list[tuple[str, str]] = []
                     for tc in response.tool_calls:
                         tool_names_used.append(tc.name)
                         _progress.on_tool_start(tc.name)
@@ -1208,12 +1222,10 @@ class AgentRuntime:
                         # Feature #7: track failures / successes per tool
                         if failure_tracker is not None:
                             if tr.is_error:
-                                should_inject = failure_tracker.record_failure(tc.name, tr.content)
+                                if failure_tracker.record_failure(tc.name, tr.content):
+                                    strategy_rotation_targets.append((tc.name, tr.content))
                             else:
                                 failure_tracker.record_success(tc.name)
-                                should_inject = False
-                        else:
-                            should_inject = False
 
                         # Trust scoring: adjust score based on tool outcome
                         _trust = getattr(self, "_trust_scorer", None)
@@ -1293,25 +1305,31 @@ class AgentRuntime:
                             }
                         )
 
-                    # Feature #7: inject strategy-rotation prompt when threshold hit
-                    if should_inject and failure_tracker is not None:
-                        # Use the last tc/tr from the loop (they stay in scope)
-                        strategy_prompt = failure_tracker.get_strategy_prompt(tc.name, tr.content)
-                        loop_messages.append({"role": "user", "content": strategy_prompt})
-                        with contextlib.suppress(Exception):
-                            self._emit_event(
-                                session_id=session_id,
-                                task_id=task_id,
-                                event_type="agent.tool.strategy_rotation",
-                                result="allow",
-                                detail={
-                                    "tool_name": tc.name,
-                                    "failure_count": failure_tracker.threshold,
-                                },
+                    # Feature #7: inject a strategy-rotation prompt for EVERY
+                    # tool that crossed its failure threshold this round, not
+                    # just whichever tool call happened to be last.
+                    if failure_tracker is not None:
+                        for target_name, target_content in strategy_rotation_targets:
+                            strategy_prompt = failure_tracker.get_strategy_prompt(
+                                target_name, target_content
                             )
+                            loop_messages.append({"role": "user", "content": strategy_prompt})
+                            with contextlib.suppress(Exception):
+                                self._emit_event(
+                                    session_id=session_id,
+                                    task_id=task_id,
+                                    event_type="agent.tool.strategy_rotation",
+                                    result="allow",
+                                    detail={
+                                        "tool_name": target_name,
+                                        "failure_count": failure_tracker.threshold,
+                                    },
+                                )
 
-                        # Feature #9: error-driven code evolution analysis
-                        self._analyze_for_evolution(tc.name, tr.content, failure_tracker)
+                            # Feature #9: error-driven code evolution analysis
+                            self._analyze_for_evolution(
+                                target_name, target_content, failure_tracker
+                            )
 
                     # OpenClaw A3: inject sticky lastToolError for repeated-error fingerprints.
                     # When the model has called the same tool with the same arguments

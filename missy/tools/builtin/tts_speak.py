@@ -256,6 +256,20 @@ class TTSSpeakTool(BaseTool):
         },
     }
 
+    def resolve_shell_command(self, kwargs: dict[str, Any]) -> str:
+        # This tool declares shell=True but has no `command` kwarg at all
+        # (it takes text/speed/voice), so ToolRegistry's default heuristic
+        # checked the meaningless literal "shell" against ShellPolicy
+        # instead of the real binaries actually invoked -- the same
+        # SR-1.5-class bug already fixed this session for incus_tools.py/
+        # x11_tools.py. execute() tries piper first, falls back to
+        # espeak-ng, and always plays back via gst-launch-1.0, so which of
+        # the two synthesis engines actually runs can't be known before
+        # execute() runs -- both must be individually allow-listed (same
+        # "&&"-chained convention as X11WindowListTool's wmctrl/xdotool
+        # fallback), alongside the playback binary that always runs.
+        return f"{_PIPER_BIN} && espeak-ng && gst-launch-1.0"
+
     def execute(
         self,
         *,
@@ -323,6 +337,14 @@ class AudioListDevicesTool(BaseTool):
     )
     permissions = ToolPermissions(shell=True)
     parameters: dict[str, Any] = {}
+
+    def resolve_shell_command(self, kwargs: dict[str, Any]) -> str:
+        # Same SR-1.5-class gap as TTSSpeakTool: no `command` kwarg, so the
+        # registry's default heuristic checked the meaningless literal
+        # "shell". execute() tries wpctl first, falls back to aplay --
+        # both must be individually allow-listed since which one actually
+        # runs can't be known before execute() runs.
+        return "wpctl && aplay"
 
     def execute(self, **_: Any) -> ToolResult:
         env = _ensure_runtime_dir()
@@ -401,6 +423,13 @@ class AudioSetVolumeTool(BaseTool):
             "default": "@DEFAULT_SINK@",
         },
     }
+
+    def resolve_shell_command(self, kwargs: dict[str, Any]) -> str:
+        # Same SR-1.5-class gap as TTSSpeakTool: `volume`/`device_id` are
+        # not a `command` kwarg, so the registry's default heuristic
+        # checked the meaningless literal "shell". execute() always shells
+        # out to wpctl only (no fallback here).
+        return "wpctl"
 
     def execute(
         self,

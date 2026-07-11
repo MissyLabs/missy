@@ -1,5 +1,56 @@
 # TEST_RESULTS
 
+## Run: 2026-07-12 10:40 UTC — round 9 research pass: SR-1.5-class gap in 3 audio tools, Discord retry-exhaustion masking bug, multi-tool-call strategy-rotation drop
+
+- Context: round 9 of the research-pass invitation (rounds 1-8:
+  Scheduler/Persona; API/MessageBus/Screencast; Memory-compaction/
+  GraphStore/Vault; Config/Vision/CandidateGenerator; MCP/SubAgent/
+  Learnings/Playbook/Attention; Discord/operator-controls/
+  AuditLogger/behavior; ContextManager/Synthesizer/Watchdog/
+  InteractiveApproval; Webhook/ConfigWatcher/ContainerSandbox/
+  MCP-client/Wizard). This round targeted `missy/tools/registry.py`,
+  `missy/agent/failure_tracker.py`, `missy/agent/circuit_breaker.py`,
+  `missy/agent/checkpoint.py`, and `missy/channels/discord/rest.py` as
+  primary audit subjects for the first time.
+- **SR-1.5-class gap in 3 audio tools**: `TTSSpeakTool`/
+  `AudioListDevicesTool`/`AudioSetVolumeTool` all declared
+  `shell=True` but had no `command` kwarg, so the registry checked the
+  literal `"shell"` instead of the real binaries (piper/espeak-ng/
+  gst-launch-1.0, wpctl/aplay, wpctl). Live-reproduced: unconditional
+  denial under a sane, real-binary allowlist. Fixed with
+  `resolve_shell_command()` overrides using the established
+  `"&&"`-chained convention.
+- Command: `pytest tests/tools/test_tts_speak_coverage.py -k SR15 -v`
+- Result: `6 passed`. 3 confirmed to genuinely fail with the exact
+  `'shell' is not in the allowed commands list` error against the
+  pre-fix code via `git stash`.
+- **Discord retry-exhaustion masking bug**: the exhaustion check was
+  nested inside `if delay is None:`, so a persistent 429 with a valid
+  `Retry-After` header on every attempt skipped it entirely, producing
+  a bare `"failed without exception"` error instead of the real,
+  logged failure. Fixed by running the exhaustion check
+  unconditionally.
+- Command: `pytest tests/channels/test_discord_extended.py -k retry_after_header -v`
+- Result: `2 passed`. The new test confirmed to genuinely fail with
+  the exact bare error message against the pre-fix code via
+  `git stash`.
+- **Multi-tool-call strategy-rotation drop**: `should_inject` was a
+  single bool overwritten (not accumulated) per tool call in a round,
+  so an earlier failing tool's threshold-crossing was silently
+  clobbered by a later succeeding tool's reset in the same round.
+  Live-reproduced via a 3-round mocked-provider test. Fixed by
+  accumulating all threshold-crossing tools in the round and injecting
+  a prompt for each.
+- Command: `pytest tests/agent/test_mutation_fingerprint.py -k strategy_rotation -v`
+- Result: `1 passed`. Confirmed to genuinely fail (prompt absent)
+  against the pre-fix code via `git stash`.
+- Command: `pytest tests/agent/ tests/tools/ tests/channels/ -q`
+- Result: `7779 passed, 6 skipped`.
+- Command: `python3 -m pytest tests/ -q -o faulthandler_timeout=120`
+  (full suite, background run)
+- Result: `21304 passed, 13 skipped in 478.42s (0:07:58)`. 0 failed, up
+  from 21296. Twenty-seventh consecutive fully green full-suite run.
+
 ## Run: 2026-07-12 09:55 UTC — round 8 research pass: MCP client hang, misleading scanner recommendation, ConfigWatcher wiring, wizard YAML-injection bug
 
 - Context: round 8 of the research-pass invitation (rounds 1-7:
