@@ -565,8 +565,22 @@ class VoiceServer:
         Returns:
             The :class:`EdgeNode` on success, or ``None`` on failure.
         """
-        # Verify token.
-        if not self._registry.verify_token(node_id, token):
+        # Verify token. verify_token() runs a real ~100k-iteration
+        # PBKDF2-HMAC-SHA256 computation (live-measured at ~40ms) --
+        # calling it directly here would run that synchronously on the
+        # single asyncio event loop thread with no offload and no rate
+        # limiting anywhere in this class or DeviceRegistry, so a client
+        # repeatedly (re)connecting and sending auth attempts could
+        # monopolize the event loop for as long as the attack continues,
+        # stalling every other connected node's audio streaming/heartbeats/
+        # TTS delivery -- an unauthenticated DoS against the whole
+        # deployment. Offloading to a thread executor keeps the event loop
+        # free to keep servicing other connections while this runs.
+        loop = asyncio.get_event_loop()
+        verified = await loop.run_in_executor(
+            None, self._registry.verify_token, node_id, token
+        )
+        if not verified:
             reason = "invalid credentials"
             logger.info("VoiceServer: auth failure for node %r — %s", node_id, reason)
             _emit(

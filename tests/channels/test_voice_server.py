@@ -5,6 +5,7 @@ All external I/O (websockets, STT, TTS, audit events, registry) is mocked.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -412,6 +413,53 @@ class TestHandleAuth:
         assert result is None
         sent = [json.loads(c[0][0]) for c in ws.send.call_args_list]
         assert any(f["type"] == "muted" for f in sent)
+
+    @pytest.mark.asyncio
+    async def test_verify_token_offloaded_does_not_block_the_event_loop(self) -> None:
+        """Regression: verify_token() runs a real ~100k-iteration
+        PBKDF2-HMAC-SHA256 computation (live-measured at ~40ms on real
+        hardware). Calling it directly (not offloaded) from this async
+        handler would run that synchronously on the single event loop
+        thread with no rate limiting anywhere -- a client repeatedly
+        (re)connecting and authenticating could monopolize the event loop,
+        stalling every other connected node's audio/heartbeats/TTS. Must be
+        offloaded to a thread executor so the loop stays responsive.
+        """
+        import time as _time
+
+        node = _make_edge_node(paired=True, policy_mode="full")
+        server = _make_server(node=node)
+        ws = _make_websocket()
+
+        def _slow_verify_token(node_id: str, token: str) -> bool:
+            _time.sleep(0.4)
+            return True
+
+        server._registry.verify_token = _slow_verify_token
+
+        ticks = 0
+
+        async def _ticker() -> None:
+            nonlocal ticks
+            for _ in range(20):
+                await asyncio.sleep(0.02)
+                ticks += 1
+
+        with patch("missy.channels.voice.server._emit"):
+            start = _time.monotonic()
+            await asyncio.gather(
+                server._handle_auth(ws, node_id="node-1", token="valid"), _ticker()
+            )
+            elapsed = _time.monotonic() - start
+
+        assert ticks == 20
+        # Sequential (blocked loop) would take ~0.4 + 0.4 = ~0.8s;
+        # concurrent (loop stayed responsive) takes ~max(0.4, 0.4) = ~0.4s.
+        # 0.65s sits roughly in the middle with generous headroom on both
+        # sides to absorb scheduling jitter under real system load (see
+        # this same session's earlier asyncio event-loop-blocking fix,
+        # which flaked once at a tighter margin under full-suite load).
+        assert elapsed < 0.65, f"expected concurrent execution, took {elapsed:.3f}s"
 
     @pytest.mark.asyncio
     async def test_auth_success(self) -> None:

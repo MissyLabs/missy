@@ -42,6 +42,13 @@ logger = logging.getLogger(__name__)
 _REGISTRY_SESSION_ID = "system"
 _REGISTRY_TASK_ID = "device-registry"
 _PBKDF2_ITERATIONS = 100_000
+# A fixed-length, never-valid placeholder used by verify_token() to keep
+# the nonexistent-node path's comparison cost identical to the
+# existing-node path -- see verify_token()'s docstring for the timing
+# oracle this closes. Must be a real hex digest of the same length
+# hashlib.pbkdf2_hmac("sha256", ...).hex() produces (64 hex chars) so
+# hmac.compare_digest() compares equal-length byte strings either way.
+_DUMMY_TOKEN_HASH = hashlib.sha256(b"missy-voice-registry-no-such-node").hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -419,7 +426,17 @@ class DeviceRegistry:
         """Return ``True`` if *token* matches the stored hash for *node_id*.
 
         Uses :func:`hmac.compare_digest` via constant-time comparison to
-        prevent timing attacks.
+        prevent timing attacks -- but that alone only protects the token
+        comparison *after* a node is known to exist. The previous version
+        returned immediately (skipping the ~100k-iteration PBKDF2 hash
+        entirely) when the node didn't exist, live-measured at ~0ms vs
+        ~40ms for an existing node with a wrong token -- a timing oracle
+        letting an unauthenticated remote client enumerate real,
+        registered node_ids (over a LAN, or even the internet) without
+        ever knowing a valid token, simply by timing auth attempts.
+        Always performing the same PBKDF2 computation (against a fixed
+        per-registry dummy hash when the node doesn't exist) keeps the
+        two code paths' timing indistinguishable.
 
         Args:
             node_id: The node to authenticate.
@@ -432,10 +449,15 @@ class DeviceRegistry:
         import hmac
 
         node = self.get_node(node_id)
-        if node is None or not node.token_hash:
-            return False
+        real_hash = node.token_hash if node is not None and node.token_hash else None
+        # Exactly one PBKDF2 computation either way (never a second one to
+        # produce a per-request dummy hash, which would just reintroduce
+        # the same timing gap in a different shape): compare against the
+        # real stored hash if the node exists, or a fixed, precomputed
+        # constant otherwise.
         candidate = self._hash_token(node_id, token)
-        return hmac.compare_digest(candidate, node.token_hash)
+        matched = hmac.compare_digest(candidate, real_hash or _DUMMY_TOKEN_HASH)
+        return matched and real_hash is not None
 
     # ------------------------------------------------------------------
     # Presence / sensor data

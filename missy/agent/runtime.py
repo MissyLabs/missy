@@ -1227,19 +1227,12 @@ class AgentRuntime:
                             else:
                                 failure_tracker.record_success(tc.name)
 
-                        # Trust scoring: adjust score based on tool outcome
-                        _trust = getattr(self, "_trust_scorer", None)
-                        if _trust is not None:
-                            if tr.is_error:
-                                _trust.record_failure(tc.name)
-                                if not _trust.is_trusted(tc.name):
-                                    logger.warning(
-                                        "Trust score for tool %r dropped below threshold: %d",
-                                        tc.name,
-                                        _trust.score(tc.name),
-                                    )
-                            else:
-                                _trust.record_success(tc.name)
+                        # Trust scoring now happens inside _execute_tool()
+                        # itself, which has the raw registry ToolResult
+                        # (including policy_denied) in scope -- see the
+                        # comment there for why doing it here instead would
+                        # collapse a policy violation into the same
+                        # record_failure() penalty as any other tool error.
 
                     # Append assistant message with tool_calls to loop history
                     loop_messages.append(
@@ -1699,6 +1692,39 @@ class AgentRuntime:
             pass
         return tuple(transient)
 
+    def _score_tool_trust(
+        self, tool_name: str, *, success: bool, policy_denied: bool = False
+    ) -> None:
+        """Adjust ``self._trust_scorer``'s score for *tool_name* by outcome.
+
+        A plain tool-execution failure costs :meth:`TrustScorer.record_failure`
+        (-50 by default). A failure specifically caused by the policy engine
+        raising ``PolicyViolationError`` (see
+        :meth:`missy.tools.registry.ToolRegistry.execute`'s ``policy_denied``
+        flag on its returned ``ToolResult``) costs the harsher
+        :meth:`TrustScorer.record_violation` (-200) instead — previously
+        every call site here used ``record_failure`` unconditionally, so
+        ``record_violation`` had zero production callers despite being
+        documented (``CLAUDE.md``, ``docs/threat-model.md``) as the scoring
+        event for policy violations specifically.
+        """
+        _trust = getattr(self, "_trust_scorer", None)
+        if _trust is None:
+            return
+        if success:
+            _trust.record_success(tool_name)
+            return
+        if policy_denied:
+            _trust.record_violation(tool_name)
+        else:
+            _trust.record_failure(tool_name)
+        if not _trust.is_trusted(tool_name):
+            logger.warning(
+                "Trust score for tool %r dropped below threshold: %d",
+                tool_name,
+                _trust.score(tool_name),
+            )
+
     def _execute_tool(
         self,
         tool_call: ToolCall,
@@ -1751,6 +1777,7 @@ class AgentRuntime:
                 result="deny",
                 detail={"tool": tool_call.name, "reason": "not_in_per_turn_allow_set"},
             )
+            self._score_tool_trust(tool_call.name, success=False)
             return ToolResult(
                 tool_call_id=tool_call.id,
                 name=tool_call.name,
@@ -1769,6 +1796,7 @@ class AgentRuntime:
             registry = get_tool_registry()
         except KeyError as exc:
             logger.warning("Tool %r not found in registry: %s", tool_call.name, exc)
+            self._score_tool_trust(tool_call.name, success=False)
             return ToolResult(
                 tool_call_id=tool_call.id,
                 name=tool_call.name,
@@ -1777,6 +1805,7 @@ class AgentRuntime:
             )
         except RuntimeError as exc:
             logger.warning("Tool registry not available: %s", exc)
+            self._score_tool_trust(tool_call.name, success=False)
             return ToolResult(
                 tool_call_id=tool_call.id,
                 name=tool_call.name,
@@ -1838,6 +1867,22 @@ class AgentRuntime:
                         task_id=task_id,
                         **tool_args,
                     )
+
+                    # Trust scoring: adjust score based on tool outcome.
+                    # Distinguishing policy_denied here (rather than in the
+                    # caller, which only sees the generic is_error bool on
+                    # the ToolResult returned below) is what makes it
+                    # possible to apply record_violation()'s harsher -200
+                    # penalty specifically for a PolicyViolationError,
+                    # instead of every failure -- policy denial included --
+                    # collapsing into the same -50 record_failure() penalty
+                    # a tool's own internal error gets.
+                    self._score_tool_trust(
+                        tool_call.name,
+                        success=result.success,
+                        policy_denied=getattr(result, "policy_denied", False) is True,
+                    )
+
                     content = str(result.output) if result.output is not None else ""
                     return ToolResult(
                         tool_call_id=tool_call.id,
@@ -1847,6 +1892,7 @@ class AgentRuntime:
                     )
                 except KeyError as exc:
                     logger.warning("Tool %r not found in registry: %s", tool_call.name, exc)
+                    self._score_tool_trust(tool_call.name, success=False)
                     return ToolResult(
                         tool_call_id=tool_call.id,
                         name=tool_call.name,
@@ -1855,6 +1901,7 @@ class AgentRuntime:
                     )
                 except RuntimeError as exc:
                     logger.warning("Tool registry not available: %s", exc)
+                    self._score_tool_trust(tool_call.name, success=False)
                     return ToolResult(
                         tool_call_id=tool_call.id,
                         name=tool_call.name,
@@ -1884,6 +1931,7 @@ class AgentRuntime:
                         )
                 except Exception:
                     logger.exception("Unexpected error executing tool %r", tool_call.name)
+                    self._score_tool_trust(tool_call.name, success=False)
                     return ToolResult(
                         tool_call_id=tool_call.id,
                         name=tool_call.name,
@@ -1892,6 +1940,7 @@ class AgentRuntime:
                     )
 
             # All retries exhausted for transient error.
+            self._score_tool_trust(tool_call.name, success=False)
             return ToolResult(
                 tool_call_id=tool_call.id,
                 name=tool_call.name,

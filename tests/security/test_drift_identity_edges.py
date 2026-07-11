@@ -596,6 +596,7 @@ class TestAgentIdentityPEMFormat:
         """A file filled with zeros is not a valid PEM and must raise an exception."""
         key_file = tmp_path / "bad.pem"
         key_file.write_bytes(b"\x00" * 256)
+        key_file.chmod(0o600)
         with pytest.raises((ValueError, TypeError, OSError)):
             AgentIdentity.from_key_file(str(key_file))
 
@@ -605,6 +606,7 @@ class TestAgentIdentityPEMFormat:
 
         key_file = tmp_path / "random.pem"
         key_file.write_bytes(sec.token_bytes(512))
+        key_file.chmod(0o600)
         with pytest.raises((ValueError, TypeError, OSError)):
             AgentIdentity.from_key_file(str(key_file))
 

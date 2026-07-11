@@ -304,6 +304,84 @@ class TestTrustScoreDropWarning:
         assert result == "done"
 
 
+class TestTrustScorePolicyViolation:
+    def test_policy_denied_result_calls_record_violation_not_record_failure(self):
+        """Regression: a tool result with policy_denied=True (set by
+        ToolRegistry.execute() when the policy engine raises
+        PolicyViolationError) must score via TrustScorer.record_violation()
+        (the -200 policy-violation penalty), not record_failure() (-50) —
+        previously every tool failure, policy denials included, went
+        through record_failure() unconditionally, leaving record_violation()
+        with zero production callers.
+        """
+        provider = MagicMock()
+        provider.name = "fake"
+        provider.is_available.return_value = True
+
+        tc = ToolCall(id="tc1", name="net_tool", arguments={})
+        tool_call_resp = CompletionResponse(
+            content="",
+            model="m",
+            provider="fake",
+            usage={},
+            raw={},
+            finish_reason="tool_calls",
+            tool_calls=[tc],
+        )
+        stop_resp = CompletionResponse(
+            content="done",
+            model="m",
+            provider="fake",
+            usage={},
+            raw={},
+            finish_reason="stop",
+        )
+        provider.complete_with_tools.side_effect = [
+            tool_call_resp,
+            stop_resp,
+            stop_resp,
+            stop_resp,
+        ]
+
+        tool = MagicMock()
+        tool.name = "net_tool"
+        tool_reg = MagicMock()
+        tool_reg.list_tools.return_value = ["net_tool"]
+        tool_reg.get.return_value = tool
+        # Simulates ToolRegistry.execute()'s return on a PolicyViolationError.
+        tool_reg.execute.return_value = MagicMock(
+            success=False, output=None, error="denied by policy", policy_denied=True
+        )
+
+        reg = _make_registry(provider)
+        cfg = AgentConfig(provider="fake", max_iterations=7, capability_mode="full")
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(cfg)
+        rt._rate_limiter = None
+        rt._memory_store = None
+        rt._cost_tracking_enabled = False
+        rt._context_manager = None
+
+        trust = MagicMock()
+        trust.is_trusted.return_value = True
+        trust.score.return_value = 300
+        rt._trust_scorer = trust
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            result = rt.run("policy denied tool")
+
+        trust.record_violation.assert_called_with("net_tool")
+        trust.record_failure.assert_not_called()
+        assert result == "done"
+
+
 # ---------------------------------------------------------------------------
 # Line 799: large content triggers _intercept_large_content
 # ---------------------------------------------------------------------------

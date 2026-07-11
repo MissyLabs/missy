@@ -192,6 +192,46 @@ class TestPermissionChecking:
             assert result.success is False
             assert "denied" in result.error.lower()
 
+    def test_policy_denial_sets_policy_denied_flag(self):
+        """Regression: a PolicyViolationError from the policy engine must
+        set ToolResult.policy_denied=True so callers (AgentRuntime's trust
+        scoring) can apply TrustScorer.record_violation()'s harsher penalty
+        instead of conflating it with an ordinary tool failure via
+        record_failure(). Previously ToolResult carried no such
+        distinction, so record_violation() had zero production callers.
+        """
+        reg = ToolRegistry()
+        reg.register(NetworkTool())
+
+        mock_engine = MagicMock()
+        mock_engine.check_network.side_effect = PolicyViolationError(
+            "host denied", category="network", detail="api.example.com"
+        )
+        with patch("missy.tools.registry.get_policy_engine", return_value=mock_engine):
+            result = reg.execute("network_tool")
+            assert result.success is False
+            assert result.policy_denied is True
+
+    def test_ordinary_tool_failure_does_not_set_policy_denied_flag(self):
+        """A tool's own internal failure (not a policy denial) must leave
+        policy_denied at its default False, so it still scores via the
+        ordinary record_failure() path.
+        """
+        reg = ToolRegistry()
+
+        class FailingTool(EchoTool):
+            name = "failing_echo"
+
+            def execute(self, **kwargs):
+                from missy.tools.base import ToolResult
+
+                return ToolResult(success=False, output=None, error="boom")
+
+        reg.register(FailingTool())
+        result = reg.execute("failing_echo", text="x")
+        assert result.success is False
+        assert result.policy_denied is False
+
     def test_filesystem_read_checks_actual_path(self):
         """Policy engine should check the actual path from kwargs."""
         reg = ToolRegistry()

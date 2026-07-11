@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (76 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eighteen consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (77 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for twenty-eight consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -3002,15 +3002,90 @@ Three genuine findings; `CircuitBreaker`'s state machine and
 Verified: `pytest tests/agent/ tests/tools/ tests/channels/ -q`:
 `7779 passed, 6 skipped`.
 
+### Post-backlog (seventieth checkpoint): round 10 research pass — voice-registry timing oracle + event-loop-blocking DoS, AgentIdentity key-file hardening, TrustScorer record_violation() wiring
+
+Round 10 (rounds 1-9: Scheduler/Persona; API/MessageBus/Screencast;
+Memory-compaction/GraphStore/Vault; Config/Vision/CandidateGenerator;
+MCP/SubAgent/Learnings/Playbook/Attention; Discord/operator-controls/
+AuditLogger/behavior; ContextManager/Synthesizer/Watchdog/
+InteractiveApproval; Webhook/ConfigWatcher/ContainerSandbox/
+MCP-client/Wizard; ToolRegistry/FailureTracker/CircuitBreaker/
+Checkpoint/Discord-rest), into `missy/channels/voice/registry.py`/
+`server.py`, `missy/security/identity.py`, and `missy/security/trust.py`
+— all previously-unaudited-as-primary-subject subsystems. Three
+genuine findings, live-verified and fixed.
+
+1. **Voice-registry timing oracle + event-loop-blocking DoS**:
+   `verify_token()` skipped the ~100k-iteration PBKDF2 hash entirely
+   (returning `False` immediately) for a nonexistent node_id — live
+   measured at ~0.00ms vs ~42ms for an existing node — a remote
+   node-enumeration timing oracle against a service that binds
+   `0.0.0.0:8765` by default. The same expensive hash was also called
+   synchronously from `VoiceServer._handle_auth()`'s `async def`
+   handler, so a client that kept (re)authenticating could monopolize
+   the single-threaded event loop indefinitely — an unauthenticated
+   DoS stalling every other connected voice device's audio/heartbeats/
+   TTS. Fixed with a fixed, precomputed dummy hash (`_DUMMY_TOKEN_HASH`,
+   deliberately *not* a second per-request PBKDF2 call, which would
+   just reintroduce the same gap in 2x-vs-1x shape) so both paths cost
+   exactly one PBKDF2 computation, plus offloading the call to
+   `loop.run_in_executor()`. 2 new tests (real wall-clock timing for
+   both the registry gap and the event-loop-blocking gap, the latter
+   widened to a 0.65s cutoff following checkpoint 68's safety-margin
+   lesson), both confirmed to genuinely fail pre-fix via `git stash`
+   (~42ms-vs-~0.00ms; 0.807s sequential against the 0.65s cutoff).
+2. **AgentIdentity key-file hardening**: `from_key_file()` loaded the
+   process's Ed25519 audit-signing key with zero ownership/permission/
+   symlink checks, unlike this codebase's own `DeviceRegistry.load()`/
+   `Vault._load_or_create_key()` precedent for the identical class of
+   resource — a group/world-readable or symlinked `~/.missy/identity.pem`
+   would let another local user extract the key and forge audit events
+   that pass verification, defeating SR-1.1's tamper-evidence guarantee
+   with no operator-visible signal. Fixed by refusing symlinks,
+   multiple hard links, non-owner-owned files, and group/world
+   read-or-write mode, raising a new `IdentityError`. 2 new regression
+   tests, both confirmed to genuinely fail pre-fix via `git stash`
+   (`ImportError` on the not-yet-existing symbol). 5 pre-existing tests
+   across 3 files needed an incidental `chmod(0o600)` fix (they wrote
+   raw PEM/garbage bytes directly, inheriting ambient-umask permissions
+   unrelated to what they actually test — PEM-content validation).
+3. **TrustScorer record_violation() wiring**: the -200 policy-violation
+   penalty had zero production callers — every tool error, including
+   genuine policy denials, scored via the generic -50
+   `record_failure()`, despite `CLAUDE.md`/`docs/threat-model.md`
+   documenting `record_violation()` as the dedicated harsher penalty.
+   Fixed by adding a `policy_denied` flag to the registry-internal
+   `ToolResult` (set when `ToolRegistry.execute()` catches
+   `PolicyViolationError`) and consolidating trust-scoring into a new
+   `AgentRuntime._score_tool_trust()` helper used consistently across
+   every `_execute_tool()` return path — replacing a duplicate, less
+   precise scoring block in the outer per-tool-call loop (removed to
+   avoid double-penalizing a single policy denial). Also corrected
+   `CLAUDE.md`'s `TrustScorer` bullet, which overclaimed
+   provider/MCP-server tracking that doesn't exist in production;
+   wiring those in is left as an honestly-documented residual matching
+   this session's `ModelRouter` precedent. 3 new tests, all confirmed
+   to genuinely fail pre-fix via `git stash`; the pre-existing
+   generic-failure trust test continues to pass unchanged.
+
+Verified: `pytest tests/agent/ tests/tools/ tests/security/ -q`:
+`7854 passed, 6 skipped`; `pytest tests/channels/ -q`: `1975 passed`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-21304 passed, 13 skipped in 478.42s (0:07:58)
+21311 passed, 13 skipped in 476.87s (0:07:56)
 ```
 
-**Zero failures**, the twenty-seventh consecutive fully green full-suite
-run. Passed count is up from 21191 to 21212 (the DISC-CMD-008
+**Zero failures**, the twenty-eighth consecutive fully green full-suite
+run. Passed count is up from 21304 to 21311 (the round 10 checkpoint's
+7 new tests: 1 voice-registry timing test, 1 voice-server
+event-loop-blocking test, 2 AgentIdentity symlink/permission tests, 2
+ToolRegistry policy_denied tests, and 1 runtime record_violation test —
+all of the sixty-first through sixty-ninth checkpoints' fixes are
+confirmed still holding).
+Passed count is up from 21191 to 21212 (the DISC-CMD-008
 rate-limiting checkpoint: 10 standalone unit tests, 9 real
 dispatch-path integration tests, 3 config-parsing tests) to 21213 (the
 Web TUI approvals/pairing checkpoint's 2 new tests) to 21219 (the

@@ -1,5 +1,70 @@
 # TEST_RESULTS
 
+## Run: 2026-07-13 09:05 UTC — round 10 research pass: voice-registry timing oracle + event-loop-blocking DoS, AgentIdentity key-file hardening, TrustScorer record_violation() wiring
+
+- Context: round 10 of the research-pass invitation (rounds 1-9:
+  Scheduler/Persona; API/MessageBus/Screencast; Memory-compaction/
+  GraphStore/Vault; Config/Vision/CandidateGenerator; MCP/SubAgent/
+  Learnings/Playbook/Attention; Discord/operator-controls/
+  AuditLogger/behavior; ContextManager/Synthesizer/Watchdog/
+  InteractiveApproval; Webhook/ConfigWatcher/ContainerSandbox/
+  MCP-client/Wizard; ToolRegistry/FailureTracker/CircuitBreaker/
+  Checkpoint/Discord-rest). This round targeted
+  `missy/channels/voice/registry.py`/`server.py`,
+  `missy/security/identity.py`, and `missy/security/trust.py` as
+  primary audit subjects for the first time.
+- **Voice-registry timing oracle + event-loop-blocking DoS**:
+  `verify_token()` skipped the ~100k-iteration PBKDF2 hash entirely
+  for a nonexistent node_id (~0.00ms) vs. ~42ms for an existing one —
+  a remote node-enumeration timing oracle. The same expensive hash was
+  also called synchronously from an `async def` handler, letting a
+  repeat-authenticating client stall the entire event loop (DoS
+  against every connected voice device). Fixed with a fixed
+  precomputed dummy hash (same cost either path) plus
+  `loop.run_in_executor()` offload.
+- Command: `pytest tests/channels/test_device_registry.py -k costs_the_same -v`
+  and `pytest tests/channels/test_voice_server.py -k verify_token_offloaded -v`
+- Result: `1 passed` (registry) + `1 passed` (server). Both confirmed
+  to genuinely fail against the pre-fix code via `git stash` — registry
+  test showed ~42ms vs ~0.00ms; server test measured 0.807s sequential
+  against a 0.65s cutoff.
+- **AgentIdentity key-file hardening**: `from_key_file()` loaded the
+  process's Ed25519 signing key with no ownership/permission/symlink
+  checks, unlike this codebase's own `DeviceRegistry.load()`/
+  `Vault._load_or_create_key()` precedent for the same class of
+  resource. Fixed by refusing symlinks, multiple hard links,
+  non-owner-owned files, and group/world-readable/writable mode,
+  raising a new `IdentityError`.
+- Command: `pytest tests/security/test_identity_drift_edges.py -k test_load_refuses -v`
+- Result: `2 passed`. Both confirmed to genuinely fail pre-fix
+  (`ImportError` on the not-yet-existing `IdentityError` symbol) via
+  `git stash`. Five pre-existing tests across three files needed an
+  explicit `chmod(0o600)` added after raw `write_bytes()`/`write_text()`
+  calls — incidental collateral from the new check, unrelated to what
+  those tests exercise (PEM-content validation).
+- **TrustScorer record_violation() wiring**: the -200 policy-violation
+  penalty had zero production callers — every tool error, policy
+  denials included, scored via the generic -50 `record_failure()`.
+  Fixed by adding a `policy_denied` flag to the registry-internal
+  `ToolResult`, set when `ToolRegistry.execute()` catches
+  `PolicyViolationError`, and consolidating trust-scoring into a new
+  `AgentRuntime._score_tool_trust()` helper that checks it.
+- Command: `pytest tests/tools/test_registry_hardening.py -k policy_denied -v`
+  and `pytest tests/agent/test_runtime_coverage_gaps.py -k TrustScorePolicyViolation -v`
+- Result: `2 passed` (registry) + `1 passed` (runtime). All three
+  confirmed to genuinely fail against the pre-fix code via `git stash`.
+  Pre-existing `test_trust_warning_logged_when_score_below_threshold`
+  (generic failure still scores via `record_failure`) continues to
+  pass unchanged.
+- Command: `pytest tests/agent/ tests/tools/ tests/security/ -q`
+- Result: `7854 passed, 6 skipped`.
+- Command: `pytest tests/channels/ -q`
+- Result: `1975 passed`.
+- Command: `python3 -m pytest tests/ -q -o faulthandler_timeout=120`
+  (full suite, background run)
+- Result: `21311 passed, 13 skipped in 476.87s (0:07:56)`. 0 failed, up
+  from 21304. Twenty-eighth consecutive fully green full-suite run.
+
 ## Run: 2026-07-12 10:40 UTC — round 9 research pass: SR-1.5-class gap in 3 audio tools, Discord retry-exhaustion masking bug, multi-tool-call strategy-rotation drop
 
 - Context: round 9 of the research-pass invitation (rounds 1-8:

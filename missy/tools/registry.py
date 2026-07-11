@@ -205,7 +205,7 @@ class ToolRegistry:
         except PolicyViolationError as exc:
             logger.warning("Policy denied execution of tool %r: %s", tool_name, exc)
             self._emit_event(tool_name, session_id, task_id, "deny", str(exc))
-            return ToolResult(success=False, output=None, error=str(exc))
+            return ToolResult(success=False, output=None, error=str(exc), policy_denied=True)
 
         # Strip registry-internal keys that tools don't accept.
         tool_kwargs = {k: v for k, v in kwargs.items() if k not in ("session_id", "task_id")}

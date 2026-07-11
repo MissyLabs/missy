@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import os
+import stat as stat_module
 from pathlib import Path
 
 from cryptography.hazmat.primitives import serialization
@@ -20,6 +21,10 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 
 #: Default location for the agent identity key file.
 DEFAULT_KEY_PATH = os.path.expanduser("~/.missy/identity.pem")
+
+
+class IdentityError(Exception):
+    """Raised when the persisted agent identity key fails a safety check."""
 
 
 class AgentIdentity:
@@ -44,8 +49,38 @@ class AgentIdentity:
 
     @classmethod
     def from_key_file(cls, path: str) -> AgentIdentity:
-        """Load a private key from a PEM file at *path*."""
-        data = Path(path).read_bytes()
+        """Load a private key from a PEM file at *path*.
+
+        This key signs every audit event (see :mod:`missy.observability`),
+        so it is as sensitive as the private key material it wraps. Before
+        reading it, refuse a symlink or multi-hard-linked file (either
+        could point to attacker-controlled content substituted after the
+        file was created — the same TOCTOU/symlink class of attack
+        :class:`missy.security.vault.Vault` already guards against for its
+        own key file), refuse a file not owned by the current user, and
+        refuse a file that is group- or world-readable/writable. Silently
+        loading a compromised or wrongly-permissioned key would let another
+        local user (or anyone who can substitute the symlink target) sign
+        audit events that pass verification as this agent's own —
+        defeating the tamper-evidence guarantee with no operator-visible
+        signal short of manually auditing file permissions.
+        """
+        p = Path(path)
+        if p.is_symlink():
+            raise IdentityError(f"Identity key file {p} is a symlink; refusing to read.")
+        st = p.stat()
+        if st.st_nlink > 1:
+            raise IdentityError(
+                f"Identity key file {p} has multiple hard links; refusing to read."
+            )
+        if st.st_uid != os.getuid():
+            raise IdentityError(f"Identity key file {p} is not owned by current user.")
+        if st.st_mode & (stat_module.S_IRWXG | stat_module.S_IRWXO):
+            raise IdentityError(
+                f"Identity key file {p} has permissive mode "
+                f"0o{st.st_mode & 0o777:o}; expected 0o600."
+            )
+        data = p.read_bytes()
         private_key = serialization.load_pem_private_key(data, password=None)
         if not isinstance(private_key, Ed25519PrivateKey):
             raise TypeError(f"Expected Ed25519 private key, got {type(private_key).__name__}")

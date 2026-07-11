@@ -262,6 +262,7 @@ class TestAgentIdentityPersistence:
         )
         key_file = tmp_path / "rsa.pem"
         key_file.write_bytes(pem)
+        key_file.chmod(0o600)
         with pytest.raises(TypeError, match="Ed25519"):
             AgentIdentity.from_key_file(str(key_file))
 
@@ -274,8 +275,45 @@ class TestAgentIdentityPersistence:
         key_file.write_bytes(
             b"-----BEGIN PRIVATE KEY-----\nnotbase64!!!\n-----END PRIVATE KEY-----\n"
         )
+        key_file.chmod(0o600)
         with pytest.raises((ValueError, OSError)):
             AgentIdentity.from_key_file(str(key_file))
+
+    def test_load_refuses_symlink(self, tmp_path):
+        """Regression: from_key_file() previously followed a symlink with no
+        check, letting a symlink at the well-known identity path be swapped
+        to point at attacker-controlled key material after the real file
+        was created (TOCTOU) -- the same class of attack Vault's key loader
+        already guards against. Must refuse to read through a symlink.
+        """
+        from missy.security.identity import IdentityError
+
+        real_identity = AgentIdentity.generate()
+        real_key = tmp_path / "real.pem"
+        real_identity.save(str(real_key))
+
+        link = tmp_path / "identity.pem"
+        link.symlink_to(real_key)
+
+        with pytest.raises(IdentityError, match="symlink"):
+            AgentIdentity.from_key_file(str(link))
+
+    def test_load_refuses_permissive_mode(self, tmp_path):
+        """Regression: from_key_file() previously loaded a key file with any
+        permission bits, including group/world readable -- letting another
+        local user (or a backup/rsync that doesn't preserve modes) read the
+        private key and forge audit events that pass verify_audit_log() as
+        genuine. Must refuse a key file wider than 0o600.
+        """
+        from missy.security.identity import IdentityError
+
+        identity = AgentIdentity.generate()
+        key_file = str(tmp_path / "identity.pem")
+        identity.save(key_file)
+        os.chmod(key_file, 0o644)
+
+        with pytest.raises(IdentityError, match="permissive"):
+            AgentIdentity.from_key_file(key_file)
 
 
 # ---------------------------------------------------------------------------

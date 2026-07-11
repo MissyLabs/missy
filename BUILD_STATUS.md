@@ -4808,6 +4808,147 @@ pytest tests/ -q -o faulthandler_timeout=120` → `21304 passed, 13
 skipped in 478.42s (0:07:58)` — 0 failed, up from 21296. Twenty-seventh
 consecutive fully green full-suite run.
 
+### Post-backlog (seventieth checkpoint): round 10 research pass finds a voice-registry timing oracle + event-loop-blocking DoS, missing AgentIdentity key-file hardening, and wires TrustScorer's dead record_violation() path
+
+Round 10 of the research-pass invitation (rounds 1-9: Scheduler/Persona;
+API/MessageBus/Screencast; Memory-compaction/GraphStore/Vault; Config/
+Vision/CandidateGenerator; MCP/SubAgent/Learnings/Playbook/Attention;
+Discord/operator-controls/AuditLogger/behavior; ContextManager/
+Synthesizer/Watchdog/InteractiveApproval; Webhook/ConfigWatcher/
+ContainerSandbox/MCP-client/Wizard; ToolRegistry/FailureTracker/
+CircuitBreaker/Checkpoint/Discord-rest), this time into
+`missy/channels/voice/registry.py`/`server.py`, `missy/security/identity.py`,
+and `missy/security/trust.py` — all previously-unaudited-as-primary-subject
+subsystems. Three genuine findings, live-verified and fixed.
+
+**1. `DeviceRegistry.verify_token()` was a node-existence timing oracle,
+and the same call site could block the voice server's entire asyncio
+event loop.** `verify_token()` returned `False` immediately — skipping
+the ~100k-iteration PBKDF2-HMAC-SHA256 hash entirely — whenever the
+requested `node_id` didn't exist, but ran the real hash (and a
+constant-time `hmac.compare_digest`) whenever it did. **Live-reproduced**:
+20 iterations of `verify_token("node-1", "wrong-guess")` (existing node)
+averaged ~42ms; the same 20 iterations against
+`verify_token("totally-nonexistent-node-id", "wrong-guess")` averaged
+~0.00ms — over a 100x gap letting an unauthenticated remote client
+enumerate real, paired node_ids over the network (voice server binds
+`0.0.0.0:8765` by default) purely by timing auth attempts, without ever
+knowing a valid token. Fixed with a fixed, precomputed module-level
+constant (`_DUMMY_TOKEN_HASH`, a plain SHA-256 of a static string — not
+a second PBKDF2 call, which would just reintroduce the same gap in a
+2x-vs-1x shape) so both the "exists" and "doesn't exist" paths always
+cost exactly one PBKDF2 computation plus one `compare_digest` call.
+Compounding this, `VoiceServer._handle_auth()` called `verify_token()`
+directly (synchronously) from its `async def` handler — since the
+event loop is single-threaded and nothing else in this class or
+`DeviceRegistry` rate-limits auth attempts, a client that keeps
+(re)connecting and authenticating could monopolize the loop for as
+long as the attack continued, stalling every other connected node's
+audio streaming, heartbeats, and TTS delivery: an unauthenticated DoS
+against the whole deployment. Fixed by offloading the call to
+`loop.run_in_executor(None, self._registry.verify_token, node_id,
+token)`, matching the same pattern already used elsewhere in this file
+for WAV writes and the checkpoint-67 `InteractiveApproval` precedent.
+2 new tests: `test_verify_nonexistent_node_costs_the_same_as_existing_node`
+(registry, wall-clock timing, confirmed via `git stash` to show a
+~42ms-vs-~0.00ms gap pre-fix) and
+`test_verify_token_offloaded_does_not_block_the_event_loop` (server,
+real wall-clock `asyncio.gather()` timing against a slow mocked
+`verify_token` plus a concurrent ticker coroutine — widened to 0.4s
+slow-call/0.4s ticker with a 0.65s cutoff, following this same
+session's checkpoint-68 lesson about generous safety margins under
+real system load; confirmed via `git stash` to measure 0.807s
+sequential pre-fix against the 0.65s cutoff).
+
+**2. `AgentIdentity.from_key_file()` loaded the process's Ed25519
+signing key with zero ownership/permission/symlink validation, unlike
+this same codebase's own established precedent for the identical class
+of resource** (`DeviceRegistry.load()` checks `st_uid`/group-world-writable;
+`Vault._load_or_create_key()` refuses symlinks/multi-hard-links and
+warns on permissive mode). This key signs every audit event — the
+SR-1.1 tamper-evidence root of trust. `~/.missy/identity.pem` becoming
+group/world-readable (a backup/rsync that doesn't preserve modes, a
+misconfigured umask, or a planted symlink) would let another local
+user extract the private key and forge audit events that pass
+`verify_audit_log()` as genuine, with no operator-visible signal short
+of manually auditing file permissions — `tests/security/test_identity*.py`
+only ever asserted `save()` produces `0o600`, never that *loading* an
+existing file enforces it. Fixed by adding the same class of checks to
+`from_key_file()`: refuse a symlink, refuse multiple hard links, refuse
+a file not owned by the current user, refuse group/world read-or-write
+bits — raising a new `IdentityError` (mirroring `VaultError`'s role for
+the vault key) rather than silently loading. 2 new regression tests
+(`test_load_refuses_symlink`, `test_load_refuses_permissive_mode`),
+both confirmed via `git stash` to genuinely fail pre-fix (an
+`ImportError` on the not-yet-existing `IdentityError` symbol). Five
+pre-existing tests across three files
+(`test_identity_drift_edges.py`, `test_drift_trust_gaps.py`,
+`test_drift_identity_edges.py`) wrote raw PEM/garbage bytes directly
+via `write_bytes()`/`write_text()` with no explicit mode, inheriting
+the ambient umask's group/world-readable permissions — incidental
+collateral from the new check, unrelated to what those tests actually
+exercise (PEM-content validation, not permissions). Fixed by adding an
+explicit `chmod(0o600)` after each raw write, preserving each test's
+original intent and exception-type assertions unchanged.
+
+**3. `TrustScorer.record_violation()` (the -200 "major decrease for a
+policy violation" scoring event) had zero production callers.** Every
+call site in `AgentRuntime`'s tool-call loop used `record_failure()`
+(-50) unconditionally for any tool error, policy denials included —
+so a policy-engine denial scored identically to a tool's own internal
+failure, despite `CLAUDE.md` and `docs/threat-model.md` both
+documenting `record_violation()` as the dedicated, harsher penalty for
+policy violations specifically. The information needed to distinguish
+the two cases was actually available and already structured
+(`PolicyViolationError` carries `category`/`detail`) but was discarded
+by the time it reached the trust-scoring call site: `ToolRegistry.execute()`'s
+`except PolicyViolationError` branch collapsed it into a generic
+`ToolResult(success=False, error=str(exc))`. Fixed by adding a
+`policy_denied: bool = False` field to `missy.tools.base.ToolResult`
+(the registry-internal result type, not the shared
+`providers.base.ToolResult` used everywhere — deliberately the
+smaller-blast-radius dataclass to touch) set to `True` in that except
+branch, and adding a new `AgentRuntime._score_tool_trust()` helper
+(`success` / `policy_denied` kwargs) that every one of `_execute_tool()`'s
+return points now calls consistently — replacing the old duplicate,
+less-precise scoring block that lived in the *outer* per-tool-call
+loop (which only ever saw the generic `is_error` bool on the shared
+outer `ToolResult` and had no way to tell a policy denial from an
+ordinary failure). Moving scoring into `_execute_tool()` itself (where
+the raw registry `ToolResult` — including `policy_denied` — is in
+scope) rather than leaving a second, redundant scoring call in the
+outer loop was necessary to avoid double-penalizing a single policy
+denial (-200 from a would-be new call *plus* -50 from the old generic
+one). Also updated `CLAUDE.md`'s `TrustScorer` bullet, which
+previously overclaimed "0-1000 reliability tracking per
+tool/provider/MCP server" — providers (`_call_provider_with_fallback`)
+and MCP servers have their own independent reliability tracking
+(`CircuitBreaker` per provider name; MCP digest-pinning/`health_check()`)
+and still do not call into `TrustScorer` at all; wiring them in is
+judged a distinct, larger architectural effort (matching this
+session's established precedent for `ModelRouter`) and is left as an
+honestly-documented residual, not attempted this checkpoint. 3 new
+tests: `test_policy_denial_sets_policy_denied_flag` and
+`test_ordinary_tool_failure_does_not_set_policy_denied_flag` (real
+`ToolRegistry`, confirming the flag is set only for genuine policy
+denials) and `test_policy_denied_result_calls_record_violation_not_record_failure`
+(a real `AgentRuntime.run()` call through a mocked provider/tool
+registry, asserting `record_violation` — not `record_failure` — fires).
+All three confirmed via `git stash` to genuinely fail pre-fix (the
+first two with `AttributeError: 'ToolResult' object has no attribute
+'policy_denied'`; the third with `record_violation` never called). The
+existing `test_trust_warning_logged_when_score_below_threshold` test
+(asserting a generic tool failure still scores via `record_failure`)
+continues to pass unchanged, confirming ordinary failures aren't
+affected by the new precision.
+
+Verified: `pytest tests/agent/ tests/tools/ tests/security/ -q`:
+`7854 passed, 6 skipped`; `pytest tests/channels/ -q`: `1975 passed`.
+**Full-suite confirmation:** `python3 -m pytest tests/ -q -o
+faulthandler_timeout=120` → `21311 passed, 13 skipped in 476.87s
+(0:07:56)` — 0 failed, up from 21304. Twenty-eighth consecutive fully
+green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

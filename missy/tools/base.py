@@ -62,11 +62,18 @@ class ToolResult:
         output: The primary result value.  Type varies by tool.
         error: Human-readable error description when ``success`` is
             ``False``.  ``None`` on success.
+        policy_denied: ``True`` when ``success is False`` specifically
+            because the policy engine raised ``PolicyViolationError`` (see
+            :meth:`missy.tools.registry.ToolRegistry.execute`), as opposed
+            to the tool itself failing internally. Lets callers apply a
+            harsher trust-score penalty for policy violations than for
+            ordinary tool failures without re-parsing ``error`` text.
     """
 
     success: bool
     output: Any
     error: str | None = None
+    policy_denied: bool = False
 
 
 class BaseTool(ABC):
