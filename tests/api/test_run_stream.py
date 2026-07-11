@@ -135,8 +135,16 @@ class TestRunLifecycle:
         runtime = FakeRuntime(bus, response="done")
         handle = registry.start(runtime=runtime, message="do a thing", session_id="s1")
         events = [e["event"] for e in registry.stream(handle.run_id)]
-        assert "run.started" in events
-        assert "run.start" in events
+        # _execute()'s own directly-pushed "run has begun" event and the
+        # bus-forwarded "agent.run.start" -> "run.start" event must use the
+        # IDENTICAL name -- web_console.py's EventSource only binds a
+        # listener to 'run.start'. Pre-fix, the directly-pushed event was
+        # named "run.started" (with a "d"), which no browser listener ever
+        # matched, so the "Agent picked up the task" UI line only appeared
+        # via the second, bus-sourced event -- silently never appearing at
+        # all if the message bus happened to be unavailable.
+        assert "run.started" not in events
+        assert events.count("run.start") == 2
         assert "tool.request" in events
         assert "tool.result" in events
         assert events[-1] == "run.complete"

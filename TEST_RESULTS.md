@@ -1,5 +1,44 @@
 # TEST_RESULTS
 
+## Run: 2026-07-13 18:15 UTC — round 29 research pass: dead SSE event-name mismatch (`run.started` vs `run.start`) between run_stream.py and the Web TUI
+
+- Context: round 29 continued explicitly re-hunting the round-26/27/28
+  bug class across the Web TUI's JS-to-Python endpoint contract,
+  scheduler job-execution calls into AgentRuntime/ProviderRegistry,
+  McpManager's internal restart_server()/health_check() calls into
+  McpClient, and HatchingManager's 8-step bootstrap's calls into the
+  memory store/persona manager/vision subsystems -- all four checked
+  out clean. One lower-severity but genuine bug found: a dead
+  string-literal mismatch between a backend SSE event name and the
+  frontend JS listener bound to it.
+- **Dead SSE event-name mismatch**: RunRegistry._execute() pushed an
+  SSE event named "run.started" as the very first event of every
+  background run, but the Web TUI's EventSource only binds a listener
+  to 'run.start' (no trailing "d") -- the mismatched event was silently
+  dropped by every browser, so the "Agent picked up the task" UI line
+  only ever appeared via a second, bus-forwarded event with the
+  matching name; if the message bus happened to be unavailable, that
+  feedback would never appear, leaving the run looking silently
+  stalled. Fixed by renaming the directly-pushed event to "run.start".
+- Command: `pytest tests/api/test_run_stream.py::TestRunLifecycle::test_stream_includes_bus_sourced_tool_events -v`
+- Result: `1 passed`. A pre-existing test literally asserted both the
+  wrong name ("run.started") and the right one ("run.start") were
+  present, documenting the mismatch as if intentional -- corrected to
+  assert the wrong name never appears. Confirmed to genuinely fail
+  pre-fix via `git stash`.
+- Command: `pytest tests/api/ -q`
+- Result: `170 passed`. A second pre-existing test
+  (test_events_stream_delivers_started_and_complete in
+  tests/api/test_server.py) asserted the literal wrong SSE wire text
+  "event: run.started" -- corrected to "event: run.start". Confirmed to
+  genuinely fail pre-fix via `git stash`.
+- Command: `python3 -m pytest tests/ -q`
+  (full suite, background run)
+- Result: `21395 passed, 14 skipped in 595.68s (0:09:55)`. 0 failed.
+  Same total pass count as the prior checkpoint (this round fixed 2
+  pre-existing tests' assertions rather than adding new ones).
+  Forty-seventh consecutive fully green full-suite run.
+
 ## Run: 2026-07-13 17:55 UTC — round 28 research pass: vault:// references silently failed to resolve against a custom vault.vault_dir
 
 - Context: round 28 continued explicitly re-hunting the round-26/27

@@ -6751,6 +6751,60 @@ test_discord_config_coverage.py -q`: `32 passed`.
 `21395 passed, 14 skipped in 534.39s (0:08:54)` — 0 failed, up from
 21393. Forty-sixth consecutive fully green full-suite run.
 
+### Post-backlog (eighty-ninth checkpoint): round 29 research pass fixes a dead SSE event-name mismatch between run_stream.py and the Web TUI's EventSource listener
+
+Round 29 continued explicitly re-hunting the round-26/27/28 bug class
+across `missy/api/web_console.py`/`missy/api/operator_controls.py` vs
+`missy/api/server.py`'s endpoints, `missy/scheduler/manager.py`'s job
+execution path's calls into `AgentRuntime`/`ProviderRegistry`,
+`missy/mcp/manager.py`'s `restart_server()`/`health_check()`'s calls
+into `McpClient`, and `missy/agent/hatching.py`'s 8-step bootstrap's
+calls into the memory store/persona manager/vision subsystems — all
+four checked out clean; every JS-to-Python endpoint pair, scheduler
+job-execution call, MCP manager internal cross-class call, and
+hatching-step dependency call matches its real target's actual
+signature. One lower-severity but genuine bug found, of a related but
+distinct flavor: not a wrong method name/lifecycle assumption on a
+Python class, but a dead string-literal mismatch between a backend
+SSE event name and the frontend JS listener bound to it.
+
+1. **`RunRegistry._execute()` pushed an SSE event named `"run.started"`
+   (with a trailing "d") as the very first event of every background
+   run, but the Web TUI's `EventSource` in `web_console.py` only binds
+   a listener to `'run.start'` (no "d") — matching the name
+   `_EVENT_NAME_BY_TOPIC` maps the bus topic `"agent.run.start"` to.**
+   The mismatched, directly-pushed event was silently dropped by every
+   browser (`EventSource` has no listener fallback for an unmatched
+   event name), so the "Agent picked up the task" UI line only ever
+   appeared via the second, bus-forwarded `agent.run.start` → `run.start`
+   event — meaning if the process-level message bus happened to be
+   unavailable, that UI feedback would never appear at all for the
+   entire run, leaving it looking silently stalled with no explanation
+   until `run.complete`/`run.error`. Fixed by renaming the directly-pushed
+   event to `"run.start"`, matching the bus-forwarded one exactly (both
+   events now fire with the same name, by design — one immediately at
+   dispatch, one confirming the runtime actually began processing).
+   This exposed that a pre-existing test
+   (`test_stream_includes_bus_sourced_tool_events`) literally asserted
+   both the wrong name (`"run.started"`) *and* the right one
+   (`"run.start"`) were present, documenting the mismatch as if it were
+   two intentionally-distinct events rather than a bug — corrected to
+   assert `"run.started"` never appears and `"run.start"` appears
+   exactly twice. A second pre-existing test
+   (`test_events_stream_delivers_started_and_complete` in
+   `tests/api/test_server.py`) asserted the literal wrong SSE wire text
+   `"event: run.started"`, corrected to `"event: run.start"`. Both
+   confirmed via `git stash` to genuinely fail pre-fix. `pytest
+   tests/api/ -q`: `170 passed`.
+
+Verified: `pytest tests/api/ -q`: `170 passed`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21395 passed, 14 skipped in 595.68s (0:09:55)` — 0 failed. Same total
+pass count as the prior checkpoint (this round fixed 2 pre-existing
+tests' assertions rather than adding new ones). Forty-seventh
+consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

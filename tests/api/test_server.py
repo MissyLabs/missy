@@ -969,7 +969,7 @@ class TestRuns:
                     body += chunk
                     if "run.complete" in body or "run.error" in body:
                         break
-            assert "event: run.started" in body
+            assert "event: run.start" in body
             assert "event: run.complete" in body
             assert "streamed answer" in body
         finally:

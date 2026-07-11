@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (95 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for forty-six consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (96 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for forty-seven consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -3921,15 +3921,48 @@ test_coverage_gaps_vault_hotreload.py tests/security/ -q`: `2485
 passed`. `pytest tests/unit/test_discord_config.py tests/unit/
 test_discord_config_coverage.py -q`: `32 passed`.
 
+### Post-backlog (eighty-ninth checkpoint): round 29 research pass — dead SSE event-name mismatch (`run.started` vs `run.start`) between run_stream.py and the Web TUI
+
+Round 29 continued explicitly re-hunting the round-26/27/28 bug class
+across the Web TUI's JS-to-Python endpoint contract, scheduler
+job-execution calls into `AgentRuntime`/`ProviderRegistry`,
+`McpManager`'s internal `restart_server()`/`health_check()` calls into
+`McpClient`, and `HatchingManager`'s 8-step bootstrap's calls into the
+memory store/persona manager/vision subsystems -- all four checked out
+clean. One lower-severity but genuine bug found, of a related but
+distinct flavor: not a wrong method name/lifecycle assumption on a
+Python class, but a dead string-literal mismatch between a backend SSE
+event name and the frontend JS listener bound to it.
+
+1. **`RunRegistry._execute()` pushed an SSE event named `"run.started"`
+   as the very first event of every background run, but the Web TUI's
+   `EventSource` only binds a listener to `'run.start'`** (no trailing
+   "d") -- the mismatched event was silently dropped by every browser,
+   so the "Agent picked up the task" UI line only ever appeared via a
+   second, bus-forwarded event with the matching name; if the message
+   bus happened to be unavailable, that feedback would never appear,
+   leaving the run looking silently stalled with no explanation. Fixed
+   by renaming the directly-pushed event to `"run.start"`. This exposed
+   that a pre-existing test literally asserted both the wrong name and
+   the right one were present, documenting the mismatch as if
+   intentional -- corrected. A second pre-existing test in
+   `tests/api/test_server.py` asserted the literal wrong SSE wire text
+   -- corrected. Both confirmed to genuinely fail pre-fix.
+
+Verified: `pytest tests/api/ -q`: `170 passed`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21395 passed, 14 skipped in 534.39s (0:08:54)
+21395 passed, 14 skipped in 595.68s (0:09:55)
 ```
 
-**Zero failures**, the forty-sixth consecutive fully green
-full-suite run. Passed count is up from 21393 to 21395 (the round 28
+**Zero failures**, the forty-seventh consecutive fully green
+full-suite run. Passed count holds at 21395 (the round 29 checkpoint
+fixed 2 pre-existing tests' assertions rather than adding new ones --
+all of the sixty-first through eighty-eighth checkpoints' fixes are
+confirmed still holding). Passed count is up from 21393 to 21395 (the round 28
 checkpoint's 2 new tests in `TestLoadConfigVaultResolutionCustomDir`;
 all of the sixty-first through eighty-seventh checkpoints' fixes are
 confirmed still holding). Passed count is up from 21390 to 21393 (the

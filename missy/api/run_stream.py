@@ -202,9 +202,17 @@ class RunRegistry:
             bus.subscribe(_SUMMARY_TOPIC, summary_handler)
 
         handle.status = "running"
+        # Must be "run.start", not "run.started" -- the Web TUI's EventSource
+        # listener (web_console.py) only binds to 'run.start' (matching the
+        # name _EVENT_NAME_BY_TOPIC below maps "agent.run.start" to). The
+        # "Agent picked up the task" UI line only ever appeared via that
+        # second, bus-forwarded event with the same intent; if the message
+        # bus is unavailable, this event was silently dropped by the browser
+        # (no listener bound to the mismatched name) and the run looked
+        # stalled with no explanation until run.complete/run.error.
         handle.push(
             {
-                "event": "run.started",
+                "event": "run.start",
                 "data": {
                     "run_id": handle.run_id,
                     "session_id": handle.session_id,
