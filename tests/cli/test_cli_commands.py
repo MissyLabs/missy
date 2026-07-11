@@ -28,6 +28,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from click.testing import CliRunner
 
+from missy.channels.voice.registry import EdgeNode
 from missy.cli.main import cli
 from tests.cli.conftest import _make_cli_runner
 
@@ -1340,10 +1341,38 @@ class TestMcpRemove:
 # ===========================================================================
 
 
+def _edge_node(spec: dict) -> EdgeNode:
+    """Build a real EdgeNode from the shorthand dict shape used by these tests."""
+    return EdgeNode(
+        node_id=spec.get("node_id", ""),
+        friendly_name=spec.get("name", spec.get("friendly_name", "")),
+        room=spec.get("room", ""),
+        ip_address=spec.get("ip_address", ""),
+        paired=spec.get("paired", False),
+        policy_mode=spec.get("policy", spec.get("policy_mode", "full")),
+        last_seen=spec.get("last_seen") or 0.0,
+        status="online" if spec.get("online") else "offline",
+        sensor_data={
+            "occupancy": spec.get("occupancy"),
+            "noise_level": spec.get("noise_level"),
+            "updated_at": 0.0,
+        },
+    )
+
+
 def _make_mock_registry(nodes: list[dict] | None = None) -> MagicMock:
-    """Return a mock DeviceRegistry that returns the given node dicts."""
+    """Return a mock DeviceRegistry backed by real EdgeNode instances,
+    matching DeviceRegistry's real list_nodes()/list_paired()/
+    list_pending()/get_node() API.
+    """
+    edge_nodes = [_edge_node(n) for n in (nodes or [])]
     reg = MagicMock()
-    reg.all.return_value = nodes or []
+    reg.list_nodes.return_value = edge_nodes
+    reg.list_paired.return_value = [n for n in edge_nodes if n.paired]
+    reg.list_pending.return_value = [n for n in edge_nodes if not n.paired]
+    reg.get_node.side_effect = lambda nid: next(
+        (n for n in edge_nodes if n.node_id == nid), None
+    )
     return reg
 
 
@@ -1419,7 +1448,7 @@ class TestDevicesPair:
     def test_devices_pair_with_node_id(self, runner: CliRunner):
         reg = _make_mock_registry([])
         mock_pairing = MagicMock()
-        mock_pairing.approve.return_value = "tok123"
+        mock_pairing.approve_pairing.return_value = "tok123"
         with (
             patch("missy.channels.voice.registry.DeviceRegistry", return_value=reg),
             patch("missy.channels.voice.pairing.PairingManager", return_value=mock_pairing),
@@ -1432,7 +1461,7 @@ class TestDevicesPair:
     def test_devices_pair_approval_failure_exits_one(self, runner: CliRunner):
         reg = _make_mock_registry([])
         mock_pairing = MagicMock()
-        mock_pairing.approve.side_effect = RuntimeError("node not found")
+        mock_pairing.approve_pairing.side_effect = RuntimeError("node not found")
         with (
             patch("missy.channels.voice.registry.DeviceRegistry", return_value=reg),
             patch("missy.channels.voice.pairing.PairingManager", return_value=mock_pairing),
@@ -1447,14 +1476,14 @@ class TestDevicesPair:
 
 class TestDevicesUnpair:
     def test_devices_unpair_exits_zero(self, runner: CliRunner):
-        reg = _make_mock_registry([])
+        reg = _make_mock_registry([{"node_id": "mynode", "name": "X"}])
         with patch("missy.channels.voice.registry.DeviceRegistry", return_value=reg):
             result = runner.invoke(cli, ["devices", "unpair", "--yes", "mynode"])
         assert result.exit_code == 0
+        reg.remove_node.assert_called_once_with("mynode")
 
     def test_devices_unpair_node_not_found_exits_one(self, runner: CliRunner):
         reg = _make_mock_registry([])
-        reg.remove.side_effect = KeyError("mynode")
         with patch("missy.channels.voice.registry.DeviceRegistry", return_value=reg):
             result = runner.invoke(cli, ["devices", "unpair", "--yes", "mynode"])
         assert result.exit_code == 1
@@ -1501,21 +1530,21 @@ class TestDevicesStatus:
 
 class TestDevicesPolicy:
     def test_devices_policy_full_mode(self, runner: CliRunner):
-        reg = _make_mock_registry([])
+        reg = _make_mock_registry([{"node_id": "mynode", "name": "X"}])
         with patch("missy.channels.voice.registry.DeviceRegistry", return_value=reg):
             result = runner.invoke(cli, ["devices", "policy", "mynode", "--mode", "full"])
         assert result.exit_code == 0
-        reg.set_policy.assert_called_once_with("mynode", "full")
+        reg.update_node.assert_called_once_with("mynode", policy_mode="full")
 
     def test_devices_policy_muted_mode(self, runner: CliRunner):
-        reg = _make_mock_registry([])
+        reg = _make_mock_registry([{"node_id": "mynode", "name": "X"}])
         with patch("missy.channels.voice.registry.DeviceRegistry", return_value=reg):
             result = runner.invoke(cli, ["devices", "policy", "mynode", "--mode", "muted"])
         assert result.exit_code == 0
 
     def test_devices_policy_node_not_found_exits_one(self, runner: CliRunner):
         reg = _make_mock_registry([])
-        reg.set_policy.side_effect = KeyError("mynode")
+        reg.update_node.side_effect = KeyError("mynode")
         with patch("missy.channels.voice.registry.DeviceRegistry", return_value=reg):
             result = runner.invoke(cli, ["devices", "policy", "mynode", "--mode", "muted"])
         assert result.exit_code == 1
@@ -1548,7 +1577,10 @@ class TestVoiceStatus:
 
     def test_voice_status_shows_paired_count(self, runner: CliRunner):
         cfg_path = _write_temp_config()
-        nodes = [{"paired": True}, {"paired": False}]
+        nodes = [
+            {"node_id": "n1", "name": "A", "paired": True},
+            {"node_id": "n2", "name": "B", "paired": False},
+        ]
         reg = _make_mock_registry(nodes)
         with patch("missy.channels.voice.registry.DeviceRegistry", return_value=reg):
             result = runner.invoke(cli, ["--config", cfg_path, "voice", "status"])
@@ -1600,6 +1632,119 @@ class TestVoiceTest:
     def test_voice_test_help_exits_zero(self, runner: CliRunner):
         result = runner.invoke(cli, ["voice", "test", "--help"])
         assert result.exit_code == 0
+
+
+class TestDevicesAndVoiceRealRegistryEndToEnd:
+    """Every devices/voice test above mocks DeviceRegistry/PairingManager by
+    hand, which previously encoded the CLI's own bug into the mock's
+    interface (`.all()`, `.remove()`, `.set_policy()`, `.approve()` --
+    none of which exist on the real classes, which use `list_nodes()`,
+    `remove_node()`, `update_node()`, `approve_pairing()` and return
+    `EdgeNode` dataclass instances, not dicts) -- so every mocked test
+    passed while every real invocation crashed with `AttributeError`.
+    These tests exercise the real, unmocked `DeviceRegistry`/
+    `PairingManager` against a temp-file-backed registry, the only way to
+    actually catch a CLI/class interface mismatch like that one.
+    """
+
+    def _set_home(self, monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+        monkeypatch.setenv("HOME", str(tmp_path))
+        (tmp_path / ".missy").mkdir(parents=True, exist_ok=True)
+
+    def test_devices_list_against_real_registry(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        self._set_home(monkeypatch, tmp_path)
+        from missy.channels.voice.registry import DeviceRegistry, EdgeNode
+
+        reg = DeviceRegistry(registry_path=str(tmp_path / ".missy" / "devices.json"))
+        reg.load()
+        reg.add_node(
+            EdgeNode(
+                node_id="real-node-1234",
+                friendly_name="Real Living Room",
+                room="Living Room",
+                ip_address="192.168.1.50",
+            )
+        )
+        reg.save()
+
+        result = runner.invoke(cli, ["devices", "list"])
+        assert result.exit_code == 0
+        assert result.exception is None
+        # Rich may wrap the name across table cell lines in a narrow terminal.
+        assert "Real" in result.output
+        assert "Living" in result.output
+
+    def test_devices_pair_and_unpair_against_real_registry(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        self._set_home(monkeypatch, tmp_path)
+        from missy.channels.voice.registry import DeviceRegistry, EdgeNode
+
+        reg = DeviceRegistry(registry_path=str(tmp_path / ".missy" / "devices.json"))
+        reg.load()
+        reg.add_node(
+            EdgeNode(
+                node_id="real-node-5678",
+                friendly_name="Real Kitchen",
+                room="Kitchen",
+                ip_address="192.168.1.51",
+            )
+        )
+        reg.save()
+
+        result = runner.invoke(cli, ["devices", "pair", "--node-id", "real-node-5678"])
+        assert result.exit_code == 0
+        assert result.exception is None
+        assert "approved" in result.output.lower()
+
+        result = runner.invoke(cli, ["devices", "unpair", "--yes", "real-node-5678"])
+        assert result.exit_code == 0
+        assert result.exception is None
+        assert "removed" in result.output.lower()
+
+        result = runner.invoke(cli, ["devices", "unpair", "--yes", "real-node-5678"])
+        assert result.exit_code == 1
+        assert "not found" in result.output.lower()
+
+    def test_devices_status_and_policy_against_real_registry(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        self._set_home(monkeypatch, tmp_path)
+        from missy.channels.voice.registry import DeviceRegistry, EdgeNode
+
+        reg = DeviceRegistry(registry_path=str(tmp_path / ".missy" / "devices.json"))
+        reg.load()
+        reg.add_node(
+            EdgeNode(
+                node_id="real-node-9999",
+                friendly_name="Real Office",
+                room="Office",
+                ip_address="192.168.1.52",
+            )
+        )
+        reg.save()
+
+        result = runner.invoke(cli, ["devices", "status"])
+        assert result.exit_code == 0
+        assert result.exception is None
+        # Rich may wrap the name across table cell lines in a narrow terminal.
+        assert "Real" in result.output
+        assert "Office" in result.output
+
+        result = runner.invoke(cli, ["devices", "policy", "real-node-9999", "--mode", "safe-chat"])
+        assert result.exit_code == 0
+        assert result.exception is None
+        assert "safe-chat" in result.output
+
+    def test_voice_status_against_real_registry(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        self._set_home(monkeypatch, tmp_path)
+        result = runner.invoke(cli, ["voice", "status"])
+        assert result.exit_code == 0
+        assert result.exception is None
 
 
 # ===========================================================================

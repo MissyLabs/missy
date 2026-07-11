@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (92 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for forty-three consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (93 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for forty-four consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -3808,15 +3808,69 @@ mismatch (claims fields it never returns) but zero production callers
 
 Verified: `pytest tests/providers/ -q`: `943 passed`.
 
+### Post-backlog (eighty-sixth checkpoint): round 26 research pass — entire `missy devices`/`missy voice` CLI command group crashed on every invocation; memory_search session override silently non-functional
+
+Round 26 (rounds 1-25 covered every area listed in the round 25 entry
+above), into remaining `missy/cli/main.py` commands, `missy/agent/
+checkpoint.py`'s WAL/resume-state integrity, `missy/agent/
+failure_tracker.py`/`missy/agent/circuit_breaker.py`'s state-machine
+math, and `missy/tools/registry.py`'s remaining internal correctness
+gaps. `checkpoint.py`, `failure_tracker.py`, `circuit_breaker.py`, and
+several other CLI commands all checked out clean. Two severe, genuine
+bugs fixed.
+
+1. **The entire `missy devices` CLI command group and `missy voice
+   status`/`missy voice test` crashed with an unhandled `AttributeError`
+   on every single invocation** against the real `DeviceRegistry`/
+   `PairingManager` classes -- the CLI called nonexistent methods
+   (`reg.all()`, `reg.remove()`, `reg.set_policy()`, `mgr.approve()`)
+   and treated `EdgeNode` dataclass instances as plain dicts. Live-
+   reproduced every one of the 7 broken commands crashing with a
+   distinct `AttributeError`. **Every existing test for these commands
+   passed throughout, both before and after this fix**, because they
+   all hand-built mocks encoding the bug's own (wrong) interface as if
+   it were correct -- a textbook case of mocked tests giving 100% false
+   confidence in a feature that was 100% broken in production. Fixed
+   all 7 call sites to use the real API, fixed the mocks in all 3
+   affected test files to match the real classes and return real
+   `EdgeNode` instances, and added 4 new tests exercising the real,
+   unmocked classes end-to-end -- the only way to actually catch a
+   CLI/class interface mismatch like this one, confirmed to genuinely
+   fail pre-fix.
+2. **`memory_search`'s documented model-facing `session_id` override
+   was silently non-functional** -- `AgentRuntime._execute_tool()` and
+   `ToolRegistry.execute()` both strip `session_id` from tool arguments
+   before dispatch (to avoid Python keyword collisions), so the
+   model's requested override could never survive to reach the tool,
+   silently scoping every search to the current session regardless of
+   what was explicitly requested. Live-reproduced with a real
+   `AgentRuntime`+`ToolRegistry`+`SQLiteMemoryStore`. Fixed by
+   recovering the model's original value from the un-stripped tool
+   call arguments and folding it into the internally-injected
+   `_session_id` fallback, preserving the tool's documented precedence.
+   This exposed that the existing regression test written specifically
+   to catch this was itself a false-pass (its assertion was trivially
+   satisfied by the tool's own "No results found" failure message
+   echoing the query term) -- strengthened to check the actual
+   retrieved content, confirmed to genuinely fail pre-fix.
+
+Verified: `pytest tests/cli/ -q`: `1083 passed`. `pytest tests/agent/
+test_memory_tool_dispatch_wiring.py tests/agent/ -k memory -q`: `80
+passed`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21386 passed, 14 skipped in 650.42s (0:10:50)
+21390 passed, 14 skipped in 711.07s (0:11:51)
 ```
 
-**Zero failures**, the forty-third consecutive fully green
-full-suite run. Passed count is up from 21384 to 21386 (the round 25
+**Zero failures**, the forty-fourth consecutive fully green
+full-suite run. Passed count is up from 21386 to 21390 (the round 26
+checkpoint's 4 new tests: the real-registry devices/voice end-to-end
+tests in `TestDevicesAndVoiceRealRegistryEndToEnd`; all of the
+sixty-first through eighty-fifth checkpoints' fixes are confirmed still
+holding). Passed count is up from 21384 to 21386 (the round 25
 checkpoint's 2 new tests: 1 CodexProvider._extract_account_id
 null-claim test and 1 _stream_sse null-error-field test; all of the
 sixty-first through eighty-fourth checkpoints' fixes are confirmed

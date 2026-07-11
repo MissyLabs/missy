@@ -53,6 +53,7 @@ import click
 import pytest
 from click.testing import CliRunner
 
+from missy.channels.voice.registry import EdgeNode
 from missy.cli.main import cli
 from tests.cli.conftest import _make_cli_runner
 
@@ -1778,15 +1779,15 @@ class TestDevicesListTimestamp:
         import time
 
         mock_reg = MagicMock()
-        mock_reg.all.return_value = [
-            {
-                "node_id": "abcdef1234567890",
-                "name": "Living Room",
-                "room": "living",
-                "paired": True,
-                "policy": "full",
-                "last_seen": time.time() - 3600,  # 1 hour ago
-            }
+        mock_reg.list_nodes.return_value = [
+            EdgeNode(
+                node_id="abcdef1234567890",
+                friendly_name="Living Room",
+                room="living",
+                ip_address="",
+                paired=True,
+                last_seen=time.time() - 3600,  # 1 hour ago
+            )
         ]
 
         with patch("missy.channels.voice.registry.DeviceRegistry", return_value=mock_reg):
@@ -1805,17 +1806,18 @@ class TestDevicesListTimestamp:
 class TestDevicesPairPrompt:
     def test_devices_pair_pending_list_and_select(self, runner: CliRunner):
         mock_reg = MagicMock()
-        mock_reg.all.return_value = [
-            {
-                "node_id": "aaabbbcccdddeeee",
-                "name": "Kitchen",
-                "room": "kitchen",
-                "paired": False,
-            }
+        mock_reg.list_pending.return_value = [
+            EdgeNode(
+                node_id="aaabbbcccdddeeee",
+                friendly_name="Kitchen",
+                room="kitchen",
+                ip_address="",
+                paired=False,
+            )
         ]
 
         mock_pairing_mgr = MagicMock()
-        mock_pairing_mgr.approve.return_value = "secret-token-xyz"
+        mock_pairing_mgr.approve_pairing.return_value = "secret-token-xyz"
 
         with (
             patch("missy.channels.voice.registry.DeviceRegistry", return_value=mock_reg),
@@ -1828,13 +1830,14 @@ class TestDevicesPairPrompt:
 
     def test_devices_pair_invalid_index_exits_one(self, runner: CliRunner):
         mock_reg = MagicMock()
-        mock_reg.all.return_value = [
-            {
-                "node_id": "aaabbbcccdddeeee",
-                "name": "Kitchen",
-                "room": "kitchen",
-                "paired": False,
-            }
+        mock_reg.list_pending.return_value = [
+            EdgeNode(
+                node_id="aaabbbcccdddeeee",
+                friendly_name="Kitchen",
+                room="kitchen",
+                ip_address="",
+                paired=False,
+            )
         ]
 
         mock_pairing_mgr = MagicMock()
@@ -1858,16 +1861,16 @@ class TestDevicesStatusTimestamp:
         import time
 
         mock_reg = MagicMock()
-        mock_reg.all.return_value = [
-            {
-                "node_id": "node00001234abcd",
-                "name": "Office",
-                "room": "office",
-                "online": True,
-                "last_seen": time.time() - 120,
-                "occupancy": 2,
-                "noise_level": 35.5,
-            }
+        mock_reg.list_nodes.return_value = [
+            EdgeNode(
+                node_id="node00001234abcd",
+                friendly_name="Office",
+                room="office",
+                ip_address="",
+                status="online",
+                last_seen=time.time() - 120,
+                sensor_data={"occupancy": 2, "noise_level": 35.5, "updated_at": 0.0},
+            )
         ]
 
         with patch("missy.channels.voice.registry.DeviceRegistry", return_value=mock_reg):
@@ -1886,7 +1889,7 @@ class TestDevicesStatusTimestamp:
 class TestVoiceStatusBranches:
     def test_voice_status_faster_whisper_installed(self, runner: CliRunner):
         mock_reg = MagicMock()
-        mock_reg.all.return_value = []
+        mock_reg.list_paired.return_value = []
 
         # Ensure faster_whisper import succeeds
         import sys
@@ -1905,7 +1908,7 @@ class TestVoiceStatusBranches:
     def test_voice_status_config_read_exception_is_swallowed(self, runner: CliRunner):
         """Errors reading yaml config for voice status should not crash."""
         mock_reg = MagicMock()
-        mock_reg.all.return_value = []
+        mock_reg.list_paired.return_value = []
 
         with (
             patch("missy.channels.voice.registry.DeviceRegistry", return_value=mock_reg),
@@ -1924,8 +1927,14 @@ class TestVoiceStatusBranches:
 class TestVoiceTestBranches:
     def test_voice_test_success(self, runner: CliRunner):
         mock_reg = MagicMock()
-        mock_reg.all.return_value = [
-            {"node_id": "testnode12345678", "name": "Test Node", "room": "lab", "paired": True}
+        mock_reg.list_nodes.return_value = [
+            EdgeNode(
+                node_id="testnode12345678",
+                friendly_name="Test Node",
+                room="lab",
+                ip_address="",
+                paired=True,
+            )
         ]
 
         mock_tts = MagicMock()
@@ -1943,8 +1952,14 @@ class TestVoiceTestBranches:
 
     def test_voice_test_generic_exception_exits_one(self, runner: CliRunner):
         mock_reg = MagicMock()
-        mock_reg.all.return_value = [
-            {"node_id": "testnode12345678", "name": "Test Node", "room": "lab", "paired": True}
+        mock_reg.list_nodes.return_value = [
+            EdgeNode(
+                node_id="testnode12345678",
+                friendly_name="Test Node",
+                room="lab",
+                ip_address="",
+                paired=True,
+            )
         ]
 
         mock_tts = MagicMock()

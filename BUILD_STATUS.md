@@ -6520,6 +6520,109 @@ Verified: `pytest tests/providers/ -q`: `943 passed`.
 `21386 passed, 14 skipped in 650.42s (0:10:50)` — 0 failed, up from
 21384. Forty-third consecutive fully green full-suite run.
 
+### Post-backlog (eighty-sixth checkpoint): round 26 research pass fixes the entire `missy devices`/`missy voice status`/`missy voice test` CLI command group (crashed on every invocation) and a silently-non-functional memory_search session override
+
+Round 26 (rounds 1-25 covered every area listed in the round 25 entry
+above), this time into remaining `missy/cli/main.py` commands not yet
+touched by prior rounds' fixes, `missy/agent/checkpoint.py`'s WAL-mode
+interaction and resume-state integrity beyond round 16's fixes,
+`missy/agent/failure_tracker.py`/`missy/agent/circuit_breaker.py`'s
+threshold/state-machine math beyond the already-fixed single-probe
+issue, and `missy/tools/registry.py`'s remaining internal correctness
+gaps. `checkpoint.py`'s WAL/resume-state handling, `failure_tracker.py`'s
+counter semantics, `circuit_breaker.py`'s full Closed→Open→HalfOpen
+state machine, and `sandbox status`/`security scan`/`persona show`/
+`evolve list`/`mcp list` all checked out clean.
+`ToolRegistry._tools`/`_disabled` mutation is unguarded by a lock and a
+raw-dict stress test can reproduce a `RuntimeError` under artificially
+tightened `sys.setswitchinterval`, but this did not reproduce under
+realistic conditions -- noted as coverage, not elevated to a fix. Two
+severe, genuine bugs fixed.
+
+1. **The entire `missy devices` CLI command group (`list`/`pair`/
+   `unpair`/`status`/`policy`) and `missy voice status`/`missy voice
+   test` crashed with an unhandled `AttributeError` on every single
+   invocation against the real, production `DeviceRegistry`/
+   `PairingManager` classes.** The CLI code called `reg.all()`,
+   `reg.remove(node_id)`, `reg.set_policy(node_id, mode)`, and
+   `mgr.approve(node_id)`, and treated every node as a plain dict
+   (`node.get("node_id", "")`) — none of these exist on the real
+   classes: `DeviceRegistry` only has `list_nodes()`/`list_paired()`/
+   `list_pending()`, `remove_node()` (a silent no-op if the node is
+   missing, never raising `KeyError`), `update_node()` (no `set_policy`
+   method exists anywhere in the class), and every method returns
+   `EdgeNode` dataclass instances, not dicts, so the `.get(...)` calls
+   would have failed even with the right method names. `PairingManager`
+   has `approve_pairing()`, not `approve()`. Live-reproduced every one of
+   the 7 broken commands against the real classes via `CliRunner`, each
+   crashing with a distinct `AttributeError`. Fixed all 7 call sites to
+   use the real API (`list_nodes()`/`list_paired()`/`list_pending()`/
+   `remove_node()`/`update_node(node_id, policy_mode=mode)`/
+   `approve_pairing()`, attribute access instead of `.get(...)`), and
+   fixed `devices_unpair`'s error handling to explicitly check
+   `reg.get_node(node_id) is None` first (since `remove_node()` never
+   raises `KeyError` the way the original code's `except KeyError`
+   assumed). Live re-verified all 7 commands end-to-end through the real
+   classes after the fix (list, pair by `--node-id`, interactive
+   pending-selection pair, status, policy, unpair, unpair-again-not-found,
+   voice status) — all now work correctly. **Every existing test for
+   these 7 commands passed throughout, both before and after this fix**,
+   because they all hand-built a `MagicMock` encoding the *bug's*
+   interface (`.all()`, `.remove()`, `.set_policy()`, `.approve()`) as if
+   it were correct — a textbook case of mocked tests giving 100% false
+   confidence in a feature that was 100% broken in production. Fixed the
+   mocks across all three affected test files
+   (`test_cli_commands.py`, `test_cli_integration_edges.py`,
+   `test_cli_main_extended.py`) to match the real `DeviceRegistry`/
+   `PairingManager`/`EdgeNode` API and return real `EdgeNode` instances
+   instead of dicts, and added 4 new tests that exercise the real,
+   unmocked classes end-to-end (`TestDevicesAndVoiceRealRegistryEndToEnd`)
+   — the only way to actually catch a CLI/class interface mismatch like
+   this one, confirmed via `git stash` to genuinely fail pre-fix (every
+   one crashed with the exact `AttributeError`s reproduced above).
+   `pytest tests/cli/ -q`: `1083 passed`.
+2. **`memory_search`'s documented model-facing `session_id` override
+   parameter was silently non-functional — every call was always scoped
+   to the current session regardless of what was explicitly requested.**
+   `AgentRuntime._execute_tool()` unconditionally strips `session_id`/
+   `task_id` from the model's tool-call arguments before dispatch (to
+   avoid colliding with the `session_id=`/`task_id=` kwargs passed to
+   `registry.execute()`), and `ToolRegistry.execute()` strips them
+   *again* before calling the tool. `MemorySearchTool.execute()` was
+   designed to read `kwargs.get("session_id") or kwargs.get("_session_id")`
+   (model override wins, falls back to the injected current-session
+   value) — but the model's `session_id` argument could never survive
+   either strip layer to reach that check. Live-reproduced with a real
+   `AgentRuntime` + real `ToolRegistry` + real `SQLiteMemoryStore`: a
+   tool call `memory_search(query="unique-marker-xyz",
+   session_id="sess-B")` from a turn in `"sess-A"` silently returned "No
+   results found for 'unique-marker-xyz'." instead of the actual
+   session-B content. Fixed by recovering the model's original
+   `session_id` value from the un-stripped `tool_call.arguments` in the
+   `_MEMORY_RETRIEVAL_TOOL_NAMES` injection block and folding it into the
+   internally-injected `_session_id` (which does survive both strip
+   layers), preserving the tool's own documented override-then-fallback
+   precedence. This exposed that the existing regression test written
+   specifically to catch this
+   (`test_memory_search_explicit_session_id_still_overridable`) was
+   itself a false-pass: its assertion (`"unique-marker-xyz" in
+   result.content.lower()`) was trivially satisfied by the tool's own
+   "No results found for 'unique-marker-xyz'." failure message echoing
+   the query term, so it passed identically whether the override worked
+   or was silently discarded. Strengthened the assertion to check for
+   the actual retrieved content and the absence of the no-results
+   message, confirmed via `git stash` to genuinely fail pre-fix.
+   `pytest tests/agent/test_memory_tool_dispatch_wiring.py tests/agent/
+   -k memory -q`: `80 passed`.
+
+Verified: `pytest tests/cli/ -q`: `1083 passed`. `pytest tests/agent/
+test_memory_tool_dispatch_wiring.py tests/agent/ -k memory -q`: `80
+passed`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21390 passed, 14 skipped in 711.07s (0:11:51)` — 0 failed, up from
+21386. Forty-fourth consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

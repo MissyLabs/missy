@@ -1,5 +1,55 @@
 # TEST_RESULTS
 
+## Run: 2026-07-13 17:15 UTC — round 26 research pass: entire `missy devices`/`missy voice` CLI command group crashed on every invocation; memory_search session override silently non-functional
+
+- Context: round 26 of the research-pass invitation (rounds 1-25 covered
+  every area listed in the round 25 entry below). This round targeted
+  remaining `missy/cli/main.py` commands, `missy/agent/checkpoint.py`'s
+  WAL-mode/resume-state integrity beyond round 16's fixes,
+  `missy/agent/failure_tracker.py`/`missy/agent/circuit_breaker.py`'s
+  state-machine math, and `missy/tools/registry.py`'s remaining internal
+  correctness gaps. checkpoint.py, failure_tracker.py, circuit_breaker.py,
+  and several other CLI commands all checked out clean. ToolRegistry's
+  unguarded dict mutation can theoretically race under artificially
+  tightened switch intervals but didn't reproduce under realistic
+  conditions -- noted, not fixed. Two severe, genuine bugs fixed.
+- **Entire `missy devices`/`missy voice status`/`missy voice test` CLI
+  command group crashed on every invocation**: the CLI called
+  nonexistent methods (`reg.all()`, `reg.remove()`, `reg.set_policy()`,
+  `mgr.approve()`) and treated EdgeNode dataclass instances as dicts --
+  every one of the 7 commands crashed with AttributeError against the
+  real DeviceRegistry/PairingManager classes. Every existing test for
+  these commands passed throughout (both before and after this fix)
+  because they all hand-built mocks encoding the bug's own (wrong)
+  interface as if it were correct. Fixed all 7 call sites to use the
+  real API and fixed the mocks in all 3 affected test files, plus added
+  4 new tests exercising the real, unmocked classes end-to-end.
+- Command: `pytest tests/cli/ -q`
+- Result: `1083 passed`. The 4 new real-registry end-to-end tests
+  confirmed to genuinely fail pre-fix via `git stash` (each crashed
+  with the exact AttributeError reproduced live against production
+  code).
+- **memory_search session override silently non-functional**: the
+  model's documented `session_id` tool argument was always stripped
+  before reaching the tool (twice -- once in AgentRuntime._execute_tool(),
+  again in ToolRegistry.execute()), so every memory_search call was
+  silently scoped to the current session regardless of what was
+  explicitly requested. Fixed by recovering the model's original value
+  and folding it into the internally-injected _session_id fallback,
+  preserving the tool's documented override-then-fallback precedence.
+  The existing regression test meant to catch this was itself a
+  false-pass (its assertion was trivially satisfied by the tool's own
+  "No results found" failure message echoing the query term) --
+  strengthened to check actual retrieved content.
+- Command: `pytest tests/agent/test_memory_tool_dispatch_wiring.py
+  tests/agent/ -k memory -q`
+- Result: `80 passed`. Strengthened test confirmed to genuinely fail
+  pre-fix via `git stash`.
+- Command: `python3 -m pytest tests/ -q`
+  (full suite, background run)
+- Result: `21390 passed, 14 skipped in 711.07s (0:11:51)`. 0 failed, up
+  from 21386. Forty-fourth consecutive fully green full-suite run.
+
 ## Run: 2026-07-13 16:55 UTC — round 25 research pass: two dict.get(key, default)-on-explicit-null crashes in CodexProvider
 
 - Context: round 25 of the research-pass invitation (rounds 1-24 covered

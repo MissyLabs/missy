@@ -3900,7 +3900,7 @@ def devices_list(ctx: click.Context) -> None:
 
     reg = DeviceRegistry()
     reg.load()
-    nodes = reg.all()
+    nodes = reg.list_nodes()
     if not nodes:
         console.print(
             "[dim]No edge nodes registered. Use a node's pair command to initiate pairing.[/]"
@@ -3915,20 +3915,20 @@ def devices_list(ctx: click.Context) -> None:
     table.add_column("Last Seen")
     table.add_column("Paired", justify="center")
     for node in nodes:
-        paired = node.get("paired", False)
+        paired = node.paired
         status_text = Text("paired", style="green") if paired else Text("pending", style="yellow")
         paired_text = Text("yes", style="green") if paired else Text("no", style="yellow")
-        last_seen_ts = node.get("last_seen")
+        last_seen_ts = node.last_seen
         if last_seen_ts:
             last_seen = datetime.fromtimestamp(last_seen_ts).strftime("%Y-%m-%d %H:%M")
         else:
             last_seen = "never"
         table.add_row(
-            node.get("node_id", "")[:8],
-            node.get("name", ""),
-            node.get("room", ""),
+            node.node_id[:8],
+            node.friendly_name,
+            node.room,
             status_text,
-            node.get("policy", "full"),
+            node.policy_mode,
             last_seen,
             paired_text,
         )
@@ -3954,23 +3954,21 @@ def devices_pair(ctx: click.Context, node_id: str | None) -> None:
     mgr = PairingManager(registry=reg)
 
     if node_id is None:
-        pending = [n for n in reg.all() if not n.get("paired", False)]
+        pending = reg.list_pending()
         if not pending:
             console.print("[dim]No pending pairing requests.[/]")
             return
         console.print("[bold]Pending nodes:[/]")
         for i, node in enumerate(pending):
-            console.print(
-                f"  [{i}] {node.get('node_id', '')[:8]}  {node.get('name', '')}  {node.get('room', '')}"
-            )
+            console.print(f"  [{i}] {node.node_id[:8]}  {node.friendly_name}  {node.room}")
         idx = click.prompt("Select index to approve", type=int)
         if idx < 0 or idx >= len(pending):
             _print_error("Invalid selection.")
             sys.exit(1)
-        node_id = pending[idx]["node_id"]
+        node_id = pending[idx].node_id
 
     try:
-        token = mgr.approve(node_id)
+        token = mgr.approve_pairing(node_id)
         _print_success(f"Node [bold]{node_id[:8]}[/] approved.")
         console.print(f"[bold yellow]Auth token (shown once):[/] [green]{token}[/]")
     except Exception as exc:
@@ -3988,13 +3986,11 @@ def devices_unpair(ctx: click.Context, node_id: str) -> None:
 
     reg = DeviceRegistry()
     reg.load()
-    try:
-        reg.remove(node_id)
-        reg.save()
-        _print_success(f"Node [bold]{node_id[:8]}[/] removed.")
-    except KeyError:
+    if reg.get_node(node_id) is None:
         _print_error(f"Node {node_id!r} not found.")
         sys.exit(1)
+    reg.remove_node(node_id)
+    _print_success(f"Node [bold]{node_id[:8]}[/] removed.")
 
 
 @devices.command("status")
@@ -4007,7 +4003,7 @@ def devices_status(ctx: click.Context) -> None:
 
     reg = DeviceRegistry()
     reg.load()
-    nodes = reg.all()
+    nodes = reg.list_nodes()
     if not nodes:
         console.print("[dim]No edge nodes registered.[/]")
         return
@@ -4020,21 +4016,21 @@ def devices_status(ctx: click.Context) -> None:
     table.add_column("Occupancy", justify="center")
     table.add_column("Noise Level", justify="right")
     for node in nodes:
-        online = node.get("online", False)
+        online = node.status == "online"
         status_text = Text("online", style="green") if online else Text("offline", style="red")
-        last_seen_ts = node.get("last_seen")
+        last_seen_ts = node.last_seen
         if last_seen_ts:
             last_seen = datetime.fromtimestamp(last_seen_ts).strftime("%Y-%m-%d %H:%M")
         else:
             last_seen = "never"
-        occupancy = node.get("occupancy")
+        occupancy = node.sensor_data.get("occupancy")
         occupancy_str = str(occupancy) if occupancy is not None else "-"
-        noise = node.get("noise_level")
+        noise = node.sensor_data.get("noise_level")
         noise_str = f"{noise:.1f} dB" if noise is not None else "-"
         table.add_row(
-            node.get("node_id", "")[:8],
-            node.get("name", ""),
-            node.get("room", ""),
+            node.node_id[:8],
+            node.friendly_name,
+            node.room,
             status_text,
             last_seen,
             occupancy_str,
@@ -4059,8 +4055,7 @@ def devices_policy(ctx: click.Context, node_id: str, mode: str) -> None:
     reg = DeviceRegistry()
     reg.load()
     try:
-        reg.set_policy(node_id, mode)
-        reg.save()
+        reg.update_node(node_id, policy_mode=mode)
         _print_success(f"Node [bold]{node_id[:8]}[/] policy set to [bold]{mode}[/].")
     except KeyError:
         _print_error(f"Node {node_id!r} not found.")
@@ -4121,7 +4116,7 @@ def voice_status(ctx: click.Context) -> None:
 
     reg = DeviceRegistry()
     reg.load()
-    paired_count = sum(1 for n in reg.all() if n.get("paired", False))
+    paired_count = len(reg.list_paired())
 
     table = Table(title="Voice Channel Status", show_lines=True)
     table.add_column("Setting", style="bold")
@@ -4162,7 +4157,7 @@ def voice_test(ctx: click.Context, node_id: str, text: str) -> None:
     # Validate node exists
     reg = DeviceRegistry()
     reg.load()
-    node = next((n for n in reg.all() if n.get("node_id", "").startswith(node_id)), None)
+    node = next((n for n in reg.list_nodes() if n.node_id.startswith(node_id)), None)
     if node is None:
         _print_error(f"Node {node_id!r} not found in registry.")
         sys.exit(1)
@@ -4186,8 +4181,8 @@ def voice_test(ctx: click.Context, node_id: str, text: str) -> None:
             f"{len(audio_bytes):,} bytes, ~{duration_s:.1f}s of audio."
         )
         console.print(
-            f"[dim]Would send to node {node.get('name', node_id[:8])} "
-            f"in room {node.get('room', 'unknown')} via gateway WebSocket.[/]"
+            f"[dim]Would send to node {node.friendly_name or node_id[:8]} "
+            f"in room {node.room or 'unknown'} via gateway WebSocket.[/]"
         )
     except FileNotFoundError:
         _print_error("piper binary not found in PATH. Install piper and ensure it is on your PATH.")

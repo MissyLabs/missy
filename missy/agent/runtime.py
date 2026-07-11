@@ -1834,7 +1834,24 @@ class AgentRuntime:
         if tool_call.name in _MEMORY_RETRIEVAL_TOOL_NAMES:
             tool_args = dict(tool_args)
             tool_args.setdefault("_memory_store", self._memory_store)
-            tool_args.setdefault("_session_id", session_id)
+            # memory_search's own schema advertises a model-suppliable
+            # `session_id` argument to search a specific PAST session
+            # (MemorySearchTool.execute() reads
+            # `kwargs.get("session_id") or kwargs.get("_session_id")`, i.e.
+            # a model-supplied value should win over the current session).
+            # But the generic strip a few lines above already removed
+            # "session_id" from tool_args (to avoid colliding with the
+            # session_id= kwarg passed to registry.execute() below), and
+            # ToolRegistry.execute() strips it AGAIN before calling
+            # tool.execute() -- so the model's override could never
+            # reach the tool and every memory_search call was silently
+            # scoped to the current session regardless of what was
+            # requested. Recover the model's original value (if any)
+            # from the un-stripped tool_call.arguments and fold it into
+            # the internally-injected _session_id, which does survive
+            # both strip layers, preserving the same effective precedence.
+            requested_session_id = tool_call.arguments.get("session_id")
+            tool_args.setdefault("_session_id", requested_session_id or session_id)
 
         # SR-4.2: delegate_task needs a live AgentRuntime reference (to run
         # sub-agents through the same policy/budget/audit machinery as this
