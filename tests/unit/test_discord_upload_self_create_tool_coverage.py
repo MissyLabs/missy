@@ -115,6 +115,86 @@ class TestDiscordUploadTool:
         assert tool.permissions.filesystem_read is True
 
 
+class TestDiscordUploadToolRegistryEnforcesFilesystemPolicy:
+    """DU-003 (task #10 validation): confirms the real ToolRegistry's
+    filesystem policy check actually applies to discord_upload_file's
+    file_path kwarg -- not just that the tool itself declares
+    filesystem_read=True. Every existing test in this file calls
+    tool.execute() directly, bypassing the registry entirely (the exact
+    declaration/dispatch gap pattern found in SR-1.4/SR-1.5 elsewhere
+    in this codebase) -- none of them would have caught a mismatch
+    between the declared permission and the registry's kwarg-name
+    heuristic. file_path happens to already be one of the registry's
+    default recognized path kwarg names, so no BaseTool hook override
+    is needed here, but that fact was previously unverified by any
+    test."""
+
+    def _make_registry(self, tmp_path):
+        from missy.config.settings import (
+            FilesystemPolicy,
+            MissyConfig,
+            NetworkPolicy,
+            PluginPolicy,
+            ShellPolicy,
+        )
+        from missy.policy.engine import init_policy_engine
+        from missy.tools.builtin.discord_upload import DiscordUploadTool
+        from missy.tools.registry import ToolRegistry
+
+        init_policy_engine(
+            MissyConfig(
+                network=NetworkPolicy(allowed_hosts=["discord.com"], allowed_domains=[], allowed_cidrs=[]),
+                filesystem=FilesystemPolicy(
+                    allowed_read_paths=[str(tmp_path)], allowed_write_paths=[str(tmp_path)]
+                ),
+                shell=ShellPolicy(enabled=False, allowed_commands=[]),
+                plugins=PluginPolicy(),
+                providers={},
+                workspace_path=str(tmp_path),
+                audit_log_path=str(tmp_path / "audit.jsonl"),
+            )
+        )
+        registry = ToolRegistry()
+        registry.register(DiscordUploadTool())
+        return registry
+
+    def test_direct_secret_file_denied_before_any_discord_call(self, tmp_path):
+        registry = self._make_registry(tmp_path)
+        result = registry.execute(
+            "discord_upload_file",
+            file_path="/etc/shadow",
+            channel_id="123",
+            session_id="s",
+            task_id="t",
+        )
+        assert result.success is False
+        assert "not within an allowed read path" in result.error
+
+    def test_path_traversal_out_of_workspace_denied(self, tmp_path):
+        registry = self._make_registry(tmp_path)
+        result = registry.execute(
+            "discord_upload_file",
+            file_path=f"{tmp_path}/../../etc/shadow",
+            channel_id="123",
+            session_id="s",
+            task_id="t",
+        )
+        assert result.success is False
+        assert "not within an allowed read path" in result.error
+
+    def test_file_outside_workspace_denied(self, tmp_path):
+        registry = self._make_registry(tmp_path)
+        result = registry.execute(
+            "discord_upload_file",
+            file_path="/home/nonexistent-user/.ssh/id_rsa",
+            channel_id="123",
+            session_id="s",
+            task_id="t",
+        )
+        assert result.success is False
+        assert "not within an allowed read path" in result.error
+
+
 # ---------------------------------------------------------------------------
 # SelfCreateTool
 # ---------------------------------------------------------------------------
