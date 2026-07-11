@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (90 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for forty-one consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (91 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for forty-two consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -3731,15 +3731,66 @@ tests/memory/ tests/channels/test_screencast_session.py -q`: `1586
 passed, 8 skipped`. `pytest tests/channels/ tests/tools/ -q`: `3532
 passed, 2 skipped`.
 
+### Post-backlog (eighty-fourth checkpoint): round 24 research pass — Playbook cross-instance lost-update race, ConfigWatcher partial-application inconsistency on reload failure
+
+Round 24 (rounds 1-23 covered every area listed in the round 23 entry
+above), into remaining `missy/tools/builtin/` files not yet covered,
+`missy/agent/playbook.py`'s internal pattern-matching/hashing logic,
+`missy/observability/otel.py`, and `missy/config/hotreload.py`
+(`ConfigWatcher`)'s file-change-detection/reload logic itself.
+`atspi_tools.py`/`x11_tools.py`/`x11_launch.py`/`browser_tools.py`/
+`incus_tools.py`/`tts_speak.py`/`discord_upload.py`/`discord_voice.py`/
+`self_create_tool.py`, `otel.py`'s redaction wrapper, `Playbook`'s
+hashing/promotion-threshold arithmetic itself, and `ConfigWatcher`'s
+polling/debounce/mtime logic all checked out clean. Two genuine bugs
+fixed.
+
+1. **Playbook cross-instance lost-update race**: every production call
+   site constructs a fresh `Playbook()` per call rather than sharing one
+   long-lived instance, so `self._lock` alone provided no protection
+   against two separate instances' read-modify-write cycles overlapping
+   -- the identical bug class already fixed in `Vault` earlier this
+   session. Live-reproduced: two `Playbook()` instances against the same
+   path, each recording a distinct pattern, left only 1 of 2 entries
+   surviving. Fixed by applying the exact same fix already proven for
+   `Vault`: a `flock()` on a dedicated lock file wrapping a fresh reload
+   from disk immediately before merging and saving, in both `record()`
+   and `mark_promoted()`. 1 new test, confirmed to fail pre-fix. Fixing
+   this exposed one pre-existing test that assumed a stale
+   already-superseded `PlaybookEntry` object reference got mutated
+   in-place by a later `mark_promoted()` call -- corrected to check the
+   playbook's current state instead.
+2. **ConfigWatcher partial-application inconsistency on reload failure**:
+   `_apply_config()` called `init_policy_engine()` then
+   `init_registry()` sequentially with no guarantee across the pair --
+   if the second call failed after the first succeeded, the process
+   ended up with a policy engine on the new config and a provider
+   registry still on the old config, masked by a generic "reload failed"
+   log line. Live-verified. Fixed by constructing both subsystem
+   instances once up front to surface either construction failure
+   before either singleton is touched. 1 new test, confirmed to fail
+   pre-fix. A first full-suite run surfaced a second pre-existing test
+   needing a fix: it used a bare `object()` sentinel instead of
+   `MagicMock()` for the config argument, which broke once
+   `_apply_config()` legitimately started constructing a real
+   config-driven object from it.
+
+Verified: `pytest tests/config/ tests/agent/ tests/unit/
+test_infrastructure.py -q`: `4817 passed, 4 skipped`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21382 passed, 14 skipped in 747.85s (0:12:27)
+21384 passed, 14 skipped in 591.81s (0:09:51)
 ```
 
-**Zero failures**, the forty-first consecutive fully green
-full-suite run. Passed count is up from 21376 to 21382 (the round 23
+**Zero failures**, the forty-second consecutive fully green
+full-suite run. Passed count is up from 21382 to 21384 (the round 24
+checkpoint's 2 new tests: 1 Playbook cross-instance-eviction test and 1
+ConfigWatcher partial-application test; all of the sixty-first through
+eighty-third checkpoints' fixes are confirmed still holding). Passed
+count is up from 21376 to 21382 (the round 23
 checkpoint's 6 new tests: 2 provider rate-limiter tests, 2 memory_search
 schema/behavior tests, and 2 screencast SessionManager eviction tests;
 all of the sixty-first through eighty-second checkpoints' fixes are

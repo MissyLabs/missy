@@ -6368,6 +6368,98 @@ passed, 2 skipped`.
 `21382 passed, 14 skipped in 747.85s (0:12:27)` — 0 failed, up from
 21376. Forty-first consecutive fully green full-suite run.
 
+### Post-backlog (eighty-fourth checkpoint): round 24 research pass fixes a Playbook cross-instance lost-update race and a ConfigWatcher partial-application inconsistency on reload failure
+
+Round 24 (rounds 1-23 covered every area listed in the round 23 entry
+above), this time into remaining `missy/tools/builtin/` files not yet
+covered, `missy/agent/playbook.py`'s internal pattern-matching/hashing
+logic, `missy/observability/otel.py` (the actual OTel export file --
+no separate `otel_exporter.py` exists), and `missy/config/hotreload.py`
+(`ConfigWatcher`)'s file-change-detection/reload-application logic
+itself. `atspi_tools.py`/`x11_tools.py`/`x11_launch.py`/
+`browser_tools.py`/`incus_tools.py`/`tts_speak.py`/`discord_upload.py`/
+`discord_voice.py`/`self_create_tool.py`, `otel.py`'s redaction
+wrapper, `Playbook`'s hashing/promotion-threshold arithmetic itself,
+and `ConfigWatcher`'s polling/debounce/mtime logic all checked out
+clean. Two genuine bugs fixed.
+
+1. **`Playbook`'s read-modify-write cycle had a cross-instance lost-update
+   race, because every production call site (`AgentRuntime`) constructs a
+   fresh `Playbook()` per call rather than sharing one long-lived
+   instance.** `record()`'s `self._lock` only serializes calls made on
+   the *same* Python object -- it provides zero protection when two
+   separate `Playbook()` instances (as two concurrently-completing tasks
+   would each create) load, mutate, and save around the same time: each
+   instance loads its own private snapshot at construction, and
+   whichever instance's `save()` lands last silently overwrites the
+   other's just-recorded pattern with its own stale snapshot. This is
+   the identical bug class already found and fixed in `Vault` earlier
+   this session (`missy/security/vault.py`) for an identical
+   construct-per-call, no-cross-process-lock design. Live-reproduced: two
+   `Playbook()` instances against the same path, each recording a
+   distinct pattern, left only 1 of 2 entries surviving. Fixed by
+   applying the exact same fix already proven for `Vault`: a `flock()`
+   on a dedicated lock file (blocks other `Playbook` instances holding a
+   separate fd on the same lock file, whether in this process or
+   another) wrapping a fresh `self.load()` immediately before merging
+   and saving, in both `record()` and `mark_promoted()`. 1 new test
+   (20 separate `Playbook()` instances across 20 threads, matching the
+   real production call pattern, each recording a distinct entry),
+   confirmed via `git stash` to genuinely fail pre-fix (only 3 of 20
+   entries survived). Fixing this exposed one pre-existing test
+   (`TestMarkPromoted::test_sets_promoted_flag`) that asserted a stale,
+   already-superseded `PlaybookEntry` object reference got mutated
+   in-place by a later `mark_promoted()` call -- this assumption no
+   longer holds once `mark_promoted()` also reloads fresh entries from
+   disk before mutating (replacing dict values with newly-parsed
+   objects rather than mutating the caller's held reference); corrected
+   to check the playbook's current state (`get_relevant()`) instead of
+   the stale reference. `pytest tests/agent/ -k "playbook or Playbook" -q`:
+   `210 passed`.
+2. **`ConfigWatcher._apply_config()` could leave the process in an
+   inconsistent state if the second of its two subsystem re-inits
+   failed.** It called `init_policy_engine(new_config)` then
+   `init_registry(new_config)` sequentially with no guarantee across the
+   pair -- each function individually constructs its replacement before
+   atomically swapping it in, but nothing prevented the first call from
+   succeeding (and fully installing the new policy engine) while the
+   second then raised (e.g. a config that passes `load_config()`'s own
+   validation but still fails `ProviderRegistry.from_config()`, such as a
+   malformed provider block), leaving the process with a policy engine
+   on the *new* config and a provider registry still on the *old*
+   config -- masked by a generic `"reload failed"` log line that reads as
+   "nothing changed" when in fact half the subsystems did. Live-verified:
+   with `ProviderRegistry.from_config` mocked to raise, pre-fix the
+   policy engine singleton was already installed globally while the
+   registry singleton remained `None`. Fixed by constructing both
+   `PolicyEngine(new_config)` and `ProviderRegistry.from_config(new_config)`
+   once up front (confirmed pure config-driven construction with no
+   side effect that isn't idempotent on a second call with the same
+   config, since `from_config()`'s network-policy-widening step already
+   guards against re-appending an already-seen host) to surface either
+   construction failure before either singleton is touched, before
+   calling the real `init_policy_engine()`/`init_registry()`. 1 new
+   test, confirmed via `git stash` to genuinely fail pre-fix (policy
+   engine installed, registry left `None`). `pytest
+   tests/config/test_hotreload.py -q`: `all passed`. The full-suite run
+   surfaced a second pre-existing test needing the same kind of fix:
+   `tests/unit/test_infrastructure.py::TestApplyConfig::
+   test_apply_config_calls_init_functions` used a bare `object()`
+   sentinel for the config argument (specifically to prove no unwanted
+   attribute access happened) rather than a `MagicMock()` -- once
+   `_apply_config()` legitimately started constructing a real
+   `PolicyEngine`/`ProviderRegistry.from_config()` from it, the bare
+   `object()` correctly raised `AttributeError: 'object' object has no
+   attribute 'network'`; switched to `MagicMock()`, matching the
+   equivalent test already in `tests/config/test_hotreload.py`.
+
+Verified: `pytest tests/config/ tests/agent/ tests/unit/
+test_infrastructure.py -q`: `4817 passed, 4 skipped`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21384 passed, 14 skipped in 591.81s (0:09:51)` — 0 failed, up from
+21382. Forty-second consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

@@ -5,6 +5,8 @@ from __future__ import annotations
 import time
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from missy.config.hotreload import ConfigWatcher, _apply_config
 
 
@@ -124,6 +126,37 @@ class TestApplyConfig:
         _apply_config(config)
         mock_policy.assert_called_once_with(config)
         mock_reg.assert_called_once_with(config)
+
+    def test_apply_does_not_partially_install_when_one_subsystem_fails(self):
+        """If ProviderRegistry construction fails, PolicyEngine must not
+        already be installed globally -- pre-fix, _apply_config() called
+        init_policy_engine() then init_registry() with no guarantee across
+        the pair: a failure in the second left the process with a policy
+        engine on the NEW config and a provider registry still on the OLD
+        config, a genuinely inconsistent runtime state.
+        """
+        import missy.policy.engine as policy_mod
+        import missy.providers.registry as registry_mod
+
+        old_engine = policy_mod._engine
+        old_registry = registry_mod._registry
+        try:
+            policy_mod._engine = None
+            registry_mod._registry = None
+            config = MagicMock()
+
+            with patch(
+                "missy.providers.registry.ProviderRegistry.from_config",
+                side_effect=RuntimeError("boom"),
+            ):
+                with pytest.raises(RuntimeError, match="boom"):
+                    _apply_config(config)
+
+            assert policy_mod._engine is None
+            assert registry_mod._registry is None
+        finally:
+            policy_mod._engine = old_engine
+            registry_mod._registry = old_registry
 
 
 class TestDebounce:

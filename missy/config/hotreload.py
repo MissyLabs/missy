@@ -122,8 +122,27 @@ class ConfigWatcher:
 
 def _apply_config(new_config) -> None:
     """Re-initialise subsystems with updated config."""
-    from missy.policy.engine import init_policy_engine
-    from missy.providers.registry import init_registry
+    from missy.policy.engine import PolicyEngine, init_policy_engine
+    from missy.providers.registry import ProviderRegistry, init_registry
+
+    # Construct both new subsystem instances before installing either one
+    # globally. init_policy_engine()/init_registry() each construct their
+    # replacement before atomically swapping it in, but _apply_config()
+    # previously called them sequentially with no such guarantee across
+    # the pair: if init_policy_engine() succeeded but init_registry()
+    # then raised (e.g. a config that passes load_config()'s own
+    # validation but still fails ProviderRegistry.from_config(), such as
+    # a malformed provider block), the process ended up with a policy
+    # engine on the NEW config and a provider registry still on the OLD
+    # config -- a genuinely inconsistent runtime state masked by a
+    # generic "reload failed" log line that reads as "nothing changed".
+    # Building both here first (discarded; PolicyEngine's __init__ and
+    # ProviderRegistry.from_config() are pure config-driven construction
+    # with no side effect that isn't idempotent on a second call with the
+    # same config) surfaces either construction failure before either
+    # singleton is touched.
+    PolicyEngine(new_config)
+    ProviderRegistry.from_config(new_config)
 
     init_policy_engine(new_config)
     init_registry(new_config)

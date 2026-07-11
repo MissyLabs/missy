@@ -17,6 +17,8 @@ Example::
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import hashlib
 import json
 import logging
@@ -114,9 +116,40 @@ class Playbook:
 
     def __init__(self, store_path: str = "~/.missy/playbook.json") -> None:
         self._path = os.path.expanduser(store_path)
+        self._lock_path = self._path + ".lock"
         self._lock = threading.Lock()
         self._entries: dict[str, PlaybookEntry] = {}
         self.load()
+
+    @contextlib.contextmanager
+    def _cross_process_locked(self):
+        """Serialize read-modify-write cycles across separate Playbook
+        instances (and processes), not just calls on this one object.
+
+        Every production caller (``AgentRuntime``) constructs a fresh
+        ``Playbook()`` per call rather than sharing one long-lived
+        instance, so ``self._lock`` alone provided no real protection: two
+        concurrently-completing tasks each load their own private snapshot
+        of the store, and whichever finishes ``save()`` last silently
+        overwrites the other's just-recorded pattern (its in-memory
+        snapshot never saw the first writer's change). Live-reproduced:
+        two ``Playbook()`` instances against the same path each recording
+        a distinct pattern left only 1 of 2 entries surviving. A
+        ``flock()`` on a dedicated lock file blocks other Playbook
+        instances -- in this process or another -- holding a separate fd
+        on the same lock file, the same fix already applied to
+        :class:`~missy.security.vault.Vault` for an identical race.
+        """
+        dir_path = os.path.dirname(self._lock_path)
+        if dir_path:
+            os.makedirs(dir_path, exist_ok=True, mode=0o700)
+        fd = os.open(self._lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
 
     def record(
         self,
@@ -139,7 +172,8 @@ class Playbook:
             The created or updated :class:`PlaybookEntry`.
         """
         pattern_id = _compute_pattern_id(task_type, tool_sequence)
-        with self._lock:
+        with self._cross_process_locked(), self._lock:
+            self.load()  # refresh from disk under the lock before merging
             if pattern_id in self._entries:
                 entry = self._entries[pattern_id]
                 entry.success_count += 1
@@ -197,7 +231,8 @@ class Playbook:
         Raises:
             KeyError: If the pattern ID is not found.
         """
-        with self._lock:
+        with self._cross_process_locked(), self._lock:
+            self.load()  # refresh from disk under the lock before mutating
             if pattern_id not in self._entries:
                 raise KeyError(f"Pattern {pattern_id!r} not found")
             self._entries[pattern_id].promoted = True
@@ -236,7 +271,3 @@ class Playbook:
                 self._entries[entry.pattern_id] = entry
         except Exception:
             logger.debug("Failed to load playbook from %s", self._path, exc_info=True)
-
-
-# Need contextlib for suppress in save()
-import contextlib  # noqa: E402

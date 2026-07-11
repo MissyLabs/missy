@@ -416,7 +416,13 @@ class TestConfigWatcherDetectsChange:
 
 class TestApplyConfig:
     def test_apply_config_calls_init_functions(self):
-        fake_config = object()
+        # _apply_config() also constructs a throwaway PolicyEngine/
+        # ProviderRegistry.from_config() up front (to surface a
+        # construction failure before either singleton is installed --
+        # see the eighty-fourth checkpoint fix), so this needs a
+        # MagicMock (auto-creates attributes like config.network) rather
+        # than a bare object() sentinel.
+        fake_config = MagicMock()
         # Both are imported inside _apply_config; patch at their source modules
         with (
             patch("missy.policy.engine.init_policy_engine") as mock_pe,

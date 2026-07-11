@@ -1,5 +1,61 @@
 # TEST_RESULTS
 
+## Run: 2026-07-13 16:20 UTC — round 24 research pass: Playbook cross-instance lost-update race, ConfigWatcher partial-application inconsistency on reload failure
+
+- Context: round 24 of the research-pass invitation (rounds 1-23 covered
+  every area listed in the round 23 entry below). This round targeted
+  remaining `missy/tools/builtin/` files not yet covered, `missy/agent/
+  playbook.py`'s internal pattern-matching/hashing logic, `missy/
+  observability/otel.py`, and `missy/config/hotreload.py`
+  (`ConfigWatcher`)'s file-change-detection/reload logic itself.
+  `atspi_tools.py`/`x11_tools.py`/`x11_launch.py`/`browser_tools.py`/
+  `incus_tools.py`/`tts_speak.py`/`discord_upload.py`/`discord_voice.py`/
+  `self_create_tool.py`, `otel.py`'s redaction wrapper, `Playbook`'s
+  hashing/promotion-threshold arithmetic itself, and `ConfigWatcher`'s
+  polling/debounce/mtime logic all checked out clean. Two genuine bugs
+  fixed.
+- **Playbook cross-instance lost-update race**: every production call
+  site constructs a fresh `Playbook()` per call rather than sharing one
+  long-lived instance, so `self._lock` alone provided no protection
+  against two separate instances' read-modify-write cycles overlapping
+  -- the same bug class already fixed in Vault earlier this session.
+  Fixed by applying the identical fix: a flock() on a dedicated lock
+  file wrapping a fresh reload-from-disk immediately before merging and
+  saving, in both record() and mark_promoted().
+- Command: `pytest tests/agent/ -k "playbook or Playbook" -q`
+- Result: `210 passed`. New test (20 separate Playbook() instances
+  across 20 threads) confirmed to genuinely fail pre-fix via `git
+  stash` (only 3 of 20 entries survived). One pre-existing test needed
+  a fix: it asserted a stale, already-superseded PlaybookEntry object
+  reference got mutated in-place by mark_promoted(), an assumption that
+  no longer holds once mark_promoted() also reloads fresh entries from
+  disk before mutating.
+- **ConfigWatcher partial-application inconsistency on reload failure**:
+  `_apply_config()` called `init_policy_engine()` then `init_registry()`
+  sequentially with no guarantee across the pair -- if the second call
+  failed after the first succeeded, the process ended up with a policy
+  engine on the new config and a provider registry still on the old
+  config. Fixed by constructing both subsystem instances once up front
+  to surface either construction failure before either singleton is
+  touched.
+- Command: `pytest tests/config/test_hotreload.py -q`
+- Result: all passed. New test confirmed to genuinely fail pre-fix via
+  `git stash` (policy engine installed globally, registry left `None`).
+  A first full-suite run surfaced a second pre-existing test needing a
+  fix: `tests/unit/test_infrastructure.py::TestApplyConfig::
+  test_apply_config_calls_init_functions` used a bare `object()`
+  sentinel instead of `MagicMock()` for the config argument -- once
+  `_apply_config()` legitimately constructs a real config-driven object
+  from it, the bare `object()` correctly raised `AttributeError`.
+  Switched to `MagicMock()`, matching the equivalent test already in
+  `test_hotreload.py`.
+- Command: `pytest tests/config/ tests/agent/ tests/unit/test_infrastructure.py -q`
+- Result: `4817 passed, 4 skipped`.
+- Command: `python3 -m pytest tests/ -q`
+  (full suite, background run)
+- Result: `21384 passed, 14 skipped in 591.81s (0:09:51)`. 0 failed, up
+  from 21382. Forty-second consecutive fully green full-suite run.
+
 ## Run: 2026-07-13 15:45 UTC — round 23 research pass: rate-limiter bypass in AnthropicProvider/OllamaProvider stream(), misleading memory_search schema claim, unbounded screencast SessionManager result growth
 
 - Context: round 23 of the research-pass invitation (rounds 1-22 covered
