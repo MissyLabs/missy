@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (64 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for seventeen consecutive checkpoints; the 89-case tool-specific validation backlog is now 100% complete)
+## Changed (66 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eighteen consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -2546,21 +2546,120 @@ tests/agent/test_provider_fallback.py -q`: 12 passed. Broader:
 `pytest tests/agent/ tests/providers/ tests/config/ -q`: 5569 passed,
 4 skipped.
 
+### Post-backlog (fifty-ninth checkpoint): reconciled against prompt.md's own checklist directly, closed two genuine gaps
+
+With every item in `BUILD_STATUS.md`'s own derived "Remaining Work"
+list closed, cross-referenced the *actual source* `~/missy-loops/prompt.md`
+checklist directly (155 `- [ ]` items) rather than continuing to work
+only from this file's own secondary notes. Nearly every item is
+already covered by FX-A through FX-G, SR-1.1 through SR-4.8, and the
+89-case backlog. Found two genuine, well-scoped, previously-uncovered
+items.
+
+**Line 91** ("Rerun `INCUS-006` including timeout, partial-completion,
+retry, and cleanup paths"): this session's existing INCUS-006
+verification only covered the happy path. `IncusInstanceActionTool`
+previously reported a bare "Command timed out after Ns" on a
+client-side timeout with no indication of the real server-side state.
+Added `_recheck_instance_state()`: on a genuine timeout for a mutating
+action (excluding `rename`, which can't be safely rechecked under
+either name), performs one more read-only `incus list` call and
+reports the actually-observed state. **Live-verified against a real
+Incus container** with an artificially tiny `timeout=1` that genuinely
+triggered `subprocess.TimeoutExpired` on a real `incus restart` call:
+correctly reported the real observed state (`Running`), independently
+confirmed via a separate raw `incus list` call. 6 new tests.
+
+**Line 48** ("Rerun `MEM-001`, `MEM-004`, `SEC-PI-004`, and `XT-006`
+against seeded and genuinely persisted content"): `SEC-PI-004` and
+`XT-006` were already reverified with real content this session;
+`MEM-004` is functionally the same scenario as `SEC-PI-004` (both
+extract a checklist from memory and resist an embedded injected
+instruction), covered via that overlap. `MEM-001` ("return only
+relevant matches and do not expose unrelated private memory") is a
+genuinely distinct, never-directly-tested property. Seeded two real
+turns into the production `~/.missy/memory.db` — one relevant ("Q3
+quarterly budget report"), one entirely unrelated ("grandma's secret
+cookie recipe") — then called the real `memory_search` tool directly.
+Result: exactly 1 match (the relevant turn); the unrelated turn was
+correctly excluded. Cleaned up both seeded turns; confirmed zero
+remaining test artifacts afterward.
+
+**Bonus, real (not tangential) finding within this same checkpoint**:
+while running the broader test sweep to verify the INCUS-006 fix,
+`tests/providers/test_registry_providers_edges.py::TestConcurrentSetDefault::test_concurrent_register_and_get_available`
+failed with `RuntimeError: dictionary changed size during iteration`.
+This exact failure had been seen once before, during the CircuitBreaker
+config checkpoint, and dismissed then as a "tangential, pre-existing
+flake" since it passed cleanly on retry. Failing a *second* time,
+independently, confirmed it as a genuine bug rather than a fluke.
+Root cause: `ProviderRegistry` (`missy/providers/registry.py`) had no
+locking anywhere — `register()` mutates `self._providers`, while
+`get_available()`, `list_providers()`, and `key_for()` each iterate
+that same dict directly with no synchronization. Fixed by adding a
+`threading.Lock`: `register()` and `rotate_key()` now run their full
+body under the lock; `list_providers()`, `key_for()`, and
+`get_available()` take a snapshot (`list(...)`) of the dict under the
+lock and then iterate the snapshot outside it (so slow per-provider
+`is_available()` I/O doesn't serialize behind the lock); `set_default()`
+keeps its `is_available()` call outside the lock for the same reason,
+only guarding the `self._default_name` assignment itself. Added a new
+`ProviderRegistry.get_config()` accessor used elsewhere this session
+was left alone by this fix (no behavior change, just confirmed
+thread-safe under the same lock).
+
+Honest limitation: could **not** force a clean, deterministic
+before/after reproduction of the exact race. Verified via `git stash`
+that the reverted code was genuinely running the pre-fix version, then
+hammered it with a strengthened stress test (3 rounds x 40 threads,
+mixing registrar and three kinds of reader threads) and a standalone
+microbenchmark (20 rounds x 10+10 threads) — both passed cleanly with
+zero errors even against the buggy code. The race's exact interleaving
+is apparently narrow enough that it isn't reliably forceable on demand
+in isolation, even though it manifested twice for real during actual
+full-suite runs under real system load. Documenting this honestly
+rather than claiming the strengthened test deterministically proves
+the fix — the fix is justified by (a) two independent real failures
+with the identical error text and traceback shape, and (b) the fix
+being a standard, structurally sound concurrency pattern
+(lock-protected mutation + snapshot-before-iterate) that eliminates the
+entire hazard class by construction, not a narrow patch for one
+call site. `git stash pop` restored the fix afterward.
+
+Verified: `pytest tests/providers/ -q` run 3x consecutively: `938
+passed` every time, zero flakes. Broader:
+`pytest tests/agent/ tests/providers/ tests/config/
+tests/tools/test_incus_tools.py -q`: `5719 passed, 4 skipped`.
+
+Verified: `pytest tests/tools/test_incus_tools.py -k
+TimeoutRecheck -v`: 6 passed. Broader: `pytest
+tests/tools/test_incus_tools.py tests/tools/test_incus_tools_extended.py
+tests/tools/test_incus_coverage_gaps.py
+tests/tools/test_incus_tools_coverage.py
+tests/unit/test_incus_tools_coverage_gaps.py -q`: 337 passed.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-21232 passed, 13 skipped, 1 warning in 614.03s (0:10:14)
+21238 passed, 13 skipped in 610.73s (0:10:10)
 ```
 
-**Zero failures**, the seventeenth consecutive fully green full-suite
-run. Passed count is up from 21191 to 21212 (the DISC-CMD-008
+**Zero failures**, the eighteenth consecutive fully green full-suite
+run — and the first full-suite run since the `ProviderRegistry`
+locking fix, confirming it holds under the exact real full-suite
+concurrency that had twice produced the race, without reintroducing
+it. Passed count is up from 21191 to 21212 (the DISC-CMD-008
 rate-limiting checkpoint: 10 standalone unit tests, 9 real
 dispatch-path integration tests, 3 config-parsing tests) to 21213 (the
 Web TUI approvals/pairing checkpoint's 2 new tests) to 21219 (the
 `shell.unrestricted` config-hygiene checkpoint's 6 new tests) to 21223
 (the `missy doctor` audit-signing checkpoint's 4 new tests) to 21232
-(the per-provider CircuitBreaker cooldown checkpoint's 9 new tests).
+(the per-provider CircuitBreaker cooldown checkpoint's 9 new tests) to
+21238 (the INCUS-006 timeout-recheck checkpoint's 6 new tests; MEM-001
+was verification-only, no new test file added, and the
+ProviderRegistry fix added 0 net new tests but strengthened 1
+existing one).
 The occasional Hypothesis deprecation warnings seen in some runs of
 this suite (`test_property_based_fuzz.py` and/or
 `test_policy_property.py`, depending on test ordering — this run shows

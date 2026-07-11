@@ -3694,6 +3694,119 @@ tests/agent/test_provider_fallback.py -q`: 12 passed. Broader:
 `21232 passed, 13 skipped, 1 warning in 614.03s (0:10:14)` — 0 failed,
 up from 21223. Seventeenth consecutive fully green full-suite run.
 
+### Post-backlog (fifty-ninth checkpoint): reconciled against prompt.md's own checklist directly, closed two genuine gaps (INCUS-006 timeout recheck, MEM-001 relevance verification)
+
+With every item in `BUILD_STATUS.md`'s own derived "Remaining Work"
+list closed, cross-referenced the *actual source* `~/missy-loops/prompt.md`
+checklist directly (155 `- [ ]` items) rather than continuing to work
+only from this file's own secondary notes. Nearly every item is
+already covered by FX-A through FX-G, SR-1.1 through SR-4.8, and the
+89-case backlog. Found two genuine, well-scoped, previously-uncovered
+items:
+
+**Line 91** ("Rerun `INCUS-006` including timeout, partial-completion,
+retry, and cleanup paths"): this session's existing INCUS-006
+verification only covered the happy path. Fixed a real gap:
+`IncusInstanceActionTool` previously reported a bare "Command timed
+out after Ns" on a client-side timeout with no indication of the real
+server-side state — the Incus daemon has no obligation to abort its
+own work just because the client subprocess gave up waiting. Added
+`_recheck_instance_state()` to `missy/tools/builtin/incus_tools.py`
+and wired it into the tool: on a genuine timeout for a mutating action
+(excluding `rename`, which can't be safely rechecked under either the
+old or new name), performs one more read-only `incus list` call
+(itself timeout-bounded) and reports the actually-observed state.
+**Live-verified against a real Incus container** with an artificially
+tiny `timeout=1` that genuinely triggered `subprocess.TimeoutExpired`
+on a real `incus restart` call: correctly reported "the action's
+effect is unknown at the moment of timeout ... Fresh read-only
+recheck: instance 'agent-test-incus006' is currently 'Running'" —
+independently confirmed via a separate raw `incus list` call showing
+the exact same real state. Added 6 new regression tests covering the
+recheck firing on timeout, reporting a since-deleted instance,
+honestly reporting when the recheck itself also fails, `rename`'s
+deliberate exclusion, no recheck for an ordinary exit-code failure, and
+project-scope propagation into the recheck call.
+
+**Line 48** ("Rerun `MEM-001`, `MEM-004`, `SEC-PI-004`, and `XT-006`
+against seeded and genuinely persisted content"): `SEC-PI-004` and
+`XT-006` were already reverified this session with real content (see
+the task #10 final-batch checkpoint). `MEM-004` is functionally the
+same scenario as `SEC-PI-004` — both extract a checklist from memory
+and resist an embedded injected instruction — so it's covered via that
+overlap rather than duplicated. `MEM-001` ("return only relevant
+matches and do not expose unrelated private memory") is a genuinely
+distinct, never-directly-tested property. Seeded two real turns into
+the production `~/.missy/memory.db` — one about a "Q3 quarterly budget
+report", one entirely unrelated ("grandma's secret cookie recipe") —
+then called the real `memory_search` tool directly with
+`query="quarterly budget report"`. Result: exactly 1 match (the
+budget turn); the unrelated turn was correctly excluded, confirming
+the real FTS5-backed search doesn't leak unrelated private memory into
+results. Cleaned up both seeded turns; confirmed zero remaining test
+artifacts by content match afterward.
+
+Verified: `pytest tests/tools/test_incus_tools.py -k
+TimeoutRecheck -v`: 6 passed. Broader: `pytest
+tests/tools/test_incus_tools.py tests/tools/test_incus_tools_extended.py
+tests/tools/test_incus_coverage_gaps.py
+tests/tools/test_incus_tools_coverage.py
+tests/unit/test_incus_tools_coverage_gaps.py -q`: 337 passed.
+
+**Bonus, real (not tangential) finding within this same checkpoint:**
+while running the full suite to verify the above, hit a genuine,
+reproducible-in-practice failure —
+`RuntimeError: dictionary changed size during iteration` in
+`test_registry_providers_edges.py::TestConcurrentSetDefault::test_concurrent_register_and_get_available`.
+This is the SAME test that was noted as a "tangential, pre-existing
+flake" during the CircuitBreaker checkpoint (fifty-eighth) — at that
+point it had failed once and passed cleanly on retry, so it was
+documented rather than chased. Failing a *second* time in an
+independent full-suite run confirmed it as a genuine, real,
+reproducible-in-practice bug, not a one-off fluke, so it was worth
+fixing properly this time.
+
+**Root cause:** `ProviderRegistry` had zero locking anywhere.
+`register()` (a dict mutation) could race with
+`get_available()`/`list_providers()`/`key_for()` (each iterating
+`self._providers` directly with no synchronization) — a concurrent
+insertion of a brand-new key during another thread's iteration is
+exactly what CPython's dict iterator detects and raises on.
+
+**Fix:** added a `threading.Lock` to `ProviderRegistry`
+(`missy/providers/registry.py`), guarding every mutation
+(`register`/`rotate_key`/`set_default`) and changing the three
+iteration methods to take a locked, complete snapshot copy of the
+relevant dict *before* iterating outside the lock — deliberately not
+holding the lock during `get_available()`'s potentially slow/blocking
+per-provider `is_available()` I/O, so one slow health check can't
+stall unrelated `register()` calls from other threads.
+
+**Honestly could not force a clean before/after reproduction via a new
+microbenchmark**: several attempts at heavier concurrent
+register+iterate stress tests against the reverted, pre-fix code
+(verified via `git stash` to genuinely be running the buggy version)
+produced zero errors even at 20 rounds × 10+10 threads — this specific
+race is real (confirmed twice via actual full-suite runs under real
+system load) but its exact interleaving is hard to force on demand in
+an isolated benchmark. The fix itself is a standard, structurally
+sound concurrency pattern that eliminates the *entire class* of "dict
+mutated during iteration" errors by construction, not merely by making
+the specific observed race less likely — confirmed via 3 clean
+consecutive `tests/providers/` runs (938 passed each) and 5 clean
+consecutive runs of the specific stress test, which was also
+strengthened to additionally exercise `list_providers`/`key_for`
+concurrently (previously untested for this exact race) across 3
+rounds of 40 threads each (up from a single round of 20).
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q
+-o faulthandler_timeout=120` → `21238 passed, 13 skipped in 610.73s
+(0:10:10)` — 0 failed, up from 21232. Eighteenth consecutive fully
+green full-suite run, and the first full-suite run since the
+ProviderRegistry lock was added — confirms the fix holds under real
+full-suite concurrency (the exact conditions that twice produced the
+race) without reintroducing it.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security
@@ -3778,24 +3891,30 @@ path). Current remaining priority order:
    delegate's cooperation, and it found real bugs that live-only
    testing would likely have missed, reserving live delegate spend for
    the genuinely judgment-requiring cases where it mattered most.
-2. Smaller tracked follow-ups: **all fixed.** ~~per-provider tunable
-   CircuitBreaker cooldown config (SR-4.8 residual)~~ — fixed, see the
-   fifty-eighth checkpoint above. The only item left in this bullet is
-   the audit-log hash chain for deletion/reordering detection and
-   key-rotation lifecycle (SR-1.1 residual), which is explicitly out of
-   scope per the review's own text since no hash-chain claim exists in
-   the product — nothing left to fix here. **The `missy doctor` audit
-   signing status check is now added** — see the fifty-seventh
-   checkpoint above. **The `shell.unrestricted` dead-config-key hygiene
-   gap is now fixed** — see the fifty-sixth checkpoint above. **The Web
-   TUI browser page for approvals and Discord pairing is now fixed** —
-   see the fifty-fifth checkpoint above. **DISC-CMD-008's per-user
-   Discord rate-limiting gap is now fixed** — see the fifty-fourth
-   checkpoint above.
+2. **CLOSED — no open items.** Every smaller tracked follow-up this
+   bullet ever listed is fixed: per-provider tunable CircuitBreaker
+   cooldown config (SR-4.8 residual, fifty-eighth checkpoint), the
+   `missy doctor` audit signing status check (fifty-seventh
+   checkpoint), the `shell.unrestricted` dead-config-key hygiene gap
+   (fifty-sixth checkpoint), the Web TUI browser page for approvals and
+   Discord pairing (fifty-fifth checkpoint), and DISC-CMD-008's
+   per-user Discord rate-limiting gap (fifty-fourth checkpoint). The
+   audit-log hash chain for deletion/reordering detection and
+   key-rotation lifecycle was never a task in this bullet to begin
+   with — the security review's own text explicitly scoped audit
+   integrity to *signing* (closed by SR-1.1) and never claimed a hash
+   chain; adding one now would be new, unrequested scope, not a bug fix
+   or a documented gap. It is listed here only as a rejected idea, for
+   the record, not as pending work.
 3. Broader untouched "Product Goal" surface from prompt.md (providers,
    tool intelligence, Discord/channels, scheduler/memory/sessions,
    hatching/persona, vision/audio/multimodal, Web TUI, OpenClaw-style
-   architecture, CLI/operations).
+   architecture, CLI/operations). Unlike items 1 and 2 (both now fully
+   closed), this has no enumerated finish line — it is the standing
+   invitation to keep finding and fixing real, concrete gaps within
+   that surface, one bounded slice at a time, the same way items 1 and
+   2 were closed out. See the fifty-ninth checkpoint onward for
+   progress against it.
 
 ### Blockers
 

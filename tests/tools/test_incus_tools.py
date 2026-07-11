@@ -270,6 +270,101 @@ class TestIncusInstanceActionTool:
 
 
 # ---------------------------------------------------------------------------
+# IncusInstanceActionTool -- post-timeout state recheck (INCUS-006,
+# prompt.md line 91: "On timeout, mark pending effects unknown, perform
+# a fresh read-only state check before retrying or reporting status").
+# A client-side subprocess timeout says nothing about whether the Incus
+# daemon actually completed a mutating action server-side -- reporting
+# only "timed out" leaves the caller with no way to distinguish "nothing
+# happened" from "it happened anyway, just slowly." Live-verified this
+# session against a real Incus container with an artificially tiny
+# timeout that genuinely triggered subprocess.TimeoutExpired.
+# ---------------------------------------------------------------------------
+class TestIncusInstanceActionTimeoutRecheck:
+    def setup_method(self) -> None:
+        self.tool = IncusInstanceActionTool()
+
+    @patch("missy.tools.builtin.incus_tools.subprocess.run")
+    def test_timeout_triggers_readonly_state_recheck(self, mock_run: MagicMock) -> None:
+        mock_run.side_effect = [
+            subprocess.TimeoutExpired(cmd="incus", timeout=1),
+            _json_proc([{"name": "test", "status": "Running"}]),
+        ]
+        result = self.tool.execute(instance="test", action="restart", timeout=1)
+
+        assert result.success is False
+        assert "timed out after 1s" in result.error
+        assert "unknown at the moment of timeout" in result.error
+        assert "currently 'Running'" in result.error
+        # The recheck must be a real, separate, read-only `incus list`
+        # call -- not just reusing/guessing from the timed-out action.
+        assert mock_run.call_count == 2
+        recheck_cmd = mock_run.call_args_list[1][0][0]
+        assert recheck_cmd == ["incus", "list", "test", "--format", "json"]
+
+    @patch("missy.tools.builtin.incus_tools.subprocess.run")
+    def test_timeout_recheck_reports_instance_gone(self, mock_run: MagicMock) -> None:
+        """A `delete` that races past the client-side timeout may have
+        actually completed server-side -- the recheck must say so
+        plainly rather than implying the instance still exists."""
+        mock_run.side_effect = [
+            subprocess.TimeoutExpired(cmd="incus", timeout=1),
+            _json_proc([]),  # incus list returns an empty array: gone
+        ]
+        result = self.tool.execute(instance="test", action="delete", timeout=1)
+
+        assert result.success is False
+        assert "no longer exists" in result.error
+
+    @patch("missy.tools.builtin.incus_tools.subprocess.run")
+    def test_timeout_recheck_itself_failing_is_reported_honestly(
+        self, mock_run: MagicMock
+    ) -> None:
+        mock_run.side_effect = [
+            subprocess.TimeoutExpired(cmd="incus", timeout=1),
+            subprocess.TimeoutExpired(cmd="incus", timeout=30),  # recheck also times out
+        ]
+        result = self.tool.execute(instance="test", action="stop", timeout=1)
+
+        assert result.success is False
+        assert "could not be determined" in result.error
+
+    @patch("missy.tools.builtin.incus_tools.subprocess.run")
+    def test_rename_timeout_does_not_attempt_recheck(self, mock_run: MagicMock) -> None:
+        """After a rename times out, the instance could be under either
+        the old or the new name -- guessing which one to recheck could
+        itself misreport state, so rename is deliberately excluded."""
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd="incus", timeout=1)
+        result = self.tool.execute(
+            instance="old", action="rename", new_name="new", timeout=1
+        )
+
+        assert result.success is False
+        assert result.error == "Command timed out after 1s"
+        assert mock_run.call_count == 1  # no recheck attempted
+
+    @patch("missy.tools.builtin.incus_tools.subprocess.run")
+    def test_non_timeout_failure_does_not_trigger_recheck(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = _make_proc(stderr="Error: not found", returncode=1)
+        result = self.tool.execute(instance="test", action="start")
+
+        assert result.success is False
+        assert "Exit code 1" in result.error
+        assert mock_run.call_count == 1  # no recheck for an ordinary exit-code failure
+
+    @patch("missy.tools.builtin.incus_tools.subprocess.run")
+    def test_project_scope_carried_into_recheck(self, mock_run: MagicMock) -> None:
+        mock_run.side_effect = [
+            subprocess.TimeoutExpired(cmd="incus", timeout=1),
+            _json_proc([{"name": "test", "status": "Stopped"}]),
+        ]
+        self.tool.execute(instance="test", action="stop", project="myproj", timeout=1)
+
+        recheck_cmd = mock_run.call_args_list[1][0][0]
+        assert recheck_cmd == ["incus", "list", "test", "--format", "json", "--project", "myproj"]
+
+
+# ---------------------------------------------------------------------------
 # IncusInfoTool
 # ---------------------------------------------------------------------------
 class TestIncusInfoTool:

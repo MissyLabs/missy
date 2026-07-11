@@ -1,5 +1,77 @@
 # TEST_RESULTS
 
+## Run: 2026-07-12 04:15 UTC — post-backlog, reconciled against prompt.md's own checklist, closed INCUS-006 timeout recheck + MEM-001 relevance gap
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Context: cross-referenced the actual source `~/missy-loops/prompt.md`
+  checklist directly (155 `- [ ]` items) instead of continuing to work
+  only from `BUILD_STATUS.md`'s own derived notes. Found two genuine,
+  previously-uncovered gaps.
+- **INCUS-006 (line 91)**: `IncusInstanceActionTool` previously
+  reported a bare timeout message with no real server-side state
+  indication. Added `_recheck_instance_state()` -- on a genuine
+  timeout for a mutating action (excluding `rename`), performs a fresh
+  read-only `incus list` and reports the actually-observed state.
+  **Live-verified against a real Incus container** with an
+  artificially tiny `timeout=1` that genuinely triggered
+  `subprocess.TimeoutExpired` on a real `incus restart`: correctly
+  reported the real observed state (`Running`), independently
+  confirmed via a separate raw `incus list` call. 6 new tests.
+- **MEM-001 (line 48)**: seeded two real turns into the production
+  `~/.missy/memory.db` -- one relevant ("Q3 quarterly budget report"),
+  one unrelated ("grandma's secret cookie recipe") -- then called the
+  real `memory_search` tool directly. Result: exactly 1 match (the
+  relevant turn); the unrelated turn was correctly excluded, confirming
+  no unrelated-private-memory leak. Cleaned up both seeded turns.
+  (MEM-004 and SEC-PI-004/XT-006, also named on this same prompt.md
+  line, are covered: SEC-PI-004/XT-006 already reverified this session
+  with real content; MEM-004 is functionally the same scenario as
+  SEC-PI-004, covered via that overlap.)
+- Command: `pytest tests/tools/test_incus_tools.py -k TimeoutRecheck -v`
+- Result: `6 passed`.
+- Command: `pytest tests/tools/test_incus_tools.py
+  tests/tools/test_incus_tools_extended.py
+  tests/tools/test_incus_coverage_gaps.py
+  tests/tools/test_incus_tools_coverage.py
+  tests/unit/test_incus_tools_coverage_gaps.py -q`
+- Result: `337 passed`.
+- **Bonus finding in this same checkpoint**: while re-running the full
+  suite, hit `RuntimeError: dictionary changed size during iteration`
+  in `test_registry_providers_edges.py::TestConcurrentSetDefault::test_concurrent_register_and_get_available`
+  -- previously noted as a "tangential flake" during the CircuitBreaker
+  checkpoint (failed once, passed on retry). Failing a *second* time
+  independently confirmed it as a genuine, real, reproducible-in-practice
+  bug: `ProviderRegistry` had zero locking anywhere, so `register()`
+  (a dict mutation) could race with
+  `get_available()`/`list_providers()`/`key_for()` (each iterating
+  `self._providers` directly).
+- Fix: added a `threading.Lock` to `ProviderRegistry`
+  (`missy/providers/registry.py`), guarding every mutation and changing
+  the three iteration methods to snapshot the relevant dict under the
+  lock before iterating outside it (not holding the lock during
+  `get_available()`'s potentially slow per-provider I/O).
+- Could not force a clean before/after reproduction via a new
+  microbenchmark (confirmed via `git stash` that the pre-fix code
+  genuinely ran, then hammered it with 20 rounds x 10+10 threads with
+  zero errors) -- this race is real but its exact interleaving is hard
+  to force on demand in isolation. The fix is a standard, structurally
+  sound pattern that eliminates the entire error class by construction.
+- Strengthened `test_concurrent_register_and_get_available` to also
+  stress `list_providers`/`key_for` (previously untested for this
+  race) across 3 rounds of 40 threads each (up from 1 round of 20).
+- Command: `pytest tests/providers/ -q` (run 3x)
+- Result: `938 passed` each time.
+- Command: `pytest tests/agent/ tests/providers/ tests/config/
+  tests/tools/test_incus_tools.py -q`
+- Result: `5719 passed, 4 skipped`.
+- Command: `python3 -m pytest tests/ -q -o faulthandler_timeout=120`
+  (full suite, background run, post-fix)
+- Result: `21238 passed, 13 skipped in 610.73s (0:10:10)`. 0 failed, up
+  from 21232. Eighteenth consecutive fully green full-suite run, and
+  the first since the `ProviderRegistry` lock was added -- confirms
+  the fix holds under real full-suite concurrency without
+  reintroducing the race.
+
 ## Run: 2026-07-12 03:50 UTC — post-backlog, per-provider tunable CircuitBreaker cooldown config added (SR-4.8 residual)
 
 - Branch: `overhaul/missy-validation-20260710-031406`

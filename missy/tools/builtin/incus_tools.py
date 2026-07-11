@@ -90,6 +90,45 @@ def _run_incus(
         return ToolResult(success=False, output=None, error=str(exc))
 
 
+def _recheck_instance_state(instance: str, project: str | None) -> str:
+    """Perform a fresh, read-only state check for *instance* after a timeout.
+
+    A client-side subprocess timeout on a mutating instance action
+    (start/stop/restart/pause/delete) says nothing about whether the
+    Incus daemon actually completed the action server-side -- the
+    daemon has no obligation to abort its own work just because our
+    subprocess gave up waiting for it. Silently reporting only "timed
+    out" leaves the caller with no way to tell current reality from a
+    guess. This performs one more read-only ``incus list`` call
+    (itself timeout-bounded, so a hung daemon can't cascade into an
+    unbounded second wait) and summarizes what was actually observed.
+
+    Args:
+        instance: Name of the instance to recheck.
+        project: Optional Incus project scope, matching the original
+            action's own ``--project`` (if any).
+
+    Returns:
+        A short, human-readable summary of the instance's observed
+        state, or an honest statement that the recheck itself could not
+        determine it.
+    """
+    args = ["list", instance, "--format", "json"]
+    if project:
+        args.extend(["--project", project])
+    recheck = _run_incus(args, timeout=30)
+
+    if not recheck.success:
+        return f"could not be determined (recheck itself failed: {recheck.error})"
+    rows = recheck.output
+    if not isinstance(rows, list) or not rows:
+        # A cleanly empty list means "no such instance" (e.g. a `delete`
+        # that raced past the client-side timeout actually completed).
+        return f"instance {instance!r} no longer exists"
+    status = rows[0].get("status", "unknown") if isinstance(rows[0], dict) else "unknown"
+    return f"instance {instance!r} is currently {status!r}"
+
+
 # ---------------------------------------------------------------------------
 # 1. List instances
 # ---------------------------------------------------------------------------
@@ -289,7 +328,33 @@ class IncusInstanceActionTool(_IncusHostCommandMixin, BaseTool):
                 args.append("--force")
         if project:
             args.extend(["--project", project])
-        return _run_incus(args, timeout=timeout)
+
+        result = _run_incus(args, timeout=timeout)
+
+        # A client-side timeout on a mutating action must never be
+        # reported as a bare, uninformative failure -- the daemon may
+        # have completed the action anyway just as our subprocess gave
+        # up waiting. `rename` is excluded: after a rename times out we
+        # don't know which name (old or new) to recheck under, and
+        # guessing either could itself misreport state.
+        if (
+            not result.success
+            and result.error
+            and result.error.startswith("Command timed out")
+            and action != "rename"
+        ):
+            state_note = _recheck_instance_state(instance, project)
+            result = ToolResult(
+                success=False,
+                output=result.output,
+                error=(
+                    f"{result.error}. The action's effect is unknown at the "
+                    f"moment of timeout (the client gave up waiting, but the "
+                    f"Incus daemon may have completed it anyway). Fresh "
+                    f"read-only recheck: {state_note}."
+                ),
+            )
+        return result
 
     def get_schema(self) -> dict[str, Any]:
         return {

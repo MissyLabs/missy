@@ -59,6 +59,16 @@ class ProviderRegistry:
         self._key_indices: dict[str, int] = {}
         self._provider_configs: dict[str, ProviderConfig] = {}
         self._default_name: str | None = None
+        # Guards every mutation of the dicts above, and every read that
+        # iterates them (rather than a single dict.get()/[] lookup,
+        # which CPython already makes atomic). Found live via a
+        # concurrency stress test: concurrent register() (a dict
+        # mutation) racing with get_available()/list_providers()/
+        # key_for() (each iterating self._providers directly) could
+        # raise "RuntimeError: dictionary changed size during
+        # iteration" -- a real, pre-existing thread-safety gap, not
+        # merely a theoretical one.
+        self._lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Mutation
@@ -76,10 +86,11 @@ class ProviderRegistry:
             provider: The provider instance to register.
             config: Optional provider configuration for key rotation support.
         """
-        self._providers[name] = provider
-        if config is not None:
-            self._provider_configs[name] = config
-            self._key_indices.setdefault(name, 0)
+        with self._lock:
+            self._providers[name] = provider
+            if config is not None:
+                self._provider_configs[name] = config
+                self._key_indices.setdefault(name, 0)
 
     def get_config(self, provider_name: str) -> ProviderConfig | None:
         """Return the :class:`ProviderConfig` registered for *provider_name*.
@@ -109,22 +120,23 @@ class ProviderRegistry:
         Args:
             provider_name: Registry key of the provider to rotate.
         """
-        config = self._provider_configs.get(provider_name)
-        provider = self._providers.get(provider_name)
-        if config is None or provider is None:
-            logger.warning("rotate_key: provider %r not found.", provider_name)
-            return
-        keys = getattr(config, "api_keys", [])
-        if len(keys) < 2:
-            logger.debug(
-                "rotate_key: provider %r has fewer than 2 api_keys; skipping rotation.",
-                provider_name,
-            )
-            return
-        current_idx = self._key_indices.get(provider_name, 0)
-        next_idx = (current_idx + 1) % len(keys)
-        self._key_indices[provider_name] = next_idx
-        next_key = keys[next_idx]
+        with self._lock:
+            config = self._provider_configs.get(provider_name)
+            provider = self._providers.get(provider_name)
+            if config is None or provider is None:
+                logger.warning("rotate_key: provider %r not found.", provider_name)
+                return
+            keys = getattr(config, "api_keys", [])
+            if len(keys) < 2:
+                logger.debug(
+                    "rotate_key: provider %r has fewer than 2 api_keys; skipping rotation.",
+                    provider_name,
+                )
+                return
+            current_idx = self._key_indices.get(provider_name, 0)
+            next_idx = (current_idx + 1) % len(keys)
+            self._key_indices[provider_name] = next_idx
+            next_key = keys[next_idx]
         # Update the provider's api_key attribute if accessible.
         if hasattr(provider, "api_key"):
             provider.api_key = next_key  # type: ignore[attr-defined]
@@ -145,6 +157,13 @@ class ProviderRegistry:
         provider = self._providers.get(name)
         if provider is None:
             raise ValueError(f"Provider {name!r} is not registered.")
+        # is_available() may perform real I/O (e.g. an HTTP health check);
+        # deliberately not held under self._lock so a slow/blocking check
+        # for one provider can't stall unrelated register()/rotate_key()
+        # calls on other providers. Only the final assignment needs the
+        # lock (a single attribute write is already atomic in CPython,
+        # but taking it anyway keeps this consistent with every other
+        # mutation of registry state going through the same guard).
         try:
             if not provider.is_available():
                 raise ValueError(f"Provider {name!r} is not available.")
@@ -152,7 +171,8 @@ class ProviderRegistry:
             if isinstance(exc, ValueError):
                 raise
             raise ValueError(f"Provider {name!r} availability check failed: {exc}") from exc
-        self._default_name = name
+        with self._lock:
+            self._default_name = name
         logger.info("Default provider set to %r.", name)
 
     def get_default_name(self) -> str | None:
@@ -190,7 +210,9 @@ class ProviderRegistry:
             The registry key, or ``None`` if *provider* is not registered
             (identity comparison, not equality).
         """
-        for key, registered in self._providers.items():
+        with self._lock:
+            snapshot = list(self._providers.items())
+        for key, registered in snapshot:
             if registered is provider:
                 return key
         return None
@@ -201,7 +223,8 @@ class ProviderRegistry:
         Returns:
             A new list of string keys in ascending alphabetical order.
         """
-        return sorted(self._providers)
+        with self._lock:
+            return sorted(self._providers)
 
     def get_available(self) -> list[BaseProvider]:
         """Return providers that report themselves as available.
@@ -213,8 +236,15 @@ class ProviderRegistry:
             A list of available :class:`~.base.BaseProvider` instances in
             registration order (dict insertion order, Python 3.7+).
         """
+        # Snapshot under the lock, then iterate (and call each provider's
+        # potentially I/O-bound is_available()) outside it -- otherwise
+        # a slow health check would hold self._lock for its full
+        # duration, blocking unrelated register()/rotate_key() calls
+        # from other threads for no good reason.
+        with self._lock:
+            snapshot = list(self._providers.values())
         available: list[BaseProvider] = []
-        for provider in self._providers.values():
+        for provider in snapshot:
             try:
                 if provider.is_available():
                     available.append(provider)
