@@ -5407,6 +5407,125 @@ faulthandler_timeout=120` → `21326 passed, 13 skipped in 492.11s
 (0:08:12)` — 0 failed, up from 21322. Thirty-second consecutive fully
 green full-suite run.
 
+### Post-backlog (seventy-fifth checkpoint): round 15 research pass finds an unredacted secret leak in the background-run API, a broken vector-search integration in vision memory, and a scheduler day-of-week numbering bug (plus a fully broken 6-field cron format)
+
+Round 15 of the research-pass invitation (rounds 1-14: Scheduler
+pause/retry; Persona; API server-not-yet-primary/MessageBus/Screencast
+session-pruning; Memory-compaction/GraphStore/Vault; Config/Vision-
+session-eviction/CandidateGenerator; MCP-approval-gate/SubAgent/Learnings/
+Playbook/Attention; Discord-rest/operator-controls/AuditLogger/behavior;
+ContextManager/Synthesizer/Watchdog/InteractiveApproval; Webhook/
+ConfigWatcher/ContainerSandbox/MCP-client/Wizard; ToolRegistry/
+FailureTracker/CircuitBreaker/Checkpoint/Discord-REST; VoiceRegistry/
+VoiceServer/AgentIdentity/TrustScorer; providers/SecurityScanner/
+LandlockPolicy/SkillDiscovery; vision-capture/CostTracker/
+CodeEvolutionManager; StructuredOutput/ProactiveManager/SleeptimeWorker/
+Summarizer; MessageBus-internals/HatchingManager/PersonaManager-backups/
+BehaviorLayer-tone), this time into `missy/api/server.py` (auth/rate-
+limiting/secrets-censoring), `missy/observability/otel.py`'s redaction,
+`missy/memory/vector_store.py`'s FAISS consistency, and
+`missy/scheduler/parser.py`'s cron parsing — none of which had been
+primary audit subjects from these specific angles before. `otel.py`'s
+redaction and `api/server.py`'s auth/rate-limiting checked out clean
+(constant-time comparison used correctly for both API-key and CSRF-token
+checks; `_redact_detail` genuinely applied before every span attribute).
+Four genuine findings, live-verified and fixed.
+
+**1. `POST /api/v1/runs` (the background-run/SSE-streaming API) never
+censored the final agent response, unlike `POST /api/v1/chat`.**
+`server.py`'s own module docstring documents "Secrets censored from
+agent output" as the security posture, and `_handle_chat` honors it via
+`censor_response()` — but `run_stream.py`'s `_execute()` set
+`handle.response = response` directly from `runtime.run(...)` with no
+redaction at all, even though every *other* field this same method
+pushes (`handle.message`, `handle.error`, `cost`) already goes through
+`redact_audit_value()` (which uses the identical `SecretsDetector`-backed
+redaction `censor_response()` does). Concretely: if the agent's final
+answer echoes a credential (quoting a config value, a file it read, or
+a leaked API key from its own context), a client polling `GET
+/api/v1/runs/{run_id}` or its SSE stream — the exact pattern the Web
+TUI's "Ask Missy" console uses — got it unredacted, while the identical
+content through `/chat` would have been redacted. Fixed by applying
+`redact_audit_value()` to `response` before storing/streaming it,
+matching this same method's own established pattern for every other
+field. 1 new test, confirmed via `git stash` to genuinely fail pre-fix
+(secret present unredacted in both the streamed event and the stored
+handle).
+
+**2. `VisionMemoryBridge.recall_observations()` always failed to unpack
+`VectorMemoryStore.search()`'s real return shape, making vision semantic
+search completely non-functional with no visible error.**
+`VectorMemoryStore.search()` returns a list of 3-key dicts
+(`{"text": ..., "metadata": ..., "score": ...}`), but its only real
+caller unpacked it as `for score, meta in vector_results` — a 3-key dict
+can never unpack into 2 variables, so this always raised `ValueError:
+too many values to unpack` for any non-empty result. This was caught by
+a broad `except Exception` right below and silently logged at DEBUG,
+so the "semantic recall of past visual analysis" feature advertised in
+the module docstring never worked even once — every call silently
+degraded to the SQLite keyword/FTS fallback. **Live-reproduced**:
+confirmed the exact unpacking failure directly (`ValueError: too many
+values to unpack (expected 2)`), then confirmed a real, non-mocked
+integration call returned 0 results instead of 1. Fixed by iterating
+`entry["metadata"]`/`entry["score"]` instead of tuple-unpacking. 1 new
+test using the real dict shape (unlike every pre-existing test in this
+area, which only mocked `search()` raising an exception — never its
+actual successful return value), confirmed via `git stash` to
+genuinely fail pre-fix. 8 pre-existing tests across
+`test_vision_memory.py`/`test_vision_modules_edges.py` had mocked the
+same wrong 2-tuple shape the buggy code expected (so they "passed"
+without ever exercising the real integration contract) — fixed to use
+the real dict shape, which is what makes them correctly fail against
+the pre-fix code and correctly pass against the fix.
+
+**3. Raw numeric cron day-of-week fields were silently misinterpreted —
+standard crontab numbers Sunday=0..Saturday=6, but APScheduler's
+`day_of_week` field follows `date.weekday()`'s convention
+(Monday=0..Sunday=6) — producing a valid-but-wrong schedule with no
+error, contradicting even the parser module's own docstring example.**
+`_parse_raw_cron` passed the raw cron string straight through, and
+`manager.py` fed it verbatim to `CronTrigger.from_crontab()`, which
+applies zero day-of-week numbering conversion. **Live-reproduced**
+against the real APScheduler dependency: `"0 9 * * 1-5"` (the parser
+docstring's own "9 AM on weekdays" example) actually fired
+**Tuesday-Saturday**, and `"0 9 * * 0"` (standard-crontab Sunday) fired
+every **Monday** — both silently accepted, no error either way. Fixed
+by adding `convert_crontab_dow_to_apscheduler()` (handles single digits,
+comma lists, ranges — including a wrap-around range like crontab's
+`5-1` splitting into two APScheduler ranges — `*/N` steps, the `7`=
+Sunday alias, and day-name tokens like `mon-fri` passing through
+unchanged since names carry no numbering ambiguity) and rewiring
+`manager.py` to split cron fields manually and construct `CronTrigger`
+directly with the converted `day_of_week`, rather than relying on
+`from_crontab`'s un-converted, 5-field-only parsing. 11 new unit tests
+for the conversion function plus 2 new end-to-end tests that actually
+schedule a job and check which real calendar dates it fires on
+(confirming `"0 9 * * 1-5"` now genuinely fires Monday through Friday
+and nothing else) — all confirmed via `git stash` to genuinely fail
+pre-fix.
+
+**4. The documented "6-field with seconds" raw cron format was
+completely broken end-to-end.** `parser.py`'s docstring advertised
+6-field cron support (its own worked example, itself independently
+wrong about field order — fixed alongside this), but
+`CronTrigger.from_crontab()` hard-rejects anything but exactly 5 fields,
+so every attempt to actually create a 6-field cron job failed with a
+confusing `SchedulerError`. **Live-reproduced**: `add_job(...,  "30 8 *
+* 1 *", ...)` raised `SchedulerError: ... Wrong number of fields; got 6,
+expected 5`. Fixed as part of the same `manager.py` rewrite for finding
+#3 above — manual field-splitting naturally supports 6 fields (`second
+minute hour day month day_of_week`) by constructing `CronTrigger`
+directly instead of going through `from_crontab` at all. 1 new
+end-to-end test confirming a 6-field expression now schedules
+successfully and fires at the exact intended time, confirmed via `git
+stash` to genuinely fail pre-fix with the exact `SchedulerError` above.
+
+Verified: `pytest tests/api/ tests/vision/ tests/scheduler/
+tests/observability/ -q`: `3639 passed`. **Full-suite confirmation:**
+`python3 -m pytest tests/ -q -o faulthandler_timeout=120` →
+`21342 passed, 13 skipped in 486.26s (0:08:06)` — 0 failed, up from
+21326. Thirty-third consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

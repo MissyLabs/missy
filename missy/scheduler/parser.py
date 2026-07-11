@@ -14,8 +14,11 @@ Cron triggers (human-readable)
 
 Raw cron expressions (5 or 6 fields)
     - ``"*/5 * * * *"``         (every 5 minutes)
-    - ``"0 9 * * 1-5"``         (9 AM on weekdays)
-    - ``"30 8 * * 1 *"``        (8:30 AM every Monday, 6-field with seconds)
+    - ``"0 9 * * 1-5"``         (9 AM on weekdays; day-of-week uses
+      standard crontab numbering, Sunday=0..Saturday=6 -- converted
+      internally to APScheduler's own Monday=0..Sunday=6 convention)
+    - ``"0 30 8 * * 1"``        (8:30 AM every Monday, 6-field with
+      seconds -- field order is sec min hour dom month dow)
 
 One-shot future-dated triggers
     - ``"at 2024-12-31 23:59"``
@@ -150,11 +153,68 @@ def _parse_weekly(match: re.Match) -> dict[str, Any]:
     }
 
 
+def convert_crontab_dow_to_apscheduler(field: str) -> str:
+    """Convert a standard crontab day-of-week field to APScheduler's numbering.
+
+    Standard crontab numbers Sunday=0 through Saturday=6 (also accepting 7
+    as an alias for Sunday). APScheduler's ``day_of_week`` numeric field
+    instead follows :meth:`datetime.date.weekday`'s convention:
+    Monday=0 through Sunday=6. Passing a raw crontab numeric field straight
+    through to APScheduler (as the manager previously did via
+    ``CronTrigger.from_crontab``) silently produces a *different, valid*
+    schedule rather than an error -- e.g. crontab's ``"1-5"`` ("weekdays")
+    actually fires Tuesday-Saturday under APScheduler's numbering.
+
+    Day-name tokens (``mon``/``tue``/.../``sun``, and ranges like
+    ``mon-fri``) pass through unchanged: APScheduler's own crontab parser
+    already accepts these directly and unambiguously, since names carry no
+    numbering-convention ambiguity.
+
+    Args:
+        field: The raw day-of-week field (comma-separated list of
+            ``*``, digits, digit ranges, day names, and/or ``/step``
+            suffixes).
+
+    Returns:
+        The equivalent field using APScheduler's day-of-week numbering.
+    """
+
+    def convert_num(n: int) -> int:
+        n = n % 7  # crontab allows 7 as an alias for Sunday
+        return (n - 1) % 7
+
+    def convert_token(token: str) -> str:
+        if "/" in token:
+            base, step = token.split("/", 1)
+            return f"{convert_token(base)}/{step}"
+        if token == "*":
+            return "*"
+        if "-" in token:
+            start_s, end_s = token.split("-", 1)
+            if not (start_s.isdigit() and end_s.isdigit()):
+                return token  # day-name range (e.g. "mon-fri"); already unambiguous
+            start, end = convert_num(int(start_s)), convert_num(int(end_s))
+            if start <= end:
+                return f"{start}-{end}"
+            # The range crossed the Sun/Mon numbering boundary after
+            # conversion (e.g. crontab "5-1" = Fri,Sat,Sun,Mon) -- split
+            # into two ranges joined by a comma.
+            return f"{start}-6,0-{end}"
+        if token.isdigit():
+            return str(convert_num(int(token)))
+        return token  # day name; already unambiguous
+
+    return ",".join(convert_token(t.strip()) for t in field.split(","))
+
+
 def _parse_raw_cron(cleaned: str) -> dict[str, Any]:
     """Return a trigger config for a raw cron expression string.
 
-    The expression is passed through as-is; the manager will use
-    ``CronTrigger.from_crontab`` to construct the actual trigger object.
+    The expression is passed through as-is; the manager splits it into
+    fields itself (rather than using ``CronTrigger.from_crontab``, which
+    only accepts exactly 5 fields and applies no day-of-week numbering
+    conversion) and applies :func:`convert_crontab_dow_to_apscheduler` to
+    the day-of-week field before constructing the actual trigger.
 
     Args:
         cleaned: A whitespace-stripped raw cron expression (5 or 6 fields).

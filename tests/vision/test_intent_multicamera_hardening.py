@@ -373,6 +373,42 @@ class TestVisionMemoryErrorPaths:
         assert len(results) == 1
         assert results[0]["observation"] == "sky pieces"
 
+    def test_recall_vector_search_returns_real_dict_shape_results(self) -> None:
+        """Regression: VectorMemoryStore.search() returns a list of dicts
+        with "text"/"metadata"/"score" keys (see
+        missy/memory/vector_store.py), not 2-tuples. recall_observations()
+        used to unpack it as `for score, meta in vector_results`, which
+        always raises ValueError ("too many values to unpack") for any
+        non-empty result -- silently caught by the surrounding
+        `except Exception`, so vector search never actually returned a
+        result in production and every call silently degraded to the
+        SQLite fallback despite a working, non-empty vector index. This
+        test uses the real return shape (unlike every other mock in this
+        class, which only exercises the search()-raises-an-exception
+        path) to confirm the real integration contract works.
+        """
+        from missy.vision.vision_memory import VisionMemoryBridge
+
+        mock_vec = MagicMock()
+        mock_vec.search.return_value = [
+            {
+                "text": "a red car in the puzzle",
+                "metadata": {"task_type": "puzzle", "session_id": "s1", "observation": "red car"},
+                "score": 0.87,
+            }
+        ]
+        mock_mem = MagicMock()
+
+        bridge = VisionMemoryBridge(memory_store=mock_mem, vector_store=mock_vec)
+        results = bridge.recall_observations(query="red car", task_type="puzzle")
+
+        assert len(results) == 1
+        assert results[0]["observation"] == "red car"
+        assert results[0]["relevance_score"] == 0.87
+        # The SQLite fallback must not have been consulted -- vector
+        # search alone produced a usable result.
+        mock_mem.search.assert_not_called()
+
     def test_recall_both_fail_returns_empty(self) -> None:
         """When both stores fail, returns empty list."""
         from missy.vision.vision_memory import VisionMemoryBridge

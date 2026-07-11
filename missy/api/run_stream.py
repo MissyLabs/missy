@@ -227,14 +227,27 @@ class RunRegistry:
             logger.warning("Background run %s failed: %s", handle.run_id, handle.error)
         else:
             handle.status = "complete"
-            handle.response = response
+            # Unlike POST /api/v1/chat (which censors response_text via
+            # censor_response() before returning it), this background-run
+            # path previously stored/streamed the raw agent response with
+            # no redaction at all -- every other field pushed by this same
+            # method (handle.message, handle.error, cost) already goes
+            # through redact_audit_value(), which uses the same
+            # SecretsDetector-backed redaction censor_response() does. If
+            # the agent's final answer echoes a credential (e.g. quoting a
+            # config value or a leaked API key from its own context), a
+            # client polling GET /api/v1/runs/{run_id} or the SSE stream
+            # got it unredacted, while the identical content through
+            # /chat would have been redacted.
+            redacted_response = redact_audit_value(response)
+            handle.response = redacted_response
             handle.finished_at = datetime.now(UTC).isoformat()
             handle.push(
                 {
                     "event": "run.complete",
                     "data": {
                         "run_id": handle.run_id,
-                        "response": response,
+                        "response": redacted_response,
                         "provider": handle.resolved_provider,
                         "tools_used": handle.tools_used,
                         "cost": handle.cost,

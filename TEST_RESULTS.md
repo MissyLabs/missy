@@ -1,5 +1,65 @@
 # TEST_RESULTS
 
+## Run: 2026-07-13 11:05 UTC — round 15 research pass: unredacted secret leak in background-run API, broken vector-search integration in vision memory, scheduler day-of-week numbering bug + broken 6-field cron
+
+- Context: round 15 of the research-pass invitation (rounds 1-14:
+  Scheduler pause/retry; Persona; API server-not-yet-primary/
+  MessageBus/Screencast session-pruning; Memory-compaction/GraphStore/
+  Vault; Config/Vision-session-eviction/CandidateGenerator; MCP-
+  approval-gate/SubAgent/Learnings/Playbook/Attention; Discord-rest/
+  operator-controls/AuditLogger/behavior; ContextManager/Synthesizer/
+  Watchdog/InteractiveApproval; Webhook/ConfigWatcher/ContainerSandbox/
+  MCP-client/Wizard; ToolRegistry/FailureTracker/CircuitBreaker/
+  Checkpoint/Discord-REST; VoiceRegistry/VoiceServer/AgentIdentity/
+  TrustScorer; providers/SecurityScanner/LandlockPolicy/SkillDiscovery;
+  vision-capture/CostTracker/CodeEvolutionManager; StructuredOutput/
+  ProactiveManager/SleeptimeWorker/Summarizer; MessageBus-internals/
+  HatchingManager/PersonaManager-backups/BehaviorLayer-tone). This
+  round targeted `missy/api/server.py`, `missy/observability/otel.py`,
+  `missy/memory/vector_store.py`, and `missy/scheduler/parser.py` as
+  primary audit subjects for the first time. `otel.py` redaction and
+  `api/server.py` auth/rate-limiting checked out clean.
+- **Unredacted secret leak in background-run API**: `POST /api/v1/runs`
+  never censored the final agent response, unlike `/chat`. Fixed by
+  applying `redact_audit_value()` to the response before storing/
+  streaming it, matching this method's own pattern for every other
+  field it pushes.
+- Command: `pytest tests/api/test_run_stream.py -k redacted -v`
+- Result: `2 passed`. Confirmed to genuinely fail against the pre-fix
+  code via `git stash` (secret present unredacted).
+- **Broken vector-search integration in vision memory**:
+  `recall_observations()` unpacked `VectorMemoryStore.search()`'s
+  3-key-dict results as 2-tuples, always raising `ValueError` (silently
+  caught), so vision semantic search never worked once and always fell
+  back to SQLite. Fixed by iterating the real dict shape.
+- Command: `pytest tests/vision/test_intent_multicamera_hardening.py -k real_dict_shape -v`
+- Result: `1 passed`. Confirmed to genuinely fail against the pre-fix
+  code via `git stash`. 8 pre-existing tests across two files had
+  mocked the same wrong tuple shape the buggy code expected; fixed to
+  use the real dict shape.
+- **Scheduler day-of-week numbering bug**: standard crontab numbers
+  Sunday=0..Saturday=6, but APScheduler's day_of_week field uses
+  Monday=0..Sunday=6 — raw numeric cron fields were passed through
+  unconverted, silently producing a valid-but-wrong schedule (e.g.
+  "weekdays" firing Tuesday-Saturday). Fixed with a new
+  `convert_crontab_dow_to_apscheduler()` conversion function.
+- Command: `pytest tests/scheduler/test_parser_extended.py -k TestConvertCrontabDowToApscheduler -v`
+  and `pytest tests/scheduler/test_manager.py -k TestRawCronDayOfWeekEndToEnd -v`
+- Result: `11 passed` + `3 passed`. All confirmed to genuinely fail
+  against the pre-fix code via `git stash` (wrong fire dates / a
+  SchedulerError for the 6-field case).
+- **Broken 6-field cron format**: `CronTrigger.from_crontab()`
+  hard-rejects anything but exactly 5 fields, so the documented
+  6-field-with-seconds format always raised `SchedulerError`. Fixed as
+  part of the same manager.py rewrite (manual field-splitting plus
+  direct `CronTrigger` construction).
+- Command: `pytest tests/api/ tests/vision/ tests/scheduler/ tests/observability/ -q`
+- Result: `3639 passed`.
+- Command: `python3 -m pytest tests/ -q -o faulthandler_timeout=120`
+  (full suite, background run)
+- Result: `21342 passed, 13 skipped in 486.26s (0:08:06)`. 0 failed, up
+  from 21326. Thirty-third consecutive fully green full-suite run.
+
 ## Run: 2026-07-13 10:40 UTC — round 14 research pass: PersonaManager backup collision (+ list_backups race it exposed), HatchingManager memory-seeding idempotency gap, ResponseShaper code corruption
 
 - Context: round 14 of the research-pass invitation (rounds 1-13:

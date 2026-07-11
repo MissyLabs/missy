@@ -44,9 +44,23 @@ def _make_sqlite_mock(turns: list | None = None) -> MagicMock:
 
 
 def _make_vector_mock(results: list[tuple[float, dict]] | None = None) -> MagicMock:
-    """Return a VectorMemoryStore mock with sensible defaults."""
+    """Return a VectorMemoryStore mock with sensible defaults.
+
+    Accepts the convenient ``(score, metadata)`` tuple shape for callers,
+    but the mocked ``search()`` return value is the *real*
+    ``VectorMemoryStore.search()`` contract -- a list of dicts with
+    "text"/"metadata"/"score" keys (see missy/memory/vector_store.py) --
+    not tuples. recall_observations() previously unpacked search()'s
+    return value as `for score, meta in vector_results`, which always
+    raised ValueError against the real dict shape; these tests originally
+    mocked the same (wrong) tuple shape the buggy code expected, so they
+    passed without ever exercising the real integration contract.
+    """
     store = MagicMock()
-    store.search.return_value = results or []
+    store.search.return_value = [
+        {"text": meta.get("observation", ""), "metadata": meta, "score": score}
+        for score, meta in (results or [])
+    ]
     return store
 
 

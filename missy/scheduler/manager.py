@@ -812,13 +812,44 @@ class SchedulerManager:
 
         try:
             if trigger_type == "cron" and "_cron_expression" in schedule_config:
-                # Raw cron expression — use CronTrigger.from_crontab.
+                # Raw cron expression. Built manually via CronTrigger's own
+                # constructor rather than CronTrigger.from_crontab(), which
+                # (a) hard-rejects the 6-field-with-seconds format this
+                # module's own docstring advertises (it only accepts
+                # exactly 5 fields), and (b) applies no conversion to the
+                # day-of-week field, silently misinterpreting standard
+                # crontab's Sunday=0..Saturday=6 numbering as APScheduler's
+                # own Monday=0..Sunday=6 convention -- e.g. crontab's
+                # "1-5" ("weekdays") would actually fire Tuesday-Saturday.
+                from missy.scheduler.parser import convert_crontab_dow_to_apscheduler
+
                 from apscheduler.triggers.cron import CronTrigger
 
                 cron_expr = schedule_config.pop("_cron_expression")
                 # Any remaining key after popping _cron_expression is "timezone".
                 cron_tz = schedule_config.pop("timezone", None) or tz
-                trigger = CronTrigger.from_crontab(cron_expr, timezone=cron_tz)
+
+                fields = cron_expr.split()
+                if len(fields) == 6:
+                    second, minute, hour, day, month, dow = fields
+                elif len(fields) == 5:
+                    minute, hour, day, month, dow = fields
+                    second = "0"
+                else:
+                    raise ValueError(
+                        f"Raw cron expression must have 5 or 6 fields, got {len(fields)}: "
+                        f"{cron_expr!r}"
+                    )
+                dow = convert_crontab_dow_to_apscheduler(dow)
+                trigger = CronTrigger(
+                    second=second,
+                    minute=minute,
+                    hour=hour,
+                    day=day,
+                    month=month,
+                    day_of_week=dow,
+                    timezone=cron_tz,
+                )
                 self._scheduler.add_job(
                     func=self._run_job,
                     trigger=trigger,

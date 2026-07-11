@@ -109,6 +109,26 @@ class TestRunLifecycle:
         assert registry.get(handle.run_id).status == "complete"
         assert registry.get(handle.run_id).response == "42"
 
+    def test_response_secrets_are_redacted(self, registry: RunRegistry, bus: MessageBus) -> None:
+        """Regression: POST /api/v1/chat censors response_text via
+        censor_response() before returning it, but this background-run
+        path (used by GET /api/v1/runs/{run_id} and its SSE stream)
+        previously stored/streamed the raw agent response with no
+        redaction at all -- every other field this same method pushes
+        (message, error, cost) already goes through redact_audit_value().
+        If the agent's final answer echoes a credential, a client polling
+        this endpoint got it unredacted while the identical content
+        through /chat would have been redacted.
+        """
+        secret = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890abcd"
+        runtime = FakeRuntime(bus, response=f"Here is the key you asked about: {secret}")
+        handle = registry.start(runtime=runtime, message="what's the key?", session_id="s1")
+        events = list(registry.stream(handle.run_id))
+        assert events[-1]["event"] == "run.complete"
+        assert secret not in events[-1]["data"]["response"]
+        assert "[REDACTED]" in events[-1]["data"]["response"]
+        assert secret not in registry.get(handle.run_id).response
+
     def test_stream_includes_bus_sourced_tool_events(
         self, registry: RunRegistry, bus: MessageBus
     ) -> None:

@@ -254,8 +254,15 @@ class TestVisionMemoryBridge:
 
         memory = MagicMock()
         vector = MagicMock()
+        # VectorMemoryStore.search() returns a list of dicts with
+        # "text"/"metadata"/"score" keys, not (score, metadata) tuples --
+        # see missy/memory/vector_store.py.
         vector.search.return_value = [
-            (0.95, {"task_type": "puzzle", "observation": "found piece"}),
+            {
+                "text": "found piece",
+                "metadata": {"task_type": "puzzle", "observation": "found piece"},
+                "score": 0.95,
+            },
         ]
         bridge = VisionMemoryBridge(memory_store=memory, vector_store=vector)
         results = bridge.recall_observations(query="puzzle piece")
@@ -268,8 +275,16 @@ class TestVisionMemoryBridge:
         memory = MagicMock()
         vector = MagicMock()
         vector.search.return_value = [
-            (0.9, {"task_type": "painting", "observation": "nice"}),
-            (0.8, {"task_type": "puzzle", "observation": "edge"}),
+            {
+                "text": "nice",
+                "metadata": {"task_type": "painting", "observation": "nice"},
+                "score": 0.9,
+            },
+            {
+                "text": "edge",
+                "metadata": {"task_type": "puzzle", "observation": "edge"},
+                "score": 0.8,
+            },
         ]
         bridge = VisionMemoryBridge(memory_store=memory, vector_store=vector)
         results = bridge.recall_observations(query="test", task_type="puzzle")

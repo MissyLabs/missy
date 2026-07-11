@@ -222,7 +222,16 @@ class VisionMemoryBridge:
             try:
                 search_query = f"[{task_type}] {query}" if task_type else query
                 vector_results = self._vector.search(search_query, top_k=limit)
-                for score, meta in vector_results:
+                # VectorMemoryStore.search() returns a list of dicts with
+                # "text"/"metadata"/"score" keys, not 2-tuples -- unpacking
+                # any non-empty result as `for score, meta in vector_results`
+                # always raised ValueError ("too many values to unpack"),
+                # silently caught by the except Exception below, so vector
+                # search never actually returned a result and this always
+                # fell through to the SQLite keyword/FTS fallback.
+                for entry in vector_results:
+                    meta = entry["metadata"]
+                    score = entry["score"]
                     if task_type and meta.get("task_type") != task_type:
                         continue
                     if session_id and meta.get("session_id") != session_id:

@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (81 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for thirty-two consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (82 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for thirty-three consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -3252,15 +3252,67 @@ which uncovered a second, previously-masked race while fixing it.
 Verified: `pytest tests/agent/ -q` (3 repeated runs to confirm the
 concurrency fixes are stable): `4268 passed, 4 skipped` each run.
 
+### Post-backlog (seventy-fifth checkpoint): round 15 research pass — unredacted secret leak in background-run API, broken vector-search integration in vision memory, scheduler day-of-week numbering bug + broken 6-field cron
+
+Round 15 (rounds 1-14: Scheduler pause/retry; Persona; API server-not-
+yet-primary/MessageBus/Screencast session-pruning; Memory-compaction/
+GraphStore/Vault; Config/Vision-session-eviction/CandidateGenerator;
+MCP-approval-gate/SubAgent/Learnings/Playbook/Attention; Discord-rest/
+operator-controls/AuditLogger/behavior; ContextManager/Synthesizer/
+Watchdog/InteractiveApproval; Webhook/ConfigWatcher/ContainerSandbox/
+MCP-client/Wizard; ToolRegistry/FailureTracker/CircuitBreaker/
+Checkpoint/Discord-REST; VoiceRegistry/VoiceServer/AgentIdentity/
+TrustScorer; providers/SecurityScanner/LandlockPolicy/SkillDiscovery;
+vision-capture/CostTracker/CodeEvolutionManager; StructuredOutput/
+ProactiveManager/SleeptimeWorker/Summarizer; MessageBus-internals/
+HatchingManager/PersonaManager-backups/BehaviorLayer-tone), into
+`missy/api/server.py`, `missy/observability/otel.py`,
+`missy/memory/vector_store.py`, and `missy/scheduler/parser.py`.
+`otel.py` redaction and `api/server.py` auth/rate-limiting checked out
+clean. Four genuine findings.
+
+1. **Unredacted secret leak in background-run API**: `POST /api/v1/runs`
+   never censored the final agent response, unlike `/chat` — a client
+   polling `GET /api/v1/runs/{run_id}` or its SSE stream got a
+   credential unredacted. Fixed by applying `redact_audit_value()` to
+   the response, matching the method's own pattern for every other
+   field it pushes. 1 new test, confirmed to fail pre-fix.
+2. **Broken vector-search integration in vision memory**:
+   `recall_observations()` unpacked `VectorMemoryStore.search()`'s
+   3-key-dict results as 2-tuples, always raising a silently-caught
+   `ValueError` — vision semantic search never worked once, always
+   falling back to SQLite. Fixed by iterating the real dict shape. 1
+   new test using the real shape, confirmed to fail pre-fix; 8
+   pre-existing tests had mocked the same wrong tuple shape and needed
+   fixing to the real shape.
+3. **Scheduler day-of-week numbering bug**: standard crontab numbers
+   Sunday=0..Saturday=6, APScheduler uses Monday=0..Sunday=6 — raw
+   numeric cron fields passed through unconverted silently produced a
+   valid-but-wrong schedule (e.g. "weekdays" firing Tuesday-Saturday).
+   Fixed with a new conversion function. 14 new tests (11 unit + 3
+   end-to-end, checking actual fire dates), confirmed to fail pre-fix.
+4. **Broken 6-field cron format**: `CronTrigger.from_crontab()`
+   hard-rejects anything but 5 fields, so the documented
+   6-field-with-seconds format always raised `SchedulerError`. Fixed as
+   part of the same manager.py rewrite. Confirmed via `git stash`.
+
+Verified: `pytest tests/api/ tests/vision/ tests/scheduler/
+tests/observability/ -q`: `3639 passed`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-21326 passed, 13 skipped in 492.11s (0:08:12)
+21342 passed, 13 skipped in 486.26s (0:08:06)
 ```
 
-**Zero failures**, the thirty-second consecutive fully green
-full-suite run. Passed count is up from 21322 to 21326 (the round 14
+**Zero failures**, the thirty-third consecutive fully green
+full-suite run. Passed count is up from 21326 to 21342 (the round 15
+checkpoint's 16 new tests: 1 background-run redaction test, 1
+vision-memory dict-shape test, 11 crontab-dow-conversion unit tests,
+and 3 end-to-end scheduler fire-date tests — all of the sixty-first
+through seventy-fourth checkpoints' fixes are confirmed still holding).
+Passed count is up from 21322 to 21326 (the round 14
 checkpoint's 4 new tests: 1 PersonaManager backup-collision test, 1
 list_backups() TOCTOU-race test, 1 HatchingManager idempotency test,
 and 1 ResponseShaper unterminated-fence test — all of the sixty-first
