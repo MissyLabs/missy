@@ -1,5 +1,53 @@
 # TEST_RESULTS
 
+## Run: 2026-07-11 23:50 UTC — validation-harness overhaul, task #10 continued (2 more cases, 74/89 total, entire VIS-* series closed, a real test-isolation bug found and fixed)
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Context: verified VIS-004/005 against a real ToolRegistry (shell
+  scoped to `scrot`), a genuine Logitech C922 webcam
+  (`/dev/video0`/`/dev/video1`), a real `scrot` screenshot capture, and
+  the real in-process `vision_scene` scene-memory manager.
+- VIS-005 (screenshot analysis): `vision_capture(source="screenshot")`
+  produced a real PNG via `scrot` with real quality-assessment metadata.
+  `vision_analyze(mode="inspection", ...)` built a real, correctly
+  mode-specific inspection prompt. A retried real webcam capture
+  against the genuine C922 correctly and honestly failed after 3 real
+  attempts with "Blank frame detected" -- a real hardware/environment
+  limitation, not fabricated success.
+- VIS-004 (scene memory): full real lifecycle verified end-to-end --
+  create -> 2x add_observation -> update_state -> summarize -> close ->
+  summarize-after-close (correctly shows the session inactive with
+  observations/state cleared -- confirmed deliberate in
+  `SceneSession.close()`, not data loss).
+- **Found and fixed a real bug (test isolation, not security)**:
+  `~/.missy/captures/` (the operator's real home directory) had ~135
+  garbage files literally named `capture_<MagicMock ...>.jpg`, dated
+  across 3+ days of prior sessions.
+- Root cause:
+  `tests/vision/test_vision_tools.py::TestVisionCaptureTool::test_file_source`
+  called `tool.execute(source="/tmp/test.jpg")` without `save_path`,
+  and only mocked `mock_frame.timestamp.isoformat` (not `.strftime`) --
+  so `VisionCaptureTool.execute()`'s `save_path` fallback
+  (`Path.home() / ".missy" / "captures"`) plus the unmocked
+  `frame.timestamp.strftime(...)` produced a literal garbage filename,
+  writing a real file to the real operator directory on every run.
+- Fix: `tests/vision/test_vision_tools.py` -- passes an explicit
+  `tmp_path`-based `save_path`, keeping the test hermetic.
+- Cleanup: deleted the ~135 unambiguous MagicMock-named garbage files
+  (left ~133 plausible-looking `capture_TIMESTAMP.jpg` files alone --
+  not obviously test garbage, not safe to delete without more
+  certainty).
+- This closes out the entire `VIS-*` series (5 of 5 cases).
+- Command: `pytest tests/vision/test_vision_tools.py
+  tests/vision/test_vision_tools_integration.py -v`
+- Result: `77 passed`. No new garbage file appeared in
+  `~/.missy/captures/` after the fix.
+- Command: `pytest tests/vision/ tests/tools/ -q`
+- Result: `4498 passed, 2 skipped`.
+- Case count: 74 of 89 run (68 full + 4 partial/mixed + 1 inconclusive
+  + 1 counted-via-overlap). ~15 remain: `AUD-003/004/005`,
+  `XT-001/003/004/005/006`, `SEC-PI-004`, `DISC-CMD-004/005/006`.
+
 ## Run: 2026-07-11 23:05 UTC — validation-harness overhaul, task #10 continued (1 more case, 73/89 total, entire AT-* series closed, second unrelated real bug found and fixed)
 
 - Branch: `overhaul/missy-validation-20260710-031406`

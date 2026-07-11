@@ -63,7 +63,16 @@ class TestVisionCaptureTool:
 
     @patch("missy.vision.sources.FileSource.acquire")
     @patch("missy.vision.sources.FileSource.is_available", return_value=True)
-    def test_file_source(self, mock_avail, mock_acquire):
+    def test_file_source(self, mock_avail, mock_acquire, tmp_path):
+        # Regression: this test previously omitted save_path and only
+        # mocked mock_frame.timestamp.isoformat (not .strftime), so
+        # VisionCaptureTool.execute()'s save_path fallback
+        # (Path.home() / ".missy" / "captures") wrote a real
+        # "capture_<MagicMock ...>.jpg" garbage file into the operator's
+        # actual home directory on every run of this "unit" test --
+        # found live during task #10 validation, with a dozen such
+        # leaked files accumulated across prior sessions. Passing an
+        # explicit tmp_path-based save_path keeps this test hermetic.
         img = np.full((100, 100, 3), 128, dtype=np.uint8)
         mock_frame = MagicMock()
         mock_frame.image = img
@@ -74,11 +83,12 @@ class TestVisionCaptureTool:
         mock_frame.timestamp.isoformat.return_value = "2026-03-19T00:00:00"
         mock_acquire.return_value = mock_frame
 
+        save_path = str(tmp_path / "captured.jpg")
         tool = VisionCaptureTool()
-        result = tool.execute(source="/tmp/test.jpg")
+        result = tool.execute(source="/tmp/test.jpg", save_path=save_path)
         assert result.success is True
         data = json.loads(result.output)
-        assert "saved_to" in data
+        assert data["saved_to"] == save_path
 
     def test_unavailable_source(self):
         tool = VisionCaptureTool()

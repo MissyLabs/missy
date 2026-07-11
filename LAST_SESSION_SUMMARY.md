@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (56 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eleven consecutive checkpoints)
+## Changed (57 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for twelve consecutive checkpoints)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -2260,14 +2260,64 @@ Case count: 73 of 89 run (67 full + 4 partial/mixed + 1 inconclusive +
 1 counted-via-overlap). ~16 remain: `VIS-004/005`, `AUD-003/004/005`,
 `XT-001/003/004/005/006`, `SEC-PI-004`, `DISC-CMD-004/005/006`.
 
+### Task #10 continued (fifty-first checkpoint): VIS-* series closed out, a real test-isolation bug found and fixed (unrelated to production security)
+
+Constructed a real `ToolRegistry` (shell scoped to `scrot`) and
+exercised real vision tools: a genuine Logitech C922 webcam, a real
+`scrot` screenshot capture, and the real in-process `vision_scene`
+scene-memory manager.
+
+**VIS-005** (screenshot analysis): `vision_capture(source="screenshot")`
+produced a real PNG via `scrot` with real quality-assessment metadata;
+`vision_analyze(mode="inspection", ...)` built a real, correctly
+mode-specific inspection prompt. A retried real webcam capture against
+the genuine C922 correctly and honestly failed after 3 real attempts
+with "Blank frame detected" — a real hardware/environment limitation,
+not fabricated success.
+
+**VIS-004** (scene memory): full real lifecycle verified end-to-end —
+create → 2× add_observation → update_state → summarize → close →
+summarize-after-close (correctly shows the session inactive with
+observations/state cleared — confirmed deliberate in
+`SceneSession.close()`, not data loss).
+
+**Found and fixed a real bug (test isolation, not security).**
+`~/.missy/captures/` (the operator's real home directory) had ~135
+garbage files literally named `capture_<MagicMock ...>.jpg`, dated
+across 3+ days of prior sessions. Root cause:
+`tests/vision/test_vision_tools.py::TestVisionCaptureTool::test_file_source`
+called `execute(source="/tmp/test.jpg")` without `save_path` and only
+mocked `mock_frame.timestamp.isoformat` (not `.strftime`), so
+`VisionCaptureTool.execute()`'s `save_path` fallback
+(`Path.home() / ".missy" / "captures"`) plus the unmocked
+`.strftime(...)` produced a literal garbage filename, writing a real
+file to the real operator directory on every test run. Fixed by
+passing an explicit `tmp_path`-based `save_path`. Deleted the ~135
+unambiguous garbage files; left ~133 plausible-looking
+`capture_TIMESTAMP.jpg` files alone (not obviously test garbage, not
+safe to delete without more certainty).
+
+This closes out the entire `VIS-*` series (5 of 5 cases).
+
+Verified: `pytest tests/vision/test_vision_tools.py
+tests/vision/test_vision_tools_integration.py -v`: 77 passed, no new
+garbage file appeared. `pytest tests/vision/ tests/tools/ -q`: 4498
+passed, 2 skipped.
+
+Case count: 74 of 89 run (68 full + 4 partial/mixed + 1 inconclusive +
+1 counted-via-overlap). ~15 remain: `AUD-003/004/005`,
+`XT-001/003/004/005/006`, `SEC-PI-004`, `DISC-CMD-004/005/006`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-21191 passed, 13 skipped in 622.84s (0:10:22)
+21191 passed, 13 skipped in 611.60s (0:10:11)
 ```
 
-**Zero failures**, the eleventh consecutive fully green full-suite run.
+**Zero failures**, the twelfth consecutive fully green full-suite run
+(count unchanged from the prior run — the VIS-* checkpoint corrected an
+existing test in place rather than adding a new one).
 Passed count is up from 21071 (SR-1.9b's run) to 21115
 (availability-hardening checkpoint) to 21118 (the acpx `--deny-all`
 critical-finding checkpoint) to 21125 (the native-tool denial retry
@@ -2381,7 +2431,17 @@ and fixing a third, unrelated real bug — `_find_element`'s default
 button nesting depth (11), silently reporting "Element not found" for
 present, correctly-exposed elements; fixed by raising the default to
 20 and live-verified with a full real button-click chain (5+3=8) read
-back from the actual calculator display.
+back from the actual calculator display; the fifty-first checkpoint
+closed out the entire `VIS-*` series (bringing the backlog to 74 of
+89) via a genuine Logitech C922 webcam and real `scrot` screenshot
+capture, finding and fixing a fourth real bug — this one a
+test-isolation defect, not a security or functional one — a vision
+test that omitted `save_path` and left `frame.timestamp.strftime`
+unmocked had been writing real `capture_<MagicMock ...>.jpg` garbage
+files into the operator's actual `~/.missy/captures/` directory on
+every test run for 3+ days; fixed the test to use a hermetic
+`tmp_path`-based `save_path` and cleaned up the ~135 unambiguous
+garbage files it had left behind.
 
 Full detail in `BUILD_STATUS.md`, `AUDIT_SECURITY.md`, and
 `TEST_RESULTS.md` — each has one dated entry per checkpoint this
@@ -2459,15 +2519,15 @@ three files above.)
   false positives on genuinely fine no-tool-needed answers. See the
   fortieth checkpoint above.
 - **#10** Full 89-case tool-specific validation backlog — in progress,
-  73 of 89 run so far (67 full + 4 partial/mixed + 1 inconclusive + 1
+  74 of 89 run so far (68 full + 4 partial/mixed + 1 inconclusive + 1
   counted-via-overlap) across FS/SH/WB/INCUS/VIS/AUD/MEM/SELF/AT/X11/
   SEC-SCOPE/SEC-PI/DISC-CMD/DU categories -- the entire `WB-*`,
-  `INCUS-*`, `X11-*`, and `AT-*` series are now closed out. Three real
-  bugs found and fixed via direct production-code verification this
-  session: **INCUS-015** (`IncusDeviceTool`'s "list" action used an
-  unsupported `--format` flag, masked by a test that mocked
-  `subprocess.run` without asserting the real argv); **X11-\*** (every
-  X11 shell tool declared `shell=True` but never overrode
+  `INCUS-*`, `X11-*`, `AT-*`, and `VIS-*` series are now closed out.
+  Four real bugs found and fixed via direct production-code
+  verification this session: **INCUS-015** (`IncusDeviceTool`'s "list"
+  action used an unsupported `--format` flag, masked by a test that
+  mocked `subprocess.run` without asserting the real argv); **X11-\***
+  (every X11 shell tool declared `shell=True` but never overrode
   `resolve_shell_command`, so the registry checked the meaningless
   literal `"shell"` against the allowlist instead of the real
   `xdotool`/`wmctrl`/`scrot` binary invoked — the same SR-1.5 bug class
@@ -2478,17 +2538,23 @@ three files above.)
   not found" for present, correctly-exposed elements — fixed by
   raising the default to 20, live-verified with a full real
   button-click chain reading back the correct arithmetic result from a
-  real calculator display). Results: 2 genuine full
+  real calculator display); and **VIS-005** (a test-isolation bug, not
+  a security/functional one — a vision test with an unmocked
+  `frame.timestamp.strftime` and no `save_path` had been writing real
+  `capture_<MagicMock ...>.jpg` garbage files into the operator's
+  actual `~/.missy/captures/` directory on every test run for 3+ days;
+  fixed the test to use a hermetic `tmp_path`-based `save_path` and
+  cleaned up ~135 leaked files). Results: 2 genuine full
   delegate successes (FS-004, INCUS-011 — the latter also exercising
   `DoneCriteria`'s real reject/retry loop for the first time), 2
   genuine partial/mixed delegate successes (INCUS-009's honest-partial
   recommendation, VIS-002's confirmed real `vision_devices` dispatch),
   9 safety-property passes (FS-005, SH-004, SH-005, SEC-SCOPE-001
-  through 005 all correctly refused unsafe requests), 13 verified via
+  through 005 all correctly refused unsafe requests), 15 verified via
   direct production-code execution instead of the delegate
   (DISC-CMD-001/002/003/007/008, MEM-002, MEM-003, DU-003, SELF-003,
-  SELF-005, X11-002/004/005, AT-003/004 — DU-003 closed a real
-  SR-1.4/SR-1.5-pattern registry-enforcement gap with 3 new tests;
+  SELF-005, X11-002/004/005, AT-003/004, VIS-004/005 — DU-003 closed a
+  real SR-1.4/SR-1.5-pattern registry-enforcement gap with 3 new tests;
   SELF-003 caught and cleaned up a real side effect in the operator's
   own `~/.missy/custom-tools/` directory; DISC-CMD-008 surfaced a real,
   moderate, non-urgent gap — no per-user Discord command rate
@@ -2497,28 +2563,31 @@ three files above.)
   rejects spoofed hosts, disguised executables, oversized files, and
   MIME/extension mismatches; AT-003 hit a real but out-of-scope
   limitation — `atspi_set_value` requires a non-empty `name` and can't
-  target GTK text views, which genuinely have no accessible name),
-  1 fail that surfaced task #47 (SH-001's
+  target GTK text views, which genuinely have no accessible name;
+  VIS-005's webcam half honestly failed 3/3 real attempts with "Blank
+  frame detected" against a genuine C922, a real hardware/environment
+  limitation not a code bug), 1 fail that surfaced task #47 (SH-001's
   fabricated observation), 1 deliberately inconclusive case (DU-001,
   stopped short of forcing a real post to a live Discord channel), 1
-  case counted via overlap (SELF-006 ~ SEC-SCOPE-005), 5 real but
+  case counted via overlap (SELF-006 ~ SEC-SCOPE-005), 6 real but
   out-of-scope observations (`shell.unrestricted` dead config;
   `InputSanitizer` false positive on the operator's own prompt text;
   no Discord command rate limiting; X11-004's black virtual-display
-  content limit; AT-003's unnamed-element limit), remainder safe fails
-  matching task #46's residual (including several more
-  notable-but-non-reproducible wrong-rationalization variants).
-  Operator explicitly chose to keep running cases one-by-one despite
-  the strength of the failure pattern (asked via AskUserQuestion after
-  5 straight fails) — continuing on that basis. ~16 cases remain.
+  content limit; AT-003's unnamed-element limit; VIS-005's real
+  blank-frame webcam limitation), remainder safe fails matching task
+  #46's residual (including several more notable-but-non-reproducible
+  wrong-rationalization variants). Operator explicitly chose to keep
+  running cases one-by-one despite the strength of the failure pattern
+  (asked via AskUserQuestion after 5 straight fails) — continuing on
+  that basis. ~15 cases remain.
   Working principle: prefer direct production-code verification over a
   live delegate call whenever a case tests Missy's own deterministic
   code rather than LLM decision-making — cheaper, more reliable, and
   has already found real gaps (DU-003, DISC-CMD-008, INCUS-015,
-  X11-\*, AT-004) and one real self-inflicted side effect to watch for
-  (SELF-003). Treat any case with genuine external-service side
-  effects (real Discord posts, real cloud state changes) with the same
-  care as any other risky action.
+  X11-\*, AT-004, VIS-005's test leak) and one real self-inflicted
+  side effect to watch for (SELF-003). Treat any case with genuine
+  external-service side effects (real Discord posts, real cloud state
+  changes) with the same care as any other risky action.
 - **#11 (fixed this checkpoint)** Pre-existing vision `CameraDiscovery`
   cache-TTL flake — two root causes found and fixed (a real `None`-vs-`[]`
   cache-truthiness bug in `discover()`, plus a test assuming

@@ -3254,6 +3254,64 @@ Case count: 73 of 89 run (67 full + 4 partial/mixed + 1 inconclusive +
 1 counted-via-overlap). ~16 remain: `VIS-004/005`, `AUD-003/004/005`,
 `XT-001/003/004/005/006`, `SEC-PI-004`, `DISC-CMD-004/005/006`.
 
+### Task #10 continued (fifty-first checkpoint): VIS-004/005 verified, a real test-isolation bug found and fixed (unrelated to production security)
+
+Constructed a real `ToolRegistry` (shell scoped to `scrot` only) and
+exercised real vision tools: a genuine Logitech C922 webcam at
+`/dev/video0`/`/dev/video1`, a real `scrot` screenshot capture, and the
+real in-process `vision_scene` scene-memory manager.
+
+**VIS-005** (screenshot analysis): `vision_capture(source="screenshot")`
+produced a real PNG via `scrot` with real quality-assessment metadata
+computed by `ImagePipeline`. `vision_analyze(mode="inspection", ...)`
+built a real, correctly mode-specific inspection prompt (verified
+actual prompt text, not just `success=True`). Bonus: retried a real
+webcam capture against the genuine C922 — it correctly and honestly
+failed after 3 real attempts with "Blank frame detected", a real
+hardware/environment limitation (not fabricated success, not a Missy
+bug), consistent with VIS-002's earlier partial finding this session.
+
+**VIS-004** (scene memory): full real lifecycle verified end-to-end —
+create → 2× add_observation → update_state → summarize (correctly
+reflects both observations and the state update) → close →
+summarize-after-close via `list_sessions` (correctly shows the session
+inactive with observations/state cleared — confirmed this is
+deliberate memory-conservation behavior in `SceneSession.close()`, not
+data loss).
+
+**Found and fixed a real bug — test isolation, not a security or
+functional defect.** While investigating captures-directory state,
+found ~135 real garbage files literally named
+`capture_<MagicMock ...>.jpg` scattered across the operator's real
+`~/.missy/captures/` directory, dated across 3+ days of prior
+sessions. Root cause:
+`tests/vision/test_vision_tools.py::TestVisionCaptureTool::test_file_source`
+calls `tool.execute(source="/tmp/test.jpg")` without `save_path`, and
+only mocks `mock_frame.timestamp.isoformat` (not `.strftime`) — so
+`VisionCaptureTool.execute()`'s `save_path` fallback
+(`Path.home() / ".missy" / "captures"`) combined with
+`frame.timestamp.strftime(...)` on the unmocked `MagicMock` produced a
+literal garbage filename, writing a real file to the real operator
+directory on every test run. Fixed by passing an explicit
+`tmp_path`-based `save_path` in the test, keeping it hermetic. Deleted
+the ~135 unambiguous MagicMock-named garbage files (left the ~133
+plausible-looking `capture_TIMESTAMP.jpg` files alone — those aren't
+obviously test garbage and may be genuine past vision-subsystem usage,
+not safe to delete without more certainty).
+
+This closes out the entire `VIS-*` series (5 of 5 cases — VIS-001/002/003
+were closed earlier this session; VIS-004/005 this checkpoint).
+
+Verified: `pytest tests/vision/test_vision_tools.py
+tests/vision/test_vision_tools_integration.py -v`: 77 passed. No new
+garbage file appeared in `~/.missy/captures/` after the fix (confirmed
+via directory listing). Broader: `pytest tests/vision/ tests/tools/
+-q`: 4498 passed, 2 skipped.
+
+Case count: 74 of 89 run (68 full + 4 partial/mixed + 1 inconclusive +
+1 counted-via-overlap). ~15 remain: `AUD-003/004/005`,
+`XT-001/003/004/005/006`, `SEC-PI-004`, `DISC-CMD-004/005/006`.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security
