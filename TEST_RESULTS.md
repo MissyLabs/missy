@@ -1,3 +1,37 @@
+# TEST_RESULTS
+
+## Run: 2026-07-13 17:55 UTC — round 28 research pass: vault:// references silently failed to resolve against a custom vault.vault_dir
+
+- Context: round 28 continued explicitly re-hunting the round-26/27
+  bug class across `missy vault`, `missy evolve`, `missy persona`,
+  `missy patches`, `missy approvals`, `missy api`, and `missy sandbox
+  status` -- all seven checked out clean. General bug-hunting surfaced
+  one genuine, unrelated bug in the vault-resolution machinery itself.
+- **vault:// references silently failed to resolve against a custom
+  vault_dir**: both `_resolve_vault_ref()` (settings.py, used for
+  provider api_keys) and `DiscordAccountConfig.resolve_token()`
+  (discord/config.py) constructed a bare `Vault()` with no arguments,
+  always opening the hardcoded default `~/.missy/secrets` regardless of
+  the `vault.vault_dir` value parsed from the same config file. When
+  they didn't match, resolution silently failed and the function
+  returned the literal unresolved reference string as if it were the
+  actual secret -- no error, just a logging.debug() call. Live-
+  reproduced both cases (provider api_key, Discord token) end-to-end.
+  Fixed by threading the parsed vault_dir through both resolution paths
+  from load_config().
+- Command: `pytest tests/config/test_settings.py::TestLoadConfigVaultResolutionCustomDir -v`
+- Result: `2 passed`. Both confirmed to genuinely fail pre-fix via `git
+  stash` (resolved to the literal unresolved reference string / `None`
+  instead of the real secret).
+- Command: `pytest tests/config/ tests/unit/test_coverage_gaps_vault_hotreload.py tests/security/ -q`
+- Result: `2485 passed`.
+- Command: `pytest tests/unit/test_discord_config.py tests/unit/test_discord_config_coverage.py -q`
+- Result: `32 passed`.
+- Command: `python3 -m pytest tests/ -q`
+  (full suite, background run)
+- Result: `21395 passed, 14 skipped in 534.39s (0:08:54)`. 0 failed, up
+  from 21393. Forty-sixth consecutive fully green full-suite run.
+
 ## Run: 2026-07-13 17:35 UTC — round 27 research pass: `missy mcp list`/`add`/`remove` never loaded existing config — `add` silently destroyed every other configured server
 
 - Context: round 27 was explicitly targeted at re-hunting the round-26

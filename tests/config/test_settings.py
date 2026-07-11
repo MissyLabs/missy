@@ -790,6 +790,72 @@ class TestLoadConfigProviders:
 
 
 # ---------------------------------------------------------------------------
+# load_config — vault:// reference resolution against a custom vault_dir
+# ---------------------------------------------------------------------------
+
+
+class TestLoadConfigVaultResolutionCustomDir:
+    """Regression tests: a vault:// reference must resolve against the
+    SAME vault.vault_dir the config file itself declares, not always
+    Vault()'s hardcoded ~/.missy/secrets default.
+
+    _resolve_vault_ref() and DiscordAccountConfig.resolve_token() both
+    previously called the bare Vault() constructor, silently ignoring
+    any custom vault.vault_dir -- a provider api_key or Discord bot
+    token configured as a vault:// reference alongside a non-default
+    vault_dir resolved to the literal, unresolved reference string
+    (an unusable "secret") instead of raising a clear error, with no
+    diagnostic beyond a logging.debug() call.
+    """
+
+    def test_provider_api_key_resolves_against_custom_vault_dir(self, tmp_path: Path):
+        pytest.importorskip("cryptography")
+        from missy.security.vault import Vault
+
+        vault_dir = tmp_path / "custom_vault_location"
+        Vault(str(vault_dir)).set("OPENAI_API_KEY", "sk-REAL-SECRET-VALUE")
+
+        path = _write_yaml(
+            tmp_path,
+            f"""
+            vault:
+              vault_dir: "{vault_dir}"
+            providers:
+              openai:
+                model: "gpt-4"
+                api_key: "vault://OPENAI_API_KEY"
+            """,
+        )
+        cfg = load_config(path)
+
+        assert cfg.providers["openai"].api_key == "sk-REAL-SECRET-VALUE"
+
+    def test_discord_token_resolves_against_custom_vault_dir(self, tmp_path: Path):
+        pytest.importorskip("cryptography")
+        from missy.security.vault import Vault
+
+        vault_dir = tmp_path / "custom_vault_location"
+        Vault(str(vault_dir)).set("DISCORD_BOT_TOKEN", "discord-real-secret-token")
+
+        path = _write_yaml(
+            tmp_path,
+            f"""
+            vault:
+              vault_dir: "{vault_dir}"
+            discord:
+              enabled: true
+              accounts:
+                - token: "vault://DISCORD_BOT_TOKEN"
+                  application_id: "123"
+            """,
+        )
+        cfg = load_config(path)
+
+        assert cfg.discord is not None
+        assert cfg.discord.accounts[0].resolve_token() == "discord-real-secret-token"
+
+
+# ---------------------------------------------------------------------------
 # load_config — error cases
 # ---------------------------------------------------------------------------
 

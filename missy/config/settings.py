@@ -689,8 +689,18 @@ def _parse_agents(data: Any) -> dict[str, AgentPolicyConfig]:
     return agents
 
 
-def _resolve_vault_ref(value: str | None) -> str | None:
+def _resolve_vault_ref(value: str | None, vault_dir: str = "~/.missy/secrets") -> str | None:
     """Resolve a ``vault://`` or ``$ENV`` reference in a config value.
+
+    Args:
+        value: The raw config value, possibly a ``vault://`` or ``$ENV``
+            reference.
+        vault_dir: The directory to open the vault from -- must match
+            the ``vault.vault_dir`` setting from the same config file, or
+            a reference will silently fail to resolve against a
+            differently-configured vault (see the caller in
+            :func:`load_config`, which threads the real configured value
+            through here instead of always using ``Vault()``'s default).
 
     Returns the resolved secret string, or the original value unchanged
     if it is not a vault/env reference.  Returns ``None`` if *value* is
@@ -702,7 +712,7 @@ def _resolve_vault_ref(value: str | None) -> str | None:
         try:
             from missy.security.vault import Vault
 
-            return Vault().resolve(value)
+            return Vault(vault_dir).resolve(value)
         except Exception:
             import logging
 
@@ -712,7 +722,9 @@ def _resolve_vault_ref(value: str | None) -> str | None:
     return value
 
 
-def _parse_providers(data: dict[str, Any]) -> dict[str, ProviderConfig]:
+def _parse_providers(
+    data: dict[str, Any], vault_dir: str = "~/.missy/secrets"
+) -> dict[str, ProviderConfig]:
     providers: dict[str, ProviderConfig] = {}
     for key, raw in data.items():
         if not isinstance(raw, dict):
@@ -730,8 +742,8 @@ def _parse_providers(data: dict[str, Any]) -> dict[str, ProviderConfig]:
             api_key = api_keys[0]
         # Resolve vault:// and $ENV references so providers receive the
         # actual secret, not the reference string.
-        api_key = _resolve_vault_ref(api_key)
-        api_keys = [_resolve_vault_ref(k) or k for k in api_keys]
+        api_key = _resolve_vault_ref(api_key, vault_dir)
+        api_keys = [_resolve_vault_ref(k, vault_dir) or k for k in api_keys]
         providers[key] = ProviderConfig(
             name=str(raw.get("name", key)),
             model=str(raw["model"]),
@@ -897,12 +909,21 @@ def load_config(path: str) -> MissyConfig:
         )
 
     try:
+        # Extracted once, up front, so both providers and Discord accounts
+        # resolve vault:// references against the vault directory the user
+        # actually configured -- previously each resolution path opened
+        # Vault() with its hardcoded default path, silently ignoring a
+        # custom vault.vault_dir and returning the unresolved reference
+        # string as the "secret" (a broken provider API key or bot token
+        # with no clear diagnostic pointing at the mismatch).
+        vault_dir = str((data.get("vault") or {}).get("vault_dir", "~/.missy/secrets"))
+
         discord_raw = data.get("discord")
         discord_cfg: DiscordConfig | None = None
         if discord_raw is not None:
             from missy.channels.discord.config import parse_discord_config
 
-            discord_cfg = parse_discord_config(discord_raw)
+            discord_cfg = parse_discord_config(discord_raw, vault_dir=vault_dir)
 
         return MissyConfig(
             network=_parse_network(data.get("network") or {}),
@@ -912,7 +933,7 @@ def load_config(path: str) -> MissyConfig:
             tools=_parse_tool_policy(data.get("tools"), context="tools"),
             agents=_parse_agents(data.get("agents")),
             tool_intelligence=_parse_tool_intelligence(data.get("tool_intelligence")),
-            providers=_parse_providers(data.get("providers") or {}),
+            providers=_parse_providers(data.get("providers") or {}, vault_dir=vault_dir),
             workspace_path=str(data.get("workspace_path", ".")),
             audit_log_path=str(data.get("audit_log_path", "~/.missy/audit.log")),
             discord=discord_cfg,

@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (94 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for forty-five consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (95 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for forty-six consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -3891,15 +3891,49 @@ Verified: `pytest tests/cli/ -k Mcp tests/integration/
 test_mcp_skills_integration.py -q`: `102 passed`. `pytest tests/cli/
 -q`: `1086 passed`.
 
+### Post-backlog (eighty-eighth checkpoint): round 28 research pass — vault:// references silently failed to resolve against a custom vault.vault_dir
+
+Round 28 continued explicitly re-hunting the round-26/27 bug class
+across `missy vault`, `missy evolve`, `missy persona`, `missy
+patches`, `missy approvals`, `missy api`, and `missy sandbox status` --
+all seven checked out clean. General bug-hunting surfaced one genuine,
+unrelated bug in the vault-resolution machinery itself.
+
+1. **vault:// references silently failed to resolve against a custom
+   vault_dir**: both `_resolve_vault_ref()` (settings.py, used for
+   provider api_keys) and `DiscordAccountConfig.resolve_token()`
+   (discord/config.py) constructed a bare `Vault()` with no arguments,
+   always opening the hardcoded default `~/.missy/secrets` regardless
+   of the `vault.vault_dir` value parsed from the same config file.
+   When they didn't match, resolution silently failed and the function
+   returned the literal unresolved reference string as if it were the
+   actual secret -- no error, just a `logging.debug()` call. Live-
+   reproduced both cases (provider api_key, Discord token) end-to-end
+   through the real `Vault` class and `load_config()`. Fixed by
+   threading the parsed `vault_dir` through both resolution paths from
+   `load_config()`. 2 new tests, confirmed to genuinely fail pre-fix
+   (the only prior test of this failure path hand-mocked the entire
+   `Vault` class, so it could never observe the missing `vault_dir`
+   argument).
+
+Verified: `pytest tests/config/ tests/unit/
+test_coverage_gaps_vault_hotreload.py tests/security/ -q`: `2485
+passed`. `pytest tests/unit/test_discord_config.py tests/unit/
+test_discord_config_coverage.py -q`: `32 passed`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21393 passed, 14 skipped in 768.16s (0:12:48)
+21395 passed, 14 skipped in 534.39s (0:08:54)
 ```
 
-**Zero failures**, the forty-fifth consecutive fully green
-full-suite run. Passed count is up from 21390 to 21393 (the round 27
+**Zero failures**, the forty-sixth consecutive fully green
+full-suite run. Passed count is up from 21393 to 21395 (the round 28
+checkpoint's 2 new tests in `TestLoadConfigVaultResolutionCustomDir`;
+all of the sixty-first through eighty-seventh checkpoints' fixes are
+confirmed still holding). Passed count is up from 21390 to 21393 (the
+round 27
 checkpoint's 3 new tests in `TestMcpRealManagerEndToEnd`; all of the
 sixty-first through eighty-sixth checkpoints' fixes are confirmed still
 holding). Passed count is up from 21386 to 21390 (the round 26

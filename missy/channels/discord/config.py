@@ -114,6 +114,7 @@ class DiscordAccountConfig:
     allow_bots_if_mention_only: bool = False
     auto_thread_threshold: int = 0  # 0 = disabled; N = create thread after N messages
     rate_limit_per_minute: int = 10  # 0 = disabled
+    vault_dir: str = "~/.missy/secrets"  # must match the config's vault.vault_dir
 
     def resolve_token(self) -> str | None:
         """Return the bot token — checks direct token, env var, and vault in order.
@@ -128,7 +129,7 @@ class DiscordAccountConfig:
                     from missy.security.vault import Vault
 
                     key = self.token[len("vault://") :]
-                    return Vault().get(key)
+                    return Vault(self.vault_dir).get(key)
                 except Exception:
                     import logging
 
@@ -171,7 +172,7 @@ def _parse_guild_policy(data: dict[str, Any]) -> DiscordGuildPolicy:
     )
 
 
-def _parse_account(data: dict[str, Any]) -> DiscordAccountConfig:
+def _parse_account(data: dict[str, Any], vault_dir: str = "~/.missy/secrets") -> DiscordAccountConfig:
     """Construct a :class:`DiscordAccountConfig` from a raw YAML dict."""
     raw_dm_policy = data.get("dm_policy", "disabled")
     try:
@@ -198,14 +199,20 @@ def _parse_account(data: dict[str, Any]) -> DiscordAccountConfig:
         allow_bots_if_mention_only=bool(data.get("allow_bots_if_mention_only", False)),
         auto_thread_threshold=int(data.get("auto_thread_threshold", 0)),
         rate_limit_per_minute=int(data.get("rate_limit_per_minute", 10)),
+        vault_dir=vault_dir,
     )
 
 
-def parse_discord_config(data: dict[str, Any]) -> DiscordConfig:
+def parse_discord_config(data: dict[str, Any], vault_dir: str = "~/.missy/secrets") -> DiscordConfig:
     """Parse a ``discord:`` YAML section into a :class:`DiscordConfig`.
 
     Args:
         data: The raw dict from the YAML ``discord:`` key.
+        vault_dir: The vault directory from the same config file's
+            ``vault.vault_dir`` setting, threaded through so each
+            account's ``resolve_token()`` opens the same vault the user
+            actually configured rather than always defaulting to
+            ``~/.missy/secrets``.
 
     Returns:
         A populated :class:`DiscordConfig`.
@@ -214,7 +221,7 @@ def parse_discord_config(data: dict[str, Any]) -> DiscordConfig:
         return DiscordConfig()
 
     raw_accounts = data.get("accounts") or []
-    accounts = [_parse_account(a) for a in raw_accounts if isinstance(a, dict)]
+    accounts = [_parse_account(a, vault_dir=vault_dir) for a in raw_accounts if isinstance(a, dict)]
 
     return DiscordConfig(
         accounts=accounts,

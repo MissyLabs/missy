@@ -6686,6 +6686,71 @@ test_mcp_skills_integration.py -q`: `102 passed`. `pytest tests/cli/ -q`:
 `21393 passed, 14 skipped in 768.16s (0:12:48)` — 0 failed, up from
 21390. Forty-fifth consecutive fully green full-suite run.
 
+### Post-backlog (eighty-eighth checkpoint): round 28 research pass fixes vault:// references silently failing to resolve against a custom vault.vault_dir
+
+Round 28 continued explicitly re-hunting the round-26/27 bug class
+across `missy vault set/get/list/delete`, `missy evolve list/show/
+approve/reject/apply/rollback`, `missy persona show/edit/reset/backups/
+diff/rollback/log`, `missy patches list/approve/reject`, `missy
+approvals list/approve/deny`, `missy api start/status`, and `missy
+sandbox status` — all seven checked out clean, their calls matching
+the real `Vault`/`CodeEvolutionManager`/`PersonaManager`/
+`PromptPatchManager`/`ApprovalGate`/`ApiServer`/`ContainerSandbox`
+classes' actual method signatures exactly. General bug-hunting
+surfaced one genuine, unrelated bug in the vault-resolution machinery
+itself (distinct from the `missy vault` CLI, which was already
+correct).
+
+1. **A `vault://` reference in `providers.*.api_key` or
+   `discord.accounts[].token` silently failed to resolve whenever the
+   config set a custom `vault.vault_dir`.** Both resolution paths —
+   `missy/config/settings.py`'s `_resolve_vault_ref()` (used by
+   `_parse_providers()`) and `missy/channels/discord/config.py`'s
+   `DiscordAccountConfig.resolve_token()` — constructed a bare
+   `Vault()` with zero arguments, always opening the hardcoded default
+   `~/.missy/secrets`, completely ignoring the `vault.vault_dir` value
+   parsed from the very same YAML file being loaded. When the two
+   didn't match, `Vault().resolve()`/`.get()` raised (key not found in
+   the wrong vault), the bare `except Exception` swallowed it, and the
+   function returned the **unresolved literal reference string**
+   (`"vault://OPENAI_API_KEY"`) as if it were the actual secret — no
+   error, no warning, just a `logging.debug()` call invisible at
+   default log levels. That garbled string then became a provider's
+   API key or a Discord bot's token, both of which fail with a generic
+   auth error at connection time with no diagnostic pointing at the
+   vault-dir mismatch. Live-reproduced both cases end-to-end through
+   the real `Vault` class and `load_config()`: a provider `api_key` set
+   to `"vault://OPENAI_API_KEY"` alongside a custom `vault.vault_dir`
+   resolved to the literal unresolved string instead of the real
+   secret stored at that custom path; identically for a Discord
+   `token: "vault://DISCORD_BOT_TOKEN"`. Fixed by threading the
+   parsed `vault.vault_dir` value through both resolution paths:
+   `load_config()` now extracts `vault_dir` from the raw YAML once, up
+   front, and passes it to `_parse_providers(data, vault_dir=...)` (which
+   threads it into `_resolve_vault_ref(value, vault_dir)`, now
+   constructing `Vault(vault_dir)`) and to `parse_discord_config(data,
+   vault_dir=...)` (which threads it into a new `vault_dir` field on
+   `DiscordAccountConfig`, consumed by `resolve_token()`'s
+   `Vault(self.vault_dir)` call). 2 new tests exercising the real
+   `Vault`/`load_config()` end-to-end with a custom vault directory,
+   confirmed via `git stash` to genuinely fail pre-fix (the round-26/27
+   pattern again: the only prior test of this failure path,
+   `TestSettingsVaultResolutionFailure`, hand-mocks the entire `Vault`
+   class, so it could never observe that the real constructor call was
+   missing its `vault_dir` argument). `pytest tests/config/ tests/unit/
+   test_coverage_gaps_vault_hotreload.py tests/security/ -q`: `2485
+   passed`. `pytest tests/unit/test_discord_config.py tests/unit/
+   test_discord_config_coverage.py -q`: `32 passed`.
+
+Verified: `pytest tests/config/ tests/unit/
+test_coverage_gaps_vault_hotreload.py tests/security/ -q`: `2485
+passed`. `pytest tests/unit/test_discord_config.py tests/unit/
+test_discord_config_coverage.py -q`: `32 passed`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21395 passed, 14 skipped in 534.39s (0:08:54)` — 0 failed, up from
+21393. Forty-sixth consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security
