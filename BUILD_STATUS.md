@@ -6908,6 +6908,86 @@ skipped`.
 `21401 passed, 14 skipped in 647.74s (0:10:47)` — 0 failed, up from
 21395. Forty-eighth consecutive fully green full-suite run.
 
+### Post-backlog (ninety-first checkpoint): round 32 research pass fixes a GraphMemoryStore query-relevance ranking bug and a missing-tool gap in extract_task_type()
+
+Round 32 went deep on `missy/agent/context.py`'s token-counting/pruning
+math for realistic multi-turn conversations, `missy/agent/
+learnings.py`'s `extract_task_type()`, `missy/memory/graph_store.py`'s
+entity-relationship pattern-matching/query logic, and `missy/agent/
+consolidation.py`'s sleep-mode turn-preservation logic.
+`ContextManager`'s tail/evictable partitioning and `_approx_tokens`,
+`MemoryConsolidator`/`condensers.py`'s tail-slicing across all four
+condenser types, and `GraphMemoryStore`'s BFS cycle/dedup handling all
+checked out clean. Two genuine bugs fixed, plus one documented
+residual (an "advertised but unwired" gap requiring a real
+architectural decision, not a bounded fix).
+
+1. **`GraphMemoryStore.find_related()`'s final ranking step could crowd
+   the actually-queried entity out of its own truncated result.** The
+   directly name-matched seed entity IS included in the BFS-expanded
+   candidate pool (`get_neighbors()` seeds `visited_entities` with the
+   query entity itself), but the final truncation step
+   (`sorted(all_entities.values(), key=mention_count, reverse=True)
+   [:limit]`) ranked the seed and its neighbors together purely by
+   global `mention_count`, with no preference for having been the
+   actual subject of the query. Live-reproduced: after building up
+   differential mention counts for three popular tool entities (15
+   ingested turns each) and one low-mention-count queried file entity
+   (`~/.missy/config.yaml`, 1 turn), `find_related("config.yaml",
+   limit=3)` returned only the three popular tools — the queried file
+   was completely absent, defeating the entire purpose of a
+   query-relevance lookup used to inject memory context into the
+   system prompt. Fixed by always keeping the directly name-matched
+   seed entities ahead of their BFS-discovered neighbors in the
+   truncated result, with neighbors still filling remaining slots
+   ranked by `mention_count` as before. 1 new test, confirmed via `git
+   stash` to genuinely fail pre-fix. `pytest tests/memory/
+   test_graph_store.py -q`: `all passed`.
+2. **`extract_task_type()` didn't recognize `file_delete`/`list_files`
+   as filesystem tools, misclassifying real filesystem-cleanup tasks
+   as `"chat"`.** Only `file_read`/`file_write` were in the
+   classifier's file-tool set, but `missy/tools/builtin/__init__.py`
+   also registers `file_delete` and `list_files` as real builtin tools
+   (both advertised directly in the model's system prompt). Live-
+   reproduced: `extract_task_type(["list_files", "file_delete",
+   "file_delete"])` returned `"chat"` instead of `"file"`, corrupting
+   the learnings feed with a nonsensical `"chat: list_files →
+   file_delete → file_delete succeeded"` lesson that future `"file"`
+   -type task lookups would never surface. Fixed by widening the
+   file-tool set to all four registered filesystem tools, applied
+   consistently to both the `"file"` and `"shell+file"` branches. 4 new
+   tests, confirmed via `git stash` to genuinely fail pre-fix. `pytest
+   tests/agent/test_learnings.py -q`: `all passed`.
+3. **Documented residual**: `SleeptimeWorker._extract_batch_learnings()`
+   (`missy/agent/sleeptime.py`) can never fire in production — it
+   groups turns by checking `turn.role == "tool"`, but the only
+   production persistence path (`AgentRuntime._save_turn`) never
+   writes a `role="tool"` turn; `ConversationTurn.new()` doesn't even
+   accept a `metadata=` kwarg to carry the `tool_name` this method
+   depends on. Live-verified: feeding a real, realistic multi-tool-use
+   session (persisted via the real `SQLiteMemoryStore` write path) into
+   this method returns `[]` unconditionally, so the background/
+   idle-time learnings-extraction feature (`SleeptimeStats.
+   learnings_extracted`) can never increment. Not fixed this round:
+   properly wiring this requires a genuine architectural decision --
+   either start persisting structured tool-role/metadata turns (a
+   change spanning `AgentRuntime._save_turn`, `ConversationTurn.new()`'s
+   API, and every downstream consumer of turn history), or rework this
+   method to heuristically scan assistant-turn prose for tool-name
+   mentions instead of structured metadata (a different, less precise
+   detection strategy) -- neither is a bounded mechanical fix, matching
+   this session's established scoping discipline for genuine
+   product-policy forks.
+
+Verified: `pytest tests/agent/test_learnings.py tests/memory/
+test_graph_store.py tests/agent/ -k learnings -q`: `237 passed`.
+`pytest tests/memory/ tests/agent/ tests/integration/ -q`: `5428
+passed, 12 skipped`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21406 passed, 14 skipped in 724.52s (0:12:04)` — 0 failed, up from
+21401. Forty-ninth consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

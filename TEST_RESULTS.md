@@ -1,5 +1,46 @@
 # TEST_RESULTS
 
+## Run: 2026-07-13 19:00 UTC — round 32 research pass: GraphMemoryStore query-relevance ranking bug, extract_task_type() missing filesystem tools
+
+- Context: round 32 went deep on ContextManager's token-counting/pruning
+  math, extract_task_type(), GraphMemoryStore's entity-relationship
+  query logic, and MemoryConsolidator's turn-preservation logic.
+  ContextManager, condensers.py's tail-slicing, and GraphMemoryStore's
+  BFS cycle/dedup handling all checked out clean. Two genuine bugs
+  fixed, plus one documented residual (SleeptimeWorker's
+  _extract_batch_learnings() can never fire in production since turns
+  are never persisted with role="tool" -- a genuine architectural gap,
+  not a bounded fix).
+- **GraphMemoryStore query-relevance ranking bug**: find_related()'s
+  final truncation step ranked the directly-queried seed entity and its
+  BFS neighbors together purely by mention_count, so popular neighbor
+  entities (e.g. frequently-used tools) could crowd the actual subject
+  of the query out of the truncated result entirely. Live-reproduced:
+  querying for a low-mention-count file entity returned only three
+  popular tool entities, with the queried file completely absent. Fixed
+  by always keeping directly name-matched seed entities ahead of their
+  neighbors in the truncated result.
+- Command: `pytest tests/memory/test_graph_store.py::TestFindRelated -v`
+- Result: `4 passed`. New test confirmed to genuinely fail pre-fix via
+  `git stash`.
+- **extract_task_type() missing filesystem tools**: only recognized
+  file_read/file_write, not file_delete/list_files (both real
+  registered builtin tools), misclassifying filesystem-cleanup tasks
+  as "chat" and corrupting the learnings feed with a nonsensical
+  lesson. Fixed by widening the file-tool set to all four registered
+  filesystem tools.
+- Command: `pytest tests/agent/test_learnings.py::TestExtractTaskType -v`
+- Result: `14 passed`. 4 new tests confirmed to genuinely fail pre-fix
+  via `git stash`.
+- Command: `pytest tests/agent/test_learnings.py tests/memory/test_graph_store.py tests/agent/ -k learnings -q`
+- Result: `237 passed`.
+- Command: `pytest tests/memory/ tests/agent/ tests/integration/ -q`
+- Result: `5428 passed, 12 skipped`.
+- Command: `python3 -m pytest tests/ -q`
+  (full suite, background run)
+- Result: `21406 passed, 14 skipped in 724.52s (0:12:04)`. 0 failed, up
+  from 21401. Forty-ninth consecutive fully green full-suite run.
+
 ## Run: 2026-07-13 18:35 UTC — round 31 research pass: intent-classifier greeting override, tone-analysis punctuation gap, SecurityScanner apex-domain false positive (round 30 was research-only, no findings)
 
 - Context: round 30 explicitly re-hunted the round-26-29 cross-module

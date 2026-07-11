@@ -861,12 +861,22 @@ class GraphMemoryStore:
                 all_rels[r.id] = r
             all_paths.extend(sub.paths)
 
-        # Sort entities by mention_count descending, truncate to limit
-        sorted_entities = sorted(
-            all_entities.values(),
+        # Always keep the directly name-matched seed entities -- the actual
+        # subject of the query -- ahead of their BFS-discovered neighbors.
+        # Sorting the combined pool by mention_count alone let a handful of
+        # popular, merely co-occurring neighbor entities (e.g. frequently
+        # used tools) crowd the queried entity itself out of the truncated
+        # result entirely, defeating the purpose of a query-relevance
+        # lookup. Neighbors still fill any remaining slots, ranked by
+        # mention_count as before.
+        seed_id_set = set(seed_ids[:5])
+        seed_entities = [all_entities[sid] for sid in seed_ids[:5] if sid in all_entities]
+        neighbor_entities = sorted(
+            (e for e in all_entities.values() if e.id not in seed_id_set),
             key=lambda e: e.mention_count,
             reverse=True,
-        )[:limit]
+        )
+        sorted_entities = (seed_entities + neighbor_entities)[:limit]
         kept_ids = {e.id for e in sorted_entities}
         filtered_rels = [
             r for r in all_rels.values() if r.source_id in kept_ids and r.target_id in kept_ids

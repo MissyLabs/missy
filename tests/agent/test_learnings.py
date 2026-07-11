@@ -59,6 +59,24 @@ class TestExtractTaskType:
     def test_priority_shell_file_over_shell_alone(self):
         assert extract_task_type(["shell_exec", "file_write", "calculator"]) == "shell+file"
 
+    def test_file_delete(self):
+        """file_delete is a real registered builtin tool (missy/tools/
+        builtin/__init__.py) alongside file_read/file_write, but was
+        previously missing from this classifier's file-tool set, so a
+        filesystem-cleanup task using only file_delete/list_files fell
+        through to the "chat" default.
+        """
+        assert extract_task_type(["file_delete"]) == "file"
+
+    def test_list_files(self):
+        assert extract_task_type(["list_files"]) == "file"
+
+    def test_list_files_and_file_delete_combo(self):
+        assert extract_task_type(["list_files", "file_delete", "file_delete"]) == "file"
+
+    def test_shell_and_file_delete(self):
+        assert extract_task_type(["shell_exec", "file_delete"]) == "shell+file"
+
 
 class TestExtractOutcome:
     def test_success_keywords(self):

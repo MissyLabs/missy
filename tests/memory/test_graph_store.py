@@ -568,6 +568,32 @@ class TestFindRelated:
         result = store.find_related("concept", limit=5)
         assert len(result.entities) <= 5
 
+    def test_directly_matched_seed_entity_survives_truncation(
+        self, store: GraphMemoryStore
+    ) -> None:
+        """The directly name-matched entity -- the actual subject of the
+        query -- must always be present in the truncated result, even when
+        popular, merely co-occurring neighbor entities (higher
+        mention_count) would otherwise crowd it out of a pure
+        mention_count-descending sort.
+        """
+        for i in range(15):
+            store.ingest_turn(f"I used shell_exec to run task {i}", "assistant", "sess")
+        for i in range(15):
+            store.ingest_turn(f"I used file_write to write report {i}", "assistant", "sess")
+        for i in range(15):
+            store.ingest_turn(f"I used web_fetch to download page {i}", "assistant", "sess")
+        store.ingest_turn(
+            "I used shell_exec and file_write and web_fetch together while "
+            "editing ~/.missy/config.yaml",
+            "assistant",
+            "sess",
+        )
+
+        result = store.find_related("config.yaml", limit=3)
+        names = [e.name for e in result.entities]
+        assert any("config.yaml" in n for n in names)
+
 
 # ---------------------------------------------------------------------------
 # GraphMemoryStore — get_context_subgraph

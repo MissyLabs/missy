@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (97 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for forty-eight consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (98 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for forty-nine consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -4009,15 +4009,54 @@ test_scanner.py tests/agent/test_structured_output.py -q`: `305
 passed`. `pytest tests/security/ tests/agent/ -q`: `6336 passed, 4
 skipped`.
 
+### Post-backlog (ninety-first checkpoint): round 32 research pass — GraphMemoryStore query-relevance ranking bug, extract_task_type() missing filesystem tools
+
+Round 32 went deep on `ContextManager`'s token-counting/pruning math,
+`extract_task_type()`, `GraphMemoryStore`'s entity-relationship query
+logic, and `MemoryConsolidator`'s turn-preservation logic.
+`ContextManager`, `condensers.py`'s tail-slicing, and
+`GraphMemoryStore`'s BFS cycle/dedup handling all checked out clean.
+Two genuine bugs fixed, plus one documented residual.
+
+1. **`GraphMemoryStore.find_related()` query-relevance ranking bug**:
+   the final truncation step ranked the directly-queried seed entity
+   and its BFS neighbors together purely by `mention_count`, so
+   popular neighbor entities could crowd the actual subject of the
+   query out of the truncated result entirely. Live-reproduced:
+   querying for a low-mention-count file entity returned only three
+   popular tool entities, with the queried file completely absent.
+   Fixed by always keeping directly name-matched seed entities ahead
+   of their neighbors. 1 new test, confirmed to fail pre-fix.
+2. **`extract_task_type()` missing filesystem tools**: only recognized
+   `file_read`/`file_write`, not `file_delete`/`list_files` (both real
+   registered builtin tools), misclassifying filesystem-cleanup tasks
+   as `"chat"` and corrupting the learnings feed. Fixed by widening the
+   file-tool set to all four registered filesystem tools. 4 new tests,
+   confirmed to fail pre-fix.
+3. **Documented residual**: `SleeptimeWorker._extract_batch_learnings()`
+   can never fire in production since turns are never persisted with
+   `role="tool"` -- a genuine architectural gap (would require either
+   changing turn persistence or a different, less precise
+   prose-scanning detection strategy), not a bounded fix.
+
+Verified: `pytest tests/agent/test_learnings.py tests/memory/
+test_graph_store.py tests/agent/ -k learnings -q`: `237 passed`.
+`pytest tests/memory/ tests/agent/ tests/integration/ -q`: `5428
+passed, 12 skipped`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21401 passed, 14 skipped in 647.74s (0:10:47)
+21406 passed, 14 skipped in 724.52s (0:12:04)
 ```
 
-**Zero failures**, the forty-eighth consecutive fully green
-full-suite run. Passed count is up from 21395 to 21401 (the round 31
+**Zero failures**, the forty-ninth consecutive fully green
+full-suite run. Passed count is up from 21401 to 21406 (the round 32
+checkpoint's 5 new tests: 1 GraphMemoryStore ranking test, 4
+extract_task_type() filesystem-tool tests; all of the sixty-first
+through ninetieth checkpoints' fixes are confirmed still holding).
+Passed count is up from 21395 to 21401 (the round 31
 checkpoint's 6 new tests: 1 SEC-013 apex-domain test, 1 tone
 punctuation test, 4 greeting-override tests; all of the sixty-first
 through eighty-ninth checkpoints' fixes are confirmed still holding).

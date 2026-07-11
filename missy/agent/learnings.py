@@ -49,6 +49,9 @@ class TaskLearning:
             self.timestamp = datetime.now(UTC).isoformat()
 
 
+_FILE_TOOLS = {"file_read", "file_write", "file_delete", "list_files"}
+
+
 def extract_task_type(tool_names_used: list[str]) -> str:
     """Derive a coarse task-type label from the set of tools invoked.
 
@@ -64,13 +67,13 @@ def extract_task_type(tool_names_used: list[str]) -> str:
     s = set(tool_names_used)
     if "shell_exec" in s and "web_fetch" in s:
         return "shell+web"
-    if "shell_exec" in s and "file_write" in s:
+    if "shell_exec" in s and (s & _FILE_TOOLS):
         return "shell+file"
     if "shell_exec" in s:
         return "shell"
     if "web_fetch" in s:
         return "web"
-    if "file_read" in s or "file_write" in s:
+    if s & _FILE_TOOLS:
         return "file"
     return "chat"
 
