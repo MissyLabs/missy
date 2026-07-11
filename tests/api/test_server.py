@@ -1714,6 +1714,48 @@ class TestOperatorControls:
         finally:
             srv.stop()
 
+    def test_import_benchmarks_preserves_explicit_zero_thresholds(self, tmp_path) -> None:
+        """Regression: `body.get("min_safety") or 1.0`-style defaulting
+        silently discarded an operator-supplied falsy override (0 or 0.0),
+        since `0 or 1.0` evaluates to `1.0` in Python. An operator using
+        the Web TUI to explicitly loosen a threshold to "no minimum" had
+        that value silently replaced with the stricter hardcoded default,
+        with no error or warning.
+        """
+        from unittest.mock import patch
+
+        from missy.api.operator_controls import _execute_candidate_import_benchmarks
+
+        candidate_store = CandidateStore(db_path=tmp_path / "candidates.db")
+        benchmark_store = BenchmarkStore(db_path=tmp_path / "benchmarks.db")
+        candidate = candidate_store.add(_make_tool_candidate())
+
+        mock_reconciler_cls = MagicMock()
+        mock_reconciler_cls.return_value.reconcile_candidate.return_value = MagicMock(
+            to_dict=lambda: {}
+        )
+        with patch(
+            "missy.tools.intelligence.CandidateBenchmarkReconciler", mock_reconciler_cls
+        ):
+            _execute_candidate_import_benchmarks(
+                {
+                    "target": candidate.id,
+                    "confirm": f"import-candidate-benchmarks:{candidate.id}",
+                    "min_samples": 0,
+                    "min_composite": 0.0,
+                    "min_safety": 0.0,
+                    "min_schema_score": 0.0,
+                },
+                candidate_store=candidate_store,
+                benchmark_store=benchmark_store,
+            )
+
+        _, kwargs = mock_reconciler_cls.call_args
+        assert kwargs["min_samples"] == 0
+        assert kwargs["min_composite"] == 0.0
+        assert kwargs["min_safety"] == 0.0
+        assert kwargs["min_schema_score"] == 0.0
+
     def test_candidate_deny_requires_confirmation_and_reason(self, tmp_path) -> None:
         candidate_store = CandidateStore(db_path=tmp_path / "candidates.db")
         candidate = candidate_store.add(_make_tool_candidate())

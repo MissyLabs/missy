@@ -441,14 +441,20 @@ def _execute_candidate_import_benchmarks(
             detail,
         )
 
+    # `x or default` silently discards an operator-supplied falsy override
+    # (0 or 0.0) since `0 or 3` evaluates to 3 in Python -- an operator
+    # explicitly loosening a threshold to "no minimum" via the Web TUI had
+    # that value silently replaced with the stricter hardcoded default,
+    # with no error or warning. `.get(key, default)` only falls back when
+    # the key is genuinely absent, preserving an explicit 0/0.0.
     try:
         reconciler = CandidateBenchmarkReconciler(
             candidate_store=candidate_store,
             benchmark_store=benchmark_store,
-            min_samples=int(body.get("min_samples") or 3),
-            min_composite=float(body.get("min_composite") or 0.4),
-            min_safety=float(body.get("min_safety") or 1.0),
-            min_schema_score=float(body.get("min_schema_score") or 0.8),
+            min_samples=int(body.get("min_samples", 3)),
+            min_composite=float(body.get("min_composite", 0.4)),
+            min_safety=float(body.get("min_safety", 1.0)),
+            min_schema_score=float(body.get("min_schema_score", 0.8)),
         )
     except (TypeError, ValueError) as exc:
         detail["reason"] = "invalid_threshold"

@@ -4340,6 +4340,127 @@ skipped`. **Full-suite confirmation:** `python3 -m pytest tests/ -q
 (0:09:23)` — 0 failed, up from 21262. Twenty-third consecutive fully
 green full-suite run.
 
+### Post-backlog (sixty-sixth checkpoint): round 6 research pass — a PR-body inconsistency fix, plus four real bugs (operator-controls falsy-zero bug, AuditLogger re-init contract violation, dead behavior/Discord config options)
+
+Before this round, the Stop hook's automated feedback correctly
+flagged (even if via a stale specific claim about task #46) that the
+PR body still contained leftover text from before the 89-case backlog
+was completed ("task #46 needs to be resolved... before the rest of
+the 89-case backlog can be meaningfully live-verified") — an internal
+contradiction against the same PR body's own "89 of 89 COMPLETE" text
+elsewhere. Verified via `TaskList` that no task #46 is actually open in
+the tracker (it was already resolved earlier this session as an
+honestly-documented, non-blocking residual). Corrected the PR body's
+stale framing (2 sections) to accurately reflect that task #46 is
+resolved, not an open blocker.
+
+Round 6 of the research-pass invitation (rounds 1-5: Scheduler/Persona;
+API/MessageBus/Screencast; Memory-compaction/GraphStore/Vault; Config/
+Vision/CandidateGenerator; MCP/SubAgent/Learnings/Playbook/Attention),
+this time into `missy/channels/discord/channel.py` (beyond commands/
+pairing/rate-limit), `missy/api/operator_controls.py`,
+`missy/agent/behavior.py`, `missy/observability/audit_logger.py`
+(beyond SR-1.1/1.10), and the individual policy engines. Four genuine
+findings, live-verified and fixed; the policy engines beyond
+already-fixed SR-1.x items, and several other Discord/behavior leads,
+were investigated and correctly ruled out (documented in the research
+agent's report, condensed here: IPv6 host-matching in `network.py` is
+unreachable dead code since IP literals are intercepted earlier;
+`RestPolicy`'s host comparison is safe because its only caller always
+passes a port-stripped hostname; Discord's ❌ reaction-reject having no
+auth check is explicitly documented as intentional in its own test
+suite).
+
+**1. `operator_controls.py`'s benchmark-import thresholds silently
+discarded an explicit zero override.** `int(body.get("min_samples") or
+3)`-style defaulting means `0 or 3` evaluates to `3` in Python — any
+operator-supplied falsy value (`0`/`0.0`) was silently replaced by the
+hardcoded default. **Live-reproduced**: `{"min_safety": 0.0, ...}`
+resulted in `min_safety=1.0` actually being applied, with no error or
+warning. An operator using the Web TUI's "Import candidate benchmarks"
+control to explicitly loosen a threshold to "no minimum" had that
+request silently ignored; the equivalent CLI path passes the same
+click options straight through with no such coercion, so the two
+interfaces to the same feature behaved inconsistently. Not a security
+issue (the bug always forces the *stricter* default, never a looser
+one than requested), but a genuine, reproducible correctness defect.
+Fixed by switching from `x or default` to `body.get(key, default)`,
+which only falls back when the key is genuinely absent. 1 new test,
+confirmed to genuinely fail against the pre-fix code via `git stash`.
+
+**2. `init_audit_logger()`'s docstring claim that re-init "replaces the
+existing logger" was never actually true.** `_subscribe()` wraps
+whatever `self._bus.publish` currently is at construction time; calling
+`init_audit_logger()` a second time constructed a brand-new instance
+and re-subscribed it, but never detached the first instance's wrapper
+— both loggers kept receiving and writing every subsequent event
+forever, the first one to its now-stale log path, with each further
+re-init nesting one more layer indefinitely. **Live-reproduced**:
+`init_audit_logger(p1)` then `init_audit_logger(p2)`, then one
+published event — both `p1` and `p2` received the identical event.
+Not reachable in today's single-init production path
+(`_load_subsystems()` calls it exactly once per process), but directly
+contradicts the documented contract, and would silently corrupt any
+future re-init path (e.g. a hot-reload-triggered audit-log-path
+change) or any test that calls the module-level function more than
+once against the shared singleton. Fixed by adding
+`AuditLogger.reconfigure(log_path, identity)`, which mutates the
+already-subscribed instance's `log_path`/`_identity` in place (both
+read dynamically at write time, not captured into a fixed closure
+variable) instead of constructing a second instance — this achieves
+the documented "replaces" behavior correctly without needing to unwind
+the publish-wrapper chain at all (which isn't safely possible if
+another wrapper, e.g. `OtelExporter`, was layered on top afterward).
+Rewrote the one existing test that asserted the wrong property
+(`al1 is not al2`, an implementation-detail identity check that never
+verified the old logger actually stopped receiving events) to instead
+verify the real behavioral contract against the actual global
+`event_bus`; confirmed to genuinely fail (event appearing in both
+files) against the pre-fix code via `git stash`.
+
+**3. `BehaviorLayer`'s "Technical topic detected" guidance branch was
+permanently dead code in production.** `get_response_guidelines()`
+implements a real, unit-tested branch that adds "include concrete
+examples or code snippets" guidance when `topic` matches
+code/script/function/class/api keywords — but the sole production call
+site (`_build_context_messages` in `runtime.py`) hardcoded
+`behavior_context["topic"] = ""`, so this branch could never fire.
+Fixed by reusing `attention_query` (the `AttentionSystem`'s already-
+computed extracted topics, falling back to `user_input`) instead of
+the hardcoded empty string — this signal was already being computed
+for memory relevance scoring, so wiring costs nothing extra. Left the
+companion `vision_mode` branch as an honest, out-of-scope residual: it
+would require a new, speculative keyword-based classifier to guess
+"is this turn about vision" ahead of any actual tool call, and vision
+analysis already has its own separate, working, dedicated prompt-
+building path (`_build_puzzle_prompt`/`_build_painting_prompt` in
+`vision/analysis.py`) that never goes through `BehaviorLayer` at all —
+wiring `vision_mode` here would be speculative rather than reusing an
+already-real signal the way the `topic` fix does. 1 new test,
+confirmed to genuinely fail against the pre-fix code via `git stash`.
+
+**4. Discord's `auto_thread_threshold` config option was tracked but
+never acted on.** `_handle_message()` dutifully incremented a
+per-channel message counter once `auto_thread_threshold` was
+configured, but nothing ever compared the count to the threshold or
+called `create_thread()` — confirmed via repo-wide grep that
+`create_thread()` had zero callers anywhere. An operator setting
+`auto_thread_threshold: 5` got a counter that silently incremented
+forever and a feature that never fired. Fixed by actually creating a
+thread once the count reaches the threshold (naming it from the
+triggering message content, or a fallback), resetting the counter
+afterward so it doesn't re-trigger every subsequent message, and using
+the newly created thread as this message's `effective_thread_id`. 1
+new test, confirmed to genuinely fail (`create_thread` never called)
+against the pre-fix code via `git stash`.
+
+Verified: `pytest tests/unit/test_discord_channel.py tests/channels/
+tests/api/ tests/agent/ tests/observability/ -q`: `6596 passed, 4
+skipped`. **Full-suite confirmation:** `python3 -m pytest tests/ -q
+-o faulthandler_timeout=120` → `21281 passed, 13 skipped in 477.29s
+(0:07:57)` — 0 failed, up from 21278. Twenty-fourth consecutive fully
+green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

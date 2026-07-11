@@ -870,6 +870,43 @@ class TestDiscordThreadManagement:
         finally:
             loop.close()
 
+    def test_auto_thread_created_once_threshold_reached(
+        self, event_bus_fresh: EventBus
+    ) -> None:
+        """Regression: the message counter was written but never read --
+        create_thread() had zero production callers anywhere. An operator
+        setting auto_thread_threshold: N got a counter that silently
+        incremented forever and a feature that never actually fired.
+        """
+        account = DiscordAccountConfig(
+            token_env_var="DISCORD_BOT_TOKEN",
+            account_id="bot-001",
+            dm_policy=DiscordDMPolicy.DISABLED,
+            guild_policies={
+                "guild-1": DiscordGuildPolicy(enabled=True),
+            },
+            auto_thread_threshold=3,
+        )
+        channel = _make_channel(account, bus=event_bus_fresh)
+        channel._bot_user_id = "bot-001"
+        channel._rest.create_thread = MagicMock(return_value={"id": "new-thread-1"})
+
+        loop = asyncio.new_event_loop()
+        try:
+            for i in range(3):
+                msg = _make_message(
+                    content=f"message {i}", guild_id="guild-1", channel_id="chan-1"
+                )
+                loop.run_until_complete(channel._handle_message(msg))
+
+            channel._rest.create_thread.assert_called_once()
+            # The counter resets after the thread fires, rather than
+            # continuing to grow (and re-triggering on every subsequent
+            # message).
+            assert channel._channel_message_counts.get("chan-1") == 0
+        finally:
+            loop.close()
+
 
 # ---------------------------------------------------------------------------
 # REST client thread operations

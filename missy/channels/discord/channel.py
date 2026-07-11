@@ -767,10 +767,24 @@ class DiscordChannel(BaseChannel):
         if effective_thread_id:
             thread_session_id = self._thread_sessions.get(effective_thread_id, "")
 
-        # Track message counts for auto-thread threshold.
+        # Track message counts for auto-thread threshold. The counter was
+        # previously written but never read anywhere -- an operator setting
+        # auto_thread_threshold: N got a counter that silently incremented
+        # forever and a feature that never actually fired.
         if guild_id and not effective_thread_id and self._auto_thread_threshold > 0:
             count = self._channel_message_counts.get(channel_id, 0) + 1
-            self._channel_message_counts[channel_id] = count
+            if count >= self._auto_thread_threshold:
+                self._channel_message_counts[channel_id] = 0
+                thread_name = content[:80] if content else f"Thread ({count} messages)"
+                new_thread_id = await self.create_thread(
+                    channel_id=channel_id,
+                    name=thread_name,
+                    message_id=str(data.get("id", "")) or None,
+                )
+                if new_thread_id:
+                    effective_thread_id = new_thread_id
+            else:
+                self._channel_message_counts[channel_id] = count
 
         # 6. Enqueue.
         self._current_channel_id = channel_id

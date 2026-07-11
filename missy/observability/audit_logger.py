@@ -132,6 +132,33 @@ class AuditLogger:
         self._identity = identity
         self._subscribe()
 
+    def reconfigure(self, log_path: str, identity: Any | None = None) -> None:
+        """Repoint this already-subscribed logger at a new *log_path*/*identity*.
+
+        `_subscribe()` wraps `self._bus.publish` by layering a new closure on
+        top of whatever `publish` currently is -- it has no way to safely
+        unwrap a specific layer out of that chain (another wrapper, e.g.
+        `OtelExporter`, may have been layered on top afterward). Constructing
+        a brand-new `AuditLogger` and re-subscribing it therefore never
+        actually replaces the old instance: the old one keeps writing every
+        subsequent event to its now-stale `log_path` forever, and each
+        further re-init nests one more layer indefinitely --
+        `init_audit_logger()`'s own docstring claims re-init "replaces the
+        existing logger," which was never actually true.
+
+        Since `_handle_event`/the write path read `self.log_path`/
+        `self._identity` fresh on every event (not captured into a fixed
+        closure variable), mutating this same, already-subscribed instance
+        in place achieves the documented "replaces" behavior correctly and
+        without needing to unwind the publish-wrapper chain at all.
+        """
+        self.log_path = Path(log_path).expanduser()
+        self.log_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if self.log_path.exists():
+            with contextlib.suppress(OSError):
+                os.chmod(self.log_path, 0o600)
+        self._identity = identity
+
     # ------------------------------------------------------------------
     # Subscription
     # ------------------------------------------------------------------
@@ -414,7 +441,13 @@ def init_audit_logger(
     global _audit_logger
     if identity is None:
         identity = _make_default_identity()
-    _audit_logger = AuditLogger(log_path=log_path, identity=identity)
+    if _audit_logger is not None:
+        # Reuse the same, already-subscribed instance -- see
+        # AuditLogger.reconfigure()'s docstring for why constructing a
+        # fresh instance here would silently fail to actually replace it.
+        _audit_logger.reconfigure(log_path, identity=identity)
+    else:
+        _audit_logger = AuditLogger(log_path=log_path, identity=identity)
     return _audit_logger
 
 

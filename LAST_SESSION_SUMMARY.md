@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (72 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eighteen consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (73 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eighteen consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -2842,14 +2842,50 @@ checked out clean.
 Verified: `pytest tests/agent/ tests/mcp/ -q`: `4637 passed, 4
 skipped`.
 
+### Post-backlog (sixty-sixth checkpoint): round 6 research pass — PR-body cleanup, operator-controls bug, AuditLogger contract violation, dead behavior/Discord options
+
+Corrected a real PR-body inconsistency first: stale text from before
+the 89-case backlog was completed claimed task #46 blocked it.
+Verified via `TaskList` (no open task #46) and fixed the framing.
+
+Round 6 (rounds 1-5: Scheduler/Persona; API/MessageBus/Screencast;
+Memory-compaction/GraphStore/Vault; Config/Vision/CandidateGenerator;
+MCP/SubAgent/Learnings/Playbook/Attention), into Discord's
+`channel.py`, `operator_controls.py`, `behavior.py`, `audit_logger.py`,
+and the policy engines. Four genuine findings.
+
+1. **Operator-controls falsy-zero bug**: `x or default` defaulting
+   silently discarded an explicit `0`/`0.0` threshold override. Fixed
+   with `.get(key, default)`. 1 new test, confirmed to fail pre-fix.
+2. **AuditLogger re-init contract violation**: re-init never actually
+   detached the old logger's publish-wrapper, so both kept writing
+   every event forever, contradicting the documented "replaces"
+   behavior. Fixed with an in-place `reconfigure()` method. Rewrote the
+   one existing test, which had asserted object identity rather than
+   real behavior. Confirmed to fail pre-fix.
+3. **BehaviorLayer dead topic branch**: hardcoded `topic=""` at the
+   sole call site made a real, tested guidance branch permanently
+   unreachable. Fixed by reusing the already-computed
+   `attention_query` signal. `vision_mode` left as an honest residual
+   (would need a new speculative classifier). Confirmed to fail
+   pre-fix.
+4. **Discord auto_thread_threshold dead config**: the message counter
+   was tracked but never compared to the threshold; `create_thread()`
+   had zero callers. Fixed by actually creating a thread once reached.
+   Confirmed to fail pre-fix.
+
+Verified: `pytest tests/unit/test_discord_channel.py tests/channels/
+tests/api/ tests/agent/ tests/observability/ -q`: `6596 passed, 4
+skipped`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-21278 passed, 13 skipped in 563.66s (0:09:23)
+21281 passed, 13 skipped in 477.29s (0:07:57)
 ```
 
-**Zero failures**, the twenty-third consecutive fully green full-suite
+**Zero failures**, the twenty-fourth consecutive fully green full-suite
 run. Passed count is up from 21191 to 21212 (the DISC-CMD-008
 rate-limiting checkpoint: 10 standalone unit tests, 9 real
 dispatch-path integration tests, 3 config-parsing tests) to 21213 (the
@@ -2874,9 +2910,12 @@ backup-collision fix's 1 new test, the vision eviction-miscount fix's
 tests) to 21278 (the MCP approval-gate-bypass fix's 2 new tests plus 1
 existing test updated, the sub-agent context-drop fix's 1 new test,
 the learnings-misclassification fix's 2 new tests, the Playbook
-wiring's 9 new tests, and the AttentionSystem wiring's 2 new tests —
-the eighteenth green run's `ProviderRegistry` fix, and all of the
-sixty-first through sixty-fourth checkpoints' fixes, are confirmed
+wiring's 9 new tests, and the AttentionSystem wiring's 2 new tests) to
+21281 (the operator-controls falsy-zero fix's 1 new test, the
+AuditLogger reconfigure fix's 1 rewritten test, the BehaviorLayer
+topic-wiring fix's 1 new test, and the Discord auto-thread fix's 1 new
+test — the eighteenth green run's `ProviderRegistry` fix, and all of
+the sixty-first through sixty-fifth checkpoints' fixes, are confirmed
 still holding).
 The occasional Hypothesis deprecation warnings seen in some runs of
 this suite (`test_property_based_fuzz.py` and/or

@@ -1,5 +1,63 @@
 # TEST_RESULTS
 
+## Run: 2026-07-12 08:30 UTC — round 6 research pass: operator-controls falsy-zero bug, AuditLogger re-init contract violation, dead behavior/Discord config options
+
+- Context: round 6 of the research-pass invitation (rounds 1-5:
+  Scheduler/Persona; API/MessageBus/Screencast; Memory-compaction/
+  GraphStore/Vault; Config/Vision/CandidateGenerator; MCP/SubAgent/
+  Learnings/Playbook/Attention). This round targeted
+  `missy/channels/discord/channel.py` (beyond commands/pairing/
+  rate-limit), `missy/api/operator_controls.py`,
+  `missy/agent/behavior.py`, `missy/observability/audit_logger.py`
+  (beyond SR-1.1/1.10), and the individual policy engines.
+- Also corrected a real inconsistency in PR #31's body: stale text from
+  before the 89-case backlog was completed claimed task #46 blocked
+  the backlog. Verified via `TaskList` (no open task #46) and fixed the
+  stale framing in 2 sections.
+- **Operator-controls falsy-zero bug**: `int(body.get("min_samples")
+  or 3)`-style defaulting silently discarded an explicit `0`/`0.0`
+  override (`0 or 3` evaluates to `3`). Live-reproduced. Fixed by
+  switching to `body.get(key, default)`.
+- Command: `pytest tests/api/test_server.py -k preserves_explicit_zero -v`
+- Result: `1 passed`. Confirmed to genuinely fail against the pre-fix
+  code via `git stash`.
+- **AuditLogger re-init contract violation**: `init_audit_logger()`'s
+  docstring claims re-init "replaces the existing logger," but the old
+  instance's publish-wrapper was never detached -- both loggers kept
+  writing every event forever. Live-reproduced: one published event
+  appeared in both the old and new log files. Fixed with a
+  `reconfigure()` method that mutates the already-subscribed instance
+  in place. Rewrote the one existing test, which asserted the wrong
+  property (object identity, not actual behavior).
+- Command: `pytest tests/observability/test_audit_logger_extended.py -k TestSingletonBehaviour -v`
+- Result: `4 passed`. Confirmed to genuinely fail (event in both files)
+  against the pre-fix code via `git stash`.
+- **BehaviorLayer dead topic branch**: the "Technical topic detected"
+  guidance branch was permanently unreachable since the sole
+  production call site hardcoded `topic=""`. Fixed by reusing the
+  already-computed `attention_query` signal. `vision_mode`'s companion
+  branch left as an honest, out-of-scope residual (would require a new
+  speculative classifier; vision already has its own working prompt
+  path).
+- Command: `pytest tests/agent/test_runtime_behavior_integration.py -v`
+- Result: `15 passed`. The new test confirmed to genuinely fail
+  against the pre-fix code via `git stash`.
+- **Discord auto_thread_threshold dead config**: the message counter
+  was tracked but never compared to the threshold; `create_thread()`
+  had zero callers anywhere. Fixed by actually creating a thread once
+  the threshold is reached and resetting the counter.
+- Command: `pytest tests/unit/test_discord_channel.py -k auto_thread -v`
+- Result: `2 passed`. The new test confirmed to genuinely fail
+  (`create_thread` never called) against the pre-fix code via
+  `git stash`.
+- Command: `pytest tests/unit/test_discord_channel.py tests/channels/
+  tests/api/ tests/agent/ tests/observability/ -q`
+- Result: `6596 passed, 4 skipped`.
+- Command: `python3 -m pytest tests/ -q -o faulthandler_timeout=120`
+  (full suite, background run)
+- Result: `21281 passed, 13 skipped in 477.29s (0:07:57)`. 0 failed, up
+  from 21278. Twenty-fourth consecutive fully green full-suite run.
+
 ## Run: 2026-07-12 07:45 UTC — round 5 research pass: MCP approval-gate bypass on restart, sub-agent context-drop, learnings misclassification, Playbook and AttentionSystem wiring
 
 - Context: round 5 of the research-pass invitation (rounds 1-4:

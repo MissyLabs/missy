@@ -625,11 +625,40 @@ class TestFileNotWritable:
 
 class TestSingletonBehaviour:
     def test_init_audit_logger_replaces_existing_singleton(self, tmp_path: Path):
-        """Calling init_audit_logger twice returns a new instance each time."""
-        al1 = init_audit_logger(str(tmp_path / "one.jsonl"))
-        al2 = init_audit_logger(str(tmp_path / "two.jsonl"))
-        assert al1 is not al2
-        assert get_audit_logger() is al2
+        """Regression: init_audit_logger()'s own docstring claims a second
+        call "replaces the existing logger with a new one targeting
+        log_path" -- but _subscribe() wraps whatever self._bus.publish
+        currently is, with no way to unwrap a specific prior layer.
+        Constructing a brand-new AuditLogger and re-subscribing it
+        previously left the FIRST logger's wrapper installed forever: both
+        loggers kept receiving and writing every subsequent event, with the
+        first one writing to its now-stale log_path indefinitely. The real
+        behavioral contract is that only the most recently configured
+        log_path receives new events -- verified here directly against the
+        real, unwrapped global event_bus (what init_audit_logger() actually
+        operates on), not a private in-memory identity check.
+        """
+        from missy.core.events import event_bus
+
+        path_one = tmp_path / "one.jsonl"
+        path_two = tmp_path / "two.jsonl"
+        init_audit_logger(str(path_one))
+        init_audit_logger(str(path_two))
+
+        event_bus.publish(
+            AuditEvent.now(
+                session_id="s",
+                task_id="t",
+                event_type="test.singleton",
+                category="network",
+                result="allow",
+            )
+        )
+
+        assert path_two.exists()
+        assert "test.singleton" in path_two.read_text()
+        assert not path_one.exists() or "test.singleton" not in path_one.read_text()
+        assert get_audit_logger().log_path == path_two
 
     def test_get_audit_logger_returns_most_recent_init(self, tmp_path: Path):
         al = init_audit_logger(str(tmp_path / "c.jsonl"))

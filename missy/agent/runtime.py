@@ -1958,7 +1958,19 @@ class AgentRuntime:
                         behavior_context = {
                             "turn_count": len(history),
                             "has_tool_results": False,
-                            "topic": "",
+                            # "topic" was previously hardcoded to "" at this
+                            # sole production call site, so
+                            # get_response_guidelines()'s "Technical topic
+                            # detected" branch (code/script/function/class/api
+                            # keyword matching) could never fire despite
+                            # being fully implemented and unit-tested in
+                            # isolation. attention_query already carries
+                            # exactly this signal -- the AttentionSystem's
+                            # extracted topics (falling back to user_input
+                            # when none were extracted) -- computed once in
+                            # run() for memory relevance scoring; reusing it
+                            # here costs nothing extra.
+                            "topic": attention_query or user_input,
                             "intent": "question",
                             "urgency": "low",
                         }
