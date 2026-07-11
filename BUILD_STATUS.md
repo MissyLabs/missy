@@ -3939,6 +3939,97 @@ tests/agent/test_persona_save_edges.py tests/cli/ -q`: `1599 passed`.
 (0:10:08)` — 0 failed, up from 21238. Nineteenth consecutive fully
 green full-suite run.
 
+### Post-backlog (sixty-second checkpoint): MessageBus never wired into production, plus two smaller real bugs (API, Screencast)
+
+Round 2 of the research-pass invitation (previous round: Scheduler/
+Persona/Hatching/Behavior, sixty-first checkpoint), this time into
+`missy/api/`, `missy/skills/discovery.py`, `missy/core/message_bus.py`,
+`missy/channels/screencast/`, and less-audited CLI commands. Three
+genuine findings, live-verified and fixed.
+
+**1. `MessageBus` is a fully-built, documented, tested subsystem that
+was never turned on in production — the highest-severity finding.**
+`docs/architecture.md` explicitly documents `init_message_bus()` as
+part of the bootstrap sequence (between `init_registry()` and
+`init_tool_registry()`, same tier as `init_audit_logger`), but
+`_load_subsystems()` in `missy/cli/main.py` — the actual bootstrap
+function called by every CLI command including `gateway start` and
+`api start` — never called it. A repo-wide grep confirmed
+`init_message_bus` was referenced nowhere except its own definition.
+Because the process-level singleton was never created,
+`get_message_bus()` always raised `RuntimeError`, which both
+`AgentRuntime._make_message_bus()` (`missy/agent/runtime.py`) and
+`RunRegistry._default_bus()` (`missy/api/run_stream.py`) silently
+swallow, defaulting to `bus = None` — by design, for graceful
+degradation, but the degradation path was silently always active in
+every real deployment. **Live-verified the concrete failure and the
+fix**: before the fix, `AgentRuntime._make_message_bus()` returned
+`None`; after wiring `init_message_bus()` into `_load_subsystems()`,
+both `AgentRuntime` and a bare `RunRegistry()` (no `bus_factory`
+override, exactly as constructed by `ApiServer.__init__`) correctly
+resolve to the real shared singleton. Concretely, this means the Web
+TUI's "Ask Missy" live run console never showed `tool.request`/
+`tool.result` events during a run, and a completed run's
+provider/tools_used/cost summary fields were always empty — even for
+a run that genuinely used tools and had real cost — with no error
+surfaced anywhere. `SleeptimeWorker._publish_bus` was silently
+no-op'ing for the same root-cause reason. Fixed with a single
+`init_message_bus()` call added to `_load_subsystems()`
+(`missy/cli/main.py`), matching the doc's own claimed bootstrap order;
+`gateway start` and `api start` both call `_load_subsystems()` first,
+so both inherit the fix. 2 new tests in
+`tests/cli/test_cli_coverage_gaps.py`
+(`TestLoadSubsystemsInitializesMessageBus`), both confirmed to
+genuinely fail against the pre-fix code via `git stash`.
+
+**2. `_handle_list_sessions` re-ran the same 1000-row memory-store
+query once per returned session.** `missy/api/server.py`'s session-list
+handler called `memory_store.list_sessions(limit=1000)` *inside* the
+per-session loop to build a session-independent turn-count lookup —
+for a `GET /api/v1/sessions?limit=200` response, the identical query
+ran up to 200 times. Correctness was unaffected (the results were
+always right), but it's a genuine, easily-verified inefficiency. Fixed
+by hoisting the lookup out of the loop, building the counts dict once.
+1 new test in `tests/api/test_server.py`
+(`test_list_sessions_calls_memory_store_once_regardless_of_session_count`),
+confirmed to genuinely fail pre-fix (5 calls observed for 5 sessions,
+not 1).
+
+**3. Screencast sessions were never purged — a slow, unbounded memory
+leak on long-running gateway processes.** `ScreencastTokenRegistry.
+revoke_session()` only flipped `session.active = False` and never
+removed the dict entry; there was no TTL or cap anywhere in the
+registry, unlike the analogous `RunRegistry._prune_locked()`
+(`_MAX_TRACKED_RUNS`) or `DiscordUserRateLimiter`'s
+`_IDLE_EVICTION_SECONDS` eviction added earlier this session — this
+one spot was simply missed, not deliberately scoped out. Every
+`!screen share`/`!screen stop` cycle permanently grew
+`~/missy/missy/channels/screencast/auth.py`'s in-memory `_sessions`
+dict. Fixed by adding a `_prune_locked()` method (mirroring
+`RunRegistry`'s pattern): revoked sessions older than
+`_REVOKED_SESSION_TTL_SECONDS` (1 hour) are removed opportunistically
+on every `create_session()`/`revoke_session()` call, and if the
+registry still exceeds `_MAX_TRACKED_SESSIONS` (500), the oldest
+inactive sessions are evicted first — active sessions are never
+evicted by the cap. 4 new tests in
+`tests/channels/test_screencast_auth.py`
+(`TestScreencastSessionPruning`), 3 of 4 confirmed to genuinely fail
+pre-fix via `git stash` (the 4th correctly passes regardless, since it
+doesn't depend on this fix).
+
+No credible additional findings in `missy/skills/discovery.py` or
+`message_bus.py`'s own subscribe/publish/priority-queue logic (both
+clean on close reading) — the bug was entirely in the missing call
+site, not the module itself. `ModelRouter` (already documented above
+as intentionally unwired) and MCP's HTTP transport (already fails
+closed with test coverage) were both correctly NOT re-flagged.
+
+Verified: `pytest tests/api/ tests/cli/ tests/channels/ tests/core/
+-q`: `3553 passed`. **Full-suite confirmation:** `python3 -m pytest
+tests/ -q -o faulthandler_timeout=120` → `21255 passed, 13 skipped, 1
+warning in 605.13s (0:10:05)` — 0 failed, up from 21248. Twentieth
+consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

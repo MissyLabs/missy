@@ -1,5 +1,52 @@
 # TEST_RESULTS
 
+## Run: 2026-07-12 05:45 UTC — round 2 research pass: MessageBus never wired into production, plus two smaller real bugs (API N+1 query, Screencast session leak)
+
+- Context: round 2 of the research-pass invitation (round 1: Scheduler/
+  Persona, previous entry below). This round targeted `missy/api/`,
+  `missy/skills/discovery.py`, `missy/core/message_bus.py`,
+  `missy/channels/screencast/`, and less-audited CLI commands.
+- **MessageBus never initialized in production** (highest severity):
+  `docs/architecture.md` documents `init_message_bus()` as part of the
+  bootstrap sequence, but `_load_subsystems()` in `missy/cli/main.py`
+  never called it. `get_message_bus()` always raised `RuntimeError`,
+  silently swallowed by `AgentRuntime._make_message_bus()` and
+  `RunRegistry._default_bus()`, defaulting to `bus=None` in every real
+  deployment. Live-verified: before the fix,
+  `AgentRuntime._make_message_bus()` returned `None`; after adding
+  `init_message_bus()` to `_load_subsystems()`, both `AgentRuntime` and
+  a bare `RunRegistry()` correctly resolve to the real shared
+  singleton. Concretely: the Web TUI's live run console never showed
+  tool-call events, and completed-run provider/tools_used/cost
+  summaries were always empty, with no error surfaced.
+- Command: `pytest tests/cli/test_cli_coverage_gaps.py -k MessageBus -v`
+- Result: `2 passed`. Both confirmed to genuinely fail against the
+  pre-fix code via `git stash`.
+- **API N+1 query**: `_handle_list_sessions` called
+  `memory_store.list_sessions(limit=1000)` inside the per-session loop
+  instead of once before it — a `limit=200` response ran the identical
+  query 200 times. Fixed by hoisting the lookup out of the loop.
+- Command: `pytest tests/api/test_server.py -k test_list_sessions -v`
+- Result: `3 passed`. The new test confirmed to genuinely fail pre-fix
+  (5 calls observed for 5 sessions, not 1).
+- **Screencast session leak**: `revoke_session()` only flipped
+  `session.active = False`, never removing the dict entry; no TTL or
+  cap existed anywhere in the registry. Fixed with a `_prune_locked()`
+  method mirroring `RunRegistry`'s existing eviction pattern
+  (TTL-based removal of revoked sessions + oldest-inactive-first
+  eviction past a 500-session cap).
+- Command: `pytest tests/channels/test_screencast_auth.py -v`
+- Result: `19 passed`. 3 of 4 new tests confirmed to genuinely fail
+  pre-fix via `git stash`.
+- Command: `pytest tests/api/ tests/cli/ tests/channels/ tests/core/ -q`
+- Result: `3553 passed`.
+- Command: `python3 -m pytest tests/ -q -o faulthandler_timeout=120`
+  (full suite, background run)
+- Result: `21255 passed, 13 skipped, 1 warning in 605.13s (0:10:05)`. 0
+  failed, up from 21248. Twentieth consecutive fully green full-suite
+  run. The 1 warning is a pre-existing, order-dependent Hypothesis
+  deprecation notice, not introduced by this checkpoint.
+
 ## Run: 2026-07-12 05:05 UTC — three real bugs found and fixed via a targeted research pass (Scheduler pause/retry, Persona type validation, Persona rollback permissions)
 
 - Context: with all enumerated prompt.md items closed, dispatched a

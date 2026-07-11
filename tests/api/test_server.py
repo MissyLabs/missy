@@ -620,6 +620,35 @@ class TestSessions:
         assert resp.status_code == 200
         assert len(resp.json()["data"]["sessions"]) <= 2
 
+    def test_list_sessions_calls_memory_store_once_regardless_of_session_count(self) -> None:
+        """Regression: the turn-count augmentation must query the memory
+        store once, not once per returned session.
+
+        `_handle_list_sessions` previously called `memory_store.list_sessions(limit=1000)`
+        inside the per-session loop, rebuilding the identical counts dict on
+        every iteration -- an N session response ran the same 1000-row query
+        N times.
+        """
+        port = _free_port()
+        mock_store = MagicMock()
+        mock_store.list_sessions.return_value = []
+
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, memory_store=mock_store)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            for _ in range(5):
+                httpx.post(f"http://127.0.0.1:{port}/api/v1/sessions", json={}, headers=HEADERS)
+
+            mock_store.list_sessions.reset_mock()
+            resp = httpx.get(f"http://127.0.0.1:{port}/api/v1/sessions?limit=5", headers=HEADERS)
+            assert resp.status_code == 200
+            assert len(resp.json()["data"]["sessions"]) >= 5
+            mock_store.list_sessions.assert_called_once_with(limit=1000)
+        finally:
+            srv.stop()
+
     def test_get_session(self, client: httpx.Client) -> None:
         create_resp = client.post("/sessions", json={"name": "get-test"})
         session_id = create_resp.json()["data"]["session_id"]

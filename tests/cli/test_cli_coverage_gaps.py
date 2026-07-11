@@ -140,6 +140,70 @@ class TestLoadSubsystemsMigrationException:
             assert result is not None
 
 
+class TestLoadSubsystemsInitializesMessageBus:
+    """Regression: _load_subsystems() must actually initialize the process-level
+    MessageBus singleton.
+
+    docs/architecture.md documents init_message_bus() as part of the
+    bootstrap sequence, but it was never actually called anywhere in the
+    running app. AgentRuntime._make_message_bus() and RunRegistry._default_bus()
+    both gracefully degrade to bus=None when get_message_bus() raises "not
+    initialised" -- so the gap was entirely silent: the Web TUI's live run
+    console never showed tool-call events or provider/tools_used/cost in its
+    completion summary, with no error surfaced anywhere.
+    """
+
+    def test_load_subsystems_calls_init_message_bus(self, tmp_path) -> None:
+        from missy.cli.main import _load_subsystems
+        from missy.core.message_bus import get_message_bus, reset_message_bus
+
+        cfg_path = tmp_path / "config.yaml"
+        cfg_path.write_text(_MINIMAL_CONFIG_YAML)
+        reset_message_bus()
+        try:
+            with (
+                patch("missy.config.settings.load_config", return_value=_make_mock_config()),
+                patch("missy.policy.engine.init_policy_engine"),
+                patch("missy.observability.audit_logger.init_audit_logger"),
+                patch("missy.providers.registry.init_registry"),
+                patch("missy.tools.builtin.register_builtin_tools"),
+                patch("missy.tools.registry.init_tool_registry"),
+            ):
+                _load_subsystems(str(cfg_path))
+
+            # get_message_bus() raises RuntimeError if init_message_bus() was
+            # never called; this must not raise.
+            bus = get_message_bus()
+            assert bus is not None
+        finally:
+            reset_message_bus()
+
+    def test_agent_runtime_bus_is_usable_after_load_subsystems(self, tmp_path) -> None:
+        """End-to-end: after _load_subsystems(), a fresh AgentRuntime's
+        _make_message_bus() must return the real singleton, not None."""
+        from missy.agent.runtime import AgentRuntime
+        from missy.cli.main import _load_subsystems
+        from missy.core.message_bus import get_message_bus, reset_message_bus
+
+        cfg_path = tmp_path / "config.yaml"
+        cfg_path.write_text(_MINIMAL_CONFIG_YAML)
+        reset_message_bus()
+        try:
+            with (
+                patch("missy.config.settings.load_config", return_value=_make_mock_config()),
+                patch("missy.policy.engine.init_policy_engine"),
+                patch("missy.observability.audit_logger.init_audit_logger"),
+                patch("missy.providers.registry.init_registry"),
+                patch("missy.tools.builtin.register_builtin_tools"),
+                patch("missy.tools.registry.init_tool_registry"),
+            ):
+                _load_subsystems(str(cfg_path))
+
+            assert AgentRuntime._make_message_bus() is get_message_bus()
+        finally:
+            reset_message_bus()
+
+
 # ---------------------------------------------------------------------------
 # Lines 338-355: setup --no-prompt paths
 # ---------------------------------------------------------------------------

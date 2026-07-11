@@ -1321,16 +1321,20 @@ def _make_handler(
 
             sessions = session_registry.list(limit=limit)
 
-            # Augment with memory store turn counts when available.
+            # Augment with memory store turn counts when available. The
+            # counts lookup is session-independent, so it must be built once
+            # before the loop -- building it per-session re-ran the same
+            # 1000-row query once per returned session (e.g. 200x for a
+            # limit=200 request).
             if memory_store is not None:
+                try:
+                    db_sessions = memory_store.list_sessions(limit=1000)
+                    counts = {s["session_id"]: s["turn_count"] for s in db_sessions}
+                except Exception:
+                    counts = {}
                 for sess in sessions:
-                    try:
-                        db_sessions = memory_store.list_sessions(limit=1000)
-                        counts = {s["session_id"]: s["turn_count"] for s in db_sessions}
-                        if sess.session_id in counts:
-                            sess.turn_count = counts[sess.session_id]
-                    except Exception:
-                        pass
+                    if sess.session_id in counts:
+                        sess.turn_count = counts[sess.session_id]
 
             return ApiResponse.ok({"sessions": [s.to_dict() for s in sessions]})
 

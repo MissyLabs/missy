@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (68 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eighteen consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (69 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eighteen consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -2701,14 +2701,46 @@ fails closed with a clear error and has test coverage).
 Verified: `pytest tests/scheduler/ tests/agent/test_persona.py
 tests/agent/test_persona_save_edges.py tests/cli/ -q`: `1599 passed`.
 
+### Post-backlog (sixty-second checkpoint): MessageBus never wired into production, plus two smaller real bugs
+
+Round 2 of the research-pass invitation (round 1: Scheduler/Persona,
+above), this time into `missy/api/`, `missy/skills/discovery.py`,
+`missy/core/message_bus.py`, `missy/channels/screencast/`, and
+less-audited CLI commands.
+
+1. **`MessageBus` was never initialized in production** (highest
+   severity) — `docs/architecture.md` documents `init_message_bus()`
+   as part of the bootstrap sequence, but `_load_subsystems()` never
+   called it, so `AgentRuntime._make_message_bus()` and
+   `RunRegistry._default_bus()` always silently degraded to
+   `bus=None`. Concretely: the Web TUI's live run console never showed
+   tool-call events, and completed-run cost/provider summaries were
+   always empty, with no error surfaced. Live-verified before/after.
+   Fixed with a single `init_message_bus()` call. 2 new tests, both
+   confirmed to genuinely fail pre-fix.
+2. **API N+1 query**: `_handle_list_sessions` re-ran the same
+   1000-row memory-store query once per returned session. Fixed by
+   hoisting it out of the loop. 1 new test, confirmed to fail pre-fix
+   (5 calls for 5 sessions).
+3. **Screencast session leak**: `revoke_session()` never removed the
+   dict entry, no TTL/cap existed. Fixed with a `_prune_locked()`
+   method mirroring `RunRegistry`'s existing eviction pattern. 4 new
+   tests, 3 confirmed to fail pre-fix.
+
+`skills/discovery.py` and `message_bus.py`'s own logic were both clean
+on close reading — the bug was entirely the missing call site.
+
+Verified: `pytest tests/api/ tests/cli/ tests/channels/ tests/core/
+-q`: `3553 passed`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-21248 passed, 13 skipped in 608.25s (0:10:08)
+21255 passed, 13 skipped, 1 warning in 605.13s (0:10:05)
 ```
 
-**Zero failures**, the nineteenth consecutive fully green full-suite
+**Zero failures**, the twentieth consecutive fully green full-suite
 run. Passed count is up from 21191 to 21212 (the DISC-CMD-008
 rate-limiting checkpoint: 10 standalone unit tests, 9 real
 dispatch-path integration tests, 3 config-parsing tests) to 21213 (the
@@ -2722,9 +2754,12 @@ ProviderRegistry fix added 0 net new tests but strengthened 1
 existing one; `VALIDATION_HARNESS.md` added 0 new tests, being a
 documentation deliverable) to 21248 (the scheduler pause/retry fix's 3
 new tests, the persona type-validation fix's 6 new tests, and the
-persona rollback permissions fix's 1 new test — the eighteenth green
-run's `ProviderRegistry` fix is confirmed still holding, and the
-scheduler/persona fixes introduced zero regressions).
+persona rollback permissions fix's 1 new test) to 21255 (the
+MessageBus wiring fix's 2 new tests, the API N+1-query fix's 1 new
+test, and the screencast session-pruning fix's 4 new tests — the
+eighteenth green run's `ProviderRegistry` fix, and all of the
+sixty-first checkpoint's scheduler/persona fixes, are confirmed still
+holding).
 The occasional Hypothesis deprecation warnings seen in some runs of
 this suite (`test_property_based_fuzz.py` and/or
 `test_policy_property.py`, depending on test ordering — this run shows

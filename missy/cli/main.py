@@ -142,6 +142,7 @@ def _load_subsystems(config_path: str) -> Any:
     """
     from missy.config.settings import load_config
     from missy.core.exceptions import ConfigurationError
+    from missy.core.message_bus import init_message_bus
     from missy.observability.audit_logger import init_audit_logger
     from missy.policy.engine import init_policy_engine
     from missy.providers.registry import init_registry
@@ -186,6 +187,15 @@ def _load_subsystems(config_path: str) -> Any:
     init_policy_engine(cfg)
     init_audit_logger(cfg.audit_log_path)
     init_registry(cfg)
+    # docs/architecture.md documents this as part of the bootstrap sequence
+    # (between provider registry and tool registry init), but it was never
+    # actually called anywhere in the running app -- AgentRuntime._make_message_bus()
+    # and RunRegistry._default_bus() both gracefully degrade to bus=None when
+    # get_message_bus() raises "not initialised", so the gap was silent: the
+    # Web TUI's live run console never showed tool-call events or
+    # provider/tools_used/cost in its completion summary, with no error
+    # surfaced anywhere.
+    init_message_bus()
 
     # Register built-in tools so the agent can use them.
     try:
