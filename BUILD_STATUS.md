@@ -5066,6 +5066,97 @@ pytest tests/ -q -o faulthandler_timeout=120` → `21316 passed, 13
 skipped in 486.87s (0:08:06)` — 0 failed, up from 21311. Twenty-ninth
 consecutive fully green full-suite run.
 
+### Post-backlog (seventy-second checkpoint): round 12 research pass finds two real bugs in CodeEvolutionManager's revert/stash safety net
+
+Round 12 of the research-pass invitation (rounds 1-11: Scheduler/Persona;
+API/MessageBus/Screencast; Memory-compaction/GraphStore/Vault; Config/
+Vision/CandidateGenerator; MCP/SubAgent/Learnings/Playbook/Attention;
+Discord/operator-controls/AuditLogger/behavior; ContextManager/
+Synthesizer/Watchdog/InteractiveApproval; Webhook/ConfigWatcher/
+ContainerSandbox/MCP-client/Wizard; ToolRegistry/FailureTracker/
+CircuitBreaker/Checkpoint/Discord-rest; VoiceRegistry/VoiceServer/
+AgentIdentity/TrustScorer; providers/SecurityScanner/LandlockPolicy/
+SkillDiscovery), this time into `missy/vision/` (camera discovery/
+capture, image pipeline, intent classification, health monitoring),
+`missy/agent/cost_tracker.py`, and `missy/agent/code_evolution.py` — a
+genuinely dangerous surface since it modifies Missy's own source code.
+Two genuine findings, both in `code_evolution.py`'s revert/stash safety
+net, live-verified and fixed; the vision subsystem and `cost_tracker.py`
+both checked out clean (the vision decompression-bomb guard was already
+present in `FileSource.acquire()`; `CostTracker`'s pre-flight budget
+check is a deliberate, already-documented SR-3.4 tradeoff, not a bug).
+
+**1. `_revert_diffs()` silently failed to restore an untracked (never-committed)
+file, leaving the broken proposed code permanently in place while `apply()`
+still reported "Tests failed. Changes reverted."** `git checkout -- <path>`
+only restores a file git already has a committed version of; for a file
+created earlier in the same session but not yet `git add`/`git commit`ed,
+the checkout is a no-op — and since the call passed `check=False`, no
+exception was ever raised for the `except Exception:` handler to catch
+and log either. **Live-reproduced**: proposed and approved an edit to an
+untracked file, called `apply()` with an always-failing test command —
+the returned result claimed `"Tests failed. Changes reverted."`, but the
+file on disk still contained the broken proposed content
+(`'BROKEN_SHOULD_BE_REVERTED'`), directly contradicting both the message
+and the class's documented safety model. `_validate_diffs()` only
+requires the file to exist on disk, never checks it's git-tracked, so
+nothing upstream prevented this. Fixed by capturing each file's full
+pre-edit content (`original_contents: dict[str, str]`, populated in
+`apply()`'s diff-application loop) and having `_revert_diffs()` check
+`git ls-files --error-unmatch` per file first — for a tracked file,
+`git checkout` proceeds exactly as before; for an untracked file, the
+captured original content is written back directly instead. 1 new test
+(`test_apply_tests_fail_reverts_untracked_file`), confirmed via `git
+stash` to genuinely fail pre-fix (file still contained
+`'BROKEN_SHOULD_BE_REVERTED'` after the reported revert).
+
+**2. `_stash_if_dirty()` returned a bogus, truthy "stash SHA" (`"stash@{0}"`)
+when nothing was actually stashed, violating its own documented
+contract.** `_has_uncommitted_changes()` (via `git status --porcelain`)
+reports untracked files as dirty, but `git stash push` (without `-u`)
+never actually stashes them — a no-op when that's the only dirty state.
+The subsequent `git rev-parse stash@{0}` against the now-nonexistent
+stash writes its "fatal: ambiguous argument..." recovery hint to
+*stdout* (not just stderr), ending in the literal text `stash@{0}` on
+its own line — truthy, and indistinguishable from a real SHA to a naive
+`.strip() or None`. **Live-reproduced**: an untracked-only dirty
+working tree caused `_stash_if_dirty()` to return the literal string
+`"stash@{0}"` instead of `None`. Blast radius was bounded — `_stash_pop()`
+only pops by resolving the SHA's *current* stack position first, so
+this bogus value could never match a real stash and only produced a
+confusing "could not find our safety stash" warning rather than
+corrupting or popping unrelated work — but the bug is real and
+contradicts the method's own docstring ("the stash's commit SHA... if
+a stash was created, else None"). Fixed by using `git rev-parse
+--verify -q stash@{0}` instead of the bare form: `--verify -q`
+suppresses the error text entirely and signals failure via an empty
+stdout / non-zero exit code, so the recovery-hint text can never be
+mistaken for a real SHA again. 1 new test
+(`test_stash_if_dirty_returns_none_for_untracked_only_dirty_state`),
+confirmed via `git stash` to genuinely fail pre-fix (`'stash@{0}' is
+not None`).
+
+Fixing finding #1 required threading `original_contents` through all
+three `_revert_diffs()` call sites in `apply()`, which shifted two
+pre-existing tests in `test_code_evolution_coverage.py` from passing to
+failing for incidental reasons unrelated to what they actually test: one
+patched `_revert_diffs` with a single-argument stand-in that couldn't
+accept the new second positional argument (fixed by widening its
+signature); the other asserted an exact total `_git` call count that
+depended on the old one-git-call-per-diff shape, now two calls per diff
+(an existence check plus the actual revert action) — fixed by tracking
+which file paths were actually processed instead of a raw call count,
+preserving the test's real intent ("all diffs are attempted even if an
+earlier one's git call raises") while no longer coupling it to an
+internal implementation detail.
+
+Verified: `pytest tests/agent/test_code_evolution.py
+tests/agent/test_code_evolution_coverage.py -v`: `53 passed`; `pytest
+tests/agent/ tests/tools/ -q`: `5811 passed, 6 skipped`. **Full-suite
+confirmation:** `python3 -m pytest tests/ -q -o faulthandler_timeout=120`
+→ `21318 passed, 13 skipped in 480.69s (0:08:00)` — 0 failed, up from
+21316. Thirtieth consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

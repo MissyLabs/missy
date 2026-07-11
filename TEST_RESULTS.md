@@ -1,5 +1,50 @@
 # TEST_RESULTS
 
+## Run: 2026-07-13 09:50 UTC — round 12 research pass: CodeEvolutionManager untracked-file revert failure and bogus stash-SHA bug
+
+- Context: round 12 of the research-pass invitation (rounds 1-11:
+  Scheduler/Persona; API/MessageBus/Screencast; Memory-compaction/
+  GraphStore/Vault; Config/Vision/CandidateGenerator; MCP/SubAgent/
+  Learnings/Playbook/Attention; Discord/operator-controls/
+  AuditLogger/behavior; ContextManager/Synthesizer/Watchdog/
+  InteractiveApproval; Webhook/ConfigWatcher/ContainerSandbox/
+  MCP-client/Wizard; ToolRegistry/FailureTracker/CircuitBreaker/
+  Checkpoint/Discord-rest; VoiceRegistry/VoiceServer/AgentIdentity/
+  TrustScorer; providers/SecurityScanner/LandlockPolicy/
+  SkillDiscovery). This round targeted `missy/vision/`,
+  `missy/agent/cost_tracker.py`, and `missy/agent/code_evolution.py` as
+  primary audit subjects for the first time.
+- **Untracked-file revert failure**: `_revert_diffs()` used `git
+  checkout -- <path>` alone, which is a silent no-op for a file that
+  was never committed to git — the broken proposed content stayed on
+  disk while `apply()` reported "Tests failed. Changes reverted."
+  Fixed by capturing each file's full pre-edit content and falling
+  back to writing it back directly when `git ls-files --error-unmatch`
+  shows the file isn't tracked.
+- Command: `pytest tests/agent/test_code_evolution.py -k untracked -v`
+- Result: `2 passed`. Both confirmed to genuinely fail against the
+  pre-fix code via `git stash`.
+- **Bogus stash-SHA bug**: `_stash_if_dirty()` returned the literal
+  string `"stash@{0}"` (truthy) instead of `None` when the only dirty
+  state was an untracked file, since `git stash push` silently no-ops
+  in that case and the subsequent bare `git rev-parse stash@{0}`
+  writes its error-recovery text to stdout. Fixed with `git rev-parse
+  --verify -q stash@{0}`, which signals failure via exit code/empty
+  stdout instead.
+- Command: `pytest tests/agent/test_code_evolution.py -k untracked_only_dirty -v`
+- Result: `1 passed`. Confirmed to genuinely fail against the pre-fix
+  code via `git stash` (`'stash@{0}' is not None`).
+- Command: `pytest tests/agent/test_code_evolution.py tests/agent/test_code_evolution_coverage.py -v`
+- Result: `53 passed` (2 pre-existing tests in the coverage file needed
+  incidental fixes for a shifted call signature/call count, unrelated
+  to what they actually test).
+- Command: `pytest tests/agent/ tests/tools/ -q`
+- Result: `5811 passed, 6 skipped`.
+- Command: `python3 -m pytest tests/ -q -o faulthandler_timeout=120`
+  (full suite, background run)
+- Result: `21318 passed, 13 skipped in 480.69s (0:08:00)`. 0 failed, up
+  from 21316. Thirtieth consecutive fully green full-suite run.
+
 ## Run: 2026-07-13 09:26 UTC — round 11 research pass: AnthropicProvider key-rotation caching bug, SecurityScanner vault-reference false positive, SEC-094 for unwired LandlockPolicy
 
 - Context: round 11 of the research-pass invitation (rounds 1-10:

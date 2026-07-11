@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (78 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for twenty-nine consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (79 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for thirty consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -3116,20 +3116,68 @@ tests/agent/test_provider_fallback.py -q` (one pre-existing, unrelated
 Hypothesis-deadline flake deselected, confirmed via `git stash` to fail
 identically pre-round-11): `2999 passed, 1 deselected`.
 
+### Post-backlog (seventy-second checkpoint): round 12 research pass — CodeEvolutionManager untracked-file revert failure and bogus stash-SHA bug
+
+Round 12 (rounds 1-11: Scheduler/Persona; API/MessageBus/Screencast;
+Memory-compaction/GraphStore/Vault; Config/Vision/CandidateGenerator;
+MCP/SubAgent/Learnings/Playbook/Attention; Discord/operator-controls/
+AuditLogger/behavior; ContextManager/Synthesizer/Watchdog/
+InteractiveApproval; Webhook/ConfigWatcher/ContainerSandbox/
+MCP-client/Wizard; ToolRegistry/FailureTracker/CircuitBreaker/
+Checkpoint/Discord-rest; VoiceRegistry/VoiceServer/AgentIdentity/
+TrustScorer; providers/SecurityScanner/LandlockPolicy/SkillDiscovery),
+into `missy/vision/`, `missy/agent/cost_tracker.py`, and
+`missy/agent/code_evolution.py` — a genuinely dangerous surface since
+it modifies Missy's own source code. Two genuine findings, both in
+`code_evolution.py`'s revert/stash safety net; vision and
+`cost_tracker.py` checked out clean.
+
+1. **Untracked-file revert failure**: `_revert_diffs()`'s `git checkout
+   -- <path>` is a silent no-op for a file never committed to git — the
+   broken proposed content stayed on disk while `apply()` still
+   reported "Tests failed. Changes reverted." Fixed by capturing each
+   file's full pre-edit content and falling back to writing it back
+   directly when `git ls-files --error-unmatch` shows the file isn't
+   tracked. 1 new test, confirmed to fail pre-fix.
+2. **Bogus stash-SHA bug**: `_stash_if_dirty()` returned the literal
+   truthy string `"stash@{0}"` instead of `None` when the only dirty
+   state was an untracked file (`git stash push` silently no-ops, and
+   the subsequent bare `git rev-parse stash@{0}` writes its
+   error-recovery text to stdout). Bounded blast radius (`_stash_pop`'s
+   SHA-resolution never matched the bogus value, so it degraded to a
+   confusing log line rather than data loss), but a genuine contract
+   violation. Fixed with `git rev-parse --verify -q stash@{0}`. 1 new
+   test, confirmed to fail pre-fix.
+
+Fixing finding #1 shifted two pre-existing tests in
+`test_code_evolution_coverage.py` for incidental reasons (a
+single-argument test stand-in couldn't accept the new second
+positional argument; an exact `_git` call-count assertion depended on
+the old one-call-per-diff shape). Both fixed without weakening their
+original intent.
+
+Verified: `pytest tests/agent/test_code_evolution.py
+tests/agent/test_code_evolution_coverage.py -v`: `53 passed`; `pytest
+tests/agent/ tests/tools/ -q`: `5811 passed, 6 skipped`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-21316 passed, 13 skipped in 486.87s (0:08:06)
+21318 passed, 13 skipped in 480.69s (0:08:00)
 ```
 
-**Zero failures**, the twenty-ninth consecutive fully green full-suite
-run. Passed count is up from 21311 to 21316 (the round 11 checkpoint's
-5 new tests: 1 AnthropicProvider key-rotation test, 2 SecurityScanner
-vault-reference tests, and 2 SEC-094 LandlockPolicy tests — all of the
-sixty-first through seventieth checkpoints' fixes are confirmed still
-holding). Passed count is up from 21304 to 21311 (the round 10
-checkpoint's 7 new tests: 1 voice-registry timing test, 1 voice-server
+**Zero failures**, the thirtieth consecutive fully green full-suite
+run. Passed count is up from 21316 to 21318 (the round 12 checkpoint's
+2 new tests: 1 untracked-file revert test and 1 bogus-stash-SHA test —
+all of the sixty-first through seventy-first checkpoints' fixes are
+confirmed still holding). Passed count is up from 21311 to 21316 (the
+round 11 checkpoint's 5 new tests: 1 AnthropicProvider key-rotation
+test, 2 SecurityScanner vault-reference tests, and 2 SEC-094
+LandlockPolicy tests — all of the sixty-first through seventieth
+checkpoints' fixes are confirmed still holding). Passed count is up
+from 21304 to 21311 (the round 10 checkpoint's 7 new tests: 1
+voice-registry timing test, 1 voice-server
 event-loop-blocking test, 2 AgentIdentity symlink/permission tests, 2
 ToolRegistry policy_denied tests, and 1 runtime record_violation test —
 all of the sixty-first through sixty-ninth checkpoints' fixes are

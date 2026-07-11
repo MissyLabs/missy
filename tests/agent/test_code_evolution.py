@@ -325,6 +325,39 @@ class TestApply:
         assert "return 'hello'" in content
         assert mgr.get(prop.id).status == EvolutionStatus.FAILED
 
+    def test_apply_tests_fail_reverts_untracked_file(self, tmp_repo, store_path):
+        """Regression: _revert_diffs() used `git checkout -- <path>` alone,
+        which only restores files git already has a committed version of.
+        For a file that was never committed (created earlier in the same
+        session but not yet `git add`/`git commit`ed), that checkout is a
+        silent no-op -- with check=False it doesn't even raise -- so the
+        broken proposed content was permanently left in place while apply()
+        still reported "Tests failed. Changes reverted." Must actually
+        restore the original content for an untracked file too.
+        """
+        (tmp_repo / "missy" / "new_untracked.py").write_text(
+            "def foo():\n    return 'ORIGINAL'\n"
+        )
+        mgr = CodeEvolutionManager(
+            store_path=store_path,
+            repo_root=str(tmp_repo),
+            test_command="false",  # always fails
+        )
+        prop = mgr.propose(
+            title="Will fail tests on an untracked file",
+            description="test",
+            file_path="missy/new_untracked.py",
+            original_code="return 'ORIGINAL'",
+            proposed_code="return 'BROKEN_SHOULD_BE_REVERTED'",
+        )
+        mgr.approve(prop.id)
+        result = mgr.apply(prop.id)
+        assert not result["success"]
+        assert "Tests failed" in result["message"]
+        content = (tmp_repo / "missy" / "new_untracked.py").read_text()
+        assert "ORIGINAL" in content
+        assert "BROKEN_SHOULD_BE_REVERTED" not in content
+
     def test_apply_stashes_dirty_work(self, mgr, tmp_repo):
         # Make uncommitted changes to an unrelated file
         (tmp_repo / "missy" / "__init__.py").write_text("# dirty\n")
@@ -415,6 +448,20 @@ class TestStashIdentity:
 
     def test_stash_if_dirty_returns_none_when_clean(self, mgr):
         assert mgr._stash_if_dirty() is None
+
+    def test_stash_if_dirty_returns_none_for_untracked_only_dirty_state(self, mgr, tmp_repo):
+        """Regression: `git status --porcelain` reports untracked files as
+        dirty, but a plain `git stash push` (no -u) never actually stashes
+        them -- it's a no-op. The old code then ran a bare
+        `git rev-parse stash@{0}` against the nonexistent stash, which
+        writes its "fatal: ambiguous argument..." recovery hint to *stdout*
+        ending in the literal text "stash@{0}" -- truthy, and easily
+        mistaken by `.strip() or None` for a real stash SHA. Must return
+        None (no stash was actually created), not a bogus SHA-shaped string.
+        """
+        (tmp_repo / "missy" / "brand_new_untracked.py").write_text("# new file\n")
+        sha = mgr._stash_if_dirty()
+        assert sha is None
 
     def test_stash_if_dirty_returns_commit_sha(self, mgr, tmp_repo):
         (tmp_repo / "missy" / "__init__.py").write_text("# dirty\n")
