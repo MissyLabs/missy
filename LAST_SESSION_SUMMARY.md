@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (59 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for twelve consecutive checkpoints; the 89-case tool-specific validation backlog is now 100% complete)
+## Changed (60 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for thirteen consecutive checkpoints; the 89-case tool-specific validation backlog is now 100% complete)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -2376,16 +2376,63 @@ backlog (task #10) is complete.** Every category (`FS`, `SH`, `WB`,
 `INCUS`, `MEM`, `SELF`, `SEC-SCOPE`, `DU`, `AT`, `X11`, `VIS`, `AUD`,
 `SEC-PI`, `XT`, `DISC-CMD`) fully closed.
 
+### Post-backlog (fifty-fourth checkpoint): DISC-CMD-008 fixed — real per-user Discord command rate limiting
+
+With the validation backlog complete, picked up the next
+concretely-scoped item from "Remaining Work": DISC-CMD-008's real,
+documented gap — no dedicated rate limiter existed for incoming
+Discord commands, so a single user could spam paid LLM calls with only
+the overall session `CostTracker` budget as a backstop.
+
+Added `missy/channels/discord/rate_limit.py`'s `DiscordUserRateLimiter`
+— a per-user token bucket, thread-safe, non-blocking (unlike
+`missy/providers/rate_limiter.py`'s single global blocking limiter for
+outbound provider calls), with idle-bucket eviction so memory stays
+bounded. New `DiscordAccountConfig.rate_limit_per_minute` field
+(default 10, `0` disables). Wired into both real command-dispatch
+paths — `_handle_message()` (natural-language) and
+`_handle_interaction()` (slash command) — checked after authorization
+(so an unauthorized user's state is never touched or revealed) but
+before any command dispatch. A refused request gets a clear reply
+rather than a silent drop, and emits a `discord.channel.rate_limited`
+audit event.
+
+**Found and fixed a real bug in the new code before it ever shipped,**
+caught by the first new test written: `_UserBucket.__init__` called
+`time.monotonic()` independently of the caller's own `now`, so a
+brand-new bucket's `last_refill` could land microseconds *after* the
+`check()` call's `now` — a negative elapsed time that silently denied
+every user's first-ever command. Fixed by threading one consistent
+`now` value through both.
+
+Added 10 standalone unit tests plus 9 integration tests exercising the
+real `_handle_message`/`_handle_interaction` dispatch functions
+(allowed-under-limit, denied-after-limit with the correct reply,
+independent per-user tracking, disabled-when-zero, and that an
+*unauthorized* user's request never reaches the rate limiter or its
+warning — which would otherwise leak the bot's presence to someone not
+supposed to be interacting with it), plus 3 config-parsing tests.
+
+Verified: `pytest tests/channels/discord/test_discord_rate_limit.py
+tests/unit/test_discord_config.py -v`: 36 passed. Broader: `pytest
+tests/channels/ tests/unit/test_discord_config.py
+tests/unit/test_discord_channel.py
+tests/unit/test_discord_commands_coverage.py -q`: 2083 passed.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-21191 passed, 13 skipped in 611.60s (0:10:11)
+21212 passed, 13 skipped, 1 warning in 617.02s (0:10:17)
 ```
 
-**Zero failures**, the twelfth consecutive fully green full-suite run
-(count unchanged from the prior run — the VIS-* checkpoint corrected an
-existing test in place rather than adding a new one).
+**Zero failures**, the thirteenth consecutive fully green full-suite
+run. Passed count is up from 21191 to 21212, reflecting the new
+DISC-CMD-008 rate-limiting tests (10 standalone unit tests, 9 real
+dispatch-path integration tests, 3 config-parsing tests). The 1 warning
+is a pre-existing, unrelated Hypothesis deprecation notice in
+`test_property_based_fuzz.py`, not something this checkpoint
+introduced.
 Passed count is up from 21071 (SR-1.9b's run) to 21115
 (availability-hardening checkpoint) to 21118 (the acpx `--deny-all`
 critical-finding checkpoint) to 21125 (the native-tool denial retry

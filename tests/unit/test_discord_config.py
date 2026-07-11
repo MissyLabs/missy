@@ -158,6 +158,15 @@ class TestDiscordAccountConfig:
         assert ac.token_env_var == "DISCORD_BOT_TOKEN"
         assert ac.dm_policy is DiscordDMPolicy.DISABLED
         assert ac.guild_policies == {}
+        assert ac.rate_limit_per_minute == 10  # DISC-CMD-008 default
+
+    def test_parse_account_rate_limit_per_minute_explicit(self) -> None:
+        ac = _parse_account({"rate_limit_per_minute": 3})
+        assert ac.rate_limit_per_minute == 3
+
+    def test_parse_account_rate_limit_per_minute_zero_disables(self) -> None:
+        ac = _parse_account({"rate_limit_per_minute": 0})
+        assert ac.rate_limit_per_minute == 0
 
 
 # ---------------------------------------------------------------------------

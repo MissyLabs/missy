@@ -127,6 +127,17 @@ class DiscordChannel(BaseChannel):
         # so voice can call the agent for conversational responses.
         self._agent_runtime: Any = None
 
+        # DISC-CMD-008: per-user command rate limiting. Checked before any
+        # command-producing dispatch (slash interaction or natural-language
+        # message) so a single user can't spam paid LLM calls unbounded --
+        # previously only the overall session CostTracker budget backstopped
+        # this, with no per-user throttle at all.
+        from missy.channels.discord.rate_limit import DiscordUserRateLimiter
+
+        self._rate_limiter = DiscordUserRateLimiter(
+            requests_per_minute=getattr(account_config, "rate_limit_per_minute", 10)
+        )
+
         token = account_config.resolve_token() or ""
         if not token:
             logger.error(
@@ -613,6 +624,29 @@ class DiscordChannel(BaseChannel):
         if not allowed:
             return
 
+        # 2a2. Per-user rate limit (DISC-CMD-008) — after authorization
+        # (so it never leaks whether an unauthorized user exists) but
+        # before any command dispatch that could produce a side effect
+        # or an LLM call.
+        rate_result = self._rate_limiter.check(author_id)
+        if not rate_result.allowed:
+            self._emit_audit(
+                "discord.channel.rate_limited",
+                "deny",
+                {
+                    "author_id": author_id,
+                    "channel_id": channel_id,
+                    "retry_after_seconds": round(rate_result.retry_after_seconds, 1),
+                },
+            )
+            with contextlib.suppress(Exception):
+                self._rest.send_message(
+                    channel_id,
+                    f"⏳ <@{author_id}> You're sending commands too quickly. "
+                    f"Please wait {rate_result.retry_after_seconds:.0f}s and try again.",
+                )
+            return
+
         # 2b. Voice commands (MESSAGE_CREATE) — only after authorization.
         if guild_id and content:
             handled = await self._maybe_handle_voice_command(
@@ -1016,6 +1050,36 @@ class DiscordChannel(BaseChannel):
                 )
             except Exception as exc:
                 logger.error("Discord: interaction denial response failed: %s", exc)
+            return
+
+        # DISC-CMD-008: per-user rate limit, checked after authorization
+        # (never leaks whether an unauthorized user exists) but before
+        # dispatching to the potentially LLM-calling command handler.
+        rate_result = self._rate_limiter.check(author_id)
+        if not rate_result.allowed:
+            self._emit_audit(
+                "discord.channel.rate_limited",
+                "deny",
+                {
+                    "author_id": author_id,
+                    "channel_id": channel_id,
+                    "retry_after_seconds": round(rate_result.retry_after_seconds, 1),
+                },
+            )
+            try:
+                self._rest.send_interaction_response(
+                    interaction_id,
+                    interaction_token,
+                    response_type=4,  # CHANNEL_MESSAGE_WITH_SOURCE
+                    data={
+                        "content": (
+                            f"⏳ You're sending commands too quickly. "
+                            f"Please wait {rate_result.retry_after_seconds:.0f}s and try again."
+                        )
+                    },
+                )
+            except Exception as exc:
+                logger.error("Discord: rate-limit response failed: %s", exc)
             return
 
         # Send deferred response immediately (type 5 = DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE)

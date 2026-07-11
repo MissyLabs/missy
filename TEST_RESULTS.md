@@ -1,5 +1,41 @@
 # TEST_RESULTS
 
+## Run: 2026-07-12 02:05 UTC — post-backlog, DISC-CMD-008 fixed — real per-user Discord command rate limiting
+
+- Branch: `overhaul/missy-validation-20260710-031406`
+- Context: with the 89-case validation backlog complete, picked up
+  DISC-CMD-008's real, documented gap -- no dedicated rate limiter
+  existed for incoming Discord commands.
+- Added `missy/channels/discord/rate_limit.py`'s `DiscordUserRateLimiter`
+  -- per-user token bucket, thread-safe, non-blocking, with idle-bucket
+  eviction. New `DiscordAccountConfig.rate_limit_per_minute` field
+  (default 10, `0` disables). Wired into `_handle_message()` and
+  `_handle_interaction()` in `missy/channels/discord/channel.py`, both
+  checked after authorization but before any command dispatch.
+- **Found and fixed a real bug in the new code before it shipped**:
+  `_UserBucket.__init__` called `time.monotonic()` independently of the
+  caller's own `now`, so a brand-new bucket's `last_refill` could land
+  microseconds after the `check()` call's `now` -- a negative elapsed
+  time that silently denied every user's first-ever command. Caught by
+  the very first new test written. Fixed by threading one consistent
+  `now` value through both.
+- Added 10 unit tests (`tests/channels/discord/test_discord_rate_limit.py`)
+  and 9 integration tests (`tests/channels/test_discord_channel_coverage.py`)
+  exercising the real `_handle_message`/`_handle_interaction` dispatch
+  functions, plus 3 config-parsing tests.
+- Command: `pytest tests/channels/discord/test_discord_rate_limit.py
+  tests/unit/test_discord_config.py -v`
+- Result: `36 passed`.
+- Command: `pytest tests/channels/ tests/unit/test_discord_config.py
+  tests/unit/test_discord_channel.py
+  tests/unit/test_discord_commands_coverage.py -q`
+- Result: `2083 passed`.
+- Command: `pytest tests/ -q -o faulthandler_timeout=120`
+- Result: `21212 passed, 13 skipped, 1 warning in 617.02s (0:10:17)` —
+  zero failures, thirteenth consecutive fully green full-suite run, up
+  from 21191. The 1 warning is a pre-existing, unrelated Hypothesis
+  deprecation notice, not introduced by this checkpoint.
+
 ## Run: 2026-07-12 01:15 UTC — validation-harness overhaul, task #10 FINAL BATCH — 89/89 complete, entire backlog closed
 
 - Branch: `overhaul/missy-validation-20260710-031406`

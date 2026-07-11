@@ -3453,6 +3453,64 @@ command rate limiting, X11-004's black virtual-display content,
 AT-003's unnamed-GTK-element limitation, VIS-005's real webcam
 blank-frame limitation).
 
+### Post-backlog (fifty-fourth checkpoint): DISC-CMD-008 fixed — real per-user Discord command rate limiting
+
+With the 89-case validation backlog complete, picked up the next
+concretely-scoped item from "Remaining Work": DISC-CMD-008's real,
+documented gap (no dedicated rate limiter existed for incoming Discord
+commands, so a single user could spam paid LLM calls with only the
+overall session `CostTracker` budget as a backstop).
+
+Added `missy/channels/discord/rate_limit.py`'s `DiscordUserRateLimiter`
+— a per-user token bucket, thread-safe, **non-blocking** (returns
+`RateLimitResult(allowed, retry_after_seconds)` immediately rather than
+sleeping, unlike `missy/providers/rate_limiter.py`'s single global
+blocking limiter meant for outbound provider calls), with idle-bucket
+eviction (1 hour) so memory stays bounded regardless of how many
+distinct Discord users the bot has ever seen. New
+`DiscordAccountConfig.rate_limit_per_minute` field (default 10, `0`
+disables). Wired into both real command-dispatch paths in
+`missy/channels/discord/channel.py`: `_handle_message()` (the
+natural-language MESSAGE_CREATE path) and `_handle_interaction()` (the
+slash-command INTERACTION_CREATE path) — both check
+**after** authorization (so an unauthorized user's rate-limit state is
+never touched or revealed) but **before** any command dispatch that
+could produce a side effect or an LLM call. A refused request gets a
+clear, friendly reply (a real Discord message or, for slash commands,
+an immediate type-4 interaction response) rather than being silently
+dropped, and emits a `discord.channel.rate_limited` audit event.
+
+**Found and fixed a real bug in the new code before it ever shipped**,
+caught by the new tests' first real assertion: `_UserBucket.__init__`
+called `time.monotonic()` independently of the caller's own `now`
+timestamp, so a brand-new bucket's `last_refill` could land
+microseconds *after* the `check()` call's `now` — producing a
+*negative* elapsed time on the very first request and silently denying
+every user's first-ever command. Fixed by threading the exact same
+`now` value through to the bucket constructor so both computations use
+one consistent timestamp.
+
+Added 10 standalone unit tests (`tests/channels/discord/test_discord_rate_limit.py`)
+covering capacity/refill/eviction/disabled-mode behavior directly, plus
+9 integration tests in `tests/channels/test_discord_channel_coverage.py`
+exercising the real `_handle_message`/`_handle_interaction` dispatch
+functions (allowed-under-limit, denied-after-limit with the correct
+reply/response-type, independent per-user tracking, disabled-when-zero,
+and — critically — that an *unauthorized* user's request never reaches
+the rate limiter or its warning message, which would otherwise leak the
+bot's presence/activity to someone not supposed to be interacting with
+it), plus 3 new config-parsing tests for the new field.
+
+Verified: `pytest tests/channels/discord/test_discord_rate_limit.py
+tests/unit/test_discord_config.py -v`: 36 passed. Broader:
+`pytest tests/channels/ tests/unit/test_discord_config.py
+tests/unit/test_discord_channel.py
+tests/unit/test_discord_commands_coverage.py -q`: 2083 passed. Full
+suite: `21212 passed, 13 skipped, 1 warning in 617.02s (0:10:17)` — 0
+failed, up from 21191. Thirteenth consecutive fully green full-suite
+run. The 1 warning is a pre-existing, unrelated Hypothesis deprecation
+notice, not introduced by this checkpoint.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security
@@ -3544,10 +3602,11 @@ path). Current remaining priority order:
    chain for deletion/reordering detection and key-rotation lifecycle
    (SR-1.1 residual, explicitly out of scope per the review's own text
    since no hash-chain claim exists in the product); a `missy doctor`
-   check surfacing audit signing status (SR-1.1/SR-4.6 residual);
-   DISC-CMD-008's real per-user Discord command rate-limiting gap; the
+   check surfacing audit signing status (SR-1.1/SR-4.6 residual); the
    `shell.unrestricted` dead-config-key hygiene gap (no config section
-   warns on unrecognized YAML keys).
+   warns on unrecognized YAML keys). **DISC-CMD-008's per-user Discord
+   rate-limiting gap is now fixed** — see the fifty-fourth checkpoint
+   above.
 3. Broader untouched "Product Goal" surface from prompt.md (providers,
    tool intelligence, Discord/channels, scheduler/memory/sessions,
    hatching/persona, vision/audio/multimodal, Web TUI, OpenClaw-style

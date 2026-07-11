@@ -97,6 +97,9 @@ class DiscordAccountConfig:
         allow_bots_if_mention_only: When ``True`` and ``ignore_bots`` is
             ``True``, bot messages that explicitly @-mention this bot are
             not ignored.
+        rate_limit_per_minute: Maximum commands (slash or
+            natural-language) a single Discord user may trigger per
+            minute. ``0`` disables per-user rate limiting entirely.
     """
 
     token_env_var: str = "DISCORD_BOT_TOKEN"
@@ -110,6 +113,7 @@ class DiscordAccountConfig:
     ignore_bots: bool = True
     allow_bots_if_mention_only: bool = False
     auto_thread_threshold: int = 0  # 0 = disabled; N = create thread after N messages
+    rate_limit_per_minute: int = 10  # 0 = disabled
 
     def resolve_token(self) -> str | None:
         """Return the bot token — checks direct token, env var, and vault in order.
@@ -193,6 +197,7 @@ def _parse_account(data: dict[str, Any]) -> DiscordAccountConfig:
         ignore_bots=bool(data.get("ignore_bots", True)),
         allow_bots_if_mention_only=bool(data.get("allow_bots_if_mention_only", False)),
         auto_thread_threshold=int(data.get("auto_thread_threshold", 0)),
+        rate_limit_per_minute=int(data.get("rate_limit_per_minute", 10)),
     )
 
 
