@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (85 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for thirty-six consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (86 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for thirty-seven consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -3431,15 +3431,65 @@ genuine findings.
 Verified: `pytest tests/agent/ tests/skills/ tests/api/ -q`: `4631
 passed, 4 skipped`.
 
+### Post-backlog (seventy-ninth checkpoint): round 19 research pass — ToolRegistry disable()/is_enabled() wiring, GET /api/v1/tools disabled-tool leak
+
+Round 19 (rounds 1-18 covered Scheduler, Persona, API server,
+MessageBus, Screencast, Memory-compaction, GraphMemoryStore, Vault,
+Config, Vision, CandidateGenerator, MCP-manager, SubAgentRunner,
+Learnings, Playbook, AttentionSystem, Discord-channel, operator-
+controls, AuditLogger, BehaviorLayer, ContextManager, MemorySynthesizer,
+Watchdog, InteractiveApproval, WebhookChannel, ConfigWatcher,
+ContainerSandbox, MCP-client, setup-wizard, ToolRegistry-execute-path,
+FailureTracker, CircuitBreaker, Checkpoint, Discord-REST-client,
+DeviceRegistry, VoiceServer, AgentIdentity, TrustScorer, providers,
+SecurityScanner, LandlockPolicy, SkillDiscovery, vision-capture,
+CostTracker, CodeEvolutionManager, StructuredOutput, ProactiveManager,
+SleeptimeWorker, Summarizer, HatchingManager, PersonaManager,
+BehaviorLayer-tone, api-auth, otel, vector_store, scheduler-parser,
+graph_store-CRUD, checkpoint-WAL, McpManager-lifecycle, interactive_
+approval-TUI, secrets-patterns, drift-mechanics, web_console.py), into
+`missy/core/session.py`, `missy/agent/condensers.py`,
+`missy/tools/builtin/code_evolve.py`, and `missy/tools/registry.py`'s
+listing/metadata surface. SessionManager, CondenserPipeline's stage
+boundaries, and code_evolve.py's exclusion-list enforcement all
+checked out clean. Two genuine, related findings fixed.
+
+1. **ToolRegistry disable()/is_enabled() wiring**: a fully built, fully
+   tested, execute()-level tool kill switch had zero production callers
+   — operators had no first-party way to disable a risky tool, despite
+   the consumption side (execute()'s refusal, _get_tools()'s filtering)
+   already being correctly wired. Confirmed this is a distinct,
+   non-redundant control from the existing tools.deny policy layer
+   (deny only narrows what's offered per turn; disable() is a harder
+   block execute() checks independently). Fixed with a new
+   tools.disabled_tools config field, applied at tool-registration
+   time in the CLI's shared bootstrap. 3 new tests (2 config-parsing, 1
+   full CLI-to-registry end-to-end), confirmed to fail pre-fix.
+2. **GET /api/v1/tools disabled-tool leak**: the endpoint never called
+   is_enabled(), so once finding #1 made _disabled reachable, a
+   disabled tool's full schema would be indistinguishable from an
+   enabled one to any API client. Fixed by adding an "enabled" field to
+   the response (kept visible rather than filtered, since this is an
+   authenticated operator console). 2 new tests, confirmed to fail
+   pre-fix; 1 pre-existing test needed an incidental mock fix.
+
+Verified: `pytest tests/api/ tests/tools/ tests/config/ tests/cli/ -q`:
+`3200 passed, 2 skipped`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-21362 passed, 13 skipped in 521.98s (0:08:41)
+21366 passed, 13 skipped in 524.47s (0:08:44)
 ```
 
-**Zero failures**, the thirty-sixth consecutive fully green
-full-suite run. Passed count is up from 21357 to 21362 (the round 18
+**Zero failures**, the thirty-seventh consecutive fully green
+full-suite run. Passed count is up from 21362 to 21366 (the round 19
+checkpoint's 4 new tests: 2 tools.disabled_tools config-parsing tests,
+1 CLI-to-registry end-to-end test, and 1 GET /api/v1/tools "enabled"
+field test — all of the sixty-first through seventy-eighth
+checkpoints' fixes are confirmed still holding). Passed count is up
+from 21357 to 21362 (the round 18
 checkpoint's 5 new tests: 3 CostTracker pricing tests, 1 SkillDiscovery
 block-list test, and 1 web-console escaping test — all of the
 sixty-first through seventy-seventh checkpoints' fixes are confirmed

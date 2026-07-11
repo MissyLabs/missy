@@ -132,7 +132,26 @@ class PluginPolicy:
 
 @dataclass
 class ToolPolicyConfig:
-    """Controls which registered tools are exposed to an agent turn."""
+    """Controls which registered tools are exposed to an agent turn.
+
+    Attributes:
+        disabled_tools: Tool names to disable registry-wide via
+            :meth:`~missy.tools.registry.ToolRegistry.disable`, applied
+            once at tool-registration time (`missy/cli/main.py`). Unlike
+            ``deny`` (which only narrows the set *offered* to the model
+            for a given turn, re-resolved per call in
+            :meth:`~missy.agent.runtime.AgentRuntime._get_tools`),
+            disabling a tool here also makes
+            :meth:`~missy.tools.registry.ToolRegistry.execute` refuse to
+            run it outright — a stronger, execute()-level kill switch
+            that still applies even if a tool_call somehow reaches
+            ``execute()`` through a path other than the per-turn
+            resolved allow-set (e.g. a hallucinated tool name, or a
+            future call site that doesn't go through ``_get_tools()``).
+            ``ToolRegistry.disable()``/``is_enabled()`` were fully built
+            and tested but had no caller anywhere in the codebase before
+            this field existed.
+    """
 
     profile: str = "full"
     allow: list[str] = field(default_factory=list)
@@ -141,6 +160,7 @@ class ToolPolicyConfig:
     by_provider: dict[str, dict[str, Any]] = field(default_factory=dict)
     by_model: dict[str, dict[str, Any]] = field(default_factory=dict)
     groups: dict[str, list[str]] = field(default_factory=dict)
+    disabled_tools: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -604,6 +624,7 @@ def _parse_tool_policy(data: Any, *, context: str = "tools") -> ToolPolicyConfig
             context=f"{context}.byModel",
         ),
         groups=_parse_tool_groups(data.get("groups"), context=f"{context}.groups"),
+        disabled_tools=_as_list_of_strings(data.get("disabled_tools")),
     )
 
 

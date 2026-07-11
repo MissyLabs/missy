@@ -204,6 +204,21 @@ def _load_subsystems(config_path: str) -> Any:
 
         tool_registry = init_tool_registry()
         register_builtin_tools(tool_registry)
+        # ToolRegistry.disable()/is_enabled() were fully built and
+        # tested (execute() refuses a disabled tool outright, and
+        # AgentRuntime._get_tools() already filters is_enabled() tools
+        # out of what's offered to the model) but had zero callers
+        # anywhere in the codebase -- an operator had no way to actually
+        # disable a tool via any first-party surface. tools.disabled_tools
+        # makes this reachable via config.
+        for _disabled_name in getattr(cfg.tools, "disabled_tools", None) or []:
+            try:
+                tool_registry.disable(_disabled_name)
+            except KeyError:
+                logger.warning(
+                    "tools.disabled_tools: %r is not a registered tool name; ignoring.",
+                    _disabled_name,
+                )
     except Exception as _tool_exc:
         logger.debug("Tool registry init failed: %s", _tool_exc)
 

@@ -851,6 +851,13 @@ def _make_handler(
                             "name": name,
                             "description": getattr(tool, "description", ""),
                             "schema": schema,
+                            # list_tools()'s own docstring notes it "Includes
+                            # disabled tools; use is_enabled() to check
+                            # state" -- this endpoint previously never did,
+                            # so a disabled tool's full schema was
+                            # indistinguishable from an enabled one to any
+                            # caller of this endpoint.
+                            "enabled": tr.is_enabled(name),
                         }
                     )
             except Exception as exc:

@@ -5886,6 +5886,94 @@ tests/ -q -o faulthandler_timeout=120` → `21362 passed, 13 skipped in
 521.98s (0:08:41)` — 0 failed, up from 21357. Thirty-sixth consecutive
 fully green full-suite run.
 
+### Post-backlog (seventy-ninth checkpoint): round 19 research pass wires up ToolRegistry's dead disable()/is_enabled() kill switch and fixes a matching API leak
+
+Round 19 of the research-pass invitation (rounds 1-18: Scheduler/Persona;
+API server/MessageBus/Screencast; Memory-compaction/GraphMemoryStore/
+Vault; Config/Vision/CandidateGenerator; MCP-manager/SubAgentRunner/
+Learnings/Playbook/AttentionSystem; Discord-channel/operator-controls/
+AuditLogger/BehaviorLayer; ContextManager/MemorySynthesizer/Watchdog/
+InteractiveApproval; WebhookChannel/ConfigWatcher/ContainerSandbox/
+MCP-client/setup-wizard; ToolRegistry-execute-permission-path/
+FailureTracker/CircuitBreaker/Checkpoint/Discord-REST-client;
+DeviceRegistry/VoiceServer/AgentIdentity/TrustScorer; providers/
+SecurityScanner/LandlockPolicy/SkillDiscovery-wiring; vision-capture/
+CostTracker/CodeEvolutionManager; StructuredOutput/ProactiveManager/
+SleeptimeWorker/Summarizer; HatchingManager/PersonaManager/
+BehaviorLayer-tone; api-auth/otel/vector_store/scheduler-parser;
+graph_store-CRUD/checkpoint-WAL/McpManager-lifecycle; interactive_
+approval-TUI/secrets-patterns/drift-mechanics/web_console.py), this
+time into `missy/core/session.py` (`SessionManager`),
+`missy/agent/condensers.py`'s 4-stage pipeline, `missy/tools/builtin/
+code_evolve.py`'s operator-only-action exclusion, and `missy/tools/
+registry.py`'s listing/metadata surface — none of which had been
+primary audit subjects from these specific angles before. `SessionManager`'s
+ID generation/lifecycle, `CondenserPipeline`'s stage boundaries (re-
+confirming round 3's "zero production callers" finding still holds —
+`compaction.py` remains the real, separate, already-audited compaction
+path), and `code_evolve.py`'s exclusion-list enforcement (plain
+case-sensitive exact-match on both sides, no bypass constructible via
+case/whitespace/alias) all checked out clean. Two genuine, related
+findings fixed.
+
+**1. `ToolRegistry.disable()`/`enable()`/`is_enabled()` — a fully built,
+fully tested, execute()-level tool kill switch — had zero production
+callers anywhere, leaving operators with no first-party way to disable
+a risky tool.** The consumption side was already correctly wired:
+`execute()` refuses a disabled tool outright, and
+`AgentRuntime._get_tools()` already filters `is_enabled()` tools out of
+what's offered to the model. But nothing ever called `.disable()` to
+populate `self._disabled` in the first place — no CLI command, no API
+endpoint, no config key. This is a distinct, non-redundant control from
+the existing `tools.deny` policy layer: `deny` only narrows what's
+*offered* to the model per turn (re-resolved in `_get_tools()`), while
+`disable()`/`execute()`'s check is a harder block that would still
+apply even if a tool_call somehow reached `execute()` through a path
+that doesn't go through the per-turn resolved allow-set (confirmed by
+reading `execute()`: it checks `self._disabled` directly and
+independently of any `tool_policy` resolution, which never appears
+anywhere in `registry.py`). Fixed with a new `tools.disabled_tools: []`
+config field (added to the existing `ToolPolicyConfig` dataclass,
+alongside `allow`/`deny`), applied once at tool-registration time in
+`missy/cli/main.py`'s shared bootstrap function — each configured name
+calls the already-built, already-tested `ToolRegistry.disable()`, with
+an unregistered name logged as a warning and skipped rather than
+aborting the rest of the list. **Live-reproduced**: end-to-end through
+a real config file, real `load_config()`, and the real process-global
+`ToolRegistry` — `is_enabled("calculator")` correctly returned `False`
+and `execute("calculator", ...)` correctly refused with "Tool
+'calculator' is disabled by operator." 3 new tests (2 config-parsing, 1
+full CLI-to-registry end-to-end), confirmed via `git stash` to
+genuinely fail pre-fix.
+
+**2. `GET /api/v1/tools` never called `is_enabled()`, so a disabled
+tool's full name/description/schema would be indistinguishable from an
+enabled one to any client of the endpoint.** `ToolRegistry.list_tools()`'s
+own docstring notes it "Includes disabled tools; use `is_enabled()` to
+check state" — the model-facing path (`_get_tools()`) already does
+this correctly, but `_handle_list_tools()` never did, and the response
+shape carried no field to distinguish the two states at all. Latent
+until finding #1 above was fixed (since `_disabled` was never populated
+in production before), but genuinely reachable now — flagged and fixed
+together as the second half of the same invariant, matching this
+session's precedent (e.g. round 3's `GraphMemoryStore.merge_entities()`)
+of treating a currently-unreachable-but-now-reachable defect as a real
+finding rather than deferring it. Fixed by adding an `"enabled"` boolean
+field to each tool's entry in the response, kept visible (not filtered
+out entirely) since this is an authenticated, operator-facing console
+endpoint where showing disabled state is more useful than hiding it. 2
+new tests, confirmed via `git stash` to genuinely fail pre-fix
+(`KeyError: 'enabled'`); 1 pre-existing test needed an incidental
+`is_enabled.return_value = True` mock configuration to avoid a
+`MagicMock`-is-not-JSON-serializable failure, unrelated to what it
+tests.
+
+Verified: `pytest tests/api/ tests/tools/ tests/config/ tests/cli/ -q`:
+`3200 passed, 2 skipped`. **Full-suite confirmation:** `python3 -m
+pytest tests/ -q -o faulthandler_timeout=120` → `21366 passed, 13
+skipped in 524.47s (0:08:44)` — 0 failed, up from 21362. Thirty-seventh
+consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

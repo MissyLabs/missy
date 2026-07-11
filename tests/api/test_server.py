@@ -2067,6 +2067,7 @@ class TestTools:
         port = _free_port()
         mock_reg = MagicMock()
         mock_reg.list_tools.return_value = ["calculator"]
+        mock_reg.is_enabled.return_value = True
 
         mock_tool = MagicMock()
         mock_tool.name = "calculator"
@@ -2085,6 +2086,40 @@ class TestTools:
             assert len(tools) == 1
             assert tools[0]["name"] == "calculator"
             assert tools[0]["description"] == "Evaluates expressions"
+            assert tools[0]["enabled"] is True
+        finally:
+            srv.stop()
+
+    def test_disabled_tool_marked_as_not_enabled(self) -> None:
+        """Regression: list_tools()'s own docstring notes it "Includes
+        disabled tools; use is_enabled() to check state" -- this endpoint
+        previously never called is_enabled() at all, so a disabled tool's
+        full name/description/schema was returned indistinguishable from
+        an enabled tool, contradicting the "excluded from tool schemas
+        exposed" defense-in-depth claim in ToolRegistry's own docstring,
+        just on the API-consumer axis instead of the model axis.
+        """
+        port = _free_port()
+        mock_reg = MagicMock()
+        mock_reg.list_tools.return_value = ["shell_exec"]
+        mock_reg.is_enabled.return_value = False
+
+        mock_tool = MagicMock()
+        mock_tool.name = "shell_exec"
+        mock_tool.description = "Runs a shell command"
+        mock_tool.get_schema.return_value = {}
+        mock_reg.get.return_value = mock_tool
+
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, tool_registry=mock_reg)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            resp = httpx.get(f"http://127.0.0.1:{port}/api/v1/tools", headers=HEADERS)
+            assert resp.status_code == 200
+            tools = resp.json()["data"]["tools"]
+            assert len(tools) == 1
+            assert tools[0]["enabled"] is False
         finally:
             srv.stop()
 

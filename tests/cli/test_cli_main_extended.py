@@ -166,6 +166,55 @@ class TestLoadSubsystemsBranches:
             os.unlink(cfg_path)
 
 
+class TestDisabledToolsWiring:
+    """Regression: ToolRegistry.disable()/is_enabled() (an execute()-level
+    kill switch stronger than tools.deny, which only narrows what's
+    offered to the model per turn) was fully built and tested but had
+    zero callers anywhere in the codebase -- an operator had no way to
+    actually disable a tool via any first-party surface. _load_subsystems
+    must apply tools.disabled_tools to the real, process-global
+    ToolRegistry it constructs.
+    """
+
+    def test_disabled_tools_config_disables_real_registry_entries(
+        self, runner: CliRunner
+    ) -> None:
+        with tempfile.NamedTemporaryFile(suffix=".yaml", mode="w", delete=False) as f:
+            f.write(
+                "network:\n"
+                "  default_deny: true\n"
+                "providers:\n"
+                "  anthropic:\n"
+                "    name: anthropic\n"
+                '    model: "claude-sonnet-4-6"\n'
+                "tools:\n"
+                "  disabled_tools: [\"calculator\"]\n"
+                'workspace_path: "/tmp/workspace"\n'
+                'audit_log_path: "/tmp/audit.jsonl"\n'
+            )
+            f.flush()
+            cfg_path = f.name
+        try:
+            with patch(
+                "missy.providers.registry.get_registry",
+                return_value=MagicMock(list_providers=list),
+            ):
+                result = runner.invoke(cli, ["--config", cfg_path, "providers"])
+            assert result.exit_code == 0
+
+            from missy.tools.registry import get_tool_registry
+
+            registry = get_tool_registry()
+            assert registry.is_enabled("calculator") is False
+            exec_result = registry.execute("calculator", expression="2+2")
+            assert exec_result.success is False
+            assert "disabled" in (exec_result.error or "").lower()
+        finally:
+            import os
+
+            os.unlink(cfg_path)
+
+
 # ---------------------------------------------------------------------------
 # --debug flag (line 213)
 # ---------------------------------------------------------------------------

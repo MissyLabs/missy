@@ -146,6 +146,30 @@ class TestLoadConfigToolPolicy:
         assert cfg.tools.profile == "full"
         assert cfg.agents == {}
 
+    def test_default_disabled_tools_is_empty(self):
+        cfg = get_default_config()
+        assert cfg.tools.disabled_tools == []
+
+    def test_loads_disabled_tools(self, tmp_path: Path):
+        """Regression: ToolRegistry.disable()/is_enabled() (an
+        execute()-level kill switch stronger than tools.deny, which only
+        narrows what's offered to the model per turn) was fully built and
+        tested but had zero callers anywhere in the codebase -- an
+        operator had no way to actually disable a tool via any
+        first-party surface. tools.disabled_tools makes this reachable.
+        """
+        path = _write_yaml(
+            tmp_path,
+            """
+            tools:
+              disabled_tools: ["shell_exec", "file_write"]
+            workspace_path: "/tmp/workspace"
+            audit_log_path: "/tmp/audit.log"
+            """,
+        )
+        cfg = load_config(str(path))
+        assert cfg.tools.disabled_tools == ["shell_exec", "file_write"]
+
     def test_loads_global_and_agent_tool_policy(self, tmp_path: Path):
         path = _write_yaml(
             tmp_path,

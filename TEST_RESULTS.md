@@ -1,5 +1,52 @@
 # TEST_RESULTS
 
+## Run: 2026-07-13 12:45 UTC — round 19 research pass: ToolRegistry disable()/is_enabled() wiring, GET /api/v1/tools disabled-tool leak
+
+- Context: round 19 of the research-pass invitation (rounds 1-18 covered
+  Scheduler, Persona, API server, MessageBus, Screencast, Memory-
+  compaction, GraphMemoryStore, Vault, Config, Vision, CandidateGenerator,
+  MCP-manager, SubAgentRunner, Learnings, Playbook, AttentionSystem,
+  Discord-channel, operator-controls, AuditLogger, BehaviorLayer,
+  ContextManager, MemorySynthesizer, Watchdog, InteractiveApproval,
+  WebhookChannel, ConfigWatcher, ContainerSandbox, MCP-client, setup-
+  wizard, ToolRegistry-execute-path, FailureTracker, CircuitBreaker,
+  Checkpoint, Discord-REST-client, DeviceRegistry, VoiceServer,
+  AgentIdentity, TrustScorer, providers, SecurityScanner, LandlockPolicy,
+  SkillDiscovery, vision-capture, CostTracker, CodeEvolutionManager,
+  StructuredOutput, ProactiveManager, SleeptimeWorker, Summarizer,
+  HatchingManager, PersonaManager, BehaviorLayer-tone, api-auth, otel,
+  vector_store, scheduler-parser, graph_store-CRUD, checkpoint-WAL,
+  McpManager-lifecycle, interactive_approval-TUI, secrets-patterns,
+  drift-mechanics, web_console.py). This round targeted
+  `missy/core/session.py`, `missy/agent/condensers.py`,
+  `missy/tools/builtin/code_evolve.py`, and `missy/tools/registry.py`'s
+  listing/metadata surface as primary audit subjects from fresh angles.
+  SessionManager, CondenserPipeline's stage boundaries, and
+  code_evolve.py's exclusion-list enforcement all checked out clean.
+- **ToolRegistry disable()/is_enabled() wiring**: a fully built, fully
+  tested, execute()-level tool kill switch had zero production callers
+  — operators had no way to disable a risky tool. Fixed with a new
+  tools.disabled_tools config field, applied at tool-registration time.
+- Command: `pytest tests/config/test_settings.py -k disabled_tools -v`
+  and `pytest tests/cli/test_cli_main_extended.py -k disabled_tools_config -v`
+- Result: `2 passed` + `1 passed`. All confirmed to genuinely fail
+  against the pre-fix code via `git stash`.
+- **GET /api/v1/tools disabled-tool leak**: the endpoint never called
+  is_enabled(), so a disabled tool's full schema was indistinguishable
+  from an enabled one. Fixed by adding an "enabled" field to the
+  response.
+- Command: `pytest tests/api/test_server.py -k TestTools -v`
+- Result: `4 passed`. The new regression test confirmed to genuinely
+  fail against the pre-fix code via `git stash` (`KeyError: 'enabled'`).
+  1 pre-existing test needed an incidental mock-configuration fix
+  (MagicMock-not-JSON-serializable), unrelated to what it tests.
+- Command: `pytest tests/api/ tests/tools/ tests/config/ tests/cli/ -q`
+- Result: `3200 passed, 2 skipped`.
+- Command: `python3 -m pytest tests/ -q -o faulthandler_timeout=120`
+  (full suite, background run)
+- Result: `21366 passed, 13 skipped in 524.47s (0:08:44)`. 0 failed, up
+  from 21362. Thirty-seventh consecutive fully green full-suite run.
+
 ## Run: 2026-07-13 12:20 UTC — round 18 research pass: CostTracker pricing-table overcharge, SkillDiscovery block-list data loss, web console escaping gap
 
 - Context: round 18 of the research-pass invitation (rounds 1-17:
