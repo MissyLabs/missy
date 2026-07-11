@@ -197,6 +197,20 @@ class CandidateGenerator:
             "required": [k for k, v in parameters.items() if v.get("required", False)],
         }
         perms = dict(permissions or {})
+        # _derive_permissions() (the generate_from_pattern path) already
+        # gates "shell" behind self._allow_shell, but this direct-schema
+        # path took caller-supplied permissions verbatim and only ran them
+        # through _validate(), which merely checks membership in
+        # _SAFE_PERMISSIONS (which itself includes "shell") -- so a caller
+        # could request permissions={"shell": True} here even with
+        # allow_shell=False, bypassing the class's own documented
+        # always-denied-without-override contract for this permission.
+        if perms.get("shell") and not self._allow_shell:
+            return GenerationResult(
+                ok=False,
+                candidate=None,
+                reason="shell permission requires allow_shell=True on this generator",
+            )
         validation_err = _validate(name, schema, perms)
         if validation_err:
             return GenerationResult(ok=False, candidate=None, reason=validation_err)

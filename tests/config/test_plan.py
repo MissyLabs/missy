@@ -36,6 +36,34 @@ class TestBackupConfig:
         backups = list_backups(backup_dir)
         assert len(backups) <= 5
 
+    def test_two_backups_within_the_same_second_do_not_collide(self, tmp_path, monkeypatch):
+        """Regression: two backup_config() calls within the same wall-clock
+        second (the timestamp's resolution) previously produced the
+        identical filename, and shutil.copy2() silently overwrote the first
+        backup with the second's content -- no error, no warning, the first
+        backup's data simply gone.
+        """
+        from missy.config.plan import backup_config
+
+        # Freeze the timestamp so both calls fall in the "same second"
+        # deterministically, rather than relying on real clock timing.
+        monkeypatch.setattr("missy.config.plan.time.strftime", lambda fmt: "20260101_120000")
+
+        config_file = tmp_path / "config.yaml"
+        backup_dir = tmp_path / "config.d"
+
+        config_file.write_text("version: 1\n")
+        path1 = backup_config(config_file, backup_dir)
+
+        config_file.write_text("version: 2\n")
+        path2 = backup_config(config_file, backup_dir)
+
+        assert path1 != path2, "same-second backups must not share a filename"
+        assert path1.exists()
+        assert path2.exists()
+        assert path1.read_text() == "version: 1\n"
+        assert path2.read_text() == "version: 2\n"
+
 
 class TestRollback:
     """Tests for rollback."""

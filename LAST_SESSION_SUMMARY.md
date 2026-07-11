@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (70 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eighteen consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (71 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eighteen consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -2770,14 +2770,47 @@ tests/agent/test_compaction.py tests/agent/test_compaction_extended.py
 tests/agent/test_compaction_context_edges.py -q`: `2716 passed, 7
 skipped`.
 
+### Post-backlog (sixty-fourth checkpoint): round 4 research pass — config backup collision, vision eviction miscount, candidate-generator bypass
+
+Round 4 (round 1: Scheduler/Persona; round 2: API/MessageBus/
+Screencast; round 3: Memory-compaction/GraphStore/Vault), into
+`missy/tools/intelligence.py`, remaining vision subsystems, remaining
+Discord areas, individual providers, and `missy/config/`. Three
+genuine findings; tool benchmark store, provider-gate/request-tracker,
+and all four providers' streaming/error paths checked out clean.
+
+1. **Config backup collision**: `backup_config()` named backups by
+   second-resolution timestamp with no collision check —
+   `shutil.copy2()` silently clobbered an earlier same-second backup,
+   zero errors raised. Reachable via `missy config set-provider`, the
+   setup wizard, and `migrate_config()`, all of which call it before
+   an overwrite. Fixed with a numeric-suffix disambiguation. 1 new
+   test, confirmed to fail pre-fix.
+2. **Vision session eviction miscount**: `SceneManager.create_session()`
+   evicted the oldest session whenever at capacity, before checking if
+   the given `task_id` already existed — so replacing an existing
+   session (no net growth) still evicted a completely unrelated,
+   unrecoverable active session. Fixed by excluding same-key replaces
+   from the capacity check. 1 new test, confirmed to fail pre-fix.
+3. **Candidate-generator permission bypass**:
+   `generate_from_schema()` bypassed the class's own `allow_shell`
+   gate that the pattern-derivation path enforces correctly. Currently
+   zero production callers, same caliber as checkpoint 63's
+   `merge_entities` finding — a latent contract violation on a
+   documented method. Fixed by adding the same gate. 2 new tests, the
+   deny-path one confirmed to fail pre-fix.
+
+Verified: `pytest tests/config/ tests/vision/ tests/tools/ -q`: `4907
+passed, 2 skipped`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q -o faulthandler_timeout=120
-21258 passed, 13 skipped in 611.87s (0:10:11)
+21262 passed, 13 skipped, 2 warnings in 564.27s (0:09:24)
 ```
 
-**Zero failures**, the twenty-first consecutive fully green full-suite
+**Zero failures**, the twenty-second consecutive fully green full-suite
 run. Passed count is up from 21191 to 21212 (the DISC-CMD-008
 rate-limiting checkpoint: 10 standalone unit tests, 9 real
 dispatch-path integration tests, 3 config-parsing tests) to 21213 (the
@@ -2796,9 +2829,12 @@ MessageBus wiring fix's 2 new tests, the API N+1-query fix's 1 new
 test, and the screencast session-pruning fix's 4 new tests) to 21258
 (the compaction continuity fix's 1 new test, the graph-merge crash
 fix's 2 new tests, and the Vault concurrent-write fix's 0 net new
-tests but 2 existing tests strengthened — the eighteenth green run's
-`ProviderRegistry` fix, and all of the sixty-first/sixty-second
-checkpoints' fixes, are confirmed still holding).
+tests but 2 existing tests strengthened) to 21262 (the config
+backup-collision fix's 1 new test, the vision eviction-miscount fix's
+1 new test, and the candidate-generator permission-bypass fix's 2 new
+tests — the eighteenth green run's `ProviderRegistry` fix, and all of
+the sixty-first through sixty-third checkpoints' fixes, are confirmed
+still holding).
 The occasional Hypothesis deprecation warnings seen in some runs of
 this suite (`test_property_based_fuzz.py` and/or
 `test_policy_property.py`, depending on test ordering — this run shows

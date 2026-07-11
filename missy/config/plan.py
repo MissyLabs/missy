@@ -36,6 +36,18 @@ def backup_config(config_path: str | Path, backup_dir: str | Path | None = None)
 
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     backup_path = dest_dir / f"config.yaml.{timestamp}"
+    # Two backup_config() calls within the same wall-clock second (the
+    # timestamp's resolution) previously produced the identical filename,
+    # and shutil.copy2() overwrites an existing file with no collision
+    # check -- the second call silently destroyed the first backup's
+    # content, with no error raised. Disambiguate with a numeric suffix so
+    # rapid successive backups (e.g. configuring two providers back-to-back,
+    # or migrate_config() immediately followed by another write) are never
+    # lost.
+    suffix = 1
+    while backup_path.exists():
+        backup_path = dest_dir / f"config.yaml.{timestamp}_{suffix}"
+        suffix += 1
     shutil.copy2(str(src), str(backup_path))
 
     _prune_backups(dest_dir)

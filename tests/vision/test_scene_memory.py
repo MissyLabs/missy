@@ -219,6 +219,28 @@ class TestSceneManager:
         mgr.create_session("task-3")
         assert mgr.get_session("task-1") is None
 
+    def test_replacing_existing_task_id_at_capacity_does_not_evict_unrelated_session(self):
+        """Regression: create_session() checked capacity BEFORE checking
+        whether task_id already exists. Replacing an existing task_id causes
+        no net growth (the entry is overwritten, not added alongside), so it
+        must not count toward the capacity check -- otherwise a caller
+        simply resetting/replacing an already-tracked session evicts a
+        completely unrelated, unrecoverable, in-process-only active session
+        it never asked to touch.
+        """
+        mgr = SceneManager(max_sessions=2)
+        mgr.create_session("task-A")
+        mgr.create_session("task-B")
+        mgr.get_session("task-B").add_observation("important B data")
+
+        # Both sessions are at capacity and active. Re-creating task-B (an
+        # existing key) is a same-key replace, not a net-new session, and
+        # must not evict the unrelated task-A.
+        mgr.create_session("task-B")
+
+        assert mgr.get_session("task-A") is not None
+        assert mgr.get_session("task-B") is not None
+
     def test_close_all(self):
         mgr = SceneManager()
         mgr.create_session("task-1")

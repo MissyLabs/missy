@@ -4136,6 +4136,94 @@ skipped`. **Full-suite confirmation:** `python3 -m pytest tests/ -q
 (0:10:11)` — 0 failed, up from 21255. Twenty-first consecutive fully
 green full-suite run.
 
+### Post-backlog (sixty-fourth checkpoint): round 4 research pass finds a config backup collision, a vision session eviction miscount, and a candidate-generator permission bypass
+
+Round 4 of the research-pass invitation (round 1: Scheduler/Persona;
+round 2: API/MessageBus/Screencast; round 3: Memory-compaction/
+GraphStore/Vault), this time into `missy/tools/intelligence.py` +
+`benchmark/`, remaining vision subsystems, remaining Discord areas,
+individual provider implementations, and `missy/config/migrate.py`/
+`plan.py`/`hotreload.py`. Three genuine findings, live-verified and
+fixed; several other areas were audited and found clean (tool
+benchmark store/scoring/runner, provider-gate/request-tracker/
+candidate-loader, vision camera-discovery caching — already fixed per
+its own inline comment — and all four individual provider
+implementations' streaming/error-classification paths).
+
+**1. `backup_config()` silently clobbered same-second backups —
+defeating the whole "back up before overwrite" safety net.**
+`missy/config/plan.py` named each backup
+`config.yaml.{time.strftime("%Y%m%d_%H%M%S")}` (second resolution) and
+wrote it with `shutil.copy2()`, which overwrites an existing file of
+the same name with no collision check. Two `backup_config()` calls
+within the same wall-clock second produce the identical filename, so
+the second call's copy silently destroys the first backup's content —
+with zero errors or warnings raised anywhere. **Live-reproduced**:
+wrote v1, backed up; wrote v2, backed up again within the same second
+— only one backup file existed afterward, containing v2's content;
+v1's backup was gone. This is reachable in production: `missy config
+set-provider`, the setup wizard, and `migrate_config()` all call
+`backup_config()` before an overwrite — any two of these run
+back-to-back in the same second (e.g. a fast automated setup, or
+configuring two providers in a shell loop) silently loses the earlier
+backup, in exactly the scenario an operator would need it for (rolling
+back a bad credential/config change). A pre-existing test
+(`test_backup_prunes_to_max`) even has a `time.sleep(0.05)` comment
+noting "ensure distinct timestamps" — the collision risk was noticed
+but dodged in the test rather than fixed in the code. Fixed by
+disambiguating with a numeric suffix (`_1`, `_2`, ...) whenever the
+timestamped path already exists, so rapid successive backups are never
+lost; `list_backups()`'s prefix filter and mtime-based sort are both
+unaffected by the new suffix. 1 new test, confirmed to genuinely fail
+against the pre-fix code via `git stash` (both backups landed at the
+identical path).
+
+**2. `SceneManager.create_session()` miscounted a same-`task_id`
+replace as needing an eviction, destroying an unrelated active
+session's data.** `missy/vision/scene_memory.py` evicted the oldest
+session whenever `len(self._sessions) >= self._max_sessions`,
+*before* checking whether `task_id` already existed — but replacing an
+existing key causes no net growth (the old entry is overwritten, not
+added alongside), so it should never have counted toward the capacity
+check. **Live-reproduced**: at `max_sessions=2` with two active
+sessions (`task-A`, `task-B`), simply re-creating `task-B` (a
+same-key replace) evicted the completely unrelated `task-A`, losing
+its accumulated frames/state/observations — data explicitly
+in-process-only per the module's own privacy-motivated docstring, so
+genuinely and irrecoverably lost, not merely delayed. Fixed by only
+evicting when `task_id not in self._sessions` in addition to being at
+capacity. 1 new test, confirmed to genuinely fail (task-A evicted)
+against the pre-fix code via `git stash`.
+
+**3. `CandidateGenerator.generate_from_schema()` bypassed the class's
+own `allow_shell` gate.** The module declares `_DENIED_PERMISSIONS =
+{"shell"}` and the pattern-derivation path
+(`_derive_permissions()`) correctly gates `shell` behind an explicit
+`allow_shell=True` override — but `_DENIED_PERMISSIONS` is never
+actually referenced anywhere, and the direct-schema path
+(`generate_from_schema()`) took caller-supplied `permissions` verbatim,
+only running them through `_validate()`, which merely checks
+`_SAFE_PERMISSIONS` membership (a set that itself includes `"shell"`).
+**Live-reproduced**: `CandidateGenerator(allow_shell=False)
+.generate_from_schema(..., permissions={"shell": True})` returned
+`ok=True` with the shell permission intact, despite `allow_shell=False`.
+Fixed by adding the same `allow_shell` check to `generate_from_schema()`
+directly. Note: `generate_from_schema` currently has zero production
+callers (only `generate_from_pattern` is wired into `agent/runtime.py`),
+so this wasn't reachable today — same caliber as checkpoint 63's
+`GraphMemoryStore.merge_entities()` finding: a documented public method
+on a class that *is* live in production, with a latent contract
+violation waiting for whoever wires up the direct-schema path. 2 new
+tests (deny without the flag, allow with it), the first confirmed to
+genuinely fail (bypass succeeded) against the pre-fix code via
+`git stash`.
+
+Verified: `pytest tests/config/ tests/vision/ tests/tools/ -q`: `4907
+passed, 2 skipped`. **Full-suite confirmation:** `python3 -m pytest
+tests/ -q -o faulthandler_timeout=120` → `21262 passed, 13 skipped, 2
+warnings in 564.27s (0:09:24)` — 0 failed, up from 21258. Twenty-second
+consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

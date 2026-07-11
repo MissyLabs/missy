@@ -1,5 +1,56 @@
 # TEST_RESULTS
 
+## Run: 2026-07-12 07:00 UTC — round 4 research pass: config backup collision, vision session eviction miscount, candidate-generator permission bypass
+
+- Context: round 4 of the research-pass invitation (round 1:
+  Scheduler/Persona; round 2: API/MessageBus/Screencast; round 3:
+  Memory-compaction/GraphStore/Vault). This round targeted
+  `missy/tools/intelligence.py`/`benchmark/`, remaining vision
+  subsystems, remaining Discord areas, individual provider
+  implementations, and `missy/config/migrate.py`/`plan.py`/
+  `hotreload.py`.
+- **Config backup collision**: `backup_config()` named backups by
+  second-resolution timestamp and wrote via `shutil.copy2()` with no
+  collision check — two calls within the same second silently
+  clobbered the earlier backup, zero errors raised. Live-reproduced:
+  only 1 backup file existed after two same-second calls, containing
+  the second write's content. Fixed with a numeric-suffix
+  disambiguation on collision.
+- Command: `pytest tests/config/test_plan.py -v`
+- Result: `9 passed`. The new test confirmed to genuinely fail against
+  the pre-fix code via `git stash` (both backups landed at the
+  identical path).
+- **Vision session eviction miscount**: `SceneManager.create_session()`
+  evicted the oldest session whenever at capacity, before checking
+  whether the given `task_id` already existed — so a same-key replace
+  (no net growth) still triggered an eviction of a completely
+  unrelated, unrecoverable active session. Live-reproduced: replacing
+  an existing `task-B` at capacity evicted the unrelated `task-A`.
+  Fixed by excluding same-key replaces from the capacity check.
+- Command: `pytest tests/vision/test_scene_memory.py -v`
+- Result: `26 passed`. The new test confirmed to genuinely fail
+  (task-A evicted) against the pre-fix code via `git stash`.
+- **Candidate-generator permission bypass**:
+  `CandidateGenerator.generate_from_schema()` took caller-supplied
+  permissions verbatim, bypassing the class's own `allow_shell` gate
+  that `generate_from_pattern`'s `_derive_permissions()` correctly
+  enforces. Live-reproduced: `allow_shell=False` still let a
+  `permissions={"shell": True}` request through. Fixed by adding the
+  same gate to `generate_from_schema()`. Currently zero production
+  callers (only `generate_from_pattern` is wired in), so not reachable
+  today — same caliber as the checkpoint 63 `merge_entities` finding.
+- Command: `pytest tests/tools/test_candidate_generator.py -v`
+- Result: `25 passed`. The deny-path test confirmed to genuinely fail
+  (bypass succeeded) against the pre-fix code via `git stash`.
+- Command: `pytest tests/config/ tests/vision/ tests/tools/ -q`
+- Result: `4907 passed, 2 skipped`.
+- Command: `python3 -m pytest tests/ -q -o faulthandler_timeout=120`
+  (full suite, background run)
+- Result: `21262 passed, 13 skipped, 2 warnings in 564.27s (0:09:24)`.
+  0 failed, up from 21258. Twenty-second consecutive fully green
+  full-suite run. The 2 warnings are pre-existing, order-dependent
+  Hypothesis deprecation notices, not introduced by this checkpoint.
+
 ## Run: 2026-07-12 06:20 UTC — round 3 research pass: compaction continuity bug, graph-merge crash, severe Vault concurrent-write data loss
 
 - Context: round 3 of the research-pass invitation (round 1: Scheduler/
