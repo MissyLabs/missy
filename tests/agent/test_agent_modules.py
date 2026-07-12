@@ -425,6 +425,60 @@ class TestPromptPatchManagerApproveReject:
         result = patch_manager.reject("nonexistent")
         assert result is False
 
+    def test_approve_already_rejected_patch_is_refused(self, patch_manager):
+        """Regression: approve()/reject() performed unconditional status
+        transitions with no guard on the patch's current status -- a
+        rejected patch could be silently re-approved (e.g. a stale/replayed
+        CLI invocation issued after the operator explicitly rejected it),
+        reinstating it into get_active_patches()'s active set with no
+        further human review, contradicting the "approve a *proposed*
+        patch" contract both approve()'s docstring and the CLI help text
+        (`missy patches approve`) document.
+        """
+        from missy.agent.prompt_patches import PatchStatus, PatchType
+
+        patch = patch_manager.propose(PatchType.WORKFLOW_PATTERN, "hint", confidence=0.5)
+        assert patch_manager.reject(patch.id) is True
+        assert patch.status == PatchStatus.REJECTED
+
+        result = patch_manager.approve(patch.id)
+        assert result is False
+        assert patch.status == PatchStatus.REJECTED
+        assert patch not in patch_manager.get_active_patches()
+
+    def test_approve_already_expired_patch_is_refused(self, patch_manager):
+        """An auto-retired (poor success rate) patch must not be silently
+        resurrected by re-approving it.
+        """
+        from missy.agent.prompt_patches import PatchStatus, PatchType
+
+        patch = patch_manager.propose(PatchType.WORKFLOW_PATTERN, "hint", confidence=0.5)
+        assert patch_manager.approve(patch.id) is True
+        patch.applications = 5
+        patch.successes = 0
+        # get_active_patches() transitions a poor-performing approved patch
+        # to EXPIRED as a side effect.
+        assert patch not in patch_manager.get_active_patches()
+        assert patch.status == PatchStatus.EXPIRED
+
+        result = patch_manager.approve(patch.id)
+        assert result is False
+        assert patch.status == PatchStatus.EXPIRED
+
+    def test_reject_already_approved_patch_is_refused(self, patch_manager):
+        """reject() must only apply to a patch still awaiting review --
+        rejecting an already-approved patch is a distinct "revoke" action
+        this method doesn't perform.
+        """
+        from missy.agent.prompt_patches import PatchStatus, PatchType
+
+        patch = patch_manager.propose(PatchType.WORKFLOW_PATTERN, "hint", confidence=0.5)
+        assert patch_manager.approve(patch.id) is True
+
+        result = patch_manager.reject(patch.id)
+        assert result is False
+        assert patch.status == PatchStatus.APPROVED
+
 
 class TestPromptPatchManagerQueries:
     """Tests for list/query operations on PromptPatchManager."""

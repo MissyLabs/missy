@@ -3947,7 +3947,7 @@ def patches_approve(ctx: click.Context, patch_id: str) -> None:
     if mgr.approve(patch_id):
         _print_success(f"Patch [bold]{patch_id}[/] approved.")
     else:
-        _print_error(f"Patch {patch_id!r} not found.")
+        _print_error(f"Patch {patch_id!r} not found or not awaiting review.")
 
 
 @patches.command("reject")
@@ -3962,7 +3962,7 @@ def patches_reject(ctx: click.Context, patch_id: str) -> None:
     if mgr.reject(patch_id):
         _print_success(f"Patch [bold]{patch_id}[/] rejected.")
     else:
-        _print_error(f"Patch {patch_id!r} not found.")
+        _print_error(f"Patch {patch_id!r} not found or not awaiting review.")
 
 
 # ---------------------------------------------------------------------------

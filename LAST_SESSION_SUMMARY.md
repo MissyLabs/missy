@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (127 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for seventy-nine consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (128 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eighty consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -5356,16 +5356,50 @@ Verified: `pytest tests/mcp/test_mcp_manager.py -k
 manifest_drift_during_approval_wait -v`: `1 passed`. `pytest
 tests/mcp/ tests/agent/ tests/security/ -q`: `6765 passed, 4 skipped`.
 
+### Post-backlog (one-hundred-twenty-second checkpoint): round 66 research pass — `PromptPatchManager.approve()`/`reject()` had no guard on a patch's current lifecycle status
+
+Round 66 checked `_ApiSession` streaming lifecycle, unaudited SEC-0xx
+checks, `structured_output.py` retry degradation, and
+`message_bus.py` fnmatch matching — all came back clean.
+
+**Found and fixed a real bug in the prompt self-tuning patch approval
+workflow: `approve()`/`reject()` mutated a patch's status
+unconditionally, with no check of its CURRENT status first — so a
+stale or replayed call could silently resurrect an already-`REJECTED`
+or auto-`EXPIRED` patch back into the active, live-system-prompt-
+injecting set, with no further human review.** Both docstrings and
+the identical CLI help text promise a `PROPOSED → APPROVED`/`REJECTED`
+transition specifically. Concretely: an operator rejects a bad patch,
+then a later unrelated approve call for the same id silently succeeds
+and reinstates it — `get_active_patches()` only checks
+`status == APPROVED` and `is_expired`, so the resurrected patch is
+injected into the next request's system prompt. Fixed by adding a
+status check to both methods: they now return `False` when the
+matched patch isn't currently `PROPOSED`, leaving its status
+untouched. Updated CLI failure messages accordingly. Live-verified
+end-to-end with a real `PromptPatchManager`. 3 new tests, all
+confirmed via `git stash` to genuinely fail pre-fix.
+
+Verified: `pytest tests/agent/test_agent_modules.py -k
+"already_rejected or already_expired or already_approved" -v`: `3
+passed`. `pytest tests/agent/ tests/cli/ -q`: `5411 passed, 4
+skipped`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21500 passed, 14 skipped in 756.98s (0:12:36)
+21503 passed, 14 skipped in 766.02s (0:12:46)
 ```
 
-**Zero failures**, the seventy-ninth consecutive fully green
-full-suite run. Passed count is up from 21499 to 21500 (the round 65
-checkpoint's 1 new test:
+**Zero failures**, the eightieth consecutive fully green full-suite
+run. Passed count is up from 21500 to 21503 (the round 66 checkpoint's
+3 new tests: `test_approve_already_rejected_patch_is_refused`,
+`test_approve_already_expired_patch_is_refused`,
+`test_reject_already_approved_patch_is_refused` — full detail above;
+all of the sixty-first through one-hundred-twenty-first checkpoints'
+fixes are confirmed still holding). Passed count is up from 21499 to
+21500 (the round 65 checkpoint's 1 new test:
 `test_manifest_drift_during_approval_wait_blocks_call` — full detail
 above; all of the sixty-first through one-hundred-twentieth
 checkpoints' fixes are confirmed still holding). Passed count is up

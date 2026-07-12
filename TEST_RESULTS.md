@@ -1,5 +1,43 @@
 # TEST_RESULTS
 
+## Run: 2026-07-12 UTC — round 66 research pass: PromptPatchManager.approve()/reject() had no guard on a patch's current lifecycle status
+
+- Context: round 66 checked _ApiSession streaming lifecycle (queued
+  from round 65), unaudited SEC-0xx checks, structured_output.py retry
+  degradation, and message_bus.py fnmatch matching -- all came back
+  clean on inspection.
+- **approve()/reject() performed unconditional status transitions**:
+  neither method checked the patch's CURRENT status before mutating
+  it, despite both docstrings and the identical CLI help text
+  promising "a proposed patch" semantics specifically. A stale/replayed
+  `missy patches approve <id>` call could silently resurrect an
+  already-REJECTED or auto-EXPIRED (poor success rate) patch back into
+  the active, live-system-prompt-injecting set with zero further human
+  review. Concretely: operator rejects a bad patch, then a later
+  unrelated approve call for the same id (second terminal, retried
+  script) silently succeeds and reinstates it -- get_active_patches()
+  only checks status==APPROVED and is_expired, so the resurrected
+  patch is injected into the next request's system prompt. Existing
+  tests only exercised approve()/reject() on a freshly-proposed patch
+  or a nonexistent id, never on an already-rejected/expired/approved
+  one.
+- Fixed by adding a status check to both methods: approve()/reject()
+  now return False when the matched patch isn't currently PROPOSED,
+  leaving its status untouched. Updated CLI failure messages from "not
+  found" to "not found or not awaiting review".
+- Command: `pytest tests/agent/test_agent_modules.py -k "already_rejected or already_expired or already_approved" -v`
+- Result: `3 passed`. All 3 new tests
+  (test_approve_already_rejected_patch_is_refused,
+  test_approve_already_expired_patch_is_refused,
+  test_reject_already_approved_patch_is_refused) confirmed via `git
+  stash` to genuinely fail pre-fix.
+- Live-verified end-to-end with a real PromptPatchManager: a rejected
+  patch's re-approve attempt returns False and stays REJECTED; an
+  auto-expired patch's re-approve attempt likewise returns False and
+  stays EXPIRED.
+- Broader sweep: `pytest tests/agent/ tests/cli/ -q`: `5411 passed, 4 skipped`.
+- Full suite: `python3 -m pytest tests/ -q` → `21503 passed, 14 skipped in 766.02s (0:12:46)` — 0 failed, up from 21500. Eightieth consecutive fully green full-suite run.
+
 ## Run: 2026-07-12 UTC — round 65 research pass: MCP manifest-digest re-verification gap across an ApprovalGate wait
 
 - Context: round 65 completed the queued webhook secret-rotation check

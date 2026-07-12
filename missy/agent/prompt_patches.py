@@ -198,15 +198,28 @@ class PromptPatchManager:
     def approve(self, patch_id: str) -> bool:
         """Approve the patch with the given ID.
 
+        Only a patch currently in :attr:`PatchStatus.PROPOSED` can be
+        approved -- without this guard, re-issuing an approve call against
+        an already-``REJECTED`` or already-``EXPIRED`` patch (e.g. a stale
+        CLI/API invocation replayed after the operator explicitly rejected
+        it, or after it was auto-retired for a poor success rate) would
+        silently reinstate it into :meth:`get_active_patches`'s active set
+        with no further human review, contradicting both this method's own
+        "approve a *proposed* patch" contract and the identical CLI help
+        text (``missy patches approve``).
+
         Args:
             patch_id: Short patch identifier.
 
         Returns:
-            ``True`` if the patch was found and approved.
+            ``True`` if the patch was found in ``PROPOSED`` status and was
+            approved; ``False`` if not found or not currently proposed.
         """
         with self._lock:
             for p in self._patches:
                 if p.id == patch_id:
+                    if p.status != PatchStatus.PROPOSED:
+                        return False
                     p.status = PatchStatus.APPROVED
                     self._save()
                     return True
@@ -215,15 +228,22 @@ class PromptPatchManager:
     def reject(self, patch_id: str) -> bool:
         """Reject the patch with the given ID.
 
+        Only a patch currently in :attr:`PatchStatus.PROPOSED` can be
+        rejected -- see :meth:`approve`'s docstring for why an unguarded
+        status transition is a real bug, not just a hypothetical one.
+
         Args:
             patch_id: Short patch identifier.
 
         Returns:
-            ``True`` if the patch was found and rejected.
+            ``True`` if the patch was found in ``PROPOSED`` status and was
+            rejected; ``False`` if not found or not currently proposed.
         """
         with self._lock:
             for p in self._patches:
                 if p.id == patch_id:
+                    if p.status != PatchStatus.PROPOSED:
+                        return False
                     p.status = PatchStatus.REJECTED
                     self._save()
                     return True

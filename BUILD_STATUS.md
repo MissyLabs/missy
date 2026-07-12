@@ -9322,6 +9322,75 @@ tests/mcp/ tests/agent/ tests/security/ -q`: `6765 passed, 4 skipped`.
 `21500 passed, 14 skipped in 756.98s (0:12:36)` — 0 failed, up from
 21499. Seventy-ninth consecutive fully green full-suite run.
 
+### Post-backlog (one-hundred-twenty-second checkpoint): round 66 research pass fixes `PromptPatchManager.approve()`/`reject()` performing unconditional status transitions with no guard on a patch's current lifecycle state
+
+Round 66 checked several genuinely fresh angles: `missy/api/server.py`'s
+`_ApiSession` streaming lifecycle (queued from round 65, deprioritized
+in favor of a concrete finding elsewhere), unaudited `SEC-0xx` checks in
+`security/scanner.py`, `structured_output.py`'s retry-degradation
+behavior on total validation failure, and `core/message_bus.py`'s
+fnmatch wildcard topic matching all came back clean on inspection —
+retries correctly return `success=False` rather than silently
+returning malformed data, and the untouched `SEC-0xx` checks correctly
+mirror their real enforcement engines' semantics.
+
+**Found and fixed a real bug in the prompt self-tuning patch approval
+workflow: `PromptPatchManager.approve()`/`reject()` mutated a patch's
+status unconditionally, with no check of its CURRENT status first —
+so a stale or replayed call could silently resurrect an already-
+`REJECTED` or auto-`EXPIRED` patch back into the active, live-system-
+prompt-injecting set, with no further human review.** Both methods'
+own docstrings ("Approve a proposed patch" / "Reject a proposed
+patch") and the identical CLI help text
+(`missy patches approve`/`reject`) promise a `PROPOSED → APPROVED`/
+`PROPOSED → REJECTED` transition specifically, but the implementation
+enforced no such precondition: `approve(patch_id)` set
+`p.status = PatchStatus.APPROVED` for ANY patch matching the ID,
+regardless of whether it was currently `PROPOSED`, already
+`REJECTED`, already `EXPIRED` (auto-retired for a &lt;40% success rate
+over ≥5 applications), or even already `APPROVED`. Concretely: an
+operator runs `missy patches reject abc12345` to reject a bad patch
+(status → `REJECTED`); a later, unrelated `missy patches approve
+abc12345` invocation (a second terminal, a retried script, a stale
+queued command) silently succeeds, reinstating the rejected patch —
+`get_active_patches()` only checks `status == APPROVED` and
+`is_expired`, so the un-rejected patch is injected into the live
+system prompt on the very next request with zero additional review.
+The same applies to resurrecting an auto-retired `EXPIRED` patch: none
+of its poor-performance counters (`applications`/`successes`) are
+reset, so it re-enters the active set immediately despite having been
+demoted for exactly that track record. Existing tests
+(`test_approve_existing_patch`/`test_reject_existing_patch` in both
+`tests/agent/test_agent_modules.py` and `tests/agent/test_prompt_patches.py`)
+only exercised `approve()`/`reject()` on a freshly-`PROPOSED` patch or
+a nonexistent ID — never on an already-`REJECTED`/`EXPIRED`/`APPROVED`
+patch, so the missing guard was never caught.
+
+Fixed by adding a status check to both methods: `approve()`/`reject()`
+now return `False` (matching the pre-existing "not found" return
+contract) when the matched patch's `status` isn't currently
+`PatchStatus.PROPOSED`, leaving its status untouched rather than
+overwriting it. Updated the CLI's failure messages
+(`missy patches approve`/`reject`) from "not found" to "not found or
+not awaiting review" to accurately cover the new `False`-but-found
+case. Live-verified end-to-end with a real `PromptPatchManager`: a
+rejected patch's re-approve attempt returns `False` and its status
+stays `REJECTED`; an auto-expired patch's re-approve attempt likewise
+returns `False` and stays `EXPIRED`. 3 new tests
+(`test_approve_already_rejected_patch_is_refused`,
+`test_approve_already_expired_patch_is_refused`,
+`test_reject_already_approved_patch_is_refused`), all confirmed via
+`git stash` to genuinely fail pre-fix.
+
+Verified: `pytest tests/agent/test_agent_modules.py -k
+"already_rejected or already_expired or already_approved" -v`: `3
+passed`. `pytest tests/agent/ tests/cli/ -q`: `5411 passed, 4
+skipped`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21503 passed, 14 skipped in 766.02s (0:12:46)` — 0 failed, up from
+21500. Eightieth consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security
