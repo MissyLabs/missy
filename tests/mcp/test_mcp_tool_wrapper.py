@@ -117,3 +117,94 @@ class TestExecute:
         result = wrapper.execute()
 
         assert result.success is True
+
+
+class TestFromMcpDictThroughRegistryIntegration:
+    """Regression: end-to-end proof that a real MCP server's annotations
+    actually reach ToolRegistry's filesystem policy enforcement, not just
+    that ToolAnnotation/McpToolWrapper's own internal arithmetic is
+    consistent with itself. Before the from_mcp_dict() fix,
+    filesystem_access was never set for any MCP-sourced annotation, so
+    this whole path was structurally a no-op regardless of what a real
+    MCP tool declared or did.
+    """
+
+    def _init_engine(self, tmp_path):
+        from missy.config.settings import (
+            FilesystemPolicy,
+            MissyConfig,
+            NetworkPolicy,
+            PluginPolicy,
+            ShellPolicy,
+        )
+        from missy.policy import engine as engine_module
+        from missy.policy.engine import init_policy_engine
+
+        engine_module._engine = None
+        cfg = MissyConfig(
+            network=NetworkPolicy(default_deny=True),
+            filesystem=FilesystemPolicy(
+                allowed_read_paths=[str(tmp_path)], allowed_write_paths=[]
+            ),
+            shell=ShellPolicy(),
+            plugins=PluginPolicy(),
+            providers={},
+            workspace_path="/tmp",
+            audit_log_path="/tmp/audit.log",
+        )
+        init_policy_engine(cfg)
+
+    def test_read_only_mcp_tool_with_path_kwarg_is_policy_checked(self, tmp_path):
+        """A real MCP server declaring a read-only filesystem tool (an
+        honest, natural annotation for e.g. a "read_file" tool) must still
+        have its declared file_path/path kwarg checked against Missy's
+        own filesystem policy -- not silently skip enforcement just
+        because the MCP spec has no dedicated filesystem hint.
+        """
+        from missy.tools.registry import ToolRegistry
+
+        self._init_engine(tmp_path)
+        registry = ToolRegistry()
+
+        ann = ToolAnnotation.from_mcp_dict({"readOnlyHint": True})
+        manager = MagicMock()
+        manager.call_tool.return_value = "root:x:0:0:root:/root:/bin/bash"
+        wrapper = McpToolWrapper(manager, "fsserver__read_file", "reads a file", {}, ann)
+        registry.register(wrapper)
+
+        result = registry.execute(
+            "fsserver__read_file",
+            session_id="s1",
+            task_id="t1",
+            file_path="/etc/shadow",
+        )
+
+        assert not result.success
+        assert result.policy_denied
+        manager.call_tool.assert_not_called()
+
+    def test_path_within_allowed_read_dir_still_succeeds(self, tmp_path):
+        """The fix must not fail-closed on legitimate, in-bounds access."""
+        from missy.tools.registry import ToolRegistry
+
+        self._init_engine(tmp_path)
+        registry = ToolRegistry()
+
+        target = tmp_path / "notes.txt"
+        target.write_text("hello")
+
+        ann = ToolAnnotation.from_mcp_dict({"readOnlyHint": True})
+        manager = MagicMock()
+        manager.call_tool.return_value = "hello"
+        wrapper = McpToolWrapper(manager, "fsserver__read_file", "reads a file", {}, ann)
+        registry.register(wrapper)
+
+        result = registry.execute(
+            "fsserver__read_file",
+            session_id="s1",
+            task_id="t1",
+            file_path=str(target),
+        )
+
+        assert result.success
+        manager.call_tool.assert_called_once()

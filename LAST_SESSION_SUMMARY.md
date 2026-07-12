@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (136 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eighty-eight consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (137 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eighty-nine consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -5681,15 +5681,59 @@ A related, lower-confidence, not-currently-reachable observation
 Verified: `pytest tests/tools/test_code_evolve.py -v`: `28 passed`.
 `pytest tests/tools/ -q`: `1564 passed, 2 skipped`.
 
+### Post-backlog (one-hundred-thirty-first checkpoint): round 76 research pass — every MCP-sourced tool annotation had `filesystem_access=False` unconditionally, structurally disabling `ToolRegistry`'s filesystem policy check for the entire MCP subsystem
+
+Round 76 reviewed `Playbook`/`Learnings` (clean) and spot-checked
+several first-party builtin tools against round 75's declared-vs-
+actual-permissions bug class (all correctly wired). One severe,
+high-confidence security finding surfaced in `missy/mcp/annotations.py`.
+
+**Fixed: `ToolAnnotation.from_mcp_dict()` never populated
+`filesystem_access`, so it stayed at the dataclass default (`False`)
+for every single MCP tool regardless of what its manifest declared or
+what it actually does.** `McpToolWrapper` derives its
+`ToolPermissions.filesystem_read`/`filesystem_write` directly from
+this field — with it always `False`, `ToolRegistry`'s actual
+filesystem allow/deny enforcement was never entered for any MCP tool,
+from any server, ever. Unlike network/read-only/destructive hints,
+the MCP spec has no standard field for "touches the filesystem" at
+all, so this wasn't a missed-key parsing bug — the gap was
+structural: nothing anywhere could ever set this field `True` for an
+MCP-sourced annotation.
+
+Live-reproduced the actual vulnerability, not just a logic concern:
+a real `ToolAnnotation.from_mcp_dict({"readOnlyHint": True})` (an
+honest annotation a real "read_file" MCP tool would plausibly
+declare), wrapped and registered into a real `ToolRegistry` +
+`PolicyEngine` with restrictive `allowed_read_paths`, called with
+`file_path="/etc/shadow"` — **pre-fix, this succeeded** (file content
+returned, zero enforcement); **post-fix, correctly denied**
+(`policy_denied == True`, the MCP manager never even reached).
+
+Fixed by having `from_mcp_dict()` unconditionally set
+`filesystem_access=True` — the same cautious-by-omission reasoning
+this function already applies to `read_only`/`openWorldHint`, since
+there's no reliable spec signal that could ever justify `False` for
+an arbitrary third-party tool. A no-op for tools with no path-shaped
+kwarg; real coarse defense-in-depth for the common case. 3 new tests,
+2 confirmed via `git stash` to genuinely fail pre-fix.
+
+Verified: `pytest tests/mcp/test_annotations.py
+tests/mcp/test_mcp_tool_wrapper.py -v`: `106 passed`. `pytest
+tests/mcp/ tests/tools/ -q`: `1956 passed, 2 skipped`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21533 passed, 18 skipped in 798.28s (0:13:18)
+21536 passed, 18 skipped in 785.49s (0:13:05)
 ```
 
-**Zero failures**, the eighty-eighth consecutive fully green
-full-suite run. Passed count is up from 21526 to 21533 (the round 75
+**Zero failures**, the eighty-ninth consecutive fully green
+full-suite run. Passed count is up from 21533 to 21536 (the round 76
+checkpoint's 3 new tests — full detail above; all of the sixty-first
+through one-hundred-thirtieth checkpoints' fixes are confirmed still
+holding). Passed count is up from 21526 to 21533 (the round 75
 checkpoint's 7 new tests: 4 in `TestResolveFilesystemTargets`, 3 in
 `TestRegistryPermissionEnforcement` — full detail above; all of the
 sixty-first through one-hundred-twenty-ninth checkpoints' fixes are

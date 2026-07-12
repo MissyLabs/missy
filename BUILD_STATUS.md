@@ -10204,6 +10204,108 @@ Verified: `pytest tests/tools/test_code_evolve.py -v`: `28 passed`.
 `21533 passed, 18 skipped in 798.28s (0:13:18)` — 0 failed, up from
 21526. Eighty-eighth consecutive fully green full-suite run.
 
+### Post-backlog (one-hundred-thirty-first checkpoint): round 76 research pass fixes every MCP-sourced tool annotation having `filesystem_access=False` unconditionally, structurally disabling `ToolRegistry`'s filesystem policy check for the entire MCP subsystem
+
+Round 76 reviewed `Playbook`/`Learnings` (clean — cross-process
+`flock`, whole-word success/failure regex, and Playbook's wiring into
+`_record_learnings` from earlier rounds all still hold) and
+spot-checked several first-party builtin tools against round 75's
+declared-vs-actual-permissions bug class (`browser_tools.py`,
+`calculator.py`, `list_files.py`, `discord_voice.py` — all correctly
+wired). One severe, high-confidence finding surfaced in
+`missy/mcp/annotations.py`, this session's most significant MCP
+security gap since round 65's digest-drift-across-approval-wait fix.
+
+**Fixed: `ToolAnnotation.from_mcp_dict()` never populated
+`filesystem_access`, so it stayed at the dataclass default (`False`)
+for every single MCP tool regardless of what its manifest declared or
+what it actually does.** `McpToolWrapper.__init__`
+(`missy/mcp/tool_wrapper.py:67-71`) derives
+`ToolPermissions(network=annotation.network_access,
+filesystem_read=annotation.filesystem_access,
+filesystem_write=annotation.filesystem_access and
+annotation.mutating)` directly from this one field — with it always
+`False`, `ToolRegistry._check_permissions()`'s entire
+`if perms.filesystem_read:`/`if perms.filesystem_write:` branches
+(Missy's actual filesystem path allow/deny enforcement — the same
+mechanism that correctly blocks a first-party tool from reading
+`/etc/shadow`, `~/.ssh`, or a `.env` secrets file) were never entered
+for any MCP tool, from any server, regardless of what that tool's
+annotations said or what it actually did. Unlike the network/
+read-only/destructive hints this same function already parses
+correctly, the MCP spec has no standard field for "this tool touches
+the filesystem" at all — so this wasn't a missed-key parsing bug in
+the usual sense; the gap was structural: `filesystem_access` had
+*zero* code path anywhere that could ever set it to `True` for an
+MCP-sourced annotation, silently defeating the field's entire stated
+purpose. `McpToolWrapper`'s own docstring already acknowledges the
+annotation "signals intent to the policy engine" — that signal
+simply never fired, for any MCP tool, ever.
+
+Live-reproduced the actual vulnerability end-to-end, not just a
+logic-inspection concern: constructed a real
+`ToolAnnotation.from_mcp_dict({"readOnlyHint": True})` — an honest,
+natural annotation a real "read_file" MCP tool would plausibly
+declare in good faith — wrapped it in a real `McpToolWrapper`,
+registered it into a real `ToolRegistry` with a real `PolicyEngine`
+configured with a restrictive `allowed_read_paths`, and called it
+with `file_path="/etc/shadow"`. **Pre-fix, this succeeded**: the
+(mocked) MCP manager's `call_tool` was actually invoked and returned
+the file content, `result.success == True`, with zero policy
+enforcement of any kind ever consulted. **Post-fix, this is correctly
+denied**: `result.success == False`, `result.policy_denied == True`,
+and the manager's `call_tool` is never even reached. Existing tests
+(`tests/mcp/test_mcp_tool_wrapper.py`'s
+`test_filesystem_access_annotation_sets_read_permission`) construct a
+`ToolAnnotation(filesystem_access=True, ...)` *directly*, bypassing
+`from_mcp_dict()` entirely — proving only that the wrapper's own
+arithmetic is internally consistent, never that the real production
+parsing path would ever actually produce that input.
+`tests/mcp/test_annotations.py`'s existing `from_mcp_dict` tests
+(`test_full_mcp_dict`, etc.) never asserted anything about
+`filesystem_access` at all, so the always-`False` behavior was
+neither caught nor even implicitly encoded as "expected" — a pure
+blind spot, not a test-that-enshrines-the-bug case.
+
+Fixed by having `from_mcp_dict()` unconditionally set
+`filesystem_access=True` on every constructed instance — the same
+cautious-by-omission reasoning this exact function already applies to
+`read_only` (defaults to `False` when the hint is absent) and
+`openWorldHint` (defaults to `True`): since there is no reliable
+MCP-spec signal that could ever legitimately justify `False` for an
+arbitrary third-party tool, assume the cautious value rather than the
+permissive one. This is a no-op for an MCP tool with no path-shaped
+kwarg at all (the registry's generic heuristic only checks
+`path`/`file_path`/`target`/`destination` kwarg names, matching the
+same defense-in-depth heuristic every first-party tool without an
+explicit resolver already relies on), and provides real, if
+necessarily coarse, protection for the common and realistic case of a
+filesystem-oriented MCP tool using one of those conventional
+parameter names — which `McpToolWrapper`'s docstring already
+correctly frames as this mechanism's honest limit ("does not itself
+constrain which host or path the external MCP server process
+touches" — the digest pin and approval gate remain the concrete,
+enforceable MCP controls; this fix restores the coarse *additional*
+signal alongside them, rather than leaving it permanently inert).
+
+3 new tests: `test_filesystem_access_always_true_regardless_of_hints`
+(`tests/mcp/test_annotations.py`) and two full end-to-end integration
+tests in a new `TestFromMcpDictThroughRegistryIntegration` class
+(`tests/mcp/test_mcp_tool_wrapper.py`) —
+`test_read_only_mcp_tool_with_path_kwarg_is_policy_checked`
+(reproduces the exact `/etc/shadow` scenario above) and
+`test_path_within_allowed_read_dir_still_succeeds` (confirms the fix
+doesn't fail-closed on legitimate in-bounds access). The first two
+confirmed via `git stash` to genuinely fail pre-fix.
+
+Verified: `pytest tests/mcp/test_annotations.py
+tests/mcp/test_mcp_tool_wrapper.py -v`: `106 passed`. `pytest
+tests/mcp/ tests/tools/ -q`: `1956 passed, 2 skipped`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21536 passed, 18 skipped in 785.49s (0:13:05)` — 0 failed, up from
+21533. Eighty-ninth consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

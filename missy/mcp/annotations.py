@@ -105,6 +105,22 @@ class ToolAnnotation:
         False}`` with no ``destructiveHint``, or an empty ``{}``) is parsed
         as mutating/approval-requiring rather than silently trusted safe.
 
+        ``filesystem_access`` is unconditionally ``True`` for every MCP-
+        sourced annotation, for the same cautious-by-omission reason: the
+        MCP spec has no standard hint distinguishing a filesystem-touching
+        tool from one that isn't, so there is no reliable signal here to
+        ever justify ``False``. Leaving this field at the dataclass
+        default (``False``, correct for a hand-written first-party
+        ``ToolAnnotation`` where Missy's own code knows exactly what the
+        tool does) would make :class:`~missy.mcp.tool_wrapper.McpToolWrapper`\\
+        's derived ``ToolPermissions.filesystem_read``/``filesystem_write``
+        permanently ``False`` for every real MCP tool -- silently
+        disabling the coarse, kwarg-name-based filesystem policy check
+        (`ToolRegistry._check_permissions`'s generic heuristic) for the
+        entire MCP subsystem regardless of what a given tool actually
+        does, with no way for even a maximally cautious third-party
+        server to opt back in.
+
         Example::
 
             ann = ToolAnnotation.from_mcp_dict({
@@ -135,6 +151,7 @@ class ToolAnnotation:
             mutating=destructive,
             idempotent=idempotent,
             network_access=open_world,
+            filesystem_access=True,
             requires_approval=destructive,
             cost_hint=cost_hint,
             estimated_latency_ms=estimated_latency_ms,

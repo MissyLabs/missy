@@ -178,6 +178,27 @@ class TestFromMcpDict:
         assert ann.estimated_latency_ms == 500
         assert ann.category == "write"
 
+    def test_filesystem_access_always_true_regardless_of_hints(self):
+        """Regression: the MCP spec has no standard hint distinguishing a
+        filesystem-touching tool from one that isn't, so from_mcp_dict()
+        must always set filesystem_access=True (cautious-by-omission, same
+        reasoning as read_only/openWorldHint's defaults) rather than
+        silently leaving it at the dataclass default of False. Before this
+        fix, EVERY MCP-sourced ToolAnnotation had filesystem_access=False
+        unconditionally -- McpToolWrapper's derived
+        ToolPermissions.filesystem_read/filesystem_write were therefore
+        always False too, structurally disabling ToolRegistry's filesystem
+        policy check for the entire MCP subsystem regardless of what a
+        tool actually does or declares.
+        """
+        assert ToolAnnotation.from_mcp_dict({}).filesystem_access is True
+        assert ToolAnnotation.from_mcp_dict({"readOnlyHint": True}).filesystem_access is True
+        assert (
+            ToolAnnotation.from_mcp_dict({"readOnlyHint": True, "openWorldHint": True}).filesystem_access
+            is True
+        )
+        assert ToolAnnotation.from_mcp_dict({"destructiveHint": True}).filesystem_access is True
+
 
 # ---------------------------------------------------------------------------
 # ToolAnnotation._infer_category

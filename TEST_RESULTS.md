@@ -1,5 +1,69 @@
 # TEST_RESULTS
 
+## Run: 2026-07-12 UTC — round 76 research pass: every MCP-sourced tool annotation had filesystem_access=False unconditionally, structurally disabling ToolRegistry's filesystem policy check for the entire MCP subsystem
+
+- Context: round 76 reviewed `Playbook`/`Learnings` (clean, prior
+  fixes from this session already hold: cross-process `flock`,
+  whole-word success/failure regex, Playbook wiring into
+  `_record_learnings`) and spot-checked several first-party builtin
+  tools against the declared-vs-actual-permissions bug class (round
+  75's pattern) -- `browser_tools.py`, `calculator.py`,
+  `list_files.py`, `discord_voice.py` all correctly wired. One
+  severe, high-confidence finding surfaced in
+  `missy/mcp/annotations.py`.
+- **Fixed: `ToolAnnotation.from_mcp_dict()` never populated
+  `filesystem_access`, so it stayed at the dataclass default
+  (`False`) for every single MCP tool regardless of what its manifest
+  declared or what it actually does.** `McpToolWrapper.__init__`
+  derives `ToolPermissions(filesystem_read=annotation.filesystem_access,
+  filesystem_write=annotation.filesystem_access and
+  annotation.mutating)` directly from this field — with it always
+  `False`, `ToolRegistry._check_permissions()`'s entire
+  `if perms.filesystem_read:`/`if perms.filesystem_write:` branches
+  (the actual path allow/deny enforcement — e.g. blocking
+  `/etc/shadow`, `~/.ssh`, secrets paths) were never entered for any
+  MCP tool, ever, regardless of server, tool, or annotation. Unlike
+  network/read-only/destructive hints, the MCP spec has no standard
+  field for "this tool touches the filesystem" at all -- so there was
+  no parsing bug to fix in the sense of a missed key; the gap was
+  that `filesystem_access` had literally zero code path to become
+  `True` for any MCP-sourced annotation, silently defeating the field
+  's entire purpose (per `McpToolWrapper`'s own docstring: "it signals
+  intent to the policy engine").
+- Live-reproduced the actual vulnerability end-to-end: constructed a
+  real `ToolAnnotation.from_mcp_dict({"readOnlyHint": True})` (an
+  honest, natural annotation a real "read_file" MCP tool would
+  plausibly declare), wrapped it in a real `McpToolWrapper`, registered
+  it into a real `ToolRegistry` with a real `PolicyEngine` configured
+  with a restrictive `allowed_read_paths`, and called it with
+  `file_path="/etc/shadow"`. **Pre-fix, this succeeded** — the mocked
+  MCP manager's `call_tool` was invoked and returned the file content
+  with `result.success == True`, zero policy enforcement of any kind.
+  **Post-fix, this is correctly denied** — `result.success == False`,
+  `result.policy_denied == True`, `manager.call_tool` never called.
+- Fixed by having `from_mcp_dict()` unconditionally set
+  `filesystem_access=True` on every constructed instance -- the same
+  cautious-by-omission reasoning this function already applies to
+  `read_only` (defaults `False`) and `openWorldHint` (defaults
+  `True`): since there is no reliable MCP-spec signal to ever justify
+  `False` for an arbitrary third-party tool, assume the cautious
+  value. This is a no-op for MCP tools with no path-shaped kwarg (the
+  registry's generic heuristic only checks `path`/`file_path`/
+  `target`/`destination` kwarg names) and provides real, if coarse,
+  defense-in-depth for the common case of a filesystem-oriented MCP
+  tool using one of those conventional parameter names.
+- Command: `pytest tests/mcp/test_annotations.py tests/mcp/test_mcp_tool_wrapper.py -v`
+- Result: `106 passed` (3 new:
+  `test_filesystem_access_always_true_regardless_of_hints`,
+  `test_read_only_mcp_tool_with_path_kwarg_is_policy_checked`,
+  `test_path_within_allowed_read_dir_still_succeeds`), the first two
+  confirmed via `git stash` to genuinely fail pre-fix (the second
+  reproducing the exact `/etc/shadow` read succeeding pre-fix).
+- Broader sweep: `pytest tests/mcp/ tests/tools/ -q`: `1956 passed, 2 skipped`.
+- Full suite: `python3 -m pytest tests/ -q` → `21536 passed, 18
+  skipped in 785.49s (0:13:05)` — 0 failed, up from 21533.
+  Eighty-ninth consecutive fully green full-suite run.
+
 ## Run: 2026-07-12 UTC — round 75 research pass: CodeEvolveTool declared filesystem_write=True but never actually writes to the target file, causing spurious policy denials of its own primary use case
 
 - Context: round 75 re-checked `CircuitBreaker` (clean — half-open
