@@ -160,6 +160,160 @@ class TestProposeMulti:
 
 
 # ---------------------------------------------------------------------------
+# resolve_filesystem_targets / ToolRegistry permission-check integration
+# ---------------------------------------------------------------------------
+
+
+class TestResolveFilesystemTargets:
+    """propose/propose_multi only ever READ the target file(s) -- they
+    never write to them (only apply(), unreachable from this tool per
+    SR-1.2/1.3, actually mutates source). resolve_filesystem_targets()
+    must declare every real file this tool touches as a read path, and
+    never as a write path.
+    """
+
+    def test_propose_declares_file_path_as_read_only(self, tool):
+        read_paths, write_paths = tool.resolve_filesystem_targets(
+            {"file_path": "missy/example.py"}
+        )
+        assert read_paths == ["missy/example.py"]
+        assert write_paths == []
+
+    def test_propose_multi_declares_every_diff_path_as_read_only(self, tool):
+        diffs_json = json.dumps(
+            [
+                {"file_path": "missy/a.py", "original_code": "x", "proposed_code": "y"},
+                {"file_path": "missy/b.py", "original_code": "x", "proposed_code": "y"},
+            ]
+        )
+        read_paths, write_paths = tool.resolve_filesystem_targets({"diffs": diffs_json})
+        assert read_paths == ["missy/a.py", "missy/b.py"]
+        assert write_paths == []
+
+    def test_no_kwargs_returns_empty(self, tool):
+        assert tool.resolve_filesystem_targets({}) == ([], [])
+
+    def test_malformed_diffs_json_does_not_raise(self, tool):
+        read_paths, write_paths = tool.resolve_filesystem_targets({"diffs": "NOT JSON"})
+        assert read_paths == []
+        assert write_paths == []
+
+
+class TestRegistryPermissionEnforcement:
+    """Regression: CodeEvolveTool previously declared filesystem_write=True,
+    so ToolRegistry's generic kwarg-name heuristic ran an unnecessary
+    check_write(file_path) against a file the tool never actually writes
+    to -- denying the tool's own documented primary use case (proposing a
+    single-file fix) under any config where the target file is readable
+    but not in allowed_write_paths (e.g. arbitrary repo source, gated
+    behind the human-only `missy evolve apply` CLI).
+    """
+
+    def _init_engine(self, tmp_repo):
+        from missy.config.settings import (
+            FilesystemPolicy,
+            MissyConfig,
+            NetworkPolicy,
+            PluginPolicy,
+            ShellPolicy,
+        )
+        from missy.policy import engine as engine_module
+        from missy.policy.engine import init_policy_engine
+
+        engine_module._engine = None
+        cfg = MissyConfig(
+            network=NetworkPolicy(default_deny=True),
+            filesystem=FilesystemPolicy(
+                allowed_read_paths=[str(tmp_repo)],
+                allowed_write_paths=["~/workspace", "~/.missy"],
+            ),
+            shell=ShellPolicy(),
+            plugins=PluginPolicy(),
+            providers={},
+            workspace_path="/tmp",
+            audit_log_path="/tmp/audit.log",
+        )
+        init_policy_engine(cfg)
+
+    def test_propose_allowed_when_file_readable_but_not_writable(
+        self, tmp_repo, store_path
+    ):
+        from missy.tools.registry import ToolRegistry
+
+        self._init_engine(tmp_repo)
+        registry = ToolRegistry()
+        registry.register(CodeEvolveTool())
+
+        with _patch_mgr(store_path, str(tmp_repo)):
+            result = registry.execute(
+                "code_evolve",
+                session_id="s1",
+                task_id="t1",
+                action="propose",
+                title="Fix greeting",
+                description="Change hello to hi",
+                file_path=str(tmp_repo / "missy" / "example.py"),
+                original_code="return 'hello'",
+                proposed_code="return 'hi'",
+            )
+        assert result.success, result.error
+
+    def test_propose_still_denied_when_file_not_readable(self, tmp_repo, store_path):
+        """The read-side policy check must still apply -- this fix only
+        removes the incorrect write-side check, not enforcement entirely.
+        """
+        from missy.tools.registry import ToolRegistry
+
+        self._init_engine(tmp_repo)
+        registry = ToolRegistry()
+        registry.register(CodeEvolveTool())
+
+        with _patch_mgr(store_path, str(tmp_repo)):
+            result = registry.execute(
+                "code_evolve",
+                session_id="s1",
+                task_id="t1",
+                action="propose",
+                title="Fix",
+                description="test",
+                file_path="/etc/shadow",
+                original_code="x",
+                proposed_code="y",
+            )
+        assert not result.success
+        assert result.policy_denied
+
+    def test_propose_multi_paths_enforced_not_silently_skipped(self, tmp_repo, store_path):
+        """Regression: propose_multi's per-file paths live inside a
+        JSON-encoded 'diffs' string, which the registry's generic
+        kwarg-name heuristic can't see at all -- pre-fix, this meant NO
+        filesystem policy check ever ran for propose_multi. Confirm an
+        unreadable path is now actually denied.
+        """
+        from missy.tools.registry import ToolRegistry
+
+        self._init_engine(tmp_repo)
+        registry = ToolRegistry()
+        registry.register(CodeEvolveTool())
+
+        diffs_json = json.dumps(
+            [{"file_path": "/etc/shadow", "original_code": "x", "proposed_code": "y"}]
+        )
+        with _patch_mgr(store_path, str(tmp_repo)):
+            result = registry.execute(
+                "code_evolve",
+                session_id="s1",
+                task_id="t1",
+                action="propose_multi",
+                title="T",
+                description="D",
+                diffs=diffs_json,
+            )
+        assert not result.success
+        assert result.policy_denied
+
+
+# ---------------------------------------------------------------------------
 # list
 # ---------------------------------------------------------------------------
 

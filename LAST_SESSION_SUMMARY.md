@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (135 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eighty-seven consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (136 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eighty-eight consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -5646,17 +5646,56 @@ Verified: `pytest tests/gateway/test_client_deep.py::TestInteractiveApprovalFlow
 `12 passed`. `pytest tests/gateway/ tests/agent/ tests/policy/ -q`:
 `5366 passed, 4 skipped`.
 
+### Post-backlog (one-hundred-thirtieth checkpoint): round 75 research pass — `CodeEvolveTool` declared `filesystem_write=True` but never actually writes to the target file, causing spurious denials of its own primary use case
+
+Round 75 re-checked `CircuitBreaker` and `Vault` (both clean, prior
+hardening holding).
+
+**Fixed: `CodeEvolveTool` declared `filesystem_write=True`, but
+`propose`/`propose_multi` never actually write to the target file** —
+they only read it to validate a diff; actual mutation only happens in
+`apply()`, deliberately unreachable from this agent-facing tool per
+SR-1.2/1.3. Because the tool didn't override
+`resolve_filesystem_targets()`, the registry's generic heuristic ran
+an unnecessary `check_write(file_path)` against a file never actually
+written to, denying the tool's own documented primary use case under
+any reasonably restrictive `allowed_write_paths` config.
+Live-reproduced with a real `ToolRegistry`+`PolicyEngine`. Fixed by
+changing `permissions` to `filesystem_read=True` only.
+
+**Fixed (same investigation): `propose_multi`'s per-file paths live
+inside a JSON-encoded `diffs` string**, invisible to the registry's
+generic kwarg-name heuristic — so no filesystem check of any kind ran
+for that action, relying solely on the manager's own internal
+repo-root validation instead of the policy engine. Fixed by adding a
+`resolve_filesystem_targets()` override extracting paths from both
+`file_path` and parsed `diffs` entries, all declared read-only.
+
+A related, lower-confidence, not-currently-reachable observation
+(`ToolRegistry.execute()` only catching `PolicyViolationError`, not
+`ValueError`) was noted but left unfixed.
+
+7 new tests (4 unit-level, 3 registry-integration), 4 confirmed via
+`git stash` to genuinely fail pre-fix.
+
+Verified: `pytest tests/tools/test_code_evolve.py -v`: `28 passed`.
+`pytest tests/tools/ -q`: `1564 passed, 2 skipped`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21526 passed, 18 skipped in 769.16s (0:12:49)
+21533 passed, 18 skipped in 798.28s (0:13:18)
 ```
 
-**Zero failures**, the eighty-seventh consecutive fully green
-full-suite run. Passed count is up from 21523 to 21526 (the round 74
-checkpoint's 3 new tests in `TestInteractiveApprovalFlow` — full
-detail above; all of the sixty-first through one-hundred-twenty-
+**Zero failures**, the eighty-eighth consecutive fully green
+full-suite run. Passed count is up from 21526 to 21533 (the round 75
+checkpoint's 7 new tests: 4 in `TestResolveFilesystemTargets`, 3 in
+`TestRegistryPermissionEnforcement` — full detail above; all of the
+sixty-first through one-hundred-twenty-ninth checkpoints' fixes are
+confirmed still holding). Passed count is up from 21523 to 21526 (the
+round 74 checkpoint's 3 new tests in `TestInteractiveApprovalFlow` —
+full detail above; all of the sixty-first through one-hundred-twenty-
 eighth checkpoints' fixes are confirmed still holding). Passed count
 is up from 21521 to 21523 (the round 73
 checkpoint's 2 new tests in `TestConcurrentPromptsSerialized` — full

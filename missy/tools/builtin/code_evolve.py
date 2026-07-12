@@ -85,10 +85,18 @@ class CodeEvolveTool(BaseTool):
         "evolutions store, or any other route that bypasses that "
         "requirement; report the limitation and stop."
     )
-    permissions = ToolPermissions(
-        filesystem_read=True,
-        filesystem_write=True,
-    )
+    # propose/propose_multi only ever READ the target file(s) to validate
+    # a diff against CodeEvolutionManager's own internal proposal store --
+    # they never write to the target file itself (only apply(), which is
+    # deliberately unreachable from this agent-facing tool per SR-1.2/1.3,
+    # actually mutates source). Declaring filesystem_write=True here made
+    # the registry's generic kwarg-name heuristic run an unnecessary
+    # check_write(file_path) against a file this tool never writes to --
+    # under any reasonably restrictive allowed_write_paths config (which
+    # wouldn't include arbitrary repo source files), this denied the
+    # tool's own documented primary use case (proposing a single-file
+    # fix) even though nothing would actually be written.
+    permissions = ToolPermissions(filesystem_read=True)
 
     parameters = {
         "action": {
@@ -173,6 +181,33 @@ class CodeEvolveTool(BaseTool):
             "required": False,
         },
     }
+
+    def resolve_filesystem_targets(self, kwargs: dict[str, Any]) -> tuple[list[str], list[str]]:
+        """Declare the real files ``propose``/``propose_multi`` read.
+
+        The registry's generic kwarg-name heuristic only checks a single
+        ``file_path`` key, so ``propose_multi``'s per-file paths --
+        carried inside a JSON-encoded ``diffs`` string -- were silently
+        skipped from policy enforcement entirely (no error, no check).
+        Both actions are read-only against the target file(s); nothing
+        here is ever returned as a write path (see the ``permissions``
+        docstring above).
+        """
+        read_paths: list[str] = []
+        file_path = kwargs.get("file_path")
+        if file_path:
+            read_paths.append(str(file_path))
+        diffs_raw = kwargs.get("diffs")
+        if diffs_raw:
+            try:
+                parsed = json.loads(diffs_raw)
+                for d in parsed:
+                    fp = d.get("file_path") if isinstance(d, dict) else None
+                    if fp:
+                        read_paths.append(str(fp))
+            except (json.JSONDecodeError, TypeError, AttributeError):
+                pass
+        return read_paths, []
 
     def execute(self, **kwargs: Any) -> ToolResult:
         """Dispatch to the appropriate action handler."""

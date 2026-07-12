@@ -10101,6 +10101,109 @@ wall-clock-timing flake documented at round 68 --
 full-suite thread contention -- reconfirmed passing reliably 3/3 in
 isolation, unrelated to this round's changes.)
 
+### Post-backlog (one-hundred-thirtieth checkpoint): round 75 research pass fixes `CodeEvolveTool` declaring `filesystem_write=True` while never actually writing to its target file, causing spurious denials of its own documented primary use case
+
+Round 75 re-checked `CircuitBreaker` (clean — half-open probe gating
+via `_probe_in_flight` and the exponential backoff timer were already
+hardened in a prior round against exactly the two race classes this
+round looked for; the only oddity, the `state` property flipping
+OPEN→HALF_OPEN as a side effect of merely being *read* by e.g. a
+status/dashboard endpoint, doesn't allow extra probes through since
+`call()` re-derives and gates on the real state under the same lock)
+and `Vault` (clean — flock-based `_locked()` correctly serializes
+`set`/`delete` cross-process, nonce generation is per-call random
+with no reuse risk, key-file creation is TOCTOU-safe via `O_EXCL`, and
+atomic rename means unlocked `get()`/`list_keys()` reads can only
+ever observe a fully-old or fully-new snapshot, never a torn file).
+Two related, genuine findings surfaced in `ToolRegistry`'s
+interaction with `CodeEvolveTool`.
+
+**Finding 1 — fixed: `CodeEvolveTool` declared
+`filesystem_write=True`, but `propose`/`propose_multi` (its only
+actions that reference a file path) never actually write to the
+target file at all.** They only `read_text()` it to validate the
+diff against `CodeEvolutionManager`'s own internal proposal store —
+actual target-file mutation only ever happens in `apply()`, which is
+deliberately unreachable from this agent-facing tool per SR-1.2/1.3
+(a human operator must run `missy evolve apply <id>` from a terminal
+on the host; the tool's own docstring documents this explicitly).
+Because `CodeEvolveTool` didn't override `resolve_filesystem_targets()`,
+`ToolRegistry._check_permissions()`
+(`missy/tools/registry.py:283-318`) fell back to its generic
+kwarg-name heuristic, which — since `perms.filesystem_write` was
+`True` — ran `engine.check_write(file_path)` in addition to the
+correct `check_read(file_path)`, against a file the tool never
+actually writes to. Under any reasonably restrictive
+`allowed_write_paths` config (which wouldn't include arbitrary repo
+source files, only workspace/config dirs — exactly the shipped
+default), this silently denied the tool's own documented primary use
+case — proposing a single-file fix — even though nothing would ever
+actually be written to that file by this call. Live-reproduced with a
+real `ToolRegistry` + `PolicyEngine`: a repo file present in
+`allowed_read_paths` but absent from `allowed_write_paths` was denied
+with `Filesystem write denied: '...' is not within an allowed write
+path` pre-fix; the identical `propose` call succeeds post-fix.
+Existing tests (`tests/tools/test_code_evolve.py`,
+`test_code_evolve_gap_coverage.py`) both instantiate the tool and
+call `.execute()` directly, never through `ToolRegistry`, so this
+exact enforcement path was never exercised. Fixed by changing
+`permissions` from `ToolPermissions(filesystem_read=True,
+filesystem_write=True)` to `ToolPermissions(filesystem_read=True)`
+only.
+
+**Finding 2 — fixed (same investigation): `propose_multi`'s per-file
+paths are carried inside a JSON-encoded `diffs` string, which the
+registry's generic kwarg-name heuristic can't see at all** (it only
+checks a single `path`/`file_path`/`target`/`destination` kwarg
+value, never parses a JSON blob looking for paths inside it) — so
+*no* filesystem policy check of any kind ran for `propose_multi`
+calls, not even the correct read check finding 1 restored for
+`propose`. The only thing standing between an arbitrary path
+supplied in a `propose_multi` diff and an actual filesystem read was
+`CodeEvolutionManager`'s own internal "is this path inside the repo
+package" validation — a real but separate, bespoke safety net, not
+the policy engine the tool's declared permissions claim to route
+through. Fixed by adding a `resolve_filesystem_targets()` override
+that extracts `file_path` from the top-level kwarg (`propose`) and
+from every parsed entry in `diffs` (`propose_multi`), returning all
+of them as read-only targets (never write, consistent with finding
+1's fix) rather than relying on the registry's blind generic
+heuristic. Live-reproduced: a `propose_multi` call targeting
+`/etc/shadow` failed pre-fix only via the manager's own internal
+"outside the Missy package" `ValueError` (`result.policy_denied ==
+False`) — meaning the policy engine was never even consulted; the
+identical call post-fix is correctly denied by the policy engine
+itself (`result.policy_denied == True`), real defense-in-depth rather
+than reliance on a single bespoke internal check that could vary by
+manager implementation.
+
+A related, lower-confidence observation from the same broader
+`ToolRegistry` investigation, deliberately left unfixed: `execute()`'s
+exception handling (`missy/tools/registry.py:203-208`) only catches
+`PolicyViolationError`, not `ValueError` (which `PolicyEngine.check_network`/
+`NetworkPolicyEngine.check_host` can raise on an empty host string) —
+this would break the documented "policy failures surface as
+`ToolResult`, not raised exceptions" invariant and skip audit-event
+emission, but confirmed currently unreachable via any first-party
+tool (the one `resolve_network_hosts` override, in
+`browser_tools.py`, already guards against an empty host) or MCP
+wrapper (empty static `allowed_hosts` means the loop never executes)
+— noted for awareness, not fixed, since it has no current reachable
+path.
+
+7 new tests: 4 in `TestResolveFilesystemTargets` (unit-level,
+verifying the override's extraction logic directly) and 3 in
+`TestRegistryPermissionEnforcement` (integration-level, using a real
+`ToolRegistry` + `PolicyEngine`), 4 of which confirmed via `git stash`
+to genuinely fail pre-fix.
+
+Verified: `pytest tests/tools/test_code_evolve.py -v`: `28 passed`.
+`pytest tests/tools/ -q`: `1564 passed, 2 skipped`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21533 passed, 18 skipped in 798.28s (0:13:18)` — 0 failed, up from
+21526. Eighty-eighth consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

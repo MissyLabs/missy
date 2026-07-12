@@ -1,5 +1,67 @@
 # TEST_RESULTS
 
+## Run: 2026-07-12 UTC — round 75 research pass: CodeEvolveTool declared filesystem_write=True but never actually writes to the target file, causing spurious policy denials of its own primary use case
+
+- Context: round 75 re-checked `CircuitBreaker` (clean — half-open
+  probe gating and backoff timer already hardened in a prior round;
+  the only oddity, `state` flipping OPEN->HALF_OPEN as a side effect
+  of being merely read, doesn't allow extra probes through since
+  `call()` re-derives and gates under the same lock) and `Vault`
+  (clean — flock-based locking correctly serializes cross-process
+  set/delete, nonce generation is per-call random, key-file creation
+  is TOCTOU-safe via `O_EXCL`, atomic rename means unlocked reads can
+  only observe a fully-old or fully-new snapshot). Two real findings
+  surfaced in `ToolRegistry`'s interaction with `CodeEvolveTool`.
+- **Fixed: `CodeEvolveTool` declared `filesystem_write=True`, but
+  `propose`/`propose_multi` (its only actions that reference a file
+  path) never actually write to the target file** — they only
+  `read_text()` it to validate the diff, then write exclusively to
+  `CodeEvolutionManager`'s own internal proposal store. Actual target-
+  file mutation only ever happens in `apply()`, which is deliberately
+  unreachable from this agent-facing tool (SR-1.2/1.3 — a human
+  operator must run `missy evolve apply` from the CLI). Because
+  `CodeEvolveTool` doesn't override `resolve_filesystem_targets()`,
+  `ToolRegistry._check_permissions()` fell back to its generic
+  kwarg-name heuristic, which ran `engine.check_write(file_path)` in
+  addition to `check_read(file_path)` -- against a file the tool
+  never actually writes to. Under any reasonably restrictive
+  `allowed_write_paths` config (which wouldn't include arbitrary repo
+  source files, only workspace/config dirs), this denied the tool's
+  own documented primary use case -- proposing a single-file fix --
+  even though nothing would actually be written. Live-reproduced with
+  a real `ToolRegistry`+`PolicyEngine`: a repo file in
+  `allowed_read_paths` but NOT `allowed_write_paths` was denied with
+  `Filesystem write denied` pre-fix; post-fix, the identical `propose`
+  call succeeds. Fixed by changing `permissions` to
+  `ToolPermissions(filesystem_read=True)` only.
+- **Fixed (same investigation): `propose_multi`'s per-file paths are
+  carried inside a JSON-encoded `diffs` string, which the registry's
+  generic heuristic can't see at all** (it only checks a single
+  `path`/`file_path`/`target`/`destination` kwarg) — so no filesystem
+  policy check of any kind ran for `propose_multi`, not even the
+  correct read check. The only thing standing between an arbitrary
+  path in a `propose_multi` diff and disk access was
+  `CodeEvolutionManager`'s own internal repo-root validation, not the
+  policy engine the tool's permissions claim to route through. Fixed
+  by adding a `resolve_filesystem_targets()` override that extracts
+  `file_path` from the top-level kwarg (`propose`) and from each
+  parsed `diffs` entry (`propose_multi`), returning all of them as
+  read-only targets (never write, consistent with the fix above).
+  Live-reproduced: a `propose_multi` call targeting `/etc/shadow`
+  pre-fix failed only via the manager's own internal
+  "outside the Missy package" check (`policy_denied=False`); post-fix
+  the same call is correctly denied by the policy engine itself
+  (`policy_denied=True`) -- real defense-in-depth, not reliance on a
+  single bespoke internal safety net.
+- Command: `pytest tests/tools/test_code_evolve.py -v`
+- Result: `28 passed` (7 new: 4 in `TestResolveFilesystemTargets`, 3
+  in `TestRegistryPermissionEnforcement`), 4 of which confirmed via
+  `git stash` to genuinely fail pre-fix.
+- Broader sweep: `pytest tests/tools/ -q`: `1564 passed, 2 skipped`.
+- Full suite: `python3 -m pytest tests/ -q` → `21533 passed, 18
+  skipped in 798.28s (0:13:18)` — 0 failed, up from 21526.
+  Eighty-eighth consecutive fully green full-suite run.
+
 ## Run: 2026-07-12 UTC — round 74 research pass: an operator's network-level policy override silently also bypassed the independent L7 REST policy layer
 
 - Context: round 74 re-checked `checkpoint.py`, `failure_tracker.py`,
