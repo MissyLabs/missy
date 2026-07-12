@@ -8437,6 +8437,78 @@ caused by a minimal `McpManager.__new__()` test double never setting
 `_config_path`; fixed via the `getattr` correction described above,
 then reconfirmed clean on rerun.)
 
+### Post-backlog (one-hundred-eleventh checkpoint): round 55 research pass fixes `missy providers switch`'s complete non-effect on any running process
+
+Round 55 re-hunted round 53/54's "load once, never refresh" staleness
+pattern into `agent/checkpoint.py` (`CheckpointManager`) and
+`agent/watchdog.py` (`Watchdog`). Both came back clean-ish:
+`CheckpointManager` genuinely re-reads its SQLite-backed state on every
+call (no in-memory cache to go stale). `Watchdog.register()`/
+`_check_all()` do share an unlocked dict with a theoretical
+register-during-iteration race, but `cli/main.py:2357-2361` registers
+every check synchronously before `watchdog.start()` at every real
+production call site, so the race is latent/unreached in practice —
+noted, not elevated to a fix.
+
+**Found and fixed a real, high-confidence bug that's a variant of the
+same family**: not "state is never refreshed," but "a mutation never
+reaches the process whose state actually matters, and there is no
+persistence mechanism to make it stick anywhere." `missy providers
+switch NAME` (`cli/main.py`) constructed its own throwaway,
+process-local `ProviderRegistry` via `_load_subsystems()` →
+`get_registry()`, called `.set_default(name)` on *that* instance, then
+exited — printing "Active provider switched to X" despite the mutated
+registry being garbage-collected on process exit. Live-verified: the
+command has zero effect on (a) a separately running `missy gateway
+start` daemon's actual provider selection, and (b) any subsequent CLI
+invocation, since no `default_provider` config field exists anywhere
+in the schema to persist a choice to — confirmed via grep, there is
+none. Meanwhile `api/operator_controls.py`'s
+`_execute_provider_set_default()` already implements a complete,
+two-step-confirmation-gated (`body["confirm"] == "set-default:{target}"`)
+mechanism to mutate a *running daemon's* live `provider_registry`
+reference, dispatched via `POST /api/v1/controls/provider.set_default`
+— but nothing in the codebase ever called it. Fixed by rewriting
+`providers_switch()` to first attempt that exact HTTP call (mirroring
+the precedented `missy approvals list/approve/deny` CLI-to-daemon
+pattern at `cli/main.py`'s `_APPROVALS_HOST_OPTION`/
+`_APPROVALS_PORT_OPTION`/`_APPROVALS_API_KEY_OPTION`/
+`_resolve_approvals_api_key()`, now shared by both) with
+`{"target": name, "confirm": f"set-default:{name}"}`. When a daemon
+answers (200), the daemon's live default is switched and the
+success message says so explicitly; on a daemon-side error (401/404/
+409/other) the daemon's own error message is surfaced and the CLI
+exits 1 without silently falling back. Only when the daemon is
+genuinely unreachable (`httpx.ConnectError`, e.g. no `missy gateway
+start` running) does it fall back to today's local, single-process
+registry mutation — but the success message for that fallback path
+was rewritten to be honest about its scope: "for this process only
+... this does not persist," with a pointer to `--provider NAME` on
+`missy ask`/`missy run` for a real one-off override. Live-verified
+both branches end-to-end: (1) a real in-process `ApiServer` +
+`ProviderRegistry` confirms the daemon path genuinely mutates
+`registry.get_default_name()` on that live instance via the HTTP
+round-trip; (2) with no daemon listening, the fallback path runs and
+is now honestly worded. The two pre-existing tests
+(`test_providers_switch_success`, `test_providers_switch_unknown_provider_exits_1`)
+had to be updated to explicitly force the unreachable-daemon branch
+(patching `httpx.post` to raise `ConnectError`) — without that patch
+they were incidentally hitting a real, unrelated `missy gateway
+start` daemon left running on this dev machine's port 8080 from
+earlier session work, which is itself the reason this bug was
+findable at all (a real daemon was reachable to demonstrate the
+"switch has no effect on it" failure mode against). 2 new tests added
+(`test_providers_switch_reaches_running_daemon`,
+`test_providers_switch_daemon_rejects_exits_1`), both confirmed via
+`git stash` to genuinely fail pre-fix.
+
+Verified: `pytest tests/cli/ tests/providers/ tests/api/ -q`: `2202
+passed`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21477 passed, 14 skipped in 821.03s (0:13:41)` — 0 failed, up from
+21475. Sixty-ninth consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

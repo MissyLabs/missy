@@ -349,7 +349,7 @@ missy setup --no-prompt             Non-interactive setup (--provider, --api-key
 missy ask PROMPT                    Single-turn query (--provider, --session)
 missy run                           Interactive REPL session (--provider)
 missy providers list                List configured providers and availability
-missy providers switch NAME         Switch active provider at runtime
+missy providers switch NAME         Switch active provider (a running `missy gateway start` daemon's live default if reachable via --host/--port, else a local-only, non-persisted fallback)
 missy skills                        List registered skills
 missy skills scan                   Scan for SKILL.md files (--path)
 missy presets list                  Show built-in network policy presets

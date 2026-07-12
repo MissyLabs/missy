@@ -1245,6 +1245,38 @@ def logs_tail_cmd(ctx: click.Context, limit: int) -> None:
 # missy providers
 # ---------------------------------------------------------------------------
 
+# Shared by `missy providers switch`, `missy discord pairing ...`, and
+# `missy approvals ...` (all talk to the running gateway's Web API from a
+# separate CLI process).
+_APPROVALS_HOST_OPTION = click.option(
+    "--host", default="127.0.0.1", show_default=True, help="Gateway API host."
+)
+_APPROVALS_PORT_OPTION = click.option(
+    "--port", default=8080, type=int, show_default=True, help="Gateway API port."
+)
+_APPROVALS_API_KEY_OPTION = click.option(
+    "--api-key",
+    envvar="MISSY_API_KEY",
+    default="",
+    help="API key for authentication (falls back to ~/.missy/secrets/web_console.key).",
+)
+
+
+def _resolve_approvals_api_key(api_key: str) -> str:
+    if api_key:
+        return api_key
+    try:
+        key_path = Path("~/.missy/secrets/web_console.key").expanduser()
+        if key_path.exists():
+            return key_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        pass
+    return ""
+
+
+# Must match `missy.api.operator_controls._CONTROL_PROVIDER_SET_DEFAULT`.
+_PROVIDER_SET_DEFAULT_CONTROL_ID = "provider.set_default"
+
 
 @cli.group("providers", invoke_without_command=True)
 @click.pass_context
@@ -1300,9 +1332,57 @@ def providers_list_cmd(ctx: click.Context) -> None:
 
 @providers_group.command("switch")
 @click.argument("name")
+@_APPROVALS_HOST_OPTION
+@_APPROVALS_PORT_OPTION
+@_APPROVALS_API_KEY_OPTION
 @click.pass_context
-def providers_switch(ctx: click.Context, name: str) -> None:
-    """Switch the active provider to NAME at runtime."""
+def providers_switch(ctx: click.Context, name: str, host: str, port: int, api_key: str) -> None:
+    """Switch the active provider to NAME.
+
+    If a `missy gateway start` daemon is reachable at --host/--port, this
+    switches *that daemon's* live default provider via its Web API (the only
+    process whose provider selection persists across subsequent requests).
+    Otherwise there is no running daemon to update, and this command falls
+    back to a local, single-process registry mutation with no lasting
+    effect (there is no ``default_provider`` config field to persist a
+    choice to) -- use ``--provider NAME`` on ``missy ask``/``missy run`` for
+    a one-off override instead.
+    """
+    import httpx
+
+    resolved_key = _resolve_approvals_api_key(api_key)
+    url = f"http://{host}:{port}/api/v1/controls/{_PROVIDER_SET_DEFAULT_CONTROL_ID}"
+    headers = {"X-API-Key": resolved_key} if resolved_key else {}
+    body = {"target": name, "confirm": f"set-default:{name}"}
+
+    resp = None
+    try:
+        resp = httpx.post(url, json=body, headers=headers, timeout=3.0)
+    except httpx.ConnectError:
+        resp = None
+    except Exception as exc:
+        _print_error(f"Could not reach gateway API: {exc}")
+        sys.exit(1)
+
+    if resp is not None:
+        if resp.status_code == 200:
+            _print_success(
+                f"Active provider switched to [bold]{name}[/] on the running gateway daemon."
+            )
+            return
+        if resp.status_code == 401:
+            _print_error(
+                "Authentication required.",
+                hint="Pass --api-key or ensure ~/.missy/secrets/web_console.key is readable.",
+            )
+            sys.exit(1)
+        try:
+            message = resp.json().get("error", "")
+        except Exception:
+            message = ""
+        _print_error(message or f"Gateway API responded with HTTP {resp.status_code}.")
+        sys.exit(1)
+
     from missy.providers.registry import get_registry
 
     _load_subsystems(ctx.obj["config_path"])
@@ -1314,7 +1394,12 @@ def providers_switch(ctx: click.Context, name: str) -> None:
         _print_error(str(exc))
         sys.exit(1)
 
-    _print_success(f"Active provider switched to [bold]{name}[/].")
+    _print_success(
+        f"Active provider switched to [bold]{name}[/] for this process only "
+        f"(no gateway daemon detected at http://{host}:{port} -- this does not persist; "
+        "pass --provider to `missy ask`/`missy run`, or run `missy gateway start` first "
+        "for a durable switch)."
+    )
 
 
 @providers_group.command("auth")
@@ -1604,33 +1689,6 @@ def plugins_list(ctx: click.Context) -> None:
 # ---------------------------------------------------------------------------
 # missy discord
 # ---------------------------------------------------------------------------
-
-# Shared by `missy discord pairing ...` and `missy approvals ...` (both talk
-# to the running gateway's Web API from a separate CLI process).
-_APPROVALS_HOST_OPTION = click.option(
-    "--host", default="127.0.0.1", show_default=True, help="Gateway API host."
-)
-_APPROVALS_PORT_OPTION = click.option(
-    "--port", default=8080, type=int, show_default=True, help="Gateway API port."
-)
-_APPROVALS_API_KEY_OPTION = click.option(
-    "--api-key",
-    envvar="MISSY_API_KEY",
-    default="",
-    help="API key for authentication (falls back to ~/.missy/secrets/web_console.key).",
-)
-
-
-def _resolve_approvals_api_key(api_key: str) -> str:
-    if api_key:
-        return api_key
-    try:
-        key_path = Path("~/.missy/secrets/web_console.key").expanduser()
-        if key_path.exists():
-            return key_path.read_text(encoding="utf-8").strip()
-    except OSError:
-        pass
-    return ""
 
 
 @cli.group()

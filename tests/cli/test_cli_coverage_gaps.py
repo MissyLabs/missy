@@ -373,8 +373,20 @@ class TestRunHatchingCheckException:
 
 
 class TestProvidersSwitch:
+    """`providers switch` first tries a running gateway daemon's Web API
+    (`POST /api/v1/controls/provider.set_default`); only when that daemon is
+    unreachable (`httpx.ConnectError`) does it fall back to a local,
+    single-process registry mutation. All tests here force the
+    unreachable-daemon branch via a patched `httpx.post` so they exercise the
+    *local fallback* deterministically, regardless of whether a real gateway
+    happens to be listening on the default host/port in the environment the
+    tests run in.
+    """
+
     def test_providers_switch_success(self, runner: CliRunner) -> None:
-        """providers switch calls set_default and prints success message (line 1002)."""
+        """No daemon reachable: falls back to set_default and prints success (line 1002)."""
+        import httpx
+
         mock_config = _make_mock_config()
         mock_registry = MagicMock()
         mock_registry.set_default.return_value = None
@@ -382,6 +394,7 @@ class TestProvidersSwitch:
         with (
             patch("missy.cli.main._load_subsystems", return_value=mock_config),
             patch("missy.providers.registry.get_registry", return_value=mock_registry),
+            patch("httpx.post", side_effect=httpx.ConnectError("refused")),
         ):
             result = runner.invoke(cli, ["providers", "switch", "openai"])
 
@@ -390,7 +403,9 @@ class TestProvidersSwitch:
         assert "openai" in result.output.lower() or "switched" in result.output.lower()
 
     def test_providers_switch_unknown_provider_exits_1(self, runner: CliRunner) -> None:
-        """providers switch with an unknown provider name prints error and exits 1 (lines 998-1000)."""
+        """No daemon reachable: local set_default ValueError still exits 1 (lines 998-1000)."""
+        import httpx
+
         mock_config = _make_mock_config()
         mock_registry = MagicMock()
         mock_registry.set_default.side_effect = ValueError("Provider 'nonexistent' not found")
@@ -398,12 +413,54 @@ class TestProvidersSwitch:
         with (
             patch("missy.cli.main._load_subsystems", return_value=mock_config),
             patch("missy.providers.registry.get_registry", return_value=mock_registry),
+            patch("httpx.post", side_effect=httpx.ConnectError("refused")),
         ):
             result = runner.invoke(cli, ["providers", "switch", "nonexistent"])
 
         assert result.exit_code == 1
         all_output = result.output + result.stderr
         assert "nonexistent" in all_output or "not found" in all_output.lower()
+
+    def test_providers_switch_reaches_running_daemon(self, runner: CliRunner) -> None:
+        """When a gateway daemon answers 200, the daemon is switched and the
+        local registry is never touched (no throwaway-mutation fallback)."""
+        mock_registry = MagicMock()
+        fake_response = MagicMock()
+        fake_response.status_code = 200
+
+        with (
+            patch("missy.providers.registry.get_registry", return_value=mock_registry),
+            patch("httpx.post", return_value=fake_response) as mock_post,
+        ):
+            result = runner.invoke(cli, ["providers", "switch", "openai"])
+
+        assert result.exit_code == 0
+        assert "gateway daemon" in result.output.lower()
+        mock_registry.set_default.assert_not_called()
+        called_url = mock_post.call_args.args[0]
+        assert called_url.endswith("/api/v1/controls/provider.set_default")
+        assert mock_post.call_args.kwargs["json"] == {
+            "target": "openai",
+            "confirm": "set-default:openai",
+        }
+
+    def test_providers_switch_daemon_rejects_exits_1(self, runner: CliRunner) -> None:
+        """A daemon-side error (e.g. unknown/unavailable provider) surfaces the
+        daemon's error message and exits 1, without falling back locally."""
+        mock_registry = MagicMock()
+        fake_response = MagicMock()
+        fake_response.status_code = 404
+        fake_response.json.return_value = {"status": "error", "error": "Provider 'x' is not registered"}
+
+        with (
+            patch("missy.providers.registry.get_registry", return_value=mock_registry),
+            patch("httpx.post", return_value=fake_response),
+        ):
+            result = runner.invoke(cli, ["providers", "switch", "x"])
+
+        assert result.exit_code == 1
+        assert "not registered" in result.output.lower()
+        mock_registry.set_default.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

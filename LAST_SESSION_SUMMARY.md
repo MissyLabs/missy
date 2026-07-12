@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (116 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for sixty-eight consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (117 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for sixty-nine consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -4888,20 +4888,72 @@ tests/security/test_scanner.py -q`: `91 passed`. `pytest tests/mcp/
 tests/security/test_scanner.py tests/agent/ -q`: `4789 passed, 4
 skipped`.
 
+### Post-backlog (one-hundred-eleventh checkpoint): round 55 research pass — `missy providers switch` had zero lasting effect on any process
+
+Round 55 re-hunted rounds 53/54's "load once, never refresh"
+staleness pattern into `agent/checkpoint.py` (`CheckpointManager` —
+clean, always re-reads its SQLite-backed state, no in-memory cache to
+go stale) and `agent/watchdog.py` (`Watchdog.register()`/
+`_check_all()` share an unlocked dict with a theoretical
+register-during-iteration race, but every real production call site
+registers checks synchronously before `watchdog.start()`
+(`cli/main.py:2357-2361`), so the race is latent/unreached — noted,
+not fixed).
+
+**Found and fixed a real bug that's a distinct variant of the same
+family: not "never refreshes," but "a mutation never reaches the
+process that matters, with no persistence mechanism to make it
+stick anywhere."** `missy providers switch NAME` constructed its own
+throwaway, process-local `ProviderRegistry`, called `.set_default(name)`
+on it, then exited — printing "Active provider switched to X" despite
+the mutated registry being discarded on exit. Live-verified zero
+effect on a separately running `missy gateway start` daemon *and* on
+any subsequent CLI invocation (no `default_provider` config field
+exists anywhere to persist a choice to). Meanwhile
+`api/operator_controls.py`'s `_execute_provider_set_default()` already
+implements a complete, confirmation-gated mechanism to mutate a
+*running daemon's* live provider registry via `POST
+/api/v1/controls/provider.set_default` — nothing called it. Fixed by
+rewriting `providers_switch()` to attempt that HTTP call first,
+mirroring the precedented `missy approvals` CLI-to-daemon pattern
+(now sharing its host/port/api-key options and
+`_resolve_approvals_api_key()` helper). A reachable daemon's response
+is now authoritative; only genuine unreachability
+(`httpx.ConnectError`) falls back to the old local mutation, whose
+success message was rewritten to honestly disclose it doesn't
+persist, pointing at `--provider NAME` on `missy ask`/`missy run`
+instead. Live-verified both branches end-to-end with a real
+in-process `ApiServer` + `ProviderRegistry` for the daemon path. The
+2 pre-existing tests had to be updated to explicitly force the
+unreachable-daemon branch — without that, they were incidentally
+reaching a real, unrelated `missy gateway start` daemon left running
+on this dev machine's port 8080 from earlier session work, which is
+itself the reason this bug was discoverable at all (a real daemon was
+reachable to demonstrate the "switch has no effect on it" failure
+mode against). 2 new tests, both confirmed via `git stash` to
+genuinely fail pre-fix.
+
+Verified: `pytest tests/cli/ tests/providers/ tests/api/ -q`: `2202
+passed`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21475 passed, 14 skipped in 743.20s (0:12:23)
+21477 passed, 14 skipped in 821.03s (0:13:41)
 ```
 
-**Zero failures**, the sixty-eighth consecutive fully green
-full-suite run. (The first attempt this checkpoint hit 1 unrelated
-pre-existing test failure caused by a minimal `McpManager.__new__()`
-test double never setting `_config_path`; fixed via a `getattr`
-correction, then reconfirmed clean on rerun.) Passed count is up from
-21469 to 21475 (the round 54 checkpoint's 6 new tests: 2 McpManager
-cross-process-staleness tests, 4 SEC-011 CIDR tests; all of the
+**Zero failures**, the sixty-ninth consecutive fully green
+full-suite run. Passed count is up from 21475 to 21477 (the round 55
+checkpoint's 2 new tests: `test_providers_switch_reaches_running_daemon`,
+`test_providers_switch_daemon_rejects_exits_1`; all of the sixty-first
+through one-hundred-tenth checkpoints' fixes are confirmed still
+holding). Passed count is up from 21469 to 21475 (the round 54
+checkpoint's 6 new tests: 2 McpManager cross-process-staleness tests,
+4 SEC-011 CIDR tests; the first attempt at this earlier checkpoint hit
+1 unrelated pre-existing test failure caused by a minimal
+`McpManager.__new__()` test double never setting `_config_path`; fixed
+via a `getattr` correction, then reconfirmed clean on rerun; all of the
 sixty-first through one-hundred-ninth checkpoints' fixes are confirmed
 still holding). Passed count is up from 21461 to 21469 (the round 53
 checkpoint's 8 new tests: 5 behavior.py robotic-phrase tests, 3

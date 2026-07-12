@@ -1,5 +1,54 @@
 # TEST_RESULTS
 
+## Run: 2026-07-12 UTC — round 55 research pass: `missy providers switch` has zero lasting effect on any process
+
+- Context: round 55 re-hunted round 53/54's "load once, never
+  refresh" staleness pattern into agent/checkpoint.py
+  (CheckpointManager -- clean, no in-memory cache, always re-reads
+  its SQLite-backed state) and agent/watchdog.py (Watchdog.register()/
+  _check_all() share an unlocked dict with a theoretical
+  register-during-iteration race, but cli/main.py:2357-2361 registers
+  every check synchronously before watchdog.start() at every real
+  production call site, so the race is latent/unreached -- noted,
+  not fixed).
+- **`missy providers switch NAME` non-effect**: constructed its own
+  throwaway, process-local ProviderRegistry via
+  `_load_subsystems()` -> `get_registry()`, called `.set_default(name)`
+  on that instance, then exited -- printing "Active provider switched
+  to X" despite the mutated registry being discarded on exit. Live-
+  verified zero effect on (a) a separately running `missy gateway
+  start` daemon, and (b) any subsequent CLI invocation (no
+  `default_provider` config field exists anywhere to persist to,
+  confirmed via grep). `api/operator_controls.py`'s
+  `_execute_provider_set_default()` already implements a complete,
+  confirmation-gated mechanism to mutate a *running daemon's* live
+  provider_registry via `POST /api/v1/controls/provider.set_default`,
+  but nothing called it. Fixed by rewriting `providers_switch()` to
+  attempt that HTTP call first (mirroring the precedented `missy
+  approvals` CLI-to-daemon pattern, now sharing its
+  `_APPROVALS_HOST_OPTION`/`_APPROVALS_PORT_OPTION`/
+  `_APPROVALS_API_KEY_OPTION`/`_resolve_approvals_api_key()`), with
+  `{"target": name, "confirm": f"set-default:{name}"}`. A reachable
+  daemon's response (200/401/404/409/other) is now authoritative and
+  surfaced directly; only `httpx.ConnectError` (no daemon reachable)
+  falls back to the old local-registry mutation, whose success
+  message was rewritten to honestly state it does not persist and
+  point at `--provider NAME` on `missy ask`/`missy run` instead.
+- Command: `pytest tests/cli/test_cli_coverage_gaps.py -k ProvidersSwitch -v`
+- Result: `4 passed`. The 2 new tests
+  (`test_providers_switch_reaches_running_daemon`,
+  `test_providers_switch_daemon_rejects_exits_1`) confirmed via `git
+  stash push -- missy/cli/main.py` to genuinely fail pre-fix. The 2
+  pre-existing tests were updated to explicitly patch `httpx.post` to
+  raise `ConnectError` (forcing the local-fallback branch) --
+  discovered mid-fix that without this patch they were incidentally
+  reaching a real, unrelated `missy gateway start` daemon left running
+  on this dev machine's port 8080 from earlier session work (the same
+  daemon whose unreachability from a separate CLI process is exactly
+  the bug being fixed).
+- Broader sweep: `pytest tests/cli/ tests/providers/ tests/api/ -q`: `2202 passed`.
+- Full suite: `python3 -m pytest tests/ -q` → `21477 passed, 14 skipped in 821.03s (0:13:41)` — 0 failed, up from 21475. Sixty-ninth consecutive fully green full-suite run.
+
 ## Run: 2026-07-14 05:40 UTC — round 54 research pass: McpManager cross-process staleness gap and SEC-011 CIDR false-negative
 
 - Context: round 54 re-hunted round 53's "load once, never reload"
