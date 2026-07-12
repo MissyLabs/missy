@@ -168,7 +168,16 @@ class TestFileSourceDecompressionBombGuard:
     array, taking ~2.8s) before MAX_DIMENSION was ever consulted -- which
     at the time only logged a warning and let the oversized image through
     regardless. The fix peeks the image header via PIL (cheap, no pixel
-    decode) and rejects before OpenCV is ever invoked."""
+    decode) and rejects before OpenCV is ever invoked.
+
+    Requires the optional Pillow dependency (part of the `vision` extra):
+    skips gracefully rather than erroring in an environment that installed
+    an older/stripped-down vision extra without it.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _skip_without_pillow(self):
+        pytest.importorskip("PIL", exc_type=ImportError)
 
     def test_rejects_declared_oversized_dimensions_before_cv2_runs(self, tmp_path):
         from PIL import Image
