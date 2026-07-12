@@ -1,5 +1,38 @@
 # TEST_RESULTS
 
+## Run: 2026-07-13 23:15 UTC — round 42 research pass: Discord Gateway zombie-connection bug (round 41 was research-only, no findings)
+
+- Context: round 41 systematically re-swept ALL tools/builtin/*.py for
+  round 40's permissions-declaration/execute() mismatch pattern (clean
+  everywhere else), network-host enforcement via PolicyHTTPClient
+  (clean), api/web_console.py XSS escaping (clean), and
+  audit_logger.py's _redact_detail() nested-dict recursion (clean). No
+  code changed. Round 42 pivoted to mcp/manager.py's digest-pinning
+  (clean), channels/voice/server.py's frame-sequencing (clean),
+  agent/summarizer.py's DAG/depth logic (clean), and
+  channels/discord/gateway.py's heartbeat handling.
+- **Discord Gateway zombie-connection bug**: _heartbeat_loop() never
+  enforced Discord's documented heartbeat-ACK requirement (close and
+  reconnect if the previous heartbeat's ACK hasn't arrived by the time
+  the next is due). get_diagnostics()'s heartbeat_ack_overdue field
+  already computed this condition but nothing acted on it -- the loop
+  just kept sending heartbeats forever. On a half-open TCP connection,
+  the bot sits in a zombie session indefinitely, appearing "connected"
+  while receiving nothing, until manually restarted. Live-reproduced
+  with a real _heartbeat_loop() task against a mocked websocket that
+  never delivers an ACK -- confirmed it looped forever with no exit.
+  Fixed by checking for a missed ACK at the top of each iteration and
+  closing the connection (non-1000 code) + incrementing
+  reconnect_count + emitting a new
+  discord.gateway.heartbeat_ack_missed audit event + returning from the
+  loop, letting run()'s outer loop reconnect.
+- Command: `pytest tests/channels/test_discord_extended.py -k TestGatewayHeartbeatAckEnforcement -v`
+- Result: `3 passed`. 2 of 3 confirmed via `git stash` to genuinely
+  fail pre-fix (both timed out at a bounded 2s via asyncio.wait_for,
+  since the pre-fix loop has no exit condition at all).
+- Broader sweep: `pytest tests/channels/test_discord_extended.py tests/channels/test_discord_protocol_deep.py -q`: `251 passed`.
+  `pytest tests/channels/ -q -k discord`: `919 passed, 1067 deselected`.
+
 ## Run: 2026-07-13 22:40 UTC — round 40 research pass: BrowserScreenshotTool filesystem-write policy bypass
 
 - Context: round 40 audited additional missy/tools/builtin/ tools

@@ -30,9 +30,11 @@ All WebSocket and HTTP I/O is mocked.  No real network connections are made.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import tempfile
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -650,6 +652,75 @@ class TestGatewayStartHeartbeat:
 
         # Old task should have been cancelled
         assert old_task.cancelled()
+
+
+class TestGatewayHeartbeatAckEnforcement:
+    """Regression: Discord's Gateway protocol requires closing the
+    connection and reconnecting when an ACK for the previous heartbeat
+    hasn't arrived by the time the next one is due -- previously
+    _heartbeat_loop sent heartbeats forever regardless of whether any
+    ACK ever came back, so a half-open TCP connection (sends succeed
+    locally, nothing ever arrives) left the client in a zombie session
+    indefinitely. get_diagnostics()'s heartbeat_ack_overdue already
+    computed this condition; nothing acted on it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_missed_ack_closes_connection_and_stops_loop(self):
+        gw = _make_gateway()
+        mock_ws = AsyncMock()
+        gw._ws = mock_ws
+
+        # No ACK is ever recorded -- every heartbeat after the first goes
+        # unacknowledged. Bounded by wait_for: pre-fix, _heartbeat_loop
+        # never returns at all (infinite `while True` with no exit
+        # condition), so this would hang forever without the timeout
+        # rather than merely assert something wrong.
+        await asyncio.wait_for(gw._heartbeat_loop(0.01), timeout=2.0)
+
+        mock_ws.close.assert_called_once()
+        assert gw._reconnect_count == 1
+        assert gw._last_disconnect_error == "heartbeat ACK timeout"
+        # Sent exactly one heartbeat (the first), then detected the
+        # still-missing ACK before a second send and closed instead.
+        assert mock_ws.send.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_acked_heartbeat_keeps_looping_without_closing(self):
+        gw = _make_gateway()
+        mock_ws = AsyncMock()
+        gw._ws = mock_ws
+
+        async def _fake_send() -> None:
+            gw._last_heartbeat_sent_at = time.time()
+            gw._last_heartbeat_ack_at = time.time()  # ACK "arrives" immediately
+            await mock_ws.send("{}")
+
+        gw._send_heartbeat = _fake_send  # type: ignore[method-assign]
+
+        task = asyncio.create_task(gw._heartbeat_loop(0.01))
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+        mock_ws.close.assert_not_called()
+        assert gw._reconnect_count == 0
+        assert mock_ws.send.call_count > 1
+
+    @pytest.mark.asyncio
+    async def test_first_iteration_sends_even_with_no_prior_heartbeat(self):
+        """_last_heartbeat_sent_at is None before the very first send --
+        must not be misread as a missed ACK and close immediately."""
+        gw = _make_gateway()
+        mock_ws = AsyncMock()
+        gw._ws = mock_ws
+        assert gw._last_heartbeat_sent_at is None
+
+        await asyncio.wait_for(gw._heartbeat_loop(0.01), timeout=2.0)
+
+        mock_ws.send.assert_called_once()
+        assert mock_ws.close.called  # still closes after the unacked send
 
 
 class TestGatewaySendHeartbeat:

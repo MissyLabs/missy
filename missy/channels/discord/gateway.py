@@ -397,12 +397,40 @@ class DiscordGatewayClient:
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop(interval))
 
     async def _heartbeat_loop(self, interval: float) -> None:
-        """Send heartbeats on the given interval forever."""
+        """Send heartbeats on the given interval forever.
+
+        Discord's Gateway protocol requires that if an ACK for the
+        previous heartbeat hasn't arrived by the time the next one is
+        due, the client must close the connection (non-1000 code) and
+        reconnect rather than keep heartbeating -- otherwise a half-open
+        TCP connection (sends succeed locally, nothing ever arrives back)
+        leaves the client sitting in a zombie session indefinitely,
+        appearing "connected" while receiving nothing, until the process
+        is restarted. ``get_diagnostics()``'s ``heartbeat_ack_overdue``
+        already computes this exact condition; this closes the loop by
+        actually acting on it instead of only surfacing it as a metric.
+        """
         # Jitter: wait a random fraction of the interval before the first beat.
         import secrets
 
         await asyncio.sleep(interval * secrets.SystemRandom().random())
         while True:
+            if self._last_heartbeat_sent_at is not None and (
+                self._last_heartbeat_ack_at is None
+                or self._last_heartbeat_ack_at < self._last_heartbeat_sent_at
+            ):
+                logger.warning(
+                    "Gateway: heartbeat ACK not received before next heartbeat "
+                    "was due; closing connection to force a reconnect."
+                )
+                self._emit_audit("discord.gateway.heartbeat_ack_missed", "error", {})
+                self._reconnect_count += 1
+                self._last_disconnect_at = time.time()
+                self._last_disconnect_error = "heartbeat ACK timeout"
+                if self._ws is not None:
+                    with contextlib.suppress(Exception):
+                        await self._ws.close(code=4000, reason="heartbeat ack timeout")
+                return
             await self._send_heartbeat()
             await asyncio.sleep(interval)
 

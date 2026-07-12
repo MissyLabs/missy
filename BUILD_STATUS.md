@@ -7523,6 +7523,97 @@ skipped`.
 `21432 passed, 14 skipped in 589.93s (0:09:49)` — 0 failed, up from
 21430. Fifty-sixth consecutive fully green full-suite run.
 
+### Round 41 (research-only, no findings): systematic tool-permissions sweep, network-host enforcement, web_console.py XSS, audit_logger.py nested-dict redaction
+
+Round 41 explicitly re-hunted round 40's newly-identified
+permissions-declaration/`execute()`-mismatch pattern across EVERY tool
+in `missy/tools/builtin/*.py` (`x11_tools.py`'s four tools,
+`incus_tools.py`'s twelve tools, `browser_tools.py`'s remaining seven
+tools, `discord_upload.py`, `discord_voice.py`, `code_evolve.py`,
+`self_create_tool.py`, `calculator.py`, `atspi_tools.py`) — all
+correctly declare or resolve their real filesystem/network/shell
+targets, and round 40's `BrowserScreenshotTool` fix is not reproduced
+elsewhere. Also checked whether any network-capable tool's real target
+host bypasses per-call enforcement by lacking a `resolve_network_hosts()`
+override — clean, since `PolicyHTTPClient`/`create_client` (the actual
+transport every network tool routes through) independently calls
+`engine.check_network_resolved()` against the real resolved host/IP
+before every request, making the registry's coarse `allowed_hosts`
+check a secondary gate, not the sole one. `api/web_console.py`'s
+dynamic `innerHTML` interpolation is clean (every value passes through
+an `esc()` HTML-entity-escaping helper before insertion; `textContent`
+assignments are inherently safe regardless). `observability/
+audit_logger.py`'s `_redact_detail()` is genuinely recursive into
+nested dicts/lists down to leaf strings, so a secret nested arbitrarily
+deep (e.g. `{"request": {"headers": {"authorization": "Bearer
+sk-..."}}}`) is still redacted correctly. No code changed; no
+checkpoint recorded.
+
+### Post-backlog (ninety-ninth checkpoint): round 42 research pass fixes a Discord Gateway zombie-connection bug (missed heartbeat ACK never triggers a reconnect)
+
+Round 42 pivoted away from the twice-swept `tools/builtin/*` area to
+fresh territory: `mcp/manager.py`'s digest-pinning re-verification
+(clean — `call_tool()` genuinely re-checks the pinned digest on every
+dispatch, not just at connect, matching CLAUDE.md's claim exactly;
+`McpToolWrapper.execute()` routes exclusively through `call_tool()`,
+so there's no tool-listing/schema-fetch bypass), `channels/voice/
+server.py`'s audio_start/audio_end frame-sequencing (clean —
+out-of-order frames correctly no-op rather than corrupting
+per-connection state that would leak into a subsequent session),
+`agent/summarizer.py`'s DAG/depth logic (clean — the actual depth
+tracking lives in `compaction.py`/`sqlite_store.py`'s
+`parent_id IS NULL`-per-depth filtering, which structurally prevents
+cycles), and `channels/discord/gateway.py`'s reconnection/heartbeat
+handling.
+
+**Found and fixed a real Discord Gateway protocol-compliance gap:**
+`_heartbeat_loop()` never enforced Discord's documented heartbeat-ACK
+requirement. Discord's Gateway protocol requires that if an ACK for
+the previous heartbeat hasn't arrived by the time the next one is due,
+the client must close the connection (non-1000 code) and reconnect —
+`get_diagnostics()`'s `heartbeat_ack_overdue` field already computed
+this exact condition (comparing `_last_heartbeat_ack_at` against
+`_last_heartbeat_sent_at`), but nothing in `_heartbeat_loop()`, in
+`_send_heartbeat()`, or in the `_OP_HEARTBEAT_ACK` handler ever acted
+on it — the loop just kept sending heartbeats forever regardless of
+whether any ACK ever came back. On a half-open TCP connection (sends
+succeed locally into the OS socket buffer, nothing ever arrives back
+— e.g. a NAT timeout or silent network partition), `_receive_loop()`'s
+`async for raw in self._ws` never raises either, so `run()`'s
+reconnect branch never fires: the bot sits in a zombie session
+indefinitely, appearing "connected" while receiving nothing, until the
+process is manually restarted. Existing tests
+(`test_diagnostics_reports_heartbeat_waiting_for_ack`,
+`test_heartbeat_ack_clears_overdue_diagnostic`) only ever asserted on
+the diagnostic dict, never that the connection actually gets closed or
+reconnected — the real enforcement behavior itself had zero coverage.
+Live-reproduced with a real `_heartbeat_loop()` task run against a
+mocked websocket that never delivers an ACK, confirmed it looped
+forever with no exit (had to bound the reproduction script with a
+timeout to observe this safely). Fixed by checking, at the top of each
+loop iteration (after the first), whether `_last_heartbeat_ack_at` is
+still older than `_last_heartbeat_sent_at`; if so, closing the
+websocket with a non-1000 code, incrementing `_reconnect_count`,
+recording `_last_disconnect_error`, emitting a new
+`discord.gateway.heartbeat_ack_missed` audit event, and returning from
+the loop (which naturally ends `_receive_loop()`'s iteration and lets
+`run()`'s outer `while self._running:` loop re-`connect()`). 3 new
+tests: missed-ACK closes and stops the loop, a healthy ACK'd loop keeps
+running without closing, and the very first iteration (before any
+heartbeat has ever been sent) isn't misread as an already-missed ACK.
+2 of the 3 confirmed via `git stash` to genuinely fail pre-fix — both
+timed out (bounded at 2s via `asyncio.wait_for`) rather than merely
+asserting wrong output, since the pre-fix loop has no exit condition
+at all.
+
+Verified: `pytest tests/channels/test_discord_extended.py tests/
+channels/test_discord_protocol_deep.py -q`: `251 passed`. `pytest
+tests/channels/ -q -k discord`: `919 passed, 1067 deselected`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21435 passed, 14 skipped in 640.19s (0:10:40)` — 0 failed, up from
+21432. Fifty-seventh consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security
