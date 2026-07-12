@@ -912,6 +912,7 @@ class AgentRuntime:
         self._acquire_rate_limit()
 
         full_text = ""
+        any_chunk_yielded = False
         subscription = AgentSubscription(reasoning_mode="off")
         subscription.handle_event({"type": "message_start"})
         try:
@@ -921,23 +922,41 @@ class AgentRuntime:
                 )
                 full_text = update.full_visible_text
                 if update.visible_delta:
+                    any_chunk_yielded = True
                     yield update.visible_delta
             final_update = subscription.handle_event({"type": "message_end"})
             full_text = final_update.full_visible_text
             if final_update.visible_delta:
+                any_chunk_yielded = True
                 yield final_update.visible_delta
         except Exception:
-            logger.debug("Streaming failed; falling back to non-streaming", exc_info=True)
-            # Fall back to non-streaming
-            response = self._single_turn(
-                provider=provider,
-                system_prompt=system_prompt,
-                messages=messages,
-                session_id=sid,
-                task_id=str(self._session_mgr.generate_task_id()),
-            )
-            yield response.content
-            full_text = response.content
+            if any_chunk_yielded:
+                # Regression: falling back to _single_turn() here re-generates
+                # and yields the ENTIRE response from scratch -- if the
+                # stream failed *after* already yielding some chunks to the
+                # caller (e.g. a connection drop mid-response), the caller
+                # would receive the already-streamed partial text followed
+                # by a full duplicate/overlapping re-generation. Stop with
+                # whatever partial text was captured instead of compounding
+                # a failure with confusing duplicated output.
+                logger.warning(
+                    "Streaming failed after partial output was already "
+                    "yielded; not falling back to avoid duplicating "
+                    "already-sent content.",
+                    exc_info=True,
+                )
+            else:
+                logger.debug("Streaming failed; falling back to non-streaming", exc_info=True)
+                # Fall back to non-streaming
+                response = self._single_turn(
+                    provider=provider,
+                    system_prompt=system_prompt,
+                    messages=messages,
+                    session_id=sid,
+                    task_id=str(self._session_mgr.generate_task_id()),
+                )
+                yield response.content
+                full_text = response.content
 
         # Persist turns
         self._save_turn(sid, "user", user_input)

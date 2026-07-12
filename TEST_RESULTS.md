@@ -1,5 +1,40 @@
 # TEST_RESULTS
 
+## Run: 2026-07-14 01:00 UTC — round 45 research pass: duplicate-content bug in run_stream()'s mid-stream failure path
+
+- Context: round 45 continued re-hunting the round 42-44 "enforcement
+  wired into only one call path" pattern. Confirmed clean: sub-agent
+  task sanitization matches top-level input sanitization, audit-event
+  emission is uniform, and _tool_loop()'s checkpoint cadence has only
+  one low-severity gap (SR-4.4 done-criteria-rejection branch doesn't
+  trigger a checkpoint update -- idempotent, not a hard bug).
+- **Documented residual (high severity, not fixed)**: run_stream()
+  never censors streamed output for secrets (censor_response() is
+  never called anywhere in the method, unlike run()/resume_checkpoint()
+  which both censor the final response before returning), and its
+  streaming call bypasses _call_provider_with_fallback()'s circuit-
+  breaker/rotation/fallback protection entirely. Both trace to the
+  same root cause: true token-by-token streaming inherently conflicts
+  with mechanisms designed for a single complete response. A naive
+  per-chunk censor was considered and rejected -- most real secrets
+  span multiple chunks, so it would rarely actually catch anything
+  while creating false confidence. Left for a dedicated future round
+  requiring an explicit design decision.
+- **Fixed a real, narrowly-scoped bug within the same code path**: a
+  mid-stream provider failure (after some chunks were already yielded)
+  fell back to _single_turn() and yielded its ENTIRE response,
+  producing duplicated/overlapping output. Live-reproduced: a stream
+  that yields one chunk then raises produced ["Hello ", "FULL
+  DUPLICATE RESPONSE"] pre-fix. Fixed by tracking whether any chunk
+  was already yielded; if so, a subsequent failure stops with the
+  partial text already sent instead of re-generating the whole
+  response. Fallback-on-total-failure (no chunk ever yielded) is
+  unchanged.
+- Command: `pytest tests/agent/test_runtime_streaming.py -k test_run_stream_does_not_duplicate_content_on_mid_stream_failure -v`
+- Result: `1 passed`. Confirmed via `git stash` to genuinely fail pre-fix.
+- Broader sweep: `pytest tests/agent/test_runtime_streaming.py -q`: `10 passed`.
+  `pytest tests/agent/ -q`: `4301 passed, 4 skipped`.
+
 ## Run: 2026-07-14 00:25 UTC — round 44 research pass: budget-enforcement gap in run_stream()'s streaming path
 
 - Context: round 44 re-hunted the round 42-43 "enforcement wired into

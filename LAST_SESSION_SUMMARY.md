@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (108 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for fifty-nine consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (109 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for sixty consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -4519,15 +4519,64 @@ product decision.
 Verified: `pytest tests/agent/test_runtime_streaming.py -q`: `9
 passed`. `pytest tests/agent/ -q`: `4300 passed, 4 skipped`.
 
+### Post-backlog (one-hundred-second checkpoint): round 45 research pass — duplicate-content bug in run_stream()'s mid-stream failure path; documents a high-severity streaming/censoring residual
+
+Round 45 continued re-hunting the round 42-44 "enforcement wired into
+only one of several call paths" pattern. Confirmed clean: sub-agent
+task sanitization matches top-level input sanitization, audit-event
+emission for `security.prompt_drift`/`agent.budget.exceeded` is
+uniform (no separate no-op construction path), and `_tool_loop()`'s
+checkpoint cadence has only one low-severity gap (idempotent, not a
+hard bug).
+
+**Documented residual (high severity, NOT fixed — genuine design
+tension): `run_stream()` never censors streamed output for secrets,
+and its streaming call bypasses `_call_provider_with_fallback()`'s
+circuit-breaker/rotation/fallback protection entirely.**
+`run()`/`resume_checkpoint()` both call `censor_response()` on the
+full final response before returning; `run_stream()`'s single-turn
+streaming branch yields raw chunks directly, with `censor_response`
+never invoked. Separately, `_single_turn()`/`_tool_loop()` both route
+every call through `_call_provider_with_fallback()`, but
+`run_stream()`'s `provider.stream()` call is invoked raw. Both trace
+to the same root cause: true token-by-token streaming inherently
+conflicts with mechanisms designed for a single complete response — a
+naive per-chunk censor was considered and rejected (most real secrets
+span multiple chunks, so it would rarely catch anything while
+creating false confidence). Left for a dedicated future round with an
+explicit design decision, matching this session's established
+discipline for genuine design-ambiguous gaps.
+
+**Found and fixed a real, narrowly-scoped correctness bug within the
+same code path: a mid-stream provider failure produced duplicated/
+overlapping output.** The `except Exception:` fallback unconditionally
+called `_single_turn()` and yielded its entire response — if
+`provider.stream()` failed *after* already yielding some chunks, the
+caller received the already-streamed partial text followed by a full
+duplicate re-generation. Live-reproduced: a stream that yields one
+chunk then raises produced `["Hello ", "FULL DUPLICATE RESPONSE"]`
+pre-fix. Fixed by tracking whether any chunk was already yielded; if
+so, a subsequent failure stops with the partial text already sent
+instead of re-generating the whole response (fallback-on-total-failure
+is unchanged). 1 new test, confirmed via `git stash` to genuinely fail
+pre-fix.
+
+Verified: `pytest tests/agent/test_runtime_streaming.py -q`: `10
+passed`. `pytest tests/agent/ -q`: `4301 passed, 4 skipped`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21438 passed, 14 skipped in 546.64s (0:09:06)
+21439 passed, 14 skipped in 625.01s (0:10:25)
 ```
 
-**Zero failures**, the fifty-ninth consecutive fully green full-suite
-run. Passed count is up from 21437 to 21438 (the round 44 checkpoint's
+**Zero failures**, the sixtieth consecutive fully green full-suite
+run. Passed count is up from 21438 to 21439 (the round 45 checkpoint's
+1 new test,
+`test_run_stream_does_not_duplicate_content_on_mid_stream_failure`;
+all of the sixty-first through one-hundred-first checkpoints' fixes
+are confirmed still holding). Passed count is up from 21437 to 21438 (the round 44 checkpoint's
 1 new test, `test_run_stream_enforces_budget_before_streaming`; all
 of the sixty-first through one-hundredth checkpoints' fixes are
 confirmed still holding). Passed count is up from 21435 to 21437 (the round 43

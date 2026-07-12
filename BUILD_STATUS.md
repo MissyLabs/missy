@@ -7773,6 +7773,84 @@ passed`. `pytest tests/agent/ -q`: `4300 passed, 4 skipped`.
 `21438 passed, 14 skipped in 546.64s (0:09:06)` — 0 failed, up from
 21437. Fifty-ninth consecutive fully green full-suite run.
 
+### Post-backlog (one-hundred-second checkpoint): round 45 research pass fixes a duplicate-content bug in run_stream()'s mid-stream failure path; documents a high-severity streaming/censoring residual
+
+Round 45 continued re-hunting the round 42-44 "enforcement wired into
+only one of several call paths" pattern. Confirmed clean: sub-agent
+task descriptions get identical input sanitization to top-level input
+(`SubAgentRunner.run_subtask()` calls the same `run()` that sanitizes
+`user_input` at its very first lines); `security.prompt_drift`/
+`agent.budget.exceeded` audit events are wired through the same
+`_emit_event()` helper used everywhere else, with no separate no-op
+construction path found; `_tool_loop()`'s checkpoint cadence is mostly
+clean (the one gap — the SR-4.4 done-criteria-rejection branch not
+triggering a checkpoint update — is low-severity/idempotent, a crash
+there just replays one round earlier, not spuriously "recoverable"
+with wrong data, so not treated as a hard bug).
+
+**Documented residual (high severity, NOT fixed — genuine design
+tension, not a one-line oversight): `run_stream()` never censors
+streamed output for secrets, and its streaming call bypasses
+`_call_provider_with_fallback()`'s circuit-breaker/rotation/fallback
+protection entirely.** `run()`/`resume_checkpoint()` both call
+`censor_response()` on the full final response before returning to the
+caller (`missy/security/censor.py`, "a last-resort filter independent
+of agent instructions"); `run_stream()`'s single-turn streaming branch
+yields raw `update.visible_delta` chunks directly, with
+`censor_response`/`SecretsDetector` never invoked anywhere in the
+method. Separately, `_single_turn()`/`_tool_loop()` both route every
+call through `_call_provider_with_fallback()` (real mid-run circuit-
+breaker/key-rotation/cross-provider recovery per CLAUDE.md), but
+`run_stream()`'s `provider.stream()` call is invoked raw — no breaker,
+no rotation, no fallback candidate, no `agent.provider.call_failed`
+audit event. Both gaps trace to the same root cause: `censor_response()`
+operates on a complete string, and `_call_provider_with_fallback()`'s
+`call_factory` convention expects a single response object, but true
+token-by-token streaming inherently yields incrementally *before* the
+full text is known — retrofitting either mechanism properly requires
+either buffering the entire stream before yielding anything (which
+defeats the purpose of `run_stream()` existing at all) or a
+genuinely new fallback/censoring design built for iterators, not a
+single corrective line. A naive per-chunk censor pass was considered
+and rejected: most real secret tokens (20+ char API keys) span
+multiple streaming chunks, so per-chunk redaction would rarely
+actually catch anything while creating a false impression that
+streamed output is protected — worse than clearly documenting the gap.
+Left for a dedicated future round with an explicit product decision on
+the real-time-vs-safety tradeoff, per this session's established
+discipline for genuine design-ambiguous gaps (matching the round-32/
+38/44 residuals).
+
+**Found and fixed a real, narrowly-scoped correctness bug within the
+same code path: a mid-stream provider failure produced duplicated/
+overlapping output.** The `except Exception:` fallback in
+`run_stream()`'s streaming branch unconditionally called
+`_single_turn()` and yielded its *entire* response — if
+`provider.stream()` failed *after* already yielding some chunks (e.g.
+a connection drop mid-response), the caller received the
+already-streamed partial text followed by a full duplicate/overlapping
+re-generation of the same answer. Unlike the censoring/fallback
+residual above, this doesn't require redesigning the streaming
+interface — it only requires not naively re-generating a full response
+once partial output has already been shown. Live-reproduced: a
+provider whose `stream()` yields one chunk then raises produced
+`["Hello ", "FULL DUPLICATE RESPONSE"]` pre-fix. Fixed by tracking
+whether any chunk was already yielded; if so, a subsequent stream
+failure logs a warning and stops with the partial text already sent,
+rather than falling back to `_single_turn()`'s full re-generation
+(fallback-on-total-failure, when no chunk was ever yielded, is
+unchanged and still covered by the existing
+`test_run_stream_falls_back_on_error` test). 1 new test, confirmed via
+`git stash` to genuinely fail pre-fix (produced the exact duplicate
+output described above).
+
+Verified: `pytest tests/agent/test_runtime_streaming.py -q`: `10
+passed`. `pytest tests/agent/ -q`: `4301 passed, 4 skipped`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21439 passed, 14 skipped in 625.01s (0:10:25)` — 0 failed, up from
+21438. Sixtieth consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

@@ -81,6 +81,42 @@ class TestRunStream:
 
         provider.stream.assert_not_called()
 
+    def test_run_stream_does_not_duplicate_content_on_mid_stream_failure(self, mock_registry):
+        """Regression: the except-block fallback previously re-generated
+        and yielded the ENTIRE response via _single_turn() regardless of
+        whether some chunks had already been streamed to the caller. A
+        connection drop mid-response (after partial output was already
+        yielded) produced the already-streamed partial text followed by a
+        full duplicate/overlapping re-generation. Once any chunk has been
+        yielded, a later stream failure must not trigger the full-response
+        fallback.
+        """
+        registry, provider = mock_registry
+
+        def _stream(messages, system=""):
+            yield "Hello "
+            raise RuntimeError("connection dropped")
+
+        provider.stream = MagicMock(side_effect=_stream)
+        provider.complete.return_value = CompletionResponse(
+            content="FULL DUPLICATE RESPONSE",
+            model="test-model",
+            provider="test",
+            usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            raw={},
+        )
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", side_effect=RuntimeError),
+        ):
+            agent = AgentRuntime(AgentConfig(provider="test"))
+            chunks = list(agent.run_stream("Hello"))
+
+        assert chunks == ["Hello "]
+        assert "FULL DUPLICATE RESPONSE" not in chunks
+        provider.complete.assert_not_called()
+
     def test_run_stream_falls_back_on_error(self, mock_registry):
         registry, provider = mock_registry
         provider.stream.side_effect = Exception("Stream failed")
