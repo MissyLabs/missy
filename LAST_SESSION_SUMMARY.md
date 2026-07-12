@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (132 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eighty-four consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (133 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eighty-five consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -5543,15 +5543,66 @@ Verified: `pytest tests/agent/test_context_with_summaries.py -v`: `10
 passed`. `pytest tests/agent/ -q -k "context or compaction or
 consolidation or summarizer"`: `651 passed, 3669 deselected`.
 
+### Post-backlog (one-hundred-twenty-seventh checkpoint): round 71 research pass — `RateLimiter.record_usage()` double-deducted every completion's token cost; `SkillDiscovery`'s YAML block-list parser dropped the standard unindented list form
+
+Round 71 surveyed `SkillDiscovery`, `RateLimiter`, and
+`core/session.py` (no findings — every real caller always supplies an
+explicit, unique `session_id`).
+
+**Fixed: `SkillDiscovery._parse_yaml()`'s block-list detection
+required list items indented strictly more than their parent key,
+silently dropping the equally-valid same-indentation YAML form**
+(`tools:\n- a\n- b`, which is what PyYAML's own default dumper
+produces for a top-level list). A column-0 list item failed the
+`is_indented` check, so the block-list loop broke immediately and the
+key was silently stored as `''` — downstream, a skill's declared
+`tools` requirement vanished with no error anywhere. Live-reproduced
+and fixed by comparing actual indentation levels instead of a strict
+"must have leading whitespace" check. 1 new test, confirmed via `git
+stash` to genuinely fail pre-fix.
+
+**Fixed: `RateLimiter.record_usage()` deducted the actual token total
+on top of the estimate `acquire()` had already reserved, without ever
+crediting that estimate back — double-charging the bucket on every
+completion.** The docstring claimed reconciliation; the
+implementation was a pure subtraction. Live-reproduced:
+`acquire(tokens=100)` -> 900, then `record_usage(80, 20)` -> 800
+instead of the correct ~900. Every real non-streaming provider call
+in both `AnthropicProvider` and `OpenAIProvider` exhausted the
+configured `tokens_per_minute` budget at roughly half the intended
+rate. The existing test asserted the buggy result as correct. Fixed
+by adding an `estimated_tokens` parameter and computing a net
+adjustment, threaded through both providers' acquire/record call
+pairs (including OpenAI's `_complete_via_responses`/`_complete_via_chat`
+helpers, one layer removed from where the estimate is computed).
+Streaming paths never called `record_usage()` before or after —
+noted as a separate, out-of-scope gap. 1 test rewritten, 4 new tests
+added, all 4 confirmed via `git stash` to genuinely fail pre-fix.
+
+Verified: `pytest tests/skills/ -q`: `188 passed`. `pytest
+tests/providers/test_rate_limiter_edge_cases.py -v`: `35 passed`.
+`pytest tests/providers/ -q`: `948 passed`.
+
+Self-caught regression during this checkpoint: the first version of
+the rate-limiter fix broke a pre-existing negative-total defensive
+test by removing its guard. Caught by running the full suite, fixed
+by restoring an explicit `if total < 0: return` guard ahead of the
+new net-adjustment math.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21516 passed, 18 skipped in 777.13s (0:12:57)
+21521 passed, 18 skipped in 1983.51s (0:33:03)
 ```
 
-**Zero failures**, the eighty-fourth consecutive fully green
-full-suite run. Passed count is up from 21515 to 21516 (the round 70
+**Zero failures**, the eighty-fifth consecutive fully green
+full-suite run. Passed count is up from 21516 to 21521 (the round 71
+checkpoint's 5 net new tests: 1 SkillDiscovery block-list test, 1
+rate-limiter test rewritten plus 4 new — full detail above; all of
+the sixty-first through one-hundred-twenty-sixth checkpoints' fixes
+are confirmed still holding). Passed count is up from 21515 to 21516
+(the round 70
 checkpoint's 1 new test: `test_oversized_early_summary_does_not_starve_later_smaller_ones`
 — full detail above; all of the sixty-first through one-hundred-twenty-fifth
 checkpoints' fixes are confirmed still holding). Passed count is up

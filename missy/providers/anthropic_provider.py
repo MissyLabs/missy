@@ -177,9 +177,8 @@ class AnthropicProvider(BaseProvider):
         # Forward any remaining provider-specific kwargs
         call_kwargs.update(kwargs)
 
-        self._acquire_rate_limit(
-            estimated_tokens=self._estimate_tokens(messages, system_content or "")
-        )
+        estimated_tokens = self._estimate_tokens(messages, system_content or "")
+        self._acquire_rate_limit(estimated_tokens=estimated_tokens)
 
         try:
             client = self._make_client()
@@ -225,7 +224,7 @@ class AnthropicProvider(BaseProvider):
             usage=usage,
             raw=raw_response.model_dump() if hasattr(raw_response, "model_dump") else {},
         )
-        self._record_rate_limit_usage(response)
+        self._record_rate_limit_usage(response, estimated_tokens=estimated_tokens)
         return response
 
     def get_tool_schema(self, tools: list) -> list:
@@ -322,9 +321,8 @@ class AnthropicProvider(BaseProvider):
         if system_content:
             call_kwargs["system"] = system_content
 
-        self._acquire_rate_limit(
-            estimated_tokens=self._estimate_tokens(messages, system_content or "")
-        )
+        estimated_tokens = self._estimate_tokens(messages, system_content or "")
+        self._acquire_rate_limit(estimated_tokens=estimated_tokens)
 
         try:
             client = self._make_client()
@@ -382,7 +380,7 @@ class AnthropicProvider(BaseProvider):
             tool_calls=tool_calls,
             finish_reason=finish_reason,
         )
-        self._record_rate_limit_usage(response)
+        self._record_rate_limit_usage(response, estimated_tokens=estimated_tokens)
         return response
 
     def stream(self, messages: list[Message], system: str = "") -> Iterator[str]:

@@ -9727,6 +9727,143 @@ consolidation or summarizer"`: `651 passed, 3669 deselected`.
 `21516 passed, 18 skipped in 777.13s (0:12:57)` — 0 failed, up from
 21515. Eighty-fourth consecutive fully green full-suite run.
 
+### Post-backlog (one-hundred-twenty-seventh checkpoint): round 71 research pass fixes `RateLimiter.record_usage()` double-deducting every completion's token cost, and `SkillDiscovery`'s YAML block-list parser silently dropping the standard unindented list form
+
+Round 71 surveyed `missy/skills/discovery.py`, `missy/providers/
+rate_limiter.py`, and `missy/core/session.py` (no findings there --
+every real production caller always supplies an explicit, uniquely
+generated `session_id`, so the theoretical thread-local
+cross-session-leak path this file's caching would otherwise enable
+isn't reachable from any current call site).
+
+**Finding 1 — fixed: `SkillDiscovery._parse_yaml()`'s block-list
+detection required list items to be indented strictly more than
+their parent key, silently dropping the equally-valid YAML form
+where items sit at the SAME indentation as the key.** Standard YAML
+permits both forms — `tools:\n  - a\n  - b` (indented) and
+`tools:\n- a\n- b` (same-level, which is what PyYAML's own default
+block-style dumper actually produces for a top-level list; confirmed
+via `yaml.safe_load` that both parse identically). The parser's
+`is_indented = next_raw[:1] in (" ", "\t")` check was `False` for a
+column-0 list item, so the block-list collection loop broke
+immediately and the key fell through to the "no items found" branch,
+silently stored as the empty string `''`. Downstream,
+`parse_skill_md()`'s `tools_raw = ''` then produced `tools = []` via
+`''.split(",")` filtered to non-empty — a skill's declared `tools`
+requirement vanished with no exception, warning, or log line
+anywhere, exactly the same silent-data-loss failure mode a prior
+round's fix (referenced in this file's own docstring) already fixed
+for the indented form. Live-reproduced:
+`SkillDiscovery._parse_yaml("name: x\ntools:\n- web_fetch\n-
+shell_exec\n")` returned `{"name": "x", "tools": ""}` instead of
+`{"name": "x", "tools": ["web_fetch", "shell_exec"]}`. Fixed by
+comparing indentation *levels* (`next_indent >= key_indent`, computed
+from each raw line's actual leading-whitespace count) instead of a
+strict "must have some leading whitespace" check — same-level
+block-sequence items are now recognized exactly as real YAML treats
+them, while a genuinely dedented line (which would be invalid nesting
+either way) still correctly stops collection. 1 new test,
+`test_parse_block_list_at_same_indentation_as_key`, confirmed via
+`git stash` to genuinely fail pre-fix.
+
+**Finding 2 — fixed: `RateLimiter.record_usage()` deducted the
+actual token total on top of the estimate `acquire()` had already
+reserved, without ever crediting that estimate back — double-
+charging the token bucket on every single completion.** The method's
+own docstring claimed it "corrects the bucket to reflect the actual
+consumption," but the implementation was a pure subtraction
+(`self._tok_tokens = max(0.0, self._tok_tokens - float(total))`) with
+no addition anywhere to undo the estimate `acquire()` had already
+removed from the same bucket. Live-reproduced:
+`RateLimiter(tokens_per_minute=1000).acquire(tokens=100)` leaves the
+bucket at 900; a subsequent `record_usage(prompt_tokens=80,
+completion_tokens=20)` (actual usage matching the estimate almost
+exactly) left the bucket at 800 instead of returning to ~900 —
+meaning every real provider call on the non-streaming
+`complete()`/`complete_with_tools()` paths of both `AnthropicProvider`
+and `OpenAIProvider` was silently exhausting the configured
+`tokens_per_minute` budget at roughly half the intended rate, causing
+spurious blocking or `RateLimitExceeded` failures under normal,
+correctly-configured load — a real availability bug, not just
+cosmetic accounting drift. The existing test
+`test_record_usage_deducts_actual_tokens` asserted the buggy
+800-token result as the expected, correct contract — a textbook case
+of a test that encoded the bug as its own specification rather than
+catching it. Fixed by adding an `estimated_tokens` parameter to
+`RateLimiter.record_usage()` and computing a net adjustment
+(`estimated_tokens - actual_total`, clamped to `[0, tpm]`) instead of
+a pure subtraction, then threading the estimate captured at each
+`_acquire_rate_limit()` call site through to its matching
+`_record_rate_limit_usage()` call in `missy/providers/base.py`,
+`anthropic_provider.py`, and `openai_provider.py` — including through
+`OpenAIProvider`'s `_complete_via_responses()`/`_complete_via_chat()`
+helper methods, whose `record_usage` call is one layer removed from
+where the estimate is actually computed in `complete()`, requiring a
+new `estimated_tokens` parameter on both helpers. Omitting
+`estimated_tokens` (its default is `0`) preserves the exact old
+pure-deduction behavior for the one caller that never reserved
+anything against the token bucket in the first place
+(`OllamaProvider`'s non-streaming paths, which call
+`_acquire_rate_limit()` with no `tokens` argument) — verified this
+produces byte-identical results to the pre-fix code for that case,
+so no change was needed there. Streaming paths (`stream()` in both
+Anthropic and OpenAI providers) never called `record_usage()` at all,
+before or after this fix — a separate, lower-impact, out-of-scope gap
+noted for completeness, not fixed here. 1 existing test rewritten to
+assert the correct reconciled value, plus 4 new tests (one an
+explicit before/after regression comparison), all 4 confirmed via
+`git stash` to genuinely fail pre-fix (`TypeError: record_usage() got
+an unexpected keyword argument 'estimated_tokens'`, since the
+parameter didn't exist at all before this fix).
+
+**Self-caught regression during this same checkpoint**: the first
+version of this fix replaced the old `if total <= 0: return` no-op
+guard entirely with the new net-adjustment math, which silently broke
+a *different*, pre-existing defensive test —
+`tests/agent/test_watchdog_ratelimiter_edges.py::TestRateLimiterRecordUsageEdgeCases::test_record_usage_negative_total_is_no_op`
+— because a negative `total` (malformed usage, e.g.
+`prompt_tokens=-100, completion_tokens=-50`) now produced a *positive*
+`net_adjustment` (crediting tokens back rather than staying a no-op),
+inflating the bucket instead of leaving it untouched. Caught by
+running the full suite before considering this checkpoint done, not
+by the round's own new tests (which never exercised a negative
+total). Fixed by restoring an explicit `if total < 0: return` guard
+ahead of the net-adjustment computation, preserving the original
+defensive contract for malformed/negative usage while still applying
+the corrected reconciliation math for all valid (non-negative)
+inputs. Re-verified: `pytest
+tests/agent/test_watchdog_ratelimiter_edges.py
+tests/providers/test_rate_limiter_edge_cases.py tests/providers/ -q`:
+`1012 passed`.
+
+Separately, running an ad hoc subset of files together
+(`tests/integration/test_end_to_end.py tests/providers/
+test_rate_limiter_stress.py tests/providers/test_rate_limiter.py
+tests/unit/test_sanitizer_concurrent_operations_coverage.py
+tests/unit/test_rate_rest_edges.py`, an unusual grouping chosen only
+to spot-check every file that references `record_usage`) surfaced 2
+failures in `test_sanitizer_concurrent_operations_coverage.py`
+(`PolicyViolationError: 'example.com' is not permitted by policy`).
+Confirmed via `git stash` this reproduces identically with this
+round's changes fully removed, and does NOT appear anywhere in either
+full-suite run this checkpoint — it's an artifact of that specific,
+atypical file ordering (some earlier test in the group mutates shared
+global policy state a later sanitizer test depends on), not a real
+regression from this round or a genuine full-suite-reproducible
+issue. Not chased further (out of scope for this round).
+
+Verified: `pytest tests/skills/test_discovery.py -k block_list -v`:
+`2 passed`. `pytest tests/skills/ -q`: `188 passed`. `pytest
+tests/providers/test_rate_limiter_edge_cases.py -v`: `35 passed`.
+`pytest tests/providers/ -q`: `948 passed`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21521 passed, 18 skipped in 1983.51s (0:33:03)` — 0 failed, up from
+21516. Eighty-fifth consecutive fully green full-suite run. (This run
+also confirms the self-caught negative-total regression fix above
+holds under real full-suite conditions, and that the sanitizer
+test-order artifact noted above does not reproduce here.)
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

@@ -1,5 +1,93 @@
 # TEST_RESULTS
 
+## Run: 2026-07-12 UTC — round 71 research pass: RateLimiter.record_usage() double-deducted every completion; SkillDiscovery's YAML block-list parser dropped the standard unindented form
+
+- Context: round 71's research agent surveyed `missy/skills/discovery.py`,
+  `missy/providers/rate_limiter.py`, and `missy/core/session.py` (no
+  findings -- every production caller always passes an explicit,
+  uniquely-generated session_id, so the theoretical thread-local
+  cross-session leak path isn't reachable at current call sites).
+  Two real, concrete, high-confidence bugs surfaced in the first two.
+- **Finding 1 -- fixed: `SkillDiscovery._parse_yaml()`'s block-list
+  detection required list items to be indented STRICTLY MORE than
+  their parent key, silently dropping the equally-common,
+  equally-valid YAML form where items sit at the SAME indentation as
+  the key** (`tools:\n- a\n- b`, which is what PyYAML's own default
+  block-style dumper produces for a top-level list -- confirmed valid
+  via `yaml.safe_load`). `is_indented = next_raw[:1] in (" ", "\t")`
+  was `False` at column 0, so the block-list loop broke immediately
+  and `tools:` fell through to the "no items found" branch, silently
+  stored as `''`. `parse_skill_md()`'s `tools_raw = ''` then produced
+  `tools = []` via `''.split(",")` -- a skill's declared tool
+  requirement silently vanished with no exception, warning, or log
+  line anywhere. Live-reproduced:
+  `SkillDiscovery._parse_yaml("tools:\n- web_fetch\n- shell_exec\n")`
+  returned `{"tools": ""}` instead of `{"tools": ["web_fetch",
+  "shell_exec"]}`. Fixed by comparing indentation levels
+  (`next_indent >= key_indent`) instead of a strict "must have
+  leading whitespace" check, so same-level block-sequence items are
+  now recognized exactly like real YAML.
+- Command: `pytest tests/skills/test_discovery.py -k block_list -v`
+- Result: `2 passed` (1 new: `test_parse_block_list_at_same_indentation_as_key`),
+  confirmed via `git stash` to genuinely fail pre-fix
+  (`assert [] == ['web_fetch', 'shell_exec']`).
+- Broader sweep: `pytest tests/skills/ -q`: `188 passed`.
+- **Finding 2 -- fixed: `RateLimiter.record_usage()` deducted the
+  actual token total on top of the estimate `acquire()` had already
+  deducted, without ever crediting that estimate back -- double-
+  charging the token bucket on every single completion.** The
+  docstring claimed it "corrects the bucket to reflect the actual
+  consumption," but the implementation was `self._tok_tokens =
+  max(0.0, self._tok_tokens - float(total))` -- a pure subtraction
+  with no addition anywhere for the estimate already removed by
+  `acquire()`. Live-reproduced: `acquire(tokens=100)` -> bucket 900;
+  `record_usage(80, 20)` -> bucket 800 (should return to ~900, net
+  change ~0, since actual usage matched the estimate). Every real
+  provider call on the non-streaming `complete()`/`complete_with_tools()`
+  paths of both `AnthropicProvider` and `OpenAIProvider` exhausted the
+  configured `tokens_per_minute` budget at roughly half the intended
+  rate, causing spurious blocking/`RateLimitExceeded` under normal,
+  correctly-configured load. The existing test
+  `test_record_usage_deducts_actual_tokens` asserted the buggy
+  800-result as the expected contract -- a test that enshrined the
+  bug rather than catching it. Fixed by adding an `estimated_tokens`
+  parameter to `record_usage()` and computing a net adjustment
+  (`estimated_tokens - actual_total`) instead of a pure subtraction,
+  then threading the estimate captured at each `_acquire_rate_limit()`
+  call site through to its matching `_record_rate_limit_usage()` call
+  in both provider files (including through `OpenAIProvider`'s
+  `_complete_via_responses`/`_complete_via_chat` helper methods, whose
+  `record_usage` call is one layer removed from where the estimate is
+  computed in `complete()`). Streaming paths (`stream()` in both
+  providers) never called `record_usage()` before or after this fix --
+  a separate, lower-impact, out-of-scope gap, left untouched.
+- Command: `pytest tests/providers/test_rate_limiter_edge_cases.py -v`
+- Result: `35 passed` (1 existing test rewritten to assert the
+  correct reconciled value; 4 new tests --
+  `test_record_usage_double_deduction_regression`,
+  `test_record_usage_actual_higher_than_estimate_deducts_the_difference`,
+  `test_record_usage_actual_lower_than_estimate_credits_the_difference`,
+  `test_record_usage_without_estimated_tokens_defaults_to_pure_deduction` --
+  confirmed via `git stash` that 4 of these genuinely fail pre-fix
+  with `TypeError: record_usage() got an unexpected keyword argument
+  'estimated_tokens'`, since the parameter didn't exist at all before).
+- Broader sweep: `pytest tests/providers/ -q`: `948 passed`.
+- Self-caught regression during this checkpoint: the first version of
+  this fix broke a pre-existing test,
+  `test_record_usage_negative_total_is_no_op` (in
+  `tests/agent/test_watchdog_ratelimiter_edges.py`), because removing
+  the old `if total <= 0: return` guard let a negative (malformed)
+  total produce a *positive* net adjustment instead of staying a
+  no-op. Caught by running the full suite, not by this round's own
+  new tests. Fixed by restoring an explicit `if total < 0: return`
+  guard ahead of the net-adjustment math. Re-verified: `pytest
+  tests/agent/test_watchdog_ratelimiter_edges.py
+  tests/providers/test_rate_limiter_edge_cases.py tests/providers/
+  -q`: `1012 passed`.
+- Full suite: `python3 -m pytest tests/ -q` → `21521 passed, 18
+  skipped in 1983.51s (0:33:03)` — 0 failed, up from 21516.
+  Eighty-fifth consecutive fully green full-suite run.
+
 ## Run: 2026-07-12 UTC — round 70 research pass: ContextManager.build_messages() let one oversized summary starve every smaller, more-recent summary after it
 
 - Context: round 70's research agent surveyed `missy/memory/graph_store.py`

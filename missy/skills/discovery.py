@@ -257,6 +257,7 @@ class SkillDiscovery:
         while i < n:
             raw_line = lines[i]
             line = raw_line.strip()
+            key_indent = len(raw_line) - len(raw_line.lstrip())
             i += 1
             if not line or line.startswith("#"):
                 continue
@@ -267,8 +268,13 @@ class SkillDiscovery:
             value = value.strip()
 
             if not value:
-                # Possible block-list: collect subsequent "- item" lines
-                # that are indented relative to this key.
+                # Possible block-list: collect subsequent "- item" lines.
+                # Standard YAML permits block-sequence items at the SAME
+                # indentation as their parent mapping key, not just deeper
+                # (this is in fact what PyYAML's own default block-style
+                # dumper produces for a top-level list) -- a strict
+                # "must be indented more" check silently dropped this
+                # equally-common form as an empty string with no error.
                 items: list[str] = []
                 while i < n:
                     next_raw = lines[i]
@@ -276,8 +282,8 @@ class SkillDiscovery:
                     if not next_stripped:
                         i += 1
                         continue
-                    is_indented = next_raw[:1] in (" ", "\t")
-                    if is_indented and next_stripped.startswith("-"):
+                    next_indent = len(next_raw) - len(next_raw.lstrip())
+                    if next_indent >= key_indent and next_stripped.startswith("-"):
                         item = next_stripped[1:].strip().strip("\"'")
                         if item:
                             items.append(item)

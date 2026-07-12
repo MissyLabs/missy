@@ -98,6 +98,36 @@ class TestParseSkillMd:
         manifest = discovery.parse_skill_md(str(skill_file))
         assert manifest.tools == ["web_fetch", "shell_exec"]
 
+    def test_parse_block_list_at_same_indentation_as_key(
+        self, discovery: SkillDiscovery, tmp_path: Path
+    ) -> None:
+        """Regression: standard YAML also permits block-sequence items at
+        the SAME indentation as their parent mapping key (this is what
+        PyYAML's own default block-style dumper produces for a top-level
+        list) -- a strict "must be indented more than the key" check
+        silently dropped this equally-common form as an empty string,
+        with the exact same silent-data-loss symptom the indented-form
+        regression test above already guards against.
+        """
+        content = (
+            "---\n"
+            "name: unindented-block-list-tools\n"
+            "description: Uses the unindented block-list YAML syntax\n"
+            "version: 1.0.0\n"
+            "author: Test\n"
+            "tools:\n"
+            "- web_fetch\n"
+            "- shell_exec\n"
+            "---\n"
+            "\n"
+            "# Instructions\n"
+        )
+        skill_file = tmp_path / "SKILL.md"
+        skill_file.write_text(content)
+
+        manifest = discovery.parse_skill_md(str(skill_file))
+        assert manifest.tools == ["web_fetch", "shell_exec"]
+
     def test_parse_minimal_frontmatter(self, discovery: SkillDiscovery, tmp_path: Path) -> None:
         content = "---\nname: minimal\n---\n\nBody text.\n"
         skill_file = tmp_path / "SKILL.md"

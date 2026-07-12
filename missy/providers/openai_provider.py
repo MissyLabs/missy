@@ -946,6 +946,7 @@ class OpenAIProvider(BaseProvider):
         model: str,
         kwargs: dict[str, Any],
         system: str = "",
+        estimated_tokens: int = 0,
     ) -> CompletionResponse:
         """Execute a plain text/vision request via OpenAI Responses."""
         instructions, input_items = self._messages_to_responses_payload(api_messages, system=system)
@@ -967,7 +968,7 @@ class OpenAIProvider(BaseProvider):
             usage=usage,
             raw=self._raw_dump(raw_response),
         )
-        self._record_rate_limit_usage(response)
+        self._record_rate_limit_usage(response, estimated_tokens=estimated_tokens)
         return response
 
     def _complete_via_chat(
@@ -976,6 +977,7 @@ class OpenAIProvider(BaseProvider):
         api_messages: list[dict[str, Any]],
         model: str,
         kwargs: dict[str, Any],
+        estimated_tokens: int = 0,
     ) -> CompletionResponse:
         """Execute a request via Chat Completions compatibility mode."""
         call_kwargs: dict[str, Any] = {
@@ -1001,7 +1003,7 @@ class OpenAIProvider(BaseProvider):
             usage=usage,
             raw=self._raw_dump(raw_response),
         )
-        self._record_rate_limit_usage(response)
+        self._record_rate_limit_usage(response, estimated_tokens=estimated_tokens)
         return response
 
     def complete(self, messages: list[Message], **kwargs: Any) -> CompletionResponse:
@@ -1034,7 +1036,8 @@ class OpenAIProvider(BaseProvider):
         api_messages = self._messages_to_chat_payload(messages, system=system)
         self._emit_transcript_repairs(session_id, task_id)
 
-        self._acquire_rate_limit(estimated_tokens=self._estimate_tokens(messages))
+        estimated_tokens = self._estimate_tokens(messages)
+        self._acquire_rate_limit(estimated_tokens=estimated_tokens)
 
         try:
             client = self._make_client()
@@ -1045,10 +1048,13 @@ class OpenAIProvider(BaseProvider):
                     model,
                     kwargs,
                     system=system,
+                    estimated_tokens=estimated_tokens,
                 )
                 self._emit_event(session_id, task_id, "allow", "responses completion successful")
                 return response
-            response = self._complete_via_chat(client, api_messages, model, kwargs)
+            response = self._complete_via_chat(
+                client, api_messages, model, kwargs, estimated_tokens=estimated_tokens
+            )
             self._emit_event(session_id, task_id, "allow", "chat completion successful")
             return response
         except _openai_sdk.APITimeoutError as exc:
@@ -1165,7 +1171,8 @@ class OpenAIProvider(BaseProvider):
             call_kwargs["tools"] = tool_schemas
             call_kwargs["tool_choice"] = "auto"
 
-        self._acquire_rate_limit(estimated_tokens=self._estimate_tokens(messages, system))
+        estimated_tokens = self._estimate_tokens(messages, system)
+        self._acquire_rate_limit(estimated_tokens=estimated_tokens)
 
         try:
             client = self._make_client()
@@ -1226,7 +1233,7 @@ class OpenAIProvider(BaseProvider):
             tool_calls=tool_calls,
             finish_reason=finish_reason,
         )
-        self._record_rate_limit_usage(response)
+        self._record_rate_limit_usage(response, estimated_tokens=estimated_tokens)
         return response
 
     def stream(self, messages: list[Message], system: str = "") -> Iterator[str]:
