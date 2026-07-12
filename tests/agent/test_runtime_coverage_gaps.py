@@ -896,9 +896,7 @@ class TestSynthesizeMemory:
         mock_synth_cls = MagicMock()
         mock_synth_cls.return_value.synthesize.return_value = "block"
         with patch("missy.memory.synthesizer.MemorySynthesizer", mock_synth_cls):
-            rt._synthesize_memory(
-                learnings=["L1"], summary_texts=[], playbook_texts=[], query="q"
-            )
+            rt._synthesize_memory(learnings=["L1"], summary_texts=[], playbook_texts=[], query="q")
 
         mock_synth_cls.assert_called_once_with(max_tokens=4500)
 

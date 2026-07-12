@@ -90,9 +90,7 @@ class TestCompactSession:
         # Second pass should find nothing new to summarize
         assert stats2["leaf_summaries_created"] == 0
 
-    def test_second_pass_continuity_uses_most_recent_prior_summary(
-        self, memory_store, summarizer
-    ):
+    def test_second_pass_continuity_uses_most_recent_prior_summary(self, memory_store, summarizer):
         """Regression: the second (and every later) compaction pass must pass
         the MOST RECENTLY created leaf summary as continuity context, not the
         oldest one.

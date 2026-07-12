@@ -327,8 +327,7 @@ class TestQueueOverflowTerminalDelivery:
             events.append(ev)
             if len(events) > _MAX_QUEUE_EVENTS + 10:
                 pytest.fail(
-                    "stream() never reached a terminal event -- it is "
-                    "stuck emitting pings forever"
+                    "stream() never reached a terminal event -- it is stuck emitting pings forever"
                 )
 
         assert events[-1]["event"] == "run.complete"

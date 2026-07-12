@@ -168,7 +168,10 @@ class McpClient:
             if len(buf) >= self._MAX_RESPONSE_BYTES:
                 return bytes(buf)
             remaining = deadline - time.monotonic()
-            if remaining <= 0 or not select.select([self._proc.stdout], [], [], max(remaining, 0))[0]:
+            if (
+                remaining <= 0
+                or not select.select([self._proc.stdout], [], [], max(remaining, 0))[0]
+            ):
                 self._teardown_after_timeout()
                 if buf:
                     raise TimeoutError(

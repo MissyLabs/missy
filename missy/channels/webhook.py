@@ -92,7 +92,7 @@ class WebhookChannel(BaseChannel):
         self._trust_proxy = trust_proxy
         self._queue: list[ChannelMessage] = []
         self._lock = threading.Lock()
-        self._server: HTTPServer | None = None
+        self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
         # Per-IP rate tracking: {ip: [timestamps]}
         self._rate_tracker: dict[str, list[float]] = {}

@@ -492,9 +492,7 @@ class TestUnknownConfigKeyWarnings:
 
         assert cfg.shell.enabled is True
         assert cfg.shell.allowed_commands == ["ls"]
-        assert any(
-            "shell" in r.message and "unrestricted" in r.message for r in caplog.records
-        )
+        assert any("shell" in r.message and "unrestricted" in r.message for r in caplog.records)
 
     def test_network_unknown_key_warns(self, tmp_path: Path, caplog):
         path = _write_yaml(
@@ -511,9 +509,7 @@ class TestUnknownConfigKeyWarnings:
         # "allowed_domain" (singular, a plausible typo for the real
         # "allowed_domains") must be flagged, not silently accepted as
         # if it configured anything.
-        assert any(
-            "network" in r.message and "allowed_domain" in r.message for r in caplog.records
-        )
+        assert any("network" in r.message and "allowed_domain" in r.message for r in caplog.records)
 
     def test_filesystem_unknown_key_warns(self, tmp_path: Path, caplog):
         path = _write_yaml(
@@ -528,8 +524,7 @@ class TestUnknownConfigKeyWarnings:
             load_config(path)
 
         assert any(
-            "filesystem" in r.message and "readonly_paths" in r.message
-            for r in caplog.records
+            "filesystem" in r.message and "readonly_paths" in r.message for r in caplog.records
         )
 
     def test_plugins_unknown_key_warns(self, tmp_path: Path, caplog):
@@ -544,9 +539,7 @@ class TestUnknownConfigKeyWarnings:
         with caplog.at_level("WARNING", logger="missy.config.settings"):
             load_config(path)
 
-        assert any(
-            "plugins" in r.message and "whitelist" in r.message for r in caplog.records
-        )
+        assert any("plugins" in r.message and "whitelist" in r.message for r in caplog.records)
 
     def test_no_warning_for_recognized_keys_only(self, tmp_path: Path, caplog):
         path = _write_yaml(

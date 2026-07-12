@@ -298,9 +298,7 @@ class CheckpointManager:
             or ``None`` if no row exists with that ID.
         """
         conn = self._connect()
-        row = conn.execute(
-            "SELECT * FROM checkpoints WHERE id = ?", (checkpoint_id,)
-        ).fetchone()
+        row = conn.execute("SELECT * FROM checkpoints WHERE id = ?", (checkpoint_id,)).fetchone()
         return self._row_to_dict(row) if row is not None else None
 
     def get_incomplete(self) -> list[dict]:
@@ -473,24 +471,23 @@ def validate_loop_messages(loop_messages: object) -> bool:
         role = msg.get("role")
         if role not in _VALID_ROLES:
             return False
-        if role == "tool":
-            # AgentRuntime._tool_loop() always writes tool_call_id alongside
-            # name/content (runtime.py's loop_messages.append for role=="tool").
-            # Without this check, a checkpoint missing tool_call_id passed
-            # validation, and OpenAIProvider._message_to_chat_payload()
-            # silently drops that tool message (no repair event logged,
-            # unlike its sibling orphan-tool-result path) while leaving the
-            # preceding assistant message's tool_calls entry in the payload
-            # -- producing exactly the shape the real OpenAI API rejects
-            # with "the following tool_call_ids did not have response
-            # messages," on the very next round after a checkpoint resume.
-            if (
-                not isinstance(msg.get("name"), str)
-                or "content" not in msg
-                or not isinstance(msg.get("tool_call_id"), str)
-                or not msg["tool_call_id"]
-            ):
-                return False
+        # AgentRuntime._tool_loop() always writes tool_call_id alongside
+        # name/content (runtime.py's loop_messages.append for role=="tool").
+        # Without this check, a checkpoint missing tool_call_id passed
+        # validation, and OpenAIProvider._message_to_chat_payload()
+        # silently drops that tool message (no repair event logged,
+        # unlike its sibling orphan-tool-result path) while leaving the
+        # preceding assistant message's tool_calls entry in the payload
+        # -- producing exactly the shape the real OpenAI API rejects
+        # with "the following tool_call_ids did not have response
+        # messages," on the very next round after a checkpoint resume.
+        if role == "tool" and (
+            not isinstance(msg.get("name"), str)
+            or "content" not in msg
+            or not isinstance(msg.get("tool_call_id"), str)
+            or not msg["tool_call_id"]
+        ):
+            return False
         if role == "assistant" and "tool_calls" in msg:
             tool_calls = msg["tool_calls"]
             if not isinstance(tool_calls, list):

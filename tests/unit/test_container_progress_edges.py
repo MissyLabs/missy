@@ -355,9 +355,7 @@ class TestStopEdgeCases:
         success -- pre-fix, stop() ignored result.returncode entirely and
         always logged "Container removed", even when removal actually failed
         (e.g. permission denied, container busy)."""
-        mock_run.return_value = MagicMock(
-            returncode=1, stdout=b"", stderr=b"permission denied"
-        )
+        mock_run.return_value = MagicMock(returncode=1, stdout=b"", stderr=b"permission denied")
         sb = _started_sb("failrm")
         with caplog.at_level("INFO", logger="missy.security.container"):
             sb.stop()

@@ -91,7 +91,9 @@ class TestBackupConfig:
         assert path1 != path2
 
         backups = list_backups(backup_dir)
-        assert backups[-1] == path2, "the true most-recent backup must sort last despite tied mtimes"
+        assert backups[-1] == path2, (
+            "the true most-recent backup must sort last despite tied mtimes"
+        )
         assert backups[0] == path1
 
 

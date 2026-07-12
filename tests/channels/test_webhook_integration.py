@@ -545,9 +545,7 @@ class TestConcurrentRequests:
                 time.sleep(0.2)  # ensure slow client is already mid-request
                 conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
                 body = json.dumps({"prompt": "fast"}).encode()
-                conn.request(
-                    "POST", "/", body=body, headers={"Content-Type": "application/json"}
-                )
+                conn.request("POST", "/", body=body, headers={"Content-Type": "application/json"})
                 resp = conn.getresponse()
                 results["fast"] = time.monotonic() - start
                 resp.read()

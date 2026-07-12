@@ -1207,9 +1207,7 @@ class AcpxProvider(BaseProvider):
                 "instead of Missy's <tool_call> protocol; retrying once with "
                 "an explicit correction."
             )
-            self._emit_event(
-                "", "", "deny", "native tool call denied; retrying with correction"
-            )
+            self._emit_event("", "", "deny", "native tool call denied; retrying with correction")
             current_prompt = current_prompt + "\n\n" + _NATIVE_TOOL_DENIAL_CORRECTION
 
         if tool_calls:
@@ -1568,7 +1566,10 @@ class AcpxProvider(BaseProvider):
             if event.get("method") != "session/update":
                 continue
             update = event.get("params", {}).get("update", {})
-            if update.get("sessionUpdate") == "tool_call_update" and update.get("status") == "failed":
+            if (
+                update.get("sessionUpdate") == "tool_call_update"
+                and update.get("status") == "failed"
+            ):
                 return True
         return False
 

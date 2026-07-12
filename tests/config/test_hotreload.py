@@ -151,12 +151,14 @@ class TestApplyConfig:
             registry_mod._registry = None
             config = MagicMock()
 
-            with patch(
-                "missy.providers.registry.ProviderRegistry.from_config",
-                side_effect=RuntimeError("boom"),
+            with (
+                patch(
+                    "missy.providers.registry.ProviderRegistry.from_config",
+                    side_effect=RuntimeError("boom"),
+                ),
+                pytest.raises(RuntimeError, match="boom"),
             ):
-                with pytest.raises(RuntimeError, match="boom"):
-                    _apply_config(config)
+                _apply_config(config)
 
             assert policy_mod._engine is None
             assert registry_mod._registry is None

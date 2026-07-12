@@ -93,8 +93,7 @@ def _peek_image_dimensions(path: str | Path) -> tuple[int, int] | None:
             return im.size
     except Image.DecompressionBombError as exc:
         raise ImageTooLargeError(
-            f"Image declares a pixel count Pillow's own decompression-bomb "
-            f"guard rejects: {exc}"
+            f"Image declares a pixel count Pillow's own decompression-bomb guard rejects: {exc}"
         ) from exc
     except Exception:
         return None

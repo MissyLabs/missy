@@ -698,9 +698,7 @@ class TestRunLoopPriorityTools:
             runtime = AgentRuntime(AgentConfig(provider="fake", max_iterations=3))
             with (
                 patch.object(runtime, "_get_tools", return_value=[tool_a, tool_b, tool_c]),
-                patch.object(
-                    runtime, "_tool_loop", return_value=("done", [])
-                ) as mock_tool_loop,
+                patch.object(runtime, "_tool_loop", return_value=("done", [])) as mock_tool_loop,
             ):
                 runtime._run_loop(
                     provider=provider,
@@ -728,9 +726,7 @@ class TestRunLoopPriorityTools:
             runtime = AgentRuntime(AgentConfig(provider="fake", max_iterations=3))
             with (
                 patch.object(runtime, "_get_tools", return_value=[tool_a, tool_b]),
-                patch.object(
-                    runtime, "_tool_loop", return_value=("done", [])
-                ) as mock_tool_loop,
+                patch.object(runtime, "_tool_loop", return_value=("done", [])) as mock_tool_loop,
             ):
                 runtime._run_loop(
                     provider=provider,
@@ -1495,9 +1491,7 @@ class TestRuntimeRecordLearnings:
         with patch("missy.agent.runtime.get_registry", return_value=reg):
             runtime = AgentRuntime(AgentConfig(provider="fake"))
             runtime._memory_store = store
-            runtime._record_learnings(
-                ["shell_exec"], "Successfully ran the command.", "run ls"
-            )
+            runtime._record_learnings(["shell_exec"], "Successfully ran the command.", "run ls")
 
         lessons = store.get_learnings(limit=5)
         assert len(lessons) == 1

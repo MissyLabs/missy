@@ -382,7 +382,9 @@ class TestAbandonOld:
             "UPDATE checkpoints SET created_at=? WHERE id=?",
             (time.time() - 30 * 3600, cid),
         )
-        cm.update(cid, loop_messages=[{"role": "user", "content": "hi"}], tool_names_used=[], iteration=1)
+        cm.update(
+            cid, loop_messages=[{"role": "user", "content": "hi"}], tool_names_used=[], iteration=1
+        )
 
         count = cm.abandon_old(max_age_seconds=86400)
 
@@ -674,9 +676,7 @@ class TestValidateLoopMessages:
         assert not validate_loop_messages([{"content": "no role key"}])
 
     def test_tool_message_missing_name_rejected(self):
-        assert not validate_loop_messages(
-            [{"role": "tool", "tool_call_id": "t1", "content": "4"}]
-        )
+        assert not validate_loop_messages([{"role": "tool", "tool_call_id": "t1", "content": "4"}])
 
     def test_tool_message_missing_content_rejected(self):
         assert not validate_loop_messages([{"role": "tool", "name": "calculator"}])
@@ -691,9 +691,7 @@ class TestValidateLoopMessages:
         "the following tool_call_ids did not have response messages" on
         the very next round after a checkpoint resume.
         """
-        assert not validate_loop_messages(
-            [{"role": "tool", "name": "calculator", "content": "4"}]
-        )
+        assert not validate_loop_messages([{"role": "tool", "name": "calculator", "content": "4"}])
 
     def test_tool_message_empty_tool_call_id_rejected(self):
         assert not validate_loop_messages(

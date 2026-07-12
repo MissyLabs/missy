@@ -39,8 +39,8 @@ from httpcore._backends.sync import SyncBackend
 #: dict/thread-local) so it is correctly isolated per async task as well as
 #: per thread -- concurrent requests to different hosts on the same shared
 #: httpx.Client/AsyncClient instance must never see each other's pins.
-_pinned_ips: contextvars.ContextVar[dict[str, str | None]] = contextvars.ContextVar(
-    "missy_pinned_ips", default={}
+_pinned_ips: contextvars.ContextVar[dict[str, str | None] | None] = contextvars.ContextVar(
+    "missy_pinned_ips", default=None
 )
 
 
@@ -63,14 +63,14 @@ def pin_host(host: str, ip: str | None) -> None:
             and the connection is allowed to fall back to normal,
             unpinned resolution).
     """
-    current = dict(_pinned_ips.get())
+    current = dict(_pinned_ips.get() or {})
     current[host] = ip
     _pinned_ips.set(current)
 
 
 def clear_pin(host: str) -> None:
     """Remove any pin for *host*, e.g. after the request completes."""
-    current = dict(_pinned_ips.get())
+    current = dict(_pinned_ips.get() or {})
     current.pop(host, None)
     _pinned_ips.set(current)
 
@@ -89,7 +89,7 @@ class _PinnedSyncBackend(httpcore.NetworkBackend):
         local_address: str | None = None,
         socket_options: typing.Iterable[Any] | None = None,
     ) -> httpcore.NetworkStream:
-        pins = _pinned_ips.get()
+        pins = _pinned_ips.get() or {}
         if host not in pins:
             # Fail closed: every connection through this transport must
             # be preceded by PolicyHTTPClient._check_url() pinning an IP
@@ -118,9 +118,7 @@ class _PinnedSyncBackend(httpcore.NetworkBackend):
         timeout: float | None = None,
         socket_options: typing.Iterable[Any] | None = None,
     ) -> httpcore.NetworkStream:
-        return self._inner.connect_unix_socket(
-            path, timeout=timeout, socket_options=socket_options
-        )
+        return self._inner.connect_unix_socket(path, timeout=timeout, socket_options=socket_options)
 
 
 class _PinnedAsyncBackend(httpcore.AsyncNetworkBackend):
@@ -137,7 +135,7 @@ class _PinnedAsyncBackend(httpcore.AsyncNetworkBackend):
         local_address: str | None = None,
         socket_options: typing.Iterable[Any] | None = None,
     ) -> httpcore.AsyncNetworkStream:
-        pins = _pinned_ips.get()
+        pins = _pinned_ips.get() or {}
         if host not in pins:
             raise httpcore.ConnectError(
                 f"Refusing to connect to {host!r}: no policy-validated IP "

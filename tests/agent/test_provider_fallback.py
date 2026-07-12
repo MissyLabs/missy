@@ -21,8 +21,8 @@ from unittest.mock import patch
 import pytest
 
 from missy.agent.circuit_breaker import CircuitBreaker, CircuitState
-from missy.agent.runtime import AgentConfig, AgentRuntime
 from missy.agent.cost_tracker import BudgetExceededError, CostTracker
+from missy.agent.runtime import AgentConfig, AgentRuntime
 from missy.config.settings import ProviderConfig
 from missy.core.events import AuditEvent, EventBus
 from missy.core.exceptions import ProviderError
@@ -194,9 +194,7 @@ def _capture_events() -> tuple[list[AuditEvent], callable]:
 
 class TestKeyRotationOnAuthFailure:
     def test_rotates_key_and_retries_same_provider_on_auth_failure(self):
-        cfg = ProviderConfig(
-            name="flaky", model="m", api_key="key-0", api_keys=["key-0", "key-1"]
-        )
+        cfg = ProviderConfig(name="flaky", model="m", api_key="key-0", api_keys=["key-0", "key-1"])
         provider = _FailNTimesProvider(
             "flaky", cfg, fail_times=1, error_message="flaky authentication failed: bad key"
         )
@@ -224,9 +222,7 @@ class TestKeyRotationOnAuthFailure:
         provider = _AlwaysFailProvider("flaky", cfg, "flaky authentication failed: bad key")
         healthy_cfg = ProviderConfig(name="healthy", model="m", api_key="hk")
         healthy = _HealthyProvider("healthy", healthy_cfg)
-        registry = _install_registry(
-            ("flaky", provider, cfg), ("healthy", healthy, healthy_cfg)
-        )
+        registry = _install_registry(("flaky", provider, cfg), ("healthy", healthy, healthy_cfg))
 
         rt = _bare_runtime("flaky")
         with patch("missy.agent.runtime.get_registry", return_value=registry):
@@ -252,9 +248,7 @@ class TestKeyRotationOnAuthFailure:
         provider = _AlwaysFailProvider("limited", cfg, "limited rate limited: 429")
         healthy_cfg = ProviderConfig(name="healthy", model="m", api_key="hk")
         healthy = _HealthyProvider("healthy", healthy_cfg)
-        registry = _install_registry(
-            ("limited", provider, cfg), ("healthy", healthy, healthy_cfg)
-        )
+        registry = _install_registry(("limited", provider, cfg), ("healthy", healthy, healthy_cfg))
 
         rt = _bare_runtime("limited")
         with patch("missy.agent.runtime.get_registry", return_value=registry):
@@ -310,9 +304,7 @@ class TestCrossProviderFallbackTranscriptAndModel:
         primary_cfg = ProviderConfig(name="anthropic", model="m", api_key="k1")
         primary = _AlwaysFailProvider("anthropic", primary_cfg, "anthropic authentication failed")
         fallback_cfg = ProviderConfig(name="openai", model="m", api_key="k2")
-        fallback = _HealthyToolCapableProvider(
-            "openai", fallback_cfg, accepts_message_dicts=True
-        )
+        fallback = _HealthyToolCapableProvider("openai", fallback_cfg, accepts_message_dicts=True)
         registry = _install_registry(
             ("anthropic", primary, primary_cfg), ("openai", fallback, fallback_cfg)
         )
@@ -386,9 +378,7 @@ class TestToolCompatibilityOrdering:
         primary = _AlwaysFailProvider("primary", primary_cfg, "primary authentication failed")
         plain_cfg = ProviderConfig(name="plain", model="m", api_key="k2")
         plain = _HealthyProvider("plain", plain_cfg)
-        registry = _install_registry(
-            ("primary", primary, primary_cfg), ("plain", plain, plain_cfg)
-        )
+        registry = _install_registry(("primary", primary, primary_cfg), ("plain", plain, plain_cfg))
 
         rt = _bare_runtime("primary")
         captured, uninstall = _capture_events()
@@ -475,7 +465,7 @@ class TestCooldownEligibility:
         # Pre-open broken's breaker via repeated failures, exactly as
         # production would after enough real calls fail.
         broken_breaker = CircuitBreaker("broken", threshold=1, base_timeout=3600.0)
-        with pytest.raises(Exception):
+        with pytest.raises(ProviderError):
             broken_breaker.call(lambda: (_ for _ in ()).throw(ProviderError("boom")))
         assert broken_breaker.state == CircuitState.OPEN
         rt._fallback_breakers["broken"] = broken_breaker

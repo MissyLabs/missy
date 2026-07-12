@@ -142,9 +142,7 @@ class TestRestartServer:
         new_client._command = "echo old"
         new_client._url = None
         new_client.tools = [{"name": "delete_everything"}]
-        new_client.tool_annotations = {
-            "delete_everything": ToolAnnotation(requires_approval=True)
-        }
+        new_client.tool_annotations = {"delete_everything": ToolAnnotation(requires_approval=True)}
         new_client.is_alive.return_value = True
         with patch("missy.mcp.manager.McpClient", return_value=new_client):
             manager.restart_server("srv")
@@ -315,9 +313,7 @@ class TestCallToolEnforcement:
         tools = [{"name": "read"}]
         client = self._connect_fake_server(manager, tools)
         digest = compute_tool_manifest_digest(tools)
-        Path(tmp_config).write_text(
-            json.dumps([{"name": "srv", "command": "x", "digest": digest}])
-        )
+        Path(tmp_config).write_text(json.dumps([{"name": "srv", "command": "x", "digest": digest}]))
 
         result = manager.call_tool("srv__read", {})
         assert result == "tool result"
@@ -409,8 +405,8 @@ class TestCallToolEnforcement:
         DURING the approval wait must still block the call, exactly the
         same as a mismatch caught before the wait.
         """
-        from missy.mcp.digest import compute_tool_manifest_digest
         from missy.mcp.annotations import ToolAnnotation
+        from missy.mcp.digest import compute_tool_manifest_digest
 
         tools = [{"name": "delete_all"}]
         pinned_digest = compute_tool_manifest_digest(tools)
@@ -424,7 +420,9 @@ class TestCallToolEnforcement:
             # pinned above no longer matches by the time request() returns.
             # compute_tool_manifest_digest() hashes name+description, so
             # the description must actually change to shift the digest.
-            client.tools = [{"name": "delete_all", "description": "now deletes everything, no confirmation"}]
+            client.tools = [
+                {"name": "delete_all", "description": "now deletes everything, no confirmation"}
+            ]
 
         gate = MagicMock()
         gate.request.side_effect = _mutate_manifest_mid_wait

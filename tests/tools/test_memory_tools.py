@@ -134,9 +134,7 @@ class TestMemorySearchTool:
         assert "AND/OR" not in query_desc
         assert "FTS5 syntax" not in query_desc
 
-    def test_boolean_query_matched_as_literal_phrase_not_silently_empty(
-        self, populated_store
-    ):
+    def test_boolean_query_matched_as_literal_phrase_not_silently_empty(self, populated_store):
         """A query containing FTS5 boolean syntax is treated as literal
         text, matching the corrected schema description, rather than being
         interpreted as a query operator.

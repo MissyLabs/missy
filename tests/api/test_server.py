@@ -291,8 +291,13 @@ class TestOperatorConsole:
         assert "api('/discord/pairing')" in script
         assert "approval-action" in script
         assert "pairing-action" in script
-        assert "/approvals/${encodeURIComponent(approvalId)}/${approve ? 'approve' : 'deny'}" in script
-        assert "/discord/pairing/${encodeURIComponent(userId)}/${approve ? 'approve' : 'deny'}" in script
+        assert (
+            "/approvals/${encodeURIComponent(approvalId)}/${approve ? 'approve' : 'deny'}" in script
+        )
+        assert (
+            "/discord/pairing/${encodeURIComponent(userId)}/${approve ? 'approve' : 'deny'}"
+            in script
+        )
 
     def test_root_redirects_to_login_without_browser_session(self) -> None:
         port = _free_port()
@@ -1745,12 +1750,8 @@ class TestOperatorControls:
         candidate = candidate_store.add(_make_tool_candidate())
 
         mock_reconciler_cls = MagicMock()
-        mock_reconciler_cls.return_value.reconcile_candidate.return_value = MagicMock(
-            to_dict=lambda: {}
-        )
-        with patch(
-            "missy.tools.intelligence.CandidateBenchmarkReconciler", mock_reconciler_cls
-        ):
+        mock_reconciler_cls.return_value.reconcile_candidate.return_value = MagicMock(to_dict=dict)
+        with patch("missy.tools.intelligence.CandidateBenchmarkReconciler", mock_reconciler_cls):
             _execute_candidate_import_benchmarks(
                 {
                     "target": candidate.id,
@@ -2759,9 +2760,7 @@ class TestDiscordPairingEndpoints:
     def test_resolve_pairing_invalid_sub_action_returns_404(self) -> None:
         srv, ch, url = self._start_server_with_discord_channel()
         try:
-            resp = httpx.post(
-                f"{url}/discord/pairing/999888777/not-a-real-action", headers=HEADERS
-            )
+            resp = httpx.post(f"{url}/discord/pairing/999888777/not-a-real-action", headers=HEADERS)
             assert resp.status_code == 404
         finally:
             srv.stop()

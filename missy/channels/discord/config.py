@@ -174,7 +174,9 @@ def _parse_guild_policy(data: dict[str, Any]) -> DiscordGuildPolicy:
     )
 
 
-def _parse_account(data: dict[str, Any], vault_dir: str = "~/.missy/secrets") -> DiscordAccountConfig:
+def _parse_account(
+    data: dict[str, Any], vault_dir: str = "~/.missy/secrets"
+) -> DiscordAccountConfig:
     """Construct a :class:`DiscordAccountConfig` from a raw YAML dict."""
     from missy.config.settings import _coerce_bool
 
@@ -207,7 +209,9 @@ def _parse_account(data: dict[str, Any], vault_dir: str = "~/.missy/secrets") ->
     )
 
 
-def parse_discord_config(data: dict[str, Any], vault_dir: str = "~/.missy/secrets") -> DiscordConfig:
+def parse_discord_config(
+    data: dict[str, Any], vault_dir: str = "~/.missy/secrets"
+) -> DiscordConfig:
     """Parse a ``discord:`` YAML section into a :class:`DiscordConfig`.
 
     Args:

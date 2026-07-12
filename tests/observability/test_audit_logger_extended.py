@@ -140,15 +140,13 @@ class TestRestrictivePermissions:
     the write path used a plain append-mode open() with no explicit
     mode."""
 
-    def test_log_file_created_with_0600_regardless_of_umask(
-        self, log_path: Path, bus: EventBus
-    ):
+    def test_log_file_created_with_0600_regardless_of_umask(self, log_path: Path, bus: EventBus):
         import os
         import stat
 
         old_umask = os.umask(0o022)
         try:
-            al = AuditLogger(log_path=str(log_path), bus=bus)
+            AuditLogger(log_path=str(log_path), bus=bus)
             bus.publish(
                 AuditEvent.now(
                     session_id="s", task_id="t", event_type="x", category="tool", result="allow"
@@ -229,9 +227,7 @@ class TestLogRotation:
         for f in rotated:
             assert stat.S_IMODE(f.stat().st_mode) == 0o600
 
-    def test_same_second_rotations_do_not_clobber_each_other(
-        self, log_path: Path, bus: EventBus
-    ):
+    def test_same_second_rotations_do_not_clobber_each_other(self, log_path: Path, bus: EventBus):
         """Regression: the rotated filename used only 1-second
         (int(time.time())) granularity with no collision check --
         os.rename() silently overwrites an existing destination on
@@ -292,7 +288,7 @@ class TestLogRotation:
         assert len(rotated) <= al._MAX_ROTATED_FILES
 
     def test_no_rotation_below_the_size_threshold(self, log_path: Path, bus: EventBus):
-        al = AuditLogger(log_path=str(log_path), bus=bus)
+        AuditLogger(log_path=str(log_path), bus=bus)
         # Default threshold (50 MB) -- a handful of small events must
         # never trigger rotation.
         for i in range(5):
@@ -326,7 +322,7 @@ class TestLogRotation:
             )
         # The event must still have been written despite the rotation failure.
         assert log_path.exists()
-        assert "\"event_type\": \"x\"" in log_path.read_text()
+        assert '"event_type": "x"' in log_path.read_text()
 
 
 # ---------------------------------------------------------------------------

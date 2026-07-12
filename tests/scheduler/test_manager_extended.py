@@ -155,9 +155,7 @@ class TestRunJob:
             "subagent_tool_policy": None,
             "tool_intelligence": None,
         }
-        mgr = SchedulerManager(
-            jobs_file=tmp_jobs_file, default_tool_policy_kwargs=policy_kwargs
-        )
+        mgr = SchedulerManager(jobs_file=tmp_jobs_file, default_tool_policy_kwargs=policy_kwargs)
         mgr.start()
         try:
             job = mgr.add_job("policy job", "every 5 minutes", "do stuff")

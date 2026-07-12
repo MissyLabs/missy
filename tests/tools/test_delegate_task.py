@@ -24,7 +24,9 @@ class TestNoRuntimeContext:
 
 class TestDepthLimit:
     def test_at_max_depth_is_rejected(self, tool):
-        r = tool.execute(prompt="1. a", _runtime=MagicMock(), _session_id="s", _depth=MAX_SUB_AGENT_DEPTH)
+        r = tool.execute(
+            prompt="1. a", _runtime=MagicMock(), _session_id="s", _depth=MAX_SUB_AGENT_DEPTH
+        )
         assert not r.success
         assert "Delegation depth limit" in r.error
 
@@ -63,7 +65,9 @@ class TestDispatch:
     def test_multi_step_success_includes_all_steps(self, tool):
         runtime = MagicMock()
         runtime.run.side_effect = ["result a", "result b"]
-        r = tool.execute(prompt="1. do a\n2. do b", _runtime=runtime, _session_id="sess-1", _depth=0)
+        r = tool.execute(
+            prompt="1. do a\n2. do b", _runtime=runtime, _session_id="sess-1", _depth=0
+        )
         assert r.success
         assert "result a" in r.output
         assert "result b" in r.output

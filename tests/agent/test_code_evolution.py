@@ -335,9 +335,7 @@ class TestApply:
         still reported "Tests failed. Changes reverted." Must actually
         restore the original content for an untracked file too.
         """
-        (tmp_repo / "missy" / "new_untracked.py").write_text(
-            "def foo():\n    return 'ORIGINAL'\n"
-        )
+        (tmp_repo / "missy" / "new_untracked.py").write_text("def foo():\n    return 'ORIGINAL'\n")
         mgr = CodeEvolutionManager(
             store_path=store_path,
             repo_root=str(tmp_repo),
@@ -521,7 +519,10 @@ class TestStashIdentity:
     def test_stash_pop_with_unknown_sha_leaves_stack_untouched(self, mgr, tmp_repo):
         (tmp_repo / "missy" / "__init__.py").write_text("# dirty\n")
         subprocess.run(
-            ["git", "stash", "push", "-m", "real stash"], cwd=str(tmp_repo), capture_output=True, check=True
+            ["git", "stash", "push", "-m", "real stash"],
+            cwd=str(tmp_repo),
+            capture_output=True,
+            check=True,
         )
         before = subprocess.run(
             ["git", "stash", "list"], cwd=str(tmp_repo), capture_output=True, text=True

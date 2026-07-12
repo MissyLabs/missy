@@ -78,12 +78,8 @@ def extract_task_type(tool_names_used: list[str]) -> str:
     return "chat"
 
 
-_SUCCESS_WORD_RE = re.compile(
-    r"\b(?:successfully|completed|done|finished|worked)\b", re.IGNORECASE
-)
-_FAILURE_WORD_RE = re.compile(
-    r"\b(?:failed|error|unable|couldn't|cannot)\b", re.IGNORECASE
-)
+_SUCCESS_WORD_RE = re.compile(r"\b(?:successfully|completed|done|finished|worked)\b", re.IGNORECASE)
+_FAILURE_WORD_RE = re.compile(r"\b(?:failed|error|unable|couldn't|cannot)\b", re.IGNORECASE)
 
 
 def extract_outcome(final_response: str) -> str:

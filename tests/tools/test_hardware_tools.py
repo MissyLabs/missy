@@ -1009,7 +1009,6 @@ class TestBrowserScreenshotToolFilesystemWritePolicy:
     """
 
     def test_write_outside_allowed_paths_is_denied(self, tmp_path):
-        from missy.policy.engine import init_policy_engine
         from missy.config.settings import (
             FilesystemPolicy,
             MissyConfig,
@@ -1017,6 +1016,7 @@ class TestBrowserScreenshotToolFilesystemWritePolicy:
             PluginPolicy,
             ShellPolicy,
         )
+        from missy.policy.engine import init_policy_engine
         from missy.tools.builtin.browser_tools import BrowserScreenshotTool
         from missy.tools.registry import ToolRegistry
 
@@ -1049,7 +1049,6 @@ class TestBrowserScreenshotToolFilesystemWritePolicy:
         mock_page_fn.assert_not_called()
 
     def test_write_inside_allowed_paths_is_permitted(self, tmp_path):
-        from missy.policy.engine import init_policy_engine
         from missy.config.settings import (
             FilesystemPolicy,
             MissyConfig,
@@ -1057,6 +1056,7 @@ class TestBrowserScreenshotToolFilesystemWritePolicy:
             PluginPolicy,
             ShellPolicy,
         )
+        from missy.policy.engine import init_policy_engine
         from missy.tools.builtin.browser_tools import BrowserScreenshotTool
         from missy.tools.registry import ToolRegistry
 

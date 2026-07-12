@@ -569,10 +569,11 @@ class TestSR15AudioToolsShellPolicyGatesRealHostCommand:
         self._init_policy(["piper", "espeak-ng", "gst-launch-1.0"])
         registry = ToolRegistry()
         registry.register(TTSSpeakTool())
-        with patch(
-            "missy.tools.builtin.tts_speak._synth_piper", return_value="piper unavailable"
-        ), patch(
-            "missy.tools.builtin.tts_speak._synth_espeak", return_value="espeak-ng unavailable"
+        with (
+            patch("missy.tools.builtin.tts_speak._synth_piper", return_value="piper unavailable"),
+            patch(
+                "missy.tools.builtin.tts_speak._synth_espeak", return_value="espeak-ng unavailable"
+            ),
         ):
             result = registry.execute("tts_speak", text="hello")
         # Reaches real tool logic (fails on synthesis, not on policy denial).

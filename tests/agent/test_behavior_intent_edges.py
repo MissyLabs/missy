@@ -1009,7 +1009,7 @@ class TestResponseShaperStripRoboticPhrases:
         assert "great question" not in result.lower()
 
     def test_strips_id_be_happy_to_help(self) -> None:
-        """"I'd be happy to help/assist(?: you)?" is only pure filler
+        """ "I'd be happy to help/assist(?: you)?" is only pure filler
         when it's sentence-terminal (nothing but punctuation follows) --
         see tests.agent.test_behavior.TestRoboticPhraseStrippingPreservesRealContent
         for why a trailing object clause like "...help you with that."

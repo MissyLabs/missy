@@ -800,7 +800,6 @@ class TestAuditVerify:
     verify_audit_log() would defeat the point of testing it."""
 
     def _write_signed_log(self, tmp_path, key_path, log_path, events):
-        import json as _json
 
         from missy.core.events import AuditEvent, EventBus
         from missy.observability.audit_logger import AuditLogger
@@ -1515,9 +1514,7 @@ def _make_mock_registry(nodes: list[dict] | None = None) -> MagicMock:
     reg.list_nodes.return_value = edge_nodes
     reg.list_paired.return_value = [n for n in edge_nodes if n.paired]
     reg.list_pending.return_value = [n for n in edge_nodes if not n.paired]
-    reg.get_node.side_effect = lambda nid: next(
-        (n for n in edge_nodes if n.node_id == nid), None
-    )
+    reg.get_node.side_effect = lambda nid: next((n for n in edge_nodes if n.node_id == nid), None)
     return reg
 
 
@@ -2844,8 +2841,12 @@ class TestDoctorAuditSigning:
         AuditLogger(log_path=str(log_path), bus=bus, identity=None)  # no identity => unsigned
         bus.publish(
             AuditEvent.now(
-                session_id="s1", task_id="t1", event_type="network.request",
-                category="network", result="allow", detail={},
+                session_id="s1",
+                task_id="t1",
+                event_type="network.request",
+                category="network",
+                result="allow",
+                detail={},
             )
         )
 

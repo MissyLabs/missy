@@ -7,6 +7,8 @@ a rotated key, while a rate limit or timeout is not.
 
 from __future__ import annotations
 
+import pytest
+
 from missy.core.exceptions import ProviderError
 from missy.providers.health import ProviderFailureClass, classify_provider_error
 
@@ -53,13 +55,17 @@ class TestClassifyProviderError:
         assert classify_provider_error(exc) == ProviderFailureClass.AUTH
 
     def test_auth_marker_takes_precedence_over_unrelated_text(self):
-        exc = ProviderError("Something went wrong: authentication failed and also a 429 in the body")
+        exc = ProviderError(
+            "Something went wrong: authentication failed and also a 429 in the body"
+        )
         # Auth is checked first -- both markers are present, auth wins.
         assert classify_provider_error(exc) == ProviderFailureClass.AUTH
 
     def test_plain_exception_not_just_provider_error(self):
         """Classification is a pure string check -- works on any exception type."""
-        assert classify_provider_error(RuntimeError("rate limited")) == ProviderFailureClass.RATE_LIMIT
+        assert (
+            classify_provider_error(RuntimeError("rate limited")) == ProviderFailureClass.RATE_LIMIT
+        )
 
     def test_provider_failure_class_is_str_enum(self):
         assert ProviderFailureClass.AUTH == "auth"
@@ -84,7 +90,6 @@ class TestClassifyProviderErrorAcpxBlindSpot:
 
         from missy.providers.acpx_provider import AcpxProvider
         from missy.providers.base import Message
-
         from tests.providers.test_acpx_provider import _make_config
 
         with patch("missy.providers.acpx_provider._run_subprocess_with_group_kill") as mock_run:

@@ -159,9 +159,7 @@ class RateLimiter:
         if net_adjustment == 0:
             return
         with self._lock:
-            self._tok_tokens = max(
-                0.0, min(float(self._tpm), self._tok_tokens + net_adjustment)
-            )
+            self._tok_tokens = max(0.0, min(float(self._tpm), self._tok_tokens + net_adjustment))
 
     def on_rate_limit_response(self, retry_after: float = 0.0) -> None:
         """Handle a 429 response from the API.

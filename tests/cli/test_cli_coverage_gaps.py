@@ -457,7 +457,10 @@ class TestProvidersSwitch:
         mock_registry = MagicMock()
         fake_response = MagicMock()
         fake_response.status_code = 404
-        fake_response.json.return_value = {"status": "error", "error": "Provider 'x' is not registered"}
+        fake_response.json.return_value = {
+            "status": "error",
+            "error": "Provider 'x' is not registered",
+        }
 
         with (
             patch("missy.providers.registry.get_registry", return_value=mock_registry),

@@ -111,7 +111,9 @@ class TestExecute:
 
     def test_ordinary_content_starting_differently_is_success(self):
         manager = MagicMock()
-        manager.call_tool.return_value = "Result: [MCP something]"  # doesn't start with a blocked prefix
+        manager.call_tool.return_value = (
+            "Result: [MCP something]"  # doesn't start with a blocked prefix
+        )
         wrapper = McpToolWrapper(manager, "srv__tool", "d", {}, ToolAnnotation())
 
         result = wrapper.execute()
@@ -143,9 +145,7 @@ class TestFromMcpDictThroughRegistryIntegration:
         engine_module._engine = None
         cfg = MissyConfig(
             network=NetworkPolicy(default_deny=True),
-            filesystem=FilesystemPolicy(
-                allowed_read_paths=[str(tmp_path)], allowed_write_paths=[]
-            ),
+            filesystem=FilesystemPolicy(allowed_read_paths=[str(tmp_path)], allowed_write_paths=[]),
             shell=ShellPolicy(),
             plugins=PluginPolicy(),
             providers={},

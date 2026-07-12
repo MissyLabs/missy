@@ -204,9 +204,7 @@ class TestRunSubprocessWithGroupKill:
         # down the whole group.
         pid_file = tmp_path / "child.pid"
         script = tmp_path / "spawn_child.sh"
-        script.write_text(
-            f"sleep 30 &\necho $! > {pid_file}\nsleep 30\n"
-        )
+        script.write_text(f"sleep 30 &\necho $! > {pid_file}\nsleep 30\n")
         script.chmod(0o755)
 
         with pytest.raises(subprocess.TimeoutExpired):
@@ -1288,9 +1286,7 @@ class TestAcpxStream:
 
     @patch("missy.providers.acpx_provider._kill_process_group")
     @patch("missy.providers.acpx_provider.subprocess.Popen")
-    def test_exception_during_streaming_kills_process_group(
-        self, mock_popen, mock_kill_group
-    ):
+    def test_exception_during_streaming_kills_process_group(self, mock_popen, mock_kill_group):
         mock_proc = MagicMock()
 
         def _bad_stdout():

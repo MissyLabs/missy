@@ -61,9 +61,7 @@ class TestStartIsolatesPerJobSchedulingFailures:
         Path(path).write_text(json.dumps(jobs))
         Path(path).chmod(0o600)
 
-    def test_good_job_still_starts_when_a_sibling_job_has_a_bad_schedule(
-        self, tmp_jobs_file: str
-    ):
+    def test_good_job_still_starts_when_a_sibling_job_has_a_bad_schedule(self, tmp_jobs_file: str):
         self._write_jobs(
             tmp_jobs_file,
             [

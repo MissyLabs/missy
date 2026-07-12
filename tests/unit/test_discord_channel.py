@@ -544,9 +544,7 @@ class TestGuildPolicy:
         finally:
             loop.close()
 
-        result = channel._check_guild_policy(
-            "guild-1", "thread-under-parent", "user-1", "hi", {}
-        )
+        result = channel._check_guild_policy("guild-1", "thread-under-parent", "user-1", "hi", {})
         assert result is True
 
     def test_channel_allowlist_denies_thread_under_unlisted_parent(self) -> None:
@@ -570,9 +568,7 @@ class TestGuildPolicy:
         finally:
             loop.close()
 
-        result = channel._check_guild_policy(
-            "guild-1", "thread-under-other", "user-1", "hi", {}
-        )
+        result = channel._check_guild_policy("guild-1", "thread-under-other", "user-1", "hi", {})
         assert result is False
 
     def test_require_mention_filters_unmention(self, event_bus_fresh: EventBus) -> None:
@@ -951,9 +947,7 @@ class TestDiscordThreadManagement:
         finally:
             loop.close()
 
-    def test_auto_thread_created_once_threshold_reached(
-        self, event_bus_fresh: EventBus
-    ) -> None:
+    def test_auto_thread_created_once_threshold_reached(self, event_bus_fresh: EventBus) -> None:
         """Regression: the message counter was written but never read --
         create_thread() had zero production callers anywhere. An operator
         setting auto_thread_threshold: N got a counter that silently
@@ -975,9 +969,7 @@ class TestDiscordThreadManagement:
         loop = asyncio.new_event_loop()
         try:
             for i in range(3):
-                msg = _make_message(
-                    content=f"message {i}", guild_id="guild-1", channel_id="chan-1"
-                )
+                msg = _make_message(content=f"message {i}", guild_id="guild-1", channel_id="chan-1")
                 loop.run_until_complete(channel._handle_message(msg))
 
             channel._rest.create_thread.assert_called_once()

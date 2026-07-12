@@ -471,9 +471,7 @@ class TestHatchingManagerReset:
         mgr.reset()
         assert mgr.needs_hatching()
 
-    def test_reset_then_rehatch_does_not_duplicate_welcome_memory_turn(
-        self, tmp_path, monkeypatch
-    ):
+    def test_reset_then_rehatch_does_not_duplicate_welcome_memory_turn(self, tmp_path, monkeypatch):
         """Regression: reset() only deletes hatching.yaml -- memory.db,
         persona.yaml, and config.yaml are all left untouched, so a reset()
         + re-hatch cycle (the documented, supported way to force a

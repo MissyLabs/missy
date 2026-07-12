@@ -240,7 +240,9 @@ def test_strategy_rotation_fires_for_non_last_tool_in_a_multi_tool_round():
         return str(m.get("content", "")) if isinstance(m, dict) else str(getattr(m, "content", ""))
 
     injected = [
-        m for m in round4_messages if _role(m) == "user" and "shell_exec" in _content(m) and "failed" in _content(m)
+        m
+        for m in round4_messages
+        if _role(m) == "user" and "shell_exec" in _content(m) and "failed" in _content(m)
     ]
     assert injected, (
         f"expected a strategy-rotation prompt for shell_exec in round 4's messages, "

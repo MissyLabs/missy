@@ -131,7 +131,9 @@ class TestWebhookChannelStart:
         mock_thread = MagicMock()
 
         with (
-            patch("missy.channels.webhook.ThreadingHTTPServer", return_value=mock_server) as mock_http,
+            patch(
+                "missy.channels.webhook.ThreadingHTTPServer", return_value=mock_server
+            ) as mock_http,
             patch("missy.channels.webhook.threading.Thread", return_value=mock_thread),
         ):
             ch.start()

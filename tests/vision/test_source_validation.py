@@ -6,7 +6,6 @@ tool-name propagation in ScreenshotSource.acquire()/_take_screenshot().
 
 from __future__ import annotations
 
-import logging
 import subprocess
 from unittest.mock import MagicMock, patch
 

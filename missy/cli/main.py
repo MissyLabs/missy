@@ -1204,9 +1204,7 @@ def audit_verify(ctx: click.Context, limit: int) -> None:
     table.add_column("Chain")
     table.add_column("Event Type")
     for r in shown:
-        chain_text = (
-            "—" if r.chain_ok is None else ("ok" if r.chain_ok else "broken")
-        )
+        chain_text = "—" if r.chain_ok is None else ("ok" if r.chain_ok else "broken")
         chain_style = "dim" if r.chain_ok is None else ("green" if r.chain_ok else "bold red")
         table.add_row(
             str(r.line_number),
@@ -2475,8 +2473,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
             scheduler_manager.start()
             _agent._scheduler = scheduler_manager  # noqa: SLF001
             console.print(
-                f"[green]Scheduler started[/] "
-                f"({len(scheduler_manager.list_jobs())} job(s) loaded)"
+                f"[green]Scheduler started[/] ({len(scheduler_manager.list_jobs())} job(s) loaded)"
             )
         else:
             console.print("[dim]Scheduler disabled via config (scheduling.enabled: false).[/]")
@@ -2967,7 +2964,9 @@ def gateway_status(ctx: click.Context) -> None:
         )
         table.add_row("scheduler", Text("auto-starts with gateway", style="green"), _sched_detail)
     else:
-        table.add_row("scheduler", Text("disabled", style="dim"), "scheduling.enabled: false in config")
+        table.add_row(
+            "scheduler", Text("disabled", style="dim"), "scheduling.enabled: false in config"
+        )
 
     console.print(table)
 
@@ -3343,7 +3342,9 @@ def cost(ctx: click.Context, session: str | None) -> None:
     "--provider", default=None, help="Provider to use for --resume (overrides config default)."
 )
 @click.pass_context
-def recover(ctx: click.Context, abandon_all: bool, resume_id: str | None, provider: str | None) -> None:
+def recover(
+    ctx: click.Context, abandon_all: bool, resume_id: str | None, provider: str | None
+) -> None:
     """List or act on incomplete task checkpoints from previous sessions.
 
     Scans for tasks that were interrupted by crashes or restarts and shows

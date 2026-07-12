@@ -70,9 +70,7 @@ class AgentIdentity:
             raise IdentityError(f"Identity key file {p} is a symlink; refusing to read.")
         st = p.stat()
         if st.st_nlink > 1:
-            raise IdentityError(
-                f"Identity key file {p} has multiple hard links; refusing to read."
-            )
+            raise IdentityError(f"Identity key file {p} has multiple hard links; refusing to read.")
         if st.st_uid != os.getuid():
             raise IdentityError(f"Identity key file {p} is not owned by current user.")
         if st.st_mode & (stat_module.S_IRWXG | stat_module.S_IRWXO):

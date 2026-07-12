@@ -1723,7 +1723,9 @@ class TestResumeCheckpoint:
             {
                 "role": "assistant",
                 "content": "",
-                "tool_calls": [{"id": "tc-1", "name": "calculator", "arguments": {"expression": "2+2"}}],
+                "tool_calls": [
+                    {"id": "tc-1", "name": "calculator", "arguments": {"expression": "2+2"}}
+                ],
             },
             {
                 "role": "tool",
@@ -1978,7 +1980,6 @@ class TestMcpToolDispatch:
     built-in tool -- not a bypass/special case."""
 
     def _connected_manager(self, tmp_path, tools, annotations=None):
-        from missy.mcp.annotations import ToolAnnotation
         from missy.mcp.client import McpClient
         from missy.mcp.manager import McpManager
 
@@ -1992,7 +1993,7 @@ class TestMcpToolDispatch:
         return mgr, client
 
     def test_mcp_tool_appears_in_get_tools(self, tmp_path):
-        from missy.tools.registry import get_tool_registry, init_tool_registry
+        from missy.tools.registry import init_tool_registry
 
         init_tool_registry()
         provider = _make_provider()
@@ -2026,7 +2027,7 @@ class TestMcpToolDispatch:
 
     def test_execute_tool_dispatches_mcp_tool_through_real_registry(self, tmp_path):
         from missy.providers.base import ToolCall
-        from missy.tools.registry import get_tool_registry, init_tool_registry
+        from missy.tools.registry import init_tool_registry
 
         init_tool_registry()
         provider = _make_provider()

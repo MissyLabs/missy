@@ -48,13 +48,13 @@ class TestCheckRemembered:
         approval._remembered[key] = True
 
         # Session A's approval applies to session A.
-        assert approval.check_remembered(
-            "network_request", "https://example.com", "session-A"
-        ) is True
+        assert (
+            approval.check_remembered("network_request", "https://example.com", "session-A") is True
+        )
         # A different session must NOT inherit session A's approval.
-        assert approval.check_remembered(
-            "network_request", "https://example.com", "session-B"
-        ) is None
+        assert (
+            approval.check_remembered("network_request", "https://example.com", "session-B") is None
+        )
         # The default (no session_id passed) is its own distinct scope too.
         assert approval.check_remembered("network_request", "https://example.com") is None
 
@@ -171,9 +171,7 @@ class TestConcurrentPromptsSerialized:
             patch.object(InteractiveApproval, "_do_prompt", side_effect=fake_do_prompt),
         ):
             threads = [
-                threading.Thread(
-                    target=approval.prompt_user, args=(f"action_{i}", f"detail_{i}")
-                )
+                threading.Thread(target=approval.prompt_user, args=(f"action_{i}", f"detail_{i}"))
                 for i in range(5)
             ]
             for t in threads:

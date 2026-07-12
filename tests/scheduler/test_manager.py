@@ -99,9 +99,7 @@ class TestRawCronDayOfWeekEndToEnd:
     already cover but can't catch this class of bug).
     """
 
-    def test_numeric_weekdays_fire_monday_through_friday(
-        self, started_manager: SchedulerManager
-    ):
+    def test_numeric_weekdays_fire_monday_through_friday(self, started_manager: SchedulerManager):
         from datetime import datetime
 
         job = started_manager.add_job("weekdays", "0 9 * * 1-5", "task")
@@ -221,9 +219,7 @@ class TestLoadJobs:
         # Without start() or load_jobs(), _jobs was never populated from disk.
         assert mgr.list_jobs() == []
 
-    def test_load_jobs_reads_persisted_jobs_without_starting_scheduler(
-        self, tmp_jobs_file: str
-    ):
+    def test_load_jobs_reads_persisted_jobs_without_starting_scheduler(self, tmp_jobs_file: str):
         job = ScheduledJob(name="persisted", schedule="every 10 minutes", task="hello")
         jobs_path = Path(tmp_jobs_file)
         jobs_path.parent.mkdir(parents=True, exist_ok=True)

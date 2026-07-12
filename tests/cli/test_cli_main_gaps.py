@@ -527,9 +527,7 @@ class TestGatewayStartMcpHealthCheck:
 
             _os.unlink(cfg_path)
 
-    def test_mcp_servers_check_restarts_dead_servers_and_reports_status(
-        self, runner: CliRunner
-    ):
+    def test_mcp_servers_check_restarts_dead_servers_and_reports_status(self, runner: CliRunner):
         """Extracts the real check-function closure registered under
         "mcp_servers" (Watchdog itself is mocked, but the closure passed to
         .register() is the genuine production function) and verifies it

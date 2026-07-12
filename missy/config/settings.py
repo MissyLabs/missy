@@ -704,9 +704,7 @@ def _parse_tool_intelligence(data: Any) -> ToolIntelligenceConfig:
         provider_gating_enabled=_coerce_bool(provider_gating.get("enabled"), False),
         provider_gating_min_samples=int(provider_gating.get("min_samples", 3)),
         provider_gating_min_composite=float(provider_gating.get("min_composite", 0.4)),
-        candidate_runtime_loading_enabled=_coerce_bool(
-            candidate_runtime.get("enabled"), False
-        ),
+        candidate_runtime_loading_enabled=_coerce_bool(candidate_runtime.get("enabled"), False),
     )
 
 

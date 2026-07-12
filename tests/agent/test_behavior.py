@@ -436,9 +436,7 @@ class TestClassifyIntentGreetingPrefixWithSubstantiveContent:
 
     def test_greeting_prefixed_crash_report_is_not_greeting(self):
         interpreter = IntentInterpreter()
-        result = interpreter.classify_intent(
-            "hello, my server keeps crashing, please help asap"
-        )
+        result = interpreter.classify_intent("hello, my server keeps crashing, please help asap")
         assert result != "greeting"
 
     def test_greeting_prefixed_urgent_question_is_not_greeting(self):
@@ -649,7 +647,7 @@ class TestShapeResponseRemovesRoboticPhrases:
         assert "42" in result
 
     def test_removes_id_be_happy_to(self):
-        """"I'd be happy to help/assist(?: you)?" is only pure filler
+        """ "I'd be happy to help/assist(?: you)?" is only pure filler
         when it's the LAST substantive content in the sentence (nothing
         but punctuation follows) -- use that shape here rather than a
         case with a real trailing object clause (see
@@ -732,8 +730,7 @@ class TestRoboticPhraseStrippingPreservesRealContent:
         substantive content of the reply."""
         shaper = ResponseShaper()
         result = shaper.shape_response(
-            "As an AI, I don't have feelings, but I'd be happy to help you"
-            " understand recursion.",
+            "As an AI, I don't have feelings, but I'd be happy to help you understand recursion.",
             persona=None,
             context={},
         )

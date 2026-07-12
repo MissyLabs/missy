@@ -670,7 +670,9 @@ class TestApplyLandlockFromConfig:
             apply_landlock_from_config(config)  # type: ignore[arg-type]
 
         existing_sys_path_entries = [p for p in sys.path if p and os.path.exists(p)]
-        assert existing_sys_path_entries, "test environment must have at least one real sys.path entry"
+        assert existing_sys_path_entries, (
+            "test environment must have at least one real sys.path entry"
+        )
         for entry in existing_sys_path_entries:
             assert entry in added_execute_paths
 

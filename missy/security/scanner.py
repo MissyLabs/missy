@@ -987,9 +987,7 @@ class SecurityScanner:
             # SEC-042: Shell interpreter in command
             cmd_tokens = command.split()
             interpreter_tokens = {
-                t
-                for t in cmd_tokens
-                if _INTERPRETER_BASENAME_RE.match(os.path.basename(t))
+                t for t in cmd_tokens if _INTERPRETER_BASENAME_RE.match(os.path.basename(t))
             }
             if interpreter_tokens:
                 self._add(

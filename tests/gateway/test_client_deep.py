@@ -1167,9 +1167,7 @@ class TestInteractiveApprovalFlow:
 
         start = time.monotonic()
         with patch.object(httpx.AsyncClient, "get", new_callable=AsyncMock, return_value=mock_resp):
-            await asyncio.gather(
-                client.aget("https://operator-approved.example.com/"), _ticker()
-            )
+            await asyncio.gather(client.aget("https://operator-approved.example.com/"), _ticker())
         elapsed = time.monotonic() - start
 
         assert ticks == 20

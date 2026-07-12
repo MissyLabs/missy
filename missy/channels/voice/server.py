@@ -606,9 +606,7 @@ class VoiceServer:
         # deployment. Offloading to a thread executor keeps the event loop
         # free to keep servicing other connections while this runs.
         loop = asyncio.get_event_loop()
-        verified = await loop.run_in_executor(
-            None, self._registry.verify_token, node_id, token
-        )
+        verified = await loop.run_in_executor(None, self._registry.verify_token, node_id, token)
         if not verified:
             reason = "invalid credentials"
             logger.info("VoiceServer: auth failure for node %r — %s", node_id, reason)

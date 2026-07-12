@@ -173,9 +173,7 @@ class TestResolveFilesystemTargets:
     """
 
     def test_propose_declares_file_path_as_read_only(self, tool):
-        read_paths, write_paths = tool.resolve_filesystem_targets(
-            {"file_path": "missy/example.py"}
-        )
+        read_paths, write_paths = tool.resolve_filesystem_targets({"file_path": "missy/example.py"})
         assert read_paths == ["missy/example.py"]
         assert write_paths == []
 
@@ -235,9 +233,7 @@ class TestRegistryPermissionEnforcement:
         )
         init_policy_engine(cfg)
 
-    def test_propose_allowed_when_file_readable_but_not_writable(
-        self, tmp_repo, store_path
-    ):
+    def test_propose_allowed_when_file_readable_but_not_writable(self, tmp_repo, store_path):
         from missy.tools.registry import ToolRegistry
 
         self._init_engine(tmp_repo)

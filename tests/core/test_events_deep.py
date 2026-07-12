@@ -418,7 +418,7 @@ class TestEventBusHistoryBound:
         bus = EventBus()
         seen: list[str] = []
         bus.subscribe("cap.sub.event", lambda e: seen.append(e.event_type))
-        for i in range(EventBus._MAX_LOG_SIZE + 500):
+        for _ in range(EventBus._MAX_LOG_SIZE + 500):
             bus.publish(_make_event(event_type="cap.sub.event"))
         assert len(seen) == EventBus._MAX_LOG_SIZE + 500
 

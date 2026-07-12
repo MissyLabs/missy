@@ -207,7 +207,5 @@ class TestScheduledJobFromDict:
         was misread as True, so a job meant to run repeatedly would be
         silently deleted after its first run.
         """
-        job = ScheduledJob.from_dict(
-            {"id": "x", "name": "test", "delete_after_run": "false"}
-        )
+        job = ScheduledJob.from_dict({"id": "x", "name": "test", "delete_after_run": "false"})
         assert job.delete_after_run is False

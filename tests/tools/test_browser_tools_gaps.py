@@ -12,6 +12,11 @@ Targets uncovered lines:
 
 from __future__ import annotations
 
+# Single persistent worker thread for every live-Playwright call in this
+# file, including the availability probe just below -- see
+# _run_in_thread's docstring for why a fresh/different thread per call
+# doesn't work with Playwright's sync API.
+import concurrent.futures as _concurrent_futures  # noqa: E402
 import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -28,23 +33,17 @@ from missy.config.settings import (
 from missy.core.exceptions import PolicyViolationError
 from missy.policy.engine import init_policy_engine
 from missy.tools.builtin.browser_tools import (
+    _FIREFOX_PREFS,
     BrowserNavigateTool,
     BrowserSession,
     _classify_browser_error,
     _err,
-    _FIREFOX_PREFS,
     _page,
     _registry,
     _route_through_network_policy,
     _SessionRegistry,
 )
 from missy.tools.registry import ToolRegistry
-
-# Single persistent worker thread for every live-Playwright call in this
-# file, including the availability probe just below -- see
-# _run_in_thread's docstring for why a fresh/different thread per call
-# doesn't work with Playwright's sync API.
-import concurrent.futures as _concurrent_futures  # noqa: E402
 
 _BROWSER_TEST_THREAD_POOL = _concurrent_futures.ThreadPoolExecutor(max_workers=1)
 
@@ -616,9 +615,7 @@ class TestSR16RegistryGatesBrowserNavigate:
         mock_page = MagicMock()
         mock_page.url = "https://example.com/"
         mock_page.title.return_value = "Example"
-        with patch(
-            "missy.tools.builtin.browser_tools._page", return_value=mock_page
-        ):
+        with patch("missy.tools.builtin.browser_tools._page", return_value=mock_page):
             result = registry.execute(
                 "browser_navigate",
                 url="https://example.com/",
@@ -776,8 +773,7 @@ class TestFirefoxPrefsTypes:
         for name in self._KNOWN_INT_PREFS:
             value = _FIREFOX_PREFS[name]
             assert type(value) is int, (
-                f"{name} must be a real int (got {value!r}, type "
-                f"{type(value).__name__})"
+                f"{name} must be a real int (got {value!r}, type {type(value).__name__})"
             )
 
 
@@ -848,9 +844,7 @@ class TestFirefoxPrefsLiveLaunch:
                     headless=True,
                 )
                 assert nav.success is True, nav.error
-                geturl = registry.execute(
-                    "browser_get_url", session_id=session_id, task_id="t"
-                )
+                geturl = registry.execute("browser_get_url", session_id=session_id, task_id="t")
                 assert geturl.success is True, geturl.error
                 assert "Fixture" in geturl.output
             finally:

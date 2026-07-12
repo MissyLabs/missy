@@ -143,7 +143,9 @@ class TestDiscordUploadToolRegistryEnforcesFilesystemPolicy:
 
         init_policy_engine(
             MissyConfig(
-                network=NetworkPolicy(allowed_hosts=["discord.com"], allowed_domains=[], allowed_cidrs=[]),
+                network=NetworkPolicy(
+                    allowed_hosts=["discord.com"], allowed_domains=[], allowed_cidrs=[]
+                ),
                 filesystem=FilesystemPolicy(
                     allowed_read_paths=[str(tmp_path)], allowed_write_paths=[str(tmp_path)]
                 ),

@@ -182,9 +182,7 @@ class TestDisabledToolsWiring:
     ToolRegistry it constructs.
     """
 
-    def test_disabled_tools_config_disables_real_registry_entries(
-        self, runner: CliRunner
-    ) -> None:
+    def test_disabled_tools_config_disables_real_registry_entries(self, runner: CliRunner) -> None:
         with tempfile.NamedTemporaryFile(suffix=".yaml", mode="w", delete=False) as f:
             f.write(
                 "network:\n"
@@ -194,7 +192,7 @@ class TestDisabledToolsWiring:
                 "    name: anthropic\n"
                 '    model: "claude-sonnet-4-6"\n'
                 "tools:\n"
-                "  disabled_tools: [\"calculator\"]\n"
+                '  disabled_tools: ["calculator"]\n'
                 'workspace_path: "/tmp/workspace"\n'
                 'audit_log_path: "/tmp/audit.jsonl"\n'
             )

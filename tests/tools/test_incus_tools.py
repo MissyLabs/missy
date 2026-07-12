@@ -317,9 +317,7 @@ class TestIncusInstanceActionTimeoutRecheck:
         assert "no longer exists" in result.error
 
     @patch("missy.tools.builtin.incus_tools.subprocess.run")
-    def test_timeout_recheck_itself_failing_is_reported_honestly(
-        self, mock_run: MagicMock
-    ) -> None:
+    def test_timeout_recheck_itself_failing_is_reported_honestly(self, mock_run: MagicMock) -> None:
         mock_run.side_effect = [
             subprocess.TimeoutExpired(cmd="incus", timeout=1),
             subprocess.TimeoutExpired(cmd="incus", timeout=30),  # recheck also times out
@@ -335,9 +333,7 @@ class TestIncusInstanceActionTimeoutRecheck:
         the old or the new name -- guessing which one to recheck could
         itself misreport state, so rename is deliberately excluded."""
         mock_run.side_effect = subprocess.TimeoutExpired(cmd="incus", timeout=1)
-        result = self.tool.execute(
-            instance="old", action="rename", new_name="new", timeout=1
-        )
+        result = self.tool.execute(instance="old", action="rename", new_name="new", timeout=1)
 
         assert result.success is False
         assert result.error == "Command timed out after 1s"

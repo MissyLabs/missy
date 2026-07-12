@@ -85,7 +85,9 @@ class SelfCreateTool(BaseTool):
 
         if action == "list":
             if not tools_dir.exists():
-                return ToolResult(success=True, output="No custom tool proposals on file.", error=None)
+                return ToolResult(
+                    success=True, output="No custom tool proposals on file.", error=None
+                )
             entries = []
             for meta_file in sorted(tools_dir.glob("*.json")):
                 try:
@@ -94,8 +96,7 @@ class SelfCreateTool(BaseTool):
                 except Exception as _meta_exc:
                     logger.debug("self_create_tool: failed to load %s: %s", meta_file, _meta_exc)
             header = (
-                "Custom tool PROPOSALS on file (not registered/callable -- "
-                "pending human review):"
+                "Custom tool PROPOSALS on file (not registered/callable -- pending human review):"
             )
             body = "\n".join(entries) if entries else "No custom tool proposals on file."
             return ToolResult(

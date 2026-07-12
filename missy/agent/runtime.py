@@ -884,9 +884,7 @@ class AgentRuntime:
         # AgentRuntime.__new__() that bypass __init__ and never set
         # _drift_detector at all.
         drift_detector = getattr(self, "_drift_detector", None)
-        if drift_detector is not None and not drift_detector.verify(
-            "system_prompt", system_prompt
-        ):
+        if drift_detector is not None and not drift_detector.verify("system_prompt", system_prompt):
             logger.warning("Prompt drift detected: system prompt has been modified")
             self._emit_event(
                 session_id=sid,
@@ -1552,9 +1550,7 @@ class AgentRuntime:
         # AgentRuntime.__new__() that bypass __init__ and never set
         # _drift_detector at all.
         drift_detector = getattr(self, "_drift_detector", None)
-        if drift_detector is not None and not drift_detector.verify(
-            "system_prompt", system_prompt
-        ):
+        if drift_detector is not None and not drift_detector.verify("system_prompt", system_prompt):
             logger.warning("Prompt drift detected: system prompt has been modified")
             self._emit_event(
                 session_id=session_id,
@@ -2566,7 +2562,9 @@ class AgentRuntime:
                             if isinstance(tc, dict)
                         ]
                         content_str = (
-                            f"[Called tool: {', '.join(tool_names)}]" if tool_names else "[Tool call]"
+                            f"[Called tool: {', '.join(tool_names)}]"
+                            if tool_names
+                            else "[Tool call]"
                         )
                     else:
                         content_str = "[No response text]"
@@ -3083,8 +3081,10 @@ class AgentRuntime:
         """
         from missy.agent.checkpoint import (
             CheckpointCorruptedError,
-            CheckpointManager as _CheckpointManager,
             validate_loop_messages,
+        )
+        from missy.agent.checkpoint import (
+            CheckpointManager as _CheckpointManager,
         )
 
         # SR-4.1: resuming is real agent activity.
@@ -3116,7 +3116,9 @@ class AgentRuntime:
 
         loop_messages = checkpoint["loop_messages"]
         if not validate_loop_messages(loop_messages):
-            cm.fail(checkpoint_id, error="Corrupted checkpoint: loop_messages failed schema validation.")
+            cm.fail(
+                checkpoint_id, error="Corrupted checkpoint: loop_messages failed schema validation."
+            )
             raise CheckpointCorruptedError(
                 f"Checkpoint {checkpoint_id!r} has corrupted loop_messages; marked FAILED."
             )
@@ -3515,7 +3517,13 @@ class AgentRuntime:
                     )
                     continue
 
-            raise last_exc
+            # last_exc already carries its own original traceback/context
+            # from wherever it was first caught (it may be the outer `exc`
+            # or a later fallback's own `exc3`) -- `from None` suppresses
+            # Python from also implying it happened "during handling of"
+            # this outer except block's `exc`, which would be misleading
+            # whenever last_exc is actually a different, later exception.
+            raise last_exc from None
 
     def _build_messages(self, user_input: str) -> list[Message]:
         """Construct the message list to send to the provider.

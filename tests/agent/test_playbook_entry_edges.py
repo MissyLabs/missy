@@ -853,9 +853,7 @@ class TestThreadSafety:
         def worker(i: int) -> None:
             try:
                 # A fresh Playbook() per call, exactly like runtime.py does.
-                Playbook(store_path=path).record(
-                    f"type_{i}", f"task{i}", [f"tool_{i}"], f"hint{i}"
-                )
+                Playbook(store_path=path).record(f"type_{i}", f"task{i}", [f"tool_{i}"], f"hint{i}")
             except Exception as exc:
                 errors.append(exc)
 

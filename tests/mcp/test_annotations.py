@@ -194,7 +194,9 @@ class TestFromMcpDict:
         assert ToolAnnotation.from_mcp_dict({}).filesystem_access is True
         assert ToolAnnotation.from_mcp_dict({"readOnlyHint": True}).filesystem_access is True
         assert (
-            ToolAnnotation.from_mcp_dict({"readOnlyHint": True, "openWorldHint": True}).filesystem_access
+            ToolAnnotation.from_mcp_dict(
+                {"readOnlyHint": True, "openWorldHint": True}
+            ).filesystem_access
             is True
         )
         assert ToolAnnotation.from_mcp_dict({"destructiveHint": True}).filesystem_access is True

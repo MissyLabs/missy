@@ -20,6 +20,14 @@ import subprocess
 import sys
 from unittest.mock import MagicMock, patch
 
+from missy.config.settings import (
+    FilesystemPolicy,
+    MissyConfig,
+    NetworkPolicy,
+    PluginPolicy,
+    ShellPolicy,
+)
+from missy.policy.engine import init_policy_engine
 from missy.tools.builtin.x11_tools import (
     X11ClickTool,
     X11KeyTool,
@@ -33,14 +41,6 @@ from missy.tools.builtin.x11_tools import (
     _get_vision_token,
     _load_oauth_token,
 )
-from missy.config.settings import (
-    FilesystemPolicy,
-    MissyConfig,
-    NetworkPolicy,
-    PluginPolicy,
-    ShellPolicy,
-)
-from missy.policy.engine import init_policy_engine
 from missy.tools.registry import ToolRegistry
 
 # ---------------------------------------------------------------------------

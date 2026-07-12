@@ -138,9 +138,7 @@ class TestFileReadTool:
         assert result.success is True
         assert "Truncated" not in result.output
 
-    def test_read_multibyte_content_truncation_matches_byte_budget(
-        self, tmp_path: Path
-    ) -> None:
+    def test_read_multibyte_content_truncation_matches_byte_budget(self, tmp_path: Path) -> None:
         """max_bytes is documented as a byte limit. Pre-fix, the tool read
         up to max_bytes *characters* via a text-mode fh.read(), so for
         multi-byte UTF-8 content the whole (smaller-in-chars) file could be
@@ -163,9 +161,7 @@ class TestFileReadTool:
         assert body != content
         assert len(body.encode("utf-8")) <= 65_536
 
-    def test_read_multibyte_content_within_byte_limit_not_truncated(
-        self, tmp_path: Path
-    ) -> None:
+    def test_read_multibyte_content_within_byte_limit_not_truncated(self, tmp_path: Path) -> None:
         content = "\U0001f600" * 100  # 400 bytes total, well under max_bytes
         target = tmp_path / "emoji_small.txt"
         target.write_text(content, encoding="utf-8")

@@ -135,9 +135,7 @@ class TestVerifyAuditLogDetectsTheReviewsExactPoc:
         assert [r.status for r in results] == ["valid", "valid"]
         assert [r.event_type for r in results] == ["network.request", "shell.exec"]
 
-    def test_detail_tamper_is_detected(
-        self, log_path: str, bus: EventBus, identity: AgentIdentity
-    ):
+    def test_detail_tamper_is_detected(self, log_path: str, bus: EventBus, identity: AgentIdentity):
         AuditLogger(log_path=log_path, bus=bus, identity=identity)
         _publish(bus, "network.request", "network", "deny", host="169.254.169.254")
 

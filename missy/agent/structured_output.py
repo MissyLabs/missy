@@ -260,7 +260,7 @@ class OutputSchema(Generic[T]):
         # Same bracket-depth-aware scan as above, for the same reason:
         # trailing prose after the embedded JSON containing a literal
         # closer character would otherwise truncate at the wrong position.
-        for opener, closer in (("{", "}"), ("[", "]")):
+        for opener, _closer in (("{", "}"), ("[", "]")):
             start = stripped.find(opener)
             if start != -1:
                 end = _find_balanced_end(stripped, start)

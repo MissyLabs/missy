@@ -118,8 +118,7 @@ class SchedulerManager:
             except Exception as exc:
                 skipped.append(job.id)
                 logger.error(
-                    "Skipping job %r (%r) -- failed to register with the "
-                    "scheduler: %s",
+                    "Skipping job %r (%r) -- failed to register with the scheduler: %s",
                     job.id,
                     job.name,
                     exc,
@@ -895,9 +894,9 @@ class SchedulerManager:
                 # crontab's Sunday=0..Saturday=6 numbering as APScheduler's
                 # own Monday=0..Sunday=6 convention -- e.g. crontab's
                 # "1-5" ("weekdays") would actually fire Tuesday-Saturday.
-                from missy.scheduler.parser import convert_crontab_dow_to_apscheduler
-
                 from apscheduler.triggers.cron import CronTrigger
+
+                from missy.scheduler.parser import convert_crontab_dow_to_apscheduler
 
                 cron_expr = schedule_config.pop("_cron_expression")
                 # Any remaining key after popping _cron_expression is "timezone".

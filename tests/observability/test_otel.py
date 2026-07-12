@@ -358,11 +358,21 @@ class TestInitOtelReinitialization:
         result = init_otel(self._disabled_config())
         assert get_active_exporter() is result
 
+    @pytest.mark.usefixtures("_skip_without_opentelemetry")
     def test_reinit_unsubscribes_previous_exporter_before_new_one(self) -> None:
         """Re-running init_otel() (as a config hot-reload would) must not
         stack a second publish() wrapper around the first -- otherwise a
         single published event would be exported once per historical
         reload rather than once.
+
+        Requires the real opentelemetry packages: init_otel() only calls
+        exporter.subscribe() (which wraps event_bus.publish) when
+        exporter.is_enabled is True, and OtelExporter._setup() sets
+        is_enabled=True only after successfully importing the real SDK --
+        this test is otherwise vacuous (the wrapper is never installed at
+        all) in an environment without the optional [otel] extra, e.g.
+        this project's own CI, which installs pip install -e
+        ".[dev,vision,vector]" without [otel].
         """
         from missy.core.events import event_bus
 
@@ -381,11 +391,15 @@ class TestInitOtelReinitialization:
         assert first._bus is None
         assert first._original_publish is None
 
+    @pytest.mark.usefixtures("_skip_without_opentelemetry")
     def test_disabling_after_enabled_restores_original_publish(self) -> None:
         """Toggling otel_enabled: true -> false at runtime (a hot-reload)
         must actually stop exporting -- the previously enabled exporter's
         publish() wrapper must be unwound when the disabled stub is
         installed, not merely for the *next* enabled re-init.
+
+        Requires the real opentelemetry packages -- see the matching note
+        on test_reinit_unsubscribes_previous_exporter_before_new_one.
         """
         from missy.core.events import event_bus
 

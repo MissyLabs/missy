@@ -125,7 +125,11 @@ class OtelExporter:
         except Exception as exc:
             self._export_failure_count += 1
             self._last_export_error = str(exc)
-            logger.warning("OtelExporter: export failed (%d total failures): %s", self._export_failure_count, exc)
+            logger.warning(
+                "OtelExporter: export failed (%d total failures): %s",
+                self._export_failure_count,
+                exc,
+            )
 
     def subscribe(self) -> None:
         """Attach to the event bus so every published event is exported.
@@ -154,7 +158,9 @@ class OtelExporter:
                 try:
                     self.export_event(evt.__dict__ if hasattr(evt, "__dict__") else {})
                 except Exception:
-                    logger.debug("OtelExporter: export_event raised during publish hook", exc_info=True)
+                    logger.debug(
+                        "OtelExporter: export_event raised during publish hook", exc_info=True
+                    )
 
             event_bus.publish = _patched_publish
             logger.debug("OtelExporter: subscribed to event bus (publish wrapped)")

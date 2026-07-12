@@ -168,9 +168,7 @@ def _persona_from_dict(data: dict[str, Any]) -> PersonaConfig:
 
     if "name" in filtered and not isinstance(filtered["name"], str):
         raise TypeError(f"persona 'name' must be a string, got {type(filtered['name']).__name__}")
-    if "identity_description" in filtered and not isinstance(
-        filtered["identity_description"], str
-    ):
+    if "identity_description" in filtered and not isinstance(filtered["identity_description"], str):
         raise TypeError(
             "persona 'identity_description' must be a string, got "
             f"{type(filtered['identity_description']).__name__}"
