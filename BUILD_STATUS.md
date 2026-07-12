@@ -7394,6 +7394,80 @@ passed`. `pytest tests/providers/ -q`: `944 passed`.
 `21421 passed, 14 skipped in 725.96s (0:12:05)` — 0 failed, up from
 21420. Fifty-fourth consecutive fully green full-suite run.
 
+### Post-backlog (ninety-seventh checkpoint): round 39 research pass fixes a delegate_task crash on >10 subtasks, a SEC-021 apex-style false positive, and a SEC-031/032 path-qualified-command false negative
+
+Round 39 targeted previously-unaudited built-in tools
+(`missy/tools/builtin/`), additional `SEC-xxx` scanner checks beyond
+SEC-013/SEC-002/SEC-060, and the Web TUI's operator-controls
+enforcement path plus `memory/vector_store.py`'s edge cases (both
+clean — `_execute_provider_set_default`'s confirmation-token gating
+and availability re-check are sound; `VectorMemoryStore`'s
+dimension-mismatch fix covers the only insertion path, and zero-
+vector/empty-index/duplicate-content searches all behave correctly).
+Three genuine bugs found and fixed.
+
+1. **`DelegateTaskTool.execute()` crashes on any compound prompt with
+   more than `MAX_SUB_AGENTS` (10) numbered steps.**
+   `SubAgentRunner.run_all()` truncates its own *local* copy of
+   `subtasks` to `MAX_SUB_AGENTS` when the caller passes more, but
+   never mutates the caller's list or returns the truncated one
+   (`sub_agent.py:192-193`). `delegate_task.py`'s `execute()` still
+   held the full, untruncated `subtasks` list from `parse_subtasks()`
+   and zipped it against `results` (sized to the truncated count) with
+   `strict=True` — for any prompt with more than 10 numbered steps,
+   this raised an unhandled `ValueError: zip() argument 2 is shorter
+   than argument 1` and crashed tool execution instead of returning a
+   `ToolResult(success=False, ...)`. Existing tests only ever called
+   `SubAgentRunner.run_all()` directly (never through
+   `DelegateTaskTool.execute()`) or used 1-2 subtask prompts through
+   the tool, so the real end-to-end crash was never exercised.
+   Live-reproduced with a real 15-step prompt through the actual tool
+   (not a mocked `SubAgentRunner`). Fixed by truncating `subtasks` to
+   `MAX_SUB_AGENTS` in `delegate_task.py` itself before calling
+   `run_all()`, keeping the two lists the same length for the zip. 1
+   new test, confirmed via `git stash` to genuinely fail pre-fix.
+2. **SEC-021's sensitive-write-path check used a bare
+   `str.startswith(prefix)` with no path-segment boundary** — the same
+   class of bug as the already-fixed SEC-013 apex-domain false
+   positive. A legitimate, unrelated write path like `/etcd-data`,
+   `/usrlocal-apps`, or `/bootstrap` (all plausible top-level
+   container/VM mount points) was falsely flagged CRITICAL as write
+   access to a sensitive system directory, since e.g.
+   `"/etcd-data".startswith("/etc")` is `True`. Existing tests only
+   ever used exact sensitive dirs or an unrelated workspace path; no
+   test used a name merely sharing a prefix's characters. Fixed by
+   requiring an exact match or a following `"/"` (mirroring the
+   SEC-013 fix's reasoning). 4 new parametrized false-positive tests
+   plus 2 confirming exact/subdirectory matches still correctly flag,
+   all confirmed via `git stash` to genuinely fail (the 4
+   false-positive ones) pre-fix.
+3. **SEC-031/SEC-032's dangerous-command/interpreter checks missed
+   path-qualified allowlist entries entirely (false negative).**
+   `ShellPolicyEngine._match_allowed()` (the REAL enforcement)
+   matches by *basename*, so an allowlist entry like `"/usr/bin/rm"`
+   or `"/bin/python3"` permits execution of `rm`/`python3` exactly as
+   if the bare name were listed — a common hardening convention to
+   avoid PATH hijacking. The scanner instead intersected
+   `shell.allowed_commands` as literal strings against bare-name
+   sets (`_DANGEROUS_COMMANDS`/`_INTERPRETER_COMMANDS`), so an
+   operator who configured `allowed_commands: ["/usr/bin/python3"]`
+   got a clean scan despite a real full-interpreter policy bypass.
+   Existing tests only ever used bare command names. Fixed by
+   comparing basenames (matching the real policy's own matching
+   semantics) while still reporting the operator's original configured
+   entry (not just the bare basename) in the finding, so the operator
+   knows exactly which config line to remove. 2 new tests, confirmed
+   via `git stash` to genuinely fail pre-fix.
+
+Verified: `pytest tests/security/test_scanner.py tests/tools/
+test_delegate_task.py -q`: `100 passed`. `pytest tests/security/
+tests/tools/ tests/agent/test_sub_agent.py -q`: `3640 passed, 2
+skipped`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21430 passed, 14 skipped in 796.16s (0:13:16)` — 0 failed, up from
+21421. Fifty-fifth consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

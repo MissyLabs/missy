@@ -1,5 +1,39 @@
 # TEST_RESULTS
 
+## Run: 2026-07-13 22:05 UTC — round 39 research pass: delegate_task crash on >10 subtasks, SEC-021 apex-style false positive, SEC-031/032 path-qualified-command false negative
+
+- Context: round 39 targeted previously-unaudited built-in tools,
+  additional SEC-xxx scanner checks beyond SEC-013/SEC-002/SEC-060,
+  and the Web TUI's operator-controls path plus vector_store.py's edge
+  cases (both clean). Three genuine bugs found and fixed.
+- **delegate_task crash on >10 subtasks**: SubAgentRunner.run_all()
+  truncates its own local subtasks copy to MAX_SUB_AGENTS but never
+  mutates the caller's list; delegate_task.py's execute() zipped the
+  full untruncated list against the truncated results with
+  strict=True, raising an unhandled ValueError for any prompt with
+  more than 10 numbered steps. Live-reproduced with a real 15-step
+  prompt through the actual tool. Fixed by truncating subtasks to
+  MAX_SUB_AGENTS in delegate_task.py itself before calling run_all().
+- Command: `pytest tests/tools/test_delegate_task.py -k test_more_than_max_sub_agents_subtasks_does_not_crash -v`
+- Result: `1 passed`. Confirmed via `git stash` to genuinely fail pre-fix.
+- **SEC-021 apex-style false positive**: bare str.startswith(prefix)
+  with no path-segment boundary flagged unrelated paths like
+  "/etcd-data"/"/usrlocal-apps"/"/bootstrap" as sensitive-directory
+  writes -- same bug class as the already-fixed SEC-013. Fixed by
+  requiring an exact match or a following "/".
+- **SEC-031/032 path-qualified-command false negative**:
+  ShellPolicyEngine._match_allowed() matches by basename, so
+  "/usr/bin/python3" permits python3 exactly like the bare name would,
+  but the scanner compared allowed_commands as literal strings against
+  bare-name sets, missing any path-qualified dangerous/interpreter
+  entry entirely. Fixed by comparing basenames while still reporting
+  the operator's original configured entry in the finding.
+- Command: `pytest tests/security/test_scanner.py -k "sec_021 or sec_031 or sec_032" -v`
+- Result: `16 passed` (6 new tests). All 6 confirmed via `git stash`
+  to genuinely fail pre-fix.
+- Broader sweep: `pytest tests/security/test_scanner.py tests/tools/test_delegate_task.py -q`: `100 passed`.
+  `pytest tests/security/ tests/tools/ tests/agent/test_sub_agent.py -q`: `3640 passed, 2 skipped`.
+
 ## Run: 2026-07-13 21:30 UTC — round 38 research pass: architectural residual documented (tool_call/tool_result pairing) and a misleading health.py docstring fixed
 
 - Context: round 38 targeted agent/summarizer.py/condensers.py

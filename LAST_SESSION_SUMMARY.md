@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (103 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for fifty-four consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (104 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for fifty-five consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -4297,15 +4297,57 @@ misclassify unrelated errors.
 Verified: `pytest tests/providers/test_provider_health.py -v`: `14
 passed`. `pytest tests/providers/ -q`: `944 passed`.
 
+### Post-backlog (ninety-seventh checkpoint): round 39 research pass — delegate_task crash on >10 subtasks, SEC-021 apex-style false positive, SEC-031/032 path-qualified-command false negative
+
+Round 39 targeted previously-unaudited built-in tools, additional
+`SEC-xxx` scanner checks beyond SEC-013/SEC-002/SEC-060, and the Web
+TUI's operator-controls path plus `vector_store.py`'s edge cases (both
+clean). Three genuine bugs found and fixed.
+
+1. **`DelegateTaskTool.execute()` crashes on any compound prompt with
+   more than `MAX_SUB_AGENTS` (10) numbered steps.**
+   `SubAgentRunner.run_all()` truncates its own local `subtasks` copy
+   but never mutates the caller's list; `delegate_task.py` zipped the
+   full untruncated list against the truncated `results` with
+   `strict=True`, raising an unhandled `ValueError` for any 11+-step
+   prompt. Live-reproduced with a real 15-step prompt through the
+   actual tool. Fixed by truncating `subtasks` to `MAX_SUB_AGENTS` in
+   `delegate_task.py` itself before calling `run_all()`.
+2. **SEC-021 apex-style false positive**: a bare `str.startswith(prefix)`
+   with no path-segment boundary flagged unrelated paths like
+   `/etcd-data`/`/usrlocal-apps`/`/bootstrap` as sensitive-directory
+   writes — the same bug class as the already-fixed SEC-013. Fixed by
+   requiring an exact match or a following `"/"`.
+3. **SEC-031/032 path-qualified-command false negative**:
+   `ShellPolicyEngine._match_allowed()` matches by basename, so
+   `"/usr/bin/python3"` permits `python3` exactly like the bare name
+   would, but the scanner compared `allowed_commands` as literal
+   strings against bare-name sets, missing any path-qualified
+   dangerous/interpreter entry entirely. Fixed by comparing basenames
+   while still reporting the operator's original configured entry in
+   the finding.
+
+7 new tests total, all confirmed via `git stash` to genuinely fail
+pre-fix.
+
+Verified: `pytest tests/security/test_scanner.py tests/tools/
+test_delegate_task.py -q`: `100 passed`. `pytest tests/security/
+tests/tools/ tests/agent/test_sub_agent.py -q`: `3640 passed, 2
+skipped`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21421 passed, 14 skipped in 725.96s (0:12:05)
+21430 passed, 14 skipped in 796.16s (0:13:16)
 ```
 
-**Zero failures**, the fifty-fourth consecutive fully green
-full-suite run. Passed count is up from 21420 to 21421 (the round 38
+**Zero failures**, the fifty-fifth consecutive fully green
+full-suite run. Passed count is up from 21421 to 21430 (the round 39
+checkpoint's 9 new tests: 1 delegate_task >MAX_SUB_AGENTS test, 6
+SEC-021 apex-style tests, 2 SEC-031/032 path-qualified tests; all of
+the sixty-first through ninety-sixth checkpoints' fixes are confirmed
+still holding). Passed count is up from 21420 to 21421 (the round 38
 checkpoint's 1 new test,
 `TestClassifyProviderErrorAcpxBlindSpot`; all of the sixty-first
 through ninety-fifth checkpoints' fixes are confirmed still holding).

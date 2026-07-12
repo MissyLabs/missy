@@ -499,6 +499,36 @@ class TestCheckFilesystemPolicy:
         assert "SEC-021" not in ids
         assert "SEC-022" not in ids
 
+    @pytest.mark.parametrize("path", ["/etcd-data", "/usrlocal-apps", "/bootstrap", "/devtools"])
+    def test_sec_021_path_merely_sharing_prefix_characters_not_flagged(self, tmp_path, path):
+        """Regression: a bare str.startswith(prefix) check with no
+        path-segment boundary false-flagged any unrelated path that
+        merely shares a sensitive prefix's characters (e.g. "/etcd-data"
+        starts with "/etc"), identical in kind to the already-fixed
+        SEC-013 apex-domain bug. These are plausible real top-level
+        container/VM mount points, not actually under /etc, /usr, /boot,
+        or /dev.
+        """
+        cfg = _make_config(write_paths=[path])
+        scanner = _scanner(config=cfg, tmp_path=tmp_path / ".missy")
+        result = scanner.scan_all()
+        ids = [f.id for f in result.findings]
+        assert "SEC-021" not in ids
+
+    def test_sec_021_exact_sensitive_dir_still_flagged(self, tmp_path):
+        cfg = _make_config(write_paths=["/etc"])
+        scanner = _scanner(config=cfg, tmp_path=tmp_path / ".missy")
+        result = scanner.scan_all()
+        ids = [f.id for f in result.findings]
+        assert "SEC-021" in ids
+
+    def test_sec_021_subdirectory_of_sensitive_dir_still_flagged(self, tmp_path):
+        cfg = _make_config(write_paths=["/etc/missy"])
+        scanner = _scanner(config=cfg, tmp_path=tmp_path / ".missy")
+        result = scanner.scan_all()
+        ids = [f.id for f in result.findings]
+        assert "SEC-021" in ids
+
     def test_sec_022_home_dir_write_high(self, tmp_path):
         home = str(Path.home())
         cfg = _make_config(write_paths=[home])
@@ -570,6 +600,30 @@ class TestCheckShellPolicy:
 
     def test_sec_032_bash_interpreter_high(self, tmp_path):
         cfg = _make_config(shell_enabled=True, allowed_commands=["bash", "git"])
+        scanner = _scanner(config=cfg, tmp_path=tmp_path / ".missy")
+        result = scanner.scan_all()
+        ids = [f.id for f in result.findings]
+        assert "SEC-032" in ids
+
+    def test_sec_031_path_qualified_dangerous_command_still_flagged(self, tmp_path):
+        """Regression: ShellPolicyEngine._match_allowed() matches by
+        basename, so an allowlist entry like "/bin/rm" permits "rm"
+        execution exactly as if the bare name were listed (a common
+        hardening convention to avoid PATH hijacking). The scanner
+        previously intersected `allowed` as literal strings against
+        `_DANGEROUS_COMMANDS` (bare names only), so a path-qualified
+        dangerous command slipped through entirely undetected.
+        """
+        cfg = _make_config(shell_enabled=True, allowed_commands=["/bin/rm", "git"])
+        scanner = _scanner(config=cfg, tmp_path=tmp_path / ".missy")
+        result = scanner.scan_all()
+        ids = [f.id for f in result.findings]
+        assert "SEC-031" in ids
+        f = result.findings[ids.index("SEC-031")]
+        assert "/bin/rm" in f.details.get("dangerous_commands", [])
+
+    def test_sec_032_path_qualified_interpreter_still_flagged(self, tmp_path):
+        cfg = _make_config(shell_enabled=True, allowed_commands=["/usr/bin/python3", "git"])
         scanner = _scanner(config=cfg, tmp_path=tmp_path / ".missy")
         result = scanner.scan_all()
         ids = [f.id for f in result.findings]

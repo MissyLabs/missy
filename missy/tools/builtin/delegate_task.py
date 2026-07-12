@@ -54,6 +54,7 @@ class DelegateTaskTool(BaseTool):
     ) -> ToolResult:
         from missy.agent.sub_agent import (
             MAX_SUB_AGENT_DEPTH,
+            MAX_SUB_AGENTS,
             SubAgentRunner,
             parse_subtasks,
         )
@@ -80,6 +81,15 @@ class DelegateTaskTool(BaseTool):
             return ToolResult(success=False, output="", error="prompt is required.")
 
         subtasks = parse_subtasks(prompt)
+        # SubAgentRunner.run_all() truncates its own local copy to
+        # MAX_SUB_AGENTS when the caller passes more subtasks than that --
+        # it never mutates *this* list, so `results` ends up shorter than
+        # `subtasks` for any prompt with more than MAX_SUB_AGENTS steps.
+        # Truncate the same way here so the two stay the same length for
+        # the zip(..., strict=True) below, instead of that raising an
+        # unhandled ValueError and crashing tool execution.
+        if len(subtasks) > MAX_SUB_AGENTS:
+            subtasks = subtasks[:MAX_SUB_AGENTS]
         runner = SubAgentRunner(runtime=_runtime, session_id=_session_id, depth=_depth + 1)
         results = runner.run_all(subtasks)
 

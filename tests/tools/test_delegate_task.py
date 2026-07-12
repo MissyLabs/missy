@@ -92,6 +92,26 @@ class TestDispatch:
         # Partial output is still surfaced, not swallowed.
         assert "boom" in r.output
 
+    def test_more_than_max_sub_agents_subtasks_does_not_crash(self, tool):
+        """Regression: SubAgentRunner.run_all() truncates its own local
+        copy of *subtasks* to MAX_SUB_AGENTS (10) when the caller passes
+        more, but never mutates the caller's list or returns the
+        truncated one. DelegateTaskTool.execute() still held the full,
+        untruncated `subtasks` list from parse_subtasks() and zipped it
+        against `results` (sized to the truncated count) with
+        strict=True -- for any prompt with more than 10 numbered steps,
+        that raised an unhandled ValueError and crashed tool execution
+        instead of returning a ToolResult(success=False, ...).
+        """
+        from missy.agent.sub_agent import MAX_SUB_AGENTS
+
+        runtime = MagicMock()
+        runtime.run.return_value = "ok"
+        prompt = "\n".join(f"{i}. step {i}" for i in range(1, MAX_SUB_AGENTS + 6))
+        r = tool.execute(prompt=prompt, _runtime=runtime, _session_id="sess-1", _depth=0)
+        assert r.success
+        assert r.output.count("Step ") == MAX_SUB_AGENTS
+
 
 class TestSchema:
     def test_schema_declares_prompt_required(self, tool):

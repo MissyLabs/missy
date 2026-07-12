@@ -715,13 +715,21 @@ class SecurityScanner:
             )
 
         # SEC-021: Write access to sensitive directories
+        def _under_sensitive_prefix(path_str: str) -> bool:
+            # A bare `str.startswith(prefix)` has no path-segment boundary,
+            # so an unrelated path that merely shares the prefix's
+            # characters (e.g. "/etcd-data", "/usrlocal-apps", "/bootstrap")
+            # false-positives identically to the already-fixed SEC-013
+            # apex-domain bug. Require an exact match or a following "/".
+            return any(
+                path_str == prefix or path_str.startswith(prefix + "/")
+                for prefix in _SENSITIVE_WRITE_PREFIXES
+            )
+
         sensitive_writes = [
             p
             for p in fs.allowed_write_paths
-            if any(
-                Path(p).expanduser().as_posix().startswith(prefix)
-                for prefix in _SENSITIVE_WRITE_PREFIXES
-            )
+            if _under_sensitive_prefix(Path(p).expanduser().as_posix())
             or str(p) in ("/", "~", str(Path.home()))
         ]
         if sensitive_writes:
@@ -782,6 +790,14 @@ class SecurityScanner:
             return  # Shell disabled — no shell findings
 
         allowed = set(shell.allowed_commands)
+        # ShellPolicyEngine._match_allowed() matches by *basename*, so an
+        # entry like "/usr/bin/rm" permits "rm" execution exactly as if
+        # the bare name were listed (a common hardening convention to
+        # avoid PATH hijacking). Comparing `allowed` as literal strings
+        # against bare-name sets below would miss any path-qualified
+        # dangerous/interpreter entry entirely; compare basenames instead
+        # so the scanner sees what the real policy actually permits.
+        allowed_basenames = {os.path.basename(cmd) for cmd in allowed}
 
         # SEC-030: Shell enabled with no allowlist (anything goes)
         if not allowed:
@@ -806,7 +822,8 @@ class SecurityScanner:
             return  # further checks are moot
 
         # SEC-031: Dangerous commands in allowlist
-        dangerous = allowed & _DANGEROUS_COMMANDS
+        dangerous_basenames = allowed_basenames & _DANGEROUS_COMMANDS
+        dangerous = {cmd for cmd in allowed if os.path.basename(cmd) in dangerous_basenames}
         if dangerous:
             self._add(
                 Finding(
@@ -829,7 +846,8 @@ class SecurityScanner:
             )
 
         # SEC-032: Interpreter commands allowed (policy bypass risk)
-        interpreters = allowed & _INTERPRETER_COMMANDS
+        interpreter_basenames = allowed_basenames & _INTERPRETER_COMMANDS
+        interpreters = {cmd for cmd in allowed if os.path.basename(cmd) in interpreter_basenames}
         if interpreters:
             self._add(
                 Finding(
