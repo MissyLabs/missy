@@ -541,6 +541,44 @@ class TestHandlePairRequest:
 
 class TestMessageLoop:
     @pytest.mark.asyncio
+    async def test_muted_mid_connection_disconnects_on_next_message(self) -> None:
+        """Regression: `missy devices policy <id> --mode muted` only ever
+        wrote to the on-disk registry (DeviceRegistry.update_node()) -- it
+        never touched an already-connected node's live WebSocket session.
+        _handle_auth()'s muted check ran once, at the initial handshake;
+        _message_loop() never re-checked it again, so a node muted while
+        already connected kept streaming audio (and invoking the agent)
+        indefinitely, until it disconnected on its own. _message_loop() must
+        re-fetch the node's live policy on every message and disconnect as
+        soon as a muted node sends anything.
+        """
+        node = _make_edge_node(policy_mode="full")
+        server = _make_server(node=node)
+        ws = _make_websocket()
+
+        # The node gets muted mid-connection -- the registry now reports it
+        # as muted, but `node` (captured at the original auth handshake) is
+        # still the stale "full" snapshot.
+        server._registry.get_node.return_value = _make_edge_node(policy_mode="muted")
+
+        async def fake_aiter():
+            yield json.dumps({"type": "heartbeat"})
+            yield json.dumps({"type": "audio_start", "sample_rate": 16000, "channels": 1})
+
+        ws.__aiter__ = lambda _self: fake_aiter()
+
+        with patch("missy.channels.voice.server._emit"):
+            await server._message_loop(ws, node)
+
+        ws.close.assert_awaited_once()
+        assert ws.close.call_args.args[0] == 1008
+        sent = [json.loads(c[0][0]) for c in ws.send.call_args_list if isinstance(c[0][0], str)]
+        assert any(f.get("type") == "muted" for f in sent)
+        # The subsequent audio_start must never have been processed -- the
+        # loop must have broken immediately on the first post-mute message.
+        server._stt.transcribe.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_binary_outside_audio_session_is_ignored(self) -> None:
         node = _make_edge_node()
         server = _make_server(node=node)
@@ -727,6 +765,29 @@ class TestHandleAudio:
         # Filter out binary frames (audio chunks), only parse JSON strings.
         sent = [json.loads(c[0][0]) for c in ws.send.call_args_list if isinstance(c[0][0], str)]
         assert any(f["type"] == "transcript" for f in sent)
+
+    @pytest.mark.asyncio
+    async def test_agent_callback_receives_node_policy_mode(self) -> None:
+        """Regression: policy_mode was read in exactly one place in the whole
+        voice subsystem (the "muted" check at auth time) -- a node configured
+        with `missy devices policy <id> --mode safe-chat` still got full,
+        unrestricted tool access, since nothing downstream ever routed it to
+        a capability-restricted runtime. _handle_audio() must thread the
+        node's current policy_mode into the metadata dict passed to
+        agent_callback so the callback (_build_agent_callback()) can
+        actually route by it.
+        """
+        node = _make_edge_node(policy_mode="safe-chat")
+        server = _make_server(node=node)
+        ws = _make_websocket()
+
+        with patch("missy.channels.voice.server._emit"):
+            await server._handle_audio(ws, node=node, audio_buffer=b"\x00" * 100, sample_rate=16000)
+
+        server._agent_callback.assert_awaited_once()
+        call_args = server._agent_callback.call_args
+        metadata = call_args[0][2]
+        assert metadata["policy_mode"] == "safe-chat"
 
     @pytest.mark.asyncio
     async def test_agent_callback_failure_sends_error_frame(self) -> None:

@@ -41,6 +41,69 @@ class TestBuildAgentCallback:
         assert result == "sync result"
 
 
+class TestBuildAgentCallbackSafeChatRouting:
+    """Regression: policy_mode was read in exactly one place in the whole
+    voice subsystem (the "muted" check at auth time) -- a node explicitly
+    configured with `missy devices policy <id> --mode safe-chat` still got
+    full, unrestricted tool access identical to "full" mode, since nothing
+    ever routed it to a capability-restricted runtime. _build_agent_callback()
+    must dispatch to a dedicated safe-chat runtime when metadata declares
+    policy_mode="safe-chat", and fail closed (refuse, not fall back to full
+    access) when no such runtime is configured.
+    """
+
+    def _run(self, cb, prompt="hello", session_id="s1", metadata=None):
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(cb(prompt, session_id, metadata or {}))
+        finally:
+            loop.close()
+
+    def test_full_policy_mode_uses_default_runtime(self):
+        full_runtime = MagicMock()
+        full_runtime.run.return_value = "full-response"
+        del full_runtime.run_async
+        safe_runtime = MagicMock()
+        safe_runtime.run.return_value = "safe-response"
+        del safe_runtime.run_async
+
+        cb = _build_agent_callback(full_runtime, safe_runtime)
+        result = self._run(cb, metadata={"policy_mode": "full"})
+
+        assert result == "full-response"
+        full_runtime.run.assert_called_once()
+        safe_runtime.run.assert_not_called()
+
+    def test_safe_chat_policy_mode_uses_restricted_runtime(self):
+        full_runtime = MagicMock()
+        full_runtime.run.return_value = "full-response"
+        del full_runtime.run_async
+        safe_runtime = MagicMock()
+        safe_runtime.run.return_value = "safe-response"
+        del safe_runtime.run_async
+
+        cb = _build_agent_callback(full_runtime, safe_runtime)
+        result = self._run(cb, metadata={"policy_mode": "safe-chat"})
+
+        assert result == "safe-response"
+        full_runtime.run.assert_not_called()
+        safe_runtime.run.assert_called_once()
+
+    def test_safe_chat_without_restricted_runtime_fails_closed(self):
+        """No safe-chat runtime configured must refuse the request outright
+        rather than silently falling back to the full-access runtime.
+        """
+        full_runtime = MagicMock()
+        full_runtime.run.return_value = "full-response"
+        del full_runtime.run_async
+
+        cb = _build_agent_callback(full_runtime)  # no safe_chat_agent_runtime
+        result = self._run(cb, metadata={"policy_mode": "safe-chat"})
+
+        assert "restricted" in result.lower() or "safe-chat" in result.lower()
+        full_runtime.run.assert_not_called()
+
+
 class TestVoiceChannelInit:
     @patch("missy.channels.voice.channel.FasterWhisperSTT")
     @patch("missy.channels.voice.channel.PiperTTS")

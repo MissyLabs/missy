@@ -1,5 +1,67 @@
 # TEST_RESULTS
 
+## Run: 2026-07-12 UTC — round 64 research pass: voice edge-node `safe-chat` policy was entirely unenforced; `muted` only checked at auth time
+
+- Context: round 64 generalized round 63's "mid-flight revocation not
+  re-checked" shape and hunted for more instances. MCP manager already
+  re-verifies digest at call time (round 59 precedent held). Found two
+  real bugs in the voice edge-node subsystem instead.
+- **safe-chat never enforced anywhere**: `_handle_auth()` only
+  special-cased `policy_mode == "muted"`; `_message_loop()` never
+  re-checked policy after the handshake; `_handle_audio()`'s metadata
+  dict never included policy_mode at all; `_build_agent_callback()`
+  always dispatched to the single runtime it was given, with no code
+  path to route a restricted node differently even in principle.
+  `gateway_start()` passes the same shared, full-capability `_agent`
+  to `voice_channel.start()` as every other channel. `missy devices
+  policy <id> --mode safe-chat` only writes to the on-disk registry --
+  the node's requests keep reaching the full-capability runtime
+  forever, for both already-connected and brand-new connections.
+- **muted only checked once, at auth**: a node muted while already
+  connected kept streaming audio and invoking the agent indefinitely,
+  until it disconnected on its own.
+- Fixed by: (1) re-checking `self._registry.get_node(node.node_id)` at
+  the top of every `_message_loop()` iteration -- a muted node is now
+  disconnected on its next message, same shape as round 63's
+  screencast fix, with the fresh node object also replacing the stale
+  one for the rest of the iteration; (2) threading
+  `"policy_mode": node.policy_mode` into `_handle_audio()`'s metadata;
+  (3) reworking `_build_agent_callback()` to accept an optional
+  `safe_chat_agent_runtime` and route by
+  `metadata.get("policy_mode")` -- safe-chat dispatches to the
+  restricted runtime, anything else to the default, and a safe-chat
+  request with no restricted runtime configured is refused outright
+  (fail closed) rather than silently served with full access; (4)
+  `gateway_start()` now constructs a dedicated
+  `capability_mode="safe-chat"` AgentRuntime (mirroring the existing
+  `_discord_agent` pattern) and passes it to `voice_channel.start()`;
+  (5) this new runtime was also added to round 62's hot-reload
+  budget-propagation closure via a forward-referenced variable
+  (ordinary Python closure late-binding), so it doesn't reintroduce
+  round 62's staleness bug for this newly-added runtime.
+- Command: `pytest tests/channels/test_voice_server.py -k "muted_mid_connection or receives_node_policy_mode" tests/channels/test_voice_channel.py -k SafeChatRouting -v`
+- Result: `5 passed`. All 5 new tests confirmed via `git stash` to
+  genuinely fail pre-fix.
+- Live-verified end-to-end with real (unmocked) objects: the
+  safe-chat/full routing dispatcher correctly routes each policy mode
+  and fails closed with no restricted runtime wired; a real
+  `VoiceServer._message_loop()` disconnects (code 1008, `{"type":
+  "muted"}`) on the very next message after a node's registry entry is
+  mutated to policy_mode="muted" mid-connection, without processing
+  that message.
+- Test-isolation fix discovered along the way: 6 pre-existing tests in
+  `test_voice_server_constants_edges.py` called `_message_loop()`
+  directly with a locally-constructed EdgeNode, but their shared
+  `_make_registry()` helper defaulted `get_node()` to return None for
+  any node ID -- harmless before this round, but exactly matching the
+  new re-check's correct "no node found -> disconnect" behavior,
+  which broke all 6 tests. Fixed by threading the real node object
+  into the registry mock via a new `node` parameter on
+  `_make_full_server_for_clamping()`; re-confirmed via `git stash`
+  that these 6 were genuinely unaffected pre-fix.
+- Broader sweep: `pytest tests/channels/ tests/cli/ -q`: `3091 passed`.
+- Full suite: `python3 -m pytest tests/ -q` → `21499 passed, 14 skipped in 766.48s (0:12:46)` — 0 failed, up from 21494. Seventy-eighth consecutive fully green full-suite run.
+
 ## Run: 2026-07-12 UTC — round 63 research pass: `!screen stop` did not actually stop an in-flight screencast stream
 
 - Context: round 63 was directed away from re-auditing gateway

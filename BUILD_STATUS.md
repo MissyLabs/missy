@@ -9150,6 +9150,112 @@ passed`.
 `21494 passed, 14 skipped in 714.99s (0:11:54)` — 0 failed, up from
 21493. Seventy-seventh consecutive fully green full-suite run.
 
+### Post-backlog (one-hundred-twentieth checkpoint): round 64 research pass fixes voice edge-node `safe-chat` policy being entirely unenforced, plus mid-connection `muted` re-check (generalizing round 63's fix to a second subsystem)
+
+Round 64 generalized round 63's "mid-flight revocation not re-checked" bug
+shape and hunted for more instances across other long-lived connections.
+`missy/mcp/manager.py` already re-verifies digest at call time (round 59
+precedent held). `missy/agent/approval.py`'s `ApprovalGate` re-validation
+and webhook secret rotation are queued for a future round given time
+budget, but the voice channel search immediately surfaced a bug at least
+as severe as round 63's, in a different dimension: not just "revocation
+doesn't reach an in-flight connection," but "a whole declared policy tier
+was never wired to anything at all."
+
+**Found and fixed two real bugs in the voice edge-node subsystem: (1)
+`policy_mode="safe-chat"` was never enforced anywhere — a node explicitly
+restricted to safe-chat got full, unrestricted tool access identical to
+`"full"` mode; (2) `policy_mode="muted"` was only checked once, at the
+initial auth handshake — a node muted while already connected kept
+streaming audio and invoking the agent indefinitely.** Traced the full
+runtime path: `_handle_auth()` (`channels/voice/server.py`) special-cases
+only `policy_mode == "muted"` at the handshake; `_message_loop()`'s
+per-iteration loop never re-checked policy again afterward, and
+`_handle_audio()`'s `metadata` dict (passed to the agent callback) never
+included `policy_mode` at all. `_build_agent_callback()`
+(`channels/voice/channel.py`) always dispatched to the single runtime it
+was given — there was no code path anywhere that could route a
+restricted-policy node differently even in principle.
+`gateway_start()` passes the same shared `_agent` (default
+`capability_mode="full"`) to `voice_channel.start()` as every other
+channel. Concretely: an operator runs `missy devices policy <id> --mode
+safe-chat` on a kitchen speaker specifically to keep it from using
+`shell_exec`/filesystem-write tools; the command only writes to the
+on-disk device registry (`DeviceRegistry.update_node()`) and has zero
+effect on the running gateway daemon — the node's voice requests
+continue to reach the full-capability runtime forever, both for
+already-connected sessions and any brand-new connection (since
+`_handle_auth()` never special-cased `"safe-chat"` either). Separately,
+`missy devices policy <id> --mode muted` on an already-connected node
+had no effect until that node's connection happened to close on its own.
+No test exercised `policy_mode="safe-chat"` actually constraining tool
+access, or a policy change reaching an already-connected session (only
+`"muted"`-at-auth and `"full"`-at-auth were covered).
+
+Fixed by: (1) adding a re-check of `self._registry.get_node(node.node_id)`
+at the top of every `_message_loop()` iteration — a node muted
+mid-connection is now disconnected (code 1008) on its very next message,
+the same fix shape as round 63's screencast revocation, with the
+freshly-fetched node object also replacing the stale one used for the
+rest of that iteration (so `_handle_audio()` naturally reads live
+`policy_mode` too, with no separate re-fetch needed); (2) threading
+`"policy_mode": node.policy_mode` into `_handle_audio()`'s `metadata`
+dict; (3) reworking `_build_agent_callback()` to accept an optional
+second `safe_chat_agent_runtime` parameter and route by
+`metadata.get("policy_mode")` — `"safe-chat"` dispatches to the
+restricted runtime, anything else to the default, and a `"safe-chat"`
+request with no restricted runtime configured is refused outright
+(fail closed) rather than silently served with full access; (4)
+`gateway_start()` now constructs a dedicated
+`capability_mode="safe-chat"` `AgentRuntime` (mirroring the existing
+`_discord_agent` pattern exactly) and passes it to
+`voice_channel.start(_agent, safe_chat_agent_runtime=...)`; (5) this new
+runtime was also added to round 62's hot-reload budget-propagation
+closure (`_apply_config_and_refresh_runtimes`) via a forward-referenced
+`_voice_safe_chat_agent` variable (declared `None` before the closure,
+assigned after actual construction — ordinary Python closure late-binding,
+no `nonlocal` needed), so it doesn't reintroduce round 62's staleness bug
+for this newly-added long-lived runtime. Live-verified end-to-end with
+real (unmocked) objects: the safe-chat/full routing dispatcher correctly
+routes each policy mode and fails closed with no restricted runtime
+wired; a real `VoiceServer._message_loop()` disconnects (code 1008,
+`{"type": "muted"}`) on the very next message after a node's registry
+entry is mutated to `policy_mode="muted"` mid-connection, without
+processing that message.
+
+**Test-isolation fix discovered along the way**: 6 pre-existing tests in
+`test_voice_server_constants_edges.py` (`TestSampleRateClamping`,
+`TestChannelClamping`) called `_message_loop()` directly with a
+locally-constructed `EdgeNode`, but their shared `_make_registry()` test
+helper defaulted `get_node()` to return `None` for any node ID —
+harmless before this round since nothing re-checked the registry
+mid-loop, but exactly matching the new re-check's (correct) "no node
+found → treat as revoked, disconnect" behavior, which broke all 6
+tests immediately. Fixed by threading the test's real `node` object into
+the registry mock via a new `node` parameter on
+`_make_full_server_for_clamping()`, re-confirmed all 6 tests pass with
+the fix in place and (via `git stash`) that they were genuinely
+unaffected pre-fix (proving the break was caused by the mid-loop
+re-check being newly reachable, not a pre-existing latent issue in
+those tests).
+
+5 new tests (`test_muted_mid_connection_disconnects_on_next_message`,
+`test_agent_callback_receives_node_policy_mode` in
+`test_voice_server.py`; `test_full_policy_mode_uses_default_runtime`,
+`test_safe_chat_policy_mode_uses_restricted_runtime`,
+`test_safe_chat_without_restricted_runtime_fails_closed` in
+`test_voice_channel.py`), all confirmed via `git stash` to genuinely
+fail pre-fix.
+
+Verified: `pytest tests/channels/test_voice_server.py -k
+"muted_mid_connection or receives_node_policy_mode" tests/channels/test_voice_channel.py
+-k SafeChatRouting -v`: `5 passed`. `pytest tests/channels/
+tests/cli/ -q`: `3091 passed`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21499 passed, 14 skipped in 766.48s (0:12:46)` — 0 failed, up from
+21494. Seventy-eighth consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

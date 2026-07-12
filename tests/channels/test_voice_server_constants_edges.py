@@ -746,11 +746,18 @@ class TestEmitHelper:
 # ---------------------------------------------------------------------------
 
 
-def _make_full_server_for_clamping() -> VoiceServer:
+def _make_full_server_for_clamping(node: EdgeNode | None = None) -> VoiceServer:
     """Build a server with proper STT/TTS mocks for clamping tests.
 
     The stt.transcribe returns an empty transcript so the agent path is
     short-circuited, avoiding the need to mock TTS synthesize output.
+
+    *node*, when given, is registered as the registry's get_node() response
+    so _message_loop()'s live per-message policy re-check (which looks the
+    node back up by ID on every message) finds the same node these tests
+    pass directly to _message_loop(), rather than the registry's default
+    None (which the re-check correctly treats as "no longer authorized" and
+    disconnects on).
     """
     from missy.channels.voice.stt.base import TranscriptionResult
 
@@ -759,7 +766,7 @@ def _make_full_server_for_clamping() -> VoiceServer:
     stt.transcribe = AsyncMock(
         return_value=TranscriptionResult(text="   ", confidence=0.0, processing_ms=5)
     )
-    return _make_server(stt_engine=stt)
+    return _make_server(stt_engine=stt, registry=_make_registry(node=node))
 
 
 class TestSampleRateClamping:
@@ -771,7 +778,7 @@ class TestSampleRateClamping:
         from missy.channels.voice.stt.base import TranscriptionResult
 
         node = _make_edge_node()
-        server = _make_full_server_for_clamping()
+        server = _make_full_server_for_clamping(node=node)
         ws = _make_ws()
 
         captured_rate: list[int] = []
@@ -801,7 +808,7 @@ class TestSampleRateClamping:
         from missy.channels.voice.stt.base import TranscriptionResult
 
         node = _make_edge_node()
-        server = _make_full_server_for_clamping()
+        server = _make_full_server_for_clamping(node=node)
         ws = _make_ws()
 
         captured_rate: list[int] = []
@@ -831,7 +838,7 @@ class TestSampleRateClamping:
         from missy.channels.voice.stt.base import TranscriptionResult
 
         node = _make_edge_node()
-        server = _make_full_server_for_clamping()
+        server = _make_full_server_for_clamping(node=node)
         ws = _make_ws()
 
         captured_rate: list[int] = []
@@ -869,7 +876,7 @@ class TestChannelClamping:
         from missy.channels.voice.stt.base import TranscriptionResult
 
         node = _make_edge_node()
-        server = _make_full_server_for_clamping()
+        server = _make_full_server_for_clamping(node=node)
         ws = _make_ws()
 
         captured_channels: list[int] = []
@@ -899,7 +906,7 @@ class TestChannelClamping:
         from missy.channels.voice.stt.base import TranscriptionResult
 
         node = _make_edge_node()
-        server = _make_full_server_for_clamping()
+        server = _make_full_server_for_clamping(node=node)
         ws = _make_ws()
 
         captured_channels: list[int] = []
@@ -929,7 +936,7 @@ class TestChannelClamping:
         from missy.channels.voice.stt.base import TranscriptionResult
 
         node = _make_edge_node()
-        server = _make_full_server_for_clamping()
+        server = _make_full_server_for_clamping(node=node)
         ws = _make_ws()
 
         captured_channels: list[int] = []

@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (125 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for seventy-seven consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (126 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for seventy-eight consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -5286,16 +5286,64 @@ Verified: `pytest tests/channels/test_screencast_server.py -k
 revoked_session -v`: `1 passed`. `pytest tests/channels/ -q`: `1990
 passed`.
 
+### Post-backlog (one-hundred-twentieth checkpoint): round 64 research pass — voice edge-node `safe-chat` policy was entirely unenforced; `muted` only checked at auth time
+
+Round 64 generalized round 63's "mid-flight revocation not re-checked"
+shape. MCP manager already re-verifies digest at call time (round 59
+precedent held). Found two real bugs in the voice edge-node subsystem
+instead, at least as severe as round 63's screencast finding.
+
+**`policy_mode="safe-chat"` was never enforced anywhere — a node
+explicitly restricted to safe-chat got full, unrestricted tool access
+identical to `"full"` mode — and `policy_mode="muted"` was only
+checked once, at the initial auth handshake.** `_handle_auth()` only
+special-cased `"muted"`; `_message_loop()` never re-checked policy
+afterward; `_handle_audio()`'s metadata never included `policy_mode`
+at all; `_build_agent_callback()` always dispatched to the single
+runtime it was given, with no code path to route a restricted node
+differently even in principle. `missy devices policy <id> --mode
+safe-chat` only writes to the on-disk registry — the node's requests
+keep reaching the full-capability runtime forever. Fixed by: (1)
+re-checking the registry at the top of every `_message_loop()`
+iteration — a muted node now disconnects on its next message, same
+shape as round 63; (2) threading `policy_mode` into
+`_handle_audio()`'s metadata; (3) reworking `_build_agent_callback()`
+to accept an optional `safe_chat_agent_runtime` and route by
+`policy_mode` — failing closed (refusing, not falling back to full
+access) when no restricted runtime is configured; (4) `gateway_start()`
+now constructs a dedicated `capability_mode="safe-chat"` `AgentRuntime`
+(mirroring `_discord_agent`) and wires it in; (5) this new runtime was
+also added to round 62's hot-reload budget-propagation closure so it
+doesn't reintroduce that staleness bug. Live-verified end-to-end with
+real (unmocked) objects. A test-isolation issue in 6 pre-existing
+tests was discovered and fixed along the way (a shared registry mock
+defaulted `get_node()` to `None`, which the new re-check correctly
+treated as "disconnect"). 5 new tests, all confirmed via `git stash`
+to genuinely fail pre-fix.
+
+Verified: `pytest tests/channels/test_voice_server.py -k
+"muted_mid_connection or receives_node_policy_mode"
+tests/channels/test_voice_channel.py -k SafeChatRouting -v`: `5
+passed`. `pytest tests/channels/ tests/cli/ -q`: `3091 passed`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21494 passed, 14 skipped in 714.99s (0:11:54)
+21499 passed, 14 skipped in 766.48s (0:12:46)
 ```
 
-**Zero failures**, the seventy-seventh consecutive fully green
-full-suite run. Passed count is up from 21493 to 21494 (the round 63
-checkpoint's 1 new test:
+**Zero failures**, the seventy-eighth consecutive fully green
+full-suite run. Passed count is up from 21494 to 21499 (the round 64
+checkpoint's 5 new tests:
+`test_muted_mid_connection_disconnects_on_next_message`,
+`test_agent_callback_receives_node_policy_mode`,
+`test_full_policy_mode_uses_default_runtime`,
+`test_safe_chat_policy_mode_uses_restricted_runtime`,
+`test_safe_chat_without_restricted_runtime_fails_closed` — full detail
+above; all of the sixty-first through one-hundred-nineteenth
+checkpoints' fixes are confirmed still holding). Passed count is up
+from 21493 to 21494 (the round 63 checkpoint's 1 new test:
 `test_revoked_session_disconnects_on_next_message` — full detail
 above; all of the sixty-first through one-hundred-eighteenth
 checkpoints' fixes are confirmed still holding). Passed count is up

@@ -45,8 +45,8 @@ from missy.channels.voice.tts.piper import PiperTTS
 logger = logging.getLogger(__name__)
 
 
-def _build_agent_callback(agent_runtime: Any) -> Callable[..., Any]:
-    """Construct an async agent callback from *agent_runtime*.
+def _build_single_runtime_callback(agent_runtime: Any) -> Callable[..., Any]:
+    """Construct an async agent callback that always calls *agent_runtime*.
 
     If *agent_runtime* exposes ``run_async`` it is used directly.  Otherwise,
     the synchronous ``run`` method is wrapped to execute in the default thread
@@ -74,6 +74,63 @@ def _build_agent_callback(agent_runtime: Any) -> Callable[..., Any]:
         return await loop.run_in_executor(None, agent_runtime.run, prompt, session_id)
 
     return _sync_cb
+
+
+def _build_agent_callback(
+    agent_runtime: Any, safe_chat_agent_runtime: Any | None = None
+) -> Callable[..., Any]:
+    """Construct an async agent callback, routing by the node's ``policy_mode``.
+
+    A voice edge node's ``policy_mode`` (``full``/``safe-chat``/``muted``) is
+    threaded into ``metadata["policy_mode"]`` by
+    :meth:`~missy.channels.voice.server.VoiceServer._handle_audio`. Before
+    this, ``policy_mode`` was read in exactly one place in the whole voice
+    subsystem (the "muted" check at auth time) -- a node explicitly
+    configured with ``missy devices policy <id> --mode safe-chat`` still got
+    full, unrestricted tool access identical to ``full`` mode, since nothing
+    downstream ever routed it to a capability-restricted runtime.
+
+    Args:
+        agent_runtime: The default (``capability_mode="full"``) runtime used
+            for nodes without a ``policy_mode`` of ``"safe-chat"``.
+        safe_chat_agent_runtime: A runtime constructed with
+            ``capability_mode="safe-chat"``, used for nodes whose
+            ``policy_mode`` is ``"safe-chat"``. When ``None`` (no restricted
+            runtime was wired), a ``"safe-chat"`` node's request is refused
+            outright rather than silently falling back to the full-access
+            runtime -- failing closed, matching this codebase's other
+            capability-enforcement gates, rather than granting broader
+            access than the operator configured.
+
+    Returns:
+        An async callable with signature
+        ``async (prompt: str, session_id: str, metadata: dict) -> str``.
+    """
+    full_cb = _build_single_runtime_callback(agent_runtime)
+    safe_chat_cb = (
+        _build_single_runtime_callback(safe_chat_agent_runtime)
+        if safe_chat_agent_runtime is not None
+        else None
+    )
+
+    async def _routed_cb(prompt: str, session_id: str, metadata: dict) -> str:
+        if metadata.get("policy_mode") == "safe-chat":
+            if safe_chat_cb is None:
+                logger.warning(
+                    "VoiceChannel: node %r is in safe-chat mode but no "
+                    "restricted runtime is configured — refusing request "
+                    "rather than granting full access.",
+                    metadata.get("node_id"),
+                )
+                return (
+                    "This device is restricted to safe-chat mode, but no "
+                    "restricted agent is configured. Refusing to respond "
+                    "with full access."
+                )
+            return await safe_chat_cb(prompt, session_id, metadata)
+        return await full_cb(prompt, session_id, metadata)
+
+    return _routed_cb
 
 
 class VoiceChannel(BaseChannel):
@@ -168,7 +225,7 @@ class VoiceChannel(BaseChannel):
     # Lifecycle
     # ------------------------------------------------------------------
 
-    def start(self, agent_runtime: Any) -> None:
+    def start(self, agent_runtime: Any, safe_chat_agent_runtime: Any | None = None) -> None:
         """Initialise all subsystems and start the WebSocket server.
 
         Loads the device registry, constructs STT/TTS engines, wiring manager,
@@ -179,7 +236,14 @@ class VoiceChannel(BaseChannel):
             agent_runtime: An object exposing either
                 ``async run_async(prompt, session_id, metadata) -> str``
                 or synchronous ``run(prompt, session_id) -> str``.  The
-                appropriate wrapper is selected automatically.
+                appropriate wrapper is selected automatically. Used for
+                edge nodes whose ``policy_mode`` is not ``"safe-chat"``.
+            safe_chat_agent_runtime: A runtime constructed with
+                ``capability_mode="safe-chat"``, used for edge nodes
+                configured via ``missy devices policy <id> --mode
+                safe-chat``. When omitted, a safe-chat node's requests are
+                refused (fail closed) rather than silently served by
+                *agent_runtime* with full access.
 
         Raises:
             RuntimeError: If :meth:`start` is called while the channel is
@@ -204,7 +268,7 @@ class VoiceChannel(BaseChannel):
         tts_engine = PiperTTS(voice=self._tts_voice)
 
         # Build the async agent callback.
-        agent_callback = _build_agent_callback(agent_runtime)
+        agent_callback = _build_agent_callback(agent_runtime, safe_chat_agent_runtime)
 
         # Construct the server.
         server = VoiceServer(

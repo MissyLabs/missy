@@ -2490,6 +2490,13 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
     # each object in place (mutating existing objects, not rebuilding them)
     # matches the same in-place-repoint approach already used for
     # AuditLogger.reconfigure()/OtelExporter re-init.
+    # Populated further down, only if the voice channel is enabled and its
+    # safe-chat runtime construction succeeds; referenced by the closure
+    # below via ordinary late-binding (no `nonlocal` needed since this
+    # function only reads it, and Python closures see later reassignments
+    # of an enclosing-scope variable, not a value snapshotted at def-time).
+    _voice_safe_chat_agent: Any = None
+
     def _apply_config_and_refresh_runtimes(new_cfg: Any) -> None:
         _apply_config(new_cfg)
         new_max_spend = getattr(new_cfg, "max_spend_usd", 0.0)
@@ -2497,6 +2504,8 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
         _discord_agent.config.max_spend_usd = new_max_spend
         if _proactive_runtime is not None:
             _proactive_runtime.config.max_spend_usd = new_max_spend
+        if _voice_safe_chat_agent is not None:
+            _voice_safe_chat_agent.config.max_spend_usd = new_max_spend
         if scheduler_manager is not None:
             scheduler_manager._default_max_spend_usd = new_max_spend  # noqa: SLF001
 
@@ -2538,7 +2547,19 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                 tts_voice=_voice_cfg.get("tts", {}).get("voice", "en_US-lessac-medium"),
                 debug_transcripts=_voice_cfg.get("debug_transcripts", False),
             )
-            voice_channel.start(_agent)
+            # A dedicated capability_mode="safe-chat" runtime for edge nodes
+            # configured via `missy devices policy <id> --mode safe-chat`.
+            # Without this, "safe-chat" was read in exactly one place in the
+            # whole voice subsystem (the "muted" check) -- a safe-chat node
+            # got full, unrestricted tool access identical to "full" mode.
+            _voice_safe_chat_agent_cfg = AgentConfig(
+                provider=_provider_name,
+                capability_mode="safe-chat",
+                max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
+                **_agent_tool_policy_kwargs(cfg),
+            )
+            _voice_safe_chat_agent = AgentRuntime(_voice_safe_chat_agent_cfg)
+            voice_channel.start(_agent, safe_chat_agent_runtime=_voice_safe_chat_agent)
             _vc_host = _voice_cfg.get("host", "0.0.0.0")
             _vc_port = _voice_cfg.get("port", 8765)
             console.print(f"[green]Voice channel started[/] on ws://{_vc_host}:{_vc_port}")
