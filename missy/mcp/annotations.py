@@ -95,6 +95,16 @@ class ToolAnnotation:
         Returns:
             A populated :class:`ToolAnnotation` instance.
 
+        Per the MCP spec's documented cautious posture, an omitted hint is
+        NOT assumed safe: ``readOnlyHint`` defaults to ``False`` and
+        ``openWorldHint`` defaults to ``True`` when absent.
+        ``destructiveHint`` is only meaningful for a non-read-only tool and
+        defaults to ``True`` in that case (a read-only tool cannot be
+        destructive regardless of this hint) -- so a server that declares
+        only a partial ``annotations`` object (e.g. ``{"readOnlyHint":
+        False}`` with no ``destructiveHint``, or an empty ``{}``) is parsed
+        as mutating/approval-requiring rather than silently trusted safe.
+
         Example::
 
             ann = ToolAnnotation.from_mcp_dict({
@@ -104,10 +114,10 @@ class ToolAnnotation:
                 "openWorldHint": True,
             })
         """
-        destructive = bool(data.get("destructiveHint", False))
-        read_only = bool(data.get("readOnlyHint", True))
+        read_only = bool(data.get("readOnlyHint", False))
+        destructive = False if read_only else bool(data.get("destructiveHint", True))
         idempotent = bool(data.get("idempotentHint", False))
-        open_world = bool(data.get("openWorldHint", False))
+        open_world = bool(data.get("openWorldHint", True))
 
         cost_hint = str(data.get("costHint", "none"))
         if cost_hint not in _COST_ORDER:
@@ -118,7 +128,7 @@ class ToolAnnotation:
         if isinstance(latency_raw, int) and latency_raw >= 0:
             estimated_latency_ms = latency_raw
 
-        category = cls._infer_category(data)
+        category = cls._infer_category(read_only, destructive, open_world)
 
         return cls(
             read_only=read_only,
@@ -132,23 +142,30 @@ class ToolAnnotation:
         )
 
     @staticmethod
-    def _infer_category(data: dict[str, Any]) -> str:
-        """Derive a category string from raw MCP annotation data.
+    def _infer_category(read_only: bool, destructive: bool, open_world: bool) -> str:
+        """Derive a category string from already-resolved annotation hints.
 
-        Priority: ``destructiveHint`` > absence of ``readOnlyHint`` > default.
+        Priority: destructive > non-read-only ("write") > open-world
+        ("search") > default. Takes the already-defaulted booleans (rather
+        than re-deriving from the raw ``annotations`` dict) so its notion of
+        "unspecified" can never drift from :meth:`from_mcp_dict`'s own
+        spec-cautious defaults.
 
         Args:
-            data: Raw ``annotations`` dict from the MCP tool manifest.
+            read_only: Resolved ``readOnlyHint`` value.
+            destructive: Resolved ``destructiveHint`` value (already forced
+                to ``False`` when ``read_only`` is ``True``).
+            open_world: Resolved ``openWorldHint`` value.
 
         Returns:
             One of ``"dangerous"``, ``"write"``, ``"search"``, or
             ``"general"``.
         """
-        if data.get("destructiveHint"):
+        if destructive:
             return "dangerous"
-        if not data.get("readOnlyHint", True):
+        if not read_only:
             return "write"
-        if data.get("openWorldHint"):
+        if open_world:
             return "search"
         return "general"
 

@@ -8780,6 +8780,101 @@ passed`. `pytest tests/scheduler/ tests/cli/ tests/security/ -q`:
 `21486 passed, 14 skipped in 780.86s (0:13:00)` — 0 failed, up from
 21484. Seventy-second consecutive fully green full-suite run.
 
+### Post-backlog (one-hundred-fifteenth checkpoint): round 59 research pass fixes an MCP annotation-parsing default that silently defeated the approval gate for realistic partial third-party tool annotations
+
+Round 59 was directed first at verifying (not assuming) round 58's
+claim that `mcp_approval_gate=None` fails closed at MCP dispatch time.
+Confirmed true by reading `McpManager.call_tool()`
+(`manager.py:393-403`) directly: when a tool's annotation resolves
+`requires_approval=True` and no gate is configured, the call is denied
+with a `no_approval_gate` audit event, not silently allowed. This is
+the single dispatch chokepoint every caller (scheduler, `ask`/`run`/
+`recover`, `api_start`) goes through, so the earlier rounds' omission
+of `mcp_approval_gate` from those `AgentConfig` sites is confirmed to
+be a functionality gap (destructive MCP tools become unusable from
+those entry points), not a security gap.
+
+**That verification led directly to a real, higher-severity finding
+one layer up: the approval-gate check itself only fires when a tool's
+resolved annotation says `requires_approval=True` — and
+`ToolAnnotation.from_mcp_dict()`'s per-field defaults were backwards
+relative to the MCP spec's own documented cautious posture, so a
+realistic (not synthetic) partial annotation from a real third-party
+server could resolve to "safe" and skip the gate entirely.** The MCP
+spec's tool-annotation defaults are: `readOnlyHint` defaults `False`,
+`destructiveHint` defaults `True` (when the tool isn't read-only),
+`openWorldHint` defaults `True` — an unannotated (or partially
+annotated) tool is meant to be treated as *maximally* risky, not safe.
+Missy's parser did the opposite: `read_only = bool(data.get("readOnlyHint",
+True))`, `destructive = bool(data.get("destructiveHint", False))` — any
+hint field a server didn't set was treated as safe. Concretely: a
+real MCP server exposing a `drop_table`/`delete_repo`-style tool with
+only `annotations: {"readOnlyHint": false}` (a common, spec-legal
+partial declaration — many real servers don't bother setting
+`destructiveHint` alongside it) was parsed by Missy as
+`mutating=False`, `requires_approval=False`, so
+`McpManager.call_tool()`'s already-correctly-fail-closed gate simply
+never triggered — the destructive call executed unconfirmed even with
+a fully configured `ApprovalGate`, exactly the scenario SR-4.7's
+approval gate exists to prevent. The bug also affected an *explicitly
+empty* `annotations: {}` (distinct from no `annotations` key at all —
+`client.py`'s `isinstance(ann_data, dict)` check registers an entry
+for either), and `_infer_category()`'s independent re-derivation from
+raw data meant its "unspecified" notion could drift from
+`from_mcp_dict`'s own defaults even after a fix to one but not the
+other. The existing test suite encoded the same wrong assumption (the
+established cross-module bug-class pattern): `test_empty_dict_uses_defaults`
+asserted the inverted "safe by omission" behavior as correct, and
+`test_read_only_hint_false`/`test_open_world_hint_sets_network_access`/
+`test_unknown_keys_ignored` all asserted category/read-only outcomes
+consistent with the unsafe defaults.
+
+Fixed `from_mcp_dict()`'s three hint defaults to match spec exactly
+(`readOnlyHint` defaults `False`; `destructiveHint` defaults `True`
+unless the tool is read-only, since a read-only tool cannot be
+destructive regardless of this hint's value; `openWorldHint` defaults
+`True`), and refactored `_infer_category()` to take the
+already-resolved `read_only`/`destructive`/`open_world` booleans
+instead of re-deriving its own defaults from the raw dict, so the two
+can never drift apart again. Live-verified end-to-end: the finding's
+exact scenario (`ToolAnnotation.from_mcp_dict({"readOnlyHint": False})`
+registered on a real `McpManager` instance) now resolves
+`requires_approval=True`/`is_safe=False`, meaning `call_tool()`'s
+already-correct gate now actually fires for it. Explicit, fully-spec'd
+declarations (e.g. `{"readOnlyHint": True, "openWorldHint": True}` →
+`category="search"`, still `is_safe=True`) are unaffected — only
+partial/omitted hints changed behavior. 10 existing tests updated to
+assert the new, spec-correct outcomes (`test_empty_dict_uses_defaults`,
+`test_read_only_hint_false`, `test_open_world_hint_sets_network_access`,
+`test_unknown_keys_ignored`, all 5 `TestInferCategory` tests — whose
+signature also changed to take resolved booleans — and
+`test_tool_with_empty_annotations_dict`), plus 2 new tests
+(`test_read_only_hint_true_is_never_destructive`,
+`test_open_world_hint_with_explicit_read_only_sets_search_category`),
+all 10 changed/new tests confirmed via `git stash` to genuinely fail
+pre-fix.
+
+**Deliberately not touched, documented as a residual**: a tool with
+*no* `annotations` key in its manifest at all (as opposed to an
+explicitly empty `{}`) is never registered in `AnnotationRegistry` and
+falls back to `get_or_default()`'s bare `ToolAnnotation()` — which
+still defaults to safe (`read_only=True`), same as the raw dataclass
+field defaults. Whether *that* broader default should also flip to
+match the spec's cautious posture is a much larger product-policy
+question (it would affect essentially every currently-configured MCP
+server's tools that carry no annotations key at all, a strictly larger
+blast radius than the parsing-bug fix made here) and was left
+untouched, consistent with this session's established practice of not
+force-fixing genuine design-policy forks without an explicit decision.
+
+Verified: `pytest tests/mcp/test_annotations.py -v`: `88 passed`.
+`pytest tests/mcp/ -q`: `388 passed`. `pytest tests/mcp/ tests/tools/
+tests/agent/ tests/security/ -q`: `8321 passed, 6 skipped`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21488 passed, 14 skipped in 799.08s (0:13:19)` — 0 failed, up from
+21486. Seventy-third consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

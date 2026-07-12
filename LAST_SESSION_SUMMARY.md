@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (120 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for seventy-two consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (121 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for seventy-three consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -5080,16 +5080,67 @@ Verified: `pytest tests/scheduler/test_manager_extended.py -k
 tool_policy tests/cli/test_cli_main_gaps.py -k tool_policy -v`: `2
 passed`.
 
+### Post-backlog (one-hundred-fifteenth checkpoint): round 59 research pass — MCP annotation defaults silently defeated the approval gate for realistic partial third-party annotations
+
+Round 59 first verified (rather than assumed) round 58's claim that
+`mcp_approval_gate=None` fails closed at MCP dispatch time. Confirmed
+true via `McpManager.call_tool()`: denies with a `no_approval_gate`
+audit event when `requires_approval` resolves true and no gate is
+configured — this is the single dispatch chokepoint every caller goes
+through, so omitting `mcp_approval_gate` from those `AgentConfig`
+sites is a functionality gap, not a security one.
+
+**That verification led directly to a real, higher-severity finding
+one layer up: `ToolAnnotation.from_mcp_dict()`'s per-field defaults
+were backwards relative to the MCP spec's own documented cautious
+posture, silently defeating the approval gate for realistic partial
+third-party annotations.** The spec's defaults are: `readOnlyHint`
+defaults `False`, `destructiveHint` defaults `True` (unless the tool
+is read-only), `openWorldHint` defaults `True` — an unannotated tool
+should be treated as maximally risky. Missy's parser did the
+opposite: any hint field a server didn't set was treated as safe. A
+real MCP server exposing a destructive tool with only
+`{"readOnlyHint": false}` (a common, spec-legal partial declaration)
+was parsed as `mutating=False`, `requires_approval=False` — the
+already-correct fail-closed gate simply never triggered, letting the
+destructive call execute unconfirmed even with a fully configured
+`ApprovalGate`. Existing tests encoded the same wrong assumption
+(`test_empty_dict_uses_defaults` asserted the inverted "safe by
+omission" behavior as correct). Fixed `from_mcp_dict()`'s three hint
+defaults to match spec exactly, and refactored `_infer_category()` to
+take the already-resolved booleans instead of re-deriving its own
+defaults, so the two can't drift apart again. Live-verified
+end-to-end: the finding's exact scenario now resolves
+`requires_approval=True`/`is_safe=False` on a real `McpManager`
+instance. 10 existing tests updated, 2 new tests added, all 10
+changed/new tests confirmed via `git stash` to genuinely fail pre-fix.
+
+**Deliberately not touched, documented as a residual**: a tool with
+*no* `annotations` key at all (vs. an explicit `{}`) still falls back
+to `AnnotationRegistry.get_or_default()`'s bare `ToolAnnotation()`
+(safe by default) — a much larger product-policy question (would
+affect essentially every currently-configured MCP server's
+no-annotation tools) left untouched, consistent with this session's
+practice of not force-fixing genuine design-policy forks.
+
+Verified: `pytest tests/mcp/test_annotations.py -v`: `88 passed`.
+`pytest tests/mcp/ -q`: `388 passed`. `pytest tests/mcp/ tests/tools/
+tests/agent/ tests/security/ -q`: `8321 passed, 6 skipped`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21486 passed, 14 skipped in 780.86s (0:13:00)
+21488 passed, 14 skipped in 799.08s (0:13:19)
 ```
 
-**Zero failures**, the seventy-second consecutive fully green
-full-suite run. Passed count is up from 21484 to 21486 (the round 58
-checkpoint's 2 new tests:
+**Zero failures**, the seventy-third consecutive fully green
+full-suite run. Passed count is up from 21486 to 21488 (the round 59
+checkpoint's net +2 tests: 10 existing MCP annotation tests updated to
+match spec-correct behavior, 2 new tests added — full detail above;
+all of the sixty-first through one-hundred-fourteenth checkpoints'
+fixes are confirmed still holding). Passed count is up from 21484 to
+21486 (the round 58 checkpoint's 2 new tests:
 `test_run_job_threads_configured_tool_policy_kwargs`,
 `test_scheduler_receives_configured_tool_policy_kwargs`; all of the
 sixty-first through one-hundred-thirteenth checkpoints' fixes are

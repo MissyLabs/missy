@@ -1,5 +1,59 @@
 # TEST_RESULTS
 
+## Run: 2026-07-12 UTC — round 59 research pass: MCP annotation defaults silently defeated the approval gate for realistic partial third-party annotations
+
+- Context: round 59 first verified (rather than assumed) round 58's
+  claim that mcp_approval_gate=None fails closed at MCP dispatch time.
+  Confirmed true via McpManager.call_tool() (manager.py:393-403): denies
+  with a no_approval_gate audit event when requires_approval resolves
+  true and no gate is configured. This is the single dispatch
+  chokepoint every caller (scheduler, ask/run/recover, api_start) goes
+  through, so omitting mcp_approval_gate from those AgentConfig sites
+  is a functionality gap, not a security one.
+- **MCP annotation parsing defaults were backwards vs. the spec,
+  silently defeating the approval gate**: the gate only fires when a
+  tool's resolved annotation says requires_approval=True.
+  ToolAnnotation.from_mcp_dict()'s per-field defaults were the
+  opposite of the MCP spec's documented cautious posture (readOnlyHint
+  defaults False, destructiveHint defaults True unless read-only,
+  openWorldHint defaults True -- an unannotated/partially-annotated
+  tool should be treated as maximally risky). Missy's parser treated
+  any omitted hint as safe instead. A real MCP server exposing a
+  destructive tool with only `{"readOnlyHint": false}` (a common,
+  spec-legal partial declaration) was parsed as mutating=False,
+  requires_approval=False -- the already-correct fail-closed gate
+  simply never triggered, letting the destructive call execute
+  unconfirmed even with a fully configured ApprovalGate. Also affected
+  an explicitly empty `{}` annotations dict, and _infer_category()'s
+  independent re-derivation from raw data could drift from
+  from_mcp_dict's own defaults. Existing tests encoded the same wrong
+  assumption (test_empty_dict_uses_defaults asserted the inverted
+  "safe by omission" behavior as correct).
+- Fixed from_mcp_dict()'s three hint defaults to match spec exactly,
+  and refactored _infer_category() to take the already-resolved
+  booleans instead of re-deriving its own defaults, so the two can't
+  drift apart again.
+- Command: `pytest tests/mcp/test_annotations.py -v`
+- Result: `88 passed`. 10 existing tests updated to assert the new,
+  spec-correct outcomes (test_empty_dict_uses_defaults,
+  test_read_only_hint_false, test_open_world_hint_sets_network_access,
+  test_unknown_keys_ignored, all 5 TestInferCategory tests, and
+  test_tool_with_empty_annotations_dict), plus 2 new tests
+  (test_read_only_hint_true_is_never_destructive,
+  test_open_world_hint_with_explicit_read_only_sets_search_category),
+  all 10 changed/new tests confirmed via `git stash` to genuinely fail
+  pre-fix.
+- Live-verified end-to-end: `ToolAnnotation.from_mcp_dict({"readOnlyHint":
+  False})` registered on a real McpManager instance now resolves
+  requires_approval=True/is_safe=False, meaning call_tool()'s gate now
+  actually fires for it.
+- Deliberately not touched, documented as a residual: a tool with no
+  `annotations` key at all (vs. an explicit `{}`) still falls back to
+  AnnotationRegistry.get_or_default()'s bare ToolAnnotation() (safe by
+  default) -- a much larger product-policy question, left untouched.
+- Broader sweep: `pytest tests/mcp/ -q`: `388 passed`. `pytest tests/mcp/ tests/tools/ tests/agent/ tests/security/ -q`: `8321 passed, 6 skipped`.
+- Full suite: `python3 -m pytest tests/ -q` → `21488 passed, 14 skipped in 799.08s (0:13:19)` — 0 failed, up from 21486. Seventy-third consecutive fully green full-suite run.
+
 ## Run: 2026-07-12 UTC — round 58 research pass: scheduled jobs bypassed the operator's global tool-policy layers
 
 - Context: round 58 swept every AgentConfig( construction site in the
