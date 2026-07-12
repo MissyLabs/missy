@@ -1,5 +1,36 @@
 # TEST_RESULTS
 
+## Run: 2026-07-14 02:10 UTC — round 48 research pass: SleeptimeWorker cross-instance idle-detection blind spot (round 47 was research-only, no findings requiring a fix)
+
+- Context: round 47 checked skills/discovery.py frontmatter parsing
+  (clean) and config/hotreload.py atomic-rename handling (clean); two
+  candidates (config/migrate.py preset-widening, agent/hatching.py
+  warned-step re-check) surfaced but neither warranted a fix (tested/
+  intentional design, and design-ambiguous respectively). Round 48
+  confirmed security/container.py's ContainerSandbox has zero
+  production callers (already documented via SEC-090),
+  agent/consolidation.py's extract_key_facts() is clean, and
+  scheduler/manager.py's capability_mode enforcement is clean.
+- **SleeptimeWorker cross-instance idle-detection blind spot**:
+  is_idle() only reflects the worker instance's own activity timer,
+  but _find_sessions_needing_work() scans every session in the shared
+  SQLiteMemoryStore with no per-worker ownership filter. A
+  multi-channel deployment (missy run constructs a separate
+  AgentRuntime/SleeptimeWorker per channel, commonly sharing one
+  store) has a real blind spot: an actively-chatting Discord session
+  gets summarized by a DIFFERENT channel's SleeptimeWorker that
+  correctly believes itself idle, violating the module's own stated
+  invariant and racing a concurrent turn-append against the summary's
+  source_turn_ids boundary. Live-reproduced: seeded a session with
+  updated_at "just now" while the worker's own timer was pushed back
+  to appear idle -- summarized anyway pre-fix. Fixed by checking each
+  session's own updated_at timestamp directly, skipping any session
+  updated too recently regardless of which worker instance is asking.
+- Command: `pytest tests/agent/test_sleeptime.py -k TestFindSessionsRespectsPerSessionRecency -v`
+- Result: `3 passed`. Core regression confirmed via `git stash` to genuinely fail pre-fix.
+- Broader sweep: `pytest tests/agent/test_sleeptime.py -q`: `50 passed`.
+  `pytest tests/agent/ -q`: `4304 passed, 4 skipped`.
+
 ## Run: 2026-07-14 01:35 UTC — round 46 research pass: punctuation-stripping gap in MemorySynthesizer and substring-only skill search
 
 - Context: round 46 pivoted away from agent/runtime.py's per-call-path

@@ -446,6 +446,94 @@ class TestExtractBatchLearnings:
 
 
 # ---------------------------------------------------------------------------
+# Per-session idle scoping (not just this worker's own activity timer)
+# ---------------------------------------------------------------------------
+
+
+class TestFindSessionsRespectsPerSessionRecency:
+    """Regression: is_idle() only reflects THIS SleeptimeWorker instance's
+    own activity timer. A multi-channel deployment (e.g. `missy run`
+    constructing a separate AgentRuntime -- and therefore a separate
+    SleeptimeWorker -- per channel) commonly has several workers sharing
+    one SQLiteMemoryStore. A session actively being written to by a
+    DIFFERENT runtime's in-flight run() call still showed up in
+    list_sessions() with no per-worker ownership filter at all, so this
+    worker's own idle timer (correctly idle, from ITS point of view) let
+    it summarize a session that was, in fact, not idle at all.
+    """
+
+    def test_recently_updated_session_skipped_even_when_worker_itself_is_idle(self):
+        import datetime as dt
+
+        just_now = dt.datetime.now(dt.UTC).isoformat()
+        turns = [_make_turn(f"t{i}", content=f"message {i}") for i in range(6)]
+        store = _make_store(
+            sessions=[{"session_id": "s1", "updated_at": just_now}],
+            turns=turns,
+            summaries=[],
+        )
+        worker = SleeptimeWorker(
+            config=SleeptimeConfig(
+                min_unprocessed_turns=5,
+                idle_threshold_seconds=300.0,
+                use_llm_summarization=False,
+            ),
+            memory_store=store,
+        )
+        # Simulate this worker's OWN activity timer genuinely reporting
+        # idle (e.g. its own channel really has been quiet for a while) --
+        # but the session itself was just updated by some OTHER runtime
+        # instance sharing the same store.
+        worker._last_activity -= 400.0
+        assert worker.is_idle() is True
+
+        worker._process_cycle()
+
+        assert worker.stats.summaries_created == 0
+        assert worker.stats.cycles_completed == 0
+        store.add_summary.assert_not_called()
+
+    def test_stale_updated_at_session_is_still_processed(self):
+        import datetime as dt
+
+        long_ago = (dt.datetime.now(dt.UTC) - dt.timedelta(seconds=600)).isoformat()
+        turns = [_make_turn(f"t{i}", content=f"message {i}") for i in range(6)]
+        store = _make_store(
+            sessions=[{"session_id": "s1", "updated_at": long_ago}],
+            turns=turns,
+            summaries=[],
+        )
+        worker = SleeptimeWorker(
+            config=SleeptimeConfig(
+                min_unprocessed_turns=5,
+                idle_threshold_seconds=300.0,
+                use_llm_summarization=False,
+            ),
+            memory_store=store,
+        )
+        worker._process_cycle()
+
+        assert worker.stats.summaries_created == 1
+        store.add_summary.assert_called_once()
+
+    def test_missing_updated_at_falls_back_to_worker_idle_check_only(self):
+        """Sessions from an older store schema or a mocked test double
+        without updated_at must not be treated as blocked forever."""
+        turns = [_make_turn(f"t{i}", content=f"message {i}") for i in range(6)]
+        store = _make_store(
+            sessions=[{"session_id": "s1"}],  # no updated_at key at all
+            turns=turns,
+            summaries=[],
+        )
+        worker = SleeptimeWorker(
+            config=SleeptimeConfig(min_unprocessed_turns=5, use_llm_summarization=False),
+            memory_store=store,
+        )
+        worker._process_cycle()
+        assert worker.stats.summaries_created == 1
+
+
+# ---------------------------------------------------------------------------
 # Error handling
 # ---------------------------------------------------------------------------
 

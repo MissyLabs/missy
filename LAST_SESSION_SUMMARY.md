@@ -4604,15 +4604,81 @@ Verified: `pytest tests/memory/test_synthesizer.py tests/memory/
 test_synthesizer_edges.py -q`: `100 passed`. `pytest tests/memory/
 -q`: `602 passed, 8 skipped`. `pytest tests/skills/ -q`: `187 passed`.
 
+### Round 47 (research-only, no findings requiring a fix): SKILL.md frontmatter parsing, config/hotreload.py atomic-rename, config/migrate.py preset-widening, agent/hatching.py warned-step re-check
+
+Round 47 checked `skills/discovery.py`'s hand-rolled frontmatter
+parser (clean — no YAML anchor/alias support, `name` is a required
+validated field, manifest fields never used to construct filesystem
+paths) and `config/hotreload.py`'s atomic-rename/debounce handling
+(clean — polling-based via `Path.stat().st_mtime`, so `os.replace()`
+is handled transparently; already has 4 dedicated passing tests).
+
+Two candidates surfaced but neither warranted a fix: `config/
+migrate.py`'s `detect_presets()` collapses a manually-narrow
+`allowed_hosts` list into a matching preset, which then additionally
+grants the preset's broader domain match — but
+`tests/config/test_migrate.py::test_hosts_detect_without_domains`
+explicitly asserts this exact behavior is correct, so it's tested,
+intentional design, not a hidden bug. `agent/hatching.py`'s
+`run_hatching()` permanently marks a warned (not just successful) step
+complete, and the top-level `HATCHED` short-circuit means a later
+`missy hatch` re-run never re-attempts it — plausibly intentional
+("one-time first-run wizard"), and fixing it correctly requires a
+genuine design decision rather than a one-line change. No code
+changed; no checkpoint recorded.
+
+### Post-backlog (one-hundred-fourth checkpoint): round 48 research pass — SleeptimeWorker cross-instance idle-detection blind spot
+
+Round 48 confirmed `security/container.py`'s ContainerSandbox has zero
+production callers anywhere in the tool-dispatch path (already
+documented via `SecurityScanner`'s SEC-090), `agent/consolidation.py`'s
+`extract_key_facts()` is clean, and `scheduler/manager.py`'s
+`capability_mode` enforcement is clean (immutable at creation, read
+fresh at fire-time, pause enforced via both APScheduler and an
+explicit re-check).
+
+**Found and fixed a real idle-detection scoping bug in
+`SleeptimeWorker`.** `is_idle()` only reflects the worker instance's
+own activity timer, but `_find_sessions_needing_work()` scans every
+session in the shared `SQLiteMemoryStore` with no per-worker ownership
+filter. A multi-channel deployment (`missy run` constructs a separate
+`AgentRuntime`/`SleeptimeWorker` per channel, commonly sharing one
+store) has a real blind spot: an actively-chatting Discord session
+gets summarized by a *different* channel's `SleeptimeWorker` that
+correctly believes itself idle, directly violating the module's own
+stated invariant and racing a concurrent turn-append against the
+summary's `source_turn_ids` boundary. Live-reproduced: seeded a
+session with `updated_at` "just now" while the worker's own timer was
+pushed back to appear idle — summarized anyway pre-fix. Fixed by
+checking each session's own `updated_at` timestamp directly against
+`idle_threshold_seconds`, skipping any session updated too recently
+regardless of which worker instance is asking. Fails closed on an
+unparsable timestamp; a missing timestamp is treated as
+not-recently-active, preserving full backward compatibility with
+every pre-existing test's mocked session dicts. 3 new tests, the core
+regression confirmed via `git stash` to genuinely fail pre-fix.
+
+Verified: `pytest tests/agent/test_sleeptime.py -q`: `50 passed`.
+`pytest tests/agent/ -q`: `4304 passed, 4 skipped`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21443 passed, 14 skipped in 670.40s (0:11:10)
+21446 passed, 14 skipped in 801.40s (0:13:21)
 ```
 
-**Zero failures**, the sixty-first consecutive fully green full-suite
-run. Passed count is up from 21439 to 21443 (the round 46 checkpoint's
+**Zero failures**, the sixty-second consecutive fully green
+full-suite run. (The first attempt this checkpoint hit 2 unrelated,
+pre-existing wall-clock-timing-dependent scheduler active-hours-window
+tests that have nothing to do with `sleeptime.py`; both passed cleanly
+in isolation immediately afterward and the rerun came back fully
+clean, confirming a transient flake rather than a regression.) Passed
+count is up from 21443 to 21446 (the round 48 checkpoint's 3 new tests
+in `TestFindSessionsRespectsPerSessionRecency`; round 47 was
+research-only with no findings requiring a fix, so it added nothing;
+all of the sixty-first through one-hundred-third checkpoints' fixes
+are confirmed still holding). Passed count is up from 21439 to 21443 (the round 46 checkpoint's
 4 new tests: 2 MemorySynthesizer punctuation tests, 2 skills-discovery
 multi-word-search tests; all of the sixty-first through
 one-hundred-second checkpoints' fixes are confirmed still holding).

@@ -7909,6 +7909,107 @@ test_synthesizer_edges.py -q`: `100 passed`. `pytest tests/memory/
 `21443 passed, 14 skipped in 670.40s (0:11:10)` — 0 failed, up from
 21439. Sixty-first consecutive fully green full-suite run.
 
+### Round 47 (research-only, no findings requiring a fix): SKILL.md frontmatter parsing, config/hotreload.py atomic-rename handling, config/migrate.py preset-widening, agent/hatching.py warned-step re-check
+
+Round 47 checked `skills/discovery.py`'s hand-rolled frontmatter
+parser (clean — no YAML anchor/alias support at all so no
+expansion-bomb vector exists, `name` is a required, validated field,
+and manifest fields are never used to construct filesystem paths
+elsewhere, only displayed), `config/hotreload.py`'s atomic-rename and
+debounce/coalescing behavior (clean — it's polling-based via
+`Path.stat().st_mtime`, so an atomic `os.replace()`/`mv` is handled
+transparently with no inotify-vs-poll divergence to have in the first
+place; this exact scenario already has 4 dedicated passing tests).
+
+Two candidate findings surfaced but neither warranted a fix: (1)
+`config/migrate.py`'s `detect_presets()` collapses a manually-narrow
+`allowed_hosts: [api.anthropic.com]` (no `allowed_domains`) into
+`presets: [anthropic]`, which then additionally grants the broader
+`anthropic.com` domain match via `resolve_presets()` — a real, if
+narrow, silent widening of egress policy. However,
+`tests/config/test_migrate.py::test_hosts_detect_without_domains`
+explicitly asserts this exact behavior is correct ("Preset detected
+by hosts alone, even if domains weren't listed") — this is tested,
+intentional design from an earlier round, not a hidden bug, so left
+untouched. (2) `agent/hatching.py`'s `run_hatching()` permanently
+marks a step complete even when it only warned (e.g.
+`verify_providers` warning because no API key is set yet), and the
+top-level `if state.status is HatchingStatus.HATCHED: return state`
+short-circuit means a later `missy hatch` re-run (after the user adds
+an API key) never re-attempts the warned step — the only escape hatch
+is `reset()`, which also discards unrelated, already-successful
+progress (persona generation, identity keys) that shouldn't be
+blindly redone. Plausibly intentional ("hatching is a one-time
+first-run wizard, not an ongoing health check") rather than a bug;
+fixing it correctly would require a genuine design decision (auto-
+recheck warned steps on every invocation vs. an explicit separate
+"recheck" command) rather than a one-line fix, so left as a
+documented but unfixed observation rather than forced. No code
+changed; no checkpoint recorded.
+
+### Post-backlog (one-hundred-fourth checkpoint): round 48 research pass fixes SleeptimeWorker's cross-instance idle-detection blind spot
+
+Round 48 confirmed `security/container.py`'s ContainerSandbox has zero
+production callers anywhere in the tool-dispatch path (already
+honestly documented by `SecurityScanner`'s SEC-090), so its internal
+lifecycle questions are moot in practice — no new finding.
+`agent/consolidation.py`'s `extract_key_facts()` keyword/role/dedup
+logic checked clean against realistic tool-augmented multi-turn
+conversations. `scheduler/manager.py`'s `capability_mode` enforcement
+is clean — stored immutably on the `ScheduledJob` at creation, read
+fresh at the moment each job fires (no registration/execution race),
+and pause is enforced both via APScheduler's `pause_job()` and an
+explicit `job.enabled` re-check at the top of every `_run_job()`
+invocation including retries.
+
+**Found and fixed a real, medium-high-confidence idle-detection
+scoping bug in `SleeptimeWorker`.** `is_idle()` only reflects the
+worker instance's own `_last_activity` timer, but
+`_find_sessions_needing_work()` scans `list_sessions()` — every
+session in the shared `SQLiteMemoryStore` — with no per-worker
+ownership filter at all. A multi-channel deployment (`missy run`
+constructs a separate `AgentRuntime`, and therefore a separate
+`SleeptimeWorker`, per channel — e.g. one for voice/webhook, one for
+Discord — commonly sharing one `SQLiteMemoryStore` since neither gets
+an explicit path override) has a real blind spot: if the Discord
+channel is actively chatting (repeatedly resetting only
+`_discord_agent`'s own idle timer) while the voice/webhook channel has
+had no traffic for 300s+, `_agent`'s `SleeptimeWorker` correctly
+believes *itself* idle and summarizes the actively in-flight Discord
+session anyway, directly violating the module's own stated invariant
+("does not process memory while the agent is actively responding") —
+and racing a concurrent turn-append with a summary read that captures
+a `source_turn_ids` boundary that can miss a turn written moments
+later. Live-reproduced: seeded a session with `updated_at` set to "just
+now" while the worker's own timer was pushed back to appear idle;
+`_process_cycle()` summarized it anyway pre-fix. Fixed by checking each
+session's own `updated_at` timestamp (already returned by
+`list_sessions()`) directly against `idle_threshold_seconds`, skipping
+any session updated too recently regardless of which worker instance
+is asking — correctly capturing "is THIS session idle" instead of "is
+THIS runtime instance's own timer idle." Fails closed on an unparsable/
+missing timestamp only when other sessions genuinely lack the field
+(treated as not-recently-active, matching every pre-existing test's
+mocked session dicts, none of which included `updated_at`, so full
+backward compatibility is preserved). 3 new tests, the core regression
+confirmed via `git stash` to genuinely fail pre-fix.
+
+Verified: `pytest tests/agent/test_sleeptime.py -q`: `50 passed`.
+`pytest tests/agent/ -q`: `4304 passed, 4 skipped`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21446 passed, 14 skipped in 801.40s (0:13:21)` — 0 failed, up from
+21443. Sixty-second consecutive fully green full-suite run. (The
+first attempt this checkpoint hit 2 unrelated failures —
+`tests/scheduler/test_jobs_extended.py::TestShouldRunNow::test_within_window`
+and `tests/scheduler/test_scheduler_deep.py::TestRunJobActiveHoursGate::
+test_run_job_inside_window_calls_agent` — both pre-existing
+wall-clock-timing-dependent tests checking "is now within an
+active-hours window" that have nothing to do with `sleeptime.py`;
+both passed cleanly in isolation immediately afterward and the
+full-suite rerun came back fully clean, confirming a transient timing
+flake rather than a regression from this checkpoint's change.)
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security
