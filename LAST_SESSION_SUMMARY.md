@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (141 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for ninety-three consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (142 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for ninety-four consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -5839,15 +5839,38 @@ fail pre-fix.
 Verified: `pytest tests/scheduler/test_jobs.py -v`: `22 passed`.
 `pytest tests/scheduler/ -q`: `375 passed`.
 
+### Post-backlog (one-hundred-thirty-sixth checkpoint): round 82 research pass — `DeviceRegistry`'s bare `bool()` coercion on `EdgeNode.paired` was a genuine authorization bypass for a hand-edited `devices.json`
+
+Round 82 checked `mcp/manager.py`'s `block_injection` (clean) and
+`summarizer.py`'s tier escalation (clean). One severe finding
+surfaced in `missy/channels/voice/registry.py` — the same bug class
+rounds 80-81 fixed, this time on a genuine authorization gate.
+
+**Fixed: `EdgeNode.paired`/`EdgeNode.audio_logging` were passed
+through `_node_from_dict()` with zero coercion.** Live-reproduced:
+`_node_from_dict({..., "paired": "false"}).paired` returned the
+string `"false"`, and `not "false"` is `False` in Python — the exact
+check `VoiceServer` performs to reject an unapproved edge node. A
+`devices.json` entry with `"paired": "false"` was silently treated as
+fully paired, granting a live voice-channel session to a node never
+actually approved. Fixed by reusing `_coerce_bool()`. 3 new tests, all
+confirmed via `git stash` to genuinely fail pre-fix.
+
+Verified: `pytest tests/channels/test_device_registry.py -v -k
+TestEdgeNode`: `6 passed`. `pytest tests/channels/ -q`: `1998 passed`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21567 passed, 18 skipped in 1942.55s (0:32:22)
+21570 passed, 18 skipped in 775.99s (0:12:55)
 ```
 
-**Zero failures**, the ninety-third consecutive fully green
-full-suite run. Passed count is up from 21564 to 21567 (the round 81
+**Zero failures**, the ninety-fourth consecutive fully green
+full-suite run. Passed count is up from 21567 to 21570 (the round 82
+checkpoint's 3 new tests — full detail above; all of the sixty-first
+through one-hundred-thirty-fifth checkpoints' fixes are confirmed
+still holding). Passed count is up from 21564 to 21567 (the round 81
 checkpoint's 3 new tests — full detail above; all of the sixty-first
 through one-hundred-thirty-fourth checkpoints' fixes are confirmed
 still holding). Passed count is up from 21544 to 21564 (the round 80

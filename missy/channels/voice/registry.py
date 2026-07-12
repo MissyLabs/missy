@@ -118,9 +118,26 @@ def _node_from_dict(data: dict[str, Any]) -> EdgeNode:
 
     Unknown keys are silently discarded so that older registry files remain
     loadable after a schema extension.
+
+    ``paired``/``audio_logging`` are explicitly coerced rather than passed
+    through verbatim: a dataclass's ``bool`` type annotation is not
+    enforced by Python at construction time, so a hand-edited or
+    tool-generated ``devices.json`` with a JSON *string* value (e.g.
+    ``"paired": "false"``) would otherwise be stored as the literal string
+    ``"false"`` -- and ``not "false"`` is ``False`` in Python (any
+    non-empty string is truthy). ``paired`` is a genuine authorization
+    gate (``VoiceServer`` rejects the connection when
+    ``not node.paired``), so this would silently treat an unapproved edge
+    node as fully paired and grant it a live voice-channel session.
     """
+    from missy.config.settings import _coerce_bool
+
     valid_fields = EdgeNode.__dataclass_fields__.keys()
     filtered = {k: v for k, v in data.items() if k in valid_fields}
+    if "paired" in filtered:
+        filtered["paired"] = _coerce_bool(filtered["paired"], False)
+    if "audio_logging" in filtered:
+        filtered["audio_logging"] = _coerce_bool(filtered["audio_logging"], False)
     return EdgeNode(**filtered)
 
 

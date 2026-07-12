@@ -10707,6 +10707,92 @@ run took notably longer than usual, ~32 minutes vs. the typical ~13,
 due to heavy concurrent system load from other verification work in
 the same window — not itself a regression signal.)
 
+### Post-backlog (one-hundred-thirty-sixth checkpoint): round 82 research pass fixes `DeviceRegistry`'s bare `bool()` coercion on `EdgeNode.paired` — a genuine authorization bypass for a hand-edited `devices.json`, not merely a configuration nit
+
+Round 82 checked `mcp/manager.py`'s `block_injection` handling (clean
+— it is always a constructor keyword argument fixed at `True` at
+every real call site, never sourced from a per-server `mcp.json`
+boolean field, so the type-coercion trap this round's pattern targets
+doesn't apply here) and `agent/summarizer.py`'s tier-escalation
+comparison logic (clean — a prior round's fix, documented inline,
+still holds; no off-by-one found on a fresh read). One severe,
+high-confidence, live-verified finding surfaced in
+`missy/channels/voice/registry.py` — the same bug class rounds 80-81
+already fixed twice (config YAML in round 80, scheduler JSON in round
+81), but this time landing on a field that is a genuine
+**authorization gate**, materially raising the stakes above the
+prior two instances' capability-toggle framing.
+
+**Fixed: `EdgeNode.paired` and `EdgeNode.audio_logging` (both
+declared `bool` on the `EdgeNode` dataclass) were passed through
+`_node_from_dict()` with zero type coercion or validation, so a JSON
+*string* value from a hand-edited or tool-generated `devices.json`
+was stored on the dataclass verbatim.** Python does not enforce
+dataclass field type annotations at construction time — `bool` on the
+field declaration is documentation, not an enforced contract. Live-
+reproduced directly: `_node_from_dict({"node_id": "node-1", ...,
+"paired": "false"}).paired` returned the literal string `"false"`,
+and `not "false"` evaluates to `False` in Python (any non-empty
+string is truthy) — which is the *exact* boolean check
+`VoiceServer._message_loop()` performs at its auth gate (`if not
+node.paired:`) to reject an unapproved edge node's WebSocket
+connection. This meant a `devices.json` entry containing `"paired":
+"false"` — a thoroughly realistic input, arising from a hand edit, a
+backup/restore/import tool, or any script that serializes Python's
+own `str(False)` instead of a native JSON boolean — was silently
+treated as **fully paired**, granting a live, functioning voice-
+channel session to an edge node the operator never actually approved
+via `missy devices pair`, subject only to that node's `policy_mode`
+(which defaults to the most permissive `"full"`). This is a genuine
+authentication bypass on a security-critical gate, not a cosmetic
+configuration-parsing nit — the closest prior finding in severity
+this session was round 76's MCP filesystem-access gap. The same
+type-confusion applies to `audio_logging`, though that field only
+affects local debug-audio persistence, not an authorization decision.
+Existing tests (`tests/channels/test_device_registry.py`) only ever
+constructed `EdgeNode(paired=True/False)` directly with real Python
+booleans, or round-tripped via `_node_to_dict()`/`_node_from_dict()`
+(where `_node_to_dict()`'s `asdict()` always serializes native Python
+bools correctly, so a same-process round-trip never exhibits the
+bug) — no test fed a raw dict/JSON payload with a stringly-typed
+`"paired"` value through `_node_from_dict()` or
+`DeviceRegistry.load()`, so this exact bypass path was completely
+untested.
+
+Fixed by importing and applying `config.settings._coerce_bool()` (the
+same helper rounds 80-81 introduced and reused, not duplicated a
+third time) to both `paired` and `audio_logging` inside
+`_node_from_dict()`, via the same lazy, function-body-local import
+pattern already established for the other files this fix family has
+touched — verified no circular import risk in either import order
+(`channels.voice.registry` ↔ `config.settings`). Consistent with
+`_coerce_bool()`'s existing "fail loud on ambiguous input" contract:
+a genuinely malformed `paired` value now raises inside the dict
+comprehension in `DeviceRegistry.load()`, which is already wrapped in
+a broad `except Exception:` that logs an error and starts the
+registry empty — the file's own pre-existing, documented philosophy
+("Corrupt or unreadable files are logged at ERROR level and the
+registry starts empty rather than raising"), not a new failure mode
+this fix introduces.
+
+3 new tests in `TestEdgeNode`
+(`test_from_dict_quoted_string_false_paired_stays_unpaired`,
+`test_from_dict_quoted_string_true_paired_is_paired`,
+`test_from_dict_quoted_string_false_audio_logging_stays_disabled`),
+all 3 confirmed via `git stash` to genuinely fail pre-fix — one
+failure's assertion diff showed the literal string `'true'` where
+`True` was expected, direct, unambiguous evidence of the underlying
+type-confusion.
+
+Verified: `pytest tests/channels/test_device_registry.py -v -k
+TestEdgeNode`: `6 passed`. `pytest
+tests/channels/test_device_registry.py -q`: `34 passed`. `pytest
+tests/channels/ -q`: `1998 passed`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21570 passed, 18 skipped in 775.99s (0:12:55)` — 0 failed, up from
+21567. Ninety-fourth consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

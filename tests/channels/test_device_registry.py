@@ -69,6 +69,50 @@ class TestEdgeNode:
         assert n.node_id == "n2"
         assert not hasattr(n, "unknown_field")
 
+    def test_from_dict_quoted_string_false_paired_stays_unpaired(self):
+        """Regression: `paired: bool = False` is not enforced by Python at
+        dataclass construction -- a hand-edited or tool-generated
+        devices.json with a JSON *string* "paired": "false" was
+        previously stored verbatim as the string "false", and
+        `not "false"` is False in Python (any non-empty string is
+        truthy). `paired` is a genuine authorization gate
+        (VoiceServer rejects the connection when `not node.paired`),
+        so this silently treated an unapproved edge node as fully
+        paired -- an auth bypass, not just a data-typing nit.
+        """
+        d = {
+            "node_id": "n3",
+            "friendly_name": "X",
+            "room": "Y",
+            "ip_address": "0.0.0.0",
+            "paired": "false",
+        }
+        n = _node_from_dict(d)
+        assert n.paired is False
+        assert not n.paired  # the exact gate check VoiceServer performs
+
+    def test_from_dict_quoted_string_true_paired_is_paired(self):
+        d = {
+            "node_id": "n4",
+            "friendly_name": "X",
+            "room": "Y",
+            "ip_address": "0.0.0.0",
+            "paired": "true",
+        }
+        n = _node_from_dict(d)
+        assert n.paired is True
+
+    def test_from_dict_quoted_string_false_audio_logging_stays_disabled(self):
+        d = {
+            "node_id": "n5",
+            "friendly_name": "X",
+            "room": "Y",
+            "ip_address": "0.0.0.0",
+            "audio_logging": "false",
+        }
+        n = _node_from_dict(d)
+        assert n.audio_logging is False
+
 
 class TestDeviceRegistryPersistence:
     def test_load_empty_file(self, registry):
@@ -214,9 +258,7 @@ class TestDeviceRegistryTokens:
         assert registry.verify_token("node-1", new_token) is True
         assert registry.verify_token("node-1", old_token) is False
 
-    def test_verify_nonexistent_node_costs_the_same_as_existing_node(
-        self, registry, sample_node
-    ):
+    def test_verify_nonexistent_node_costs_the_same_as_existing_node(self, registry, sample_node):
         """Regression: verify_token() previously returned immediately
         (skipping the ~100k-iteration PBKDF2 hash entirely) when the node
         didn't exist -- a node-existence timing oracle letting an

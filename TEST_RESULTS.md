@@ -1,5 +1,51 @@
 # TEST_RESULTS
 
+## Run: 2026-07-12 UTC — round 82 research pass: DeviceRegistry's bare bool() coercion on EdgeNode.paired was a genuine authorization bypass for a hand-edited devices.json
+
+- Context: round 82 checked `mcp/manager.py`'s `block_injection`
+  (clean — always a constructor kwarg fixed at `True`, never sourced
+  from a per-server `mcp.json` boolean, so the coercion trap doesn't
+  apply) and `agent/summarizer.py`'s tier-escalation comparisons
+  (clean — a prior round's fix already holds). One severe,
+  high-confidence, live-verified finding surfaced in
+  `missy/channels/voice/registry.py` — the same bug class rounds 80-81
+  fixed, this time on a field that's a genuine **authorization gate**,
+  not just a capability toggle.
+- **Fixed: `EdgeNode.paired`/`EdgeNode.audio_logging` (both declared
+  `bool` on the dataclass) were passed through `_node_from_dict()`
+  with zero coercion, so a JSON string value from a hand-edited or
+  tool-generated `devices.json` was stored verbatim.** Python does
+  not enforce dataclass type annotations at construction time.
+  Live-reproduced:
+  `_node_from_dict({..., "paired": "false"}).paired` returned the
+  string `"false"`, and `not "false"` evaluates to `False` in
+  Python — the exact check `VoiceServer` performs
+  (`if not node.paired:`) to reject an unapproved edge node's
+  connection. This meant a devices.json entry with `"paired":
+  "false"` (a realistic hand-edit or import-tool artifact) was
+  silently treated as **fully paired**, granting a live voice-channel
+  session to a node an operator never approved, subject only to
+  `policy_mode` (which defaults to `"full"`) — a genuine
+  authentication bypass on a security-critical gate, not merely a
+  configuration UX issue.
+- Fixed by importing and applying `config.settings._coerce_bool()`
+  (the same helper rounds 80-81 introduced/reused) to both fields
+  inside `_node_from_dict()`. Verified no circular import in either
+  direction.
+- Command: `pytest tests/channels/test_device_registry.py -v -k TestEdgeNode`
+- Result: `6 passed` (3 new:
+  `test_from_dict_quoted_string_false_paired_stays_unpaired`,
+  `test_from_dict_quoted_string_true_paired_is_paired`,
+  `test_from_dict_quoted_string_false_audio_logging_stays_disabled`),
+  all 3 confirmed via `git stash` to genuinely fail pre-fix -- the
+  second failure printed the string `'true'` where `True` was
+  expected, direct evidence of the type-confusion bug.
+- Broader sweep: `pytest tests/channels/test_device_registry.py -q`:
+  `34 passed`. `pytest tests/channels/ -q`: `1998 passed`.
+- Full suite: `python3 -m pytest tests/ -q` → `21570 passed, 18
+  skipped in 775.99s (0:12:55)` — 0 failed, up from 21567.
+  Ninety-fourth consecutive fully green full-suite run.
+
 ## Run: 2026-07-12 UTC — round 81 research pass: ScheduledJob.from_dict()'s bare bool() coercion silently inverted quoted-string "enabled"/"delete_after_run" values in jobs.json
 
 - Context: round 81 confirmed `config/migrate.py` has no additional
