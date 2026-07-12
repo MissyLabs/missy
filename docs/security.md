@@ -172,7 +172,7 @@ not automatically loaded or made callable** — nothing in Missy scans
 `~/.missy/custom-tools/` and registers its contents into the live tool
 registry.  A human operator must review a proposal and wire it in
 manually before it can ever run; this is a deliberate scope limit, not
-a gap (see `AUDIT_SECURITY.md`'s SR-4.5 finding).
+a gap.
 
 ### Device Registry Safety
 

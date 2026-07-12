@@ -5,10 +5,9 @@ sidecar metadata JSON. Nothing in Missy scans that directory or loads
 its contents back into the live ToolRegistry -- a script written here
 can never actually be called as a tool. This is intentional (dynamic
 loading and auto-execution of agent-authored code is a significant,
-currently-unimplemented security surface -- see AUDIT_SECURITY.md's
-"SR-4.5" section), not an oversight, so every user-facing string this
-tool returns says "proposal"/"written for review", never "created" or
-"registered".
+currently-unimplemented security surface), not an oversight, so every
+user-facing string this tool returns says "proposal"/"written for
+review", never "created" or "registered".
 """
 
 from __future__ import annotations
