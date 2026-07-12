@@ -1,5 +1,106 @@
 # TEST_RESULTS
 
+## Run: 2026-07-12 UTC — round 70 research pass: ContextManager.build_messages() let one oversized summary starve every smaller, more-recent summary after it
+
+- Context: round 70's research agent surveyed `missy/memory/graph_store.py`
+  (GraphMemoryStore — confirmed unwired from any production call site,
+  documented as a residual alongside the existing ModelRouter/
+  LandlockPolicy precedent), `missy/agent/condensers.py`/
+  `missy/agent/compaction.py` (no new findings — prior-round fixes
+  already hold, stage ordering/chunk-boundary math checked out), and
+  `missy/agent/summarizer.py` (flagged that tier-1 "normal"
+  acceptance never compares its output against `target_tokens`, only
+  against the raw input size -- judged a defensible design choice per
+  the class's own "guarantee progress" framing rather than an
+  unambiguous bug, documented as a residual rather than force-fixed).
+  One concrete, unambiguous, bounded bug surfaced downstream of that
+  same investigation, in `missy/agent/context.py`: fixed.
+- **Fixed: `ContextManager.build_messages()`'s summary-inclusion loop
+  used `break` on the first summary that didn't fit the remaining
+  budget, silently discarding every summary after it too.**
+  `SQLiteMemoryStore.get_summaries()` orders summaries oldest-first
+  (`ORDER BY depth, created_at`), so an early, unusually large summary
+  (e.g. one leaf summary of an unusually dense conversation segment)
+  permanently starved every later, smaller, more-recent summary from
+  ever entering context -- even ones that individually fit the
+  remaining budget comfortably. Live-reproduced: 3 summaries (one
+  huge and oldest, two tiny and newer) -- pre-fix, both tiny summaries
+  were silently dropped even though budget had ample room once the
+  oversized one was skipped. Fixed by changing `break` to `continue`:
+  an over-budget summary is now skipped on its own rather than halting
+  the whole loop, mirroring the recency-priority intent the adjacent
+  evictable-history loop already documents for its own budget-fill
+  logic.
+- Command: `pytest tests/agent/test_context_with_summaries.py -v`
+- Result: `10 passed` (1 new:
+  `test_oversized_early_summary_does_not_starve_later_smaller_ones`),
+  confirmed via `git stash` to genuinely fail pre-fix
+  (`AssertionError: assert False` — `NEWER-SMALL-A` missing from
+  the assembled messages).
+- Broader sweep: `pytest tests/agent/ -q -k "context or compaction or
+  consolidation or summarizer"`: `651 passed, 3669 deselected`.
+- Full suite: `python3 -m pytest tests/ -q` → `21516 passed, 18 skipped
+  in 777.13s (0:12:57)` — 0 failed, up from 21515. Eighty-fourth
+  consecutive fully green full-suite run.
+
+## Run: 2026-07-12 UTC — round 69 research pass: VisionMemoryBridge.clear_session() never purged the vector-store copy of a deleted observation
+
+- Context: round 69's research agent surfaced two related findings in
+  `missy/vision/vision_memory.py`. Finding 1: `VisionMemoryBridge` is
+  never constructed anywhere in production code (`grep -rn
+  "VisionMemoryBridge" missy/` matches only its own docstring example
+  and a hypothetical-future-consumer comment in `agent/runtime.py`) --
+  a genuine "where should this be wired in" design question, not a
+  mechanical bug, documented as a residual (see BUILD_STATUS.md).
+  Finding 2, inside that same class, was a concrete bounded bug: fixed.
+- **Finding 2 -- fixed: `clear_session()` never cleaned up the
+  vector-store copy of a deleted observation**. It only called
+  `self._memory.delete_turn(...)` against the SQLite store; the
+  parallel `VectorMemoryStore` entry `store_observation()` had
+  indexed via `self._vector.add(...)` was left untouched. Live-
+  reproduced: `store_observation()` for session A and B, then
+  `clear_session("A")` -- `recall_observations(query=...)`'s
+  semantic-search path still returned session A's supposedly-cleared
+  observation, because `VectorMemoryStore` (`missy/memory/
+  vector_store.py`) had no delete method at all (`add`/`search`/
+  `save`/`load`/`count` only). Fixed by adding
+  `VectorMemoryStore.delete_by_metadata(filters: dict) -> int`, which
+  removes every entry whose metadata matches all given key/value
+  pairs and rebuilds the FAISS `IndexFlatL2` from the survivors (FAISS
+  flat indexes have no row-level delete; reused the same rebuild
+  approach `load()` already applies for a dimension-mismatch
+  recovery, refactored into a shared `_rebuild_index_from_entries()`
+  helper). `clear_session()` now also calls
+  `self._vector.delete_by_metadata({"session_id": session_id})`,
+  swallowing exceptions the same way the existing SQLite path does.
+- Live-verified end-to-end with a real `VectorMemoryStore` (faiss-cpu
+  not installed in this dev environment, so verified against a
+  minimal numpy-backed `IndexFlatL2` stand-in exposing the identical
+  add/search/ntotal contract real faiss provides): before the fix,
+  clearing session A left the vector count at 2 and session A's
+  observation still searchable; after the fix, the count drops to 1
+  and only session B's observation is recallable, while `store()`/
+  `search()`/`add()` remain fully functional on the rebuilt index
+  afterward.
+- Command: `pytest tests/vision/test_vision_memory.py::TestClearSession -v`
+- Result: `13 passed` (3 new: `test_purges_matching_entries_from_vector_store`,
+  `test_vector_store_delete_exception_is_swallowed`,
+  `test_no_vector_store_does_not_raise`). The first of these confirmed
+  via `git stash` to genuinely fail pre-fix (`AssertionError: Expected
+  'delete_by_metadata' to be called once. Called 0 times.`).
+- Command: `pytest tests/memory/test_vector_store.py -v`
+- Result: `5 passed, 12 skipped` (4 new faiss-gated tests --
+  `test_delete_by_metadata_removes_only_matching_entries`,
+  `test_delete_by_metadata_no_match_returns_zero`,
+  `test_delete_by_metadata_on_empty_store_returns_zero`,
+  `test_delete_by_metadata_index_still_usable_after_delete` -- skip in
+  this environment alongside the pre-existing `@needs_faiss` suite
+  since faiss-cpu isn't installed here; logic verified manually per
+  above. Plus 1 new no-op-path assertion in the existing
+  `test_graceful_without_faiss`.)
+- Broader sweep: `pytest tests/vision/ tests/memory/ -q`: `3580 passed, 12 skipped`.
+- Full suite: `python3 -m pytest tests/ -q` → `21515 passed, 18 skipped in 761.53s (0:12:41)` — 0 failed, up from 21512 passed / 14 skipped. Eighty-third consecutive fully green full-suite run.
+
 ## Run: 2026-07-12 UTC — round 68 research pass: audit log couldn't detect reordering; config backup ordering keyed on a value shutil.copy2() doesn't update per backup
 
 - Context: round 68 prioritized breadth over re-mining already-found

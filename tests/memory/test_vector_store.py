@@ -178,6 +178,56 @@ class TestVectorMemoryStoreWithFaiss:
         texts = {r["text"] for r in results}
         assert "the deployment failed" in texts
 
+    def test_delete_by_metadata_removes_only_matching_entries(self, tmp_path: Path) -> None:
+        store = VectorMemoryStore(
+            dimension=64,
+            index_path=str(tmp_path / "delete.faiss"),
+        )
+        store.add("edge piece found near sky", {"session_id": "sess-A"})
+        store.add("corner piece found", {"session_id": "sess-B"})
+        store.add("another sess-A fragment", {"session_id": "sess-A"})
+
+        removed = store.delete_by_metadata({"session_id": "sess-A"})
+
+        assert removed == 2
+        assert store.count() == 1
+        results = store.search("piece", top_k=5)
+        assert all(r["metadata"]["session_id"] == "sess-B" for r in results)
+
+    def test_delete_by_metadata_no_match_returns_zero(self, tmp_path: Path) -> None:
+        store = VectorMemoryStore(
+            dimension=64,
+            index_path=str(tmp_path / "delete_nomatch.faiss"),
+        )
+        store.add("entry", {"session_id": "sess-B"})
+
+        removed = store.delete_by_metadata({"session_id": "sess-does-not-exist"})
+
+        assert removed == 0
+        assert store.count() == 1
+
+    def test_delete_by_metadata_on_empty_store_returns_zero(self, tmp_path: Path) -> None:
+        store = VectorMemoryStore(
+            dimension=64,
+            index_path=str(tmp_path / "delete_empty.faiss"),
+        )
+        assert store.delete_by_metadata({"session_id": "sess-A"}) == 0
+
+    def test_delete_by_metadata_index_still_usable_after_delete(self, tmp_path: Path) -> None:
+        """The rebuilt index must remain fully functional for further add/search."""
+        store = VectorMemoryStore(
+            dimension=64,
+            index_path=str(tmp_path / "delete_reuse.faiss"),
+        )
+        store.add("edge piece found near sky", {"session_id": "sess-A"})
+        store.add("corner piece found", {"session_id": "sess-B"})
+        store.delete_by_metadata({"session_id": "sess-A"})
+
+        store.add("brand new entry", {"session_id": "sess-C"})
+        assert store.count() == 2
+        results = store.search("brand new entry", top_k=1)
+        assert results[0]["text"] == "brand new entry"
+
 
 # ---------------------------------------------------------------------------
 # Graceful degradation without FAISS
@@ -204,3 +254,4 @@ class TestGracefulWithoutFaiss:
             assert results == []
             store.save()  # Should not raise
             store.load()  # Should not raise
+            assert store.delete_by_metadata({"session_id": "x"}) == 0  # Should not raise

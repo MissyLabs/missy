@@ -295,7 +295,9 @@ class VisionMemoryBridge:
     def clear_session(self, session_id: str) -> int:
         """Remove all vision observations for a session.
 
-        Returns the number of observations removed.
+        Returns the number of observations removed from the SQLite store.
+        Also purges any matching entries from the vector store so a
+        cleared session cannot still surface via semantic recall.
         """
         self._ensure_init()
         count = 0
@@ -311,4 +313,9 @@ class VisionMemoryBridge:
                             pass
             except Exception as exc:
                 logger.debug("Failed to clear session: %s", exc)
+        if self._vector is not None:
+            try:
+                self._vector.delete_by_metadata({"session_id": session_id})
+            except Exception as exc:
+                logger.debug("Failed to clear vector store entries for session: %s", exc)
         return count

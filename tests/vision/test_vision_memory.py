@@ -867,6 +867,42 @@ class TestClearSession:
 
         mstore.get_session_turns.assert_called_once_with("s1", limit=1000)
 
+    def test_purges_matching_entries_from_vector_store(self) -> None:
+        """clear_session() must also purge the vector-store copy.
+
+        Previously it only called self._memory.delete_turn(...) and never
+        touched self._vector, so a "cleared" session's observation could
+        still surface via recall_observations()'s semantic-search path.
+        """
+        mstore = _make_sqlite_mock(turns=[])
+        vstore = MagicMock()
+        bridge = VisionMemoryBridge(memory_store=mstore, vector_store=vstore)
+        bridge._initialized = True
+
+        bridge.clear_session("s1")
+
+        vstore.delete_by_metadata.assert_called_once_with({"session_id": "s1"})
+
+    def test_vector_store_delete_exception_is_swallowed(self) -> None:
+        mstore = _make_sqlite_mock(turns=[])
+        vstore = MagicMock()
+        vstore.delete_by_metadata.side_effect = RuntimeError("boom")
+        bridge = VisionMemoryBridge(memory_store=mstore, vector_store=vstore)
+        bridge._initialized = True
+
+        count = bridge.clear_session("s1")  # must not raise
+
+        assert count == 0
+
+    def test_no_vector_store_does_not_raise(self) -> None:
+        mstore = _make_sqlite_mock(turns=[])
+        bridge = VisionMemoryBridge(memory_store=mstore, vector_store=None)
+        bridge._initialized = True
+
+        count = bridge.clear_session("s1")  # must not raise
+
+        assert count == 0
+
     def test_calls_ensure_init(self) -> None:
         mstore = _make_sqlite_mock(turns=[])
         bridge = VisionMemoryBridge(memory_store=mstore)

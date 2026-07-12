@@ -9562,6 +9562,171 @@ a wall-clock-timing-based concurrency test unrelated to either of this
 round's changes — reconfirmed passing in isolation and on full-suite
 rerun.)
 
+### Post-backlog (one-hundred-twenty-fifth checkpoint): round 69 research pass fixes `VisionMemoryBridge.clear_session()` never purging the vector-store copy of a deleted observation; documents the bridge's total absence from any production call site as a residual design question
+
+Round 69's research agent surfaced two related findings inside
+`missy/vision/vision_memory.py`, both concerning `VisionMemoryBridge` --
+the class that bridges ephemeral vision observations into the durable
+`SQLiteMemoryStore`/`VectorMemoryStore` memory subsystem.
+
+**Finding 1 -- documented residual: `VisionMemoryBridge` is never
+constructed anywhere in production code.** `grep -rn
+"VisionMemoryBridge" missy/` matches only the class's own docstring
+usage example and a comment in `agent/runtime.py:2698` listing it as a
+*hypothetical future* consumer, not a real call site. Nothing in
+`vision_tools.py`'s `VisionAnalyzeTool`/`VisionSceneMemoryTool`, nor
+`AgentRuntime`'s construction path, ever instantiates it or calls
+`store_observation()`/`recall_observations()`. This is a genuine
+"where and when should visual observations actually persist across
+sessions" design question -- not a mechanical bug -- so, consistent
+with this session's established precedent for findings confirmed to
+have zero current production reachability (the Watchdog-race
+precedent, and round 47's PromptPatchManager-unwired-at-the-time
+note), it is documented here rather than force-wired into a call site
+chosen without a real product decision behind it.
+
+**Finding 2 -- fixed: `clear_session()` never cleaned up the parallel
+vector-store entry.** `clear_session()` only ever called
+`self._memory.delete_turn(...)` against the SQLite store; it never
+touched `self._vector` (a `VectorMemoryStore`), even though
+`store_observation()` indexes into *both* stores via
+`self._vector.add(text, entry)`. Live-reproduced: store an observation
+for session A and session B, call `clear_session("A")`, then
+`recall_observations(query=...)` -- the semantic-search path (which
+tries the vector store first) still returned session A's supposedly-
+cleared observation, because `VectorMemoryStore`
+(`missy/memory/vector_store.py`) had no delete capability at all --
+confirmed via grep its only public methods were `add`/`search`/
+`save`/`load`/`count`. Unlike finding 1, this is a concrete, bounded
+bug independent of whether/when the bridge gets wired into production
+-- worth fixing now so it's already correct the moment anyone does
+wire it in, rather than leaving a second bug waiting to be
+rediscovered later.
+
+Fixed by adding `VectorMemoryStore.delete_by_metadata(filters: dict)
+-> int`, which removes every entry whose metadata matches all given
+key/value pairs. FAISS's `IndexFlatL2` has no row-level delete, so the
+method rebuilds the index from the surviving entries -- reusing the
+exact same rebuild approach `load()` already applies to recover from a
+dimension mismatch, factored out into a shared
+`_rebuild_index_from_entries()` helper so both call sites (the
+existing dimension-mismatch path and the new delete path) share one
+implementation. `VisionMemoryBridge.clear_session()` now also calls
+`self._vector.delete_by_metadata({"session_id": session_id})`,
+wrapped in the same try/except-and-log-at-debug pattern the existing
+SQLite cleanup already uses, so a vector-store failure can't prevent
+the SQLite-side deletion from being reported.
+
+Live-verified end-to-end: faiss-cpu is not installed in this dev
+environment (consistent with the `@needs_faiss`-skipped baseline this
+whole session has run under), so verification used a minimal
+numpy-backed `IndexFlatL2` stand-in exposing the identical
+add/search/ntotal contract real faiss provides, monkeypatched into
+`missy.memory.vector_store.faiss`. Before the fix: `clear_session("A")`
+left the vector count at 2 and session A's observation still
+recallable by semantic query. After the fix: the count drops to 1,
+only session B's observation is recallable, and `add()`/`search()`
+remain fully functional against the rebuilt index afterward (verified
+by adding a further entry and searching for it post-delete).
+
+3 new tests in `tests/vision/test_vision_memory.py`'s
+`TestClearSession` (`test_purges_matching_entries_from_vector_store`,
+`test_vector_store_delete_exception_is_swallowed`,
+`test_no_vector_store_does_not_raise`) -- the first confirmed via
+`git stash` to genuinely fail pre-fix
+(`AssertionError: Expected 'delete_by_metadata' to be called once.
+Called 0 times.`). 4 new faiss-gated tests in
+`tests/memory/test_vector_store.py`'s `TestVectorMemoryStoreWithFaiss`
+(`test_delete_by_metadata_removes_only_matching_entries`,
+`test_delete_by_metadata_no_match_returns_zero`,
+`test_delete_by_metadata_on_empty_store_returns_zero`,
+`test_delete_by_metadata_index_still_usable_after_delete`) plus 1 new
+no-op-path assertion added to `test_graceful_without_faiss` -- these
+skip in this environment alongside the rest of the pre-existing
+`@needs_faiss` suite, and their logic was confirmed correct via the
+manual numpy-stand-in verification above.
+
+Verified: `pytest tests/vision/test_vision_memory.py::TestClearSession
+-v`: `13 passed`. `pytest tests/memory/test_vector_store.py -v`: `5
+passed, 12 skipped`. `pytest tests/vision/ tests/memory/ -q`: `3580
+passed, 12 skipped`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21515 passed, 18 skipped in 761.53s (0:12:41)` — 0 failed, up from
+21512 passed / 14 skipped (3 new vision mock tests pass; 4 new
+faiss-gated `delete_by_metadata` tests join the pre-existing
+`@needs_faiss` skip set in this faiss-cpu-less dev environment).
+Eighty-third consecutive fully green full-suite run.
+
+### Post-backlog (one-hundred-twenty-sixth checkpoint): round 70 research pass fixes `ContextManager.build_messages()`'s summary loop starving every later summary after the first oversized one; documents `GraphMemoryStore` (unwired) and `Summarizer`'s tier-1 target_tokens gap as residuals
+
+Round 70 surveyed `missy/memory/graph_store.py` (GraphMemoryStore),
+`missy/agent/condensers.py`/`missy/agent/compaction.py`, and
+`missy/agent/summarizer.py`.
+
+**Residual 1 — `GraphMemoryStore` is never constructed anywhere in
+production code.** Confirmed via grep: the only reference outside its
+own module and tests is `missy/agent/sleeptime.py`, where it's
+accepted as a constructor parameter explicitly commented `"Reserved
+for future graph-memory entity consolidation"` and stored but never
+read or called. Same "confirmed unwired, documented rather than
+force-wired into an unmotivated call site" treatment as
+`ModelRouter`/`LandlockPolicy` from earlier rounds. Internal logic
+(upsert/merge/prune, BFS neighbor traversal with depth bounds and
+visited-set dedup) checked out fine on inspection — no cycle/
+infinite-loop risk found.
+
+**Residual 2 — `Summarizer._escalate()`'s tier-1 "normal" acceptance
+never compares its output against `target_tokens`, only against the
+raw input size** (`missy/agent/summarizer.py`: `if result and
+result_tokens <= input_tokens`). `target_tokens` (1200 for leaf
+summaries, 2000 for condensed) is threaded through both public
+methods but only actually enforced by tier 2's prompt (`_AGGRESSIVE_
+PROMPT` explicitly states "fewer than {target_tokens} tokens") and
+tier 3's deterministic truncation — tier 1's own prompts
+(`_LEAF_PROMPT`/`_CONDENSED_PROMPT`) don't mention a token target at
+all, so a merely-smaller-than-input (but far bigger than intended)
+tier-1 response is accepted as-is. Judged a defensible design choice
+rather than an unambiguous bug: the class's own docstring frames the
+three tiers as guaranteeing *progress* ("even when the model
+misbehaves"), not hitting an exact numeric target, and escalation is
+explicitly triggered only when tier 1 fails to shrink the input at
+all. Documented here rather than force-changed, consistent with round
+67's `resume_job()`/`consecutive_failures` precedent for this exact
+kind of ambiguous judgment call.
+
+**Fixed: `ContextManager.build_messages()`'s summary-inclusion loop
+(`missy/agent/context.py`) used `break` on the first summary that
+didn't fit the remaining `history_budget`, silently discarding every
+summary after it too — even smaller, more-recent ones that would
+have fit easily.** `SQLiteMemoryStore.get_summaries()` orders
+summaries oldest-first (`ORDER BY depth, created_at`), so this loop
+processes them oldest-first. Concretely: one unusually large leaf
+summary of a dense conversation segment, followed by several small,
+recent, individually-fitting summaries — pre-fix, ALL of them were
+silently dropped from context the moment the oldest oversized one was
+hit, purely because of iteration order, not actual budget exhaustion.
+Live-reproduced with a 500-token budget: an oldest ~6000-char summary
+followed by two ~15-char summaries — pre-fix, neither small summary
+appeared in the assembled messages even though remaining budget after
+skipping the oversized one was ample. Fixed by changing `break` to
+`continue`, so an over-budget summary is skipped on its own rather
+than halting the whole loop — the same recency-priority intent the
+adjacent evictable-history loop directly below it already documents
+in its own comment ("Fill remaining budget from evictable prefix,
+newest first"). 1 new test,
+`test_oversized_early_summary_does_not_starve_later_smaller_ones` in
+`tests/agent/test_context_with_summaries.py`, confirmed via `git
+stash` to genuinely fail pre-fix.
+
+Verified: `pytest tests/agent/test_context_with_summaries.py -v`: `10
+passed`. `pytest tests/agent/ -q -k "context or compaction or
+consolidation or summarizer"`: `651 passed, 3669 deselected`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21516 passed, 18 skipped in 777.13s (0:12:57)` — 0 failed, up from
+21515. Eighty-fourth consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

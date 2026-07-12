@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (130 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eighty-two consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (132 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eighty-four consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -5464,15 +5464,104 @@ tests/config/test_plan.py -k ordering_survives_tied_mtimes -v`: `1
 passed`. `pytest tests/cli/ tests/observability/ tests/config/
 tests/agent/ -q`: `5969 passed, 4 skipped`.
 
+### Post-backlog (one-hundred-twenty-fifth checkpoint): round 69 research pass — `VisionMemoryBridge.clear_session()` never purged the vector-store copy of a deleted observation; the bridge's total absence from any production call site documented as a residual
+
+Round 69 surfaced two related findings in `missy/vision/vision_memory.py`.
+
+**Finding 1 — documented residual: `VisionMemoryBridge` is never
+constructed anywhere in production code.** Confirmed via grep — only
+matches are the class's own docstring example and a comment in
+`agent/runtime.py` listing it as a hypothetical future consumer. This
+is a genuine "where/when should vision observations persist" design
+question, not a mechanical bug, so — consistent with the Watchdog-race
+precedent for findings with zero current production reachability —
+it's documented rather than force-wired into a call site chosen
+without a real product decision behind it.
+
+**Finding 2 — fixed: `clear_session()` never cleaned up the parallel
+vector-store entry.** It only called `self._memory.delete_turn(...)`
+against SQLite; `store_observation()` also indexes into a
+`VectorMemoryStore` via `self._vector.add(...)`, which `clear_session()`
+never touched. Live-reproduced: store an observation for session A and
+B, `clear_session("A")`, then `recall_observations()`'s semantic-search
+path still returned session A's supposedly-cleared observation —
+`VectorMemoryStore` had no delete method at all (only `add`/`search`/
+`save`/`load`/`count`). Fixed by adding
+`VectorMemoryStore.delete_by_metadata(filters: dict) -> int`, which
+removes matching entries and rebuilds the FAISS `IndexFlatL2` from the
+survivors (flat indexes have no row-level delete; reused the same
+rebuild approach `load()` already applies for a dimension-mismatch
+recovery, factored into a shared `_rebuild_index_from_entries()`
+helper). `clear_session()` now also calls
+`self._vector.delete_by_metadata({"session_id": session_id})`.
+Live-verified end-to-end (faiss-cpu isn't installed in this dev
+environment, so verification used a minimal numpy-backed
+`IndexFlatL2` stand-in exposing the identical add/search/ntotal
+contract): pre-fix, the vector count stayed at 2 and session A's
+observation remained searchable after "clearing" it; post-fix, the
+count drops to 1, only session B's observation is recallable, and the
+rebuilt index remains fully usable for further add/search. 3 new tests
+in `TestClearSession` (1 confirmed via `git stash` to genuinely fail
+pre-fix) plus 4 new faiss-gated tests in `test_vector_store.py`
+(skip in this environment alongside the pre-existing `@needs_faiss`
+suite; logic confirmed via the manual stand-in verification).
+
+Verified: `pytest tests/vision/test_vision_memory.py::TestClearSession
+-v`: `13 passed`. `pytest tests/memory/test_vector_store.py -v`: `5
+passed, 12 skipped`. `pytest tests/vision/ tests/memory/ -q`: `3580
+passed, 12 skipped`.
+
+### Post-backlog (one-hundred-twenty-sixth checkpoint): round 70 research pass — `ContextManager.build_messages()`'s summary loop starved every later summary after the first oversized one; `GraphMemoryStore` (unwired) and `Summarizer`'s tier-1 target_tokens gap documented as residuals
+
+Round 70 surveyed `GraphMemoryStore`, the condenser/compaction
+pipeline (no new findings — prior fixes hold), and `Summarizer`.
+
+**Residual — `GraphMemoryStore` is never constructed in production**
+(only referenced as an unused, explicitly "reserved for future use"
+constructor param in `sleeptime.py`) — same treatment as
+`ModelRouter`/`LandlockPolicy`.
+
+**Residual — `Summarizer` tier-1 acceptance never checks
+`target_tokens`**, only that output is smaller than input; judged a
+defensible design choice (the class explicitly frames its tiers as
+guaranteeing progress, not hitting an exact target) rather than an
+unambiguous bug.
+
+**Fixed: `ContextManager.build_messages()`'s summary loop used
+`break` on the first over-budget summary, discarding every summary
+after it too — even smaller, more-recent ones that would have fit.**
+Summaries are supplied oldest-first, so one oversized early summary
+silently starved all later ones purely due to iteration order, not
+actual exhausted budget. Live-reproduced with a 500-token budget: an
+oversized oldest summary followed by two tiny ones — pre-fix, neither
+tiny summary made it into context. Fixed by changing `break` to
+`continue`, matching the recency-priority intent the adjacent
+evictable-history loop already documents. 1 new test, confirmed via
+`git stash` to genuinely fail pre-fix.
+
+Verified: `pytest tests/agent/test_context_with_summaries.py -v`: `10
+passed`. `pytest tests/agent/ -q -k "context or compaction or
+consolidation or summarizer"`: `651 passed, 3669 deselected`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21512 passed, 14 skipped in 788.11s (0:13:08)
+21516 passed, 18 skipped in 777.13s (0:12:57)
 ```
 
-**Zero failures**, the eighty-second consecutive fully green
-full-suite run. Passed count is up from 21504 to 21512 (the round 68
+**Zero failures**, the eighty-fourth consecutive fully green
+full-suite run. Passed count is up from 21515 to 21516 (the round 70
+checkpoint's 1 new test: `test_oversized_early_summary_does_not_starve_later_smaller_ones`
+— full detail above; all of the sixty-first through one-hundred-twenty-fifth
+checkpoints' fixes are confirmed still holding). Passed count is up
+from 21512 to 21515, skipped up from 14 to 18 (the round 69
+checkpoint's 7 new tests: 3 mock-based `TestClearSession` tests pass;
+4 new faiss-gated `delete_by_metadata` tests join the pre-existing
+`@needs_faiss` skip set in this faiss-cpu-less dev environment — full
+detail above; all of the sixty-first through one-hundred-twenty-fourth
+checkpoints' fixes are confirmed still holding). Passed count is up
+from 21504 to 21512 (the round 68
 checkpoint's 8 new tests: 5 hash-chain tests in
 `TestHashChainDetectsReordering`, 2 CLI reordering-detection tests, 1
 config-backup tied-mtime-ordering test — full detail above; all of

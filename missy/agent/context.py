@@ -156,13 +156,19 @@ class ContextManager:
             used += _approx_tokens(str(turn.get("content", "")))
 
         # Include summaries (compressed history) before evictable messages.
+        #
+        # `continue` rather than `break` on an over-budget summary: summaries
+        # are supplied oldest-first (SQLiteMemoryStore.get_summaries() orders
+        # by depth, created_at), so an early oversized summary must not
+        # starve every later, smaller, more-recent summary that would
+        # otherwise still fit -- it should just be skipped on its own.
         summary_messages: list[dict] = []
         if summaries:
             for s in summaries:
                 s_text = _format_summary(s)
                 s_tokens = _approx_tokens(s_text)
                 if used + s_tokens > history_budget:
-                    break
+                    continue
                 summary_messages.append({"role": "user", "content": s_text})
                 used += s_tokens
 
