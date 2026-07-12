@@ -8130,6 +8130,69 @@ tests/channels/test_discord_channel_coverage.py -q`: `84 passed`.
 `21451 passed, 14 skipped in 690.01s (0:11:30)` — 0 failed, up from
 21449. Sixty-fourth consecutive fully green full-suite run.
 
+### Post-backlog (one-hundred-seventh checkpoint): round 51 research pass fixes a screencast vision-analysis secrets-detection bypass
+
+Round 51 continued re-hunting the round 49-50 "parallel dispatch path
+missing a safety check" pattern into fresh dispatch surfaces.
+Confirmed clean: `scheduler/manager.py`'s `_run_job()` already runs
+`InputSanitizer().check_for_injection(job.task)` before dispatch
+(explicitly documented defense-in-depth), and no code path
+dynamically constructs a scheduled job's task text from a prior tool
+call's output — tasks are only operator-authored strings validated at
+`add_job()`. `mcp/tool_wrapper.py`'s `McpToolWrapper.execute()` output
+flows into the exact same generic tool-results loop every built-in
+tool uses, so `InputSanitizer.check_for_injection()` applies uniformly
+regardless of tool origin — no MCP exemption found.
+`channels/webhook.py`'s `WebhookChannel` has zero production callers
+anywhere in the codebase (same "zero production callers" category as
+the earlier `ContainerSandbox` finding) — the actual live REST prompt
+surfaces (`api/server.py`'s `/api/v1/chat`, `api/run_stream.py`) both
+call `AgentRuntime.run()` directly, which applies `InputSanitizer`
+unconditionally regardless of caller, so those paths are already
+protected; `WebhookChannel` itself is unwired dead code, not a live
+vulnerable path.
+
+**Found and fixed a real, high-confidence security gap matching the
+same pattern a third time: the screencast channel's vision-analysis
+text bypassed `censor_response()`/`SecretsDetector` before being
+posted to Discord.** `FrameAnalyzer._process_frame()` calls the vision
+model directly (`analyze_image_bytes()`, an Ollama vision-model call)
+— it never goes through `AgentRuntime` at all, so it never receives
+the `censor_response()` protection `run()`/`run_stream()` apply
+unconditionally to every other agent-output surface (CLI,
+`/api/v1/chat`, Discord text replies). A user sharing their screen via
+the browser-based screencast feature while a terminal, password
+manager, or browser tab displaying a credential is visible has it
+transcribed verbatim by the vision model — describing on-screen text
+is literally its job — and posted unredacted directly into a
+(potentially multi-member) Discord channel, unlike the credential
+scrubbing Discord's own inbound text messages already receive.
+`tests/channels/test_screencast_analyzer.py` mocks both the
+vision-model call and the Discord callback, so no test exercised real
+secret content flowing through this path. Fixed by applying
+`censor_response()` to the vision model's output immediately after the
+call returns, before it's stored (`AnalysisResult.analysis_text`) or
+posted to Discord — protecting both surfaces with a single change at
+the earliest point, mirroring exactly where `run()` applies
+`censor_response()` to its own `final_response`. While fixing this, an
+editing mistake was caught and corrected before commit: a trailing
+assertion belonging to the pre-existing `test_discord_callback` test
+was accidentally left dangling inside the newly-inserted test during
+an in-place insertion; caught immediately when the new test failed
+with an assertion string ("Desktop visible") that didn't belong to it,
+and fixed by restoring the assertion to its original test. 1 new test
+(secret-bearing vision analysis redacted at both the Discord-post and
+stored-result surfaces), confirmed via `git stash` to genuinely fail
+pre-fix.
+
+Verified: `pytest tests/channels/test_screencast_analyzer.py -q`: `14
+passed`. `pytest tests/channels/ -q -k screencast`: `327 passed, 1662
+deselected`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21452 passed, 14 skipped in 764.70s (0:12:44)` — 0 failed, up from
+21451. Sixty-fifth consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

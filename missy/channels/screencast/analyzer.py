@@ -155,6 +155,21 @@ class FrameAnalyzer:
             data,
         )
 
+        # Every other agent-output surface (CLI, /api/v1/chat, Discord text
+        # replies, run_stream()) applies censor_response() to its final
+        # text before it reaches a caller/channel (AgentRuntime.run()/
+        # run_stream() do this unconditionally). This path never goes
+        # through AgentRuntime at all -- it's a direct vision-model call --
+        # so without this, a shared screen showing a visible credential
+        # (a terminal, password manager, or browser tab) gets transcribed
+        # verbatim by the vision model (describing on-screen text is
+        # literally its job) and posted unredacted into a Discord channel
+        # with no scrubbing, unlike the credential-detection Discord's own
+        # inbound text messages already get.
+        from missy.security.censor import censor_response
+
+        analysis_text = censor_response(analysis_text)
+
         elapsed_ms = int((time.monotonic_ns() // 1_000_000) - start_ms)
 
         result = AnalysisResult(

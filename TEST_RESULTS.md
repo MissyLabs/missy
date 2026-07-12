@@ -1,5 +1,33 @@
 # TEST_RESULTS
 
+## Run: 2026-07-14 03:55 UTC — round 51 research pass: screencast vision-analysis secrets-detection bypass
+
+- Context: round 51 continued re-hunting the round 49-50 pattern into
+  fresh dispatch surfaces. Confirmed clean: scheduler/manager.py's
+  _run_job() already runs InputSanitizer().check_for_injection()
+  before dispatch; mcp/tool_wrapper.py's output flows through the
+  same generic tool-results sanitization loop as built-in tools; and
+  channels/webhook.py's WebhookChannel has zero production callers
+  (the live REST prompt surfaces both call AgentRuntime.run()
+  directly, which applies InputSanitizer unconditionally).
+- **Screencast vision-analysis secrets-detection bypass**:
+  FrameAnalyzer._process_frame() calls the vision model directly --
+  never through AgentRuntime -- so it never received the
+  censor_response() protection run()/run_stream() apply
+  unconditionally to every other agent-output surface. A shared
+  screen showing a visible credential (terminal, password manager,
+  browser tab) got transcribed verbatim by the vision model and
+  posted unredacted directly into a Discord channel. Fixed by
+  applying censor_response() to the vision model's output immediately
+  after the call returns, before it's stored or posted to Discord.
+  While fixing this, an editing mistake (a trailing assertion from a
+  pre-existing test left dangling inside the newly-inserted test) was
+  caught and corrected before commit.
+- Command: `pytest tests/channels/test_screencast_analyzer.py -k test_vision_model_secret_is_redacted_before_discord_post -v`
+- Result: `1 passed`. Confirmed via `git stash` to genuinely fail pre-fix.
+- Broader sweep: `pytest tests/channels/test_screencast_analyzer.py -q`: `14 passed`.
+  `pytest tests/channels/ -q -k screencast`: `327 passed, 1662 deselected`.
+
 ## Run: 2026-07-14 03:20 UTC — round 50 research pass: Discord voice-transcript secrets-detection bypass
 
 - Context: round 50 re-hunted round 49's "two parallel dispatch paths,

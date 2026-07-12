@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (112 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for sixty-four consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (113 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for sixty-five consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -4731,15 +4731,51 @@ Verified: `pytest tests/channels/test_discord_channel_gap_coverage.py
 tests/channels/test_discord_channel_coverage.py -q`: `84 passed`.
 `pytest tests/channels/ -q -k discord`: `921 passed, 1067 deselected`.
 
+### Post-backlog (one-hundred-seventh checkpoint): round 51 research pass — screencast vision-analysis secrets-detection bypass
+
+Round 51 continued re-hunting the round 49-50 "parallel dispatch path
+missing a safety check" pattern into fresh surfaces. Confirmed clean:
+`scheduler/manager.py`'s `_run_job()` already runs `InputSanitizer`
+before dispatch; `mcp/tool_wrapper.py`'s output flows through the same
+generic tool-results sanitization loop as built-in tools;
+`channels/webhook.py`'s `WebhookChannel` has zero production callers
+(the live REST prompt surfaces both call `AgentRuntime.run()`
+directly, which applies `InputSanitizer` unconditionally).
+
+**Found and fixed a real, high-confidence security gap matching the
+same pattern a third time: the screencast channel's vision-analysis
+text bypassed `censor_response()`/`SecretsDetector` before being
+posted to Discord.** `FrameAnalyzer._process_frame()` calls the vision
+model directly — it never goes through `AgentRuntime` at all, so it
+never received the `censor_response()` protection `run()`/
+`run_stream()` apply unconditionally to every other agent-output
+surface. A user sharing their screen while a terminal, password
+manager, or browser tab displaying a credential is visible has it
+transcribed verbatim by the vision model and posted unredacted
+directly into a Discord channel. Fixed by applying `censor_response()`
+to the vision model's output immediately after the call returns,
+before it's stored or posted to Discord. While fixing this, an editing
+mistake (a trailing assertion from a pre-existing test left dangling
+inside the newly-inserted test) was caught and corrected before
+commit. 1 new test, confirmed via `git stash` to genuinely fail
+pre-fix.
+
+Verified: `pytest tests/channels/test_screencast_analyzer.py -q`: `14
+passed`. `pytest tests/channels/ -q -k screencast`: `327 passed, 1662
+deselected`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21451 passed, 14 skipped in 690.01s (0:11:30)
+21452 passed, 14 skipped in 764.70s (0:12:44)
 ```
 
-**Zero failures**, the sixty-fourth consecutive fully green
-full-suite run. Passed count is up from 21449 to 21451 (the round 50
+**Zero failures**, the sixty-fifth consecutive fully green full-suite
+run. Passed count is up from 21451 to 21452 (the round 51 checkpoint's
+1 new test in `test_screencast_analyzer.py`; all of the sixty-first
+through one-hundred-sixth checkpoints' fixes are confirmed still
+holding). Passed count is up from 21449 to 21451 (the round 50
 checkpoint's 2 new tests in `TestMaybeHandleVoiceCommand`; all of the
 sixty-first through one-hundred-fifth checkpoints' fixes are confirmed
 still holding). Passed count is up from 21446 to 21449 (the round 49 checkpoint's
