@@ -285,8 +285,8 @@ class ProviderRegistry:
         # trail at all). An operator setting base_url for one provider
         # (e.g. pointing to a self-hosted OpenAI-compatible endpoint)
         # would never see that their policy's effective allowlist grew,
-        # and nothing in AUDIT_SECURITY.md's "structured audit events for
-        # privileged actions" guarantee covered this path. SSRF/DNS-
+        # and nothing covered this path under the "structured audit events
+        # for privileged actions" guarantee. SSRF/DNS-
         # rebinding via a maliciously-crafted base_url is already closed
         # independently by SR-1.9a's rebinding check (every hostname
         # match, including ones added here, still re-verifies the
