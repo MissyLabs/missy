@@ -1,5 +1,51 @@
 # TEST_RESULTS
 
+## Run: 2026-07-12 UTC — round 62 research pass: hot-reloaded max_spend_usd never reached already-running gateway daemon runtimes (7th confirmed instance of the family)
+
+- Context: round 62 re-verified (rather than trusted) SubAgentRunner's
+  claim of reusing the caller's exact AgentRuntime/session_id --
+  confirmed true directly, no bug. Discord's /model command explicitly
+  returns "not yet supported" (honest no-op, not a broken mutation).
+  FailureTracker threshold/reset logic and Watchdog/RateLimiter
+  hot-reload exposure both checked clean.
+- **max_spend_usd hot-reload never reached already-constructed
+  runtimes**: _apply_config() correctly rebuilds PolicyEngine/
+  ProviderRegistry/OtelExporter/AuditLogger on every reload (rounds
+  55/60/61), but none of those is what AgentRuntime reads for its
+  budget cap -- each long-lived runtime holds its own AgentConfig
+  object, built once at gateway_start() startup and never touched
+  again. AgentRuntime._make_cost_tracker() reads
+  self.config.max_spend_usd fresh only when a session's CostTracker is
+  first created, but self.config is the same object for the runtime's
+  entire process lifetime -- editing max_spend_usd while `missy
+  gateway start` keeps running had zero effect on the main agent, the
+  Discord agent, or the proactive-trigger runtime, not even for
+  brand-new sessions, only a restart would pick it up. Same staleness
+  for SchedulerManager._default_max_spend_usd (set once at
+  construction in round 57's fix).
+- Fixed by wrapping _apply_config in a closure inside gateway_start()
+  that, after calling the real _apply_config(), mutates
+  _agent.config.max_spend_usd, _discord_agent.config.max_spend_usd,
+  the proactive-trigger runtime's config.max_spend_usd (guarded by a
+  new _proactive_runtime variable), and
+  scheduler_manager._default_max_spend_usd in place -- the same
+  in-place-repoint approach already used for
+  AuditLogger.reconfigure()/OtelExporter re-init. ConfigWatcher now
+  uses this wrapping closure as its reload_fn.
+- Command: `pytest tests/cli/test_cli_main_gaps.py -k HotReloadRefreshes -v`
+- Result: `1 passed`. New test
+  (test_hot_reload_updates_max_spend_usd_on_running_agents_and_scheduler)
+  confirmed via `git stash` to genuinely fail pre-fix (asserting the
+  post-reload state, not just that a function was called).
+- Live-verified end-to-end with REAL (unmocked) AgentRuntime and
+  SchedulerManager instances, capturing every constructed instance via
+  patched __init__s: after invoking the real reload callback with a
+  config carrying a new max_spend_usd, both agent instances' .config.
+  max_spend_usd and the scheduler's ._default_max_spend_usd all
+  reflected the new value.
+- Broader sweep: `pytest tests/cli/ tests/config/ tests/scheduler/ tests/agent/ -q`: `6185 passed, 4 skipped`.
+- Full suite: `python3 -m pytest tests/ -q` → `21493 passed, 14 skipped in 710.00s (0:11:50)` — 0 failed, up from 21492. Seventy-sixth consecutive fully green full-suite run.
+
 ## Run: 2026-07-12 UTC — round 61 research pass: AuditLogger hot-reload was a complete no-op (6th confirmed instance of the "config value never reaches the process that matters" family)
 
 - Context: round 61 systematically re-read _apply_config() (now

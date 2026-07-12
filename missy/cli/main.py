@@ -2290,6 +2290,10 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
 
     # Start proactive manager if configured.
     proactive_manager = None
+    # Populated below only when a proactive-trigger AgentRuntime is actually
+    # constructed; used by the config hot-reload callback further down to
+    # propagate a changed max_spend_usd to this runtime too.
+    _proactive_runtime = None
     try:
         if hasattr(cfg, "proactive") and cfg.proactive.enabled and cfg.proactive.triggers:
             from missy.agent.proactive import ProactiveManager, ProactiveTrigger
@@ -2326,6 +2330,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                     **_agent_tool_policy_kwargs(cfg),
                 )
                 _runtime = AgentRuntime(_agent_cfg)
+                _proactive_runtime = _runtime
 
                 def _proactive_callback(prompt: str, session_id: str) -> str:
                     return _runtime.run(prompt, session_id=session_id)
@@ -2469,7 +2474,35 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
     # wired to an actual ConfigWatcher instance.
     from missy.config.hotreload import ConfigWatcher, _apply_config
 
-    config_watcher = ConfigWatcher(ctx.obj["config_path"], reload_fn=_apply_config)
+    # _apply_config() reinitializes PolicyEngine/ProviderRegistry/
+    # OtelExporter/AuditLogger, but each of those is a fresh singleton
+    # rebuilt from the new config. _agent/_discord_agent/_proactive_runtime
+    # are long-lived AgentRuntime instances already constructed above --
+    # their .config (a plain, mutable AgentConfig, not rebuilt on reload)
+    # is read fresh only when a *new* per-session CostTracker is first
+    # created (AgentRuntime._make_cost_tracker() reads self.config.max_spend_usd
+    # at that moment), so editing max_spend_usd in config.yaml while the
+    # gateway keeps running had no effect on this process's already-running
+    # runtimes at all -- not even for brand-new sessions started after the
+    # edit -- until a full restart. Same gap for scheduler_manager's
+    # _default_max_spend_usd, read once at construction and threaded into
+    # every per-job AgentConfig thereafter. Propagating the new value onto
+    # each object in place (mutating existing objects, not rebuilding them)
+    # matches the same in-place-repoint approach already used for
+    # AuditLogger.reconfigure()/OtelExporter re-init.
+    def _apply_config_and_refresh_runtimes(new_cfg: Any) -> None:
+        _apply_config(new_cfg)
+        new_max_spend = getattr(new_cfg, "max_spend_usd", 0.0)
+        _agent.config.max_spend_usd = new_max_spend
+        _discord_agent.config.max_spend_usd = new_max_spend
+        if _proactive_runtime is not None:
+            _proactive_runtime.config.max_spend_usd = new_max_spend
+        if scheduler_manager is not None:
+            scheduler_manager._default_max_spend_usd = new_max_spend  # noqa: SLF001
+
+    config_watcher = ConfigWatcher(
+        ctx.obj["config_path"], reload_fn=_apply_config_and_refresh_runtimes
+    )
     config_watcher.start()
 
     # Start voice channel if configured.

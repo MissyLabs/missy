@@ -954,6 +954,96 @@ class TestGatewayStartAgentBudgetWiring:
             _os.unlink(cfg_path)
 
 
+class TestGatewayStartHotReloadRefreshesRunningRuntimeBudget:
+    """Regression: _apply_config() (the ConfigWatcher hot-reload callback)
+    reinitializes PolicyEngine/ProviderRegistry/OtelExporter/AuditLogger,
+    but none of those touch the already-constructed, long-lived
+    AgentRuntime instances gateway_start() builds once at startup
+    (_agent/_discord_agent/the proactive-trigger runtime) or
+    SchedulerManager's _default_max_spend_usd. AgentRuntime reads
+    self.config.max_spend_usd fresh only when a session's CostTracker is
+    first created -- since self.config is the same AgentConfig object for
+    the runtime's entire lifetime, editing max_spend_usd in config.yaml
+    while the gateway keeps running had zero effect on any session
+    (existing or brand-new) until a full restart.
+    """
+
+    def test_hot_reload_updates_max_spend_usd_on_running_agents_and_scheduler(
+        self, runner: CliRunner
+    ) -> None:
+        import os
+
+        cfg_path = _cfg_path()
+        try:
+            mock_config = _make_mock_config()
+            mock_config.discord = None
+            mock_config.providers = {}
+            mock_config.max_spend_usd = 5.0
+            mock_config.scheduling.enabled = True
+
+            constructed_agents: list[MagicMock] = []
+
+            def _capture_agent_runtime(cfg):
+                agent = MagicMock()
+                agent.config = cfg
+                constructed_agents.append(agent)
+                return agent
+
+            constructed_schedulers: list[MagicMock] = []
+
+            def _capture_scheduler(**kwargs):
+                sched = MagicMock()
+                sched._default_max_spend_usd = kwargs.get("default_max_spend_usd", 0.0)
+                sched.list_jobs.return_value = []
+                constructed_schedulers.append(sched)
+                return sched
+
+            reload_fn_holder: dict = {}
+
+            def _capture_watcher(path, reload_fn, **kwargs):
+                reload_fn_holder["fn"] = reload_fn
+                return MagicMock()
+
+            call_count = [0]
+
+            def fake_sleep(t):
+                call_count[0] += 1
+                if call_count[0] >= 1:
+                    os.kill(os.getpid(), signal.SIGTERM)
+
+            with (
+                patch("missy.cli.main._load_subsystems", return_value=mock_config),
+                patch("missy.agent.runtime.AgentRuntime", side_effect=_capture_agent_runtime),
+                patch("missy.scheduler.manager.SchedulerManager", side_effect=_capture_scheduler),
+                patch("missy.config.hotreload.ConfigWatcher", side_effect=_capture_watcher),
+                patch("missy.config.hotreload._apply_config"),
+                patch("time.sleep", side_effect=fake_sleep),
+                patch("yaml.safe_load", return_value={}),
+            ):
+                result = runner.invoke(cli, ["--config", cfg_path, "gateway", "start"])
+
+            assert result.exit_code == 0
+            assert len(constructed_agents) >= 2
+            assert len(constructed_schedulers) == 1
+            assert all(a.config.max_spend_usd == 5.0 for a in constructed_agents)
+            assert constructed_schedulers[0]._default_max_spend_usd == 5.0
+
+            # Simulate the operator editing config.yaml's max_spend_usd
+            # while the gateway keeps running, then invoke the real
+            # captured reload callback directly (this is exactly what
+            # ConfigWatcher._do_reload() does on a real file change).
+            new_config = MagicMock()
+            new_config.max_spend_usd = 1.0
+            reload_fn_holder["fn"](new_config)
+
+            assert all(a.config.max_spend_usd == 1.0 for a in constructed_agents)
+            assert constructed_schedulers[0]._default_max_spend_usd == 1.0
+        finally:
+            import os as _os
+
+            _os.unlink(cfg_path)
+
+
 class TestApiStartAgentBudgetWiring:
     """Regression: `missy api start`'s standalone AgentConfig construction
     (like gateway_start()'s) never passed max_spend_usd, unlike

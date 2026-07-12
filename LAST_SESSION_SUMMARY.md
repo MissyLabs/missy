@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (123 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for seventy-five consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (124 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for seventy-six consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -5211,15 +5211,59 @@ Verified: `pytest tests/config/test_hotreload.py -v`: `38 passed`.
 `pytest tests/config/ tests/observability/ tests/agent/ tests/cli/
 -q`: `5957 passed, 4 skipped`.
 
+### Post-backlog (one-hundred-eighteenth checkpoint): round 62 research pass — hot-reloaded `max_spend_usd` never reached already-running gateway daemon runtimes, the seventh confirmed instance of the family
+
+Round 62 re-verified (rather than trusted) `SubAgentRunner`'s claim of
+reusing the caller's exact `AgentRuntime`/`session_id` — confirmed
+true directly, no bug. Discord's `/model` command explicitly returns
+"not yet supported" (honest no-op). `FailureTracker` threshold/reset
+logic and `Watchdog`/`RateLimiter` hot-reload exposure both checked
+clean.
+
+**Found and fixed a seventh instance of this session's dominant bug
+family, distinct in shape from the prior six: `_apply_config()` now
+correctly rebuilds `PolicyEngine`/`ProviderRegistry`/`OtelExporter`/
+`AuditLogger` on every reload, but none of those is what
+`AgentRuntime` reads for its budget cap — each long-lived runtime
+holds its own `AgentConfig` object, built once at `gateway_start()`
+startup and never touched again.** `AgentRuntime._make_cost_tracker()`
+reads `self.config.max_spend_usd` fresh only when a session's
+`CostTracker` is first created, but `self.config` is the same object
+for the runtime's entire process lifetime — editing `max_spend_usd`
+while `missy gateway start` keeps running had zero effect on the main
+agent, the Discord agent, or the proactive-trigger runtime, not even
+for brand-new sessions, only a restart would pick it up. Same
+staleness for `SchedulerManager._default_max_spend_usd`. Fixed by
+wrapping `_apply_config` in a closure inside `gateway_start()` that,
+after calling the real `_apply_config()`, mutates
+`_agent.config.max_spend_usd`, `_discord_agent.config.max_spend_usd`,
+the proactive-trigger runtime's config, and
+`scheduler_manager._default_max_spend_usd` in place — the same
+in-place-repoint approach already used for
+`AuditLogger.reconfigure()`/`OtelExporter` re-init. Live-verified
+end-to-end with REAL (unmocked) `AgentRuntime` and `SchedulerManager`
+instances: after invoking the real reload callback with a new
+`max_spend_usd`, all constructed instances reflected the new value.
+1 new test, confirmed via `git stash` to genuinely fail pre-fix.
+
+Verified: `pytest tests/cli/test_cli_main_gaps.py -k
+HotReloadRefreshes -v`: `1 passed`. `pytest tests/cli/ tests/config/
+tests/scheduler/ tests/agent/ -q`: `6185 passed, 4 skipped`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21492 passed, 14 skipped in 661.26s (0:11:01)
+21493 passed, 14 skipped in 710.00s (0:11:50)
 ```
 
-**Zero failures**, the seventy-fifth consecutive fully green
-full-suite run. Passed count is up from 21491 to 21492 (the round 61
+**Zero failures**, the seventy-sixth consecutive fully green
+full-suite run. Passed count is up from 21492 to 21493 (the round 62
+checkpoint's 1 new test:
+`test_hot_reload_updates_max_spend_usd_on_running_agents_and_scheduler`
+— full detail above; all of the sixty-first through
+one-hundred-seventeenth checkpoints' fixes are confirmed still
+holding). Passed count is up from 21491 to 21492 (the round 61
 checkpoint's net +1 test: 1 existing hot-reload test updated, 1 new
 end-to-end AuditLogger re-init test added — full detail above; all of
 the sixty-first through one-hundred-sixteenth checkpoints' fixes are

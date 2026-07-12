@@ -9018,6 +9018,72 @@ Verified: `pytest tests/config/test_hotreload.py -v`: `38 passed`.
 `21492 passed, 14 skipped in 661.26s (0:11:01)` — 0 failed, up from
 21491. Seventy-fifth consecutive fully green full-suite run.
 
+### Post-backlog (one-hundred-eighteenth checkpoint): round 62 research pass fixes hot-reloaded `max_spend_usd` never reaching already-running gateway daemon runtimes — the seventh confirmed instance of the "config value never reaches the process that matters" family, and its first appearance on an *already-constructed long-lived object* rather than a rebuildable singleton
+
+Round 62 re-verified (rather than trusted) `SubAgentRunner`'s
+documented claim that it reuses the caller's exact `AgentRuntime`/
+`session_id` — confirmed true directly in `sub_agent.py`, budget
+aggregation and policy/capability_mode enforcement genuinely fall out
+of reuse, no bug. Also verified Discord's `/model` command: it
+explicitly returns "Dynamic model switching is not yet supported" — an
+honest no-op, not a silently-broken mutation like pre-fix `providers
+switch`. `FailureTracker`'s threshold/reset logic for realistic
+multi-tool-call sequences and `Watchdog`/`RateLimiter` hot-reload
+exposure both checked clean.
+
+**Found and fixed a seventh instance of this session's dominant bug
+family, distinct in shape from the prior six: `_apply_config()` now
+correctly rebuilds `PolicyEngine`/`ProviderRegistry`/`OtelExporter`/
+`AuditLogger` on every hot-reload (rounds 55/60/61), but none of those
+singletons is what `AgentRuntime` reads for its budget cap — each
+long-lived runtime holds its OWN `AgentConfig` object, constructed
+once at `gateway_start()` startup and never touched again.**
+`AgentRuntime._make_cost_tracker()` reads `self.config.max_spend_usd`
+fresh only when a session's `CostTracker` is first created — but
+`self.config` is the exact same object for the runtime's entire
+process lifetime, so editing `max_spend_usd` in `config.yaml` while
+`missy gateway start` keeps running had zero effect on the main agent,
+the Discord agent, or the proactive-trigger runtime — not even for
+brand-new sessions started after the edit, only a full restart would
+pick it up. The same staleness affected `SchedulerManager`'s
+`_default_max_spend_usd` (set once at construction in round 57's fix,
+never revisited). Concretely: an operator running a long-lived gateway
+tightens `max_spend_usd` from `5.00` to `1.00` specifically to stop a
+session from burning too much money; `ConfigWatcher` logs "reload
+complete," giving every impression the change is live, but every
+subsequent session (interactive, Discord, scheduled job) keeps
+operating under the old `5.00` cap until the daemon is restarted.
+
+Fixed by wrapping `_apply_config` in a small closure inside
+`gateway_start()` (`_apply_config_and_refresh_runtimes()`) that, after
+calling the real `_apply_config()`, mutates
+`_agent.config.max_spend_usd`, `_discord_agent.config.max_spend_usd`,
+the proactive-trigger runtime's `config.max_spend_usd` (guarded by a
+new `_proactive_runtime` variable — `None` unless that runtime was
+actually constructed, since it lives inside a conditionally-entered
+try block), and `scheduler_manager._default_max_spend_usd` in place —
+mutating the existing objects rather than rebuilding them, the same
+in-place-repoint approach already used for `AuditLogger.reconfigure()`/
+`OtelExporter` re-init. `ConfigWatcher` is now constructed with this
+wrapping closure as its `reload_fn` instead of the bare `_apply_config`.
+Live-verified end-to-end with REAL (unmocked) `AgentRuntime` and
+`SchedulerManager` instances, capturing every constructed instance via
+patched `__init__`s: after invoking the real reload callback with a
+config carrying a new `max_spend_usd`, both agent instances' `.config.
+max_spend_usd` and the scheduler's `._default_max_spend_usd` all
+reflected the new value. 1 new test
+(`test_hot_reload_updates_max_spend_usd_on_running_agents_and_scheduler`),
+confirmed via `git stash` to genuinely fail pre-fix (asserting the
+post-reload state, not just that a function was called).
+
+Verified: `pytest tests/cli/test_cli_main_gaps.py -k
+HotReloadRefreshes -v`: `1 passed`. `pytest tests/cli/ tests/config/
+tests/scheduler/ tests/agent/ -q`: `6185 passed, 4 skipped`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21493 passed, 14 skipped in 710.00s (0:11:50)` — 0 failed, up from
+21492. Seventy-sixth consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security
