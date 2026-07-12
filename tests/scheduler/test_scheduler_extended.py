@@ -596,6 +596,31 @@ class TestPauseJobStopsInFlightRetries:
         assert mgr._scheduler.get_job(f"{job.id}_retry_1") is None
 
     @patch("missy.scheduler.manager.uuid")
+    def test_remove_removes_pending_retry_from_scheduler(
+        self, mock_uuid, mgr: SchedulerManager
+    ) -> None:
+        """Regression: remove_job() is a more permanent action than
+        pause_job(), which already cleans up dangling pending-retry
+        APScheduler entries (scheduled independently by _run_job() on a
+        prior failure) for exactly this reason -- remove_job() previously
+        had no equivalent cleanup, leaving a stale scheduled callback
+        referencing a deleted job lingering in the scheduler's internal
+        state for up to the full retry backoff window.
+        """
+        mock_uuid.uuid4.return_value = "sess"
+        job = mgr.add_job("flaky3", "every 5 minutes", "t", max_attempts=3)
+
+        with patch("missy.agent.runtime.AgentRuntime") as MockRuntime:
+            MockRuntime.return_value.run.side_effect = RuntimeError("boom")
+            mgr._run_job(job.id)
+
+        assert mgr._scheduler.get_job(f"{job.id}_retry_1") is not None
+
+        mgr.remove_job(job.id)
+
+        assert mgr._scheduler.get_job(f"{job.id}_retry_1") is None
+
+    @patch("missy.scheduler.manager.uuid")
     def test_resumed_job_can_run_again(self, mock_uuid, mgr: SchedulerManager) -> None:
         mock_uuid.uuid4.return_value = "sess"
         job = mgr.add_job("resumable", "every 5 minutes", "t")

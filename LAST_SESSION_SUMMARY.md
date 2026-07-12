@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (128 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eighty consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (129 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eighty-one consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -5385,15 +5385,52 @@ Verified: `pytest tests/agent/test_agent_modules.py -k
 passed`. `pytest tests/agent/ tests/cli/ -q`: `5411 passed, 4
 skipped`.
 
+### Post-backlog (one-hundred-twenty-third checkpoint): round 67 research pass — `SchedulerManager.remove_job()` left a dangling pending-retry APScheduler entry that `pause_job()` already cleans up
+
+Round 67 generalized round 66's "state-machine mutation with no
+current-state precondition" finding across `CheckpointManager`,
+`PairingManager`, `CodeEvolutionManager`, `McpManager`
+`restart_server()`/`remove_server()`, and
+`ScreencastTokenRegistry.revoke_session()` — all clean, every
+mutation method already has a correct current-state guard.
+
+**Found and fixed a real, more narrowly-scoped inconsistency:
+`SchedulerManager.remove_job()` never cleaned up a dangling pending
+retry APScheduler entry, even though `pause_job()`'s own inline
+comment explains exactly why that cleanup is necessary and already
+performs it.** A scheduled job's retry is a *separate*, one-shot
+APScheduler entry that fires independently of the job's main trigger
+id. `remove_job()` — a strictly more permanent action than pausing —
+had no equivalent cleanup at all, leaving the retry entry live in
+APScheduler's internal state for up to the job's full backoff window.
+Impact is muted (`_run_job()`'s own re-check already no-ops
+harmlessly on a removed job), but it's a genuine, traceable
+inconsistency. Fixed by factoring the retry-cleanup loop out of
+`pause_job()` into a new `_remove_pending_retries(job_id)` helper,
+called from both methods. 1 new test, confirmed via `git stash` to
+genuinely fail pre-fix.
+
+Secondary observation, documented as a residual: `resume_job()` never
+resets `job.consecutive_failures`, a plausible design choice rather
+than an unambiguous bug, left untouched.
+
+Verified: `pytest tests/scheduler/test_scheduler_extended.py -k
+remove_removes_pending_retry -v`: `1 passed`. `pytest
+tests/scheduler/ tests/cli/ tests/security/ -q`: `3532 passed`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21503 passed, 14 skipped in 766.02s (0:12:46)
+21504 passed, 14 skipped in 772.04s (0:12:52)
 ```
 
-**Zero failures**, the eightieth consecutive fully green full-suite
-run. Passed count is up from 21500 to 21503 (the round 66 checkpoint's
+**Zero failures**, the eighty-first consecutive fully green full-suite
+run. Passed count is up from 21503 to 21504 (the round 67 checkpoint's
+1 new test: `test_remove_removes_pending_retry_from_scheduler` — full
+detail above; all of the sixty-first through one-hundred-twenty-second
+checkpoints' fixes are confirmed still holding). Passed count is up
+from 21500 to 21503 (the round 66 checkpoint's
 3 new tests: `test_approve_already_rejected_patch_is_refused`,
 `test_approve_already_expired_patch_is_refused`,
 `test_reject_already_approved_patch_is_refused` — full detail above;

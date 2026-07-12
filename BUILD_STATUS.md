@@ -9391,6 +9391,83 @@ skipped`.
 `21503 passed, 14 skipped in 766.02s (0:12:46)` — 0 failed, up from
 21500. Eightieth consecutive fully green full-suite run.
 
+### Post-backlog (one-hundred-twenty-third checkpoint): round 67 research pass fixes `SchedulerManager.remove_job()` leaving a dangling pending-retry APScheduler entry that `pause_job()` already cleans up
+
+Round 67 generalized round 66's "state-machine mutation with no
+current-state precondition" finding across other stateful workflow
+objects. `CheckpointManager.claim()`, `PairingManager`'s
+approve/reject flow, `CodeEvolutionManager`'s propose/approve/reject/
+apply/rollback chain, `McpManager.restart_server()`/`remove_server()`,
+`ScreencastTokenRegistry.revoke_session()`, and the Web TUI's
+session/CSRF/logout flow were all checked and found clean — every
+mutation method already has a correct current-state guard, matching
+extensive prior hardening already documented inline in this codebase.
+`AgentIdentity` has no key-rotation mechanism at all, so that specific
+candidate didn't apply.
+
+**Found and fixed a real, more narrowly-scoped inconsistency:
+`SchedulerManager.remove_job()` never cleaned up a dangling pending
+retry APScheduler entry, even though `pause_job()`'s own inline
+comment explains exactly why that cleanup is necessary and already
+performs it.** A scheduled job's retry (scheduled by `_run_job()` on a
+prior failure, id `f"{job_id}_retry_{n}"`) is a *separate*, one-shot
+APScheduler entry that fires independently of the job's main trigger
+id. `pause_job()` (lines 336-348, pre-fix) explicitly iterates
+`self._scheduler.get_jobs()` and removes any such dangling retry entry
+— its own comment states this avoids "defeating pause's
+emergency-stop semantics," since relying solely on `_run_job()`'s
+`job.enabled`/`self._jobs.get()` re-check as the only line of defense
+was judged insufficient for a *pause* action. `remove_job()` — a
+strictly more permanent action than pausing — had no equivalent
+cleanup at all: it only removed the primary trigger id and deleted
+the in-memory `ScheduledJob` record, leaving the separate retry entry
+live in APScheduler's internal job list for up to the job's full
+backoff window (which can be minutes to hours). Concretely: a job
+fails and schedules a `..._retry_1` entry with a multi-minute backoff;
+before it fires, the operator runs `missy schedule remove <job_id>`
+directly (rather than pausing first) — the retry entry survives the
+removal, referencing a `job_id` that no longer exists in
+`self._jobs`. Impact is muted (not a functional re-execution bug,
+since `_run_job()`'s own `self._jobs.get(job_id)` re-check at the top
+already no-ops harmlessly on a removed job, and the entry is a
+one-shot trigger APScheduler evicts after firing), but it's a genuine,
+traceable inconsistency between two actions where the more permanent
+one did strictly less cleanup than the less permanent one.
+`tests/scheduler/test_scheduler_extended.py::test_pause_removes_pending_retry_from_scheduler`
+verified the cleanup exists for `pause_job()`; no equivalent test
+existed for `remove_job()`, confirming the asymmetry was never
+exercised.
+
+Fixed by factoring the retry-cleanup loop out of `pause_job()` into a
+new `_remove_pending_retries(job_id)` helper, called from both
+`pause_job()` (unchanged behavior) and `remove_job()` (the new call).
+Live-verified via the existing pytest run: a job that fails once
+(scheduling a real `..._retry_1` APScheduler entry), then has
+`remove_job()` called on it, now has that entry actually gone from
+`self._scheduler.get_jobs()`. 1 new test
+(`test_remove_removes_pending_retry_from_scheduler`), confirmed via
+`git stash` to genuinely fail pre-fix.
+
+**Secondary observation, documented as a residual, not fixed**:
+`resume_job()` re-enables a paused job (`job.enabled = True`) but
+never resets `job.consecutive_failures`, so a job paused mid-retry-
+streak resumes with that count intact — a single subsequent failure
+after resume could immediately trip the permanent-failure threshold
+rather than getting a fresh set of attempts. This is a plausible,
+defensible design choice (preserving failure history as a diagnostic
+signal across a pause/resume cycle) rather than an unambiguous bug,
+and — per this session's established practice for genuine design
+questions — was left untouched rather than force-changed without an
+explicit product decision.
+
+Verified: `pytest tests/scheduler/test_scheduler_extended.py -k
+remove_removes_pending_retry -v`: `1 passed`. `pytest
+tests/scheduler/ tests/cli/ tests/security/ -q`: `3532 passed`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21504 passed, 14 skipped in 772.04s (0:12:52)` — 0 failed, up from
+21503. Eighty-first consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

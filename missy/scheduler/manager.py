@@ -282,6 +282,26 @@ class SchedulerManager:
         )
         return job
 
+    def _remove_pending_retries(self, job_id: str) -> None:
+        """Remove any pending retry job(s) for *job_id* (id f"{job_id}_retry_{n}"),
+        scheduled independently by :meth:`_run_job` on a prior failure.
+
+        A scheduled retry is a *separate* one-shot APScheduler job that fires
+        independently of the main trigger id, so pausing/removing the main
+        job alone leaves it dangling. The ``job.enabled``/``self._jobs``
+        checks in :meth:`_run_job` would also prevent a dangling retry from
+        actually doing anything once it fires, but removing the entry
+        outright avoids relying on that as the only line of defense and
+        keeps the scheduler's job list accurate.
+        """
+        for ap_job in self._scheduler.get_jobs():
+            if ap_job.id.startswith(f"{job_id}_retry_"):
+                try:
+                    self._scheduler.remove_job(ap_job.id)
+                    logger.info("Removed pending retry %s for job %s.", ap_job.id, job_id)
+                except Exception:
+                    logger.debug("Could not remove pending retry %s", ap_job.id, exc_info=True)
+
     def remove_job(self, job_id: str) -> None:
         """Remove a job from the scheduler and the persistence store.
 
@@ -301,6 +321,14 @@ class SchedulerManager:
                 self._scheduler.remove_job(job_id)
         except Exception as exc:
             raise SchedulerError(f"Failed to remove APScheduler job {job_id!r}: {exc}") from exc
+
+        # SR: removing a job is a more permanent action than pausing one, so
+        # it must clean up at least as thoroughly -- pause_job() already
+        # removes dangling pending-retry entries for exactly this reason;
+        # remove_job() previously didn't, leaving a stale scheduled callback
+        # referencing a deleted job lingering in the scheduler's internal
+        # state for up to the full retry backoff window.
+        self._remove_pending_retries(job_id)
 
         del self._jobs[job_id]
         self._save_jobs()
@@ -332,20 +360,7 @@ class SchedulerManager:
 
         job.enabled = False
         self._save_jobs()
-
-        # Remove any pending retry job(s) for this job (id f"{job_id}_retry_{n}"),
-        # scheduled independently by _run_job() on a prior failure. The
-        # job.enabled check in _run_job() would also prevent one of these from
-        # actually running, but removing the dangling APScheduler entry
-        # outright avoids relying on that as the only line of defense and
-        # keeps the scheduler's job list accurate.
-        for ap_job in self._scheduler.get_jobs():
-            if ap_job.id.startswith(f"{job_id}_retry_"):
-                try:
-                    self._scheduler.remove_job(ap_job.id)
-                    logger.info("Removed pending retry %s for paused job %s.", ap_job.id, job_id)
-                except Exception:
-                    logger.debug("Could not remove pending retry %s", ap_job.id, exc_info=True)
+        self._remove_pending_retries(job_id)
 
         logger.info("Paused job id=%s name=%r.", job_id, job.name)
         self._emit_event(
