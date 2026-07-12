@@ -18,6 +18,7 @@ Example::
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import os
@@ -595,8 +596,28 @@ class SecurityScanner:
             )
 
         # SEC-011: Overly broad CIDR allowances
-        _OPEN_CIDRS = {"0.0.0.0/0", "::/0", "0.0.0.0/1", "128.0.0.0/1"}
-        broad_cidrs = [c for c in net.allowed_cidrs if c in _OPEN_CIDRS]
+        #
+        # Real enforcement (policy/network.py) parses every configured CIDR
+        # via ipaddress.ip_network(cidr, strict=False), which normalizes
+        # host bits away -- so "1.2.3.4/1"/"10.0.0.0/1"/"8.8.8.8/0" are
+        # functionally identical to "0.0.0.0/1"/"0.0.0.0/0" (half or all of
+        # the IPv4 space). A bare string-set membership check (as this used
+        # to be) never catches these differently-written-but-equally-broad
+        # CIDRs -- the same "realistic-input matching" bug class already
+        # fixed for SEC-013. Normalize the same way the real engine does
+        # before comparing.
+        _OPEN_NETWORKS = {
+            ipaddress.ip_network(c, strict=False)
+            for c in ("0.0.0.0/0", "::/0", "0.0.0.0/1", "128.0.0.0/1")
+        }
+
+        def _is_overly_broad_cidr(cidr: str) -> bool:
+            try:
+                return ipaddress.ip_network(cidr, strict=False) in _OPEN_NETWORKS
+            except ValueError:
+                return False
+
+        broad_cidrs = [c for c in net.allowed_cidrs if _is_overly_broad_cidr(c)]
         if broad_cidrs:
             self._add(
                 Finding(

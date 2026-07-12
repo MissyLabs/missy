@@ -1,5 +1,50 @@
 # TEST_RESULTS
 
+## Run: 2026-07-14 05:40 UTC — round 54 research pass: McpManager cross-process staleness gap and SEC-011 CIDR false-negative
+
+- Context: round 54 re-hunted round 53's "load once, never reload"
+  staleness pattern. agent/playbook.py is clean by design (re-loads
+  under a flock before every mutation, fresh instance per call).
+  skills/discovery.py is stateless and unwired. agent/prompt_patches.py
+  has the same shape internally but the subsystem is already
+  documented as entirely unwired (low real-world impact). agent/
+  done_criteria.py re-verified accurate (no mutable state to go stale).
+- **McpManager cross-process staleness**: connect_all() runs exactly
+  once at construction, but _sync_mcp_tools()'s own docstring promises
+  servers added via `missy mcp add` are "reflected on the very next
+  turn." A separate `missy mcp add` CLI process constructs its own
+  fresh McpManager, mutates mcp.json, and exits -- never touching a
+  running daemon's in-memory self._clients. health_check() only ever
+  restarted already-tracked dead servers, never diffed against the
+  on-disk config for new entries. Live-verified. Fixed by factoring
+  connect_all()'s config-read-plus-permission-check logic into a
+  shared _read_config_servers() helper and adding
+  _connect_new_servers_from_config(), called from health_check(),
+  which connects only genuinely new config entries (deliberately not
+  reconciling changed command/url on an already-alive server).
+  _read_config_servers() reads self._config_path via
+  getattr(self, "_config_path", None) rather than direct attribute
+  access -- the initial full-suite run caught a pre-existing test
+  (test_hardening_piper_discord.py::test_health_check_no_dead_servers)
+  that constructs a minimal McpManager via __new__() (bypassing
+  __init__, never setting _config_path) and calls health_check()
+  directly; getattr fixes that minimal test double without weakening
+  the real check (same pattern applied to _drift_detector in round 43).
+- Command: `pytest tests/mcp/test_mcp_manager.py -k "test_picks_up_server_added_to_config_by_a_separate_process or test_health_check_does_not_reconnect_already_known_servers" -v`
+- Result: `2 passed`. Core regression confirmed via `git stash` (after the getattr correction) to genuinely fail pre-fix.
+- **SEC-011 CIDR false-negative**: raw string-set membership check
+  didn't normalize CIDRs the way the real enforcement engine
+  (ipaddress.ip_network(cidr, strict=False)) does, so
+  "1.2.3.4/1"/"10.0.0.0/1"/"8.8.8.8/0" (functionally identical to
+  "0.0.0.0/1"/"0.0.0.0/0" -- half or all of IPv4) produced zero
+  finding. Same false-negative class as the already-fixed SEC-013.
+  Fixed by normalizing each configured CIDR the same way the real
+  engine does before comparing.
+- Command: `pytest tests/security/test_scanner.py -k sec_011 -v`
+- Result: `6 passed`. 3 parametrized cases confirmed via `git stash` to genuinely fail pre-fix.
+- Broader sweep: `pytest tests/mcp/ -q`: `386 passed`. `pytest tests/security/test_scanner.py -q`: `91 passed`.
+  `pytest tests/mcp/ tests/security/test_scanner.py tests/agent/ -q`: `4789 passed, 4 skipped`.
+
 ## Run: 2026-07-14 05:05 UTC — round 53 research pass: robotic-phrase-stripping content-mangling bug and persona-edit staleness bug
 
 - Context: round 53 confirmed agent/structured_output.py's retry

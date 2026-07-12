@@ -206,6 +206,57 @@ class TestHealthCheck:
         with patch.object(manager, "restart_server", side_effect=RuntimeError("fail")):
             manager.health_check()  # should not raise
 
+    def test_picks_up_server_added_to_config_by_a_separate_process(self, tmp_config):
+        """Regression: connect_all() only ever runs once, at
+        construction. A separate `missy mcp add` CLI process edits
+        mcp.json and exits without ever touching this (potentially
+        long-running daemon's) in-memory self._clients -- so a
+        brand-new server was silently never connected until the daemon
+        was restarted, contradicting _sync_mcp_tools()'s own documented
+        claim that servers added via `missy mcp add` are "reflected on
+        the very next turn." health_check() (the existing periodic
+        call site) must now also pick up newly-configured servers.
+        """
+        mgr = McpManager(config_path=tmp_config)
+        mgr.connect_all()  # starts with no config file at all
+        assert mgr.list_servers() == []
+
+        # Simulate a separate `missy mcp add newtool ...` process writing
+        # to the same config file after this manager was constructed.
+        config = [{"name": "newtool", "command": "npx new-server"}]
+        p = Path(tmp_config)
+        p.write_text(json.dumps(config))
+        p.chmod(0o600)
+
+        new_client = MagicMock()
+        new_client.tools = []
+        new_client.is_alive.return_value = True
+        with patch("missy.mcp.manager.McpClient", return_value=new_client):
+            mgr.health_check()
+
+        assert "newtool" in {s["name"] for s in mgr.list_servers()}
+        new_client.connect.assert_called_once()
+
+    def test_health_check_does_not_reconnect_already_known_servers(self, tmp_config):
+        """Only genuinely new config entries should be connected --
+        an already-tracked, alive server must not be touched again."""
+        config = [{"name": "existing", "command": "npx existing-server"}]
+        p = Path(tmp_config)
+        p.write_text(json.dumps(config))
+        p.chmod(0o600)
+
+        mgr = McpManager(config_path=tmp_config)
+        alive_client = MagicMock()
+        alive_client.tools = []
+        alive_client.is_alive.return_value = True
+        with patch("missy.mcp.manager.McpClient", return_value=alive_client):
+            mgr.connect_all()
+        alive_client.connect.assert_called_once()
+
+        with patch("missy.mcp.manager.McpClient", return_value=MagicMock()) as mock_cls:
+            mgr.health_check()
+        mock_cls.assert_not_called()
+
 
 class TestAllTools:
     def test_namespaces_tools(self, manager):

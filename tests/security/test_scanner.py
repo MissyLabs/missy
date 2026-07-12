@@ -400,6 +400,29 @@ class TestCheckNetworkPolicy:
         ids = [f.id for f in result.findings]
         assert "SEC-011" not in ids
 
+    @pytest.mark.parametrize("cidr", ["1.2.3.4/1", "10.0.0.0/1", "8.8.8.8/0"])
+    def test_sec_011_differently_written_but_equally_broad_cidr_flagged(self, tmp_path, cidr):
+        """Regression: real enforcement (policy/network.py) parses every
+        CIDR via ipaddress.ip_network(cidr, strict=False), which
+        normalizes host bits away -- so "1.2.3.4/1" grants access to
+        half the IPv4 address space exactly like "0.0.0.0/1", but a
+        bare string-set membership check never caught it since the
+        literal string differs. Same bug class as the already-fixed
+        SEC-013 apex-domain false negative.
+        """
+        cfg = _make_config(allowed_cidrs=[cidr])
+        scanner = _scanner(config=cfg, tmp_path=tmp_path / ".missy")
+        result = scanner.scan_all()
+        ids = [f.id for f in result.findings]
+        assert "SEC-011" in ids
+
+    def test_sec_011_malformed_cidr_does_not_crash_scanner(self, tmp_path):
+        cfg = _make_config(allowed_cidrs=["not-a-cidr"])
+        scanner = _scanner(config=cfg, tmp_path=tmp_path / ".missy")
+        result = scanner.scan_all()
+        ids = [f.id for f in result.findings]
+        assert "SEC-011" not in ids
+
     def test_sec_012_no_rest_policies_low(self, tmp_path):
         cfg = _make_config(rest_policies=[])
         scanner = _scanner(config=cfg, tmp_path=tmp_path / ".missy")

@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (115 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for sixty-seven consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (116 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for sixty-eight consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -4841,15 +4841,69 @@ Verified: `pytest tests/agent/ -q -k behavior`: `623 passed`. `pytest
 tests/agent/test_persona.py -q`: `74 passed`. `pytest tests/agent/ -q`:
 `4312 passed, 4 skipped`.
 
+### Post-backlog (one-hundred-tenth checkpoint): round 54 research pass — McpManager cross-process staleness gap and SEC-011 CIDR false-negative
+
+Round 54 re-hunted round 53's "load once, never reload" staleness
+pattern across other manager classes. `agent/playbook.py` is clean by
+design (re-loads under a flock before every mutation). `skills/
+discovery.py` is stateless and unwired. `agent/prompt_patches.py` has
+the same shape internally but the subsystem is already documented as
+entirely unwired. `agent/done_criteria.py` re-verified accurate.
+
+**Found and fixed two real, high-confidence bugs.** (1)
+`mcp/manager.py`'s `McpManager` never re-read `mcp.json` for an
+already-running long-lived process — `connect_all()` runs exactly
+once, at construction, but `_sync_mcp_tools()`'s own docstring
+promises servers added via `missy mcp add` are "reflected on the very
+next turn." A separate `missy mcp add` CLI process constructs its own
+fresh `McpManager`, mutates `mcp.json`, and exits — never touching a
+running daemon's in-memory `self._clients`; `health_check()` only ever
+restarted already-tracked dead servers, never diffed against the
+on-disk config for new entries. Live-verified. Fixed by factoring
+`connect_all()`'s config-read-plus-permission-check logic into a
+shared `_read_config_servers()` helper and adding
+`_connect_new_servers_from_config()`, called from `health_check()`,
+which connects only genuinely new config entries. Reads
+`self._config_path` via `getattr(self, "_config_path", None)` rather
+than direct attribute access — the initial full-suite run caught a
+pre-existing test that constructs a minimal `McpManager` via
+`__new__()` (bypassing `__init__`) and calls `health_check()`
+directly; `getattr` fixes that minimal test double without weakening
+the real check (same pattern applied to `_drift_detector` in round
+43). 2 new tests, the core regression confirmed via `git stash` (after
+the `getattr` correction) to genuinely fail pre-fix.
+(2) `security/scanner.py`'s SEC-011 overly-broad-CIDR check was a raw
+string-set-membership check, not subnet-aware — the same
+false-negative class as the already-fixed SEC-013. The real
+enforcement engine normalizes host bits away via
+`ipaddress.ip_network(cidr, strict=False)`, so `"1.2.3.4/1"` grants
+access to half the IPv4 space exactly like `"0.0.0.0/1"`, but the bare
+string comparison never caught it. Fixed by normalizing each
+configured CIDR the same way the real engine does before comparing.
+6 new tests, 3 parametrized cases confirmed via `git stash` to
+genuinely fail pre-fix.
+
+Verified: `pytest tests/mcp/ -q`: `387 passed`. `pytest
+tests/security/test_scanner.py -q`: `91 passed`. `pytest tests/mcp/
+tests/security/test_scanner.py tests/agent/ -q`: `4789 passed, 4
+skipped`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21469 passed, 14 skipped in 618.97s (0:10:18)
+21475 passed, 14 skipped in 743.20s (0:12:23)
 ```
 
-**Zero failures**, the sixty-seventh consecutive fully green
-full-suite run. Passed count is up from 21461 to 21469 (the round 53
+**Zero failures**, the sixty-eighth consecutive fully green
+full-suite run. (The first attempt this checkpoint hit 1 unrelated
+pre-existing test failure caused by a minimal `McpManager.__new__()`
+test double never setting `_config_path`; fixed via a `getattr`
+correction, then reconfirmed clean on rerun.) Passed count is up from
+21469 to 21475 (the round 54 checkpoint's 6 new tests: 2 McpManager
+cross-process-staleness tests, 4 SEC-011 CIDR tests; all of the
+sixty-first through one-hundred-ninth checkpoints' fixes are confirmed
+still holding). Passed count is up from 21461 to 21469 (the round 53
 checkpoint's 8 new tests: 5 behavior.py robotic-phrase tests, 3
 persona.py cross-process-reload tests; all of the sixty-first through
 one-hundred-eighth checkpoints' fixes are confirmed still holding).

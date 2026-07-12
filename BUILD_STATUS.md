@@ -8343,6 +8343,100 @@ tests/agent/test_persona.py -q`: `74 passed`. `pytest tests/agent/ -q`:
 `21469 passed, 14 skipped in 618.97s (0:10:18)` — 0 failed, up from
 21461. Sixty-seventh consecutive fully green full-suite run.
 
+### Post-backlog (one-hundred-tenth checkpoint): round 54 research pass fixes an McpManager cross-process staleness gap and a SEC-011 CIDR false-negative
+
+Round 54 explicitly re-hunted round 53's newly-identified "load once
+at construction, never reload" staleness pattern across other manager
+classes. `agent/playbook.py` is clean by design — every mutating
+method explicitly re-`load()`s under a cross-process flock before
+mutating, and every production caller constructs a fresh `Playbook()`
+instance per call, so staleness never has a chance to manifest.
+`skills/discovery.py`'s `scan_directory()` is stateless (rescans on
+every call) and isn't wired into the runtime's tool loop at all.
+`agent/prompt_patches.py` does carry the same "load once, never
+reload" shape internally, but since the whole subsystem remains
+completely unwired from `AgentRuntime` (documented residual from an
+earlier round), the only race is CLI-vs-CLI concurrent invocation —
+low real-world impact, not fixed this round. `agent/done_criteria.py`
+re-verified accurate: `make_verification_prompt()` is genuinely wired;
+only `is_compound_task`/`make_done_prompt`/`DoneCriteria` remain
+unused exactly as the module's own docstring states, and it holds no
+mutable state to go stale in the first place.
+
+**Found and fixed two real, high-confidence bugs.** (1)
+`mcp/manager.py`'s `McpManager` never re-read `mcp.json` for an
+already-running long-lived process. `connect_all()` runs exactly once,
+at `AgentRuntime._make_mcp_manager()` construction — but
+`_sync_mcp_tools()`'s own docstring explicitly promises that servers
+"connected/reconnected/disconnected after startup (via `missy mcp
+add`/`remove` or `health_check()`) are reflected on the very next
+turn." In reality, `missy mcp add`/`remove` are separate CLI
+processes: each constructs its own fresh `McpManager()`, mutates
+`mcp.json`, and exits — never touching the running daemon's in-memory
+`self._clients`. The periodic `Watchdog`-driven `health_check()` only
+ever restarted already-tracked *dead* servers; it never diffed
+against the on-disk config to discover a brand-new entry. Concretely:
+start `missy chat`/`missy api start`, run `missy mcp add newtool
+--command "..."` in another terminal, and `newtool` is never exposed
+to the running session until it's manually restarted — directly
+contradicting the documented promise. Live-verified with a real
+`McpManager` instance: constructed against an empty config, then had
+a server entry written to the same file by a simulated separate
+process, then confirmed `health_check()` alone didn't pick it up
+pre-fix. Fixed by factoring the config-read-plus-permission-check
+logic (file ownership/mode verification) that `connect_all()` already
+performs into a shared `_read_config_servers()` helper, and adding
+`_connect_new_servers_from_config()` — called from `health_check()`,
+the existing periodic call site — which diffs the on-disk config
+against `self._clients` and connects only genuinely new entries.
+Deliberately scoped narrowly: reconciling a changed `command`/`url`
+for an already-alive server, or disconnecting a removed entry, is a
+separate, more invasive decision left untouched. `_read_config_servers()`
+reads `self._config_path` via `getattr(self, "_config_path", None)`
+rather than direct attribute access — the initial full-suite run
+caught a pre-existing test
+(`test_hardening_piper_discord.py::test_health_check_no_dead_servers`)
+that constructs a minimal `McpManager` via `__new__()` (bypassing
+`__init__`, never setting `_config_path`) and calls `health_check()`
+directly; `getattr` fixes that minimal test double without weakening
+the real check, matching the same defensive pattern applied to
+`AgentRuntime._drift_detector` in round 43. 2 new tests (a new server
+is picked up via `health_check()`; an already-known server is not
+redundantly reconnected), the core regression confirmed via `git
+stash` (after the `getattr` correction) to genuinely fail pre-fix. (2)
+`security/scanner.py`'s SEC-011
+overly-broad-CIDR check was a raw string-set-membership check, not a
+subnet-aware one — the same false-negative class as the already-fixed
+SEC-013. The real enforcement engine (`policy/network.py`) parses
+every CIDR via `ipaddress.ip_network(cidr, strict=False)`, which
+normalizes host bits away, so `"1.2.3.4/1"`/`"10.0.0.0/1"`/
+`"8.8.8.8/0"` are functionally identical to `"0.0.0.0/1"`/`"0.0.0.0/0"`
+(half or all of the IPv4 address space) — but the scanner's bare
+string comparison against a fixed literal set never caught any of
+these differently-written-but-equally-broad entries, producing zero
+SEC-011 finding for a config that in practice grants access to half
+the internet. Fixed by normalizing each configured CIDR the same way
+the real engine does (`ipaddress.ip_network(..., strict=False)`)
+before comparing against a set of pre-normalized "fully open" networks.
+6 new tests (3 parametrized differently-written-broad-CIDR cases, plus
+a malformed-CIDR-doesn't-crash-the-scanner safety test), the 3
+parametrized cases confirmed via `git stash` to genuinely fail
+pre-fix.
+
+Verified: `pytest tests/mcp/ -q`: `387 passed`. `pytest
+tests/security/test_scanner.py -q`: `91 passed`. `pytest tests/mcp/
+tests/security/test_scanner.py tests/agent/ -q`: `4789 passed, 4
+skipped`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21475 passed, 14 skipped in 743.20s (0:12:23)` — 0 failed, up from
+21469. Sixty-eighth consecutive fully green full-suite run. (The
+first attempt this checkpoint hit 1 unrelated pre-existing test
+failure — `test_hardening_piper_discord.py::test_health_check_no_dead_servers`,
+caused by a minimal `McpManager.__new__()` test double never setting
+`_config_path`; fixed via the `getattr` correction described above,
+then reconfirmed clean on rerun.)
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

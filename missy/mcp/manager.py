@@ -54,36 +54,54 @@ class McpManager:
         for tool_name, annotation in BUILTIN_ANNOTATIONS.items():
             self._annotation_registry.register(tool_name, annotation)
 
-    def connect_all(self) -> None:
-        """Load config and connect to all configured MCP servers."""
-        if not self._config_path.exists():
-            logger.debug("No MCP config at %s; skipping", self._config_path)
-            return
+    def _read_config_servers(self) -> list[dict] | None:
+        """Read and validate mcp.json, returning its server entries.
+
+        Returns ``None`` (logging the reason) if the file is missing,
+        fails the ownership/permission check, or fails to parse.
+        Factored out of :meth:`connect_all` so
+        :meth:`_connect_new_servers_from_config` can reuse the exact
+        same security checks rather than risk a second, divergent
+        implementation that forgets one of them. Uses ``getattr`` (not
+        a direct attribute access) so a minimal test double built via
+        ``McpManager.__new__()`` -- which bypasses ``__init__`` and
+        never sets ``_config_path`` -- doesn't crash ``health_check()``.
+        """
+        config_path = getattr(self, "_config_path", None)
+        if config_path is None or not config_path.exists():
+            logger.debug("No MCP config at %s; skipping", config_path)
+            return None
         # Security: verify file permissions before loading
         try:
-            st = self._config_path.stat()
+            st = config_path.stat()
             if st.st_uid != os.getuid():
                 logger.warning(
                     "MCP config %s owned by uid %d, expected %d; refusing to load",
-                    self._config_path,
+                    config_path,
                     st.st_uid,
                     os.getuid(),
                 )
-                return
+                return None
             if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
                 logger.warning(
                     "MCP config %s is group/world-writable (mode %o); refusing to load",
-                    self._config_path,
+                    config_path,
                     st.st_mode,
                 )
-                return
+                return None
         except OSError as exc:
-            logger.warning("MCP: cannot stat config %s: %s", self._config_path, exc)
-            return
+            logger.warning("MCP: cannot stat config %s: %s", config_path, exc)
+            return None
         try:
-            servers = json.loads(self._config_path.read_text())
+            return json.loads(config_path.read_text())
         except Exception as exc:
             logger.warning("MCP config parse error: %s", exc)
+            return None
+
+    def connect_all(self) -> None:
+        """Load config and connect to all configured MCP servers."""
+        servers = self._read_config_servers()
+        if servers is None:
             return
         for entry in servers:
             name = entry.get("name", "unknown")
@@ -91,6 +109,41 @@ class McpManager:
                 self.add_server(name, command=entry.get("command"), url=entry.get("url"))
             except Exception as exc:
                 logger.warning("MCP: failed to connect %r: %s", name, exc)
+
+    def _connect_new_servers_from_config(self) -> None:
+        """Connect any server present in mcp.json but not yet tracked.
+
+        ``connect_all()`` only ever runs once, at construction
+        (``AgentRuntime._make_mcp_manager()``). For a long-running
+        process (``missy chat``/``missy api start``/the Discord bot),
+        a separate ``missy mcp add`` CLI invocation edits mcp.json and
+        exits without ever touching this daemon's in-memory
+        ``self._clients`` -- so a brand-new server was silently never
+        connected until the daemon was restarted, contradicting
+        ``_sync_mcp_tools()``'s own documented claim that servers
+        "connected... after startup (via `missy mcp add`... or
+        health_check()) are reflected on the very next turn." Called
+        from :meth:`health_check` (already the periodic call site) so
+        the fix takes effect through the same existing polling loop.
+        Only genuinely NEW entries are connected here -- reconciling a
+        changed command/url for an already-alive server, or
+        disconnecting a removed entry, is a separate, more invasive
+        decision intentionally left untouched by this fix.
+        """
+        servers = self._read_config_servers()
+        if servers is None:
+            return
+        with self._lock:
+            known = set(self._clients.keys())
+        for entry in servers:
+            name = entry.get("name", "unknown")
+            if name in known:
+                continue
+            try:
+                self.add_server(name, command=entry.get("command"), url=entry.get("url"))
+                logger.info("MCP: connected newly-configured server %r via health_check", name)
+            except Exception as exc:
+                logger.warning("MCP: failed to connect newly-configured server %r: %s", name, exc)
 
     def add_server(
         self, name: str, command: str | None = None, url: str | None = None
@@ -250,7 +303,12 @@ class McpManager:
             self.add_server(name, command=cmd, url=url)
 
     def health_check(self) -> None:
-        """Restart any dead MCP servers."""
+        """Restart any dead MCP servers, and connect any newly-configured ones.
+
+        See :meth:`_connect_new_servers_from_config` for why the
+        latter is necessary for a long-running process to ever pick
+        up a separate ``missy mcp add`` invocation.
+        """
         with self._lock:
             dead = [n for n, c in self._clients.items() if not c.is_alive()]
         for name in dead:
@@ -259,6 +317,7 @@ class McpManager:
                 self.restart_server(name)
             except Exception as exc:
                 logger.error("MCP: failed to restart %r: %s", name, exc)
+        self._connect_new_servers_from_config()
 
     def all_tools(self) -> list[dict]:
         """Return all tool definitions from all connected servers, namespaced."""
