@@ -205,6 +205,125 @@ class TestVerifyAuditLogDetectsTheReviewsExactPoc:
         assert results[0].status == "valid"
 
 
+class TestHashChainDetectsReordering:
+    """Per-line signing alone (the rest of this file) detects CONTENT
+    tampering but not REORDERING: two validly-signed lines swapped in
+    position, or one deleted, would leave every individual signature
+    intact. Each line now carries a prev_chain_hash (SHA-256 of the exact
+    bytes of the line immediately before it, covered by that line's own
+    signature) so verify_audit_log() can also detect sequence rewrites.
+    """
+
+    def test_baseline_chain_is_valid_and_first_line_not_applicable(
+        self, log_path: str, bus: EventBus, identity: AgentIdentity
+    ):
+        AuditLogger(log_path=log_path, bus=bus, identity=identity)
+        _publish(bus, "event.a", "test", "allow")
+        _publish(bus, "event.b", "test", "allow")
+        _publish(bus, "event.c", "test", "allow")
+
+        results = verify_audit_log(log_path, identity)
+        assert [r.status for r in results] == ["valid", "valid", "valid"]
+        assert results[0].chain_ok is None  # first line: nothing to check against
+        assert results[1].chain_ok is True
+        assert results[2].chain_ok is True
+
+    def test_swapping_two_validly_signed_lines_is_caught_by_chain_ok(
+        self, log_path: str, bus: EventBus, identity: AgentIdentity
+    ):
+        """The exact gap per-line signing alone cannot close: a pure
+        reorder with no content edits leaves every signature valid.
+        """
+        AuditLogger(log_path=log_path, bus=bus, identity=identity)
+        _publish(bus, "event.a", "test", "allow")
+        _publish(bus, "event.b", "test", "allow")
+        _publish(bus, "event.c", "test", "allow")
+
+        lines = Path(log_path).read_text().splitlines()
+        lines[1], lines[2] = lines[2], lines[1]
+        Path(log_path).write_text("\n".join(lines) + "\n")
+
+        results = verify_audit_log(log_path, identity)
+        assert all(r.status == "valid" for r in results), (
+            "a pure reorder must not break any individual line's signature"
+        )
+        assert any(r.chain_ok is False for r in results[1:]), (
+            "reordering must be caught via chain_ok despite valid signatures"
+        )
+
+    def test_chain_continues_across_a_fresh_logger_instance(
+        self, log_path: str, identity: AgentIdentity
+    ):
+        """A restarted process (fresh AuditLogger construction against the
+        same existing file) must seed its chain state from the file's
+        current tail, not start a disconnected new chain.
+        """
+        bus1 = EventBus()
+        AuditLogger(log_path=log_path, bus=bus1, identity=identity)
+        _publish(bus1, "before.restart", "test", "allow")
+
+        bus2 = EventBus()
+        AuditLogger(log_path=log_path, bus=bus2, identity=identity)
+        _publish(bus2, "after.restart", "test", "allow")
+
+        results = verify_audit_log(log_path, identity)
+        assert [r.status for r in results] == ["valid", "valid"]
+        assert results[1].chain_ok is True
+
+    def test_legacy_lines_with_no_chain_field_are_not_applicable(
+        self, log_path: str, identity: AgentIdentity
+    ):
+        """A log written before this feature existed has no
+        prev_chain_hash field at all -- must remain valid, not be
+        misclassified as tampered/broken.
+        """
+        record = {
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "session_id": "s1",
+            "task_id": "t1",
+            "event_type": "legacy.event",
+            "category": "test",
+            "result": "allow",
+            "detail": {},
+            "policy_rule": None,
+        }
+        payload = json.dumps(record, sort_keys=True, default=str).encode("utf-8")
+        record["identity_signature"] = identity.sign(payload).hex()
+        Path(log_path).write_text(json.dumps(record, default=str) + "\n")
+
+        results = verify_audit_log(log_path, identity)
+        assert results[0].status == "valid"
+        assert results[0].chain_ok is None
+
+    def test_concurrent_writers_do_not_corrupt_the_chain(
+        self, log_path: str, bus: EventBus, identity: AgentIdentity
+    ):
+        """The build-sign-write-advance sequence runs under a lock so
+        concurrent publishers can't both read the same 'previous hash'
+        and produce two lines chained from the same point.
+        """
+        import threading
+
+        AuditLogger(log_path=log_path, bus=bus, identity=identity)
+
+        n_threads, n_events = 6, 15
+
+        def worker(tid: int) -> None:
+            for i in range(n_events):
+                _publish(bus, f"ev.{tid}.{i}", "test", "allow")
+
+        threads = [threading.Thread(target=worker, args=(t,)) for t in range(n_threads)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        results = verify_audit_log(log_path, identity)
+        assert len(results) == n_threads * n_events
+        assert all(r.status == "valid" for r in results)
+        assert not any(r.chain_ok is False for r in results)
+
+
 class TestInitAuditLoggerSignsByDefault:
     def test_init_audit_logger_resolves_identity_and_signs(self, tmp_path: Path, monkeypatch):
         key_path = str(tmp_path / "identity.pem")

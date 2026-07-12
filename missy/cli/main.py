@@ -1177,25 +1177,46 @@ def audit_verify(ctx: click.Context, limit: int) -> None:
     )
     console.print(f"Verified {len(results)} line(s) — {summary}")
 
+    # Per-line signatures alone catch content tampering but not
+    # reordering/deletion -- two validly-signed lines swapped in
+    # position would report every line "valid" above. chain_ok surfaces
+    # that separately: it's False only when a line's prev_chain_hash
+    # doesn't match the actual preceding line's hash.
+    broken_chain = [r for r in results if r.chain_ok is False]
+    if broken_chain:
+        console.print(
+            f"[bold red]chain: {len(broken_chain)} line(s) out of sequence "
+            "relative to their originally-written order (reordering/deletion "
+            "detected despite individually valid signatures)[/]"
+        )
+
     non_valid = [r for r in results if r.status != "valid"]
-    if not non_valid:
+    if not non_valid and not broken_chain:
         _print_success("Every signed line verified intact. No tampering detected.")
         return
 
-    shown = non_valid if limit <= 0 else non_valid[:limit]
-    table = Table(title="Non-valid lines", show_lines=True)
+    shown_ids = {r.line_number for r in non_valid} | {r.line_number for r in broken_chain}
+    shown_results = [r for r in results if r.line_number in shown_ids]
+    shown = shown_results if limit <= 0 else shown_results[:limit]
+    table = Table(title="Non-valid or out-of-sequence lines", show_lines=True)
     table.add_column("Line", justify="right")
     table.add_column("Status")
+    table.add_column("Chain")
     table.add_column("Event Type")
     for r in shown:
+        chain_text = (
+            "—" if r.chain_ok is None else ("ok" if r.chain_ok else "broken")
+        )
+        chain_style = "dim" if r.chain_ok is None else ("green" if r.chain_ok else "bold red")
         table.add_row(
             str(r.line_number),
             Text(r.status, style=style_by_status.get(r.status, "white")),
+            Text(chain_text, style=chain_style),
             r.event_type or "",
         )
     console.print(table)
 
-    if any(r.status == "tampered" for r in non_valid):
+    if any(r.status == "tampered" for r in non_valid) or broken_chain:
         sys.exit(1)
 
 
@@ -3018,10 +3039,22 @@ def doctor(ctx: click.Context) -> None:
             for r in results:
                 counts[r.status] = counts.get(r.status, 0) + 1
             summary = ", ".join(f"{status}={count}" for status, count in sorted(counts.items()))
+            # Per-line signatures alone catch content tampering but not
+            # reordering/deletion of otherwise validly-signed lines --
+            # surfaced separately here since counts (status-keyed) has no
+            # slot for it.
+            broken_chain_count = sum(1 for r in results if r.chain_ok is False)
             if not results:
                 table.add_row("audit signing", warn, "log is empty — nothing to verify yet")
             elif counts.get("tampered") or counts.get("malformed"):
                 table.add_row("audit signing", fail, f"integrity issue found: {summary}")
+            elif broken_chain_count:
+                table.add_row(
+                    "audit signing",
+                    fail,
+                    f"{broken_chain_count} line(s) out of sequence "
+                    f"(reordering/deletion detected): {summary}",
+                )
             elif counts.get("unsigned"):
                 table.add_row(
                     "audit signing",

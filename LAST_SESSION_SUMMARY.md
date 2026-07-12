@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (129 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eighty-one consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (130 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eighty-two consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -5418,15 +5418,67 @@ Verified: `pytest tests/scheduler/test_scheduler_extended.py -k
 remove_removes_pending_retry -v`: `1 passed`. `pytest
 tests/scheduler/ tests/cli/ tests/security/ -q`: `3532 passed`.
 
+### Post-backlog (one-hundred-twenty-fourth checkpoint): round 68 research pass — audit log couldn't detect reordering; config backup ordering keyed on a value `shutil.copy2()` doesn't update per backup
+
+Round 68 was directed toward breadth over re-mining already-found bug
+patterns. Two fresh findings surfaced, both about verification/
+ordering guarantees weaker than their own documentation implied.
+
+**Finding 1 — fixed: the audit log could not detect reordering, only
+per-line content tampering.** Per-line signing (SR-1.1) detects
+content tampering but records nothing about the relationship BETWEEN
+lines — swapping two validly-signed lines (or deleting one) left
+every remaining signature valid, so `missy audit verify`/`missy
+doctor` reported the log fully "valid" despite its actual sequence
+having been rewritten. Fixed by adding a `prev_chain_hash` field
+(SHA-256 of the preceding line's exact bytes) to every record, set
+before signing so it's covered by that line's own signature.
+`verify_audit_log()` tracks the expected hash line-by-line via a new
+`AuditLineVerification.chain_ok` field. The write path now runs under
+a new `AuditLogger._chain_lock` — the file had ZERO synchronization
+before this. Chain state is seeded from the log's existing tail on
+construction/`reconfigure()` so it survives restarts/rotation. `missy
+audit verify`/`missy doctor` now surface a broken chain as a distinct
+failure. Live-verified end-to-end with a real `AgentIdentity`:
+swapping two lines produces `status=valid` for both yet
+`chain_ok=False`; chain integrity holds under 8 real concurrent
+threads with zero corruption; the chain continues across a simulated
+restart; a legacy log with no chain field remains valid/`chain_ok=None`.
+7 new tests, all confirmed via `git stash` to genuinely fail pre-fix.
+
+**Finding 2 — fixed: `config/plan.py`'s backup ordering was keyed on
+`stat().st_mtime`, which `shutil.copy2()` doesn't actually set to
+"when this backup was made."** Two backups of an unchanged config
+file get *identical* mtimes (live-reproduced) since `copy2()`
+preserves the SOURCE's mtime, while the backup filename already
+encodes true creation order correctly. With tied mtimes, `sorted()`
+fell back to filesystem enumeration order, so pruning could delete
+the actually-newest backup and rollback could restore the wrong
+version. Fixed by sorting by filename instead. 1 new test, confirmed
+via `git stash` to genuinely fail pre-fix.
+
+Verified: `pytest tests/observability/test_audit_signing.py -k
+TestHashChainDetectsReordering -v`: `5 passed`. `pytest
+tests/cli/test_cli_commands.py -k reordered -v`: `2 passed`. `pytest
+tests/config/test_plan.py -k ordering_survives_tied_mtimes -v`: `1
+passed`. `pytest tests/cli/ tests/observability/ tests/config/
+tests/agent/ -q`: `5969 passed, 4 skipped`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21504 passed, 14 skipped in 772.04s (0:12:52)
+21512 passed, 14 skipped in 788.11s (0:13:08)
 ```
 
-**Zero failures**, the eighty-first consecutive fully green full-suite
-run. Passed count is up from 21503 to 21504 (the round 67 checkpoint's
+**Zero failures**, the eighty-second consecutive fully green
+full-suite run. Passed count is up from 21504 to 21512 (the round 68
+checkpoint's 8 new tests: 5 hash-chain tests in
+`TestHashChainDetectsReordering`, 2 CLI reordering-detection tests, 1
+config-backup tied-mtime-ordering test — full detail above; all of
+the sixty-first through one-hundred-twenty-third checkpoints' fixes
+are confirmed still holding). Passed count is up from 21503 to 21504
+(the round 67 checkpoint's
 1 new test: `test_remove_removes_pending_retry_from_scheduler` — full
 detail above; all of the sixty-first through one-hundred-twenty-second
 checkpoints' fixes are confirmed still holding). Passed count is up

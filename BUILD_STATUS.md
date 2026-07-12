@@ -9468,6 +9468,100 @@ tests/scheduler/ tests/cli/ tests/security/ -q`: `3532 passed`.
 `21504 passed, 14 skipped in 772.04s (0:12:52)` — 0 failed, up from
 21503. Eighty-first consecutive fully green full-suite run.
 
+### Post-backlog (one-hundred-twenty-fourth checkpoint): round 68 research pass fixes the audit log's inability to detect reordering (adds a hash chain) and `config/plan.py`'s backup ordering being keyed on a value `shutil.copy2()` doesn't actually update per backup
+
+Round 68 was explicitly directed toward breadth over re-testing already-mined
+bug patterns. Surveyed `missy/tools/builtin/`'s less-audited tools,
+`missy/core/session.py`'s threading model, remaining
+`operator_controls.py` actions, and a systematic SEC-0xx sweep — no new
+findings there this round. Two real, genuinely fresh findings surfaced
+instead, both about **verification/ordering guarantees that were weaker
+than their own documentation implied**.
+
+**Finding 1 — fixed: the audit log could not detect reordering, only
+per-line content tampering.** `AuditLogger._handle_event()` (SR-1.1)
+signs every field of each record independently; `verify_audit_log()`
+recomputes and checks that signature per line. Neither ever recorded
+any relationship *between* lines. Concretely: swap two validly-signed
+lines in the JSONL file (e.g. move a "dangerous action approved"
+entry to appear *before* the request that supposedly triggered it),
+or delete a line outright — every remaining line's signature still
+matches its own content, so `missy audit verify`/`missy doctor`
+reported the log fully "valid," giving false assurance that the
+log's actual sequence was intact when it had been rewritten. No
+sequence number, hash chain, or monotonic-timestamp check existed
+anywhere in the file to catch this — confirmed by grep. Fixed by
+adding a `prev_chain_hash` field to every record (the SHA-256 of the
+immediately preceding line's exact serialized bytes), set *before*
+signing so it's itself covered by the per-line signature.
+`verify_audit_log()` now tracks the expected hash line-by-line and
+sets a new `AuditLineVerification.chain_ok` (`False` on mismatch,
+`None` when not applicable — the first line in a file, since it may
+legitimately continue a rotated-away predecessor this function can't
+see, or a legacy pre-chaining line with no such field at all, for
+graceful backward compatibility with existing logs). The whole
+build-sign-write-and-advance sequence in `_handle_event()` now runs
+under a new `AuditLogger._chain_lock` (the file had **zero**
+synchronization of any kind before this — the write path relied
+entirely on POSIX `O_APPEND` atomicity, which does protect individual
+writes from interleaving but says nothing about two concurrent
+publishers both reading the same "previous line" state), and the
+chain state is seeded from the log's existing tail on construction
+and `reconfigure()` so it survives process restarts and log rotation.
+`missy audit verify` and `missy doctor`'s audit-signing row both now
+surface a broken chain as a distinct failure (`sys.exit(1)`/`FAIL`),
+separate from `tampered`. Live-verified end-to-end with a real
+`AgentIdentity`: (a) swapping two lines produces `status=valid` for
+both yet `chain_ok=False`; (b) chain integrity holds under 8 real
+concurrent threads publishing 160 events with zero corruption; (c)
+the chain correctly continues across a simulated process restart
+(fresh `AuditLogger` instance against the same file); (d) a legacy
+log with no `prev_chain_hash` field at all remains `valid`/
+`chain_ok=None`, not misclassified. 5 new tests in
+`tests/observability/test_audit_signing.py`
+(`TestHashChainDetectsReordering`) plus 2 new CLI tests (one for
+`missy audit verify`, one for `missy doctor`), all 7 confirmed via
+`git stash` to genuinely fail pre-fix.
+
+**Finding 2 — fixed: `config/plan.py`'s backup ordering was keyed on
+`stat().st_mtime`, which `shutil.copy2()` doesn't actually set to "when
+this backup was made."** `shutil.copy2()` (used by `backup_config()`)
+preserves the *source* file's mtime on the copy — two backups of an
+unchanged config file get *identical* mtimes regardless of real
+wall-clock time between the calls (live-reproduced: two `copy2()`
+calls 1+ seconds apart produced byte-identical `st_mtime` values).
+`_prune_backups()`/`rollback()`/`list_backups()` all sorted by this
+value, while the backup *filename* already encodes true creation
+order correctly (including the `_N` disambiguating suffix a prior
+round's fix added specifically for same-second collisions). With tied
+mtimes, `sorted()`'s stability falls back to `Path.iterdir()`'s
+filesystem-dependent enumeration order rather than true creation
+order, so `_prune_backups()` could delete the actually-newest backup
+instead of the oldest, and `rollback()` could restore the wrong
+(not-truly-latest) version. Fixed by sorting all three functions by
+filename (`p.name`) instead of `st_mtime` — the timestamp format
+already sorts lexicographically in true chronological order. 1 new
+test (`test_ordering_survives_tied_mtimes_from_unchanged_source`),
+confirmed via `git stash` to genuinely fail pre-fix (reproducing the
+exact tied-mtime scenario and asserting the true-latest backup still
+sorts last).
+
+Verified: `pytest tests/observability/test_audit_signing.py -k
+TestHashChainDetectsReordering -v`: `5 passed`. `pytest
+tests/cli/test_cli_commands.py -k reordered -v`: `2 passed`. `pytest
+tests/config/test_plan.py -k ordering_survives_tied_mtimes -v`: `1
+passed`. `pytest tests/cli/ tests/observability/ tests/config/
+tests/agent/ -q`: `5969 passed, 4 skipped`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21512 passed, 14 skipped in 788.11s (0:13:08)` — 0 failed, up from
+21504. Eighty-second consecutive fully green full-suite run. (A prior
+attempt this checkpoint hit 1 unrelated pre-existing flake —
+`test_client_deep.py::TestInteractiveApprovalFlow::test_async_prompt_does_not_block_the_event_loop`,
+a wall-clock-timing-based concurrency test unrelated to either of this
+round's changes — reconfirmed passing in isolation and on full-suite
+rerun.)
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

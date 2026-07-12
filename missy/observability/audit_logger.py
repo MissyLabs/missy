@@ -23,9 +23,11 @@ Example::
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import logging
 import os
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -130,7 +132,33 @@ class AuditLogger:
         # production entry point, resolves and passes a real identity by
         # default so the actual running gateway/CLI signs every event.
         self._identity = identity
+        # Hash-chain state: each written line's own SHA-256 becomes the
+        # NEXT line's "prev_chain_hash" field (set before signing, so it's
+        # covered by the per-line signature too). Per-line signing alone
+        # (SR-1.1) detects content tampering but not REORDERING: two
+        # validly-signed lines swapped in position, or one deleted, leaves
+        # every individual signature intact. Chaining each line to the
+        # exact bytes of the one before it makes reordering/deletion
+        # detectable by verify_audit_log() the same way a git commit chain
+        # detects history rewrites. Seeded from the existing file's last
+        # line (if any) so the chain survives process restarts/log
+        # rotation instead of silently starting a new, disconnected chain
+        # every time the logger is constructed.
+        self._chain_lock = threading.Lock()
+        self._last_line_hash: str | None = self._seed_last_line_hash()
         self._subscribe()
+
+    def _seed_last_line_hash(self) -> str | None:
+        """Return the SHA-256 hex digest of the log file's current last
+        non-blank line, or ``None`` if the file is empty/absent.
+        """
+        try:
+            lines = self._read_tail_lines(1)
+        except Exception:
+            return None
+        if not lines:
+            return None
+        return hashlib.sha256(lines[-1].encode("utf-8")).hexdigest()
 
     def reconfigure(self, log_path: str, identity: Any | None = None) -> None:
         """Repoint this already-subscribed logger at a new *log_path*/*identity*.
@@ -158,6 +186,14 @@ class AuditLogger:
             with contextlib.suppress(OSError):
                 os.chmod(self.log_path, 0o600)
         self._identity = identity
+        # The hash chain must continue from the NEW log_path's own tail,
+        # not the previous file's -- otherwise the first event written
+        # after a reconfigure() (e.g. a hot-reloaded audit_log_path) would
+        # chain from a now-irrelevant hash, and verify_audit_log() on the
+        # new file would see a "genesis" line whose prev_chain_hash points
+        # nowhere reconstructible from that file alone.
+        with self._chain_lock:
+            self._last_line_hash = self._seed_last_line_hash()
 
     # ------------------------------------------------------------------
     # Subscription
@@ -212,49 +248,63 @@ class AuditLogger:
         signature inside ``detail``, and only covered events emitted via
         that one method).
 
+        Every record also carries a ``prev_chain_hash`` field (the SHA-256
+        of the exact serialised bytes of the immediately preceding line in
+        this file, or ``null`` for the first line), set before signing so
+        it's covered by the signature too. Per-line signing alone detects
+        *content* tampering but not *reordering*: swapping two validly-
+        signed lines, or deleting one, leaves every individual signature
+        intact. The whole build-sign-write-and-advance-the-chain sequence
+        runs under ``self._chain_lock`` so concurrent publishers can't both
+        read the same "previous hash" and produce two lines chained from
+        the same point.
+
         Args:
             event: The audit event to persist.
         """
-        record: dict[str, Any] = {
-            "timestamp": event.timestamp.isoformat(),
-            "session_id": event.session_id,
-            "task_id": event.task_id,
-            "event_type": event.event_type,
-            "category": event.category,
-            "result": event.result,
-            "detail": _redact_detail(event.detail),
-            "policy_rule": event.policy_rule,
-        }
-        if self._identity is not None:
+        with self._chain_lock:
+            record: dict[str, Any] = {
+                "timestamp": event.timestamp.isoformat(),
+                "session_id": event.session_id,
+                "task_id": event.task_id,
+                "event_type": event.event_type,
+                "category": event.category,
+                "result": event.result,
+                "detail": _redact_detail(event.detail),
+                "policy_rule": event.policy_rule,
+                "prev_chain_hash": self._last_line_hash,
+            }
+            if self._identity is not None:
+                try:
+                    payload = json.dumps(record, sort_keys=True, default=str).encode("utf-8")
+                    record["identity_signature"] = self._identity.sign(payload).hex()
+                except Exception:
+                    _module_logger.warning(
+                        "AuditLogger: failed to sign event %r; writing unsigned",
+                        event.event_type,
+                        exc_info=True,
+                    )
             try:
-                payload = json.dumps(record, sort_keys=True, default=str).encode("utf-8")
-                record["identity_signature"] = self._identity.sign(payload).hex()
-            except Exception:
-                _module_logger.warning(
-                    "AuditLogger: failed to sign event %r; writing unsigned",
+                line = json.dumps(record, default=str)
+                self._rotate_if_needed()
+                # Availability hardening: os.open() with an explicit mode
+                # applies restrictive permissions atomically at file-creation
+                # time (no window where a newly-created log file is briefly
+                # world-readable before a follow-up chmod() call, unlike a
+                # plain open("a") + chmod() sequence).
+                fd = os.open(str(self.log_path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+                try:
+                    os.write(fd, (line + "\n").encode("utf-8"))
+                finally:
+                    os.close(fd)
+                self._last_line_hash = hashlib.sha256(line.encode("utf-8")).hexdigest()
+            except Exception as exc:
+                _module_logger.error(
+                    "AuditLogger: failed to write event %r to %s: %s",
                     event.event_type,
-                    exc_info=True,
+                    self.log_path,
+                    exc,
                 )
-        try:
-            line = json.dumps(record, default=str)
-            self._rotate_if_needed()
-            # Availability hardening: os.open() with an explicit mode
-            # applies restrictive permissions atomically at file-creation
-            # time (no window where a newly-created log file is briefly
-            # world-readable before a follow-up chmod() call, unlike a
-            # plain open("a") + chmod() sequence).
-            fd = os.open(str(self.log_path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-            try:
-                os.write(fd, (line + "\n").encode("utf-8"))
-            finally:
-                os.close(fd)
-        except Exception as exc:
-            _module_logger.error(
-                "AuditLogger: failed to write event %r to %s: %s",
-                event.event_type,
-                self.log_path,
-                exc,
-            )
 
     def _rotate_if_needed(self) -> None:
         """Rotate the active log file once it exceeds ``_MAX_LOG_SIZE_BYTES``.
@@ -506,11 +556,24 @@ class AuditLineVerification:
         status: One of :data:`VerificationStatus`.
         event_type: The record's ``event_type``, when the line parsed as
             JSON (``None`` for a ``"malformed"`` line).
+        chain_ok: ``True`` when this line's ``prev_chain_hash`` field
+            matches the SHA-256 of the immediately preceding line's exact
+            bytes (see :meth:`AuditLogger._handle_event`); ``False`` when
+            it's present but doesn't match -- meaning either this line or
+            the one before it has been reordered, deleted, or replaced
+            relative to the original write sequence, something per-line
+            signature verification alone cannot detect. ``None`` when not
+            applicable: the line has no ``prev_chain_hash`` field at all
+            (predates this feature, or signing was disabled when it was
+            written), or it's the very first line in the file (which may
+            legitimately chain from a rotated-away predecessor file this
+            function has no visibility into).
     """
 
     line_number: int
     status: VerificationStatus
     event_type: str | None = None
+    chain_ok: bool | None = None
 
 
 def verify_audit_log(log_path: str, identity: Any) -> list[AuditLineVerification]:
@@ -525,6 +588,14 @@ def verify_audit_log(log_path: str, identity: Any) -> list[AuditLineVerification
     verification counterpart the security review found entirely absent:
     signing without any verification path provides no actual tamper
     detection, since nothing would ever notice a mismatch.
+
+    Also verifies the hash chain: each line (other than the first in the
+    file) must carry a ``prev_chain_hash`` matching the SHA-256 of the
+    exact bytes of the line immediately before it. Per-line signatures
+    alone catch content tampering but not REORDERING -- two validly
+    signed lines swapped in position, or one deleted outright, would
+    otherwise report every line "valid" despite the log's actual sequence
+    having been rewritten.
 
     Args:
         log_path: Path to the JSONL audit log file.
@@ -542,6 +613,8 @@ def verify_audit_log(log_path: str, identity: Any) -> list[AuditLineVerification
         return []
 
     results: list[AuditLineVerification] = []
+    expected_prev_hash: str | None = None
+    is_first_line = True
     with path.open("r", encoding="utf-8") as fh:
         for line_number, raw_line in enumerate(fh, start=1):
             line = raw_line.strip()
@@ -551,22 +624,34 @@ def verify_audit_log(log_path: str, identity: Any) -> list[AuditLineVerification
                 record = json.loads(line)
             except json.JSONDecodeError:
                 results.append(AuditLineVerification(line_number, "malformed"))
+                # A malformed line's own bytes can't seed the next line's
+                # expected hash meaningfully; treat the chain as broken
+                # from here rather than silently resuming.
+                expected_prev_hash = None
+                is_first_line = False
                 continue
 
             event_type = record.get("event_type") if isinstance(record, dict) else None
+            has_chain_field = isinstance(record, dict) and "prev_chain_hash" in record
+            chain_ok: bool | None = None
+            if has_chain_field and not is_first_line:
+                chain_ok = record.get("prev_chain_hash") == expected_prev_hash
+
             sig_hex = record.pop("identity_signature", None) if isinstance(record, dict) else None
             if sig_hex is None:
-                results.append(AuditLineVerification(line_number, "unsigned", event_type))
-                continue
+                results.append(AuditLineVerification(line_number, "unsigned", event_type, chain_ok))
+            else:
+                try:
+                    signature = bytes.fromhex(sig_hex)
+                    payload = json.dumps(record, sort_keys=True, default=str).encode("utf-8")
+                    valid = identity.verify(payload, signature)
+                except Exception:
+                    valid = False
 
-            try:
-                signature = bytes.fromhex(sig_hex)
-                payload = json.dumps(record, sort_keys=True, default=str).encode("utf-8")
-                valid = identity.verify(payload, signature)
-            except Exception:
-                valid = False
+                status: VerificationStatus = "valid" if valid else "tampered"
+                results.append(AuditLineVerification(line_number, status, event_type, chain_ok))
 
-            status: VerificationStatus = "valid" if valid else "tampered"
-            results.append(AuditLineVerification(line_number, status, event_type))
+            expected_prev_hash = hashlib.sha256(line.encode("utf-8")).hexdigest()
+            is_first_line = False
 
     return results

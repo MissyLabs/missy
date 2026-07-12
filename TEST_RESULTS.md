@@ -1,5 +1,62 @@
 # TEST_RESULTS
 
+## Run: 2026-07-12 UTC — round 68 research pass: audit log couldn't detect reordering; config backup ordering keyed on a value shutil.copy2() doesn't update per backup
+
+- Context: round 68 prioritized breadth over re-mining already-found
+  bug patterns. Surveyed less-audited built-in tools, session.py's
+  threading model, remaining operator_controls.py actions, and did a
+  systematic SEC-0xx sweep -- no new findings there. Two fresh findings
+  surfaced instead, both about verification/ordering guarantees weaker
+  than documented.
+- **Finding 1 -- audit log couldn't detect reordering**: per-line
+  signing (SR-1.1) detects content tampering but records nothing about
+  the relationship BETWEEN lines. Swapping two validly-signed lines
+  (or deleting one) left every remaining signature valid, so `missy
+  audit verify`/`missy doctor` reported the log fully "valid" despite
+  its actual sequence having been rewritten. Fixed by adding a
+  `prev_chain_hash` field (SHA-256 of the preceding line's exact
+  bytes) to every record, set before signing so it's covered by that
+  line's own signature. `verify_audit_log()` tracks the expected hash
+  line-by-line via a new `AuditLineVerification.chain_ok` field
+  (False on mismatch, None when not applicable -- first line in a
+  file, or a legacy pre-chaining line with no such field, for
+  backward compatibility). The write path (`_handle_event()`) now runs
+  under a new `AuditLogger._chain_lock` -- the file had ZERO
+  synchronization before this, relying entirely on POSIX O_APPEND
+  atomicity for individual writes, which says nothing about two
+  concurrent publishers both reading the same "previous line" state.
+  Chain state is seeded from the log's existing tail on construction
+  and reconfigure() so it survives restarts/rotation. `missy audit
+  verify`/`missy doctor` now surface a broken chain as a distinct
+  failure from `tampered`.
+- Live-verified end-to-end with a real AgentIdentity: swapping two
+  lines produces status=valid for both yet chain_ok=False; chain
+  integrity holds under 8 real concurrent threads publishing 160
+  events with zero corruption; the chain correctly continues across a
+  simulated process restart; a legacy log with no prev_chain_hash
+  field remains valid/chain_ok=None.
+- Command: `pytest tests/observability/test_audit_signing.py -k TestHashChainDetectsReordering -v`
+- Result: `5 passed`. Plus `pytest tests/cli/test_cli_commands.py -k reordered -v`: `2 passed`. All 7 new tests confirmed via `git stash` to genuinely fail pre-fix.
+- **Finding 2 -- config backup ordering keyed on the wrong value**:
+  `shutil.copy2()` (used by `backup_config()`) preserves the SOURCE
+  file's mtime on the copy -- two backups of an unchanged config get
+  identical mtimes regardless of real wall-clock time between calls
+  (live-reproduced). `_prune_backups()`/`rollback()`/`list_backups()`
+  all sorted by this tied value instead of the backup filename (which
+  already encodes true creation order correctly, including the `_N`
+  disambiguating suffix a prior round's fix added for same-second
+  collisions). With tied mtimes, sort() falls back to filesystem
+  enumeration order, so pruning could delete the actually-newest
+  backup and rollback could restore the wrong version.
+- Fixed by sorting all three functions by filename instead of
+  st_mtime.
+- Command: `pytest tests/config/test_plan.py -k ordering_survives_tied_mtimes -v`
+- Result: `1 passed`. New test
+  (test_ordering_survives_tied_mtimes_from_unchanged_source) confirmed
+  via `git stash` to genuinely fail pre-fix.
+- Broader sweep: `pytest tests/cli/ tests/observability/ tests/config/ tests/agent/ -q`: `5969 passed, 4 skipped`.
+- Full suite: `python3 -m pytest tests/ -q` → `21512 passed, 14 skipped in 788.11s (0:13:08)` — 0 failed, up from 21504. Eighty-second consecutive fully green full-suite run. (A prior attempt hit 1 unrelated pre-existing wall-clock-timing flake in test_client_deep.py, reconfirmed passing in isolation and on rerun.)
+
 ## Run: 2026-07-12 UTC — round 67 research pass: SchedulerManager.remove_job() left a dangling pending-retry APScheduler entry that pause_job() already cleans up
 
 - Context: round 67 generalized round 66's "state-machine mutation

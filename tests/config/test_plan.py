@@ -64,6 +64,36 @@ class TestBackupConfig:
         assert path1.read_text() == "version: 1\n"
         assert path2.read_text() == "version: 2\n"
 
+    def test_ordering_survives_tied_mtimes_from_unchanged_source(self, tmp_path, monkeypatch):
+        """Regression: list_backups()/rollback()/_prune_backups() sorted by
+        stat().st_mtime, but shutil.copy2() (used by backup_config())
+        preserves the *source* config file's mtime on the copy, not the
+        time the backup was actually made. Two backups of an unchanged
+        source file get IDENTICAL mtimes, even when their filenames
+        (and the disambiguating _N suffix backup_config() already adds
+        for same-second collisions) correctly encode true creation order.
+        Sorting must use the filename, not mtime, so ties can't scramble
+        backup ordering.
+        """
+        from missy.config.plan import backup_config, list_backups
+
+        config_file = tmp_path / "config.yaml"
+        backup_dir = tmp_path / "config.d"
+        config_file.write_text("version: 1\n")
+
+        # Two backups of the SAME unchanged content: shutil.copy2() gives
+        # both copies the identical source mtime, regardless of real
+        # wall-clock time between the two calls.
+        path1 = backup_config(config_file, backup_dir)
+        path2 = backup_config(config_file, backup_dir)
+
+        assert path1.stat().st_mtime == path2.stat().st_mtime
+        assert path1 != path2
+
+        backups = list_backups(backup_dir)
+        assert backups[-1] == path2, "the true most-recent backup must sort last despite tied mtimes"
+        assert backups[0] == path1
+
 
 class TestRollback:
     """Tests for rollback."""

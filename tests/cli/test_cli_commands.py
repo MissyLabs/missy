@@ -873,6 +873,49 @@ class TestAuditVerify:
         assert "tampered: 1" in result.output
         assert "shell.exec" in result.output
 
+    def test_verify_reordered_log_exits_nonzero_and_reports_chain_break(
+        self, runner: CliRunner, tmp_path, monkeypatch
+    ):
+        """Regression: per-line signatures alone catch content tampering
+        but not reordering -- two validly-signed lines swapped in
+        position must still be caught and surfaced, via the hash chain,
+        not silently reported as fully valid.
+        """
+        import json as _json
+
+        key_path = tmp_path / "identity.pem"
+        log_path = tmp_path / "audit.jsonl"
+        monkeypatch.setattr("missy.security.identity.DEFAULT_KEY_PATH", str(key_path))
+        self._write_signed_log(
+            tmp_path,
+            key_path,
+            log_path,
+            [
+                ("event.a", "test", "allow", {}),
+                ("event.b", "test", "allow", {}),
+                ("event.c", "test", "allow", {}),
+            ],
+        )
+        lines = log_path.read_text().splitlines()
+        lines[1], lines[2] = lines[2], lines[1]
+        log_path.write_text("\n".join(lines) + "\n")
+        # Every individual line still parses and its own signature still
+        # verifies -- the point of this test is that reordering alone
+        # (no content edits) must still be caught.
+        for ln in lines:
+            _json.loads(ln)
+
+        cfg_path = _write_temp_config()
+        cfg = _make_mock_config()
+        cfg.audit_log_path = str(log_path)
+
+        with _SubsystemsPatch(cfg):
+            result = runner.invoke(cli, ["--config", cfg_path, "audit", "verify"])
+
+        assert result.exit_code == 1
+        assert "valid: 3" in result.output
+        assert "out of sequence" in result.output.lower()
+
     def test_verify_empty_log_message(self, runner: CliRunner, tmp_path, monkeypatch):
         key_path = tmp_path / "identity.pem"
         log_path = tmp_path / "does_not_exist.jsonl"
@@ -2746,6 +2789,44 @@ class TestDoctorAuditSigning:
         assert result.exit_code == 0  # doctor reports, never crashes/exits nonzero
         assert "audit signing" in result.output.lower()
         assert "tampered=1" in result.output
+        assert "FAIL" in result.output
+
+    def test_reordered_lines_show_fail(self, runner: CliRunner, tmp_path, monkeypatch):
+        """Regression: reordering two validly-signed lines (no content
+        edits) must still be surfaced as a FAIL, via the hash chain --
+        per-line signature checks alone would report this log fully
+        valid.
+        """
+        import json as _json
+
+        key_path = tmp_path / "identity.pem"
+        log_path = tmp_path / "audit.jsonl"
+        monkeypatch.setattr("missy.security.identity.DEFAULT_KEY_PATH", str(key_path))
+        self._write_signed_log(
+            key_path,
+            log_path,
+            [
+                ("event.a", "test", "allow", {}),
+                ("event.b", "test", "allow", {}),
+                ("event.c", "test", "allow", {}),
+            ],
+        )
+        lines = log_path.read_text().splitlines()
+        lines[1], lines[2] = lines[2], lines[1]
+        log_path.write_text("\n".join(lines) + "\n")
+        for ln in lines:
+            _json.loads(ln)  # still individually well-formed/parseable
+
+        cfg_path = _write_temp_config()
+        cfg = _make_mock_config()
+        cfg.audit_log_path = str(log_path)
+
+        result = self._invoke_doctor(runner, cfg_path, cfg)
+
+        assert result.exit_code == 0  # doctor reports, never crashes/exits nonzero
+        assert "audit signing" in result.output.lower()
+        assert "valid=3" in result.output
+        assert "out of sequence" in result.output.lower()
         assert "FAIL" in result.output
 
     def test_unsigned_lines_show_warn(self, runner: CliRunner, tmp_path, monkeypatch):
