@@ -94,6 +94,11 @@ def _make_mock_config(**overrides) -> MagicMock:
     cfg.plugins.allowed_plugins = []
     cfg.discord = None
     cfg.vault = None
+    # See test_cli_coverage_gaps.py's _make_mock_config for why this must
+    # default off: `gateway start` now constructs a real SchedulerManager
+    # (touching ~/.missy/jobs.json) whenever cfg.scheduling.enabled is
+    # truthy, which a bare MagicMock attribute is by default.
+    cfg.scheduling.enabled = False
     for k, v in overrides.items():
         setattr(cfg, k, v)
     return cfg

@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (117 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for sixty-nine consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (118 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for seventy consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -4936,16 +4936,73 @@ genuinely fail pre-fix.
 Verified: `pytest tests/cli/ tests/providers/ tests/api/ -q`: `2202
 passed`.
 
+### Post-backlog (one-hundred-twelfth checkpoint): round 56 research pass — scheduled jobs never actually ran under `missy gateway start`
+
+Round 56 targeted fresh territory (scheduler persistence, approval-gate
+session scoping, other Discord slash commands, vault rotation,
+cost-tracker cross-process staleness, OTel runtime toggling,
+failure-tracker scoping, webhook auth completeness).
+
+**Found and fixed a severe instance of the same family as rounds
+53-55, this time with no live execution path at all rather than a
+merely stranded mutation.** `gateway_start()` — the long-running
+process the documented systemd unit invokes — never constructed,
+started, or referenced `SchedulerManager` anywhere. Every
+`SchedulerManager()` instantiation in `cli/main.py` lives inside the
+standalone `missy schedule add/list/pause/resume/remove` CLI
+subcommands, each opening a private instance, mutating `jobs.json`,
+and tearing it down again within the same synchronous call — no
+window existed for a persisted job's trigger to actually fire. A
+second, related defect: the Web TUI's scheduler pages/operator
+controls (already fully built and tested) resolve their
+`SchedulerManager` via `getattr(runtime, "_scheduler", None)`, but
+nothing ever set `_scheduler` on the `AgentRuntime` passed to
+`ApiServer` as `runtime=_agent` — silently non-functional in every
+real deployment despite correct downstream logic. Fixed by
+constructing a `SchedulerManager()` in `gateway_start()` (gated on
+`cfg.scheduling.enabled`, mirroring the existing watchdog/
+config-watcher/proactive-manager wiring), calling `.start()`,
+assigning it to `_agent._scheduler`, and calling `.stop()` in the
+existing shutdown `finally` block. Also added a scheduler row to
+`missy gateway status` using `SchedulerManager().load_jobs()` (the
+same APScheduler-thread-free read `missy schedule list`/`missy doctor`
+already use). Live-verified end-to-end with a real, unmocked
+`SchedulerManager`: printed "Scheduler started (0 job(s) loaded)" then
+"Scheduler stopped." on SIGTERM, and `_agent._scheduler is <the
+constructed instance>` confirmed directly.
+
+**Test-isolation hazard caught along the way**: the three shared
+`_make_mock_config()` helpers build a bare `MagicMock()` config, and
+an unconfigured `cfg.scheduling.enabled` attribute is truthy by
+default on a `MagicMock` — every existing `gateway start` test in all
+three files would otherwise have started hitting the new code for
+real, against the *operator's actual* `~/.missy/jobs.json`, spinning
+up a genuine `BackgroundScheduler` thread (same "test leaks into the
+operator's real home directory" bug class as the already-fixed
+VIS-005). Confirmed via a `stat` mtime check on the real file that it
+was otherwise being touched by the 20 pre-existing `gateway start`
+tests. Fixed by defaulting `cfg.scheduling.enabled = False` in all
+three helpers (matching the existing `cfg.discord = None`/
+`cfg.vault = None` inert-by-default pattern). 2 new tests, both
+confirmed via `git stash` to genuinely fail pre-fix.
+
+Verified: `pytest tests/cli/ -q`: `1090 passed`. `pytest
+tests/scheduler/ tests/api/ -q`: `539 passed`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21477 passed, 14 skipped in 821.03s (0:13:41)
+21479 passed, 14 skipped in 609.31s (0:10:09)
 ```
 
-**Zero failures**, the sixty-ninth consecutive fully green
-full-suite run. Passed count is up from 21475 to 21477 (the round 55
-checkpoint's 2 new tests: `test_providers_switch_reaches_running_daemon`,
+**Zero failures**, the seventieth consecutive fully green full-suite
+run. Passed count is up from 21477 to 21479 (the round 56 checkpoint's
+2 new tests: `test_scheduler_started_wired_and_stopped`,
+`test_scheduler_disabled_via_config_is_not_started`; all of the
+sixty-first through one-hundred-eleventh checkpoints' fixes are
+confirmed still holding). Passed count is up from 21475 to 21477 (the
+round 55 checkpoint's 2 new tests: `test_providers_switch_reaches_running_daemon`,
 `test_providers_switch_daemon_rejects_exits_1`; all of the sixty-first
 through one-hundred-tenth checkpoints' fixes are confirmed still
 holding). Passed count is up from 21469 to 21475 (the round 54

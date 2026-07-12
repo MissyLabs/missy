@@ -8509,6 +8509,107 @@ passed`.
 `21477 passed, 14 skipped in 821.03s (0:13:41)` — 0 failed, up from
 21475. Sixty-ninth consecutive fully green full-suite run.
 
+### Post-backlog (one-hundred-twelfth checkpoint): round 56 research pass fixes scheduled jobs never actually running under `missy gateway start`
+
+Round 56 targeted fresh territory: scheduler persistence/live-daemon
+wiring, approval-gate session scoping, other Discord slash commands,
+vault rotation, cost-tracker cross-process staleness, OTel runtime
+toggling, failure-tracker scoping, webhook auth completeness.
+
+**Found and fixed a severe instance of the "state never reaches the
+process that matters" pattern (rounds 55/54/53's family), this time
+with no live execution path at all rather than merely a stranded
+mutation.** `gateway_start()` (`cli/main.py`) — the long-running daemon
+the documented systemd unit's `ExecStart` invokes, and the only process
+`docs/scheduler.md` describes as giving scheduled jobs "full
+integration with the agent pipeline" — never constructed, started, or
+referenced `SchedulerManager` anywhere in its body. Confirmed via a
+full grep of every `SchedulerManager`/`scheduler` reference in
+`cli/main.py`: every instantiation lives inside the standalone `missy
+schedule add/list/pause/resume/remove` CLI subcommands, each of which
+opens a private `SchedulerManager()`, calls `.start()`/the requested
+operation/`.stop()`, and exits within the same synchronous call —
+there is no window in which a persisted job's trigger can actually
+fire, since the scheduler thread is torn down again microseconds to
+seconds after being created. Concretely: an operator runs `missy
+schedule add --schedule "daily at 09:00" ...`, sees "Job added," and
+deploys `missy gateway start` (or the systemd unit) as documented — but
+9:00 AM never triggers anything, forever, while `missy schedule list`
+keeps showing the job as enabled with a computed `next_run`, giving
+false confidence that it's live. A second, related defect was found
+while tracing this: the Web TUI's scheduler pages and operator
+controls (`api/server.py`'s `_handle_list_scheduled_jobs`/
+`_handle_create_scheduled_job`, `api/operator_controls.py`'s
+`scheduler.pause_job`/`resume_job`/`remove_job`) were *already fully
+built, tested, and correct* — every one of them resolves its
+`SchedulerManager` via `getattr(runtime, "_scheduler", None)` where
+`runtime` is the `AgentRuntime` passed to `ApiServer` as `runtime=_agent`
+— but nothing in the codebase ever set `_scheduler` on that object, so
+every one of these endpoints was silently non-functional in every real
+deployment (empty job list, 503 "scheduler unavailable"), despite
+correct downstream logic. No test asserted that `gateway_start` boots a
+scheduler, so both gaps were entirely unexercised.
+
+Fixed by constructing a `SchedulerManager()` in `gateway_start()`
+(gated on `cfg.scheduling.enabled`, mirroring the existing
+watchdog/config-watcher/proactive-manager wiring pattern in the same
+function), calling `.start()`, assigning it to `_agent._scheduler` so
+the already-correct Web TUI code finds a live instance, and calling
+`.stop()` in the function's existing `finally` shutdown block alongside
+the other subsystems. Also added a `scheduler` row to `missy gateway
+status` (using `SchedulerManager().load_jobs()` — the same read-only,
+APScheduler-thread-free method `missy schedule list`/`missy doctor`
+already use for exactly this reason, per its own docstring).
+Live-verified end-to-end with a **real**, unmocked `SchedulerManager`
+(redirected to a temp `jobs.json`, `VoiceChannel.start` patched to fail
+so the port conflict from an already-running gateway process didn't
+mask the result): the real run printed "Scheduler started (0 job(s)
+loaded)" and, on SIGTERM, "Scheduler stopped." — confirming the real
+`BackgroundScheduler`'s lifecycle is genuinely driven by
+`gateway_start()`, not just a mock recording calls. A second live
+check confirmed `_agent._scheduler is <the constructed instance>`.
+
+**Test-isolation hazard caught and fixed along the way**: the three
+shared `_make_mock_config()` helpers (`test_cli_coverage_gaps.py`,
+`test_cli_main_gaps.py`, `test_cli_main_extended.py`) build a bare
+`MagicMock()` config, and an unconfigured `cfg.scheduling.enabled`
+attribute on a `MagicMock` is truthy by default — so every existing
+`gateway start` test in all three files would otherwise have started
+hitting the new code path for real, constructing a genuine
+`SchedulerManager()` against the *operator's actual*
+`~/.missy/jobs.json` and spinning up a real `BackgroundScheduler`
+thread, exactly the "test leaks into the operator's real home
+directory" bug class already found and fixed once before (round-30-era
+predecessor, VIS-005). Caught immediately (the 9 pre-existing
+`gateway start` tests all still passed, but a `stat` check on the real
+`~/.missy/jobs.json` before/after confirmed it was being read from
+directly — luckily empty on this dev machine, but not something to
+leave to luck). Fixed by defaulting `cfg.scheduling.enabled = False` in
+all three shared mock-config helpers (matching the existing
+`cfg.discord = None`/`cfg.vault = None` "inert by default" pattern
+already used there), re-confirmed via a `stat` mtime check that the
+real file is now untouched by the full existing `gateway start` test
+set (20 tests across all three files, all still green). 2 new tests
+added directly for the fix (`test_scheduler_started_wired_and_stopped`,
+`test_scheduler_disabled_via_config_is_not_started`), both confirmed
+via `git stash` to genuinely fail pre-fix.
+
+Watchdog's register()/`_check_all()` unlocked-dict race (re-noted, not
+re-elevated — same latent/unreached conclusion as round 55, no new
+production call site changed that assessment) and the other angles
+scoped for this round (approval-gate session scoping, other Discord
+slash commands, vault rotation, cost-tracker/OTel/failure-tracker
+cross-process behavior, webhook auth) came back clean or are queued
+for a future round — the scheduler finding was severe enough to close
+out this round on its own.
+
+Verified: `pytest tests/cli/ -q`: `1090 passed`. `pytest
+tests/scheduler/ tests/api/ -q`: `539 passed`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21479 passed, 14 skipped in 609.31s (0:10:09)` — 0 failed, up from
+21477. Seventieth consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

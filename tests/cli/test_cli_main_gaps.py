@@ -71,6 +71,11 @@ def _make_mock_config(**overrides) -> MagicMock:
     cfg.plugins.allowed_plugins = []
     cfg.discord = None
     cfg.vault = None
+    # See test_cli_coverage_gaps.py's _make_mock_config for why this must
+    # default off: `gateway start` now constructs a real SchedulerManager
+    # (touching ~/.missy/jobs.json) whenever cfg.scheduling.enabled is
+    # truthy, which a bare MagicMock attribute is by default.
+    cfg.scheduling.enabled = False
     for k, v in overrides.items():
         setattr(cfg, k, v)
     return cfg
@@ -263,6 +268,108 @@ class TestGatewayStartWatchdog:
             }
             assert "provider_registry" in registered_names
             assert "memory_store" in registered_names
+        finally:
+            import os as _os
+
+            _os.unlink(cfg_path)
+
+
+class TestGatewayStartScheduler:
+    """Regression: SchedulerManager (missy/scheduler/manager.py) was fully
+    built and tested but had zero production callers inside gateway_start()
+    -- the persistent daemon process the systemd unit runs never constructed
+    one, so a job persisted via `missy schedule add` (a separate CLI
+    invocation that opens its own private SchedulerManager, mutates
+    jobs.json, and immediately stops it again) would never actually fire:
+    nothing in the long-running gateway process ever loaded jobs.json into
+    a live, running APScheduler instance. The Web TUI's scheduler pages and
+    operator controls were also silently non-functional, since they all
+    resolve their SchedulerManager via getattr(runtime, "_scheduler", None)
+    and nothing ever set that attribute on the AgentRuntime passed to
+    ApiServer as runtime=_agent. gateway_start() must construct a
+    SchedulerManager, start it, attach it to the agent runtime as
+    `_scheduler`, and stop it cleanly on shutdown.
+    """
+
+    def test_scheduler_started_wired_and_stopped(self, runner: CliRunner):
+        import os
+        import signal
+
+        cfg_path = _cfg_path()
+        try:
+            mock_config = _make_mock_config()
+            mock_config.discord = None
+            mock_config.providers = {}
+            mock_config.scheduling.enabled = True
+
+            call_count = [0]
+
+            def fake_sleep(t):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    os.kill(os.getpid(), signal.SIGTERM)
+                elif call_count[0] > 5:
+                    raise SystemExit(0)
+
+            mock_agent_instance = MagicMock()
+
+            with (
+                patch("missy.cli.main._load_subsystems", return_value=mock_config),
+                patch("missy.agent.runtime.AgentRuntime", return_value=mock_agent_instance),
+                patch("missy.agent.runtime.AgentConfig"),
+                patch("time.sleep", side_effect=fake_sleep),
+                patch("yaml.safe_load", return_value={}),
+                patch("missy.scheduler.manager.SchedulerManager") as mock_sched_cls,
+            ):
+                mock_sched_cls.return_value.list_jobs.return_value = []
+                result = runner.invoke(cli, ["--config", cfg_path, "gateway", "start"])
+
+            assert result.exit_code == 0
+            mock_sched_cls.return_value.start.assert_called_once()
+            mock_sched_cls.return_value.stop.assert_called_once()
+            # The scheduler instance must be reachable from the same
+            # AgentRuntime object passed to ApiServer as runtime=_agent, so
+            # the Web TUI's getattr(runtime, "_scheduler", None) lookups
+            # find a live SchedulerManager instead of always seeing None.
+            assert mock_agent_instance._scheduler is mock_sched_cls.return_value
+        finally:
+            import os as _os
+
+            _os.unlink(cfg_path)
+
+    def test_scheduler_disabled_via_config_is_not_started(self, runner: CliRunner):
+        import os
+        import signal
+
+        cfg_path = _cfg_path()
+        try:
+            mock_config = _make_mock_config()
+            mock_config.discord = None
+            mock_config.providers = {}
+            mock_config.scheduling.enabled = False
+
+            call_count = [0]
+
+            def fake_sleep(t):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    os.kill(os.getpid(), signal.SIGTERM)
+                elif call_count[0] > 5:
+                    raise SystemExit(0)
+
+            with (
+                patch("missy.cli.main._load_subsystems", return_value=mock_config),
+                patch("missy.agent.runtime.AgentRuntime"),
+                patch("missy.agent.runtime.AgentConfig"),
+                patch("time.sleep", side_effect=fake_sleep),
+                patch("yaml.safe_load", return_value={}),
+                patch("missy.scheduler.manager.SchedulerManager") as mock_sched_cls,
+            ):
+                result = runner.invoke(cli, ["--config", cfg_path, "gateway", "start"])
+
+            assert result.exit_code == 0
+            mock_sched_cls.assert_not_called()
+            assert "scheduler disabled" in result.output.lower()
         finally:
             import os as _os
 

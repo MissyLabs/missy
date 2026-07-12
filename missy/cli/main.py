@@ -2418,6 +2418,40 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
     watchdog.register("mcp_servers", _check_mcp_servers)
     watchdog.start()
 
+    # Job scheduler. Fully built and tested (missy/scheduler/manager.py,
+    # including per-job active-hours gating, retry backoff, and audit
+    # events) but had zero production callers in gateway_start() -- the
+    # persistent daemon process this systemd unit runs never constructed a
+    # SchedulerManager at all, so a job added via `missy schedule add`
+    # (itself just a separate CLI invocation that starts a private
+    # SchedulerManager, mutates jobs.json, and immediately stops it again)
+    # would never actually fire: nothing in the long-running gateway
+    # process ever loaded jobs.json into a live, running APScheduler
+    # instance. The Web TUI's scheduler pages and operator controls
+    # (api/server.py's _handle_list_scheduled_jobs/_handle_create_scheduled_job,
+    # api/operator_controls.py's scheduler.pause_job/resume_job/remove_job)
+    # were also silently non-functional in every real deployment, since
+    # they all resolve their SchedulerManager via
+    # getattr(runtime, "_scheduler", None) and nothing ever set that
+    # attribute on the AgentRuntime passed to ApiServer as runtime=_agent.
+    scheduler_manager = None
+    try:
+        if cfg.scheduling.enabled:
+            from missy.scheduler.manager import SchedulerManager
+
+            scheduler_manager = SchedulerManager()
+            scheduler_manager.start()
+            _agent._scheduler = scheduler_manager  # noqa: SLF001
+            console.print(
+                f"[green]Scheduler started[/] "
+                f"({len(scheduler_manager.list_jobs())} job(s) loaded)"
+            )
+        else:
+            console.print("[dim]Scheduler disabled via config (scheduling.enabled: false).[/]")
+    except Exception as _sched_exc:
+        console.print(f"[yellow]Scheduler failed to start: {_sched_exc}[/]")
+        logger.warning("Scheduler startup error: %s", _sched_exc, exc_info=True)
+
     # Config hot-reload. Fully built and tested (missy/config/hotreload.py,
     # including its symlink/ownership/permission safety checks before
     # reload), but had zero production callers anywhere -- editing
@@ -2753,6 +2787,12 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
             watchdog.stop()
         except Exception as _wd_stop_exc:
             logger.debug("watchdog: stop error: %s", _wd_stop_exc)
+        if scheduler_manager is not None:
+            try:
+                scheduler_manager.stop()
+                console.print("[dim]Scheduler stopped.[/]")
+            except Exception as _sched_stop_exc:
+                logger.debug("scheduler: stop error: %s", _sched_stop_exc)
         try:
             config_watcher.stop()
         except Exception as _cw_stop_exc:
@@ -2827,6 +2867,26 @@ def gateway_status(ctx: click.Context) -> None:
         )
     else:
         table.add_row("web", Text("disabled", style="dim"), "api.enabled: false in config")
+
+    # Scheduler — auto-starts with the gateway (missy schedule add/list
+    # manage jobs.json directly and don't require the gateway to be running,
+    # but jobs only actually *fire* while a `missy gateway start` process is
+    # up).
+    if cfg.scheduling.enabled:
+        try:
+            from missy.scheduler.manager import SchedulerManager
+
+            _job_count = len(SchedulerManager().load_jobs())
+        except Exception:
+            _job_count = None
+        _sched_detail = (
+            f"{_job_count} job(s) in jobs.json (missy gateway start)"
+            if _job_count is not None
+            else "jobs.json unreadable"
+        )
+        table.add_row("scheduler", Text("auto-starts with gateway", style="green"), _sched_detail)
+    else:
+        table.add_row("scheduler", Text("disabled", style="dim"), "scheduling.enabled: false in config")
 
     console.print(table)
 

@@ -68,6 +68,13 @@ def _make_mock_config(**overrides) -> MagicMock:
     cfg.plugins.allowed_plugins = []
     cfg.discord = None
     cfg.vault = None
+    # `gateway start` now constructs a real SchedulerManager (pointed at the
+    # real ~/.missy/jobs.json) whenever cfg.scheduling.enabled is truthy --
+    # and a bare, un-configured MagicMock attribute is truthy by default.
+    # Defaulting this off here keeps every gateway-start test that doesn't
+    # care about the scheduler from touching the operator's real jobs.json
+    # or spinning up a real APScheduler thread.
+    cfg.scheduling.enabled = False
     for k, v in overrides.items():
         setattr(cfg, k, v)
     return cfg
