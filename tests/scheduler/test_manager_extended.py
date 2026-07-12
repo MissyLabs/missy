@@ -137,6 +137,51 @@ class TestRunJob:
             mgr.stop()
 
     @patch("missy.scheduler.manager.uuid")
+    def test_run_job_threads_configured_tool_policy_kwargs(self, mock_uuid, tmp_jobs_file: str):
+        """Regression: every other AgentConfig construction site in the
+        codebase also passes _agent_tool_policy_kwargs(cfg) (tool_policy,
+        agent_tool_policy, sandbox_tool_policy, subagent_tool_policy,
+        tool_intelligence, agent_id). Without threading these through,
+        an operator's global tools.deny: [...] config would silently not
+        apply to a scheduled job's AgentConfig -- the same class of gap
+        default_max_spend_usd closed for the spend cap.
+        """
+        mock_uuid.uuid4.return_value = "test-session-id"
+        policy_kwargs = {
+            "agent_id": "default",
+            "tool_policy": {"deny": ["shell_exec"]},
+            "agent_tool_policy": None,
+            "sandbox_tool_policy": None,
+            "subagent_tool_policy": None,
+            "tool_intelligence": None,
+        }
+        mgr = SchedulerManager(
+            jobs_file=tmp_jobs_file, default_tool_policy_kwargs=policy_kwargs
+        )
+        mgr.start()
+        try:
+            job = mgr.add_job("policy job", "every 5 minutes", "do stuff")
+
+            with (
+                patch("missy.agent.runtime.AgentRuntime") as MockRuntime,
+                patch("missy.agent.runtime.AgentConfig") as MockConfig,
+            ):
+                mock_agent = MagicMock()
+                mock_agent.run.return_value = "Done!"
+                MockRuntime.return_value = mock_agent
+
+                mgr._run_job(job.id)
+
+            MockConfig.assert_called_once_with(
+                provider=job.provider,
+                capability_mode="safe-chat",
+                max_spend_usd=0.0,
+                **policy_kwargs,
+            )
+        finally:
+            mgr.stop()
+
+    @patch("missy.scheduler.manager.uuid")
     def test_run_job_error_increments_failures(self, mock_uuid, started_manager: SchedulerManager):
         mock_uuid.uuid4.return_value = "test-session"
         job = started_manager.add_job("fail", "every 5 minutes", "crash")

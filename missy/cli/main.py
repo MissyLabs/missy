@@ -2443,7 +2443,8 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
             from missy.scheduler.manager import SchedulerManager
 
             scheduler_manager = SchedulerManager(
-                default_max_spend_usd=getattr(cfg, "max_spend_usd", 0.0)
+                default_max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
+                default_tool_policy_kwargs=_agent_tool_policy_kwargs(cfg),
             )
             scheduler_manager.start()
             _agent._scheduler = scheduler_manager  # noqa: SLF001

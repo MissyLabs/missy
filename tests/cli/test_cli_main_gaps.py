@@ -375,7 +375,61 @@ class TestGatewayStartScheduler:
                 result = runner.invoke(cli, ["--config", cfg_path, "gateway", "start"])
 
             assert result.exit_code == 0
-            mock_sched_cls.assert_called_once_with(default_max_spend_usd=3.5)
+            mock_sched_cls.assert_called_once()
+            call_kwargs = mock_sched_cls.call_args.kwargs
+            assert call_kwargs.get("default_max_spend_usd") == 3.5
+        finally:
+            import os as _os
+
+            _os.unlink(cfg_path)
+
+    def test_scheduler_receives_configured_tool_policy_kwargs(self, runner: CliRunner):
+        """Regression: SchedulerManager must also receive the operator's
+        config-based tool-policy layers (tool_policy/agent_tool_policy/
+        sandbox_tool_policy/subagent_tool_policy/tool_intelligence), the
+        same _agent_tool_policy_kwargs(cfg) dict every other AgentConfig
+        construction site passes. Without this, a scheduled job's per-run
+        AgentConfig gets none of these layers -- an operator's global
+        tools.deny: [...] config would silently not apply to a
+        capability_mode="full" scheduled job.
+        """
+        import os
+        import signal
+
+        cfg_path = _cfg_path()
+        try:
+            mock_config = _make_mock_config()
+            mock_config.discord = None
+            mock_config.providers = {}
+            mock_config.scheduling.enabled = True
+            mock_config.tools = {"deny": ["shell_exec"]}
+
+            call_count = [0]
+
+            def fake_sleep(t):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    os.kill(os.getpid(), signal.SIGTERM)
+                elif call_count[0] > 5:
+                    raise SystemExit(0)
+
+            with (
+                patch("missy.cli.main._load_subsystems", return_value=mock_config),
+                patch("missy.agent.runtime.AgentRuntime"),
+                patch("missy.agent.runtime.AgentConfig"),
+                patch("time.sleep", side_effect=fake_sleep),
+                patch("yaml.safe_load", return_value={}),
+                patch("missy.scheduler.manager.SchedulerManager") as mock_sched_cls,
+            ):
+                mock_sched_cls.return_value.list_jobs.return_value = []
+                result = runner.invoke(cli, ["--config", cfg_path, "gateway", "start"])
+
+            assert result.exit_code == 0
+            mock_sched_cls.assert_called_once()
+            call_kwargs = mock_sched_cls.call_args.kwargs
+            policy_kwargs = call_kwargs.get("default_tool_policy_kwargs")
+            assert policy_kwargs is not None
+            assert policy_kwargs.get("tool_policy") == {"deny": ["shell_exec"]}
         finally:
             import os as _os
 

@@ -8703,6 +8703,83 @@ attempt this checkpoint hit 1 unrelated pre-existing flake — the
 Hypothesis DNS-timing deadline test above — reconfirmed clean on
 rerun.)
 
+### Post-backlog (one-hundred-fourteenth checkpoint): round 58 research pass fixes scheduled jobs bypassing the operator's global tool-policy layers
+
+Round 58 was directed at a systematic sweep of every `AgentConfig(`
+construction site in the codebase, since the "a config value reaches
+some construction sites but not others" shape had just paid off twice
+in a row (rounds 56-57). The sweep confirmed `missy ask`/`run`/
+`recover`, `gateway_start()`'s main/Discord/proactive runtimes, and
+`missy api start` are now all consistent (round 57 closed the
+remaining gaps) — but found one more site still incomplete.
+
+**Found and fixed a real bug: `SchedulerManager._run_job()` still
+built its per-job `AgentConfig` with only `provider`,
+`capability_mode`, and (as of round 57) `max_spend_usd` — omitting the
+`tool_policy`/`agent_tool_policy`/`sandbox_tool_policy`/
+`subagent_tool_policy`/`tool_intelligence`/`agent_id` kwargs every
+other `AgentConfig` site passes via `_agent_tool_policy_kwargs(cfg)`.**
+Tracing the actual effect: `build_configured_tool_policy_layers()`
+(`policy/tool_policy_pipeline.py`) only adds a policy layer when the
+corresponding argument is non-`None`; with all of them `None`, a
+scheduled job with `capability_mode="full"` (an explicitly supported,
+non-default opt-in per `ScheduledJob`'s own validation) gets only the
+bare `"full"` profile layer — every registered tool, with no
+operator-configured `tools.deny`/`tools.allow` restriction applied at
+all. `AgentRuntime._execute_tool()` enforces the resulting
+per-turn allowed-tool set as a hard execute-time gate (not just
+hiding tools from the model), so this is a real enforcement gap, not
+cosmetic: an operator who sets `tools: {deny: ["shell_exec"]}` in
+`config.yaml` specifically to keep shell access out of the assistant's
+hands globally — correctly enforced for `missy ask`/`run`/the
+gateway's interactive and Discord sessions — would find a
+`--capability-mode full` scheduled job able to call `shell_exec`
+freely, silently defeating that global policy. No test exercised this:
+grepping `tests/scheduler/` and the scheduler-hardening security test
+file for `tool_policy`/`agent_tool_policy`/`sandbox_tool_policy`
+returned zero hits.
+
+Fixed by adding a `default_tool_policy_kwargs: dict[str, Any] | None`
+constructor parameter to `SchedulerManager` (mirroring round 57's
+`default_max_spend_usd` parameter exactly), applied in `_run_job()`'s
+`AgentConfig(...)` call via `**(getattr(self,
+"_default_tool_policy_kwargs", None) or {})` (the `getattr` defensive
+form applied proactively this time, since round 57 already established
+that a pre-existing minimal `SchedulerManager.__new__()` test double
+in `test_scheduler_jobs_selfcreate_webhook_mcp_hardening.py` never
+sets these newly-added attributes — confirmed still passing without
+needing further correction). `gateway_start()`'s `SchedulerManager(...)`
+construction now also passes
+`default_tool_policy_kwargs=_agent_tool_policy_kwargs(cfg)` alongside
+the existing `default_max_spend_usd`. 3 new tests
+(`test_run_job_threads_configured_tool_policy_kwargs` in
+`test_manager_extended.py`;
+`test_scheduler_receives_configured_tool_policy_kwargs` in
+`test_cli_main_gaps.py`, plus an existing
+`test_scheduler_receives_configured_max_spend_usd` assertion loosened
+from `assert_called_once_with(default_max_spend_usd=3.5)` to
+inspecting `call_args.kwargs` directly so it doesn't over-specify the
+full kwargs dict now that a second keyword argument is always
+present), both new tests confirmed via `git stash` to genuinely fail
+pre-fix.
+
+Noted but not flagged as a bug: `mcp_approval_gate` is also omitted at
+every one of these sites (scheduler, `ask`/`run`/`recover`,
+`api_start`) — but `McpManager`'s dispatch path fails *closed* when
+`approval_gate is None` (denies rather than silently allowing), so
+this is a functionality gap (destructive MCP tools become unusable
+from these entry points), not a security gap, and is out of scope for
+this round.
+
+Verified: `pytest tests/scheduler/test_manager_extended.py -k
+tool_policy tests/cli/test_cli_main_gaps.py -k tool_policy -v`: `2
+passed`. `pytest tests/scheduler/ tests/cli/ tests/security/ -q`:
+`3530 passed`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21486 passed, 14 skipped in 780.86s (0:13:00)` — 0 failed, up from
+21484. Seventy-second consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

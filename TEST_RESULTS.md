@@ -1,5 +1,51 @@
 # TEST_RESULTS
 
+## Run: 2026-07-12 UTC — round 58 research pass: scheduled jobs bypassed the operator's global tool-policy layers
+
+- Context: round 58 swept every AgentConfig( construction site in the
+  codebase (the "config value reaches some sites but not others" shape
+  had just paid off twice in a row, rounds 56-57). ask/run/recover,
+  gateway_start()'s main/Discord/proactive runtimes, and api_start are
+  now all consistent (round 57 closed those gaps) -- but
+  SchedulerManager._run_job() was still incomplete.
+- **Scheduled jobs bypass tools.deny/tools.allow entirely**:
+  _run_job()'s AgentConfig only ever got provider/capability_mode/
+  (as of round 57) max_spend_usd -- never the tool_policy/
+  agent_tool_policy/sandbox_tool_policy/subagent_tool_policy/
+  tool_intelligence/agent_id kwargs every other AgentConfig site
+  passes via _agent_tool_policy_kwargs(cfg). build_configured_tool_policy_layers()
+  only adds a policy layer when its argument is non-None; with all
+  None, a capability_mode="full" scheduled job gets the bare "full"
+  profile layer -- every registered tool, no operator-configured deny
+  applied. AgentRuntime._execute_tool() enforces the resulting
+  allowed-tool set as a hard execute-time gate, so an operator's
+  `tools: {deny: ["shell_exec"]}` (correctly enforced for ask/run/the
+  gateway's interactive and Discord sessions) would not stop a
+  --capability-mode full scheduled job from calling shell_exec. No
+  test exercised this (zero hits grepping tests/scheduler/ for
+  tool_policy/agent_tool_policy/sandbox_tool_policy). Fixed by adding
+  a `default_tool_policy_kwargs` constructor parameter to
+  SchedulerManager (mirroring round 57's default_max_spend_usd
+  exactly), applied in _run_job() via `**(getattr(self,
+  "_default_tool_policy_kwargs", None) or {})`; gateway_start()'s
+  SchedulerManager(...) construction now also passes
+  `default_tool_policy_kwargs=_agent_tool_policy_kwargs(cfg)`.
+- Command: `pytest tests/scheduler/test_manager_extended.py -k tool_policy tests/cli/test_cli_main_gaps.py -k tool_policy -v`
+- Result: `2 passed`. Both new tests
+  (`test_run_job_threads_configured_tool_policy_kwargs`,
+  `test_scheduler_receives_configured_tool_policy_kwargs`) confirmed
+  via `git stash` to genuinely fail pre-fix. An existing test
+  (`test_scheduler_receives_configured_max_spend_usd`) loosened from
+  `assert_called_once_with(default_max_spend_usd=3.5)` to inspecting
+  `call_args.kwargs` directly since a second keyword argument is now
+  always present.
+- Noted, not fixed: `mcp_approval_gate` is also omitted at every one
+  of these AgentConfig sites, but McpManager's dispatch fails closed
+  when `approval_gate is None` -- a functionality gap, not a security
+  one.
+- Broader sweep: `pytest tests/scheduler/ tests/cli/ tests/security/ -q`: `3530 passed`.
+- Full suite: `python3 -m pytest tests/ -q` → `21486 passed, 14 skipped in 780.86s (0:13:00)` — 0 failed, up from 21484. Seventy-second consecutive fully green full-suite run.
+
 ## Run: 2026-07-12 UTC — round 57 research pass: every gateway-daemon `AgentConfig` construction site silently ignored the operator's configured spend cap
 
 - Context: round 57 was primed to re-hunt round 56's "fully built,

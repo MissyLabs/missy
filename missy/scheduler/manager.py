@@ -23,6 +23,7 @@ import os
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -56,15 +57,31 @@ class SchedulerManager:
             interactive and Discord runtimes/``missy api start``) honors.
             ``0.0`` (the default) means unlimited, matching
             ``AgentConfig.max_spend_usd``'s own default.
+        default_tool_policy_kwargs: Additional :class:`~missy.agent.runtime.AgentConfig`
+            keyword arguments carrying the operator's config-based tool
+            policy layers (``tool_policy``/``agent_tool_policy``/
+            ``sandbox_tool_policy``/``subagent_tool_policy``/
+            ``tool_intelligence``/``agent_id`` -- the same dict
+            ``missy.cli.main._agent_tool_policy_kwargs()`` builds and every
+            other ``AgentConfig`` construction site passes). Without this,
+            a scheduled job's per-run ``AgentConfig`` gets none of these
+            layers, so e.g. an operator's global ``tools.deny: [...]``
+            config would silently not apply to a ``capability_mode="full"``
+            job -- the exact same "config value applied to some
+            AgentConfig sites but not others" gap ``default_max_spend_usd``
+            closed for the spend cap. ``None``/omitted means no extra
+            kwargs are added, matching ``AgentConfig``'s own defaults.
     """
 
     def __init__(
         self,
         jobs_file: str = "~/.missy/jobs.json",
         default_max_spend_usd: float = 0.0,
+        default_tool_policy_kwargs: dict[str, Any] | None = None,
     ) -> None:
         self.jobs_file = Path(jobs_file).expanduser()
         self._default_max_spend_usd = default_max_spend_usd
+        self._default_tool_policy_kwargs = default_tool_policy_kwargs or {}
         self._scheduler: BackgroundScheduler = BackgroundScheduler()
         self._jobs: dict[str, ScheduledJob] = {}
 
@@ -520,6 +537,7 @@ class SchedulerManager:
                     provider=job.provider,
                     capability_mode=job.capability_mode,
                     max_spend_usd=getattr(self, "_default_max_spend_usd", 0.0),
+                    **(getattr(self, "_default_tool_policy_kwargs", None) or {}),
                 )
             )
             result_text = agent.run(job.task, session_id=session_id)

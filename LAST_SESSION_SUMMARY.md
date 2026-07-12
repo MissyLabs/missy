@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (119 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for seventy-one consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (120 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for seventy-two consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -5040,15 +5040,60 @@ ApiStart or scheduler_receives" tests/scheduler/test_manager_extended.py
 tests/security/test_scheduler_jobs_selfcreate_webhook_mcp_hardening.py::TestSchedulerTaskSanitization
 -v`: `9 passed`.
 
+### Post-backlog (one-hundred-fourteenth checkpoint): round 58 research pass — scheduled jobs bypassed the operator's global tool-policy layers
+
+Round 58 swept every `AgentConfig(` construction site in the codebase
+(the "config value reaches some sites but not others" shape had just
+paid off twice in a row). `ask`/`run`/`recover`, `gateway_start()`'s
+main/Discord/proactive runtimes, and `api_start` are now all
+consistent (round 57 closed those gaps) — but
+`SchedulerManager._run_job()` was still incomplete.
+
+**Found and fixed a real bug: scheduled jobs bypass `tools.deny`/
+`tools.allow` entirely.** `_run_job()`'s `AgentConfig` only ever got
+`provider`/`capability_mode`/`max_spend_usd` — never the
+`tool_policy`/`agent_tool_policy`/`sandbox_tool_policy`/
+`subagent_tool_policy`/`tool_intelligence`/`agent_id` kwargs every
+other `AgentConfig` site passes via `_agent_tool_policy_kwargs(cfg)`.
+`build_configured_tool_policy_layers()` only adds a policy layer when
+its argument is non-`None`; with all `None`, a
+`capability_mode="full"` scheduled job gets the bare `"full"` profile
+layer — every registered tool, no operator-configured deny applied.
+`AgentRuntime._execute_tool()` enforces the resulting allowed-tool set
+as a hard execute-time gate, so an operator's `tools: {deny:
+["shell_exec"]}` (correctly enforced everywhere else) would not stop a
+`--capability-mode full` scheduled job from calling `shell_exec`.
+Fixed by adding a `default_tool_policy_kwargs` constructor parameter
+to `SchedulerManager` (mirroring round 57's `default_max_spend_usd`
+exactly), applied in `_run_job()` via `**(getattr(self,
+"_default_tool_policy_kwargs", None) or {})`; `gateway_start()` now
+passes `default_tool_policy_kwargs=_agent_tool_policy_kwargs(cfg)`
+alongside the existing `default_max_spend_usd`. 2 new tests, both
+confirmed via `git stash` to genuinely fail pre-fix.
+
+Noted but not flagged as a bug: `mcp_approval_gate` is also omitted at
+every one of these sites, but `McpManager`'s dispatch fails closed
+when `approval_gate is None` — a functionality gap, not a security
+one.
+
+Verified: `pytest tests/scheduler/test_manager_extended.py -k
+tool_policy tests/cli/test_cli_main_gaps.py -k tool_policy -v`: `2
+passed`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21484 passed, 14 skipped in 719.05s (0:11:59)
+21486 passed, 14 skipped in 780.86s (0:13:00)
 ```
 
-**Zero failures**, the seventy-first consecutive fully green
-full-suite run. Passed count is up from 21479 to 21484 (the round 57
+**Zero failures**, the seventy-second consecutive fully green
+full-suite run. Passed count is up from 21484 to 21486 (the round 58
+checkpoint's 2 new tests:
+`test_run_job_threads_configured_tool_policy_kwargs`,
+`test_scheduler_receives_configured_tool_policy_kwargs`; all of the
+sixty-first through one-hundred-thirteenth checkpoints' fixes are
+confirmed still holding). Passed count is up from 21479 to 21484 (the round 57
 checkpoint's 5 new tests: `test_run_job_threads_configured_max_spend_usd`,
 `test_scheduler_receives_configured_max_spend_usd`,
 `test_main_and_discord_agent_configs_receive_configured_budget`,
