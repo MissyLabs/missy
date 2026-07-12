@@ -26,6 +26,7 @@ import logging
 import os
 import shutil
 import tempfile
+import threading
 import time
 from dataclasses import asdict, dataclass, field, fields
 from datetime import UTC, datetime
@@ -210,6 +211,15 @@ class PersonaManager:
         self._path = Path(os.path.expanduser(str(persona_path)))
         self._persona: PersonaConfig = self._load()
         self._loaded_mtime: float | None = self._current_mtime()
+        # Guards save()/rollback() end to end: without it, concurrent
+        # callers race on the same non-atomic
+        # exists()-check/backup/version-increment/temp-write/replace
+        # sequence -- e.g. two threads' _create_backup() calls can both
+        # pass the same "does this backup filename exist yet" check before
+        # either has written it, or a concurrent _prune_backups() can
+        # unlink a backup a different thread's shutil.copy2() is still
+        # writing to, mid-copy.
+        self._lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Public API
@@ -311,44 +321,45 @@ class PersonaManager:
             OSError: If the directory cannot be created or the file cannot
                 be written.
         """
-        # Back up existing file before overwriting
-        if self._path.exists():
-            self._create_backup()
+        with self._lock:
+            # Back up existing file before overwriting
+            if self._path.exists():
+                self._create_backup()
 
-        self._persona.version += 1
-        self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        data = _persona_to_dict(self._persona)
-        dir_ = str(self._path.parent)
-        fd, tmp_path = tempfile.mkstemp(dir=dir_, suffix=".yaml.tmp")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                yaml.dump(
-                    data,
-                    fh,
-                    default_flow_style=False,
-                    allow_unicode=True,
-                    sort_keys=False,
+            self._persona.version += 1
+            self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            data = _persona_to_dict(self._persona)
+            dir_ = str(self._path.parent)
+            fd, tmp_path = tempfile.mkstemp(dir=dir_, suffix=".yaml.tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    yaml.dump(
+                        data,
+                        fh,
+                        default_flow_style=False,
+                        allow_unicode=True,
+                        sort_keys=False,
+                    )
+                os.replace(tmp_path, self._path)
+                # Restrict file permissions — persona may contain sensitive identity info
+                with contextlib.suppress(OSError):
+                    self._path.chmod(0o600)
+                # Record the mtime this same process just wrote so the next
+                # get_persona() call doesn't immediately re-trigger
+                # _reload_if_changed() and redundantly re-read what's already
+                # correctly held in memory.
+                self._loaded_mtime = self._current_mtime()
+                self._audit("save")
+                logger.debug(
+                    "Persona saved to %s (version %d)",
+                    self._path,
+                    self._persona.version,
                 )
-            os.replace(tmp_path, self._path)
-            # Restrict file permissions — persona may contain sensitive identity info
-            with contextlib.suppress(OSError):
-                self._path.chmod(0o600)
-            # Record the mtime this same process just wrote so the next
-            # get_persona() call doesn't immediately re-trigger
-            # _reload_if_changed() and redundantly re-read what's already
-            # correctly held in memory.
-            self._loaded_mtime = self._current_mtime()
-            self._audit("save")
-            logger.debug(
-                "Persona saved to %s (version %d)",
-                self._path,
-                self._persona.version,
-            )
-        except Exception:
-            # Clean up temp file on failure; ignore errors during cleanup
-            with contextlib.suppress(OSError):
-                os.unlink(tmp_path)
-            raise
+            except Exception:
+                # Clean up temp file on failure; ignore errors during cleanup
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp_path)
+                raise
 
     def reset(self) -> None:
         """Restore the persona to factory defaults and save.
@@ -537,34 +548,35 @@ class PersonaManager:
         Returns:
             Path to the restored backup, or ``None`` if no backups exist.
         """
-        backups = self.list_backups()
-        if not backups:
-            return None
+        with self._lock:
+            backups = self.list_backups()
+            if not backups:
+                return None
 
-        latest = backups[-1]
-        restore_content = latest.read_text(encoding="utf-8")
+            latest = backups[-1]
+            restore_content = latest.read_text(encoding="utf-8")
 
-        # Back up current before overwriting (without incrementing version)
-        if self._path.exists():
-            self._create_backup()
+            # Back up current before overwriting (without incrementing version)
+            if self._path.exists():
+                self._create_backup()
 
-        self._path.write_text(restore_content, encoding="utf-8")
-        # Restrict file permissions -- persona may contain sensitive identity
-        # info. write_text() preserves an existing file's mode, but if
-        # self._path didn't already exist (deleted/corrupted-and-removed), it
-        # creates a brand-new file subject to the process umask, silently
-        # losing the confidentiality guarantee save() establishes.
-        with contextlib.suppress(OSError):
-            self._path.chmod(0o600)
-        self._persona = self._load()
-        self._loaded_mtime = self._current_mtime()
-        self._audit("rollback", {"from_backup": latest.name})
-        logger.info(
-            "Persona rolled back to backup %s (version %d)",
-            latest.name,
-            self._persona.version,
-        )
-        return latest
+            self._path.write_text(restore_content, encoding="utf-8")
+            # Restrict file permissions -- persona may contain sensitive identity
+            # info. write_text() preserves an existing file's mode, but if
+            # self._path didn't already exist (deleted/corrupted-and-removed), it
+            # creates a brand-new file subject to the process umask, silently
+            # losing the confidentiality guarantee save() establishes.
+            with contextlib.suppress(OSError):
+                self._path.chmod(0o600)
+            self._persona = self._load()
+            self._loaded_mtime = self._current_mtime()
+            self._audit("rollback", {"from_backup": latest.name})
+            logger.info(
+                "Persona rolled back to backup %s (version %d)",
+                latest.name,
+                self._persona.version,
+            )
+            return latest
 
     def diff(self) -> str:
         """Return a unified diff between the current persona and the latest backup.
