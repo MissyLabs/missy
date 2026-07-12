@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (104 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for fifty-five consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (105 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for fifty-six consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -4335,15 +4335,56 @@ test_delegate_task.py -q`: `100 passed`. `pytest tests/security/
 tests/tools/ tests/agent/test_sub_agent.py -q`: `3640 passed, 2
 skipped`.
 
+### Post-backlog (ninety-eighth checkpoint): round 40 research pass — BrowserScreenshotTool filesystem-write policy bypass
+
+Round 40 audited additional `missy/tools/builtin/` tools
+(`shell_exec.py`/`policy/shell.py`, `memory_tools.py`, `tts_speak.py`/
+`vision_tools.py` — all clean, already hardened), went deeper on
+`api/operator_controls.py` per round 39's note that it was only
+lightly reviewed (clean — every `_execute_*` action follows the
+identical safe-target-regex + confirmation-token + real-subsystem-
+dispatch pattern), `channels/webhook.py`'s HMAC/replay verification
+(clean — constant-time comparison, bounded timestamp/replay windows),
+and `agent/interactive_approval.py`'s "allow always" scoping and
+non-TTY auto-deny (clean).
+
+**Found and fixed a real filesystem-write policy bypass in
+`BrowserScreenshotTool`.** The tool's `execute()` writes an
+agent-controlled `path` kwarg to disk via Playwright, but its
+`permissions` declaration was only `ToolPermissions(network=True)` —
+missing `filesystem_write=True`. `ToolRegistry._check_permissions()`
+only calls `engine.check_write()` inside its `if
+perms.filesystem_write:` branch, so the write-path policy check was
+skipped entirely for this tool, unlike every other write-capable tool
+in the codebase (`file_write.py`, `x11_tools.py`'s screenshot tool,
+the vision capture tools). Live-reproduced through a real
+`ToolRegistry` + real policy engine (not `tool.execute()` called
+directly, which is all the existing tests did): a `path` outside
+`filesystem.allowed_write_paths` reached Playwright's real screenshot
+call completely unchecked, only failing afterward with an unrelated
+`FileNotFoundError` — proof the policy check never ran, not that it
+correctly denied anything. Fixed by adding `filesystem_write=True`; no
+`resolve_filesystem_targets()` override needed since the registry's
+generic path-kwarg heuristic already covers this tool's `path`
+parameter. 2 new tests, the denial test confirmed via `git stash` to
+genuinely fail pre-fix.
+
+Verified: `pytest tests/tools/test_hardware_tools.py -q`: `195
+passed, 2 skipped`. `pytest tests/tools/ tests/policy/ -q`: `2215
+passed, 2 skipped`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21430 passed, 14 skipped in 796.16s (0:13:16)
+21432 passed, 14 skipped in 589.93s (0:09:49)
 ```
 
-**Zero failures**, the fifty-fifth consecutive fully green
-full-suite run. Passed count is up from 21421 to 21430 (the round 39
+**Zero failures**, the fifty-sixth consecutive fully green full-suite
+run. Passed count is up from 21430 to 21432 (the round 40 checkpoint's
+2 new tests in `TestBrowserScreenshotToolFilesystemWritePolicy`; all
+of the sixty-first through ninety-seventh checkpoints' fixes are
+confirmed still holding). Passed count is up from 21421 to 21430 (the round 39
 checkpoint's 9 new tests: 1 delegate_task >MAX_SUB_AGENTS test, 6
 SEC-021 apex-style tests, 2 SEC-031/032 path-qualified tests; all of
 the sixty-first through ninety-sixth checkpoints' fixes are confirmed

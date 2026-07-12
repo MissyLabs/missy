@@ -1,5 +1,38 @@
 # TEST_RESULTS
 
+## Run: 2026-07-13 22:40 UTC — round 40 research pass: BrowserScreenshotTool filesystem-write policy bypass
+
+- Context: round 40 audited additional missy/tools/builtin/ tools
+  (shell_exec.py/policy/shell.py, memory_tools.py, tts_speak.py/
+  vision_tools.py -- all clean, already hardened), went deeper on
+  api/operator_controls.py per round 39's note (clean -- every
+  _execute_* action follows the identical safe-target-regex +
+  confirmation-token + real-subsystem-dispatch pattern),
+  channels/webhook.py's HMAC/replay verification (clean --
+  constant-time comparison, bounded timestamp/replay windows), and
+  agent/interactive_approval.py's "allow always" scoping and non-TTY
+  auto-deny (clean).
+- **BrowserScreenshotTool filesystem-write policy bypass**: the tool's
+  execute() writes an agent-controlled `path` kwarg to disk via
+  Playwright, but its permissions declaration was only
+  ToolPermissions(network=True) -- missing filesystem_write=True.
+  ToolRegistry._check_permissions() only calls engine.check_write()
+  inside its `if perms.filesystem_write:` branch, so the write-path
+  policy check was skipped entirely for this tool, unlike every other
+  write-capable tool in the codebase. Live-reproduced through a real
+  ToolRegistry + real policy engine: a path outside
+  filesystem.allowed_write_paths reached Playwright's real screenshot
+  call completely unchecked. Fixed by adding filesystem_write=True; no
+  resolve_filesystem_targets() override needed since the registry's
+  generic path-kwarg heuristic already covers this tool's `path`
+  parameter.
+- Command: `pytest tests/tools/test_hardware_tools.py -k TestBrowserScreenshotTool -v`
+- Result: `5 passed` (2 new tests). Denial test confirmed via `git
+  stash` to genuinely fail pre-fix (mocked write proceeded with
+  policy_denied=False instead of being blocked).
+- Broader sweep: `pytest tests/tools/test_hardware_tools.py -q`: `195 passed, 2 skipped`.
+  `pytest tests/tools/ tests/policy/ -q`: `2215 passed, 2 skipped`.
+
 ## Run: 2026-07-13 22:05 UTC — round 39 research pass: delegate_task crash on >10 subtasks, SEC-021 apex-style false positive, SEC-031/032 path-qualified-command false negative
 
 - Context: round 39 targeted previously-unaudited built-in tools,

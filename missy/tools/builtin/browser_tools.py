@@ -520,7 +520,16 @@ class BrowserFillTool(BaseTool):
 class BrowserScreenshotTool(BaseTool):
     name = "browser_screenshot"
     description = "Take a screenshot of the current browser page."
-    permissions = ToolPermissions(network=True)
+    # filesystem_write=True is required, not just network=True: execute()
+    # writes an agent-controlled `path` kwarg to disk via Playwright.
+    # Without this flag, ToolRegistry._check_permissions() never enters
+    # its filesystem_write branch at all, so engine.check_write() is
+    # never called for this tool -- every other write-capable tool in
+    # this codebase (file_write.py, x11_tools.py's screenshot tool, the
+    # vision capture tools) correctly declares this; it was missed here.
+    # No resolve_filesystem_targets() override is needed since the
+    # registry's generic heuristic already checks a `path` kwarg.
+    permissions = ToolPermissions(network=True, filesystem_write=True)
     parameters = {
         "path": {
             "type": "string",

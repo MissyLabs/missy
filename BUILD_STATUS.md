@@ -7468,6 +7468,61 @@ skipped`.
 `21430 passed, 14 skipped in 796.16s (0:13:16)` — 0 failed, up from
 21421. Fifty-fifth consecutive fully green full-suite run.
 
+### Post-backlog (ninety-eighth checkpoint): round 40 research pass fixes a filesystem-write policy bypass in BrowserScreenshotTool
+
+Round 40 audited additional `missy/tools/builtin/` tools not yet
+individually checked (`shell_exec.py`/`policy/shell.py`'s
+subshell/heredoc/brace-group rejection, `memory_tools.py`'s
+lookup-failure-vs-not-found distinction, `tts_speak.py`/
+`vision_tools.py`'s `resolve_shell_command`/`resolve_filesystem_targets`
+overrides — all clean, already hardened), went deeper on
+`api/operator_controls.py` per round 39's note that it was only
+lightly reviewed (every `_execute_*` action function follows the
+identical safe-target-regex + confirmation-token + real-subsystem-
+dispatch pattern — clean, no parallel/shortcut path found),
+`channels/webhook.py`'s HMAC/replay verification (clean —
+`hmac.compare_digest` is constant-time, timestamp-bound signing has a
+300s skew window, and a separate exact-signature replay cache is
+correctly locked and bounded), and `agent/interactive_approval.py`'s
+"allow always" session-memory scoping and non-TTY auto-deny (clean —
+the cache key is `sha256(session_id:action:detail)`, correctly scoped
+to the exact action+detail+session, and the only construction/usage
+sites both gate on `_is_tty()` correctly).
+
+**Found and fixed a real filesystem-write policy bypass in
+`BrowserScreenshotTool`** (`missy/tools/builtin/browser_tools.py`).
+The tool's `execute()` writes an agent-controlled `path` kwarg to disk
+via Playwright, but its `permissions` declaration was only
+`ToolPermissions(network=True)` — missing `filesystem_write=True`.
+`ToolRegistry._check_permissions()` only calls `engine.check_write()`
+inside its `if perms.filesystem_write:` branch (`registry.py:308`); a
+tool that never sets this flag never enters that branch at all, so the
+write-path policy check was skipped entirely for this one tool, unlike
+every other write-capable tool in the codebase (`file_write.py`,
+`x11_tools.py`'s screenshot tool, the vision capture tools), all of
+which correctly declare it. Live-reproduced through a real
+`ToolRegistry` + real policy engine (not `tool.execute()` called
+directly, which is all the existing tests did): a `path` outside
+`filesystem.allowed_write_paths` reached Playwright's real screenshot
+call completely unchecked, only failing afterward with an unrelated
+`FileNotFoundError` when the (mocked) write's target directory didn't
+exist — proof the policy check never ran at all, not that it correctly
+denied anything. Fixed by adding `filesystem_write=True`; no
+`resolve_filesystem_targets()` override is needed since the registry's
+generic path-kwarg heuristic already covers this tool's `path`
+parameter. 2 new tests (real-registry denied-outside-allowed-paths and
+allowed-inside-allowed-paths), the denial test confirmed via `git
+stash` to genuinely fail pre-fix (the mocked write proceeded with
+`policy_denied=False` instead of being blocked).
+
+Verified: `pytest tests/tools/test_hardware_tools.py -q`: `195 passed,
+2 skipped`. `pytest tests/tools/ tests/policy/ -q`: `2215 passed, 2
+skipped`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21432 passed, 14 skipped in 589.93s (0:09:49)` — 0 failed, up from
+21430. Fifty-sixth consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security
