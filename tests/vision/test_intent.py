@@ -112,6 +112,44 @@ class TestVisionIntentClassifier:
         result = self.classifier.classify("   ")
         assert result.intent == VisionIntent.NONE
 
+    # -- Idiomatic false-positive regression --
+    #
+    # "can you see"/"do you see"/"what do you see" and bare "capture"/
+    # "snap" are extremely common idiomatic English used far more often
+    # rhetorically (debugging, discussion) than as a literal request to
+    # look through the camera. At their old 0.90 confidence (above
+    # auto_threshold's default 0.80) these phrases auto-activated the
+    # camera with NO human confirmation on completely unrelated text.
+
+    def test_idiomatic_do_you_see_does_not_auto_activate(self):
+        result = self.classifier.classify("Do you see what I mean about the API design?")
+        assert result.decision != ActivationDecision.ACTIVATE
+
+    def test_idiomatic_can_you_see_why_does_not_auto_activate(self):
+        result = self.classifier.classify("Can you see why this code keeps crashing?")
+        assert result.decision != ActivationDecision.ACTIVATE
+
+    def test_idiomatic_capture_the_idea_does_not_auto_activate(self):
+        result = self.classifier.classify("Let's capture the key idea in a summary.")
+        assert result.decision != ActivationDecision.ACTIVATE
+
+    def test_idiomatic_snap_out_of_it_does_not_auto_activate(self):
+        result = self.classifier.classify("Snap out of it and focus.")
+        assert result.decision != ActivationDecision.ACTIVATE
+
+    def test_genuine_can_you_see_still_recognized_but_asks_first(self):
+        """The phrase is still a real signal -- it should prompt for
+        confirmation (ASK), not be dropped to SKIP entirely."""
+        result = self.classifier.classify("Can you see what's on my screen?")
+        assert result.intent == VisionIntent.LOOK
+        assert result.decision == ActivationDecision.ASK
+
+    def test_unambiguous_take_a_photo_still_auto_activates(self):
+        """The unambiguous phrase form must be unaffected by narrowing
+        the bare capture/snap match."""
+        result = self.classifier.classify("Take a photo of this document.")
+        assert result.decision == ActivationDecision.ACTIVATE
+
     # -- Activation thresholds --
 
     def test_high_confidence_activates(self):

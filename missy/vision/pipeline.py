@@ -108,8 +108,14 @@ class ImagePipeline:
             return image
 
         scale = max_dim / max(h, w)
-        new_w = int(w * scale)
-        new_h = int(h * scale)
+        # An extreme aspect ratio (e.g. a corrupted/glitched capture with a
+        # 1px-thin dimension) can scale the SHORT side down to 0, which
+        # cv2.resize() rejects with "Assertion failed) inv_scale_x > 0"
+        # instead of a catchable ValueError -- clamp to a minimum of 1px so
+        # a malformed frame degrades to a thin-but-valid image instead of
+        # crashing the whole pipeline.
+        new_w = max(1, int(w * scale))
+        new_h = max(1, int(h * scale))
 
         return cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
 

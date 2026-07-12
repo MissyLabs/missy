@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (113 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for sixty-five consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (114 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for sixty-six consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -4764,15 +4764,57 @@ Verified: `pytest tests/channels/test_screencast_analyzer.py -q`: `14
 passed`. `pytest tests/channels/ -q -k screencast`: `327 passed, 1662
 deselected`.
 
+### Post-backlog (one-hundred-eighth checkpoint): round 52 research pass — idiomatic-phrase false-activation bug in VisionIntentClassifier and extreme-aspect-ratio crash in ImagePipeline.resize()
+
+Round 52 confirmed `agent/structured_output.py`'s retry mechanics are
+clean and `agent/failure_tracker.py`/`agent/circuit_breaker.py`
+operate in total isolation by design (a soft prompt-injection nudge,
+not an enforcement mechanism — intentional, though a real behavioral
+gap worth noting).
+
+**Found and fixed two real, high-confidence bugs.** (1)
+`vision/intent.py`'s `_EXPLICIT_LOOK_PATTERNS` included `"can you
+see"`/`"do you see"`/`"what do you see"` and bare `"capture"`/`"snap"`
+at 0.90 confidence — above `auto_threshold`'s default 0.80 — so
+extremely common idiomatic English ("Can you see why this code keeps
+crashing?", "Let's capture the key idea in a summary") auto-activated
+the camera with no human confirmation on completely ordinary text.
+Live-verified: all six example phrases produced `look activate 0.9`.
+Fixed by lowering these two patterns' confidence into the
+`ask_threshold`-to-`auto_threshold` band (0.65) — still recognized,
+still prompts for confirmation, no longer silently fires unasked —
+while splitting the unambiguous `"take a (photo|picture|snapshot)"`
+phrase into its own pattern at the original 0.90. 6 new tests, 5
+confirmed via `git stash` to genuinely fail pre-fix. (2)
+`vision/pipeline.py`'s `resize()` computed `new_w`/`new_h` with no
+minimum-1px clamp — an extreme-aspect-ratio frame (e.g. 1×3000,
+plausible from a corrupted/glitched camera capture) scales the short
+side to exactly 0, and `cv2.resize()` rejects a zero target dimension
+with an uncatchable `cv2.error` instead of the already-handled
+`ValueError` path, crashing the whole vision pipeline on that frame.
+Live-reproduced with a real 1×3000 numpy array through real
+`cv2.resize()`. Fixed by clamping both dimensions to a minimum of
+1px. 3 new tests using real OpenCV, all confirmed via `git stash` to
+genuinely fail pre-fix with the exact same `cv2.error` reproduced
+live.
+
+Verified: `pytest tests/vision/test_intent.py tests/vision/
+test_intent_extended.py tests/vision/test_pipeline_hardening.py -q`:
+`118 passed`. `pytest tests/vision/ -q`: `2975 passed`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21452 passed, 14 skipped in 764.70s (0:12:44)
+21461 passed, 14 skipped in 830.13s (0:13:50)
 ```
 
-**Zero failures**, the sixty-fifth consecutive fully green full-suite
-run. Passed count is up from 21451 to 21452 (the round 51 checkpoint's
+**Zero failures**, the sixty-sixth consecutive fully green full-suite
+run. Passed count is up from 21452 to 21461 (the round 52 checkpoint's
+9 new tests: 6 VisionIntentClassifier idiomatic-phrase tests, 3
+ImagePipeline extreme-aspect-ratio tests; all of the sixty-first
+through one-hundred-seventh checkpoints' fixes are confirmed still
+holding). Passed count is up from 21451 to 21452 (the round 51 checkpoint's
 1 new test in `test_screencast_analyzer.py`; all of the sixty-first
 through one-hundred-sixth checkpoints' fixes are confirmed still
 holding). Passed count is up from 21449 to 21451 (the round 50

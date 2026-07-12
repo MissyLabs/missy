@@ -1,5 +1,41 @@
 # TEST_RESULTS
 
+## Run: 2026-07-14 04:30 UTC — round 52 research pass: idiomatic-phrase false-activation bug in VisionIntentClassifier and extreme-aspect-ratio crash in ImagePipeline.resize()
+
+- Context: round 52 confirmed agent/structured_output.py's retry
+  mechanics (clean) and agent/failure_tracker.py +
+  agent/circuit_breaker.py's total isolation (documented/intentional
+  soft-nudge design, not a bug). vision/pipeline.py's
+  assess_quality() handles solid-color/pitch-black frames correctly.
+- **VisionIntentClassifier idiomatic false-activation**:
+  _EXPLICIT_LOOK_PATTERNS included "can you see"/"do you see"/"what
+  do you see" and bare "capture"/"snap" at 0.90 confidence (above
+  auto_threshold's default 0.80), so extremely common idiomatic
+  English ("Can you see why this code keeps crashing?", "Let's
+  capture the key idea in a summary") auto-activated the camera with
+  NO human confirmation on completely ordinary text. Live-verified:
+  all six example phrases produced "look activate 0.9". Fixed by
+  lowering these two patterns' confidence into the ask_threshold-to-
+  auto_threshold band (0.65) -- still recognized, still prompts for
+  confirmation, no longer silently fires unasked -- while splitting
+  the unambiguous "take a (photo|picture|snapshot)" phrase into its
+  own pattern at the original 0.90.
+- Command: `pytest tests/vision/test_intent.py -k "idiomatic or genuine_can_you_see or unambiguous_take" -v`
+- Result: `7 passed`. 5 confirmed via `git stash` to genuinely fail pre-fix.
+- **ImagePipeline.resize() extreme-aspect-ratio crash**: new_w/new_h
+  computed via int(w * scale)/int(h * scale) with no minimum-1px
+  clamp -- an extreme-aspect-ratio frame (e.g. 1x3000, plausible from
+  a corrupted/glitched camera capture) scales the short side to
+  exactly 0, and cv2.resize() rejects a zero target dimension with an
+  uncatchable cv2.error instead of the already-handled ValueError
+  path, crashing the whole pipeline. Live-reproduced with a real
+  1x3000 numpy array through real cv2.resize(). Fixed by clamping
+  both dimensions to a minimum of 1px.
+- Command: `pytest tests/vision/test_pipeline_hardening.py -k ExtremeAspectRatio -v`
+- Result: `3 passed`. All 3 confirmed via `git stash` to genuinely fail pre-fix (exact same cv2.error reproduced live).
+- Broader sweep: `pytest tests/vision/test_intent.py tests/vision/test_intent_extended.py tests/vision/test_pipeline_hardening.py -q`: `118 passed`.
+  `pytest tests/vision/ -q`: `2975 passed`.
+
 ## Run: 2026-07-14 03:55 UTC — round 51 research pass: screencast vision-analysis secrets-detection bypass
 
 - Context: round 51 continued re-hunting the round 49-50 pattern into

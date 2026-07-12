@@ -8193,6 +8193,78 @@ deselected`.
 `21452 passed, 14 skipped in 764.70s (0:12:44)` — 0 failed, up from
 21451. Sixty-fifth consecutive fully green full-suite run.
 
+### Post-backlog (one-hundred-eighth checkpoint): round 52 research pass fixes an idiomatic-phrase false-activation bug in VisionIntentClassifier and an extreme-aspect-ratio crash in ImagePipeline.resize()
+
+Round 52 confirmed `agent/structured_output.py`'s retry mechanics are
+clean (both `complete_structured`/`acomplete_structured` correctly
+preserve original message history across retries, append the raw
+assistant reply plus formatted validation-error feedback each retry,
+and correctly bound retries to `schema.max_retries + 1` total
+attempts — round 31 only fixed a docstring inaccuracy about `strict`
+mode, not these mechanics, and they check out clean). `agent/
+failure_tracker.py` and `agent/circuit_breaker.py` operate in total
+isolation from each other by design — `FailureTracker.record_failure()`
+only injects a soft strategy-rotation text nudge into `loop_messages`
+(the model can ignore it and re-attempt the same tool with zero
+friction), and `should_inject_strategy()` has zero call sites anywhere
+in the codebase outside its own tests — this matches the module's own
+framing as a prompt-injection feature, not an enforcement one, so it's
+treated as documented/intentional behavior rather than a bug, though
+it is a real, worth-noting behavioral gap. `vision/pipeline.py`'s
+`assess_quality()` handles solid-color and pitch-black frames
+correctly (both correctly scored "poor" with accurate issue tags).
+
+**Found and fixed two real, high-confidence bugs.** (1)
+`vision/intent.py`'s `_EXPLICIT_LOOK_PATTERNS` included
+`"can you see"`/`"do you see"`/`"what do you see"` and bare
+`"capture"`/`"snap"` at 0.90 confidence — above `auto_threshold`'s
+default 0.80 — so these extremely common idiomatic English phrases
+("Can you see why this code keeps crashing?", "Let's capture the key
+idea in a summary", "Snap out of it and focus") auto-activated the
+camera with **no human confirmation** on completely ordinary,
+vision-unrelated conversational text, directly contradicting the
+module's own stated design goal ("Auto-activation requires strong
+confidence"). Live-verified against real code: all six example
+phrases produced `look activate 0.9`. Existing tests in
+`tests/vision/test_intent.py`/`test_intent_extended.py` only checked
+sentences with zero keyword overlap at all (e.g. "What is the boiling
+point of water?"), never idiomatic "do/can you see" or bare
+"capture"/"snap" phrasing, so this classifier code path's real
+false-positive behavior was entirely untested. Fixed by lowering
+these two patterns' confidence into the `ask_threshold`-to-
+`auto_threshold` band (0.65) — the phrase is still recognized as a
+real signal and still prompts for confirmation, but no longer
+silently fires the camera unasked — while splitting the unambiguous
+`"take a (photo|picture|snapshot)"` phrase out into its own pattern at
+the original 0.90 so it's unaffected by narrowing the bare
+capture/snap match. 6 new tests (4 confirming the false-positives no
+longer auto-activate, 1 confirming the genuine phrase still gets
+recognized via `ASK` rather than dropped to `SKIP`, 1 confirming the
+unambiguous phrase form is unaffected), 5 confirmed via `git stash` to
+genuinely fail pre-fix. (2) `vision/pipeline.py`'s `resize()` computed
+`new_w`/`new_h` via `int(w * scale)`/`int(h * scale)` with no
+clamping to a minimum of 1px — a frame with an extreme aspect ratio
+(e.g. a corrupted/glitched capture with a 1px-thin dimension, plausible
+from camera hardware faults) scales the short side down to exactly 0,
+and `cv2.resize()` rejects a zero target dimension with an uncatchable
+`cv2.error: ... Assertion failed) inv_scale_x > 0` instead of the
+already-handled `ValueError` path, crashing the entire vision pipeline
+on that one frame. Live-reproduced with a real (non-mocked) 1×3000
+numpy array through the real `cv2.resize()`. Fixed by clamping both
+dimensions to a minimum of 1px, so a malformed frame degrades to a
+thin-but-valid image instead of crashing. 3 new tests using real
+OpenCV (no mocking, matching this test file's existing convention),
+all 3 confirmed via `git stash` to genuinely fail pre-fix with the
+exact same `cv2.error` reproduced live.
+
+Verified: `pytest tests/vision/test_intent.py tests/vision/
+test_intent_extended.py tests/vision/test_pipeline_hardening.py -q`:
+`118 passed`. `pytest tests/vision/ -q`: `2975 passed`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21461 passed, 14 skipped in 830.13s (0:13:50)` — 0 failed, up from
+21452. Sixty-sixth consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security
