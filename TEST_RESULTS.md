@@ -1,5 +1,65 @@
 # TEST_RESULTS
 
+## Run: 2026-07-12 UTC — round 77 research pass: apply_landlock_from_config() never granted execute access despite the ruleset globally handling EXECUTE (a self-inflicted total subprocess-exec DoS the instant it's ever activated); SEC-042 scanner check missed full-path/version-suffixed shell interpreters
+
+- Context: round 77 re-examined `ToolAnnotation`'s other fields
+  (`network_access`, `requires_approval`, `category`, `cost_hint`)
+  for the same "structurally inert" pattern round 76 found in
+  `filesystem_access` -- all confirmed either correctly wired or an
+  already-documented, intentional known limitation (the
+  no-`annotations`-key case is locked in by an existing test as
+  intentional). Two real, fresh findings surfaced instead in
+  `missy/security/landlock.py` and `missy/security/scanner.py`.
+- **Fixed: `apply_landlock_from_config()` never granted execute
+  access to anything, despite `_create_ruleset()` unconditionally
+  including `LANDLOCK_ACCESS_FS_EXECUTE` in the ruleset's globally
+  "handled" access mask.** Per Landlock semantics, once a category is
+  "handled," the kernel default-denies that access *everywhere*
+  unless a rule explicitly grants it back for a path. This function
+  called `add_read_path()` for `/usr`, `/lib`, `/lib64`, `/etc`,
+  `/bin`, `/sbin`, every `sys.path` entry -- but never
+  `add_execute_path()` for anything. Live-reproduced: captured the
+  real (non-mocked) rule-accumulation logic via a spy on
+  `LandlockPolicy.apply()` -- pre-fix, zero execute-access rules were
+  ever added, confirmed via `git stash`. Consequence if this function
+  is ever wired up and invoked on a Landlock-supporting kernel:
+  `landlock_restrict_self()` would succeed, and from that point on
+  every `execve()` in the process would fail with EACCES --
+  including every configured MCP server's subprocess spawn, the
+  `shell_exec` tool, and any other subprocess call -- a total,
+  self-inflicted DoS the moment Landlock activates, independent of
+  the already-documented "nothing calls this yet" wiring gap. Fixed
+  by changing the system directories that contain executables
+  (`/usr`, `/lib`, `/lib64`, `/bin`, `/sbin`) from `add_read_path()`
+  to `add_execute_path()` (which already implies read access), and
+  likewise for every `sys.path` entry (needed for C-extension `.so`
+  module loading via `dlopen()`, gated by the same execute right as
+  `execve()`); `/etc` correctly remains read-only since it holds
+  configuration, not executables.
+- Command: `pytest tests/security/test_landlock.py -v`
+- Result: `70 passed` (2 new:
+  `test_system_binary_paths_granted_execute_not_just_read`,
+  `test_sys_path_entries_granted_execute_for_extension_modules`),
+  both confirmed via `git stash` to genuinely fail pre-fix.
+- **Fixed (same round): SEC-042's "shell interpreter in command"
+  scanner check only matched a command token that equaled a bare
+  interpreter name exactly** (`"python"`, `"npx"`, etc.), missing any
+  full-path (`/usr/bin/python3 ...`), virtualenv-relative
+  (`.venv/bin/python ...`), or version-suffixed (`python3.11 ...`)
+  invocation -- all functionally identical in risk to the bare
+  `npx ...` case the check already caught, but silently unflagged.
+  Fixed by matching each token's `os.path.basename()` against a
+  regex allowing an optional numeric version suffix, rather than
+  exact whole-token set membership.
+- Command: `pytest tests/security/test_scanner.py -v -k sec_042`
+- Result: `5 passed` (3 new: full-path, version-suffixed, and
+  venv-relative-path interpreter cases), all 3 confirmed via `git
+  stash` to genuinely fail pre-fix.
+- Broader sweep: `pytest tests/security/ -q`: `2069 passed`.
+- Full suite: `python3 -m pytest tests/ -q` → `21541 passed, 18
+  skipped in 796.95s (0:13:16)` — 0 failed, up from 21536. Ninetieth
+  consecutive fully green full-suite run.
+
 ## Run: 2026-07-12 UTC — round 76 research pass: every MCP-sourced tool annotation had filesystem_access=False unconditionally, structurally disabling ToolRegistry's filesystem policy check for the entire MCP subsystem
 
 - Context: round 76 reviewed `Playbook`/`Learnings` (clean, prior

@@ -605,6 +605,75 @@ class TestApplyLandlockFromConfig:
         missy_dir = os.path.expanduser("~/.missy")
         assert missy_dir in added_write_paths
 
+    def test_system_binary_paths_granted_execute_not_just_read(self) -> None:
+        """Regression: _create_ruleset() unconditionally includes
+        LANDLOCK_ACCESS_FS_EXECUTE in the ruleset's "handled" access mask,
+        so once a Landlock ruleset activates, the kernel default-denies
+        execve() (and dlopen()'s PROT_EXEC mmap) EVERYWHERE unless a rule
+        explicitly grants execute back for a path. Previously this
+        function only ever called add_read_path() for /usr/bin/sbin/lib
+        et al, never add_execute_path() for anything -- meaning every
+        subprocess spawn in this process (every configured MCP server
+        command, shell_exec, any other exec() call) would fail with
+        EACCES the instant this policy activated, a total self-inflicted
+        DoS rather than a permissions restriction.
+        """
+        config = _MissyConfig()
+        added_execute_paths: list[str] = []
+        added_read_paths: list[str] = []
+        original_add_execute = LandlockPolicy.add_execute_path
+        original_add_read = LandlockPolicy.add_read_path
+
+        def spy_add_execute(self_inner: LandlockPolicy, path: str) -> LandlockPolicy:
+            added_execute_paths.append(path)
+            return original_add_execute(self_inner, path)
+
+        def spy_add_read(self_inner: LandlockPolicy, path: str) -> LandlockPolicy:
+            added_read_paths.append(path)
+            return original_add_read(self_inner, path)
+
+        with (
+            patch.object(LandlockPolicy, "is_available", return_value=True),
+            patch.object(LandlockPolicy, "apply", return_value=True),
+            patch.object(LandlockPolicy, "add_execute_path", spy_add_execute),
+            patch.object(LandlockPolicy, "add_read_path", spy_add_read),
+            patch("os.path.exists", return_value=True),
+        ):
+            apply_landlock_from_config(config)  # type: ignore[arg-type]
+
+        for binary_dir in ("/usr", "/lib", "/lib64", "/bin", "/sbin"):
+            assert binary_dir in added_execute_paths, (
+                f"{binary_dir} must be granted execute access, not just read"
+            )
+        # /etc holds configuration, not executables -- read-only is correct.
+        assert "/etc" in added_read_paths
+        assert "/etc" not in added_execute_paths
+
+    def test_sys_path_entries_granted_execute_for_extension_modules(self) -> None:
+        """sys.path entries (site-packages, stdlib) must also get execute
+        access -- a C-extension module (.so file) is loaded via dlopen(),
+        gated by the same LANDLOCK_ACCESS_FS_EXECUTE right as execve().
+        """
+        config = _MissyConfig()
+        added_execute_paths: list[str] = []
+        original_add_execute = LandlockPolicy.add_execute_path
+
+        def spy_add_execute(self_inner: LandlockPolicy, path: str) -> LandlockPolicy:
+            added_execute_paths.append(path)
+            return original_add_execute(self_inner, path)
+
+        with (
+            patch.object(LandlockPolicy, "is_available", return_value=True),
+            patch.object(LandlockPolicy, "apply", return_value=True),
+            patch.object(LandlockPolicy, "add_execute_path", spy_add_execute),
+        ):
+            apply_landlock_from_config(config)  # type: ignore[arg-type]
+
+        existing_sys_path_entries = [p for p in sys.path if p and os.path.exists(p)]
+        assert existing_sys_path_entries, "test environment must have at least one real sys.path entry"
+        for entry in existing_sys_path_entries:
+            assert entry in added_execute_paths
+
 
 # ---------------------------------------------------------------------------
 # landlock_status

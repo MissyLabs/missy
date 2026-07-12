@@ -553,9 +553,13 @@ def apply_landlock_from_config(config: MissyConfig) -> bool:  # type: ignore[nam
 
     The following paths are always included regardless of config:
 
-    * Read-only: ``/usr``, ``/lib``, ``/lib64``, ``/etc``, ``/bin``,
-      ``/sbin``, ``/proc/self`` (needed by Python internals), and all
-      entries on :data:`sys.path`.
+    * Read+execute: ``/usr``, ``/lib``, ``/lib64``, ``/bin``, ``/sbin``
+      (binaries and shared libraries this process may need to exec or
+      dlopen), and all entries on :data:`sys.path` (stdlib, site-packages,
+      source tree -- C-extension ``.so`` modules are dlopen()'d, which
+      Landlock gates by the same execute right as ``execve()``).
+    * Read-only: ``/etc`` (configuration, not executables) and
+      ``/proc/self`` (needed by Python internals).
     * Read-write: ``~/.missy`` (Missy's own data directory) and ``/tmp``.
 
     User-configured paths from ``config.filesystem.allowed_read_paths`` and
@@ -575,19 +579,40 @@ def apply_landlock_from_config(config: MissyConfig) -> bool:  # type: ignore[nam
 
     policy = LandlockPolicy()
 
-    # System read-only paths needed by Python and Missy itself.
-    for system_path in ("/usr", "/lib", "/lib64", "/etc", "/bin", "/sbin"):
+    # System paths needed to execute binaries and load shared libraries --
+    # NOT just read them. _create_ruleset() unconditionally includes
+    # LANDLOCK_ACCESS_FS_EXECUTE in the ruleset's "handled" access mask
+    # (see that method), which means the kernel default-denies execve()
+    # (and PROT_EXEC mmap, used by dlopen() for .so extension modules)
+    # EVERYWHERE the instant landlock_restrict_self() activates, unless a
+    # rule explicitly grants it back for a given path. Granting only
+    # add_read_path() here (as this function previously did) would make
+    # every subprocess spawn in this process -- every configured MCP
+    # server command, the shell_exec tool, any other exec() call -- fail
+    # with EACCES the moment this policy is applied: a total,
+    # self-inflicted DoS, not a permissions restriction. add_execute_path()
+    # already implies read access (see _access_flags_for_rule), so these
+    # replace the previous read-only grants rather than adding to them.
+    for system_path in ("/usr", "/lib", "/lib64", "/bin", "/sbin"):
         if os.path.exists(system_path):
-            policy.add_read_path(system_path)
+            policy.add_execute_path(system_path)
+
+    # /etc holds configuration, not executables -- read-only is correct.
+    if os.path.exists("/etc"):
+        policy.add_read_path("/etc")
 
     # /proc/self is accessed by Python's import machinery and ctypes.
     if os.path.exists("/proc/self"):
         policy.add_read_path("/proc/self")
 
-    # All entries on sys.path (site-packages, stdlib, source tree, etc.).
+    # All entries on sys.path (site-packages, stdlib, source tree, etc.)
+    # need execute access too, not just read -- a C-extension module
+    # (.so file) is loaded via dlopen(), which is gated by the same
+    # LANDLOCK_ACCESS_FS_EXECUTE right as execve() once EXECUTE is
+    # handled by the ruleset.
     for sys_path_entry in sys.path:
         if sys_path_entry and os.path.exists(sys_path_entry):
-            policy.add_read_path(sys_path_entry)
+            policy.add_execute_path(sys_path_entry)
 
     # Missy data directory — always read+write.
     missy_dir = os.path.expanduser("~/.missy")

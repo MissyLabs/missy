@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (137 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eighty-nine consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (138 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for ninety consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -5722,18 +5722,53 @@ Verified: `pytest tests/mcp/test_annotations.py
 tests/mcp/test_mcp_tool_wrapper.py -v`: `106 passed`. `pytest
 tests/mcp/ tests/tools/ -q`: `1956 passed, 2 skipped`.
 
+### Post-backlog (one-hundred-thirty-second checkpoint): round 77 research pass — `apply_landlock_from_config()` never granted execute access (a self-inflicted total subprocess-exec DoS the instant it's ever activated); SEC-042 scanner check missed full-path/version-suffixed interpreters
+
+Round 77 re-examined `ToolAnnotation`'s other fields for round 76's
+pattern — all clean or already-documented as intentional.
+
+**Fixed: `apply_landlock_from_config()` never granted execute access
+to anything, despite the ruleset globally handling
+`LANDLOCK_ACCESS_FS_EXECUTE`.** Once a category is "handled" by a
+Landlock ruleset, the kernel default-denies it everywhere unless a
+rule explicitly grants it back. This function granted read access to
+system directories but never execute — meaning if this
+(currently-unwired) function is ever invoked, every `execve()` in the
+process would fail with EACCES from that point on, including every
+MCP server subprocess spawn and `shell_exec`. Live-reproduced via a
+spy on the real rule-accumulation logic: zero execute rules existed
+pre-fix. Fixed by granting execute (which implies read) on system
+binary directories and `sys.path` entries (needed for C-extension
+`.so` loading via `dlopen()`). 2 new tests, both confirmed via `git
+stash` to genuinely fail pre-fix.
+
+**Fixed (same round): SEC-042's shell-interpreter detection only
+matched a bare exact interpreter name**, missing full-path,
+venv-relative, or version-suffixed invocations — all equally risky
+but silently unflagged. Fixed by matching each token's basename
+against a regex allowing an optional version suffix. 3 new tests, all
+confirmed via `git stash` to genuinely fail pre-fix.
+
+Verified: `pytest tests/security/test_landlock.py -v`: `70 passed`.
+`pytest tests/security/test_scanner.py -v -k sec_042`: `5 passed`.
+`pytest tests/security/ -q`: `2069 passed`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21536 passed, 18 skipped in 785.49s (0:13:05)
+21541 passed, 18 skipped in 796.95s (0:13:16)
 ```
 
-**Zero failures**, the eighty-ninth consecutive fully green
-full-suite run. Passed count is up from 21533 to 21536 (the round 76
-checkpoint's 3 new tests — full detail above; all of the sixty-first
-through one-hundred-thirtieth checkpoints' fixes are confirmed still
-holding). Passed count is up from 21526 to 21533 (the round 75
+**Zero failures**, the ninetieth consecutive fully green full-suite
+run. Passed count is up from 21536 to 21541 (the round 77
+checkpoint's 5 new tests: 2 Landlock, 3 SEC-042 scanner — full detail
+above; all of the sixty-first through one-hundred-thirty-first
+checkpoints' fixes are confirmed still holding). Passed count is up
+from 21533 to 21536 (the round 76 checkpoint's 3 new tests — full
+detail above; all of the sixty-first through one-hundred-thirtieth
+checkpoints' fixes are confirmed still holding). Passed count is up
+from 21526 to 21533 (the round 75
 checkpoint's 7 new tests: 4 in `TestResolveFilesystemTargets`, 3 in
 `TestRegistryPermissionEnforcement` — full detail above; all of the
 sixty-first through one-hundred-twenty-ninth checkpoints' fixes are

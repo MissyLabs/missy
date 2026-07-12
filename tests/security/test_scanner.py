@@ -784,6 +784,88 @@ class TestCheckMcpSecurity:
         ids = [f.id for f in result.findings]
         assert "SEC-042" not in ids
 
+    def test_sec_042_full_path_interpreter_flagged(self, tmp_path):
+        """Regression: a full-path interpreter invocation (e.g.
+        "/usr/bin/python3 -m my_mcp_server") is functionally identical in
+        risk to the bare "npx ..." case already caught, but previously
+        went undetected because the old check only matched a token that
+        equaled a known interpreter name exactly -- a full path never
+        does.
+        """
+        d = tmp_path / ".missy"
+        d.mkdir()
+        mcp_path = d / "mcp.json"
+        mcp_path.write_text(
+            json.dumps(
+                [
+                    {
+                        "name": "fsserver",
+                        "command": "/usr/bin/python3 -m my_mcp_server",
+                        "digest": "sha256:pinned",
+                    }
+                ]
+            )
+        )
+        mcp_path.chmod(0o600)
+        scanner = SecurityScanner(
+            config=_make_config(), config_path="/nonexistent", missy_dir=str(d)
+        )
+        result = scanner.scan_all()
+        ids = [f.id for f in result.findings]
+        assert "SEC-042" in ids
+
+    def test_sec_042_version_suffixed_interpreter_flagged(self, tmp_path):
+        """Regression: a version-suffixed interpreter (e.g. "python3.11")
+        was also previously undetected for the same reason.
+        """
+        d = tmp_path / ".missy"
+        d.mkdir()
+        mcp_path = d / "mcp.json"
+        mcp_path.write_text(
+            json.dumps(
+                [
+                    {
+                        "name": "fsserver",
+                        "command": "python3.11 server.py",
+                        "digest": "sha256:pinned",
+                    }
+                ]
+            )
+        )
+        mcp_path.chmod(0o600)
+        scanner = SecurityScanner(
+            config=_make_config(), config_path="/nonexistent", missy_dir=str(d)
+        )
+        result = scanner.scan_all()
+        ids = [f.id for f in result.findings]
+        assert "SEC-042" in ids
+
+    def test_sec_042_venv_relative_path_interpreter_flagged(self, tmp_path):
+        """Regression: an interpreter inside a virtualenv path (e.g.
+        ".venv/bin/python") was also previously undetected.
+        """
+        d = tmp_path / ".missy"
+        d.mkdir()
+        mcp_path = d / "mcp.json"
+        mcp_path.write_text(
+            json.dumps(
+                [
+                    {
+                        "name": "fsserver",
+                        "command": ".venv/bin/python server.py",
+                        "digest": "sha256:pinned",
+                    }
+                ]
+            )
+        )
+        mcp_path.chmod(0o600)
+        scanner = SecurityScanner(
+            config=_make_config(), config_path="/nonexistent", missy_dir=str(d)
+        )
+        result = scanner.scan_all()
+        ids = [f.id for f in result.findings]
+        assert "SEC-042" in ids
+
     def test_multiple_mcp_servers_each_checked(self, tmp_path):
         d = tmp_path / ".missy"
         d.mkdir()

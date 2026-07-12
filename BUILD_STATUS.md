@@ -10306,6 +10306,98 @@ tests/mcp/ tests/tools/ -q`: `1956 passed, 2 skipped`.
 `21536 passed, 18 skipped in 785.49s (0:13:05)` — 0 failed, up from
 21533. Eighty-ninth consecutive fully green full-suite run.
 
+### Post-backlog (one-hundred-thirty-second checkpoint): round 77 research pass fixes `apply_landlock_from_config()`'s missing execute-access grants (a self-inflicted total subprocess-exec DoS the instant it's ever activated) and `SecurityScanner`'s SEC-042 full-path/version-suffixed shell-interpreter detection gap
+
+Round 77 re-examined `ToolAnnotation`'s other fields
+(`network_access`, `requires_approval`, `category`, `cost_hint`) for
+the same "structurally inert" pattern round 76 found in
+`filesystem_access` — all confirmed either correctly wired end to end
+or an already-documented, intentional known limitation (the
+no-`annotations`-key-at-all case is deliberately locked in by an
+existing test as intentional per this session's own established
+"cautious by omission" precedent, not a fresh gap). Two real, fresh
+findings surfaced instead, both in code that's confirmed unreachable
+from production TODAY but would cause a real, severe failure the
+moment either is ever actually invoked — matching round 69's
+"VisionMemoryBridge" precedent for fixing a bounded, safe bug inside
+already-documented dead/unwired code rather than leaving a second bug
+waiting to be rediscovered later.
+
+**Finding 1 — fixed: `apply_landlock_from_config()` never granted
+execute access to anything, despite `_create_ruleset()`
+unconditionally including `LANDLOCK_ACCESS_FS_EXECUTE` in the
+ruleset's globally "handled" access mask.** Per Landlock kernel
+semantics, once a category is "handled" by a ruleset, the kernel
+default-denies that entire access category *everywhere on the
+filesystem* from the moment `landlock_restrict_self()` activates,
+unless a rule explicitly grants it back for a given path hierarchy.
+This function called `add_read_path()` for `/usr`, `/lib`, `/lib64`,
+`/etc`, `/bin`, `/sbin`, `/proc/self`, and every `sys.path` entry —
+but never called `add_execute_path()` for anything, not even `/bin`
+or `/usr/bin`. Live-reproduced by capturing the real (non-mocked)
+rule-accumulation logic via a spy on `LandlockPolicy.apply()`
+(the only mocked piece is the actual ctypes syscall, exactly as the
+existing test suite already does): pre-fix, zero execute-access
+rules were ever added to the policy, confirmed via `git stash`.
+Consequence if this function is ever wired up and actually invoked on
+a Landlock-supporting kernel (currently: nothing calls it, per
+`SecurityScanner`'s own honest SEC-094 finding): `landlock_restrict_self()`
+would succeed, and from that exact point forward, *every* `execve()`
+call in the process would fail with `EACCES` — including every
+configured MCP server's subprocess spawn, the `shell_exec` tool's
+command execution, and any other subprocess call anywhere in Missy —
+a total, self-inflicted denial-of-service the instant Landlock
+activates, completely independent of and orthogonal to the
+already-documented "nothing calls this yet" wiring gap. Fixed by
+changing the system directories that actually contain executables
+(`/usr`, `/lib`, `/lib64`, `/bin`, `/sbin`) from `add_read_path()` to
+`add_execute_path()` (which already implies read access per
+`_access_flags_for_rule`, so this replaces rather than duplicates the
+read grant), and likewise for every `sys.path` entry — needed because
+a C-extension module (a `.so` file, common in real Python
+installations via ctypes-based packages, numpy, etc.) is loaded via
+`dlopen()`, which Landlock gates by the identical
+`LANDLOCK_ACCESS_FS_EXECUTE` right as `execve()` itself. `/etc`
+correctly remains read-only, since it holds configuration files, not
+executables. 2 new tests
+(`test_system_binary_paths_granted_execute_not_just_read`,
+`test_sys_path_entries_granted_execute_for_extension_modules`), both
+confirmed via `git stash` to genuinely fail pre-fix — the existing
+`TestApplyLandlockFromConfig` class's tests all mock
+`LandlockPolicy.apply` wholesale in every single test, so the real
+ctypes syscall consequence of this gap (and thus this exact bug) was
+never previously exercised.
+
+**Finding 2 — fixed (same round): `SecurityScanner`'s SEC-042 "shell
+interpreter in command" check only matched a command token that
+equaled a bare interpreter name exactly** (`"python"`, `"npx"`,
+`"node"`, etc., via plain set membership on `command.split()`) —
+missing any full-path invocation (`/usr/bin/python3 -m
+my_mcp_server`), virtualenv-relative path
+(`.venv/bin/python server.py`), or version-suffixed interpreter
+(`python3.11 server.py`), all of which are functionally identical in
+risk to the bare `npx ...` invocation the check already correctly
+catches (a compromised interpreter/venv running an MCP server
+launches with the same blast radius regardless of how it's
+addressed), yet were silently unflagged in an installation security
+audit. Fixed by matching each command token's `os.path.basename()`
+against a regex allowing an optional trailing numeric version suffix
+(`^(bash|sh|python|...)(\d+(\.\d+)*)?$`), rather than requiring exact
+whole-token set membership — a full path or venv-relative path
+correctly reduces to its basename for the comparison, while a
+genuinely non-interpreter binary (e.g. `/usr/local/bin/mymcp`)
+remains correctly unflagged. 3 new tests (full-path,
+version-suffixed, venv-relative-path cases), all confirmed via `git
+stash` to genuinely fail pre-fix.
+
+Verified: `pytest tests/security/test_landlock.py -v`: `70 passed`.
+`pytest tests/security/test_scanner.py -v -k sec_042`: `5 passed`.
+`pytest tests/security/ -q`: `2069 passed`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21541 passed, 18 skipped in 796.95s (0:13:16)` — 0 failed, up from
+21536. Ninetieth consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

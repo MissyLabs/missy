@@ -22,6 +22,7 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import stat
 import time
 from dataclasses import dataclass, field
@@ -946,6 +947,15 @@ class SecurityScanner:
             "uvx",
             "pipx",
         }
+        # Matches a bare interpreter name, optionally version-suffixed
+        # (e.g. "python3.11", "node20") -- applied to each token's
+        # basename below so a full-path invocation (e.g.
+        # "/usr/bin/python3" or ".venv/bin/python") is still recognized
+        # as launching via a shell interpreter, not just a bare command
+        # name with no path component.
+        _INTERPRETER_BASENAME_RE = re.compile(
+            r"^(" + "|".join(sorted(_SHELL_INTERPRETERS_RE_TOKENS)) + r")(\d+(\.\d+)*)?$"
+        )
 
         for server in servers:
             if not isinstance(server, dict):
@@ -975,8 +985,12 @@ class SecurityScanner:
                 )
 
             # SEC-042: Shell interpreter in command
-            cmd_tokens = set(command.split())
-            interpreter_tokens = cmd_tokens & _SHELL_INTERPRETERS_RE_TOKENS
+            cmd_tokens = command.split()
+            interpreter_tokens = {
+                t
+                for t in cmd_tokens
+                if _INTERPRETER_BASENAME_RE.match(os.path.basename(t))
+            }
             if interpreter_tokens:
                 self._add(
                     Finding(
