@@ -1,5 +1,41 @@
 # TEST_RESULTS
 
+## Run: 2026-07-12 UTC — round 65 research pass: MCP manifest-digest re-verification gap across an ApprovalGate wait
+
+- Context: round 65 completed the queued webhook secret-rotation check
+  (clean -- HMAC secret read fresh per request, no in-flight state
+  after acceptance; WebhookChannel also isn't wired into any
+  production construction site, so it's dead code). Consolidation
+  race, learnings classification ordering, and disabled_tools
+  hot-reload all re-verified clean/already-intentional.
+- **MCP digest re-verification gap across the approval wait**:
+  `McpManager.call_tool()` verified the pinned manifest digest once,
+  before the ApprovalGate branch, but never again after
+  `ApprovalGate.request()` returns. The gate blocks synchronously for
+  up to its configured timeout (60s default in production) -- a
+  compromised/updated MCP server could mutate its advertised manifest
+  during that window, and the call would still proceed against the
+  operator's approval as if nothing had changed, since nothing
+  re-checked the digest between the wait returning and actual
+  dispatch. Existing tests used a MagicMock gate returning instantly,
+  never exercising manifest drift during a (simulated) wait.
+- Fixed by factoring the digest check into a `_check_digest_drift()`
+  helper, called once before the approval branch (unchanged) and a
+  second time immediately after `ApprovalGate.request()` returns
+  successfully, before dispatch -- a drift introduced during the wait
+  is now caught and denied exactly like a pre-existing mismatch.
+- Command: `pytest tests/mcp/test_mcp_manager.py -k manifest_drift_during_approval_wait -v`
+- Result: `1 passed`. New test
+  (test_manifest_drift_during_approval_wait_blocks_call) uses a
+  MagicMock gate whose request.side_effect mutates the connected
+  client's tools manifest (changing description, the field
+  compute_tool_manifest_digest() actually hashes) before returning --
+  confirmed via `git stash` to genuinely fail pre-fix (pre-fix, the
+  manifest mutation went completely undetected and the call
+  succeeded).
+- Broader sweep: `pytest tests/mcp/ tests/agent/ tests/security/ -q`: `6765 passed, 4 skipped`.
+- Full suite: `python3 -m pytest tests/ -q` → `21500 passed, 14 skipped in 756.98s (0:12:36)` — 0 failed, up from 21499. Seventy-ninth consecutive fully green full-suite run.
+
 ## Run: 2026-07-12 UTC — round 64 research pass: voice edge-node `safe-chat` policy was entirely unenforced; `muted` only checked at auth time
 
 - Context: round 64 generalized round 63's "mid-flight revocation not

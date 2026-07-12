@@ -332,6 +332,43 @@ class McpManager:
                     tools.append(namespaced)
         return tools
 
+    def _check_digest_drift(
+        self, server_name: str, client: Any, namespaced_name: str
+    ) -> str | None:
+        """Return a denial message if *server_name*'s live manifest no
+        longer matches its pinned digest, or ``None`` if it's unpinned or
+        still matches.
+
+        Factored out of :meth:`call_tool` so it can be called both before
+        AND after an :class:`~missy.agent.approval.ApprovalGate` wait --
+        the gate blocks synchronously for up to its configured timeout, a
+        window in which a compromised/updated server could mutate its
+        manifest after the pre-approval check but before actual dispatch.
+        """
+        expected_digest = self._get_server_digest(server_name)
+        if expected_digest is None:
+            return None
+
+        from missy.mcp.digest import compute_tool_manifest_digest, verify_digest
+
+        actual_digest = compute_tool_manifest_digest(client.tools)
+        if verify_digest(expected_digest, actual_digest):
+            return None
+
+        logger.warning(
+            "MCP: digest drift detected for %r at call time "
+            "(expected=%s actual=%s); denying call to %r",
+            server_name,
+            expected_digest,
+            actual_digest,
+            namespaced_name,
+        )
+        return (
+            f"[MCP BLOCKED] Server {server_name!r}'s tool manifest no longer "
+            "matches its pinned digest; call denied. Run 'missy mcp pin "
+            f"{server_name}' after verifying the change is expected."
+        )
+
     def call_tool(
         self,
         namespaced_name: str,
@@ -362,28 +399,12 @@ class McpManager:
         # malicious or compromised server could mutate its tool manifest
         # (e.g. widen a tool's effective behavior) after the initial
         # connection without ever triggering a reconnect.
-        expected_digest = self._get_server_digest(server_name)
-        if expected_digest is not None:
-            from missy.mcp.digest import compute_tool_manifest_digest, verify_digest
-
-            actual_digest = compute_tool_manifest_digest(client.tools)
-            if not verify_digest(expected_digest, actual_digest):
-                logger.warning(
-                    "MCP: digest drift detected for %r at call time "
-                    "(expected=%s actual=%s); denying call to %r",
-                    server_name,
-                    expected_digest,
-                    actual_digest,
-                    namespaced_name,
-                )
-                self._emit_call_audit(
-                    namespaced_name, session_id, task_id, "deny", "digest_mismatch_at_call_time"
-                )
-                return (
-                    f"[MCP BLOCKED] Server {server_name!r}'s tool manifest no longer "
-                    "matches its pinned digest; call denied. Run 'missy mcp pin "
-                    f"{server_name}' after verifying the change is expected."
-                )
+        digest_error = self._check_digest_drift(server_name, client, namespaced_name)
+        if digest_error is not None:
+            self._emit_call_audit(
+                namespaced_name, session_id, task_id, "deny", "digest_mismatch_at_call_time"
+            )
+            return digest_error
 
         # Annotation-driven approval gate: destructive/mutating MCP tools
         # must be confirmed by a human before running, same as SR-2.2's
@@ -412,6 +433,26 @@ class McpManager:
                     namespaced_name, session_id, task_id, "deny", f"approval_failed: {exc}"
                 )
                 return f"[MCP DENIED] Approval for {namespaced_name!r} was not granted: {exc}"
+
+            # ApprovalGate.request() blocks synchronously waiting for a
+            # human response (up to its configured timeout, 60s by
+            # default in production) -- a compromised/updated server could
+            # mutate its advertised manifest during that window, after the
+            # digest check above ran but before dispatch actually happens.
+            # Re-verifying here closes that gap: the operator's approval
+            # is only honored against the manifest state that's still
+            # current right before the call, not whatever was current
+            # when the approval prompt was first shown.
+            digest_error = self._check_digest_drift(server_name, client, namespaced_name)
+            if digest_error is not None:
+                self._emit_call_audit(
+                    namespaced_name,
+                    session_id,
+                    task_id,
+                    "deny",
+                    "digest_mismatch_after_approval_wait",
+                )
+                return digest_error
 
         result = client.call_tool(tool_name, arguments)
         # Defense-in-depth: scan MCP tool results for prompt injection.

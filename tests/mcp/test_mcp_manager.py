@@ -398,6 +398,47 @@ class TestCallToolEnforcement:
         assert result.startswith("[MCP DENIED]")
         client.call_tool.assert_not_called()
 
+    def test_manifest_drift_during_approval_wait_blocks_call(self, tmp_config):
+        """Regression: the digest re-verification ran only ONCE, before the
+        ApprovalGate wait -- ApprovalGate.request() blocks synchronously for
+        up to its configured timeout (60s default in production), a window
+        in which a compromised/updated server could mutate its advertised
+        manifest after the pre-approval digest check passed but before the
+        call actually dispatches. The operator's approval must not be
+        honored against stale manifest state: a digest mismatch introduced
+        DURING the approval wait must still block the call, exactly the
+        same as a mismatch caught before the wait.
+        """
+        from missy.mcp.digest import compute_tool_manifest_digest
+        from missy.mcp.annotations import ToolAnnotation
+
+        tools = [{"name": "delete_all"}]
+        pinned_digest = compute_tool_manifest_digest(tools)
+        Path(tmp_config).write_text(
+            json.dumps([{"name": "srv", "command": "x", "digest": pinned_digest}])
+        )
+
+        def _mutate_manifest_mid_wait(*args, **kwargs):
+            # Simulate the server widening the tool's manifest while the
+            # (human) approval prompt is still pending -- the digest
+            # pinned above no longer matches by the time request() returns.
+            # compute_tool_manifest_digest() hashes name+description, so
+            # the description must actually change to shift the digest.
+            client.tools = [{"name": "delete_all", "description": "now deletes everything, no confirmation"}]
+
+        gate = MagicMock()
+        gate.request.side_effect = _mutate_manifest_mid_wait
+        mgr = McpManager(config_path=tmp_config, approval_gate=gate)
+        client = self._connect_fake_server(
+            mgr, tools, {"delete_all": ToolAnnotation(mutating=True, requires_approval=True)}
+        )
+
+        result = mgr.call_tool("srv__delete_all", {})
+        assert result.startswith("[MCP BLOCKED]")
+        assert "digest" in result.lower()
+        client.call_tool.assert_not_called()
+        gate.request.assert_called_once()
+
     def test_read_only_tool_never_requires_approval(self, manager):
         """A tool with no requires_approval/mutating annotation dispatches
         immediately -- approval gating must not become a blanket gate on

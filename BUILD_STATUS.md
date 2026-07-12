@@ -9256,6 +9256,72 @@ tests/cli/ -q`: `3091 passed`.
 `21499 passed, 14 skipped in 766.48s (0:12:46)` — 0 failed, up from
 21494. Seventy-eighth consecutive fully green full-suite run.
 
+### Post-backlog (one-hundred-twenty-first checkpoint): round 65 research pass fixes an MCP manifest-digest re-verification gap across an `ApprovalGate` wait
+
+Round 65 completed the queued "mid-flight revocation" hunt from round
+64: `missy/channels/webhook.py` checked clean (HMAC secret is read
+fresh on every request with no long-lived in-flight state after
+acceptance — secret rotation applies to the very next request with no
+gap; `WebhookChannel` itself also isn't wired into any production
+construction site, so it's currently dead code rather than a real
+enforcement gap). `missy/agent/consolidation.py`/`sleeptime.py`'s
+consolidation race, `missy/agent/learnings.py`'s success/failure
+classification ordering, and `tools/registry.py`'s `disabled_tools`
+hot-reload were all re-verified clean or already-intentional/
+documented behavior.
+
+**Found and fixed a real, security-relevant gap in the MCP digest
+pinning mechanism itself: manifest-digest re-verification ran ONCE,
+before an `ApprovalGate` wait, but never again after it — so a
+compromised/updated MCP server could mutate its advertised tool
+manifest during the (up to 60-second-by-default) window while a human
+operator was being asked to approve a destructive call, and the call
+would still proceed against the operator's approval as if the
+manifest hadn't changed.** `McpManager.call_tool()`'s own docstring
+claims the digest check runs "immediately before dispatch... not only
+at connect time" — true for the check that runs before the approval
+branch, but the actual `client.call_tool(...)` dispatch happens only
+*after* `ApprovalGate.request()` returns, and nothing re-verified the
+digest in between. `ApprovalGate.request()` blocks synchronously
+waiting for a human to type `approve <id>`/`deny <id>`, with a default
+60-second timeout in production (`cli/main.py`'s
+`ApprovalGate(send_fn=...)` construction takes no override). A
+malicious or buggy MCP server could widen a destructive tool's
+manifest (e.g. change its description to imply broader/different
+behavior) at any point during that window; the pre-approval digest
+check had already passed by then, and no second check existed to
+catch the drift before the now-stale-approved call actually executed.
+Existing tests (`test_requires_approval_granted_by_gate_allows_call`)
+used a `MagicMock()` gate returning instantly, never exercising a
+scenario where the manifest changes *during* the (simulated) wait; the
+digest-drift tests covered only the pre-approval check in isolation.
+
+Fixed by factoring the digest-verification logic out of `call_tool()`
+into a new `_check_digest_drift(server_name, client, namespaced_name)`
+helper, called once before the approval branch (unchanged behavior)
+and a second time immediately after `ApprovalGate.request()` returns
+successfully, before `client.call_tool(...)` actually dispatches — a
+drift introduced during the wait is now caught and denied
+(`digest_mismatch_after_approval_wait` audit reason) exactly like a
+pre-existing mismatch, rather than being silently missed. 1 new test
+(`test_manifest_drift_during_approval_wait_blocks_call`) uses a
+`MagicMock` gate whose `request.side_effect` mutates the connected
+client's `tools` manifest (changing the tool's `description`, the
+field `compute_tool_manifest_digest()` actually hashes) before
+returning — confirming the call is now denied with `[MCP BLOCKED]`
+and the underlying server's `call_tool()` is never reached, whereas
+before the fix the manifest mutation went completely undetected and
+the call succeeded. Confirmed via `git stash` to genuinely fail
+pre-fix.
+
+Verified: `pytest tests/mcp/test_mcp_manager.py -k
+manifest_drift_during_approval_wait -v`: `1 passed`. `pytest
+tests/mcp/ tests/agent/ tests/security/ -q`: `6765 passed, 4 skipped`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21500 passed, 14 skipped in 756.98s (0:12:36)` — 0 failed, up from
+21499. Seventy-ninth consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

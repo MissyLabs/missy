@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (126 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for seventy-eight consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (127 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for seventy-nine consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -5326,15 +5326,50 @@ Verified: `pytest tests/channels/test_voice_server.py -k
 tests/channels/test_voice_channel.py -k SafeChatRouting -v`: `5
 passed`. `pytest tests/channels/ tests/cli/ -q`: `3091 passed`.
 
+### Post-backlog (one-hundred-twenty-first checkpoint): round 65 research pass — MCP manifest-digest re-verification gap across an ApprovalGate wait
+
+Round 65 completed the queued webhook secret-rotation check (clean).
+Consolidation race, learnings classification ordering, and
+disabled_tools hot-reload all re-verified clean/already-intentional.
+
+**Found and fixed a real, security-relevant gap: manifest-digest
+re-verification ran ONCE, before an `ApprovalGate` wait, but never
+again after it — so a compromised/updated MCP server could mutate its
+advertised tool manifest during the (up to 60-second-by-default)
+window while a human operator was being asked to approve a destructive
+call, and the call would still proceed against that stale approval.**
+`McpManager.call_tool()`'s own docstring claims the digest check runs
+"immediately before dispatch... not only at connect time" — true for
+the check before the approval branch, but the actual dispatch happens
+only after `ApprovalGate.request()` returns, with nothing re-verifying
+the digest in between. Fixed by factoring the check into a
+`_check_digest_drift()` helper, called once before the approval branch
+(unchanged) and a second time immediately after the gate returns
+successfully, before dispatch. 1 new test uses a mock gate whose
+`request.side_effect` mutates the connected client's manifest
+(changing the description, the field the digest actually hashes)
+before returning — confirming the call is now denied, whereas before
+the fix the mutation went completely undetected and the call
+succeeded. Confirmed via `git stash` to genuinely fail pre-fix.
+
+Verified: `pytest tests/mcp/test_mcp_manager.py -k
+manifest_drift_during_approval_wait -v`: `1 passed`. `pytest
+tests/mcp/ tests/agent/ tests/security/ -q`: `6765 passed, 4 skipped`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21499 passed, 14 skipped in 766.48s (0:12:46)
+21500 passed, 14 skipped in 756.98s (0:12:36)
 ```
 
-**Zero failures**, the seventy-eighth consecutive fully green
-full-suite run. Passed count is up from 21494 to 21499 (the round 64
+**Zero failures**, the seventy-ninth consecutive fully green
+full-suite run. Passed count is up from 21499 to 21500 (the round 65
+checkpoint's 1 new test:
+`test_manifest_drift_during_approval_wait_blocks_call` — full detail
+above; all of the sixty-first through one-hundred-twentieth
+checkpoints' fixes are confirmed still holding). Passed count is up
+from 21494 to 21499 (the round 64
 checkpoint's 5 new tests:
 `test_muted_mid_connection_disconnects_on_next_message`,
 `test_agent_callback_receives_node_policy_mode`,
