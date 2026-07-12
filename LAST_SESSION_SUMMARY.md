@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (101 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for fifty-two consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (102 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for fifty-three consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -4173,15 +4173,91 @@ test_code_evolution_coverage.py tests/agent/test_runtime_coverage_gaps.py
 -q`: `94 passed`. `pytest tests/agent/ tests/mcp/ -q`: `4681 passed, 4
 skipped`.
 
+### Round 36 (research-only, no findings): ProactiveManager/ApprovalGate wiring, Watchdog health-check logic, Discord DM/guild/role access control, vision SceneSession eviction
+
+Round 36 targeted four areas expected to be fresh territory but which
+turned out already hardened by earlier work: `proactive.py`'s
+`_fire_trigger()` uniformly checks `trigger.requires_confirmation` for
+every trigger type and fails closed when `approval_gate is None`, and
+`missy gateway start` threads one real `ApprovalGate` instance into
+both `ProactiveManager` and `AgentConfig.mcp_approval_gate` — no
+construction-order gap. `watchdog.py`'s `_check_all()` re-raises a
+`False` return as a `RuntimeError` so an exception and an explicit
+unhealthy result both mark `healthy = False` identically, and
+`gateway_start()` already registers real health checks. Discord's
+DM-allowlist and guild/role policy paths are mutually exclusive on
+`guild_id is None`; multi-role matching uses set intersection against
+an allow-list (no deny-list to conflict with); role-name comparison
+is correctly case-sensitive. Vision's `SceneSession`/`SceneManager`
+correctly enforces `max_frames`/`max_sessions` via a `while len >
+max: pop(0)` eviction loop, backed by dedicated eviction/hardening/
+stress test files. No code changed; no checkpoint recorded. Round 37
+steered toward `vision/multi_camera.py`, `vision/health_monitor.py`,
+`channels/discord/rest.py`/`rate_limit.py`, and the web API
+`/approvals` endpoints instead.
+
+### Post-backlog (ninety-fifth checkpoint): round 37 research pass — Discord REST retry-coverage asymmetry
+
+Round 37 followed round 36's recommendation into
+`vision/multi_camera.py` (`capture_all()`'s timeout-propagation
+behavior is already an explicitly-accepted, tested tradeoff — not a
+fresh finding), `vision/health_monitor.py` (clean — zero-division
+guards and consecutive-failure escalation are both correct and not
+diluted by historical successes), and the Web API `/api/v1/approvals`
+endpoints (clean — CLI and server agree exactly on request/response
+shape, and the list/approve race is handled correctly via a shared
+lock mapped to a clean 404).
+
+**Found and fixed a real retry-coverage asymmetry in
+`DiscordRestClient`** (`missy/channels/discord/rest.py`). Only
+`send_message()` retried on Discord's transient statuses (429/502/
+503/504) with Retry-After-aware backoff; every other method —
+`get_current_user`, `get_gateway_bot`, `add_reaction`,
+`create_thread`, `get_channel`, `get_guild_roles`,
+`send_interaction_response`, `edit_interaction_response`,
+`get_channel_messages`, `download_attachment`,
+`register_slash_commands`, `delete_message` — called
+`response.raise_for_status()` directly with zero retry, so a single
+transient hiccup on any of those routes failed the whole operation
+immediately. Most consequential for `get_guild_roles`, which
+`channel.py`'s role-based access-control path calls to resolve
+role-ID snowflakes to names — it already fails closed on error (denies
+the message rather than crashing), so this was an availability/
+reliability bug rather than a security hole, but realistic Discord bot
+usage (reacting to messages quickly, resolving roles on every guild
+message) would see spurious command rejections and failed reactions/
+threads under ordinary Discord-side rate limiting that `send_message`
+would have quietly retried through. Existing tests only ever exercised
+transient-status handling for `send_message`; every other method's
+tests covered URL construction and snowflake validation but never a
+transient-status response. Fixed by extracting the retry loop into a
+shared `_request_with_retry()` helper and routing all twelve affected
+call sites through it — deliberately leaving `send_message` (its own
+correct, already-hardened exception-retry logic), `upload_file` (its
+streamed file body can't be safely re-sent without an explicit
+`seek(0)` between attempts — a separate, riskier change), and
+`trigger_typing` (deliberately best-effort/fire-and-forget) untouched.
+5 new tests, 4 confirmed via `git stash` to genuinely fail pre-fix (the
+5th, a non-retryable-403 control test, correctly passes both before
+and after).
+
+Verified: `pytest tests/channels/test_discord_extended.py tests/
+channels/test_discord_protocol_deep.py -q`: `248 passed`. `pytest
+tests/channels/ -q -k discord`: `916 passed, 1067 deselected`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21415 passed, 14 skipped in 612.71s (0:10:12)
+21420 passed, 14 skipped in 679.94s (0:11:19)
 ```
 
-**Zero failures**, the fifty-second consecutive fully green
-full-suite run. Passed count is up from 21413 to 21415 (the round 35
+**Zero failures**, the fifty-third consecutive fully green
+full-suite run. Passed count is up from 21415 to 21420 (the round 37
+checkpoint's 5 new tests in `TestRequestWithRetryAppliedToOtherEndpoints`;
+round 36 was research-only with no findings, so it added nothing; all
+of the sixty-first through ninety-fourth checkpoints' fixes are
+confirmed still holding). Passed count is up from 21413 to 21415 (the round 35
 checkpoint's 2 new tests: 1 CodeEvolutionManager multi-diff-same-file
 revert test, 1 TrustScorer-covers-MCP-tools test; all of the
 sixty-first through ninety-third checkpoints' fixes are confirmed

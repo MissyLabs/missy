@@ -7210,6 +7210,107 @@ skipped`.
 `21415 passed, 14 skipped in 612.71s (0:10:12)` — 0 failed, up from
 21413. Fifty-second consecutive fully green full-suite run.
 
+### Round 36 (research-only, no findings): ProactiveManager/ApprovalGate wiring, Watchdog health-check logic, Discord DM/guild/role access control, vision SceneSession eviction
+
+Round 36 targeted four areas expected to be fresh territory but which
+turned out to already be hardened by earlier work: `proactive.py`'s
+`_fire_trigger()` uniformly checks `trigger.requires_confirmation` for
+every trigger type and fails closed when `approval_gate is None`, and
+`missy gateway start` threads one real `ApprovalGate` instance into
+both `ProactiveManager` and `AgentConfig.mcp_approval_gate` — no
+construction-order gap. `watchdog.py`'s `_check_all()` re-raises a
+`False` return as a `RuntimeError` so an exception and an explicit
+unhealthy result both mark `healthy = False` identically — no "check
+ran" vs. "check passed" confusion — and `gateway_start()` already
+registers real `provider_registry`/`memory_store`/`mcp_servers`
+checks. Discord's DM-allowlist and guild/role policy paths
+(`channels/discord/channel.py`) are mutually exclusive on
+`guild_id is None`, so "DM-allowlisted but not in an allowed guild"
+isn't a real cross-cutting case; multi-role matching uses set
+intersection against an allow-list (no deny-list to conflict with,
+so "allow wins" is the only semantic that exists), and role-name
+comparison is correctly case-sensitive per Discord's own semantics.
+Vision's `SceneSession`/`SceneManager` (`vision/scene_memory.py`)
+correctly enforces `max_frames` via a `while len > max: pop(0)` loop
+and only counts a task toward `max_sessions` capacity when it's a
+genuinely new task_id, backed by dedicated eviction/hardening/stress
+test files. No code changed; no checkpoint recorded. Round 37 should
+steer toward less-picked-over modules: `vision/multi_camera.py`,
+`vision/health_monitor.py`, `channels/discord/rest.py`/`rate_limit.py`,
+or the web API `/approvals` endpoints.
+
+### Post-backlog (ninety-fifth checkpoint): round 37 research pass fixes a retry-coverage asymmetry across Discord REST endpoints
+
+Round 37 followed round 36's recommendation into `vision/multi_camera.py`
+(capture_all()'s timeout-propagation behavior is already explicitly
+acknowledged and accepted by an existing stress test as one of two
+tolerated outcomes — not a fresh finding), `vision/health_monitor.py`
+(clean — success-rate/quality/latency averages all guard zero-division
+correctly, and consecutive-failure escalation triggers on the raw streak
+counter rather than being diluted by historical successes), the Web API
+`/api/v1/approvals` endpoints (clean — CLI and server agree exactly on
+path/method/body shape, and `ApprovalGate.approve_by_id`/`deny_by_id`
+correctly return `False` under the same lock `list_pending` uses,
+mapped to a clean 404 rather than any inconsistent state), and
+`channels/discord/rest.py`'s REST client.
+
+**Found and fixed a real retry-coverage asymmetry in
+`DiscordRestClient`.** Only `send_message()` retried on Discord's
+transient statuses (429/502/503/504) with Retry-After-aware backoff;
+every other method — `get_current_user`, `get_gateway_bot`,
+`add_reaction`, `create_thread`, `get_channel`, `get_guild_roles`,
+`send_interaction_response`, `edit_interaction_response`,
+`get_channel_messages`, `download_attachment`,
+`register_slash_commands`, `delete_message` — called
+`response.raise_for_status()` directly with no retry at all, so a
+single transient rate-limit or upstream hiccup on any of those routes
+failed the whole operation immediately. This is most consequential for
+`get_guild_roles`, which `channel.py`'s role-based access-control path
+calls to resolve role-ID snowflakes to names — a transient failure
+there already fails closed (denies the message) rather than crashing,
+so the bug was availability/reliability, not a security hole, but it
+meant realistic Discord bot usage (reacting to many messages quickly,
+resolving roles for every guild message) would see spurious command
+rejections and failed reactions/threads under ordinary Discord-side
+rate limiting that `send_message` would have quietly retried through.
+Existing tests (`TestRestSendMessageRetry`) only ever exercised 429/
+502/503/504 handling for `send_message`; every other method's tests
+covered URL construction and snowflake validation but never a
+transient-status response, so the gap was never exercised.
+
+Fixed by extracting the retry loop into a shared
+`_request_with_retry(method, url, **kwargs)` helper (same
+`_RETRY_STATUSES`/backoff/Retry-After logic `send_message` already
+used) and routing all twelve affected call sites through it.
+Deliberately left three methods untouched: `send_message` itself
+(its bespoke exception-retry-plus-detailed-failure-logging is already
+correct and battle-tested — no reason to risk it for a mechanical
+refactor); `upload_file` (its request body is a streamed open file
+handle — retrying would silently re-send from wherever the file
+pointer landed after the first attempt read it, risking a truncated
+re-upload, a strictly worse failure mode than today's single-attempt
+behavior; a safe fix would need an explicit `seek(0)` between
+attempts, a separate and riskier change not bundled into this
+mechanical extraction); and `trigger_typing` (already deliberately
+best-effort/fire-and-forget — it swallows every exception and logs at
+debug, since a missed typing indicator is cosmetic).
+
+5 new tests in a new `TestRequestWithRetryAppliedToOtherEndpoints`
+class (`get_guild_roles` 429-then-succeed and exhausted-retries-raises,
+`add_reaction` 503-then-succeed, `create_thread` 502-then-succeed, and
+a control test confirming a non-retryable 403 still returns/raises
+immediately with zero sleeps). 4 of the 5 confirmed via `git stash` to
+genuinely fail pre-fix (the 403 control test correctly passes both
+before and after, since that behavior was never broken).
+
+Verified: `pytest tests/channels/test_discord_extended.py tests/channels/
+test_discord_protocol_deep.py -q`: `248 passed`. `pytest tests/channels/
+-q -k discord`: `916 passed, 1067 deselected`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21420 passed, 14 skipped in 679.94s (0:11:19)` — 0 failed, up from
+21415. Fifty-third consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

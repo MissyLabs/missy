@@ -1,5 +1,43 @@
 # TEST_RESULTS
 
+## Run: 2026-07-13 20:55 UTC — round 37 research pass: Discord REST retry-coverage asymmetry (round 36 was research-only, no findings)
+
+- Context: round 36 targeted ProactiveManager/ApprovalGate wiring,
+  Watchdog health-check logic, Discord DM/guild/role access control,
+  and vision SceneSession eviction -- all four checked out clean
+  (already hardened by earlier work). Round 37 followed round 36's
+  recommendation into vision/multi_camera.py (capture_all()'s
+  timeout-propagation is already an explicitly-accepted, tested
+  tradeoff -- not fresh), vision/health_monitor.py (clean --
+  zero-division guards and consecutive-failure escalation are both
+  correct), and the Web API /api/v1/approvals endpoints (clean -- CLI
+  and server agree exactly on shape, and the resolve-race is handled
+  correctly via a shared lock + clean 404).
+- **Discord REST retry-coverage asymmetry**: only send_message()
+  retried on Discord's transient statuses (429/502/503/504) with
+  Retry-After-aware backoff; every other method (get_current_user,
+  get_gateway_bot, add_reaction, create_thread, get_channel,
+  get_guild_roles, send_interaction_response, edit_interaction_response,
+  get_channel_messages, download_attachment, register_slash_commands,
+  delete_message) called response.raise_for_status() directly with no
+  retry, so a single transient hiccup on any of those routes failed
+  the whole operation immediately. Most consequential for
+  get_guild_roles, used by channel.py's role-based access-control path
+  (already fails closed on error, so this was an availability bug, not
+  a security hole). Fixed by extracting the retry loop into a shared
+  _request_with_retry() helper and routing all twelve affected call
+  sites through it. Deliberately left send_message (own correct
+  bespoke logic), upload_file (streamed file body -- retry would
+  silently re-send from a stale file-pointer position without an
+  explicit seek(0), a separate and riskier change), and trigger_typing
+  (deliberately best-effort/fire-and-forget) untouched.
+- Command: `pytest tests/channels/test_discord_extended.py -k TestRequestWithRetryAppliedToOtherEndpoints -v`
+- Result: `5 passed`. 4 of 5 new tests confirmed to genuinely fail
+  pre-fix via `git stash` (the 5th, a non-retryable-403 control test,
+  correctly passes both before and after).
+- Broader sweep: `pytest tests/channels/test_discord_extended.py tests/channels/test_discord_protocol_deep.py -q`: `248 passed`.
+  `pytest tests/channels/ -q -k discord`: `916 passed, 1067 deselected`.
+
 ## Run: 2026-07-13 20:10 UTC — round 35 research pass: CodeEvolutionManager multi-diff same-file revert-corruption bug and false CLAUDE.md claim about MCP tools bypassing TrustScorer
 
 - Context: round 35 targeted four previously-unaudited areas:
