@@ -186,6 +186,65 @@ class TestHandleAsk:
         assert "Final constraint: never do Y." in forwarded
 
 
+class TestHandleAskSecretsDetection:
+    """Regression: regular MESSAGE_CREATE text runs through
+    SecretsDetector before dispatch (channel.py's "1b. Credential /
+    secrets detection" step), deleting the message and never forwarding
+    it to the agent. _handle_ask() forwarded its `prompt` option
+    straight to agent.run() with no equivalent check at all -- a
+    /ask prompt containing a live credential reached the LLM (and
+    Discord's own interaction history) with no scrubbing warning,
+    unlike identical content typed as a plain message.
+    """
+
+    @pytest.mark.asyncio
+    async def test_prompt_with_secret_is_not_forwarded_to_agent(self):
+        interaction = _make_interaction(
+            "ask",
+            options=[{"name": "prompt", "value": "My AWS key is AKIAIOSFODNN7EXAMPLE123456"}],
+        )
+        channel = _make_mock_channel()
+        mock_agent = MagicMock()
+        mock_agent.run.return_value = "should never be reached"
+        channel._agent_runtime = mock_agent
+
+        result = await _handle_ask(interaction, channel)
+
+        mock_agent.run.assert_not_called()
+        assert "credential" in result.lower() or "secret" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_prompt_with_secret_emits_audit_event(self):
+        interaction = _make_interaction(
+            "ask",
+            options=[{"name": "prompt", "value": "AKIAIOSFODNN7EXAMPLE123456"}],
+        )
+        channel = _make_mock_channel()
+        channel._agent_runtime = MagicMock()
+
+        await _handle_ask(interaction, channel)
+
+        channel._emit_audit.assert_called_once()
+        event_type, result_kind, _detail = channel._emit_audit.call_args[0]
+        assert event_type == "discord.channel.credential_detected"
+        assert result_kind == "deny"
+
+    @pytest.mark.asyncio
+    async def test_prompt_without_secret_still_forwarded_normally(self):
+        interaction = _make_interaction(
+            "ask", options=[{"name": "prompt", "value": "What time is it?"}]
+        )
+        channel = _make_mock_channel()
+        mock_agent = MagicMock()
+        mock_agent.run.return_value = "It is 3pm."
+        channel._agent_runtime = mock_agent
+
+        result = await _handle_ask(interaction, channel)
+
+        mock_agent.run.assert_called_once()
+        assert result == "It is 3pm."
+
+
 # ---------------------------------------------------------------------------
 # _interaction_author_id / per-user session scoping (SR-1.13 critical fix)
 #

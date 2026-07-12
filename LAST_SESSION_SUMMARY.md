@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (110 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for sixty-one consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (111 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for sixty-three consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -4661,20 +4661,53 @@ regression confirmed via `git stash` to genuinely fail pre-fix.
 Verified: `pytest tests/agent/test_sleeptime.py -q`: `50 passed`.
 `pytest tests/agent/ -q`: `4304 passed, 4 skipped`.
 
+### Post-backlog (one-hundred-fifth checkpoint): round 49 research pass — Discord /ask slash-command secrets-detection bypass
+
+Round 49 confirmed `api/server.py`'s route auth/rate-limiting is
+uniform across every route including `/health`/`/status`/the SSE
+events endpoint, and `observability/otel.py`'s exporter reconnection
+is clean (the OTel SDK handles collector reconnection internally).
+Two further candidates (a possible span-attribute size cap gap in
+`otel.py`; a token-budget reconciliation concern across
+`agent/runtime.py`'s combined playbook/summary/synthesized-memory
+injection) were left as documented residuals rather than force-fixed
+— the runtime.py one already carries extensive prior-round commentary
+explicitly reasoning through this exact problem, so further changes
+risk destabilizing already-deliberate logic without a clear, safe fix.
+
+**Found and fixed a real, high-confidence security gap: the Discord
+`/ask` slash command bypassed secrets detection entirely.**
+`channel.py`'s regular MESSAGE_CREATE path runs every plain text
+message through `SecretsDetector.has_secrets()` before dispatch,
+deleting the message and never forwarding it to the agent when a
+credential is detected. The `/ask` slash-command handler forwarded its
+`prompt` option straight to `agent.run()` with no equivalent check at
+all — a credential-containing `/ask` prompt reached the LLM and
+Discord's own interaction history verbatim with no scrubbing warning,
+no deletion, and no `discord.channel.credential_detected` audit event.
+Fixed by adding the identical `SecretsDetector` check before
+forwarding; since a slash-command option can't be "deleted" the way a
+channel message can, the equivalent action is refusing to forward the
+prompt and returning a warning as the interaction response, plus
+emitting the same audit event for consistency. 3 new tests, 2 of the 3
+confirmed via `git stash` to genuinely fail pre-fix.
+
+Verified: `pytest tests/unit/test_discord_commands_coverage.py -q`:
+`30 passed`. `pytest tests/channels/ -q -k discord`: `919 passed, 1067
+deselected`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21446 passed, 14 skipped in 801.40s (0:13:21)
+21449 passed, 14 skipped in 634.72s (0:10:34)
 ```
 
-**Zero failures**, the sixty-second consecutive fully green
-full-suite run. (The first attempt this checkpoint hit 2 unrelated,
-pre-existing wall-clock-timing-dependent scheduler active-hours-window
-tests that have nothing to do with `sleeptime.py`; both passed cleanly
-in isolation immediately afterward and the rerun came back fully
-clean, confirming a transient flake rather than a regression.) Passed
-count is up from 21443 to 21446 (the round 48 checkpoint's 3 new tests
+**Zero failures**, the sixty-third consecutive fully green full-suite
+run. Passed count is up from 21446 to 21449 (the round 49 checkpoint's
+3 new tests in `TestHandleAskSecretsDetection`; all of the sixty-first
+through one-hundred-fourth checkpoints' fixes are confirmed still
+holding). Passed count is up from 21443 to 21446 (the round 48 checkpoint's 3 new tests
 in `TestFindSessionsRespectsPerSessionRecency`; round 47 was
 research-only with no findings requiring a fix, so it added nothing;
 all of the sixty-first through one-hundred-third checkpoints' fixes

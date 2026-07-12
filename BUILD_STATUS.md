@@ -8010,6 +8010,71 @@ both passed cleanly in isolation immediately afterward and the
 full-suite rerun came back fully clean, confirming a transient timing
 flake rather than a regression from this checkpoint's change.)
 
+### Post-backlog (one-hundred-fifth checkpoint): round 49 research pass fixes a Discord /ask slash-command secrets-detection bypass
+
+Round 49 confirmed `api/server.py`'s route auth/rate-limiting applies
+uniformly to every route including `/health`, `/status`, and the SSE
+`/runs/{id}/events` endpoint (clean — its own explicit auth check runs
+before streaming starts), and `observability/otel.py`'s exporter
+reconnection is clean (the OTel SDK's `BatchSpanProcessor`/
+`OTLPSpanExporter` handle collector reconnection internally via gRPC
+channel-level retries; `_export_failure_count` is just a counter with
+no permanently-failed state). Two further candidates surfaced but were
+left as documented observations rather than force-fixed this round: a
+possible span-attribute size cap gap in `observability/otel.py`
+(`span.set_attribute(f"missy.{k}", str(v))` has no length/size
+truncation, so a very large tool-output `detail` value could produce
+an oversized span attribute — plausible but not confirmed against a
+real OTLP collector's actual size limits here); and a token-budget
+reconciliation concern in `agent/runtime.py`'s combined
+playbook/summary/synthesized-memory injection into
+`_build_context_messages()` — the code already carries extensive
+prior-round commentary explicitly reasoning through this exact
+budget-reconciliation problem (deriving `MemorySynthesizer`'s
+`max_tokens` from the same `TokenBudget` reservation specifically to
+keep the two paths in sync), so further changes here risk
+destabilizing already-deliberately-engineered logic without a clear,
+narrowly-scoped, safe fix; left as a documented residual for a
+dedicated future round with adequate design care, per this session's
+established discipline (matching the round-32/38/44/45 residuals).
+
+**Found and fixed a real, high-confidence security gap: the Discord
+`/ask` slash command bypassed secrets detection entirely.**
+`channel.py`'s regular MESSAGE_CREATE path runs every plain text
+message through `SecretsDetector.has_secrets()` before dispatch
+("1b. Credential / secrets detection"), deleting the message and
+never forwarding it to the agent when a credential is detected. The
+`/ask` slash-command handler (`commands.py`'s `_handle_ask()`) forwarded
+its `prompt` option straight to `agent.run()` with **no equivalent
+check at all** — a user could run `/ask my AWS key is AKIA... what do
+I do with it` and have the credential echoed verbatim into the LLM
+conversation (and retained in Discord's own interaction history) with
+no scrubbing warning, no deletion, and no
+`discord.channel.credential_detected` audit event, unlike identical
+content typed as a plain message. Live-verified against real code (not
+merely inferred from reading): the existing test suite for
+`_handle_ask()` covers session scoping, whitespace preservation, and
+error handling, but no test exercised `SecretsDetector` in the
+slash-command path at all. Fixed by adding the identical
+`SecretsDetector.has_secrets()` check before forwarding — since a
+slash-command option isn't a sendable channel message that can be
+deleted the way a regular MESSAGE_CREATE can, the equivalent action is
+refusing to forward the prompt and returning a warning as the
+interaction response instead, plus emitting the same
+`discord.channel.credential_detected` audit event for consistency. 3
+new tests (secret blocks forwarding + emits audit event; no-secret
+prompt still forwards normally), 2 of the 3 confirmed via `git stash`
+to genuinely fail pre-fix (the third, the no-secret pass-through
+control, correctly passes both before and after).
+
+Verified: `pytest tests/unit/test_discord_commands_coverage.py -q`:
+`30 passed`. `pytest tests/channels/ -q -k discord`: `919 passed, 1067
+deselected`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21449 passed, 14 skipped in 634.72s (0:10:34)` — 0 failed, up from
+21446. Sixty-third consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

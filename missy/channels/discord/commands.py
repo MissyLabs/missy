@@ -97,6 +97,39 @@ async def _handle_ask(interaction: dict[str, Any], channel: DiscordChannel) -> s
     if not prompt:
         return "Please provide a prompt with `/ask <your question>`."
 
+    # Regular MESSAGE_CREATE text runs through SecretsDetector before
+    # dispatch (channel.py's "1b. Credential / secrets detection" step),
+    # deleting the message and never forwarding it to the agent. This
+    # slash-command path forwarded `prompt` straight to agent.run() with
+    # no equivalent check at all -- a user could `/ask` a prompt
+    # containing a live credential and have it echoed into the LLM
+    # conversation (and Discord's own interaction history) with no
+    # scrubbing warning, unlike the identical content typed as a plain
+    # message. There's no channel message to delete for a slash-command
+    # option (it's interaction data, not a sent message), so the
+    # equivalent action here is refusing to forward it and returning a
+    # warning as the interaction response instead.
+    author_id = _interaction_author_id(interaction)
+    try:
+        from missy.security.secrets import SecretsDetector
+
+        if SecretsDetector().has_secrets(prompt):
+            channel._emit_audit(
+                "discord.channel.credential_detected",
+                "deny",
+                {"author_id": author_id, "source": "slash_command_ask"},
+            )
+            logger.warning(
+                "Discord: credentials detected in /ask prompt from %s — refusing to forward.",
+                author_id,
+            )
+            return (
+                "⚠️ Your prompt appeared to contain credentials or secrets and"
+                " was not sent. Please rotate any exposed keys immediately."
+            )
+    except Exception as _sec_exc:
+        logger.debug("Secrets detection error in /ask: %s", _sec_exc)
+
     agent = channel._agent_runtime
     if agent is None:
         return "Agent runtime is not available. Please try again later."
@@ -108,7 +141,6 @@ async def _handle_ask(interaction: dict[str, Any], channel: DiscordChannel) -> s
     # shared one conversation history -- one user's prompts and the
     # agent's replies to them became context for every other user's
     # /ask calls.
-    author_id = _interaction_author_id(interaction)
     session_id = author_id or "discord"
 
     try:

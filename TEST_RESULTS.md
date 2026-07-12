@@ -1,5 +1,32 @@
 # TEST_RESULTS
 
+## Run: 2026-07-14 02:45 UTC — round 49 research pass: Discord /ask slash-command secrets-detection bypass
+
+- Context: round 49 confirmed api/server.py's route auth/rate-limiting
+  is uniform (clean) and observability/otel.py's exporter reconnection
+  is clean (OTel SDK handles it internally). Two candidates
+  (otel.py span-attribute size cap, runtime.py's combined
+  playbook/summary/synthesized-memory token-budget reconciliation) left
+  as documented residuals rather than force-fixed -- the runtime.py one
+  already has extensive prior-round commentary on this exact problem,
+  so further changes risk destabilizing already-deliberate logic
+  without a clear safe fix.
+- **Discord /ask secrets-detection bypass**: regular MESSAGE_CREATE
+  text runs through SecretsDetector before dispatch, deleting the
+  message and never forwarding it to the agent. The /ask slash-command
+  handler forwarded its prompt straight to agent.run() with no
+  equivalent check -- a credential-containing /ask prompt reached the
+  LLM and Discord's interaction history verbatim with no scrubbing
+  warning. Fixed by adding the identical SecretsDetector check before
+  forwarding; since a slash-command option can't be "deleted" like a
+  channel message, the equivalent action is refusing to forward and
+  returning a warning as the interaction response, plus emitting the
+  same discord.channel.credential_detected audit event.
+- Command: `pytest tests/unit/test_discord_commands_coverage.py -k TestHandleAskSecretsDetection -v`
+- Result: `3 passed`. 2 of 3 confirmed via `git stash` to genuinely fail pre-fix.
+- Broader sweep: `pytest tests/unit/test_discord_commands_coverage.py -q`: `30 passed`.
+  `pytest tests/channels/ -q -k discord`: `919 passed, 1067 deselected`.
+
 ## Run: 2026-07-14 02:10 UTC — round 48 research pass: SleeptimeWorker cross-instance idle-detection blind spot (round 47 was research-only, no findings requiring a fix)
 
 - Context: round 47 checked skills/discovery.py frontmatter parsing
