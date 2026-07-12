@@ -184,3 +184,30 @@ class TestScheduledJobFromDict:
     def test_valid_capability_modes_excludes_discord(self):
         assert "discord" not in VALID_CAPABILITY_MODES
         assert set(VALID_CAPABILITY_MODES) == {"full", "safe-chat", "no-tools"}
+
+    def test_quoted_string_false_enabled_stays_disabled(self):
+        """Regression: bare bool(data.get("enabled", True)) treats any
+        non-empty string as truthy, so a hand-edited jobs.json entry with
+        "enabled": "false" (a quoted string, not a real YAML/JSON
+        boolean) silently produced enabled=True -- the opposite of what
+        a user editing the file to disable a job actually wrote. enabled
+        is load-bearing for whether SchedulerManager actually fires the
+        job (manager.py gates on `if not job.enabled`), so this silently
+        re-enabled a job the user believed they'd turned off.
+        """
+        job = ScheduledJob.from_dict({"id": "x", "name": "test", "enabled": "false"})
+        assert job.enabled is False
+
+    def test_quoted_string_true_enabled_stays_enabled(self):
+        job = ScheduledJob.from_dict({"id": "x", "name": "test", "enabled": "true"})
+        assert job.enabled is True
+
+    def test_quoted_string_false_delete_after_run_stays_false(self):
+        """Same bug, same fix, for delete_after_run -- a string "false"
+        was misread as True, so a job meant to run repeatedly would be
+        silently deleted after its first run.
+        """
+        job = ScheduledJob.from_dict(
+            {"id": "x", "name": "test", "delete_after_run": "false"}
+        )
+        assert job.delete_after_run is False

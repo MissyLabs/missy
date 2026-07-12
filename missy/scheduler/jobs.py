@@ -194,6 +194,8 @@ class ScheduledJob:
             A new :class:`ScheduledJob` instance.
         """
 
+        from missy.config.settings import _coerce_bool
+
         def _parse_dt(value: str | None) -> datetime | None:
             if value is None:
                 return None
@@ -206,7 +208,7 @@ class ScheduledJob:
             schedule=str(data.get("schedule", "")),
             task=str(data.get("task", "")),
             provider=str(data.get("provider", "anthropic")),
-            enabled=bool(data.get("enabled", True)),
+            enabled=_coerce_bool(data.get("enabled"), True),
             created_at=_parse_dt(data.get("created_at")) or datetime.now(tz=UTC),
             last_run=_parse_dt(data.get("last_run")),
             next_run=_parse_dt(data.get("next_run")),
@@ -219,7 +221,7 @@ class ScheduledJob:
             consecutive_failures=int(data.get("consecutive_failures", 0)),
             last_error=str(data.get("last_error", "")),
             # One-shot
-            delete_after_run=bool(data.get("delete_after_run", False)),
+            delete_after_run=_coerce_bool(data.get("delete_after_run"), False),
             # Active hours
             active_hours=str(data.get("active_hours", "")),
             # Timezone

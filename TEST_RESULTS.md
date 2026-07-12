@@ -1,5 +1,53 @@
 # TEST_RESULTS
 
+## Run: 2026-07-12 UTC — round 81 research pass: ScheduledJob.from_dict()'s bare bool() coercion silently inverted quoted-string "enabled"/"delete_after_run" values in jobs.json
+
+- Context: round 81 confirmed `config/migrate.py` has no additional
+  bug beyond round 80's already-fixed boolean-coercion issue
+  (migration only touches the `network` preset-detection section and
+  round-trips everything else unchanged via `yaml.dump`; any
+  pre-existing quoted-string boolean elsewhere survives migration as
+  a string, which is fine since round 80's `_coerce_bool` fix
+  operates at config-*load* time, after migration, not at migration
+  time). Swept `int()`/`float()` coercions across the config-parsing
+  surface and found nothing new — unlike `bool()`, Python's
+  `int()`/`float()` raise cleanly on non-numeric strings and on
+  lists/dicts, so these already fail loud rather than silently
+  producing a wrong value. One real, high-confidence, live-verified
+  finding surfaced in `missy/scheduler/jobs.py` — the exact same bug
+  class round 80 just fixed, in a file that fix never touched.
+- **Fixed: `ScheduledJob.from_dict()` used bare
+  `bool(data.get("enabled", True))` and
+  `bool(data.get("delete_after_run", False))`, silently inverting a
+  quoted-string boolean the same way round 80's config-parsing fix
+  addressed.** `jobs.json` is an explicitly hand-editable,
+  legacy-tolerant persistence file (its own docstring: "existing
+  jobs.json files produced by older versions ... continue to load
+  without error"). Live-reproduced:
+  `ScheduledJob.from_dict({'id':'x','name':'test','enabled':'false'}).enabled`
+  returned `True` pre-fix. `enabled` is load-bearing for whether
+  `SchedulerManager` actually fires the job (`manager.py` gates on
+  `if not job.enabled:` in two places) — so a job a user believed
+  they'd disabled via a manually-edited `"enabled": "false"` would
+  silently continue to execute on schedule, including under
+  `capability_mode: "full"` if so configured. The analogous
+  `delete_after_run` bug meant a job intended to run repeatedly could
+  be silently deleted after its first run instead. Existing tests
+  only exercised `from_dict(to_dict())` round-trips and dict literals
+  with real Python `bool` values, never a quoted-string boolean.
+  Fixed by importing and applying `config.settings._coerce_bool()`
+  (round 80's helper) at both call sites.
+- Command: `pytest tests/scheduler/test_jobs.py -v`
+- Result: `22 passed` (3 new:
+  `test_quoted_string_false_enabled_stays_disabled`,
+  `test_quoted_string_true_enabled_stays_enabled`,
+  `test_quoted_string_false_delete_after_run_stays_false`), the first
+  and third confirmed via `git stash` to genuinely fail pre-fix.
+- Broader sweep: `pytest tests/scheduler/ -q`: `375 passed`.
+- Full suite: `python3 -m pytest tests/ -q` → `21567 passed, 18
+  skipped in 1942.55s (0:32:22)` — 0 failed, up from 21564.
+  Ninety-third consecutive fully green full-suite run.
+
 ## Run: 2026-07-12 UTC — round 80 research pass: bare bool(data.get(key, default)) silently inverted quoted-string YAML boolean values across the entire config-parsing surface
 
 - Context: round 80 verified `SQLiteMemoryStore.cleanup()`'s pinned-

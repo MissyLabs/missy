@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (140 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for ninety-two consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (141 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for ninety-three consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -5820,15 +5820,37 @@ passed`. `pytest tests/security/ -q`: `2068 passed` (1 unrelated,
 pre-existing Hypothesis timing flake confirmed via `git stash`).
 `pytest tests/channels/ -q`: `1995 passed`.
 
+### Post-backlog (one-hundred-thirty-fifth checkpoint): round 81 research pass — `ScheduledJob.from_dict()`'s bare `bool()` coercion silently inverted quoted-string `"enabled"`/`"delete_after_run"` values in `jobs.json`
+
+Round 81 confirmed `config/migrate.py` has no additional bug and
+swept `int()`/`float()` config coercions — clean (Python's
+`int()`/`float()` already raise on bad input, unlike `bool()`).
+
+**Fixed: the same bug class round 80 fixed, in a different file.**
+`jobs.json` is an explicitly hand-editable, legacy-tolerant
+persistence file. Live-reproduced:
+`ScheduledJob.from_dict({..., "enabled": "false"}).enabled` returned
+`True` pre-fix — `enabled` gates whether `SchedulerManager` actually
+fires the job, so a job a user believed disabled would silently keep
+running. Fixed by reusing round 80's `_coerce_bool()` helper at both
+call sites. 3 new tests, 2 confirmed via `git stash` to genuinely
+fail pre-fix.
+
+Verified: `pytest tests/scheduler/test_jobs.py -v`: `22 passed`.
+`pytest tests/scheduler/ -q`: `375 passed`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21564 passed, 18 skipped in 784.25s (0:13:04)
+21567 passed, 18 skipped in 1942.55s (0:32:22)
 ```
 
-**Zero failures**, the ninety-second consecutive fully green
-full-suite run. Passed count is up from 21544 to 21564 (the round 80
+**Zero failures**, the ninety-third consecutive fully green
+full-suite run. Passed count is up from 21564 to 21567 (the round 81
+checkpoint's 3 new tests — full detail above; all of the sixty-first
+through one-hundred-thirty-fourth checkpoints' fixes are confirmed
+still holding). Passed count is up from 21544 to 21564 (the round 80
 checkpoint's 20 new tests — full detail above; all of the sixty-first
 through one-hundred-thirty-third checkpoints' fixes are confirmed
 still holding). Passed count is up from 21541 to 21544 (the round 78
