@@ -879,6 +879,38 @@ class DiscordChannel(BaseChannel):
                     _rt = self._agent_runtime
 
                     async def _voice_agent_cb(prompt: str, session_id: str) -> str:
+                        # Regular typed-text messages run through
+                        # SecretsDetector before ever reaching the agent
+                        # ("1b. Credential / secrets detection" above),
+                        # deleting the message and blocking it entirely.
+                        # AgentRuntime.run() itself only applies
+                        # InputSanitizer (prompt-injection detection), never
+                        # SecretsDetector -- so a voice transcript feeding
+                        # straight into _rt.run() with no check of its own
+                        # bypassed secrets screening completely (e.g.
+                        # dictating an API key to "read it back to me"
+                        # reached the LLM provider, session history, and
+                        # TTS reply unscrubbed). There's no Discord message
+                        # to delete for a live voice utterance, so the
+                        # equivalent action is refusing to forward the
+                        # transcript and returning a spoken warning instead.
+                        try:
+                            from missy.security.secrets import SecretsDetector
+
+                            if SecretsDetector().has_secrets(prompt):
+                                self._emit_audit(
+                                    "discord.channel.credential_detected",
+                                    "deny",
+                                    {"session_id": session_id, "source": "voice_transcript"},
+                                )
+                                return (
+                                    "Your message appeared to contain credentials or"
+                                    " secrets, so I didn't process it. Please rotate"
+                                    " any exposed keys immediately."
+                                )
+                        except Exception:
+                            logger.debug("Secrets detection error in voice callback", exc_info=True)
+
                         loop = asyncio.get_running_loop()
                         return await loop.run_in_executor(
                             None,

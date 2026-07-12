@@ -8075,6 +8075,61 @@ deselected`.
 `21449 passed, 14 skipped in 634.72s (0:10:34)` — 0 failed, up from
 21446. Sixty-third consecutive fully green full-suite run.
 
+### Post-backlog (one-hundred-sixth checkpoint): round 50 research pass fixes a Discord voice-transcript secrets-detection bypass
+
+Round 50 explicitly re-hunted round 49's newly-identified "two
+parallel dispatch paths, one missing a check the other has" pattern.
+Confirmed clean: the Web TUI's SSE-streaming "Ask Missy" console
+(`api/run_stream.py`), `missy ask` (CLI), and Discord all converge on
+the same `AgentRuntime.run()`, which uniformly applies
+`InputSanitizer.sanitize()` — no parallel path skips it, and the
+run_stream.py raw-response issue noted in an earlier round is already
+fixed with documented `censor_response()`/`redact_audit_value()`
+parity. `tools/builtin/self_create_tool.py`'s proposal path runs an
+explicit dangerous-pattern scan before writing proposed script
+content, and `code_evolution.py`'s `approve`/`apply`/`rollback`
+actions are deliberately excluded from the agent-facing `code_evolve`
+tool (`_HUMAN_OPERATOR_ONLY_ACTIONS`) and only reachable via `missy
+evolve` CLI under an interactive human operator — an intentional,
+already-documented trust boundary, not a gap.
+
+**Found and fixed a real, high-confidence security gap matching the
+exact round-49 pattern again: Discord voice transcripts bypassed
+secrets detection entirely, unlike typed text.** `channel.py`'s
+regular MESSAGE_CREATE path runs every plain text message through
+`SecretsDetector.has_secrets()` before it ever reaches the agent
+("1b. Credential / secrets detection"), deleting the message and
+blocking it. The voice-command path's own agent callback
+(`_voice_agent_cb`, built in `_maybe_handle_voice_command()`) instead
+fed faster-whisper's transcribed text straight into `_rt.run()` with
+no equivalent check — and `AgentRuntime.run()` itself only applies
+`InputSanitizer` (prompt-injection detection), never `SecretsDetector`
+— so a spoken credential (e.g. dictating an API key to "read it back
+to me") reached the LLM provider, session history, and TTS reply
+completely unscrubbed, unlike identical content typed in chat. Every
+existing voice test (`test_discord_voice.py`,
+`test_discord_voice_extended.py`, `test_discord_voice_gaps.py`) mocks
+`_agent_callback` directly rather than exercising the real
+`_voice_agent_cb` closure `channel.py` actually builds, so this gap
+was entirely untested. Fixed by adding the identical
+`SecretsDetector.has_secrets()` check inside `_voice_agent_cb` before
+forwarding to `_rt.run()`; since there's no Discord message to delete
+for a live voice utterance, the equivalent action is refusing to
+forward the transcript and returning a spoken warning instead, plus
+emitting the same `discord.channel.credential_detected` audit event
+for consistency. 2 new tests (secret-bearing transcript blocked
+without reaching the agent; a normal transcript still forwards
+correctly), the blocking test confirmed via `git stash` to genuinely
+fail pre-fix.
+
+Verified: `pytest tests/channels/test_discord_channel_gap_coverage.py
+tests/channels/test_discord_channel_coverage.py -q`: `84 passed`.
+`pytest tests/channels/ -q -k discord`: `921 passed, 1067 deselected`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21451 passed, 14 skipped in 690.01s (0:11:30)` — 0 failed, up from
+21449. Sixty-fourth consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

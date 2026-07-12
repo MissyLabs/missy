@@ -1,5 +1,34 @@
 # TEST_RESULTS
 
+## Run: 2026-07-14 03:20 UTC — round 50 research pass: Discord voice-transcript secrets-detection bypass
+
+- Context: round 50 re-hunted round 49's "two parallel dispatch paths,
+  one missing a check the other has" pattern. Confirmed clean: Web
+  TUI SSE console / CLI / Discord all converge on AgentRuntime.run()
+  with uniform InputSanitizer coverage; self_create_tool.py and
+  code_evolution.py's approval workflow are already properly gated
+  (intentional trust boundary, not a gap).
+- **Discord voice-transcript secrets-detection bypass**: regular
+  MESSAGE_CREATE text runs through SecretsDetector before ever
+  reaching the agent, deleting the message and blocking it. The
+  voice-command path's own agent callback (_voice_agent_cb) instead
+  fed faster-whisper's transcribed text straight into _rt.run() with
+  no equivalent check -- and AgentRuntime.run() itself only applies
+  InputSanitizer (prompt-injection), never SecretsDetector -- so a
+  spoken credential reached the LLM provider, session history, and
+  TTS reply completely unscrubbed. Every existing voice test mocks
+  _agent_callback directly rather than exercising the real
+  _voice_agent_cb closure, so this gap was entirely untested. Fixed
+  by adding the identical SecretsDetector check inside
+  _voice_agent_cb before forwarding; since there's no message to
+  delete for a live voice utterance, the equivalent action is
+  refusing to forward and returning a spoken warning, plus emitting
+  the same credential_detected audit event.
+- Command: `pytest tests/channels/test_discord_channel_gap_coverage.py -k test_voice_agent_callback -v`
+- Result: `2 passed`. The blocking test confirmed via `git stash` to genuinely fail pre-fix.
+- Broader sweep: `pytest tests/channels/test_discord_channel_gap_coverage.py tests/channels/test_discord_channel_coverage.py -q`: `84 passed`.
+  `pytest tests/channels/ -q -k discord`: `921 passed, 1067 deselected`.
+
 ## Run: 2026-07-14 02:45 UTC — round 49 research pass: Discord /ask slash-command secrets-detection bypass
 
 - Context: round 49 confirmed api/server.py's route auth/rate-limiting

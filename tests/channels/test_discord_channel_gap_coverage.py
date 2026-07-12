@@ -537,6 +537,110 @@ class TestMaybeHandleVoiceCommand:
         voice_binding.clear_voice_binding()
 
     @pytest.mark.asyncio
+    async def test_voice_agent_callback_blocks_secrets_before_forwarding(self):
+        """Regression: typed-text messages run through SecretsDetector
+        before ever reaching the agent ("1b. Credential / secrets
+        detection" in _handle_message), deleting the message and
+        blocking it entirely. AgentRuntime.run() itself only applies
+        InputSanitizer (prompt-injection detection), never
+        SecretsDetector -- so the real _voice_agent_cb built here fed a
+        voice transcript straight into _rt.run() with no check of its
+        own, bypassing secrets screening completely for voice input
+        (unlike identical text typed in chat).
+        """
+        ch = _make_channel()
+        ch._voice = None
+        ch._agent_runtime = MagicMock()
+        ch._agent_runtime.run = MagicMock(return_value="response")
+
+        mock_vm = MagicMock()
+        mock_vm.start = AsyncMock()
+
+        mock_result = MagicMock()
+        mock_result.handled = True
+        mock_result.reply = None
+
+        ch._rest.send_message = MagicMock()
+
+        captured_kwargs: dict = {}
+
+        def _capture_voice_manager(**kwargs):
+            captured_kwargs.update(kwargs)
+            return mock_vm
+
+        with (
+            patch(
+                "missy.channels.discord.voice.DiscordVoiceManager",
+                side_effect=_capture_voice_manager,
+            ),
+            patch(
+                "missy.channels.discord.voice_commands.maybe_handle_voice_command",
+                AsyncMock(return_value=mock_result),
+            ),
+        ):
+            await ch._maybe_handle_voice_command(
+                guild_id="g1",
+                channel_id="c1",
+                author_id="u1",
+                content="join the general voice channel",
+            )
+
+        voice_binding.clear_voice_binding()
+
+        agent_callback = captured_kwargs["agent_callback"]
+        result = await agent_callback("My AWS key is AKIAIOSFODNN7EXAMPLE123456", "sess-1")
+
+        ch._agent_runtime.run.assert_not_called()
+        assert "credential" in result.lower() or "secret" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_voice_agent_callback_forwards_normal_prompt(self):
+        ch = _make_channel()
+        ch._voice = None
+        ch._agent_runtime = MagicMock()
+        ch._agent_runtime.run = MagicMock(return_value="It is 3pm.")
+
+        mock_vm = MagicMock()
+        mock_vm.start = AsyncMock()
+
+        mock_result = MagicMock()
+        mock_result.handled = True
+        mock_result.reply = None
+
+        ch._rest.send_message = MagicMock()
+
+        captured_kwargs: dict = {}
+
+        def _capture_voice_manager(**kwargs):
+            captured_kwargs.update(kwargs)
+            return mock_vm
+
+        with (
+            patch(
+                "missy.channels.discord.voice.DiscordVoiceManager",
+                side_effect=_capture_voice_manager,
+            ),
+            patch(
+                "missy.channels.discord.voice_commands.maybe_handle_voice_command",
+                AsyncMock(return_value=mock_result),
+            ),
+        ):
+            await ch._maybe_handle_voice_command(
+                guild_id="g1",
+                channel_id="c1",
+                author_id="u1",
+                content="join the general voice channel",
+            )
+
+        voice_binding.clear_voice_binding()
+
+        agent_callback = captured_kwargs["agent_callback"]
+        result = await agent_callback("What time is it?", "sess-1")
+
+        ch._agent_runtime.run.assert_called_once()
+        assert result == "It is 3pm."
+
+    @pytest.mark.asyncio
     async def test_existing_voice_manager_registers_new_guild_scope(self):
         ch = _make_channel()
         ch._voice = MagicMock()
