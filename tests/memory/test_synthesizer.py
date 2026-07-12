@@ -65,6 +65,21 @@ class TestScoreRelevance:
         # base * 0.5 + 0 * 0.5 = 0.3
         assert score == pytest.approx(0.3)
 
+    def test_question_mark_on_query_does_not_block_overlap(self):
+        """Regression: _word_set() didn't strip punctuation, so a
+        question-phrased query's final keyword (e.g. "networking?")
+        never matched the same clean word ("networking") in fragment
+        content -- silently under-scoring the most relevant fragment on
+        any question-style query, which is nearly all real user input.
+        """
+        synth = MemorySynthesizer()
+        frag = MemoryFragment(source="test", content="Docker networking setup", relevance=1.0)
+        score = synth.score_relevance(frag, "How do I fix Docker networking?")
+        # "docker" and "networking" both overlap once punctuation is
+        # stripped from "networking?" and "how"/"do"/"i"/"fix"/"docker".
+        no_punct_score = synth.score_relevance(frag, "How do I fix Docker networking")
+        assert score == pytest.approx(no_punct_score)
+
 
 class TestSynthesizeRanksByRelevance:
     def test_most_relevant_first(self):
@@ -123,6 +138,30 @@ class TestDeduplicateKeepsDifferent:
         ]
         result = synth.deduplicate(frags, threshold=0.8)
         assert len(result) == 2
+
+
+class TestDeduplicateIgnoresTrailingPunctuation:
+    def test_near_duplicate_differing_only_by_trailing_period_removed(self):
+        """Regression: _word_set() didn't strip punctuation, so
+        "first." and "first" were treated as entirely different words --
+        two near-identical fragments from different sources (e.g. a
+        learning and a summary phrasing the same fact slightly
+        differently) fell just under the default 0.8 dedup threshold
+        and were BOTH kept, wasting the token budget on duplicated
+        context.
+        """
+        synth = MemorySynthesizer()
+        frags = [
+            MemoryFragment(
+                source="learnings", content="Always check the ports first.", relevance=0.7
+            ),
+            MemoryFragment(
+                source="summaries", content="Always check the ports first", relevance=0.4
+            ),
+        ]
+        result = synth.deduplicate(frags)  # default threshold=0.8
+        assert len(result) == 1
+        assert result[0].relevance == pytest.approx(0.7)
 
 
 class TestSynthesizeEmpty:

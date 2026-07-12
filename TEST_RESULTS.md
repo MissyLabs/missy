@@ -1,5 +1,39 @@
 # TEST_RESULTS
 
+## Run: 2026-07-14 01:35 UTC — round 46 research pass: punctuation-stripping gap in MemorySynthesizer and substring-only skill search
+
+- Context: round 46 pivoted away from agent/runtime.py's per-call-path
+  enforcement mechanisms to fresh territory. agent/attention.py's 5
+  subsystems and core/session.py's create_session_with_id() both
+  checked clean.
+- **MemorySynthesizer punctuation gap**: _word_set() didn't strip
+  punctuation before computing Jaccard word-overlap for both
+  score_relevance() and deduplicate() -- the repo already has the
+  correct pattern elsewhere (agent/behavior.py/agent/attention.py both
+  strip punctuation) but it wasn't applied here. A learning "Always
+  check the ports first." and a summary "Always check the ports
+  first" (near-duplicate, different trailing punctuation) fell just
+  under the 0.8 dedup threshold and were both kept. Separately, any
+  question-phrased query's trailing "?" prevented its final keyword
+  from matching the same clean word in fragment content, silently
+  under-scoring the most relevant fragment on the most common query
+  shape. Live-reproduced both scenarios. Fixed by stripping the same
+  punctuation set agent/attention.py already uses.
+- Command: `pytest tests/memory/test_synthesizer.py -k "test_question_mark_on_query_does_not_block_overlap or test_near_duplicate_differing_only_by_trailing_period_removed" -v`
+- Result: `2 passed`. Both confirmed via `git stash` to genuinely fail pre-fix.
+- **skills/discovery.py search() false negative**: plain
+  contiguous-substring matching mis-described as "fuzzy" -- a natural
+  multi-word query "web search" matched neither "web-search" (hyphen
+  vs space) nor a description with the words reordered. Fixed by
+  tokenizing query and target text (normalizing -/_ to spaces) and
+  requiring every query word to appear somewhere in the target, in
+  any order. All 5 pre-existing single-word tests still pass
+  unchanged.
+- Command: `pytest tests/skills/test_discovery.py -k test_search_multi_word -v`
+- Result: `2 passed`. Both confirmed via `git stash` to genuinely fail pre-fix.
+- Broader sweep: `pytest tests/memory/test_synthesizer.py tests/memory/test_synthesizer_edges.py -q`: `100 passed`.
+  `pytest tests/memory/ -q`: `602 passed, 8 skipped`. `pytest tests/skills/ -q`: `187 passed`.
+
 ## Run: 2026-07-14 01:00 UTC — round 45 research pass: duplicate-content bug in run_stream()'s mid-stream failure path
 
 - Context: round 45 continued re-hunting the round 42-44 "enforcement

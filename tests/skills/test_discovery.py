@@ -207,6 +207,32 @@ class TestSearch:
         assert len(results) >= 1
         assert results[0].name == "web-search"
 
+    def test_search_multi_word_query_matches_hyphenated_name(
+        self, discovery: SkillDiscovery, sample_skills: list[SkillManifest]
+    ) -> None:
+        """Regression: a plain contiguous-substring check required the
+        query to appear verbatim (same delimiter) -- "web search" is not
+        a substring of "web-search" (hyphen vs. space), a false negative
+        on a completely natural multi-word phrasing for an obviously
+        relevant skill.
+        """
+        results = discovery.search("web search", sample_skills)
+        assert len(results) >= 1
+        assert results[0].name == "web-search"
+
+    def test_search_multi_word_query_reordered_still_matches(
+        self, discovery: SkillDiscovery
+    ) -> None:
+        skill = SkillManifest(
+            name="tool-a",
+            description="Search the web using DuckDuckGo",
+            version="1.0.0",
+            author="A",
+        )
+        # Query words in the opposite order from the description's phrasing.
+        results = discovery.search("web search", [skill])
+        assert len(results) == 1
+
 
 class TestMissingFrontmatter:
     """Test graceful handling of missing/invalid frontmatter."""

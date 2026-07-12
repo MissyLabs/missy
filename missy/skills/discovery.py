@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -153,9 +154,18 @@ class SkillDiscovery:
     def search(self, query: str, skills: list[SkillManifest]) -> list[SkillManifest]:
         """Fuzzy-match skills by name and description.
 
-        Performs a case-insensitive substring match of *query* against
-        the ``name`` and ``description`` fields.  Name matches are
-        ranked higher than description-only matches.
+        Each word of *query* is matched independently (case-insensitive,
+        with ``-``/``_`` normalised to spaces) against the ``name`` and
+        ``description`` fields; a skill matches only if EVERY query word
+        appears somewhere in the target text, in any order. A single
+        contiguous-substring check previously required the query to
+        appear verbatim (same word order, same delimiters) in one field
+        -- a natural multi-word query like ``"web search"`` matched
+        neither ``"web-search"`` (hyphen vs. space) nor a description
+        with the words in the opposite order, a false negative on
+        exactly the kind of realistic phrasing "fuzzy" search implies
+        it handles. Name matches are ranked higher than
+        description-only matches.
 
         Args:
             query: Search string.
@@ -167,14 +177,22 @@ class SkillDiscovery:
         if not query:
             return list(skills)
 
-        q = query.lower()
+        def _normalize(text: str) -> str:
+            return re.sub(r"[-_]+", " ", text.lower())
+
+        query_words = _normalize(query).split()
+        if not query_words:
+            return list(skills)
+
         name_matches: list[SkillManifest] = []
         desc_matches: list[SkillManifest] = []
 
         for skill in skills:
-            if q in skill.name.lower():
+            name_norm = _normalize(skill.name)
+            desc_norm = _normalize(skill.description)
+            if all(w in name_norm for w in query_words):
                 name_matches.append(skill)
-            elif q in skill.description.lower():
+            elif all(w in name_norm or w in desc_norm for w in query_words):
                 desc_matches.append(skill)
 
         return name_matches + desc_matches

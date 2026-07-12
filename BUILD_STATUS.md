@@ -7851,6 +7851,64 @@ passed`. `pytest tests/agent/ -q`: `4301 passed, 4 skipped`.
 `21439 passed, 14 skipped in 625.01s (0:10:25)` — 0 failed, up from
 21438. Sixtieth consecutive fully green full-suite run.
 
+### Post-backlog (one-hundred-third checkpoint): round 46 research pass fixes a punctuation-stripping gap in MemorySynthesizer and a substring-only skill search that mismatched realistic multi-word queries
+
+Round 46 pivoted away from `agent/runtime.py`'s per-call-path
+enforcement mechanisms (thoroughly mined rounds 42-45) to fresh
+territory. `agent/attention.py`'s 5 subsystems checked clean against
+realistic multi-signal/topic-switch input (the apparent
+"first-word-never-a-topic" behavior is explicit, intentional, and
+already directly tested). `core/session.py`'s `create_session_with_id()`
+is clean — it deliberately returns a fresh `Session` object per call
+rather than caching by ID, since only the deterministic UUID5 `.id`
+is relied on as an external history key (object identity across
+threads is explicitly not assumed, per the method's own docstring).
+
+**Fixed a real, high-confidence punctuation-stripping gap in
+`memory/synthesizer.py`'s `_word_set()`**, used by both
+`score_relevance()` and `deduplicate()`. No punctuation was stripped
+before computing Jaccard word-overlap — the same repo already has the
+correct pattern elsewhere (`agent/behavior.py`/`agent/attention.py`
+both strip `"!.,?;:\"'()"`), but it wasn't applied here. Two concrete
+consequences: (1) a learning fragment "Always check the ports first."
+and a summary fragment "Always check the ports first" (a realistic
+near-duplicate from two different sources) produced word sets
+differing only by the trailing period, landing Jaccard overlap just
+under the default 0.8 dedup threshold — both were kept as if
+independent facts, wasting the token budget; (2) any question-phrased
+query (nearly all real user input, e.g. "How do I fix Docker
+networking?") had its final keyword's trailing `?` prevent it from
+matching the same clean word in fragment content, silently
+under-scoring the most relevant fragment on the most common query
+shape. Live-reproduced both scenarios against real code. Fixed by
+stripping the same punctuation set `agent/attention.py` already uses.
+2 new tests, both confirmed via `git stash` to genuinely fail pre-fix.
+
+**Fixed a real, medium-confidence false-negative in
+`skills/discovery.py`'s `search()`**, which was plain contiguous-
+substring matching mis-described in its own docstring as "fuzzy."
+A completely natural multi-word query like `"web search"` matched
+neither `"web-search"` (hyphen vs. space delimiter) nor a description
+phrasing the words in the opposite order — a false negative on
+exactly the realistic phrasing "fuzzy" search implies it handles.
+Live-reproduced against real code. Fixed by tokenizing both the query
+and the target name/description (normalizing `-`/`_` to spaces) and
+requiring every query word to appear somewhere in the target text, in
+any order — a bounded improvement matching the docstring's actual
+promise without introducing a real fuzzy/edit-distance dependency. All
+5 pre-existing single-word-query tests still pass unchanged (a
+single-word query's "all words present" check is equivalent to the
+old substring check for that case). 2 new tests, both confirmed via
+`git stash` to genuinely fail pre-fix.
+
+Verified: `pytest tests/memory/test_synthesizer.py tests/memory/
+test_synthesizer_edges.py -q`: `100 passed`. `pytest tests/memory/
+-q`: `602 passed, 8 skipped`. `pytest tests/skills/ -q`: `187 passed`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21443 passed, 14 skipped in 670.40s (0:11:10)` — 0 failed, up from
+21439. Sixty-first consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

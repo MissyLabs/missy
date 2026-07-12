@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (109 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for sixty consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (110 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for sixty-one consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -4564,15 +4564,59 @@ pre-fix.
 Verified: `pytest tests/agent/test_runtime_streaming.py -q`: `10
 passed`. `pytest tests/agent/ -q`: `4301 passed, 4 skipped`.
 
+### Post-backlog (one-hundred-third checkpoint): round 46 research pass — punctuation-stripping gap in MemorySynthesizer and substring-only skill search
+
+Round 46 pivoted away from `agent/runtime.py`'s per-call-path
+enforcement mechanisms (thoroughly mined rounds 42-45) to fresh
+territory. `agent/attention.py`'s 5 subsystems and `core/session.py`'s
+`create_session_with_id()` both checked clean.
+
+**Fixed a real punctuation-stripping gap in
+`memory/synthesizer.py`'s `_word_set()`**, used by both
+`score_relevance()` and `deduplicate()`. No punctuation was stripped
+before computing Jaccard word-overlap — the repo already has the
+correct pattern elsewhere (`agent/behavior.py`/`agent/attention.py`
+both strip punctuation) but it wasn't applied here. A learning
+"Always check the ports first." and a summary "Always check the
+ports first" (a realistic near-duplicate from two different sources)
+fell just under the default 0.8 dedup threshold and were both kept;
+separately, any question-phrased query's trailing `?` prevented its
+final keyword from matching the same clean word in fragment content,
+silently under-scoring the most relevant fragment on the most common
+query shape. Live-reproduced both scenarios against real code. Fixed
+by stripping the same punctuation set `agent/attention.py` already
+uses. 2 new tests, both confirmed via `git stash` to genuinely fail
+pre-fix.
+
+**Fixed a real false-negative in `skills/discovery.py`'s `search()`**,
+which was plain contiguous-substring matching mis-described in its own
+docstring as "fuzzy." A natural multi-word query like `"web search"`
+matched neither `"web-search"` (hyphen vs. space delimiter) nor a
+description phrasing the words in the opposite order. Live-reproduced
+against real code. Fixed by tokenizing both the query and target text
+(normalizing `-`/`_` to spaces) and requiring every query word to
+appear somewhere in the target, in any order — a bounded improvement
+matching the docstring's actual promise. All 5 pre-existing
+single-word-query tests still pass unchanged. 2 new tests, both
+confirmed via `git stash` to genuinely fail pre-fix.
+
+Verified: `pytest tests/memory/test_synthesizer.py tests/memory/
+test_synthesizer_edges.py -q`: `100 passed`. `pytest tests/memory/
+-q`: `602 passed, 8 skipped`. `pytest tests/skills/ -q`: `187 passed`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21439 passed, 14 skipped in 625.01s (0:10:25)
+21443 passed, 14 skipped in 670.40s (0:11:10)
 ```
 
-**Zero failures**, the sixtieth consecutive fully green full-suite
-run. Passed count is up from 21438 to 21439 (the round 45 checkpoint's
+**Zero failures**, the sixty-first consecutive fully green full-suite
+run. Passed count is up from 21439 to 21443 (the round 46 checkpoint's
+4 new tests: 2 MemorySynthesizer punctuation tests, 2 skills-discovery
+multi-word-search tests; all of the sixty-first through
+one-hundred-second checkpoints' fixes are confirmed still holding).
+Passed count is up from 21438 to 21439 (the round 45 checkpoint's
 1 new test,
 `test_run_stream_does_not_duplicate_content_on_mid_stream_failure`;
 all of the sixty-first through one-hundred-first checkpoints' fixes
