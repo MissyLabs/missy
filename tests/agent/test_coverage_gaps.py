@@ -1170,6 +1170,40 @@ class TestRuntimeDictsToMessages:
         assistant_msg = next(m for m in messages if m.role == "assistant")
         assert "shell_exec" in assistant_msg.content
 
+    def test_empty_content_assistant_turn_without_tool_calls_gets_placeholder(self):
+        """A second, sibling call site (the SR-4.4 done-criteria-rejection
+        retry path in _tool_loop()) appends
+        {"role": "assistant", "content": final_text} where final_text can
+        itself be "" if the provider returned blank text with
+        finish_reason="stop" -- with no "tool_calls" key at all. This is
+        the same empty-content-rejected-by-Anthropic bug fixed for the
+        tool-call-only case, just via a different, non-tool_calls trigger.
+        """
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        runtime = AgentRuntime(AgentConfig())
+        dicts = [
+            {"role": "user", "content": "Do the thing"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "call_1", "name": "do_thing", "arguments": {}}],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "name": "do_thing",
+                "content": "boom: permission denied",
+                "is_error": True,
+            },
+            {"role": "user", "content": "[verification prompt]"},
+            {"role": "assistant", "content": ""},  # no tool_calls key at all
+            {"role": "user", "content": "DONE-CRITERIA CHECK FAILED: ..."},
+        ]
+        messages = runtime._dicts_to_messages("system prompt", dicts)
+
+        assert not any(m.content == "" for m in messages)
+
     def test_assistant_turn_with_real_content_and_tool_calls_unaffected(self):
         """When the assistant turn already has real text alongside its
         tool_calls, the placeholder substitution must not kick in and

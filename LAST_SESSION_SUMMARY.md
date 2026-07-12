@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (99 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for fifty consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (100 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for fifty-one consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -4077,15 +4077,54 @@ Verified: `pytest tests/agent/test_coverage_gaps.py tests/agent/
 test_runtime_deep.py tests/providers/ -q`: `1178 passed`. `pytest
 tests/agent/ -q`: `4290 passed, 4 skipped`.
 
+### Post-backlog (ninety-third checkpoint): round 34 research pass — sibling empty-content site and missing tool_call_id validation gap, both following from round 33's finding
+
+Round 34 followed up directly on round 33's finding, re-examining
+every message-conversion path across all four providers plus
+`checkpoint.py`'s `validate_loop_messages()`. `OpenAIProvider`'s
+parallel-tool-call round-trip, `codex_provider.py`/`acpx_provider.py`'s
+own message handling, and whether `validate_loop_messages()` should
+reject the OLD round-33 shape (it shouldn't) all checked out clean.
+Two genuine bugs fixed, both directly following from round 33's lead.
+
+1. **Sibling empty-content site**: the SR-4.4 done-criteria-rejection
+   retry path appends an assistant message with `content=final_text`
+   (which can be `""`) and no `tool_calls` key at all -- round 33's fix
+   only guarded the `tool_calls`-present case, so this narrower trigger
+   still reached `_dicts_to_messages()` unguarded, reproducing the same
+   class of Anthropic API rejection. Live-reproduced end-to-end. Fixed
+   by broadening the guard to any empty-content assistant message. 1
+   new test, confirmed to fail pre-fix.
+2. **Missing `tool_call_id` validation gap**: `validate_loop_messages()`
+   never checked `tool_call_id`/`id` presence, even though
+   `AgentRuntime._tool_loop()` always writes both. A checkpoint missing
+   `tool_call_id` passed validation and round-tripped into
+   `resume_checkpoint()`; `OpenAIProvider` then silently dropped that
+   tool message with no repair event logged, leaving the preceding
+   assistant's `tool_calls` entry permanently unresolved -- exactly
+   what the real OpenAI API rejects. Live-reproduced end-to-end through
+   the real `OpenAIProvider` payload builder. Fixed by requiring a
+   non-empty `tool_call_id`/`id`, matching production. 4 new tests,
+   confirmed to fail pre-fix.
+
+Verified: `pytest tests/agent/test_checkpoint.py tests/agent/
+test_coverage_gaps.py tests/agent/test_runtime_deep.py tests/agent/
+test_runtime_coverage_gaps.py tests/providers/ -q`: `1299 passed`.
+`pytest tests/agent/ -q`: `4295 passed, 4 skipped`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21408 passed, 14 skipped in 759.33s (0:12:39)
+21413 passed, 14 skipped in 1818.14s (0:30:18)
 ```
 
-**Zero failures**, the fiftieth consecutive fully green
-full-suite run. Passed count is up from 21406 to 21408 (the round 33
+**Zero failures**, the fifty-first consecutive fully green
+full-suite run. Passed count is up from 21408 to 21413 (the round 34
+checkpoint's 5 new tests: 1 sibling empty-content test, 4
+tool_call_id-validation tests; all of the sixty-first through
+ninety-second checkpoints' fixes are confirmed still holding). Passed
+count is up from 21406 to 21408 (the round 33
 checkpoint's 2 new tests in `TestRuntimeDictsToMessages`; all of the
 sixty-first through ninety-first checkpoints' fixes are confirmed
 still holding). Passed count is up from 21401 to 21406 (the round 32

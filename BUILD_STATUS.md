@@ -7052,6 +7052,84 @@ passed, 4 skipped`.
 `21408 passed, 14 skipped in 759.33s (0:12:39)` — 0 failed, up from
 21406. Fiftieth consecutive fully green full-suite run.
 
+### Post-backlog (ninety-third checkpoint): round 34 research pass fixes a sibling empty-content site and a missing tool_call_id validation gap, both following directly from round 33's finding
+
+Round 34 followed up directly on round 33's empty-content-rejected-by-
+Anthropic finding, re-examining every `_dicts_to_messages()`/
+`_dicts_to_native_messages()` conversion path across all four
+providers plus `checkpoint.py`'s `validate_loop_messages()` for other
+realistic-but-untested message shapes that violate a real provider
+API's actual constraints. `OpenAIProvider`'s parallel-tool-call
+round-trip (2 simultaneous tool calls followed by 2 matching tool-role
+messages), `codex_provider.py`/`acpx_provider.py`'s own message
+handling (neither reconstructs tool-call pairing independently — both
+consume the already-fixed `list[Message]` from `_dicts_to_messages()`),
+and whether `validate_loop_messages()` should reject the *old*,
+already-fixed round-33 empty-content-with-tool_calls shape (it
+shouldn't — that shape is legitimate at rest in a checkpoint; the fix
+substitutes the placeholder at conversion time, not persistence time)
+all checked out clean. Two genuine bugs fixed, both directly following
+from round 33's lead.
+
+1. **A sibling call site produced the identical empty-content-rejected-
+   by-Anthropic message round 33 fixed, via a different trigger.** The
+   SR-4.4 "done-criteria rejected" retry path in `_tool_loop()` appends
+   `{"role": "assistant", "content": final_text}` — with `final_text =
+   response.content or ""` — and **no `tool_calls` key at all** when a
+   provider returns `finish_reason="stop"` with blank text immediately
+   after a round whose tool call errored. Round 33's fix only guarded
+   the case where `d.get("tool_calls")` was truthy, so this narrower
+   trigger (empty content, no tool_calls, not the final message in the
+   list — a rejection message always follows it and the loop continues)
+   still reached `_dicts_to_messages()` unguarded and was converted
+   straight to an empty-content `Message`, reproducing the exact same
+   class of hard Anthropic API rejection round 33 fixed. Live-
+   reproduced end-to-end with the real bound method: a realistic
+   6-message sequence (tool-call round → tool error → verification
+   prompt → blank stop response → rejection message) produced an
+   empty-content, non-final assistant `Message` at index 5. Fixed by
+   broadening the guard to apply to *any* empty-content assistant
+   message, not just the tool_calls case: when `tool_calls` is present,
+   substitute the existing tool-call-describing placeholder; otherwise
+   substitute a generic `"[No response text]"` placeholder. This
+   centralizes the fix at the true underlying invariant ("every
+   non-final assistant message needs non-empty content") rather than
+   requiring every individual call site that might produce empty
+   content to remember to guard against it. 1 new test, confirmed via
+   `git stash` to genuinely fail pre-fix.
+2. **`validate_loop_messages()` never checked for `tool_call_id`/`id`
+   presence on tool-role messages or assistant `tool_calls` entries,**
+   even though `AgentRuntime._tool_loop()` always writes both in
+   production. A checkpoint missing `tool_call_id` on a tool-role
+   message still passed validation and round-tripped straight into
+   `resume_checkpoint()`; `OpenAIProvider._message_to_chat_payload()`
+   then silently dropped that tool message with **no repair event
+   logged** (unlike its sibling orphan-tool-result path, which is
+   logged), leaving the preceding assistant message's `tool_calls`
+   entry permanently unresolved in the payload — exactly the shape the
+   real OpenAI API rejects with "the following tool_call_ids did not
+   have response messages," on the very next round after a checkpoint
+   resume. Live-reproduced end-to-end through the real
+   `OpenAIProvider._messages_to_chat_payload()`: the malformed
+   checkpoint's tool message vanished from the payload while its
+   matching `tool_calls` entry remained attached to the assistant
+   message. Fixed by requiring a non-empty string `tool_call_id` on
+   every tool-role message and a non-empty string `id` on every
+   assistant `tool_calls` entry, matching exactly what production
+   always writes (per the validator's own stated purpose: "rejects
+   anything that doesn't look exactly like what
+   `AgentRuntime._tool_loop()` itself writes"). 4 new tests, confirmed
+   via `git stash` to genuinely fail pre-fix.
+
+Verified: `pytest tests/agent/test_checkpoint.py tests/agent/
+test_coverage_gaps.py tests/agent/test_runtime_deep.py tests/agent/
+test_runtime_coverage_gaps.py tests/providers/ -q`: `1299 passed`.
+`pytest tests/agent/ -q`: `4295 passed, 4 skipped`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21413 passed, 14 skipped in 1818.14s (0:30:18)` — 0 failed, up from
+21408. Fifty-first consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

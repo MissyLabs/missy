@@ -1,5 +1,52 @@
 # TEST_RESULTS
 
+## Run: 2026-07-13 19:45 UTC — round 34 research pass: sibling empty-content site and missing tool_call_id validation gap, both following from round 33's finding
+
+- Context: round 34 followed up directly on round 33's finding,
+  re-examining every message-conversion path across all four providers
+  plus checkpoint.py's validate_loop_messages() for other realistic-
+  but-untested message shapes that violate a real provider API's
+  constraints. OpenAIProvider's parallel-tool-call round-trip,
+  codex_provider.py/acpx_provider.py's own message handling, and
+  whether validate_loop_messages() should reject the OLD round-33
+  shape (it shouldn't -- that shape is legitimate at rest) all checked
+  out clean. Two genuine bugs fixed, both directly following from
+  round 33's lead.
+- **Sibling empty-content site**: the SR-4.4 done-criteria-rejection
+  retry path appends an assistant message with content=final_text
+  (which can be "") and no tool_calls key at all -- round 33's fix only
+  guarded the tool_calls-present case, so this narrower trigger still
+  reached _dicts_to_messages() unguarded, reproducing the same class
+  of Anthropic API rejection. Live-reproduced end-to-end. Fixed by
+  broadening the guard to any empty-content assistant message,
+  substituting a generic "[No response text]" placeholder when there's
+  no tool_calls to describe.
+- Command: `pytest tests/agent/test_coverage_gaps.py::TestRuntimeDictsToMessages -v`
+- Result: `7 passed`. New test confirmed to genuinely fail pre-fix via
+  `git stash`.
+- **Missing tool_call_id validation gap**: validate_loop_messages()
+  never checked tool_call_id/id presence, even though
+  AgentRuntime._tool_loop() always writes both. A checkpoint missing
+  tool_call_id passed validation and round-tripped into
+  resume_checkpoint(); OpenAIProvider then silently dropped that tool
+  message with no repair event logged, leaving the preceding
+  assistant's tool_calls entry permanently unresolved -- exactly what
+  the real OpenAI API rejects with "tool_call_ids did not have response
+  messages." Live-reproduced end-to-end through the real
+  OpenAIProvider payload builder. Fixed by requiring a non-empty
+  tool_call_id/id, matching what production always writes.
+- Command: `pytest tests/agent/test_checkpoint.py::TestValidateLoopMessages -v`
+- Result: `16 passed`. 4 new tests confirmed to genuinely fail pre-fix
+  via `git stash`.
+- Command: `pytest tests/agent/test_checkpoint.py tests/agent/test_coverage_gaps.py tests/agent/test_runtime_deep.py tests/agent/test_runtime_coverage_gaps.py tests/providers/ -q`
+- Result: `1299 passed`.
+- Command: `pytest tests/agent/ -q`
+- Result: `4295 passed, 4 skipped`.
+- Command: `python3 -m pytest tests/ -q`
+  (full suite, background run)
+- Result: `21413 passed, 14 skipped in 1818.14s (0:30:18)`. 0 failed, up
+  from 21408. Fifty-first consecutive fully green full-suite run.
+
 ## Run: 2026-07-13 19:20 UTC — round 33 research pass: Anthropic-rejected empty-content assistant message in the multi-round tool loop
 
 - Context: round 33 went deep on FailureTracker/CircuitBreaker's

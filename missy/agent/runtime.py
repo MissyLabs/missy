@@ -2463,24 +2463,36 @@ class AgentRuntime:
                 result.append(Message(role="user", content=content_str))
             elif role in ("user", "assistant"):
                 content_str = str(content)
-                if not content_str and role == "assistant" and d.get("tool_calls"):
-                    # Claude (and other providers) frequently emit a
-                    # tool_use block with no accompanying text -- behavior.py
-                    # explicitly tells the model to avoid preamble -- so
-                    # this dict's "content" is legitimately "". But the
-                    # Anthropic Messages API rejects any non-final message
-                    # with empty content ("all messages must have
+                if not content_str and role == "assistant":
+                    # The Anthropic Messages API rejects any non-final
+                    # message with empty content ("all messages must have
                     # non-empty content except for the optional final
-                    # assistant message"), so re-serializing this turn
-                    # verbatim on the next tool-loop round sent an invalid
-                    # request and aborted the entire multi-round task --
-                    # not an edge case, since a tool-call-only assistant
-                    # turn is the common case. Substitute a placeholder
-                    # describing the call(s) instead of an empty string.
-                    tool_names = [
-                        str(tc.get("name", "tool")) for tc in d["tool_calls"] if isinstance(tc, dict)
-                    ]
-                    content_str = f"[Called tool: {', '.join(tool_names)}]" if tool_names else "[Tool call]"
+                    # assistant message"). An assistant loop_messages dict
+                    # can legitimately have content="" for more than one
+                    # reason -- Claude (and other providers) frequently
+                    # emit a tool_use block with no accompanying text
+                    # (behavior.py explicitly tells the model to avoid
+                    # preamble), and the SR-4.4 done-criteria-rejection
+                    # retry path (above) also appends
+                    # {"role": "assistant", "content": final_text} where
+                    # final_text can itself be "" if the provider returned
+                    # blank text with finish_reason="stop". Both are the
+                    # common case, not an edge case, and both previously
+                    # re-serialized straight to an empty-content Message,
+                    # sending an invalid request and aborting the entire
+                    # multi-round task on the very next round. Substitute a
+                    # placeholder instead of an empty string in every case.
+                    if d.get("tool_calls"):
+                        tool_names = [
+                            str(tc.get("name", "tool"))
+                            for tc in d["tool_calls"]
+                            if isinstance(tc, dict)
+                        ]
+                        content_str = (
+                            f"[Called tool: {', '.join(tool_names)}]" if tool_names else "[Tool call]"
+                        )
+                    else:
+                        content_str = "[No response text]"
                 result.append(Message(role=role, content=content_str))
         return result
 

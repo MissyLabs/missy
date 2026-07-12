@@ -474,14 +474,34 @@ def validate_loop_messages(loop_messages: object) -> bool:
         if role not in _VALID_ROLES:
             return False
         if role == "tool":
-            if not isinstance(msg.get("name"), str) or "content" not in msg:
+            # AgentRuntime._tool_loop() always writes tool_call_id alongside
+            # name/content (runtime.py's loop_messages.append for role=="tool").
+            # Without this check, a checkpoint missing tool_call_id passed
+            # validation, and OpenAIProvider._message_to_chat_payload()
+            # silently drops that tool message (no repair event logged,
+            # unlike its sibling orphan-tool-result path) while leaving the
+            # preceding assistant message's tool_calls entry in the payload
+            # -- producing exactly the shape the real OpenAI API rejects
+            # with "the following tool_call_ids did not have response
+            # messages," on the very next round after a checkpoint resume.
+            if (
+                not isinstance(msg.get("name"), str)
+                or "content" not in msg
+                or not isinstance(msg.get("tool_call_id"), str)
+                or not msg["tool_call_id"]
+            ):
                 return False
         if role == "assistant" and "tool_calls" in msg:
             tool_calls = msg["tool_calls"]
             if not isinstance(tool_calls, list):
                 return False
             for tc in tool_calls:
-                if not isinstance(tc, dict) or not isinstance(tc.get("name"), str):
+                if (
+                    not isinstance(tc, dict)
+                    or not isinstance(tc.get("name"), str)
+                    or not isinstance(tc.get("id"), str)
+                    or not tc["id"]
+                ):
                     return False
     return True
 

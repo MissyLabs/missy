@@ -681,6 +681,25 @@ class TestValidateLoopMessages:
     def test_tool_message_missing_content_rejected(self):
         assert not validate_loop_messages([{"role": "tool", "name": "calculator"}])
 
+    def test_tool_message_missing_tool_call_id_rejected(self):
+        """AgentRuntime._tool_loop() always writes tool_call_id alongside
+        name/content on every persisted tool-role message. Pre-fix, a
+        checkpoint missing it still validated -- OpenAIProvider then
+        silently dropped the tool message with no repair event logged,
+        leaving the preceding assistant message's tool_calls entry
+        permanently unresolved, which the real OpenAI API rejects with
+        "the following tool_call_ids did not have response messages" on
+        the very next round after a checkpoint resume.
+        """
+        assert not validate_loop_messages(
+            [{"role": "tool", "name": "calculator", "content": "4"}]
+        )
+
+    def test_tool_message_empty_tool_call_id_rejected(self):
+        assert not validate_loop_messages(
+            [{"role": "tool", "tool_call_id": "", "name": "calculator", "content": "4"}]
+        )
+
     def test_assistant_tool_calls_not_a_list_rejected(self):
         assert not validate_loop_messages(
             [{"role": "assistant", "content": "", "tool_calls": "not-a-list"}]
@@ -689,6 +708,31 @@ class TestValidateLoopMessages:
     def test_assistant_tool_call_missing_name_rejected(self):
         assert not validate_loop_messages(
             [{"role": "assistant", "content": "", "tool_calls": [{"id": "t1"}]}]
+        )
+
+    def test_assistant_tool_call_missing_id_rejected(self):
+        """Every production tool_calls entry (runtime.py's loop_messages
+        append) always includes an "id" alongside "name"/"arguments".
+        """
+        assert not validate_loop_messages(
+            [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{"name": "calculator", "arguments": {}}],
+                }
+            ]
+        )
+
+    def test_assistant_tool_call_empty_id_rejected(self):
+        assert not validate_loop_messages(
+            [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{"id": "", "name": "calculator", "arguments": {}}],
+                }
+            ]
         )
 
     def test_assistant_without_tool_calls_accepted(self):
