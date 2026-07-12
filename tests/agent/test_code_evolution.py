@@ -358,6 +358,45 @@ class TestApply:
         assert "ORIGINAL" in content
         assert "BROKEN_SHOULD_BE_REVERTED" not in content
 
+    def test_apply_tests_fail_reverts_untracked_file_multi_diff_same_file(
+        self, tmp_repo, store_path
+    ):
+        """Regression: apply() captured `original_contents[diff.file_path]`
+        inside the diff-application loop, keyed only by file_path. When a
+        single proposal has two FileDiff entries against the SAME untracked
+        file, the second diff's iteration reads the file *after* the first
+        diff was already written, overwriting original_contents with that
+        intermediate (already-patched) state instead of the true pre-edit
+        original. _revert_diffs()'s untracked-file fallback then restores
+        that corrupted "original," permanently leaving the first diff's
+        edit in place while apply() still reports "Tests failed. Changes
+        reverted."
+        """
+        (tmp_repo / "missy" / "new_untracked.py").write_text(
+            "def foo():\n    return 'ORIGINAL_A'\n\ndef bar():\n    return 'ORIGINAL_B'\n"
+        )
+        mgr = CodeEvolutionManager(
+            store_path=store_path,
+            repo_root=str(tmp_repo),
+            test_command="false",  # always fails
+        )
+        prop = mgr.propose_multi(
+            title="Multi-diff same untracked file",
+            description="test",
+            diffs=[
+                FileDiff("missy/new_untracked.py", "return 'ORIGINAL_A'", "return 'BROKEN_A'"),
+                FileDiff("missy/new_untracked.py", "return 'ORIGINAL_B'", "return 'BROKEN_B'"),
+            ],
+        )
+        mgr.approve(prop.id)
+        result = mgr.apply(prop.id)
+        assert not result["success"]
+        assert "Tests failed" in result["message"]
+        content = (tmp_repo / "missy" / "new_untracked.py").read_text()
+        assert "ORIGINAL_A" in content
+        assert "ORIGINAL_B" in content
+        assert "BROKEN" not in content
+
     def test_apply_stashes_dirty_work(self, mgr, tmp_repo):
         # Make uncommitted changes to an unrelated file
         (tmp_repo / "missy" / "__init__.py").write_text("# dirty\n")

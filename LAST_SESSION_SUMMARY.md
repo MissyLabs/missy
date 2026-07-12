@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (100 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for fifty-one consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (101 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for fifty-two consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -4112,15 +4112,80 @@ test_coverage_gaps.py tests/agent/test_runtime_deep.py tests/agent/
 test_runtime_coverage_gaps.py tests/providers/ -q`: `1299 passed`.
 `pytest tests/agent/ -q`: `4295 passed, 4 skipped`.
 
+### Post-backlog (ninety-fourth checkpoint): round 35 research pass — CodeEvolutionManager multi-diff same-file revert-corruption bug and a false CLAUDE.md claim about MCP tools bypassing TrustScorer
+
+Round 35 targeted four previously-unaudited areas: `persona.py`'s
+backup/rollback/diff logic (clean — `rollback()`/`diff()` both
+independently call `list_backups()[-1]`, always agreeing with each
+other; `_create_backup()` already has same-second-collision/TOCTOU
+handling from an earlier round), `code_evolution.py`'s
+approve/apply/rollback workflow, `security/trust.py` +
+`runtime.py`'s `_score_tool_trust()` coverage across MCP tool calls,
+and `scheduler/parser.py`'s human-friendly-schedule grammar against
+realistic phrasings ("every day at 9am", "weekdays at 5:30pm", "every
+monday and wednesday at noon" — all rejected). The parser's own
+docstring and `ValueError` message narrowly and accurately enumerate
+exactly what it supports and it fails loudly rather than silently
+producing a wrong schedule, so this is judged an intentional,
+accurately-documented grammar rather than a bug — left as-is rather
+than force-expanded into an NLP-style parser, matching this session's
+established discipline for documented residuals vs. genuine bugs.
+
+Two genuine issues found and fixed:
+
+1. **`CodeEvolutionManager.apply()` corrupts its own revert-fallback
+   content for a proposal with two `FileDiff` entries against the SAME
+   untracked file.** `original_contents` is keyed only by
+   `file_path`; the second diff's loop iteration reads the file AFTER
+   the first diff was already written, overwriting
+   `original_contents[file_path]` with that intermediate
+   (already-patched) state instead of the true pre-edit original.
+   `_revert_diffs()`'s untracked-file fallback then restores that
+   corrupted "original," silently leaving diff #1's edit in place while
+   `apply()` reports "Tests failed. Changes reverted." Only bites
+   untracked/new files — tracked files are correctly restored by `git
+   checkout --` regardless of what `original_contents` holds. Live-
+   reproduced end-to-end: a two-diff proposal against a fresh untracked
+   file with `test_command="false"` left `ORIGINAL_A` replaced by
+   `BROKEN_A` after a claimed full revert. Fixed with a one-line guard
+   — `original_contents[diff.file_path]` is now only ever set the
+   first time that path is seen, so later diffs against the same file
+   still read the live sequentially-patched content to apply their own
+   edit but never clobber the captured pristine original. 1 new test,
+   confirmed via `git stash` to genuinely fail pre-fix.
+2. **CLAUDE.md falsely claimed MCP tool calls "do not currently call
+   into `TrustScorer` at all."** `AgentRuntime._sync_mcp_tools()` wraps
+   every connected MCP tool in a real `McpToolWrapper(BaseTool)` and
+   registers it into the exact same `ToolRegistry` every built-in tool
+   uses; ALL tool dispatch — built-in or MCP — flows through the
+   single `_execute_tool()` → `registry.execute()` path, which
+   unconditionally calls `_score_tool_trust()` regardless of tool
+   origin. No code anywhere special-cases MCP tool names for trust
+   scoring. Corrected the CLAUDE.md prose and added a regression test
+   exercising a REAL `ToolRegistry` + real `McpToolWrapper` (not a
+   hand-built mock that would just encode the same wrong assumption)
+   proving `trust.record_success()` is actually called for an
+   MCP-namespaced tool name — this exact integration point had zero
+   test coverage in either direction before this round.
+
+Verified: `pytest tests/agent/test_code_evolution.py tests/agent/
+test_code_evolution_coverage.py tests/agent/test_runtime_coverage_gaps.py
+-q`: `94 passed`. `pytest tests/agent/ tests/mcp/ -q`: `4681 passed, 4
+skipped`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21413 passed, 14 skipped in 1818.14s (0:30:18)
+21415 passed, 14 skipped in 612.71s (0:10:12)
 ```
 
-**Zero failures**, the fifty-first consecutive fully green
-full-suite run. Passed count is up from 21408 to 21413 (the round 34
+**Zero failures**, the fifty-second consecutive fully green
+full-suite run. Passed count is up from 21413 to 21415 (the round 35
+checkpoint's 2 new tests: 1 CodeEvolutionManager multi-diff-same-file
+revert test, 1 TrustScorer-covers-MCP-tools test; all of the
+sixty-first through ninety-third checkpoints' fixes are confirmed
+still holding). Passed count is up from 21408 to 21413 (the round 34
 checkpoint's 5 new tests: 1 sibling empty-content test, 4
 tool_call_id-validation tests; all of the sixty-first through
 ninety-second checkpoints' fixes are confirmed still holding). Passed

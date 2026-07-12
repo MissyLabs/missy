@@ -382,6 +382,45 @@ class TestTrustScorePolicyViolation:
         assert result == "done"
 
 
+class TestTrustScoreCoversMcpTools:
+    def test_mcp_tool_call_via_real_registry_feeds_trust_scorer(self):
+        """Regression/doc-accuracy: CLAUDE.md used to claim MCP tool calls
+        "do not currently call into TrustScorer at all." That's false --
+        _sync_mcp_tools() registers every connected MCP tool as a real
+        McpToolWrapper(BaseTool) into the same ToolRegistry built-in tools
+        use, so _execute_tool()'s registry.execute() -> _score_tool_trust()
+        path is identical regardless of tool origin. Exercise the REAL
+        ToolRegistry + a real McpToolWrapper (not a hand-built mock that
+        would just encode whatever assumption we're trying to verify) to
+        prove an MCP-namespaced tool call actually reaches record_success().
+        """
+        from missy.mcp.annotations import ToolAnnotation
+        from missy.mcp.tool_wrapper import McpToolWrapper
+        from missy.tools.registry import ToolRegistry
+
+        mcp_manager = MagicMock()
+        mcp_manager.call_tool.return_value = "mcp tool ran fine"
+
+        real_registry = ToolRegistry()
+        real_registry.register(
+            McpToolWrapper(mcp_manager, "srv__do_thing", "desc", {}, ToolAnnotation())
+        )
+
+        rt, _reg = _build_runtime()
+        trust = MagicMock()
+        rt._trust_scorer = trust
+
+        tc = ToolCall(id="tc1", name="srv__do_thing", arguments={})
+        with patch("missy.agent.runtime.get_tool_registry", return_value=real_registry):
+            result = rt._execute_tool(tc)
+
+        assert not result.is_error
+        mcp_manager.call_tool.assert_called_once_with("srv__do_thing", {})
+        trust.record_success.assert_called_once_with("srv__do_thing")
+        trust.record_failure.assert_not_called()
+        trust.record_violation.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # Line 799: large content triggers _intercept_large_content
 # ---------------------------------------------------------------------------

@@ -559,7 +559,8 @@ class CodeEvolutionManager:
                         "test_output": "",
                     }
                 content = abs_path.read_text()
-                original_contents[diff.file_path] = content
+                if diff.file_path not in original_contents:
+                    original_contents[diff.file_path] = content
                 content = content.replace(diff.original_code, diff.proposed_code, 1)
                 abs_path.write_text(content)
 

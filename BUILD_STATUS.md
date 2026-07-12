@@ -7130,6 +7130,86 @@ test_runtime_coverage_gaps.py tests/providers/ -q`: `1299 passed`.
 `21413 passed, 14 skipped in 1818.14s (0:30:18)` — 0 failed, up from
 21408. Fifty-first consecutive fully green full-suite run.
 
+### Post-backlog (ninety-fourth checkpoint): round 35 research pass fixes a CodeEvolutionManager multi-diff same-file revert-corruption bug and a false CLAUDE.md claim about MCP tools bypassing TrustScorer
+
+Round 35 targeted four previously-unaudited areas: `persona.py`'s
+backup/rollback/diff logic (checked out clean — `rollback()` and
+`diff()` both independently call `list_backups()[-1]`, so they always
+agree, and `_create_backup()` already has same-second-collision and
+TOCTOU handling from an earlier round), `code_evolution.py`'s
+approve/apply/rollback workflow, `security/trust.py` +
+`runtime.py`'s `_score_tool_trust()` coverage across MCP tool calls,
+and `scheduler/parser.py`'s human-friendly-schedule grammar against
+realistic phrasings (e.g. "every day at 9am", "weekdays at 5:30pm") —
+the parser rejects all of these, but its own docstring and `ValueError`
+message narrowly and accurately enumerate exactly what it supports, so
+this is an intentional, loudly-failing, accurately-documented grammar
+rather than a bug; left as-is rather than force-expanded into an
+NLP-style parser, matching this session's established discipline for
+documented residuals vs. genuine bugs.
+
+Two genuine issues found and fixed:
+
+1. **`CodeEvolutionManager.apply()` corrupts its own revert-fallback
+   content for a proposal with two `FileDiff` entries against the SAME
+   untracked file**, permanently leaving the first diff's edit in
+   place while reporting a clean revert. `original_contents` is keyed
+   only by `file_path` (`code_evolution.py:538,562`); when a single
+   proposal has two diffs against one file, the second diff's loop
+   iteration reads the file *after* the first diff was already
+   written, overwriting `original_contents[file_path]` with that
+   intermediate (already-patched) state instead of the true pre-edit
+   original. `_revert_diffs()`'s untracked-file fallback (added by an
+   earlier round specifically to handle files `git checkout --` can't
+   touch) then restores that corrupted "original," so diff #1's edit
+   survives silently. For a *tracked* file this is masked by `git
+   checkout --` reverting from git's own history regardless of what
+   `original_contents` holds — the bug only bites untracked/new files,
+   exactly the fallback path the code's own comments say exists to
+   handle. Live-reproduced end-to-end: a two-diff proposal against a
+   fresh untracked file with `test_command="false"` (always fails) left
+   `ORIGINAL_A` replaced by `BROKEN_A` after `apply()` reported "Tests
+   failed. Changes reverted." Fixed with a one-line guard —
+   `original_contents[diff.file_path]` is now only ever set the first
+   time that path is seen, so later diffs against the same file read
+   the live (sequentially-patched) content to apply their own edit but
+   never clobber the captured pristine original. 1 new test
+   (`test_apply_tests_fail_reverts_untracked_file_multi_diff_same_file`),
+   confirmed via `git stash` to genuinely fail pre-fix (asserted
+   `ORIGINAL_A` missing from the "reverted" file).
+2. **CLAUDE.md's `TrustScorer` entry claimed MCP tool calls "do not
+   currently call into `TrustScorer` at all" — false in the current
+   code.** `AgentRuntime._sync_mcp_tools()` wraps every connected MCP
+   tool in a real `McpToolWrapper(BaseTool)` and registers it into the
+   exact same `ToolRegistry` every built-in tool uses; ALL tool
+   dispatch — built-in or MCP — flows through the single
+   `_execute_tool()` → `registry.execute()` path, which
+   unconditionally calls `_score_tool_trust(tool_call.name,
+   success=result.success, policy_denied=...)` regardless of whether
+   the tool came from `_get_tools()`'s built-ins or an MCP server's
+   namespaced `server__tool` name. No code special-cases MCP tool
+   names for trust scoring anywhere. Corrected the CLAUDE.md prose
+   (previously written as if this were a real, distinct, not-yet-done
+   effort) to accurately state that MCP tool calls score into
+   `TrustScorer` exactly like built-ins, scored under their namespaced
+   name — and added 1 new regression test
+   (`TestTrustScoreCoversMcpTools::test_mcp_tool_call_via_real_registry_feeds_trust_scorer`)
+   exercising a REAL `ToolRegistry` + real `McpToolWrapper` (not a
+   hand-built mock that would just encode the same wrong assumption) to
+   prove `trust.record_success()` is actually called for an
+   MCP-namespaced tool name — this exact integration point had zero
+   test coverage in either direction before this round, so the doc
+   claim had gone unverified.
+
+Verified: `pytest tests/agent/test_code_evolution.py tests/agent/
+test_code_evolution_coverage.py tests/agent/test_runtime_coverage_gaps.py
+-q`: `94 passed`. `pytest tests/agent/ tests/mcp/ -q`: `4681 passed, 4
+skipped`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21415 passed, 14 skipped in 612.71s (0:10:12)` — 0 failed, up from
+21413. Fifty-second consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

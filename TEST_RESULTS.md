@@ -1,5 +1,54 @@
 # TEST_RESULTS
 
+## Run: 2026-07-13 20:10 UTC — round 35 research pass: CodeEvolutionManager multi-diff same-file revert-corruption bug and false CLAUDE.md claim about MCP tools bypassing TrustScorer
+
+- Context: round 35 targeted four previously-unaudited areas:
+  persona.py's backup/rollback/diff logic (clean -- rollback()/diff()
+  both independently call list_backups()[-1], always agreeing), the
+  CodeEvolutionManager approve/apply/rollback workflow,
+  security/trust.py + runtime.py's _score_tool_trust() coverage across
+  MCP tool calls, and scheduler/parser.py's human-friendly-schedule
+  grammar against realistic phrasings ("every day at 9am", "weekdays
+  at 5:30pm" -- all rejected, but the parser's own docstring/ValueError
+  message narrowly and accurately enumerate exactly what it supports,
+  so this is an intentional, loudly-failing, accurately-documented
+  grammar rather than a bug; left as-is).
+- **CodeEvolutionManager.apply() revert-corruption bug**:
+  original_contents is keyed only by file_path; a proposal with two
+  FileDiff entries against the SAME untracked file has its second
+  diff's loop iteration read the file AFTER the first diff was already
+  written, overwriting original_contents[file_path] with that
+  intermediate (already-patched) state instead of the true pre-edit
+  original. _revert_diffs()'s untracked-file fallback then restores
+  that corrupted "original," silently leaving diff #1's edit in place
+  while apply() reports "Tests failed. Changes reverted." Only bites
+  untracked/new files (tracked files are correctly restored by `git
+  checkout --` regardless). Live-reproduced end-to-end: a two-diff
+  proposal against a fresh untracked file with test_command="false"
+  left ORIGINAL_A replaced by BROKEN_A after a claimed full revert.
+  Fixed with a one-line guard: original_contents[diff.file_path] is
+  only ever set the first time that path is seen.
+- Command: `pytest tests/agent/test_code_evolution.py::TestApply::test_apply_tests_fail_reverts_untracked_file_multi_diff_same_file -v`
+- Result: `1 passed`. New test confirmed to genuinely fail pre-fix via
+  `git stash` (asserted ORIGINAL_A missing from the "reverted" file).
+- **False CLAUDE.md claim about MCP/TrustScorer**: CLAUDE.md stated
+  MCP tool calls "do not currently call into TrustScorer at all" --
+  false. AgentRuntime._sync_mcp_tools() wraps every connected MCP tool
+  in a real McpToolWrapper(BaseTool) and registers it into the exact
+  same ToolRegistry built-in tools use; ALL tool dispatch flows through
+  the single _execute_tool() -> registry.execute() path, which
+  unconditionally calls _score_tool_trust() regardless of tool origin.
+  Corrected the CLAUDE.md prose and added a regression test exercising
+  a REAL ToolRegistry + real McpToolWrapper (not a mock that would
+  encode the same wrong assumption) proving trust.record_success() is
+  actually called for an MCP-namespaced tool name -- this exact
+  integration point had zero test coverage in either direction before
+  this round.
+- Command: `pytest tests/agent/test_runtime_coverage_gaps.py::TestTrustScoreCoversMcpTools -v`
+- Result: `1 passed`.
+- Broader sweep: `pytest tests/agent/test_code_evolution.py tests/agent/test_code_evolution_coverage.py tests/agent/test_runtime_coverage_gaps.py -q`: `94 passed`.
+  `pytest tests/agent/ tests/mcp/ -q`: `4681 passed, 4 skipped`.
+
 ## Run: 2026-07-13 19:45 UTC — round 34 research pass: sibling empty-content site and missing tool_call_id validation gap, both following from round 33's finding
 
 - Context: round 34 followed up directly on round 33's finding,
