@@ -337,6 +337,50 @@ class TestGatewayStartScheduler:
 
             _os.unlink(cfg_path)
 
+    def test_scheduler_receives_configured_max_spend_usd(self, runner: CliRunner):
+        """Regression: SchedulerManager must receive the operator's
+        configured max_spend_usd cap so per-job AgentRuntime instances
+        (_run_job() constructs a fresh one per run) don't silently run
+        with an unlimited budget regardless of config.yaml.
+        """
+        import os
+        import signal
+
+        cfg_path = _cfg_path()
+        try:
+            mock_config = _make_mock_config()
+            mock_config.discord = None
+            mock_config.providers = {}
+            mock_config.scheduling.enabled = True
+            mock_config.max_spend_usd = 3.5
+
+            call_count = [0]
+
+            def fake_sleep(t):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    os.kill(os.getpid(), signal.SIGTERM)
+                elif call_count[0] > 5:
+                    raise SystemExit(0)
+
+            with (
+                patch("missy.cli.main._load_subsystems", return_value=mock_config),
+                patch("missy.agent.runtime.AgentRuntime"),
+                patch("missy.agent.runtime.AgentConfig"),
+                patch("time.sleep", side_effect=fake_sleep),
+                patch("yaml.safe_load", return_value={}),
+                patch("missy.scheduler.manager.SchedulerManager") as mock_sched_cls,
+            ):
+                mock_sched_cls.return_value.list_jobs.return_value = []
+                result = runner.invoke(cli, ["--config", cfg_path, "gateway", "start"])
+
+            assert result.exit_code == 0
+            mock_sched_cls.assert_called_once_with(default_max_spend_usd=3.5)
+        finally:
+            import os as _os
+
+            _os.unlink(cfg_path)
+
     def test_scheduler_disabled_via_config_is_not_started(self, runner: CliRunner):
         import os
         import signal
@@ -748,6 +792,164 @@ class TestGatewayStartProactiveApprovalGateWiring:
             assert result.exit_code == 0
             assert "approval_gate" in captured_kwargs
             assert isinstance(captured_kwargs["approval_gate"], ApprovalGate)
+        finally:
+            import os as _os
+
+            _os.unlink(cfg_path)
+
+
+class TestGatewayStartAgentBudgetWiring:
+    """Regression: gateway_start()'s main agent, Discord agent, and
+    proactive-trigger runtime all built AgentConfig without max_spend_usd,
+    unlike `missy ask`/`missy run`/`missy recover` which all pass
+    max_spend_usd=getattr(cfg, "max_spend_usd", 0.0). Every session run
+    through the gateway daemon (the primary long-running way Missy
+    operates) silently ignored the operator's configured spend cap.
+    """
+
+    def test_main_and_discord_agent_configs_receive_configured_budget(
+        self, runner: CliRunner
+    ) -> None:
+        import os
+
+        cfg_path = _cfg_path()
+        try:
+            mock_config = _make_mock_config()
+            mock_config.discord = None
+            mock_config.providers = {}
+            mock_config.max_spend_usd = 2.5
+
+            captured_calls = []
+
+            def _capture_agent_config(**kwargs):
+                captured_calls.append(kwargs)
+                return MagicMock()
+
+            call_count = [0]
+
+            def fake_sleep(t):
+                call_count[0] += 1
+                if call_count[0] >= 1:
+                    os.kill(os.getpid(), signal.SIGTERM)
+
+            with (
+                patch("missy.cli.main._load_subsystems", return_value=mock_config),
+                patch("missy.agent.runtime.AgentRuntime"),
+                patch("missy.agent.runtime.AgentConfig", side_effect=_capture_agent_config),
+                patch("time.sleep", side_effect=fake_sleep),
+                patch("yaml.safe_load", return_value={}),
+            ):
+                result = runner.invoke(cli, ["--config", cfg_path, "gateway", "start"])
+
+            assert result.exit_code == 0
+            assert len(captured_calls) >= 2
+            for call_kwargs in captured_calls:
+                assert call_kwargs.get("max_spend_usd") == 2.5
+        finally:
+            import os as _os
+
+            _os.unlink(cfg_path)
+
+    def test_proactive_runtime_config_receives_configured_budget(self, runner: CliRunner) -> None:
+        import os
+
+        cfg_path = _cfg_path()
+        try:
+            mock_config = _make_mock_config()
+            mock_config.discord = None
+            mock_config.providers = {}
+            mock_config.max_spend_usd = 1.25
+
+            proactive_cfg = MagicMock()
+            proactive_cfg.enabled = True
+            proactive_cfg.triggers = [MagicMock()]
+            mock_config.proactive = proactive_cfg
+
+            captured_calls = []
+
+            def _capture_agent_config(**kwargs):
+                captured_calls.append(kwargs)
+                return MagicMock()
+
+            call_count = [0]
+
+            def fake_sleep(t):
+                call_count[0] += 1
+                if call_count[0] >= 1:
+                    os.kill(os.getpid(), signal.SIGTERM)
+
+            with (
+                patch("missy.cli.main._load_subsystems", return_value=mock_config),
+                patch("missy.agent.runtime.AgentRuntime"),
+                patch("missy.agent.runtime.AgentConfig", side_effect=_capture_agent_config),
+                patch("missy.agent.proactive.ProactiveManager"),
+                patch("missy.agent.proactive.ProactiveTrigger"),
+                patch("time.sleep", side_effect=fake_sleep),
+                patch("yaml.safe_load", return_value={}),
+            ):
+                result = runner.invoke(cli, ["--config", cfg_path, "gateway", "start"])
+
+            assert result.exit_code == 0
+            # The proactive runtime's AgentConfig call is the first one made
+            # (constructed before the main/Discord agents in gateway_start()).
+            assert captured_calls
+            assert captured_calls[0].get("max_spend_usd") == 1.25
+        finally:
+            import os as _os
+
+            _os.unlink(cfg_path)
+
+
+class TestApiStartAgentBudgetWiring:
+    """Regression: `missy api start`'s standalone AgentConfig construction
+    (like gateway_start()'s) never passed max_spend_usd, unlike
+    `missy ask`/`missy run`/`missy recover`. No test previously exercised
+    `missy api start` at all.
+    """
+
+    def test_api_start_agent_config_receives_configured_budget(self, runner: CliRunner) -> None:
+        cfg_path = _cfg_path()
+        try:
+            mock_config = _make_mock_config()
+            mock_config.max_spend_usd = 4.0
+
+            captured_calls = []
+
+            def _capture_agent_config(**kwargs):
+                captured_calls.append(kwargs)
+                return MagicMock()
+
+            def fake_sleep(t):
+                raise KeyboardInterrupt()
+
+            mock_server = MagicMock()
+            mock_server.url = "http://127.0.0.1:8080"
+
+            with (
+                patch("missy.cli.main._load_subsystems", return_value=mock_config),
+                patch("missy.agent.runtime.AgentRuntime"),
+                patch("missy.agent.runtime.AgentConfig", side_effect=_capture_agent_config),
+                patch("missy.api.server.ApiServer", return_value=mock_server),
+                patch("missy.providers.registry.get_registry", return_value=MagicMock()),
+                patch("missy.tools.registry.get_tool_registry", return_value=MagicMock()),
+                patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=MagicMock()),
+                patch("time.sleep", side_effect=fake_sleep),
+            ):
+                result = runner.invoke(
+                    cli,
+                    [
+                        "--config",
+                        cfg_path,
+                        "api",
+                        "start",
+                        "--api-key",
+                        "test-key",
+                    ],
+                )
+
+            assert result.exit_code == 0
+            assert len(captured_calls) == 1
+            assert captured_calls[0].get("max_spend_usd") == 4.0
         finally:
             import os as _os
 

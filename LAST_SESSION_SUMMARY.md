@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (118 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for seventy consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (119 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for seventy-one consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -4989,15 +4989,73 @@ confirmed via `git stash` to genuinely fail pre-fix.
 Verified: `pytest tests/cli/ -q`: `1090 passed`. `pytest
 tests/scheduler/ tests/api/ -q`: `539 passed`.
 
+### Post-backlog (one-hundred-thirteenth checkpoint): round 57 research pass — every gateway-daemon `AgentConfig` construction site silently ignored the operator's configured spend cap
+
+Round 57 was primed to re-hunt round 56's "fully built, fully tested,
+zero production caller in the actual long-running daemon" bug shape.
+Re-checked `gateway_start()` for other unwired subsystems
+(`MemoryConsolidator`, `CondenserPipeline`/`CompactionManager`,
+`TrustScorer` persistence) — clean, each already wired or a distinct,
+already-documented residual.
+
+**Found and fixed a real bug directly downstream of round 56's fix
+making the scheduler live for the first time.**
+`SchedulerManager._run_job()` constructs a fresh
+`AgentRuntime(AgentConfig(provider=job.provider,
+capability_mode=job.capability_mode))` per job run — with no
+`max_spend_usd`, unlike every other `AgentConfig` site (`missy ask`/
+`run`/`recover`, which all pass `max_spend_usd=getattr(cfg,
+"max_spend_usd", 0.0)`). Since each job run gets a brand-new
+session/`AgentRuntime`/`CostTracker`, a scheduled job would run with
+an unlimited budget regardless of the operator's configured cap.
+Tracing further surfaced the same gap in `gateway_start()` itself: its
+main agent, Discord agent, and proactive-trigger runtime's
+`AgentConfig` construction *also* never passed `max_spend_usd` — the
+gateway daemon itself, not just the newly-live scheduler, has been
+silently ignoring the operator's spend cap all along. `missy api
+start`'s standalone `AgentConfig` construction had the identical gap
+and zero prior test coverage of any kind. Fixed all 5 sites:
+`SchedulerManager` gained a `default_max_spend_usd` constructor
+parameter, applied via `getattr(self, "_default_max_spend_usd", 0.0)`
+in `_run_job()` (the defensive `getattr` form applied proactively,
+confirmed necessary when a pre-existing minimal
+`SchedulerManager.__new__()` test double hit an `AttributeError` on
+the first, non-`getattr` attempt); `gateway_start()`'s
+`SchedulerManager(...)` construction, its main/Discord/proactive
+`AgentConfig` calls, and `api_start()`'s `AgentConfig` call all now
+pass `max_spend_usd=getattr(cfg, "max_spend_usd", 0.0)`. 5 new tests,
+all confirmed via `git stash` to genuinely fail pre-fix (including
+re-confirmed after the `getattr` correction). 2 pre-existing tests
+updated to assert the complete new call signature.
+
+Two unrelated, pre-existing flakes surfaced during verification and
+confirmed via isolation + `git stash` to predate this round: a
+persona-backup-collision thread-timing race, and a live-DNS-timing
+Hypothesis deadline flake (reproduced identically with this round's
+changes stashed out).
+
+Verified: `pytest tests/cli/test_cli_main_gaps.py -k "Budget or
+ApiStart or scheduler_receives" tests/scheduler/test_manager_extended.py
+-k "threads_configured or Budget or ApiStart or scheduler_receives"
+tests/security/test_scheduler_jobs_selfcreate_webhook_mcp_hardening.py::TestSchedulerTaskSanitization
+-v`: `9 passed`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21479 passed, 14 skipped in 609.31s (0:10:09)
+21484 passed, 14 skipped in 719.05s (0:11:59)
 ```
 
-**Zero failures**, the seventieth consecutive fully green full-suite
-run. Passed count is up from 21477 to 21479 (the round 56 checkpoint's
+**Zero failures**, the seventy-first consecutive fully green
+full-suite run. Passed count is up from 21479 to 21484 (the round 57
+checkpoint's 5 new tests: `test_run_job_threads_configured_max_spend_usd`,
+`test_scheduler_receives_configured_max_spend_usd`,
+`test_main_and_discord_agent_configs_receive_configured_budget`,
+`test_proactive_runtime_config_receives_configured_budget`,
+`test_api_start_agent_config_receives_configured_budget`; all of the
+sixty-first through one-hundred-twelfth checkpoints' fixes are
+confirmed still holding). Passed count is up from 21477 to 21479 (the round 56 checkpoint's
 2 new tests: `test_scheduler_started_wired_and_stopped`,
 `test_scheduler_disabled_via_config_is_not_started`; all of the
 sixty-first through one-hundred-eleventh checkpoints' fixes are

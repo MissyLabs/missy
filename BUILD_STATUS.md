@@ -8610,6 +8610,99 @@ tests/scheduler/ tests/api/ -q`: `539 passed`.
 `21479 passed, 14 skipped in 609.31s (0:10:09)` — 0 failed, up from
 21477. Seventieth consecutive fully green full-suite run.
 
+### Post-backlog (one-hundred-thirteenth checkpoint): round 57 research pass fixes every gateway-daemon `AgentConfig` construction site silently ignoring the operator's configured spend cap
+
+Round 57 was explicitly primed to re-hunt round 56's "fully built,
+fully tested, zero production caller in the actual long-running
+daemon" bug shape, since it had been the highest-value pattern found
+in the last two rounds. Re-checked `gateway_start()` end-to-end for
+other unwired subsystems (`MemoryConsolidator`, `CondenserPipeline`/
+`CompactionManager`, `TrustScorer` persistence) and came back clean —
+each is either genuinely wired via a path already read, or is a
+distinct, already-documented residual from an earlier round, not a
+new instance of the pattern.
+
+**Found and fixed a real, high-confidence bug that's directly
+downstream of round 56's fix making the scheduler live for the first
+time.** `SchedulerManager._run_job()` (`scheduler/manager.py`)
+constructs `AgentRuntime(AgentConfig(provider=job.provider,
+capability_mode=job.capability_mode))` for every job run — with no
+`max_spend_usd`. Every other `AgentConfig` construction site in the
+codebase (`missy ask`, `missy run`, `missy recover`) explicitly passes
+`max_spend_usd=getattr(cfg, "max_spend_usd", 0.0)`. Since `_run_job()`
+builds a brand-new session/`AgentRuntime`/in-memory `CostTracker` per
+run, a scheduled job would run with an unlimited budget regardless of
+what the operator configured — silently bypassing the single
+documented spend-cap knob (`config.yaml`'s `max_spend_usd`, per its
+own help text at `cli/main.py`: `"max_spend_usd: 5.00  # dollars per
+session"`). Tracing this further surfaced the same gap in
+`gateway_start()` itself: its main agent (`_agent_cfg`), Discord agent
+(`_discord_agent_cfg`), and proactive-trigger runtime's `AgentConfig`
+construction *also* never passed `max_spend_usd` — meaning the
+primary long-running way Missy operates (the gateway daemon, its
+Discord channel, and its proactive triggers) has been silently
+ignoring the operator's spend cap all along, not just the
+newly-live scheduler path. A fourth site, `missy api start`'s
+standalone `AgentConfig` construction, had the identical gap and zero
+existing test coverage of any kind (no test in the whole suite
+previously invoked `missy api start`).
+
+Fixed all 5 sites: added `default_max_spend_usd` (default `0.0`,
+matching `AgentConfig`'s own default) as a `SchedulerManager`
+constructor parameter, applied in `_run_job()`'s `AgentConfig(...)`
+call via `getattr(self, "_default_max_spend_usd", 0.0)` (the
+`getattr` defensive form used on the first attempt, correctly
+anticipating the same minimal-test-double pattern from rounds 43/54 —
+confirmed necessary when a pre-existing test in
+`tests/security/test_scheduler_jobs_selfcreate_webhook_mcp_hardening.py`
+constructing `SchedulerManager.__new__(SchedulerManager)` directly
+would otherwise have hit an `AttributeError`); `gateway_start()`'s
+`SchedulerManager(...)` construction now passes
+`default_max_spend_usd=getattr(cfg, "max_spend_usd", 0.0)`; the main
+agent, Discord agent, and proactive-runtime `AgentConfig` calls in
+`gateway_start()` and `api_start()`'s `AgentConfig` call all gained the
+same `max_spend_usd=getattr(cfg, "max_spend_usd", 0.0)` kwarg already
+used by `missy ask`/`missy run`/`missy recover`. 5 new tests
+(`test_run_job_threads_configured_max_spend_usd`,
+`test_scheduler_receives_configured_max_spend_usd`,
+`test_main_and_discord_agent_configs_receive_configured_budget`,
+`test_proactive_runtime_config_receives_configured_budget`,
+`test_api_start_agent_config_receives_configured_budget` — the last
+one also the first test of any kind to exercise `missy api start`),
+all confirmed via `git stash` to genuinely fail pre-fix (including
+after the `getattr` correction, re-verified to still fail correctly).
+2 pre-existing tests (`test_run_job_uses_job_capability_mode_default_safe_chat`,
+`test_run_job_full_capability_mode_explicit_opt_in`) updated to assert
+the new, complete `AgentConfig` call signature including
+`max_spend_usd=0.0`.
+
+Two unrelated, pre-existing flakes surfaced during verification and
+confirmed via isolation + `git stash` to predate this round's changes:
+`test_hatching_persona_stress.py::TestPersonaAuditLogIntegrity::test_audit_log_survives_concurrent_appends`
+(a persona-backup-collision thread-timing race, passed cleanly on
+immediate rerun) and
+`test_property_based_fuzz.py::TestNetworkPolicyEngineFuzz::test_check_host_never_crashes_on_arbitrary_unicode`
+(a live-DNS-timing Hypothesis deadline flake, reproduced identically
+with this round's changes stashed out — the same flake class noted in
+earlier rounds' real-DNS-check tests). Neither touched by this round's
+fix; both passed on the final full-suite confirmation run.
+
+Verified: `pytest tests/cli/test_cli_main_gaps.py -k "Budget or
+ApiStart or scheduler_receives" tests/scheduler/test_manager_extended.py
+-k "threads_configured or Budget or ApiStart or scheduler_receives"
+tests/security/test_scheduler_jobs_selfcreate_webhook_mcp_hardening.py::TestSchedulerTaskSanitization
+-v`: `9 passed`. `pytest tests/cli/ tests/scheduler/ tests/security/
+tests/agent/ -q`: `7839 passed, 4 skipped` (first attempt; the 1
+pre-existing persona flake noted above was the only failure, isolated
+and reconfirmed unrelated).
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21484 passed, 14 skipped in 719.05s (0:11:59)` — 0 failed, up from
+21479. Seventy-first consecutive fully green full-suite run. (A prior
+attempt this checkpoint hit 1 unrelated pre-existing flake — the
+Hypothesis DNS-timing deadline test above — reconfirmed clean on
+rerun.)
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

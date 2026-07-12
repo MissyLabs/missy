@@ -2322,6 +2322,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                 )
                 _agent_cfg = AgentConfig(
                     provider=_provider_name,
+                    max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
                     **_agent_tool_policy_kwargs(cfg),
                 )
                 _runtime = AgentRuntime(_agent_cfg)
@@ -2357,6 +2358,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
     _agent_cfg = AgentConfig(
         provider=_provider_name,
         mcp_approval_gate=approval_gate,
+        max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
         **_agent_tool_policy_kwargs(cfg),
     )
     _agent = AgentRuntime(_agent_cfg)
@@ -2367,6 +2369,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
         system_prompt=DISCORD_SYSTEM_PROMPT,
         capability_mode="discord",
         mcp_approval_gate=approval_gate,
+        max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
         **_agent_tool_policy_kwargs(cfg),
     )
     _discord_agent = AgentRuntime(_discord_agent_cfg)
@@ -2439,7 +2442,9 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
         if cfg.scheduling.enabled:
             from missy.scheduler.manager import SchedulerManager
 
-            scheduler_manager = SchedulerManager()
+            scheduler_manager = SchedulerManager(
+                default_max_spend_usd=getattr(cfg, "max_spend_usd", 0.0)
+            )
             scheduler_manager.start()
             _agent._scheduler = scheduler_manager  # noqa: SLF001
             console.print(
@@ -5546,7 +5551,11 @@ def api_start(
         logger.debug("Memory store unavailable: %s", _mem_exc)
         memory_store = None
 
-    agent_config = AgentConfig(provider=provider, **_agent_tool_policy_kwargs(cfg))
+    agent_config = AgentConfig(
+        provider=provider,
+        max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
+        **_agent_tool_policy_kwargs(cfg),
+    )
     runtime = AgentRuntime(agent_config)
 
     api_config = ApiConfig(host=host, port=port, api_key=api_key)

@@ -44,10 +44,27 @@ class SchedulerManager:
     Args:
         jobs_file: Path to the JSON file used for job persistence.  Tilde
             expansion is performed automatically.
+        default_max_spend_usd: The operator's configured ``max_spend_usd``
+            cap (from ``config.yaml``), applied to every per-job
+            :class:`~missy.agent.runtime.AgentConfig` that :meth:`_run_job`
+            constructs. Each job run gets a brand-new session/AgentRuntime
+            with its own in-memory ``CostTracker``, so without this a
+            scheduled job would run with an unlimited budget regardless of
+            what the operator configured -- silently bypassing the one
+            documented spend-cap knob that every other entry point
+            (``missy ask``/``missy run``/``missy recover``/the gateway's
+            interactive and Discord runtimes/``missy api start``) honors.
+            ``0.0`` (the default) means unlimited, matching
+            ``AgentConfig.max_spend_usd``'s own default.
     """
 
-    def __init__(self, jobs_file: str = "~/.missy/jobs.json") -> None:
+    def __init__(
+        self,
+        jobs_file: str = "~/.missy/jobs.json",
+        default_max_spend_usd: float = 0.0,
+    ) -> None:
         self.jobs_file = Path(jobs_file).expanduser()
+        self._default_max_spend_usd = default_max_spend_usd
         self._scheduler: BackgroundScheduler = BackgroundScheduler()
         self._jobs: dict[str, ScheduledJob] = {}
 
@@ -499,7 +516,11 @@ class SchedulerManager:
                 logger.debug("Could not run InputSanitizer on job task", exc_info=True)
 
             agent = AgentRuntime(
-                AgentConfig(provider=job.provider, capability_mode=job.capability_mode)
+                AgentConfig(
+                    provider=job.provider,
+                    capability_mode=job.capability_mode,
+                    max_spend_usd=getattr(self, "_default_max_spend_usd", 0.0),
+                )
             )
             result_text = agent.run(job.task, session_id=session_id)
         except Exception as exc:
