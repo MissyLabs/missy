@@ -875,6 +875,27 @@ class AgentRuntime:
         system_prompt, messages = self._build_context_messages(user_input, history, session_id=sid)
         msg_objects = self._dicts_to_messages(system_prompt, messages)
 
+        # Verify system prompt integrity before this provider call --
+        # this streaming path calls provider.stream() directly rather
+        # than going through _single_turn()/_tool_loop(), so it needs
+        # its own drift check (see the identical check now in
+        # _single_turn() for why this matters). getattr (not a direct
+        # attribute access) tolerates minimal test doubles built via
+        # AgentRuntime.__new__() that bypass __init__ and never set
+        # _drift_detector at all.
+        drift_detector = getattr(self, "_drift_detector", None)
+        if drift_detector is not None and not drift_detector.verify(
+            "system_prompt", system_prompt
+        ):
+            logger.warning("Prompt drift detected: system prompt has been modified")
+            self._emit_event(
+                session_id=sid,
+                task_id="",
+                event_type="security.prompt_drift",
+                result="alert",
+                detail={"prompt_id": "system_prompt"},
+            )
+
         self._acquire_rate_limit()
 
         full_text = ""
@@ -1486,6 +1507,30 @@ class AgentRuntime:
         # complete_with_tools, so this is a second, independent gap from
         # the pre-flight check added to _tool_loop's main iteration.
         self._check_budget(session_id=session_id, task_id=task_id)
+
+        # Verify system prompt integrity before this provider call. Only
+        # _tool_loop() did this (checked once per iteration); this method
+        # is *also* the entire completion path for every conversation with
+        # no tools registered or max_iterations<=1 (the non-tool-loop
+        # branch of _run_loop), so those calls previously sent the system
+        # prompt to the provider with zero drift verification at all --
+        # a prompt-injection rewrite of the system prompt on exactly
+        # those paths went completely undetected. getattr (not a direct
+        # attribute access) tolerates minimal test doubles built via
+        # AgentRuntime.__new__() that bypass __init__ and never set
+        # _drift_detector at all.
+        drift_detector = getattr(self, "_drift_detector", None)
+        if drift_detector is not None and not drift_detector.verify(
+            "system_prompt", system_prompt
+        ):
+            logger.warning("Prompt drift detected: system prompt has been modified")
+            self._emit_event(
+                session_id=session_id,
+                task_id=task_id,
+                event_type="security.prompt_drift",
+                result="alert",
+                detail={"prompt_id": "system_prompt"},
+            )
 
         msg_objects = self._dicts_to_messages(system_prompt, messages)
         primary_name = provider.name

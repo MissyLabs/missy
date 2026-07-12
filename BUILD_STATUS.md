@@ -7614,6 +7614,95 @@ tests/channels/ -q -k discord`: `919 passed, 1067 deselected`.
 `21435 passed, 14 skipped in 640.19s (0:10:40)` — 0 failed, up from
 21432. Fifty-seventh consecutive fully green full-suite run.
 
+### Post-backlog (one-hundredth checkpoint): round 43 research pass fixes a PromptDriftDetector coverage gap on non-tool-loop and streaming completion paths
+
+Round 43 checked `core/message_bus.py`'s fnmatch wildcard matching,
+priority-queue ordering, and shutdown-drain behavior (clean —
+cross-dot wildcard matching is intentional/documented, the
+`(-priority, seq, message)` tuple with a monotonic `seq` guarantees
+correct ordering plus stable FIFO tie-breaking, and `stop()`
+explicitly drains the queue before joining), `security/identity.py` +
+`observability/audit_logger.py`'s signature verification (clean — the
+signature is genuinely bound to the full recomputed record payload,
+not merely "a valid signature exists," and tampering with any field
+correctly flips status to `"tampered"`; key-file loading rejects
+symlinks/hardlinks/wrong ownership/permissive modes), and
+`providers/ollama_provider.py`'s message/tool-call payload
+construction with fresh eyes.
+
+**Confirmed but NOT fixed (documented residual): `OllamaProvider`
+degrades multi-turn tool-call history into flattened prose.**
+`complete_with_tools()` (`ollama_provider.py:270-271`) only ever
+builds `{"role": msg.role, "content": msg.content}` from generic
+`Message` objects — `Message` (`providers/base.py`) has no
+`tool_calls`/`tool_call_id` fields, and `OllamaProvider` never sets
+`accepts_message_dicts = True` (contrast `openai_provider.py:87`), so
+`runtime.py`'s `_make_complete_with_tools_call()` always routes it
+through the lossy `_dicts_to_messages()` conversion instead of
+`_dicts_to_native_messages()`. Every prior assistant tool-call turn
+becomes plain text `"[Called tool: X]"`, and every tool result becomes
+a `role="user"` message `"[Tool result for X]: ..."` — never a native
+tool-role message. A properly targeted fix would require rewriting
+`complete_with_tools()`'s message-building loop to accept dict-shaped
+history and reconstruct Ollama's real multi-turn tool-message wire
+format — but Missy's own code already reveals real ambiguity in that
+format: `ollama_provider.py:322`'s `id=tc.get("id", "") or
+tc_name[:8]` shows Ollama's `/api/chat` tool_calls frequently carry no
+stable per-call ID at all (unlike OpenAI's), meaning Ollama's own
+protocol may correlate multi-turn tool results by order rather than by
+ID — a detail this sandboxed environment has no way to verify
+authoritatively against a live Ollama instance or its API docs.
+Attempting a full rewrite without being able to confirm the exact
+wire contract risks replacing one silent degradation with a
+differently-broken one. Left undone for the same reason as the
+round-38 acpx-error-classification residual: the correct fix depends
+on an external system's real behavior that can't be verified from
+here. `tests/providers/test_ollama_provider.py` only ever exercises
+single-turn `complete_with_tools()` calls, so this gap is currently
+untested either way.
+
+**Found and fixed a real, high-confidence gap in
+`PromptDriftDetector` coverage.** `verify()` was only ever called
+inside `_tool_loop()`'s per-iteration loop (`runtime.py:1107-1109`) —
+contrary to the module's own claim ("verifies before each provider
+call"), two entire completion paths never checked it at all: (1)
+`_single_turn()` (`runtime.py:1462+`), the sole completion path for
+any conversation with no tools registered or `max_iterations<=1` (the
+non-tool-loop branch of `_run_loop`), and (2) `run_stream()`'s
+single-turn streaming path, which calls `provider.stream()` directly
+without ever going through `_tool_loop()`/`_single_turn()` on the
+non-exception path. A prompt-injection attack that rewrites the
+system prompt mid-conversation on exactly these paths went completely
+undetected. Existing tests
+(`test_drift_detected_logs_warning_and_emits_event`) only exercised
+the tool-loop path. Fixed by adding the identical drift-verification
+block (already used in `_tool_loop()`) to `_single_turn()` itself
+(covering both the direct no-tools call site and its use as
+`_tool_loop`'s own no-`complete_with_tools`-support fallback) and
+separately before `run_stream()`'s `provider.stream()` call (since
+that path bypasses `_single_turn()` entirely on the happy path). Both
+new checks read `self._drift_detector` via `getattr(self,
+"_drift_detector", None)` rather than direct attribute access — a
+pre-existing test
+(`TestStreamingFallbackLogging::test_streaming_failure_logged`)
+constructs an `AgentRuntime` via `__new__()`/bypassed `__init__` and
+never sets that attribute at all, and the initial full-suite run after
+this fix caught the resulting `AttributeError` there; `getattr` fixes
+that minimal test double without weakening the real check (every
+production instance always has the attribute, set unconditionally in
+`__init__`). 2 new tests, both confirmed via `git stash` (after the
+`getattr` correction) to genuinely fail pre-fix.
+
+Verified: `pytest tests/agent/test_runtime_coverage_gaps.py -q`: `42
+passed`. `pytest tests/agent/ -q`: `4299 passed, 4 skipped`. `pytest
+tests/unit/ -q`: `2248 passed` (includes
+`test_streaming_failure_logged`, confirmed passing again after the
+`getattr` correction).
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21437 passed, 14 skipped in 747.68s (0:12:27)` — 0 failed, up from
+21435. Fifty-eighth consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

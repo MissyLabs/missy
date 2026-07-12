@@ -1,5 +1,44 @@
 # TEST_RESULTS
 
+## Run: 2026-07-13 23:50 UTC — round 43 research pass: PromptDriftDetector coverage gap on non-tool-loop and streaming completion paths
+
+- Context: round 43 checked core/message_bus.py (clean), security/
+  identity.py + audit_logger.py signature verification (clean), and
+  providers/ollama_provider.py's payload construction. Confirmed but
+  NOT fixed: OllamaProvider degrades multi-turn tool-call history into
+  flattened prose since Message has no tool_calls/tool_call_id fields
+  and OllamaProvider never sets accepts_message_dicts=True. Left as a
+  documented residual (like the round-38 acpx finding) since the
+  correct fix depends on Ollama's real multi-turn tool-message wire
+  format, which the codebase's own code hints may not even use stable
+  per-call IDs (ollama_provider.py:322's `id=tc.get("id", "") or
+  tc_name[:8]` fallback) -- unverifiable from this environment without
+  a live Ollama instance or its API docs.
+- **PromptDriftDetector coverage gap**: verify() was only ever called
+  inside _tool_loop()'s per-iteration loop, contrary to the module's
+  "verifies before each provider call" claim. _single_turn() (the sole
+  completion path for any conversation with no tools registered or
+  max_iterations<=1) and run_stream()'s single-turn streaming path
+  (which calls provider.stream() directly, bypassing _tool_loop()/
+  _single_turn() entirely) never checked drift at all. A
+  prompt-injection rewrite of the system prompt on exactly these paths
+  went completely undetected. Fixed by adding the identical
+  drift-verification block to _single_turn() and separately before
+  run_stream()'s provider.stream() call, using getattr(self,
+  "_drift_detector", None) rather than direct attribute access in
+  both new checks -- the initial full-suite run caught a pre-existing
+  test (test_streaming_failure_logged) that constructs an AgentRuntime
+  via __new__()/bypassed __init__ and never sets that attribute;
+  getattr fixes that minimal test double without weakening the real
+  check.
+- Command: `pytest tests/agent/test_runtime_coverage_gaps.py -k "test_drift_checked_on_no_tool_loop_single_turn_path or test_drift_checked_on_streaming_single_turn_path" -v`
+- Result: `2 passed`. Both confirmed via `git stash` (after the getattr
+  correction) to genuinely fail pre-fix.
+- Broader sweep: `pytest tests/agent/test_runtime_coverage_gaps.py -q`: `42 passed`.
+  `pytest tests/agent/ -q`: `4299 passed, 4 skipped`. `pytest
+  tests/unit/ -q`: `2248 passed` (includes test_streaming_failure_logged,
+  confirmed passing again after the getattr correction).
+
 ## Run: 2026-07-13 23:15 UTC — round 42 research pass: Discord Gateway zombie-connection bug (round 41 was research-only, no findings)
 
 - Context: round 41 systematically re-swept ALL tools/builtin/*.py for

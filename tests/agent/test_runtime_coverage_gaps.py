@@ -225,6 +225,58 @@ class TestDriftDetectorTamperWarning:
         drift.verify.assert_called()
         assert result == "response"
 
+    def test_drift_checked_on_no_tool_loop_single_turn_path(self):
+        """Regression: PromptDriftDetector.verify() was only ever called
+        inside _tool_loop()'s per-iteration loop. Any conversation with
+        no tools registered (or max_iterations<=1) instead goes through
+        _run_loop()'s non-tool-loop branch straight to _single_turn(),
+        which never checked drift at all -- a prompt-injection rewrite
+        of the system prompt on this path went completely undetected,
+        contrary to the module's own "verifies before each provider
+        call" claim. _single_turn() is used both directly here and as a
+        no-tools fallback, so this covers both.
+        """
+        rt, reg = _build_runtime(capability_mode="no-tools", max_iterations=1)
+
+        drift = MagicMock()
+        drift.verify.return_value = False  # tamper detected
+        rt._drift_detector = drift
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", side_effect=RuntimeError),
+        ):
+            result = rt.run("hello")
+
+        drift.verify.assert_called()
+        assert result == "ok"
+
+    def test_drift_checked_on_streaming_single_turn_path(self):
+        """Regression: run_stream()'s single-turn streaming path calls
+        provider.stream() directly, bypassing both _tool_loop() and
+        _single_turn() entirely on the non-exception path -- so it also
+        never checked drift at all before this fix.
+        """
+        provider = _make_provider()
+
+        def _stream(messages, system=""):
+            yield "chunk"
+
+        provider.stream = MagicMock(side_effect=_stream)
+        rt, reg = _build_runtime(provider=provider, capability_mode="no-tools", max_iterations=1)
+
+        drift = MagicMock()
+        drift.verify.return_value = False  # tamper detected
+        rt._drift_detector = drift
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", side_effect=RuntimeError),
+        ):
+            list(rt.run_stream("hello"))
+
+        drift.verify.assert_called()
+
 
 # ---------------------------------------------------------------------------
 # Line 770: trust score drops below threshold after tool error

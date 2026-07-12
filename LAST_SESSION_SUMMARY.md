@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (106 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for fifty-seven consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (107 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for fifty-eight consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -4432,15 +4432,64 @@ Verified: `pytest tests/channels/test_discord_extended.py tests/
 channels/test_discord_protocol_deep.py -q`: `251 passed`. `pytest
 tests/channels/ -q -k discord`: `919 passed, 1067 deselected`.
 
+### Post-backlog (one-hundredth checkpoint): round 43 research pass — PromptDriftDetector coverage gap on non-tool-loop and streaming completion paths
+
+Round 43 checked `core/message_bus.py` (clean), `security/identity.py`
++ `audit_logger.py` signature verification (clean), and
+`providers/ollama_provider.py`'s payload construction with fresh eyes.
+
+**Confirmed but NOT fixed (documented residual): `OllamaProvider`
+degrades multi-turn tool-call history into flattened prose.** Since
+`Message` has no `tool_calls`/`tool_call_id` fields and
+`OllamaProvider` never sets `accepts_message_dicts = True`, every
+prior assistant tool-call turn becomes plain text and every tool
+result becomes a `role="user"` message rather than a native tool-role
+message. Left undone since Missy's own code
+(`ollama_provider.py:322`'s `id=tc.get("id", "") or tc_name[:8]`
+fallback) hints Ollama's real API may not even carry stable per-call
+IDs, meaning the correct multi-turn wire format can't be verified
+from this environment — same reasoning as the round-38 acpx residual.
+
+**Found and fixed a real, high-confidence gap in `PromptDriftDetector`
+coverage.** `verify()` was only ever called inside `_tool_loop()`'s
+per-iteration loop — contrary to the module's own claim ("verifies
+before each provider call"), two entire completion paths never checked
+it at all: `_single_turn()` (the sole completion path for any
+conversation with no tools registered or `max_iterations<=1`) and
+`run_stream()`'s single-turn streaming path (which calls
+`provider.stream()` directly, bypassing `_tool_loop()`/`_single_turn()`
+entirely). A prompt-injection rewrite of the system prompt on exactly
+these paths went completely undetected. Fixed by adding the identical
+drift-verification block to `_single_turn()` (covering both its direct
+call site and its use as `_tool_loop`'s own fallback) and separately
+before `run_stream()`'s `provider.stream()` call, using
+`getattr(self, "_drift_detector", None)` rather than direct attribute
+access in both new checks — the initial full-suite run caught a
+pre-existing test (`test_streaming_failure_logged`) that constructs an
+`AgentRuntime` via `__new__()`/bypassed `__init__` and never sets that
+attribute; `getattr` fixes that minimal test double without weakening
+the real check (every production instance always has the attribute).
+2 new tests, both confirmed via `git stash` (after the `getattr`
+correction) to genuinely fail pre-fix.
+
+Verified: `pytest tests/agent/test_runtime_coverage_gaps.py -q`: `42
+passed`. `pytest tests/agent/ -q`: `4299 passed, 4 skipped`.
+`pytest tests/unit/ -q`: `2248 passed` (includes
+`test_streaming_failure_logged`, confirmed passing again after the
+`getattr` correction).
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21435 passed, 14 skipped in 640.19s (0:10:40)
+21437 passed, 14 skipped in 747.68s (0:12:27)
 ```
 
-**Zero failures**, the fifty-seventh consecutive fully green
-full-suite run. Passed count is up from 21432 to 21435 (the round 42
+**Zero failures**, the fifty-eighth consecutive fully green
+full-suite run. Passed count is up from 21435 to 21437 (the round 43
+checkpoint's 2 new tests in `TestDriftDetectorTamperWarning`; all of
+the sixty-first through ninety-ninth checkpoints' fixes are confirmed
+still holding). Passed count is up from 21432 to 21435 (the round 42
 checkpoint's 3 new tests in `TestGatewayHeartbeatAckEnforcement`;
 round 41 was research-only with no findings, so it added nothing; all
 of the sixty-first through ninety-eighth checkpoints' fixes are
