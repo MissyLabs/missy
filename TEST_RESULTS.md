@@ -1,5 +1,47 @@
 # TEST_RESULTS
 
+## Run: 2026-07-14 05:05 UTC — round 53 research pass: robotic-phrase-stripping content-mangling bug and persona-edit staleness bug
+
+- Context: round 53 confirmed agent/structured_output.py's retry
+  mechanics (clean, already checked round 52) and
+  vision/health_monitor.py's get_recommendations() (clean, internally
+  consistent). Documented as a residual (not fixed):
+  vision/scene_memory.py's perceptual-hash change-detection is blind
+  to small real localized changes (a puzzle-piece placement scored
+  "no change", and with the default deduplicate=True the frame is
+  silently dropped before detect_change even runs) while
+  over-reacting to trivial brightness shifts on uniform backgrounds
+  (scored MORE severe than an actual change). Left undone -- the
+  correct fix requires redesigning the hash/local-diff algorithm
+  itself, not a narrow correction.
+- **behavior.py robotic-phrase mangling**: _ROBOTIC_PHRASES
+  unconditionally stripped "I'd be happy to help/assist(?: you)?" and
+  the "Certainly/Of course/Absolutely, I'll help/assist you" family
+  up through "help"/"assist"(+"you") with only optional trailing
+  punctuation -- but these are only pure filler when "help"/"assist"
+  is the LAST substantive word; a real continuation (e.g. "I'd be
+  happy to help you understand recursion.") had the verb and object
+  silently eaten, and sequential stripping compounded into nonsensical
+  output ("but understand recursion."). Fixed by requiring a
+  lookahead that what follows is sentence-terminal punctuation or
+  end-of-string; otherwise the phrase is left untouched. Corrected 3
+  pre-existing tests that had encoded the buggy assumption.
+- Command: `pytest tests/agent/test_behavior.py -k TestRoboticPhraseStrippingPreservesRealContent -v`
+- Result: `5 passed`. All confirmed via `git stash` to genuinely fail pre-fix.
+- **persona.py cross-process staleness**: PersonaManager.get_persona()
+  only ever returned a copy of the in-memory PersonaConfig loaded once
+  at __init__ -- a long-running daemon's manager never saw a separate
+  `missy persona edit` CLI process's write to persona.yaml until
+  restarted. Fixed by adding a stat()-based mtime staleness check
+  (same pattern config/hotreload.py already uses) at the top of
+  get_persona(), reloading only when the file actually changed;
+  save()/rollback() update the tracked mtime to avoid a redundant
+  same-process reload.
+- Command: `pytest tests/agent/test_persona.py -k TestPersonaManagerCrossProcessReload -v`
+- Result: `3 passed`. Core cross-process test confirmed via `git stash` to genuinely fail pre-fix.
+- Broader sweep: `pytest tests/agent/ -q -k behavior`: `623 passed`. `pytest tests/agent/test_persona.py -q`: `74 passed`.
+  `pytest tests/agent/ -q`: `4312 passed, 4 skipped`.
+
 ## Run: 2026-07-14 04:30 UTC — round 52 research pass: idiomatic-phrase false-activation bug in VisionIntentClassifier and extreme-aspect-ratio crash in ImagePipeline.resize()
 
 - Context: round 52 confirmed agent/structured_output.py's retry

@@ -211,6 +211,7 @@ class PersonaManager:
     ) -> None:
         self._path = Path(os.path.expanduser(str(persona_path)))
         self._persona: PersonaConfig = self._load()
+        self._loaded_mtime: float | None = self._current_mtime()
 
     # ------------------------------------------------------------------
     # Public API
@@ -219,12 +220,41 @@ class PersonaManager:
     def get_persona(self) -> PersonaConfig:
         """Return the current :class:`PersonaConfig` (a shallow copy).
 
+        Reloads from disk first if the file has changed since it was
+        last read (see :meth:`_reload_if_changed`) -- a long-running
+        daemon (``missy gateway start``/``missy run``) constructs one
+        ``PersonaManager`` at startup; without this check, a separate
+        ``missy persona edit``/``reset``/``rollback`` CLI invocation
+        (a different process) had silently zero effect on the running
+        daemon's agent turns until it was manually restarted.
+
         Returns:
             A copy of the in-memory persona so callers cannot mutate state
             accidentally.
         """
+        self._reload_if_changed()
         # Return a new instance with the same field values
         return PersonaConfig(**asdict(self._persona))
+
+    def _current_mtime(self) -> float | None:
+        """Return persona.yaml's current mtime, or None if it doesn't exist."""
+        try:
+            return self._path.stat().st_mtime
+        except OSError:
+            return None
+
+    def _reload_if_changed(self) -> None:
+        """Reload the persona from disk if it changed since last read.
+
+        Cheap `stat()`-based staleness check (same polling pattern
+        already used by :mod:`missy.config.hotreload`), so a separate
+        process's edit is picked up on the next call without requiring
+        a filesystem watcher or process restart.
+        """
+        current = self._current_mtime()
+        if current != self._loaded_mtime:
+            self._persona = self._load()
+            self._loaded_mtime = current
 
     def get_system_prompt_prefix(self) -> str:
         """Build a persona description string for injection into system prompts.
@@ -305,6 +335,11 @@ class PersonaManager:
             # Restrict file permissions — persona may contain sensitive identity info
             with contextlib.suppress(OSError):
                 self._path.chmod(0o600)
+            # Record the mtime this same process just wrote so the next
+            # get_persona() call doesn't immediately re-trigger
+            # _reload_if_changed() and redundantly re-read what's already
+            # correctly held in memory.
+            self._loaded_mtime = self._current_mtime()
             self._audit("save")
             logger.debug(
                 "Persona saved to %s (version %d)",
@@ -524,6 +559,7 @@ class PersonaManager:
         with contextlib.suppress(OSError):
             self._path.chmod(0o600)
         self._persona = self._load()
+        self._loaded_mtime = self._current_mtime()
         self._audit("rollback", {"from_backup": latest.name})
         logger.info(
             "Persona rolled back to backup %s (version %d)",

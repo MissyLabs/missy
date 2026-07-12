@@ -274,12 +274,27 @@ _ROBOTIC_PHRASES: list[re.Pattern[str]] = [
         r"(?:Please note|Note) that I(?:'m| am) an AI[^.]*\.\s*",
         r"As (?:your|an?) (?:AI |virtual |digital )?assistant[,.]?\s*",
         r"I(?:'m| am) here to (?:help|assist)(?: you)?[,.]?\s*",
-        r"Certainly[,!]\s*(?:I(?:'ll| will) (?:help|assist)(?: you)?[!.]?\s*)?",
-        r"Of course[,!]\s*(?:I(?:'ll| will) (?:help|assist)(?: you)?[!.]?\s*)?",
-        r"Absolutely[,!]\s*(?:I(?:'ll| will) (?:help|assist)(?: you)?[!.]?\s*)?",
+        # Regression: "Certainly/Of course/Absolutely, I'll help you {X}."
+        # and "I'd be happy to help you {X}." are only pure filler when
+        # "help"/"assist" is the LAST substantive word (nothing meaningful
+        # follows). The old patterns unconditionally consumed "help"/
+        # "assist"(+ "you") with only optional trailing punctuation, so a
+        # realistic reply like "I'd be happy to help you understand
+        # recursion." had "help you" silently eaten along with the filler,
+        # mangling the sentence into "understand recursion." -- and
+        # sequential stripping of an earlier "As an AI, I don't have
+        # feelings, but" prefix on the same reply left a dangling "but"
+        # with no clause before it. The lookahead below requires what
+        # follows "help"/"assist"(+"you") to be sentence-terminal
+        # punctuation or end-of-string; when a real object/continuation
+        # follows instead (no punctuation), the whole phrase is left
+        # untouched rather than partially stripped into something garbled.
+        r"Certainly[,!]\s*(?:I(?:'ll| will) (?:help|assist)(?: you)?(?=[!.]|$)[!.]?\s*)?",
+        r"Of course[,!]\s*(?:I(?:'ll| will) (?:help|assist)(?: you)?(?=[!.]|$)[!.]?\s*)?",
+        r"Absolutely[,!]\s*(?:I(?:'ll| will) (?:help|assist)(?: you)?(?=[!.]|$)[!.]?\s*)?",
         r"Great question[,!]\s*",
         r"That(?:'s| is) a great question[,!]\s*",
-        r"I(?:'d| would) be happy to (?:help|assist)(?: you)?[,.]?\s*",
+        r"I(?:'d| would) be happy to (?:help|assist)(?: you)?(?=[,.!]|$)[,.!]?\s*",
     ]
 ]
 

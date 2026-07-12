@@ -234,6 +234,79 @@ class TestPersonaManagerSave:
 
 
 # ---------------------------------------------------------------------------
+# PersonaManager — cross-process reload (long-running daemon picks up an
+# edit made by a separate `missy persona edit`/`reset`/`rollback` CLI
+# invocation without requiring a restart)
+# ---------------------------------------------------------------------------
+
+
+class TestPersonaManagerCrossProcessReload:
+    """Regression: get_persona() only ever returned a copy of the
+    in-memory PersonaConfig loaded once at __init__ -- a long-running
+    daemon (`missy gateway start`/`missy run`) constructs one
+    PersonaManager at startup, but a separate `missy persona edit` CLI
+    invocation (a different process) writing persona.yaml had silently
+    zero effect on the running daemon's agent turns until it was
+    manually restarted.
+    """
+
+    def test_external_edit_is_picked_up_on_next_get_persona_call(self, tmp_path):
+        path = tmp_path / "persona.yaml"
+        # Simulates the long-running daemon's manager, constructed once.
+        daemon_mgr = PersonaManager(persona_path=path)
+        assert daemon_mgr.get_persona().name == "Missy"
+
+        # Simulates a separate `missy persona edit` CLI process writing
+        # the same file via its own independent PersonaManager instance.
+        editor_mgr = PersonaManager(persona_path=path)
+        editor_mgr.update(name="Jarvis")
+        editor_mgr.save()
+
+        # The daemon's original instance must pick this up without
+        # ever being told to reload explicitly.
+        assert daemon_mgr.get_persona().name == "Jarvis"
+
+    def test_no_change_does_not_reload_or_reset_in_memory_state(self, tmp_path, monkeypatch):
+        path = tmp_path / "persona.yaml"
+        pm = PersonaManager(persona_path=path)
+        pm.update(name="Local")
+        pm.save()
+
+        load_calls = []
+        original_load = pm._load
+
+        def _counting_load():
+            load_calls.append(1)
+            return original_load()
+
+        monkeypatch.setattr(pm, "_load", _counting_load)
+
+        pm.get_persona()
+        pm.get_persona()
+        assert load_calls == []  # no external change -- must not re-read the file
+
+    def test_own_save_does_not_trigger_redundant_reload(self, tmp_path, monkeypatch):
+        """A manager's own save() must not cause its very next
+        get_persona() call to needlessly re-read the file it just wrote."""
+        path = tmp_path / "persona.yaml"
+        pm = PersonaManager(persona_path=path)
+        pm.update(name="SelfSaved")
+        pm.save()
+
+        load_calls = []
+        original_load = pm._load
+
+        def _counting_load():
+            load_calls.append(1)
+            return original_load()
+
+        monkeypatch.setattr(pm, "_load", _counting_load)
+
+        assert pm.get_persona().name == "SelfSaved"
+        assert load_calls == []
+
+
+# ---------------------------------------------------------------------------
 # PersonaManager — get_system_prompt_prefix
 # ---------------------------------------------------------------------------
 

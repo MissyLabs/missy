@@ -649,10 +649,13 @@ class TestShapeResponseRemovesRoboticPhrases:
         assert "42" in result
 
     def test_removes_id_be_happy_to(self):
+        """"I'd be happy to help/assist(?: you)?" is only pure filler
+        when it's the LAST substantive content in the sentence (nothing
+        but punctuation follows) -- use that shape here rather than a
+        case with a real trailing object clause (see
+        TestRoboticPhraseStrippingPreservesRealContent below for why)."""
         shaper = ResponseShaper()
-        result = shaper.shape_response(
-            "I'd be happy to help you with that.", persona=None, context={}
-        )
+        result = shaper.shape_response("I'd be happy to help!", persona=None, context={})
         assert "I'd be happy to" not in result
 
     def test_removes_i_am_here_to_help(self):
@@ -680,6 +683,70 @@ class TestShapeResponseRemovesRoboticPhrases:
         assert "As an AI language model" not in result
         assert "Great question" not in result
         assert "configuration" in result
+
+
+class TestRoboticPhraseStrippingPreservesRealContent:
+    """Regression: "I'd be happy to help/assist(?: you)?" and the
+    "Certainly/Of course/Absolutely, I'll help/assist you" family were
+    unconditionally stripped up through "help"/"assist"(+"you") with
+    only OPTIONAL trailing punctuation -- so a realistic reply where
+    "help you {object}" carries the actual substantive content (e.g.
+    "I'd be happy to help you understand recursion.") had "help you"
+    silently eaten along with the filler, mangling the sentence into
+    something that dropped the verb and/or object entirely. These
+    phrases are only genuinely pure filler when "help"/"assist"(+"you")
+    is the LAST substantive word in the sentence; when a real object/
+    continuation follows with no intervening punctuation, the whole
+    phrase must be left untouched rather than partially stripped into
+    something garbled.
+    """
+
+    def test_id_be_happy_to_help_you_with_object_clause_is_untouched(self):
+        shaper = ResponseShaper()
+        result = shaper.shape_response(
+            "I'd be happy to help you understand recursion.", persona=None, context={}
+        )
+        assert "help you understand recursion" in result
+
+    def test_certainly_ill_help_you_with_object_clause_is_untouched(self):
+        shaper = ResponseShaper()
+        result = shaper.shape_response(
+            "Certainly, I'll help you understand recursion, which is a fundamental concept.",
+            persona=None,
+            context={},
+        )
+        assert "help you understand recursion" in result
+        assert "Certainly" not in result  # the pure-filler prefix is still stripped
+
+    def test_of_course_ill_help_you_with_object_clause_is_untouched(self):
+        shaper = ResponseShaper()
+        result = shaper.shape_response(
+            "Of course, I'll help you debug this issue right now.", persona=None, context={}
+        )
+        assert "help you debug this issue" in result
+        assert "Of course" not in result
+
+    def test_sequential_stripping_no_longer_drops_real_words(self):
+        """The original reported failure case: sequential stripping of
+        multiple robotic phrases must not compound into losing the
+        substantive content of the reply."""
+        shaper = ResponseShaper()
+        result = shaper.shape_response(
+            "As an AI, I don't have feelings, but I'd be happy to help you"
+            " understand recursion.",
+            persona=None,
+            context={},
+        )
+        assert "help you understand recursion" in result
+        assert "As an AI" not in result
+        assert "I don't have feelings" not in result
+
+    def test_genuinely_terminal_filler_still_fully_stripped(self):
+        """Sanity check: the fix must not regress the case where the
+        phrase really is pure filler with nothing after it."""
+        shaper = ResponseShaper()
+        assert shaper.shape_response("I'd be happy to help!", persona=None, context={}) == ""
+        assert shaper.shape_response("Of course, I'll help!", persona=None, context={}) == ""
 
 
 class TestShapeResponsePreservesCodeBlocks:
@@ -804,7 +871,7 @@ class TestDetectRoboticPatterns:
 
     def test_detects_id_be_happy_to(self):
         shaper = ResponseShaper()
-        found = shaper.detect_robotic_patterns("I'd be happy to help you with that.")
+        found = shaper.detect_robotic_patterns("I'd be happy to help!")
         assert len(found) > 0
 
     def test_clean_text_returns_empty_list(self):

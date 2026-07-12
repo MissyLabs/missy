@@ -8265,6 +8265,84 @@ test_intent_extended.py tests/vision/test_pipeline_hardening.py -q`:
 `21461 passed, 14 skipped in 830.13s (0:13:50)` — 0 failed, up from
 21452. Sixty-sixth consecutive fully green full-suite run.
 
+### Post-backlog (one-hundred-ninth checkpoint): round 53 research pass fixes a robotic-phrase-stripping content-mangling bug and a persona-edit staleness bug; documents a vision change-detection algorithm residual
+
+Round 53 confirmed `agent/structured_output.py`'s retry mechanics are
+clean (already checked in round 52), and `vision/health_monitor.py`'s
+`get_recommendations()` produces internally-consistent, additive (not
+contradictory) recommendations across every health-signal combination
+checked. **Documented as a residual (not fixed): `vision/scene_memory.py`'s
+perceptual-hash change-detection** is blind to small, real, localized
+changes (a puzzle-piece placement covering ~0.5% of frame area scored
+`change_score=0.0009, description='no change'`, and with
+`deduplicate=True` — the default — the frame containing the change is
+silently dropped from session history entirely before `detect_change`
+even runs) while simultaneously over-reacting to a trivial brightness
+shift on a near-uniform background (the `std_val < 0.5` fallback
+branch replaces the hash with a byte-repeated raw-intensity hex
+string, producing a Hamming distance of 48/64 bits — `change_score=
+0.4735, description='major change'` — scored *more* severe than an
+actual meaningful change). Not force-fixed this round: the correct
+fix requires redesigning the perceptual-hash/local-diff algorithm
+itself (e.g. block-wise or gradient-based comparison instead of a
+single global average-hash) rather than a narrowly-scoped correction,
+carrying real risk of introducing a differently-wrong hashing scheme
+without dedicated design attention — left for a focused future round,
+matching this session's established discipline for genuinely
+algorithmic findings.
+
+**Found and fixed two real, high-confidence bugs.** (1)
+`agent/behavior.py`'s `ResponseShaper._ROBOTIC_PHRASES` unconditionally
+stripped "I'd be happy to help/assist(?: you)?" and the "Certainly/Of
+course/Absolutely, I'll help/assist you" family up through "help"/
+"assist"(+"you") with only optional trailing punctuation — but these
+phrases are only genuinely pure filler when "help"/"assist" is the
+LAST substantive word in the sentence; when a real object/continuation
+follows (e.g. "I'd be happy to help you understand recursion."), the
+verb and object got silently eaten along with the filler, and
+sequential stripping of an earlier "As an AI, I don't have feelings,
+but" prefix on the same reply compounded into "but understand
+recursion." — nonsensical, meaning-losing output delivered to the end
+user as-is. Live-verified against real code with 5+ realistic phrasings
+before fixing. Fixed by adding a lookahead requiring what follows
+"help"/"assist"(+"you") to be sentence-terminal punctuation or
+end-of-string; when a real continuation follows instead, the whole
+phrase is left untouched rather than partially stripped into something
+garbled. This corrected 3 pre-existing tests that had encoded the
+exact buggy assumption (asserting "I'd be happy to help you with
+that." stripped down to "with that." was correct) — updated to use
+genuinely-terminal-filler inputs instead, matching this session's
+established pattern for tests that encode the bug being fixed. 5 new
+tests, all confirmed via `git stash` to genuinely fail pre-fix. (2)
+`agent/persona.py`'s `PersonaManager.get_persona()` only ever returned
+a copy of the in-memory `PersonaConfig` loaded once at `__init__` —
+a long-running daemon (`missy gateway start`/`missy run`) constructs
+one `PersonaManager` at startup, but a separate `missy persona
+edit`/`reset`/`rollback` CLI invocation (a different process) writing
+`persona.yaml` had silently zero effect on the running daemon's agent
+turns until it was manually restarted, with no user-facing warning.
+Live-verified: constructing two `PersonaManager` instances against the
+same file (simulating the daemon and a separate CLI edit) confirmed
+the first instance never saw the second's edit. Fixed by adding a
+cheap `stat()`-based mtime staleness check (the same polling pattern
+`config/hotreload.py` already uses) at the top of `get_persona()`,
+reloading from disk only when the file has actually changed since last
+read; `save()`/`rollback()` update the tracked mtime immediately after
+writing so a manager's own edit doesn't trigger a redundant
+same-process reload on its very next call. 3 new tests (external edit
+picked up without an explicit reload call; no reload when nothing
+changed; a manager's own save doesn't redundantly re-read itself), the
+core cross-process test confirmed via `git stash` to genuinely fail
+pre-fix.
+
+Verified: `pytest tests/agent/ -q -k behavior`: `623 passed`. `pytest
+tests/agent/test_persona.py -q`: `74 passed`. `pytest tests/agent/ -q`:
+`4312 passed, 4 skipped`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21469 passed, 14 skipped in 618.97s (0:10:18)` — 0 failed, up from
+21461. Sixty-seventh consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

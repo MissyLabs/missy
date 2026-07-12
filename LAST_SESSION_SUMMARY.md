@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (114 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for sixty-six consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (115 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for sixty-seven consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -4802,15 +4802,58 @@ Verified: `pytest tests/vision/test_intent.py tests/vision/
 test_intent_extended.py tests/vision/test_pipeline_hardening.py -q`:
 `118 passed`. `pytest tests/vision/ -q`: `2975 passed`.
 
+### Post-backlog (one-hundred-ninth checkpoint): round 53 research pass — robotic-phrase-stripping content-mangling bug and persona-edit staleness bug; documents a vision change-detection residual
+
+Round 53 confirmed `agent/structured_output.py`'s retry mechanics and
+`vision/health_monitor.py`'s `get_recommendations()` are both clean.
+Documented as a residual (not fixed): `vision/scene_memory.py`'s
+perceptual-hash change-detection is blind to small real localized
+changes (a puzzle-piece placement scored "no change," and with the
+default `deduplicate=True` the frame is silently dropped before
+`detect_change` even runs) while over-reacting to trivial brightness
+shifts on uniform backgrounds — the correct fix requires redesigning
+the hash/local-diff algorithm itself, left for a focused future round.
+
+**Found and fixed two real, high-confidence bugs.** (1)
+`agent/behavior.py`'s `_ROBOTIC_PHRASES` unconditionally stripped
+"I'd be happy to help/assist(?: you)?" and the "Certainly/Of course/
+Absolutely, I'll help/assist you" family through "help"/"assist"
+with only optional trailing punctuation — but these are only pure
+filler when "help"/"assist" is the last substantive word; a real
+continuation (e.g. "I'd be happy to help you understand recursion.")
+had the verb and object silently eaten, and sequential stripping
+compounded into nonsensical output. Fixed by requiring a lookahead
+that what follows is sentence-terminal punctuation or end-of-string;
+otherwise the phrase is left untouched rather than partially
+mangled. Corrected 3 pre-existing tests that had encoded the buggy
+assumption. 5 new tests, all confirmed via `git stash` to genuinely
+fail pre-fix. (2) `agent/persona.py`'s `PersonaManager.get_persona()`
+only ever returned a copy of the in-memory `PersonaConfig` loaded once
+at `__init__` — a long-running daemon's manager never saw a separate
+`missy persona edit` CLI process's write until restarted. Fixed by
+adding a `stat()`-based mtime staleness check (same pattern
+`config/hotreload.py` already uses); `save()`/`rollback()` update the
+tracked mtime to avoid a redundant same-process reload. 3 new tests,
+the core cross-process test confirmed via `git stash` to genuinely
+fail pre-fix.
+
+Verified: `pytest tests/agent/ -q -k behavior`: `623 passed`. `pytest
+tests/agent/test_persona.py -q`: `74 passed`. `pytest tests/agent/ -q`:
+`4312 passed, 4 skipped`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21461 passed, 14 skipped in 830.13s (0:13:50)
+21469 passed, 14 skipped in 618.97s (0:10:18)
 ```
 
-**Zero failures**, the sixty-sixth consecutive fully green full-suite
-run. Passed count is up from 21452 to 21461 (the round 52 checkpoint's
+**Zero failures**, the sixty-seventh consecutive fully green
+full-suite run. Passed count is up from 21461 to 21469 (the round 53
+checkpoint's 8 new tests: 5 behavior.py robotic-phrase tests, 3
+persona.py cross-process-reload tests; all of the sixty-first through
+one-hundred-eighth checkpoints' fixes are confirmed still holding).
+Passed count is up from 21452 to 21461 (the round 52 checkpoint's
 9 new tests: 6 VisionIntentClassifier idiomatic-phrase tests, 3
 ImagePipeline extreme-aspect-ratio tests; all of the sixty-first
 through one-hundred-seventh checkpoints' fixes are confirmed still
