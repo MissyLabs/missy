@@ -1032,6 +1032,19 @@ class TestPersonaAuditLogIntegrity:
         limitation of the backup naming scheme and must *not* corrupt the audit
         log — so we filter ``SameFileError`` out of the fatal-error list and
         only fail on unexpected exceptions.
+
+        This also guards a second, previously-undetected race: ``shutil.copy2``
+        is ``copyfile()`` + ``copystat()`` as two separate steps, not one
+        atomic operation. ``PersonaManager._lock`` only serializes save()/
+        rollback() *within a single instance* -- it does not span the multiple
+        independent instances this test constructs against the same path. A
+        different instance's ``_prune_backups()`` can unlink the backup file
+        this thread's ``copyfile()`` just created before this thread's
+        ``copystat()`` runs, making ``copystat()``'s ``utime()`` raise
+        ``FileNotFoundError``. At 5 threads x 10 saves this reproduced in real
+        CI (Test (Python 3.11), run 29209260077) but only ~1/20 locally; the
+        20x20 parameters below reproduced it in 13/15 local trials pre-fix and
+        0/15 post-fix.
         """
         import shutil
 
@@ -1054,11 +1067,11 @@ class TestPersonaAuditLogIntegrity:
             except Exception as exc:  # noqa: BLE001
                 errors.append(exc)
 
-        threads = [threading.Thread(target=_write_audit, args=(10,)) for _ in range(5)]
+        threads = [threading.Thread(target=_write_audit, args=(20,)) for _ in range(20)]
         for t in threads:
             t.start()
         for t in threads:
-            t.join(timeout=15)
+            t.join(timeout=30)
 
         assert not errors, f"Threads raised unexpected errors: {errors}"
 

@@ -499,7 +499,24 @@ class PersonaManager:
         while backup_path.exists():
             backup_path = bdir / f"persona.yaml.{timestamp}_{suffix}"
             suffix += 1
-        shutil.copy2(str(self._path), str(backup_path))
+        try:
+            shutil.copy2(str(self._path), str(backup_path))
+        except FileNotFoundError:
+            # shutil.copy2() is copyfile() + copystat() as two separate
+            # steps, not one atomic operation. A different PersonaManager
+            # instance (no shared lock across instances -- self._lock only
+            # serializes save()/rollback() within a single instance) can run
+            # _prune_backups() concurrently and unlink backup_path between
+            # our copyfile() and copystat(), so copystat()'s utime() raises
+            # FileNotFoundError even though the copy itself "succeeded" and
+            # was immediately pruned. Nothing to preserve at that point --
+            # treat it like the same-second SameFileError race callers
+            # already tolerate.
+            logger.debug(
+                "Backup %s removed by a concurrent prune before it could be finalized",
+                backup_path,
+            )
+            return backup_path
         self._prune_backups()
         logger.debug("Persona backup created: %s", backup_path)
         return backup_path
