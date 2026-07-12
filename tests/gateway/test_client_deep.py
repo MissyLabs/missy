@@ -1048,6 +1048,77 @@ class TestInteractiveApprovalFlow:
             await client.aget("https://denied.example.com/")
         approval.prompt_user.assert_called_once()
 
+    def test_operator_override_does_not_bypass_rest_policy_deny(self) -> None:
+        """Regression: an operator's "allow this network request" decision
+        overrides only the NETWORK-level host denial that triggered the
+        prompt -- it must not also silently bypass an independent L7 REST
+        policy deny rule for the same host. Previously, approving the
+        network-level prompt returned immediately, skipping
+        _check_rest_policy() entirely.
+        """
+        init_policy_engine(
+            _restrictive_config(
+                rest_policies=[
+                    {
+                        "host": "operator-approved.example.com",
+                        "method": "DELETE",
+                        "path": "/repos/critical/**",
+                        "action": "deny",
+                    }
+                ]
+            )
+        )
+        approval = self._make_approval(prompt_returns=True)
+        set_interactive_approval(approval)
+
+        client = PolicyHTTPClient()
+        with (
+            patch.object(httpx.Client, "delete") as mock_delete,
+            pytest.raises(PolicyViolationError),
+        ):
+            client.delete("https://operator-approved.example.com/repos/critical/x")
+        # The operator was prompted (and approved) the network-level
+        # denial, but the REST-level deny rule must still block the call.
+        approval.prompt_user.assert_called_once()
+        mock_delete.assert_not_called()
+
+    async def test_operator_override_does_not_bypass_rest_policy_deny_async(self) -> None:
+        """Async counterpart of the sync test above."""
+        init_policy_engine(
+            _restrictive_config(
+                rest_policies=[
+                    {
+                        "host": "operator-approved.example.com",
+                        "method": "DELETE",
+                        "path": "/repos/critical/**",
+                        "action": "deny",
+                    }
+                ]
+            )
+        )
+        approval = self._make_approval(prompt_returns=True)
+        set_interactive_approval(approval)
+
+        client = PolicyHTTPClient()
+        with pytest.raises(PolicyViolationError):
+            await client.adelete("https://operator-approved.example.com/repos/critical/x")
+        approval.prompt_user.assert_called_once()
+
+    def test_operator_override_allows_when_rest_policy_permits(self) -> None:
+        """The operator-override fix must not regress the ordinary allowed
+        case: with no REST deny rule in play, approving the network-level
+        prompt still lets the request through end to end."""
+        self._use_restrictive()
+        approval = self._make_approval(prompt_returns=True)
+        set_interactive_approval(approval)
+
+        client = PolicyHTTPClient()
+        mock_resp = _mock_response(200)
+        with patch.object(httpx.Client, "delete", return_value=mock_resp):
+            resp = client.delete("https://operator-approved.example.com/repos/whatever")
+        assert resp.status_code == 200
+        approval.prompt_user.assert_called_once()
+
     async def test_async_prompt_does_not_block_the_event_loop(self) -> None:
         """Regression: InteractiveApproval.prompt_user() is a blocking,
         un-timed call (console.input()). Every async gateway method

@@ -1,5 +1,67 @@
 # TEST_RESULTS
 
+## Run: 2026-07-12 UTC — round 74 research pass: an operator's network-level policy override silently also bypassed the independent L7 REST policy layer
+
+- Context: round 74 re-checked `checkpoint.py`, `failure_tracker.py`,
+  and `watchdog.py` (all clean, prior hardening holding; no
+  reachable races found — `FailureTracker` is instantiated fresh per
+  top-level task and mutated only sequentially within a
+  single-threaded tool loop, not via `ThreadPoolExecutor`), and
+  `pinned_transport.py` (clean — uses `contextvars`, not a shared
+  thread-local/global dict, so concurrent requests can't cross-
+  contaminate IP pins). One genuine, fresh bug surfaced in
+  `missy/gateway/client.py`, immediately downstream of round 73's
+  `InteractiveApproval` fix.
+- **Fixed: `PolicyHTTPClient._check_url()`/`_check_url_async()`
+  returned immediately after an operator approved a network-level
+  policy denial, entirely skipping the independent L7 REST
+  method/path policy check that would otherwise still run.** When
+  `_validate_and_pin()` raises `PolicyViolationError` (host denied at
+  the network layer) and the operator approves via
+  `InteractiveApproval.prompt_user()`, the method returned right away
+  from inside the `except` block -- before `_check_rest_policy()`
+  (method + path level) ever ran. This meant a single operator "allow
+  this network request" decision silently also granted a pass on any
+  independent REST-level deny rule configured for that same host
+  (e.g. a rule blocking `DELETE /repos/critical/**`), even though
+  these two policy layers are deliberately enforced independently
+  everywhere else in this file (the file's own extensive DNS-
+  rebinding/path-normalization hardening shows real engineering
+  effort was spent keeping them separate). The operator is only ever
+  shown `"network_request"` + the URL via the prompt -- never told
+  that approving it also skips REST-path enforcement entirely.
+  Live-reproduced: a restrictive config with a `rest_policies` rule
+  denying `DELETE /repos/critical/**` on a host that's also
+  network-denied; approving the network-level prompt (pre-fix) let
+  the DELETE proceed all the way to a real `httpx.Client.delete()`
+  call (confirmed via `git stash`: the mocked `delete` was never even
+  reached because the pre-fix code attempted a genuine, unmocked
+  network call and hit a real DNS resolution failure -- direct
+  evidence the REST deny was never evaluated at all). Fixed by
+  extracting the path-normalization logic (previously inline in
+  `_validate_and_pin()`) into a shared `_normalize_path()` static
+  method, and calling `_check_rest_policy(host, method, path)` in
+  both the sync and async operator-override branches before
+  returning, using that same normalization on the raw URL. A REST
+  deny now correctly raises `PolicyViolationError` even after an
+  operator has approved the network-level prompt, since
+  `_check_rest_policy()`'s exception isn't caught locally and
+  propagates out of the override branch.
+- Command: `pytest tests/gateway/test_client_deep.py::TestInteractiveApprovalFlow -v`
+- Result: `12 passed` (3 new:
+  `test_operator_override_does_not_bypass_rest_policy_deny`,
+  `test_operator_override_does_not_bypass_rest_policy_deny_async`,
+  `test_operator_override_allows_when_rest_policy_permits` -- the
+  last confirms the fix doesn't regress the ordinary allowed case).
+  The first two confirmed via `git stash` to genuinely fail pre-fix.
+- Broader sweep: `pytest tests/gateway/ tests/agent/ tests/policy/ -q`:
+  `5366 passed, 4 skipped`.
+- Full suite: `python3 -m pytest tests/ -q` → `21526 passed, 18
+  skipped in 769.16s (0:12:49)` — 0 failed, up from 21523.
+  Eighty-seventh consecutive fully green full-suite run. (A prior
+  attempt hit the same pre-existing wall-clock-timing flake from
+  round 68, reconfirmed passing reliably 3/3 in isolation.)
+
 ## Run: 2026-07-12 UTC — round 73 research pass: InteractiveApproval had no serialization across concurrent operator prompts, racing on shared stdin
 
 - Context: round 72 was research-only (no fix) — `AttentionSystem`'s

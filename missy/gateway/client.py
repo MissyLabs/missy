@@ -346,21 +346,29 @@ class PolicyHTTPClient:
         from missy.gateway.pinned_transport import pin_host
 
         pin_host(host, resolved_ip)
-        # RestPolicy.check() (and its fnmatch-based glob matching) operates
-        # on this path as a literal string with no dot-segment resolution
-        # -- but httpx normalizes "/a/../b" -> "/b" (RFC 3986) before
-        # actually sending the request. Without matching that
-        # normalization here, a narrow deny rule for a sensitive subpath
-        # (e.g. "/repos/secret/**") could be silently bypassed by a
-        # request to ".../repos/foo/../secret/token": the unnormalized
-        # literal path fails to match the deny glob and falls through to
-        # a broader allow rule, while the actual bytes sent on the wire
-        # target exactly the path the deny rule was meant to block.
-        raw_path = parsed.path or "/"
-        path = posixpath.normpath(raw_path)
-        if raw_path.endswith("/") and not path.endswith("/"):
+        return host, self._normalize_path(parsed.path)
+
+    @staticmethod
+    def _normalize_path(raw_path: str | None) -> str:
+        """Normalize a URL path the way httpx normalizes it before sending.
+
+        ``RestPolicy.check()`` (and its fnmatch-based glob matching)
+        operates on this path as a literal string with no dot-segment
+        resolution -- but httpx normalizes ``"/a/../b"`` -> ``"/b"``
+        (RFC 3986) before actually sending the request. Without matching
+        that normalization here, a narrow deny rule for a sensitive
+        subpath (e.g. ``"/repos/secret/**"``) could be silently bypassed
+        by a request to ``".../repos/foo/../secret/token"``: the
+        unnormalized literal path fails to match the deny glob and falls
+        through to a broader allow rule, while the actual bytes sent on
+        the wire target exactly the path the deny rule was meant to
+        block.
+        """
+        raw = raw_path or "/"
+        path = posixpath.normpath(raw)
+        if raw.endswith("/") and not path.endswith("/"):
             path += "/"
-        return host, path
+        return path
 
     @staticmethod
     def _pin_operator_override(host: str) -> None:
@@ -413,7 +421,20 @@ class PolicyHTTPClient:
                 ):
                     logger.info("Operator approved denied network request to %s", host)
                     self._pin_operator_override(host)
-                    return  # skip the rest — operator override
+                    # An operator override only overrides the NETWORK-level
+                    # host denial that triggered this prompt -- it is not
+                    # shown, and must not be treated as, a blanket approval
+                    # of the independent L7 REST method/path policy layer
+                    # below. Skipping straight to `return` here previously
+                    # let one "allow this host" click also silently bypass
+                    # any REST-policy deny rule for that same host (e.g. a
+                    # rule blocking DELETE /repos/**), even though the two
+                    # layers are deliberately enforced independently
+                    # everywhere else in this file.
+                    path = self._normalize_path(urlparse(url).path)
+                    if method:
+                        self._check_rest_policy(host, method, path)
+                    return
             raise exc
 
         # L7 REST policy check (method + path level)
@@ -455,7 +476,13 @@ class PolicyHTTPClient:
                     if approved:
                         logger.info("Operator approved denied network request to %s", host)
                         self._pin_operator_override(host)
-                        return  # skip the rest — operator override
+                        # See _check_url's matching comment: an operator
+                        # override only overrides the network-level host
+                        # denial, not the independent L7 REST policy layer.
+                        path = self._normalize_path(urlparse(url).path)
+                        if method:
+                            self._check_rest_policy(host, method, path)
+                        return
             raise exc
 
         if method:

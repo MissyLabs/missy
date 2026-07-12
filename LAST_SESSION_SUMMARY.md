@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (134 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eighty-six consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (135 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eighty-seven consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -5616,15 +5616,49 @@ Verified: `pytest tests/agent/test_interactive_approval.py -v`: `12
 passed`. `pytest tests/agent/ tests/gateway/ -q`: `4705 passed, 4
 skipped`.
 
+### Post-backlog (one-hundred-twenty-ninth checkpoint): round 74 research pass — an operator's network-level policy override silently also bypassed the independent L7 REST policy layer
+
+Round 74 re-checked `checkpoint.py`, `failure_tracker.py`,
+`watchdog.py`, and `pinned_transport.py` (all clean, prior hardening
+holding).
+
+**Fixed: `PolicyHTTPClient._check_url()`/`_check_url_async()`
+returned immediately after an operator approved a network-level
+policy denial, entirely skipping the independent L7 REST method/path
+policy check.** When `_validate_and_pin()` raises
+`PolicyViolationError` and the operator approves via
+`InteractiveApproval.prompt_user()`, the method returned right away —
+before `_check_rest_policy()` ever ran. A single "allow this network
+request" decision silently also granted a pass on any independent
+REST-level deny rule for that host (e.g. blocking `DELETE
+/repos/critical/**`), even though the two layers are deliberately
+independent everywhere else in this file. Live-reproduced and
+confirmed via `git stash`: pre-fix, the code attempted a genuine,
+unmocked network call instead of raising `PolicyViolationError` --
+direct evidence the REST deny was never evaluated. Fixed by
+extracting path normalization into a shared `_normalize_path()`
+method and calling `_check_rest_policy()` in both the sync and async
+override branches before returning. 3 new tests (2 confirmed via
+`git stash` to genuinely fail pre-fix, 1 confirming the ordinary
+allowed case doesn't regress).
+
+Verified: `pytest tests/gateway/test_client_deep.py::TestInteractiveApprovalFlow -v`:
+`12 passed`. `pytest tests/gateway/ tests/agent/ tests/policy/ -q`:
+`5366 passed, 4 skipped`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21523 passed, 18 skipped in 784.24s (0:13:04)
+21526 passed, 18 skipped in 769.16s (0:12:49)
 ```
 
-**Zero failures**, the eighty-sixth consecutive fully green
-full-suite run. Passed count is up from 21521 to 21523 (the round 73
+**Zero failures**, the eighty-seventh consecutive fully green
+full-suite run. Passed count is up from 21523 to 21526 (the round 74
+checkpoint's 3 new tests in `TestInteractiveApprovalFlow` — full
+detail above; all of the sixty-first through one-hundred-twenty-
+eighth checkpoints' fixes are confirmed still holding). Passed count
+is up from 21521 to 21523 (the round 73
 checkpoint's 2 new tests in `TestConcurrentPromptsSerialized` — full
 detail above; all of the sixty-first through one-hundred-twenty-
 seventh checkpoints' fixes are confirmed still holding). Passed count

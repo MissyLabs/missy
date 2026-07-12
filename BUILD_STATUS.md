@@ -10003,6 +10003,104 @@ skipped`.
 `21523 passed, 18 skipped in 784.24s (0:13:04)` — 0 failed, up from
 21521. Eighty-sixth consecutive fully green full-suite run.
 
+### Post-backlog (one-hundred-twenty-ninth checkpoint): round 74 research pass fixes an operator's network-level policy override silently also bypassing the independent L7 REST policy layer
+
+Round 74 re-checked `missy/agent/checkpoint.py` (clean — the
+`claim()` TOCTOU fix, `abandon_old()`'s timestamp fix, and
+`validate_loop_messages()`'s `tool_call_id` check from prior rounds
+all hold; `resume_checkpoint()`'s atomic claim correctly prevents
+double-resume), `missy/agent/failure_tracker.py` (clean — simple,
+correct counter logic; instantiated fresh per top-level task and
+mutated only sequentially within a single-threaded tool loop, not via
+`ThreadPoolExecutor`, so no cross-call staleness or race is reachable),
+`missy/agent/watchdog.py` (clean — already wired into `gateway start`;
+health-check recovery correctly resets `consecutive_failures`/`healthy`
+and logs recovery, no stuck-degraded or off-by-one bug found), and
+`missy/gateway/pinned_transport.py` (clean — uses `contextvars`, not a
+shared thread-local/global dict, so concurrent requests can't
+cross-contaminate IP pins). One genuine, fresh bug surfaced in
+`missy/gateway/client.py`, immediately downstream of round 73's
+`InteractiveApproval` concurrency fix.
+
+**Fixed: `PolicyHTTPClient._check_url()`/`_check_url_async()`
+returned immediately after an operator approved a network-level
+policy denial, entirely skipping the independent L7 REST method/path
+policy check that would otherwise still run.** When
+`_validate_and_pin()` raises `PolicyViolationError` (host denied at
+the network layer) and the operator approves via
+`InteractiveApproval.prompt_user()`, both methods returned right away
+from inside the `except` block — before `_check_rest_policy()`
+(method + path level, evaluated on the normal success path just a few
+lines below) ever ran. This meant a single operator "allow this
+network request" decision silently also granted a pass on any
+independent REST-level deny rule configured for that same host (e.g.
+a rule blocking `DELETE /repos/critical/**`), even though these two
+policy layers are deliberately enforced independently everywhere else
+in this file (the file's own extensive SR-1.9a/b DNS-rebinding and
+path-normalization hardening shows real engineering effort was spent
+specifically to keep network-level and REST-level enforcement
+separate and equally rigorous). The operator is only ever shown
+`"network_request"` plus the raw URL via `prompt_user()` — never told
+that approving it also skips REST-path enforcement entirely, so an
+operator reasonably believing they're approving "reach this host at
+all" unknowingly also waives a specific, narrower, independently-
+configured destructive-path protection. Concretely: a host is absent
+from the network allowlist (triggering the denial prompt) but the
+config also has a `rest_policies` rule denying `DELETE
+/repos/critical/**` on that same host — a tool call to `DELETE
+https://that-host/repos/critical/x` triggers the network-deny prompt;
+the operator, believing they're only approving host reachability,
+approves it once; `_pin_operator_override()` pins the IP and the
+method returns — the REST deny rule for that specific destructive
+path is never evaluated, and the DELETE proceeds. Live-reproduced and
+confirmed via `git stash`: with the fix removed, the pre-fix code
+path attempted a genuine, unmocked `httpx.Client.delete()` network
+call (hitting a real DNS resolution failure in the test sandbox)
+rather than raising `PolicyViolationError` — direct, concrete
+evidence the REST deny was never evaluated at all, not just a
+logic-inspection concern. Existing tests
+(`tests/gateway/test_client_deep.py`, `test_gateway_extended.py`,
+`test_policy_gateway_edges.py`) tested `_check_rest_policy()` in
+isolation and interactive-approval override in isolation, but never
+both together for the same request, so this exact interaction gap
+was invisible to the existing suite. Fixed by extracting the
+path-normalization logic (previously inline in `_validate_and_pin()`)
+into a shared `_normalize_path()` static method, and calling
+`_check_rest_policy(host, method, path)` in both the sync and async
+operator-override branches — using that same normalization applied to
+the raw URL — before returning. A REST deny now correctly raises
+`PolicyViolationError` even after an operator has approved the
+network-level prompt, since `_check_rest_policy()`'s exception isn't
+caught locally in the override branch and propagates out normally. A
+related, lower-confidence observation from this same investigation:
+`_make_key()`'s (in `InteractiveApproval`) plain colon-joining could
+theoretically collide if `session_id`/`detail` ever contained a
+colon, but no current production caller can trigger this (fixed
+literal `"network_request"` action, colon-free session IDs
+everywhere) — noted as a latent code-quality risk, not fixed, since
+it has no current reachable path.
+
+3 new tests in `TestInteractiveApprovalFlow`
+(`test_operator_override_does_not_bypass_rest_policy_deny`,
+`test_operator_override_does_not_bypass_rest_policy_deny_async`, and
+`test_operator_override_allows_when_rest_policy_permits` confirming
+the fix doesn't regress the ordinary allowed case) — the first two
+confirmed via `git stash` to genuinely fail pre-fix.
+
+Verified: `pytest tests/gateway/test_client_deep.py::TestInteractiveApprovalFlow -v`:
+`12 passed`. `pytest tests/gateway/ tests/agent/ tests/policy/ -q`:
+`5366 passed, 4 skipped`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21526 passed, 18 skipped in 769.16s (0:12:49)` — 0 failed, up from
+21523. Eighty-seventh consecutive fully green full-suite run. (A
+prior full-suite attempt this checkpoint hit the same pre-existing
+wall-clock-timing flake documented at round 68 --
+`test_async_prompt_does_not_block_the_event_loop`, this time at
+5.6s instead of the expected ~0.4-0.8s under unusually heavy
+full-suite thread contention -- reconfirmed passing reliably 3/3 in
+isolation, unrelated to this round's changes.)
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security
