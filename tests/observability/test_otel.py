@@ -302,6 +302,104 @@ class TestInitOtel:
         assert isinstance(result, OtelExporter)
 
 
+class TestInitOtelReinitialization:
+    """Regression: init_otel() was only ever called once, at process
+    bootstrap -- `missy config` hot-reload (ConfigWatcher/_apply_config)
+    had no way to make a change to observability.otel_enabled/otel_endpoint/
+    otel_protocol take effect on a running `missy gateway start` daemon
+    without a restart, despite existing specifically for that purpose.
+    init_otel() must now (a) be safe to call more than once in the same
+    process, (b) unwind any previously active exporter's publish() wrapper
+    before installing a new one so events aren't exported once per
+    historical re-init, and (c) track the currently active exporter so a
+    later caller in the same process can read its live state.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset_otel_state(self):
+        import missy.observability.otel as otel_module
+        from missy.core.events import event_bus
+
+        original_publish = event_bus.publish
+        original_active = otel_module._active_exporter
+        yield
+        if otel_module._active_exporter is not None:
+            otel_module._active_exporter.unsubscribe()
+        event_bus.publish = original_publish
+        otel_module._active_exporter = original_active
+
+    def _disabled_config(self):
+        @dataclass
+        class ObsCfg:
+            otel_enabled: bool = False
+            otel_endpoint: str = "http://localhost:4317"
+            otel_protocol: str = "grpc"
+            otel_service_name: str = "missy-test"
+
+        config = MagicMock()
+        config.observability = ObsCfg()
+        return config
+
+    def _enabled_config(self):
+        @dataclass
+        class ObsCfg:
+            otel_enabled: bool = True
+            otel_endpoint: str = "http://localhost:4317"
+            otel_protocol: str = "grpc"
+            otel_service_name: str = "missy-test"
+
+        config = MagicMock()
+        config.observability = ObsCfg()
+        return config
+
+    def test_get_active_exporter_tracks_the_most_recent_init(self) -> None:
+        from missy.observability.otel import get_active_exporter
+
+        result = init_otel(self._disabled_config())
+        assert get_active_exporter() is result
+
+    def test_reinit_unsubscribes_previous_exporter_before_new_one(self) -> None:
+        """Re-running init_otel() (as a config hot-reload would) must not
+        stack a second publish() wrapper around the first -- otherwise a
+        single published event would be exported once per historical
+        reload rather than once.
+        """
+        from missy.core.events import event_bus
+
+        first = init_otel(self._enabled_config())
+        assert first.is_enabled is True
+        publish_after_first = event_bus.publish
+
+        second = init_otel(self._enabled_config())
+        assert second.is_enabled is True
+        assert second is not first
+        # The first exporter's wrapper must have been unwound: publish()
+        # changed identity (a fresh wrap was installed by the second
+        # exporter), and the first exporter no longer holds a live
+        # reference to the bus/original publish function.
+        assert event_bus.publish is not publish_after_first
+        assert first._bus is None
+        assert first._original_publish is None
+
+    def test_disabling_after_enabled_restores_original_publish(self) -> None:
+        """Toggling otel_enabled: true -> false at runtime (a hot-reload)
+        must actually stop exporting -- the previously enabled exporter's
+        publish() wrapper must be unwound when the disabled stub is
+        installed, not merely for the *next* enabled re-init.
+        """
+        from missy.core.events import event_bus
+
+        enabled_exporter = init_otel(self._enabled_config())
+        assert enabled_exporter.is_enabled is True
+        wrapped_publish = event_bus.publish
+
+        disabled_exporter = init_otel(self._disabled_config())
+        assert disabled_exporter.is_enabled is False
+        assert event_bus.publish is not wrapped_publish
+        assert enabled_exporter._bus is None
+        assert enabled_exporter._original_publish is None
+
+
 @pytest.fixture
 def _skip_without_opentelemetry():
     pytest.importorskip("opentelemetry")

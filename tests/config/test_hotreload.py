@@ -119,13 +119,15 @@ class TestDoReload:
 
 
 class TestApplyConfig:
+    @patch("missy.observability.otel.init_otel")
     @patch("missy.providers.registry.init_registry")
     @patch("missy.policy.engine.init_policy_engine")
-    def test_apply_reinitializes_subsystems(self, mock_policy, mock_reg):
+    def test_apply_reinitializes_subsystems(self, mock_policy, mock_reg, mock_otel):
         config = MagicMock()
         _apply_config(config)
         mock_policy.assert_called_once_with(config)
         mock_reg.assert_called_once_with(config)
+        mock_otel.assert_called_once_with(config)
 
     def test_apply_does_not_partially_install_when_one_subsystem_fails(self):
         """If ProviderRegistry construction fails, PolicyEngine must not

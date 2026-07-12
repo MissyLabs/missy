@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (121 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for seventy-three consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (122 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for seventy-four consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -5127,15 +5127,67 @@ Verified: `pytest tests/mcp/test_annotations.py -v`: `88 passed`.
 `pytest tests/mcp/ -q`: `388 passed`. `pytest tests/mcp/ tests/tools/
 tests/agent/ tests/security/ -q`: `8321 passed, 6 skipped`.
 
+### Post-backlog (one-hundred-sixteenth checkpoint): round 60 research pass — OTel hot-reload was a complete no-op
+
+Round 60 checked `agent/interactive_approval.py`/`approval.py`
+(already correctly session-scoped), Discord's `/status`/`/model`/
+`/help` slash commands (no secrets-detection gap), and
+`security/vault.py` (locking/nonce/symlink handling sound) — all
+clean. Found and fixed a real bug closing the same "config value never
+reaches the process that matters" family as rounds 56-58, in a new
+subsystem.
+
+**`init_otel()` was only ever called once, at process bootstrap, with
+its return value discarded — toggling `observability.otel_enabled`/
+`otel_endpoint`/`otel_protocol` on a running `missy gateway start`
+daemon via config hot-reload had zero effect.** `_apply_config()`
+(`ConfigWatcher`'s reload callback) only ever rebuilt
+`PolicyEngine`/`ProviderRegistry`; it never touched OTel. Enabling at
+runtime produced no spans; disabling left the old exporter's
+`event_bus.publish()` wrapper running forever. Fixed by making
+`init_otel()` safe to call more than once per process, tracking the
+active exporter as a module-level singleton
+(`get_active_exporter()`), and adding an `unsubscribe()` method that
+restores `event_bus.publish` before a new exporter installs its own
+wrap — proactively avoiding a stacked-wrapper bug the fix would
+otherwise introduce. `_apply_config()` now calls
+`init_otel(new_config)` alongside the existing policy/registry reinit.
+Live-verified end-to-end (correcting one false alarm along the way: an
+initial verification script used `is` identity comparison on a bound
+method and `copy.copy()` on a `MagicMock` config, both misleading;
+redone with a `__name__`-based patch check and independently
+constructed configs): enabling → disabling → re-enabling → disabling
+again via `_apply_config()` toggles
+`get_active_exporter().is_enabled` correctly at every step, with no
+publish-wrapper stacking. 1 existing test updated, 3 new tests added,
+all 4 changed/new tests confirmed via `git stash` to genuinely fail
+pre-fix.
+
+**Noted, not implemented**: a `missy doctor` OTLP-failure check would
+need the same CLI-to-daemon HTTP pattern `missy providers switch`
+(round 55) established, since `missy doctor` reruns `_load_subsystems()`
+fresh each time and can't see a running daemon's live exporter state —
+left as a documented residual rather than force a shallow, misleading
+check.
+
+Verified: `pytest tests/observability/test_otel.py
+tests/config/test_hotreload.py -v`: `68 passed`. `pytest
+tests/observability/ tests/config/ tests/agent/ tests/cli/ -q`: `5956
+passed, 4 skipped`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21488 passed, 14 skipped in 799.08s (0:13:19)
+21491 passed, 14 skipped in 591.64s (0:09:51)
 ```
 
-**Zero failures**, the seventy-third consecutive fully green
-full-suite run. Passed count is up from 21486 to 21488 (the round 59
+**Zero failures**, the seventy-fourth consecutive fully green
+full-suite run. Passed count is up from 21488 to 21491 (the round 60
+checkpoint's net +3 tests: 1 existing hot-reload test updated, 3 new
+OTel re-init tests added — full detail above; all of the sixty-first
+through one-hundred-fifteenth checkpoints' fixes are confirmed still
+holding). Passed count is up from 21486 to 21488 (the round 59
 checkpoint's net +2 tests: 10 existing MCP annotation tests updated to
 match spec-correct behavior, 2 new tests added — full detail above;
 all of the sixty-first through one-hundred-fourteenth checkpoints'

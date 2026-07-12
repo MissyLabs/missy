@@ -8875,6 +8875,82 @@ tests/agent/ tests/security/ -q`: `8321 passed, 6 skipped`.
 `21488 passed, 14 skipped in 799.08s (0:13:19)` — 0 failed, up from
 21486. Seventy-third consecutive fully green full-suite run.
 
+### Post-backlog (one-hundred-sixteenth checkpoint): round 60 research pass fixes OTel hot-reload being a complete no-op, closing the same "config value never reaches the process that matters" family as rounds 56-58 in a new subsystem
+
+Round 60 checked `missy/agent/interactive_approval.py`/`approval.py`
+(already correctly session-scoped), Discord's `/status`/`/model`/`/help`
+slash commands (no secrets-detection gap — none of them forward
+free-text user input to the agent the way `/ask` does), and
+`missy/security/vault.py` (locking/nonce/symlink handling sound) —
+all clean. Found and fixed a real bug in the observability subsystem.
+
+**`init_otel()` was only ever called once, at process bootstrap
+(`_load_subsystems()`), with its return value discarded — toggling
+`observability.otel_enabled`/`otel_endpoint`/`otel_protocol` on a
+running `missy gateway start` daemon via config hot-reload had zero
+effect, despite `ConfigWatcher`/`_apply_config()` existing specifically
+to make config changes take effect without a restart.**
+`_apply_config()` (`config/hotreload.py`) only ever rebuilt
+`PolicyEngine`/`ProviderRegistry`; it never touched OTel. Concretely:
+an operator starts the gateway with `otel_enabled: false`, edits
+`config.yaml` to enable it while the daemon keeps running, and no
+spans are ever exported — no error either way, just silence. The
+reverse (disabling at runtime) is equally inert: the old exporter's
+`event_bus.publish()` wrapper (`otel.py`'s established
+`AuditLogger`-mirroring monkey-patch pattern) keeps running forever,
+continuing to export events the operator just asked to stop exporting.
+No test combined hot-reload with OTel init, because no production code
+path connected them — the gap was real, not just untested.
+
+Fixed by making `init_otel()` (a) safe to call more than once per
+process, (b) track the currently active exporter as a module-level
+singleton via a new `get_active_exporter()` accessor, and (c) call the
+previous exporter's new `unsubscribe()` method (restoring
+`event_bus.publish` to what it was before that exporter's own wrap)
+before installing a new one — proactively closing an adjacent bug this
+fix would otherwise have introduced: without unwinding the old wrapper
+first, each re-init would stack another layer of
+`_patched_publish` around the bus's real `publish()`, so a single
+event would be exported once per historical reload rather than once.
+`_apply_config()` now calls `init_otel(new_config)` alongside the
+existing policy/registry reinit. Live-verified end-to-end (correcting
+one false alarm along the way — an initial verification script used
+`is` identity comparison on a bound method and `copy.copy()` on a
+`MagicMock` config, both of which gave misleading results; redone with
+a `__name__`-based patch check and two independently-constructed
+configs): enabling → disabling → re-enabling → disabling again via
+`_apply_config()` toggles `get_active_exporter().is_enabled` correctly
+at every step, with no publish-wrapper stacking across repeated
+re-inits and `event_bus.publish` genuinely restored to its prior value
+each time OTel is disabled. 4 tests total: 1 existing test
+(`test_apply_reinitializes_subsystems`) updated to also assert
+`init_otel` is called once per reload; 3 new tests
+(`test_get_active_exporter_tracks_the_most_recent_init`,
+`test_reinit_unsubscribes_previous_exporter_before_new_one`,
+`test_disabling_after_enabled_restores_original_publish`), all 4
+changed/new tests confirmed via `git stash` to genuinely fail pre-fix.
+
+**Noted, not implemented — a genuine follow-up requiring the
+established daemon-HTTP pattern, not a quick addition here**: the
+existing `OtelExporter.export_failure_count`/`.last_export_error`
+properties are explicitly documented as existing "so callers (e.g.
+`missy doctor`) can surface OTLP export is silently failing," but
+`missy doctor` has zero references to them and, being a separate
+one-shot CLI invocation that reruns `_load_subsystems()` from scratch,
+cannot read a *running gateway daemon's* live exporter state without
+the same CLI-to-daemon HTTP pattern `missy providers switch` (round 55)
+and `missy approvals` already establish — a doctor check that
+constructed its own fresh exporter would always misleadingly report
+zero failures, having never handled a real event. Left as a documented
+residual rather than force a shallow, misleading check.
+
+Verified: `pytest tests/observability/test_otel.py tests/config/test_hotreload.py -v`: `68 passed`. `pytest tests/observability/
+tests/config/ tests/agent/ tests/cli/ -q`: `5956 passed, 4 skipped`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21491 passed, 14 skipped in 591.64s (0:09:51)` — 0 failed, up from
+21488. Seventy-fourth consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

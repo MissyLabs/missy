@@ -124,6 +124,7 @@ def _apply_config(new_config) -> None:
     """Re-initialise subsystems with updated config."""
     from missy.policy.engine import PolicyEngine, init_policy_engine
     from missy.providers.registry import ProviderRegistry, init_registry
+    from missy.observability.otel import init_otel
 
     # Construct both new subsystem instances before installing either one
     # globally. init_policy_engine()/init_registry() each construct their
@@ -147,3 +148,17 @@ def _apply_config(new_config) -> None:
     init_policy_engine(new_config)
     init_registry(new_config)
     logger.info("ConfigWatcher: policy engine and provider registry updated")
+
+    # SR-4.6/observability: init_otel() was only ever called once, at
+    # process bootstrap (missy/cli/main.py's _load_subsystems()) -- toggling
+    # observability.otel_enabled (or changing otel_endpoint/otel_protocol)
+    # on a running `missy gateway start` daemon had no effect whatsoever,
+    # despite ConfigWatcher/_apply_config existing specifically to make
+    # config changes take effect without a restart. init_otel() itself
+    # unwinds any previously active exporter's publish() wrapper before
+    # installing a new one, so this is safe to call on every reload.
+    try:
+        init_otel(new_config)
+        logger.info("ConfigWatcher: OpenTelemetry exporter updated")
+    except Exception as exc:
+        logger.warning("ConfigWatcher: OpenTelemetry re-init failed: %s", exc)

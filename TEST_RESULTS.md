@@ -1,5 +1,56 @@
 # TEST_RESULTS
 
+## Run: 2026-07-12 UTC — round 60 research pass: OTel hot-reload was a complete no-op
+
+- Context: round 60 checked agent/interactive_approval.py + approval.py
+  (already correctly session-scoped), Discord's /status/model/help slash
+  commands (no secrets-detection gap -- none forward free-text user
+  input the way /ask does), and security/vault.py (locking/nonce/symlink
+  handling sound) -- all clean.
+- **OTel hot-reload never worked**: init_otel() was only ever called
+  once, at process bootstrap (_load_subsystems()), with its return
+  value discarded. _apply_config() (ConfigWatcher's reload callback)
+  only ever rebuilt PolicyEngine/ProviderRegistry -- never touched
+  OTel. Toggling observability.otel_enabled/otel_endpoint/otel_protocol
+  on a running `missy gateway start` daemon via config hot-reload had
+  zero effect either direction (enabling produced no spans; disabling
+  left the old exporter's event_bus.publish() wrapper running forever).
+  No test combined hot-reload with OTel init, because no production
+  code path connected them.
+- Fixed by making init_otel() safe to call more than once per process,
+  tracking the active exporter as a module-level singleton
+  (get_active_exporter()), and adding an unsubscribe() method that
+  restores event_bus.publish before a new exporter installs its own
+  wrap -- proactively avoiding a stacked-wrapper bug the fix would
+  otherwise introduce (each re-init would otherwise wrap publish()
+  again around the previous wrap, exporting once per historical
+  reload). _apply_config() now calls init_otel(new_config) alongside
+  the existing policy/registry reinit.
+- Command: `pytest tests/observability/test_otel.py tests/config/test_hotreload.py -v`
+- Result: `68 passed`. 1 existing test
+  (test_apply_reinitializes_subsystems) updated to also assert
+  init_otel is called once per reload; 3 new tests
+  (test_get_active_exporter_tracks_the_most_recent_init,
+  test_reinit_unsubscribes_previous_exporter_before_new_one,
+  test_disabling_after_enabled_restores_original_publish), all 4
+  changed/new tests confirmed via `git stash` to genuinely fail
+  pre-fix.
+- Live-verified end-to-end (correcting one false alarm: an initial
+  verification script used `is` identity comparison on a bound method
+  and `copy.copy()` on a MagicMock config, both misleading; redone with
+  a __name__-based patch check and independently-constructed configs):
+  enabling -> disabling -> re-enabling -> disabling again via
+  _apply_config() toggles get_active_exporter().is_enabled correctly
+  at every step, no publish-wrapper stacking, event_bus.publish
+  genuinely restored each time OTel is disabled.
+- Noted, not implemented: a `missy doctor` OTLP-failure check would
+  need the same CLI-to-daemon HTTP pattern `missy providers switch`
+  (round 55) established, since doctor reruns _load_subsystems() fresh
+  each time and can't see a running daemon's live exporter state --
+  left as a documented residual.
+- Broader sweep: `pytest tests/observability/ tests/config/ tests/agent/ tests/cli/ -q`: `5956 passed, 4 skipped`.
+- Full suite: `python3 -m pytest tests/ -q` → `21491 passed, 14 skipped in 591.64s (0:09:51)` — 0 failed, up from 21488. Seventy-fourth consecutive fully green full-suite run.
+
 ## Run: 2026-07-12 UTC — round 59 research pass: MCP annotation defaults silently defeated the approval gate for realistic partial third-party annotations
 
 - Context: round 59 first verified (rather than assumed) round 58's

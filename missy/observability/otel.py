@@ -161,6 +161,25 @@ class OtelExporter:
         except Exception as exc:
             logger.warning("OtelExporter: subscribe failed: %s", exc)
 
+    def unsubscribe(self) -> None:
+        """Undo :meth:`subscribe`'s ``publish()`` wrap, restoring the prior function.
+
+        Required before installing a *new* exporter's wrapper (e.g. on a
+        config hot-reload) -- without this, each re-init stacks another
+        layer of ``_patched_publish`` around the bus's real ``publish()``,
+        so a single event would be exported once per historical reload
+        rather than once.
+        """
+        if self._bus is not None and self._original_publish is not None:
+            try:
+                if self._bus.publish is not self._original_publish:
+                    self._bus.publish = self._original_publish
+            except Exception:
+                logger.debug("OtelExporter: unsubscribe failed", exc_info=True)
+            finally:
+                self._bus = None
+                self._original_publish = None
+
     @property
     def is_enabled(self) -> bool:
         return self._enabled
@@ -204,11 +223,44 @@ def _disabled_stub() -> OtelExporter:
     return stub
 
 
+_active_exporter: OtelExporter | None = None
+
+
+def get_active_exporter() -> OtelExporter | None:
+    """Return the most recently installed exporter, or ``None`` if
+    :func:`init_otel` has never been called.
+
+    Lets a long-lived caller (e.g. a future ``missy doctor``/Web TUI check
+    running *inside* the same process as the live exporter) read
+    ``is_enabled``/``export_failure_count``/``last_export_error`` off the
+    actual exporter currently wired to the event bus, rather than a
+    throwaway instance a separate CLI invocation would otherwise have to
+    construct from scratch (which would misleadingly always report zero
+    failures, having never handled a real event).
+    """
+    return _active_exporter
+
+
 def init_otel(config) -> OtelExporter:
-    """Initialise OpenTelemetry from config. Returns exporter (may be disabled)."""
+    """Initialise OpenTelemetry from config. Returns exporter (may be disabled).
+
+    Safe to call more than once for the same process -- e.g. from
+    :func:`missy.config.hotreload._apply_config` when the operator changes
+    ``observability.otel_enabled``/``otel_endpoint``/``otel_protocol`` on a
+    running ``missy gateway start`` daemon. Any previously active exporter
+    has its ``publish()`` wrapper unwound first, so re-init never stacks a
+    second layer of export around the same event.
+    """
+    global _active_exporter
+
+    if _active_exporter is not None:
+        _active_exporter.unsubscribe()
+        _active_exporter = None
+
     obs = getattr(config, "observability", None)
     if obs is None or not getattr(obs, "otel_enabled", False):
-        return _disabled_stub()
+        _active_exporter = _disabled_stub()
+        return _active_exporter
 
     exporter = OtelExporter(
         endpoint=obs.otel_endpoint,
@@ -217,4 +269,5 @@ def init_otel(config) -> OtelExporter:
     )
     if exporter.is_enabled:
         exporter.subscribe()
+    _active_exporter = exporter
     return exporter
