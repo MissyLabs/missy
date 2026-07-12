@@ -1,5 +1,110 @@
 # TEST_RESULTS
 
+## Run: 2026-07-12 UTC — CI fix 4: shutil.copy2() partial-failure race across independent PersonaManager instances (Test Python 3.11 failure on PR #31, run 29209260077)
+
+- Context: user-directed CI remediation on PR #31. After CI fix 3
+  (PersonaManager save()/rollback() lock, commit `c47fe26`) was pushed,
+  `Test (Python 3.12)` and `Test (Python 3.13)` turned green, but
+  `Test (Python 3.11)` failed fast (1m19s) on a *different* test:
+  `TestPersonaAuditLogIntegrity::test_audit_log_survives_concurrent_appends`.
+- Root cause, found by reproducing locally (the test only stores the
+  bare exception with no traceback, so a standalone repro script was
+  needed to see the actual failure site): `shutil.copy2()` inside
+  `PersonaManager._create_backup()` is `copyfile()` + `copystat()` as
+  two separate steps. This test constructs 5 independent
+  `PersonaManager` instances against the same path (not 5 threads
+  sharing one instance), so fix 3's new `self._lock` — which only
+  serializes `save()`/`rollback()` within a single instance — does not
+  protect against this. A different instance's `_prune_backups()` can
+  unlink the backup file one thread's `copyfile()` just wrote,
+  between that `copyfile()` and the same thread's own `copystat()`
+  call, so `copystat()`'s internal `os.utime()` raises
+  `FileNotFoundError` on a path that's already gone.
+- Live-reproduced directly:
+  ```
+  File "missy/agent/persona.py", line 327, in save
+      self._create_backup()
+  File "missy/agent/persona.py", line 502, in _create_backup
+      shutil.copy2(str(self._path), str(backup_path))
+  File ".../shutil.py", line 476, in copy2
+      copystat(src, dst, follow_symlinks=follow_symlinks)
+  File ".../shutil.py", line 384, in copystat
+      lookup("utime")(dst, ns=(st.st_atime_ns, st.st_mtime_ns), ...)
+  FileNotFoundError: [Errno 2] No such file or directory
+  ```
+- Fixed by wrapping the `shutil.copy2()` call itself in
+  `try/except FileNotFoundError`, returning early (the backup was
+  already pruned by the other instance, so there's nothing left to
+  finalize) — equivalent in effect to the already-accepted
+  `SameFileError` same-second race this test's own docstring already
+  documents as a known backup-naming-scheme limitation.
+- Command:
+  `pytest tests/agent/test_hatching_persona_stress.py::TestPersonaAuditLogIntegrity::test_audit_log_survives_concurrent_appends -q`
+  at the pre-fix, original 5-threads-x-10-saves parameters: 0/8 local
+  reproductions despite having failed once in real CI (a genuine race,
+  just a narrow window). Strengthened to 20 threads x 20 saves via a
+  standalone stress script that tuned parameters against the pre-fix
+  code first: 13/15 failing trials pre-fix, 0/15 post-fix. Re-ran the
+  actual pytest test (not just the standalone script) at the new
+  parameters directly against pre-fix code via `git stash push --
+  missy/agent/persona.py`: 5/5 runs fail pre-fix
+  (`FileNotFoundError`), 5/5 runs pass post-fix.
+- Broader sweep:
+  `pytest tests/agent/test_hatching_persona_stress.py tests/agent/test_persona_save_edges.py tests/agent/ -k persona -q`
+  → `481 passed`.
+- Lint/format: `ruff check` + `ruff format --check` on all 4 touched
+  files (`missy/agent/persona.py`, `missy/agent/hatching.py`,
+  `tests/agent/test_hatching_persona_stress.py`,
+  `tests/agent/test_hatching_checkpoint_edges.py`): all clean.
+- **Full suite:** `python3 -m pytest tests/ -q` → `21575 passed, 18
+  skipped in 2030.74s (0:33:50)` — 0 failed, same passed count as the
+  round 83 checkpoint (this fix strengthens an existing test's
+  parameters rather than adding a new one). Ninety-sixth consecutive
+  fully green full-suite run. (This run took ~34 minutes vs. the
+  typical ~13 due to heavy concurrent system load, matching the
+  precedent already noted for the round 82 full-suite run — not itself
+  a regression signal; the earlier 84%-progress checkpoint showed the
+  process actively CPU-bound and progressing, not hung.)
+
+## Run: 2026-07-12 UTC — round 83 research pass: HatchingState.from_dict() crashed with an unhandled TypeError on a non-list steps_completed scalar in a hand-edited hatching.yaml
+
+- Context: round 83 checked `missy/agent/hatching.py`'s
+  `HatchingState.from_dict()` against the same "hand-editable
+  YAML/JSON with a wrong scalar type" bug class rounds 80-82 kept
+  finding elsewhere.
+- **Fixed:** `steps_completed=list(data.get("steps_completed") or
+  [])` still crashes on a non-iterable, non-falsy scalar — the `or []`
+  only guards `None`/falsy values, not e.g. `steps_completed: 5` in a
+  hand-edited `hatching.yaml` (a plausible mistake, since sibling
+  fields like `persona_generated: true` genuinely are scalars). Live-
+  reproduced: `HatchingState.from_dict({"steps_completed": 5})` raised
+  `TypeError: 'int' object is not iterable`, propagating out of
+  `HatchingManager.get_state()`/`needs_hatching()` — both called on
+  every `missy` invocation via the bootstrap check, making this a real
+  "assistant unusable until the file is manually fixed" crash.
+- Fixed via `raw_steps = data.get("steps_completed"); steps_completed
+  = list(raw_steps) if isinstance(raw_steps, list) else []`. Also
+  broadened `HatchingManager.get_state()`'s `except (OSError,
+  yaml.YAMLError)` to include `ValueError, TypeError` for
+  defense-in-depth, matching `persona.py`'s existing exception
+  surface for the same hand-edited-file risk class.
+- Command: `pytest tests/agent/test_hatching_checkpoint_edges.py -q`
+  with 5 new tests
+  (`test_steps_completed_non_list_scalar_falls_back_to_empty_list`,
+  `test_steps_completed_bool_scalar_falls_back_to_empty_list`,
+  `test_steps_completed_string_scalar_falls_back_to_empty_list`,
+  `TestHatchingManagerMalformedStateFile::
+  test_non_list_steps_completed_does_not_crash_needs_hatching`,
+  `TestHatchingManagerMalformedStateFile::
+  test_non_list_steps_completed_does_not_crash_get_state`).
+- Result: all 5 confirmed via `git stash push --
+  missy/agent/hatching.py` to genuinely fail pre-fix with
+  `TypeError: 'int' object is not iterable`; all pass post-fix.
+- Broader sweep: `pytest tests/agent/ -k hatching -q`: all passing.
+- Full suite: `python3 -m pytest tests/ -q` → `21575 passed, 18
+  skipped in 786.67s (0:13:06)` — 0 failed, up from 21570. Ninety-fifth
+  consecutive fully green full-suite run.
+
 ## Run: 2026-07-12 UTC — round 82 research pass: DeviceRegistry's bare bool() coercion on EdgeNode.paired was a genuine authorization bypass for a hand-edited devices.json
 
 - Context: round 82 checked `mcp/manager.py`'s `block_injection`

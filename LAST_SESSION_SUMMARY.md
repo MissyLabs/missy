@@ -5859,15 +5859,91 @@ confirmed via `git stash` to genuinely fail pre-fix.
 Verified: `pytest tests/channels/test_device_registry.py -v -k
 TestEdgeNode`: `6 passed`. `pytest tests/channels/ -q`: `1998 passed`.
 
+### Post-backlog (one-hundred-thirty-seventh checkpoint): round 83 research pass — `HatchingState.from_dict()` crashed with an unhandled `TypeError` on a non-list `steps_completed` scalar in a hand-edited `hatching.yaml`
+
+Round 83 checked `hatching.py`'s `HatchingState.from_dict()` against
+the same "hand-editable file with a wrong scalar type" bug class
+rounds 80-82 kept finding. **Fixed:**
+`steps_completed=list(data.get("steps_completed") or [])` still
+crashes on a non-iterable, non-falsy scalar — a hand-edited
+`hatching.yaml` with `steps_completed: 5` (plausible, since sibling
+fields like `persona_generated: true` genuinely are scalars) raised
+`TypeError: 'int' object is not iterable` from `from_dict()`,
+propagating out of `HatchingManager.get_state()`/`needs_hatching()` —
+both called on *every* `missy` invocation via the bootstrap check,
+making this a real "assistant unusable until the file is manually
+fixed" crash. Fixed via an explicit `isinstance(raw_steps, list)`
+check, falling back to `[]` otherwise. Also broadened
+`get_state()`'s except clause to include `ValueError, TypeError`,
+matching `persona.py`'s existing defensive posture for this file-
+parsing risk class. 5 new tests, all confirmed via `git stash` to
+genuinely fail pre-fix with the exact `TypeError`.
+
+Verified: `pytest tests/agent/test_hatching_checkpoint_edges.py -q`
+and `pytest tests/agent/ -k hatching -q`: all passing.
+
+### CI pipeline remediation (user-directed): four fixes to make GitHub Actions pass on PR #31, the fourth surfacing a fifth genuine concurrency bug
+
+The operator explicitly asked to check why CI was failing and fix it
+— separate, user-directed work tracked outside the round numbering.
+All 4 `gh pr checks 31` jobs were failing; each was root-caused from
+its own real Actions log, not guessed at:
+
+1. **Lint & Format**: 26 ruff errors (2 were real bugs — an undefined
+   `HTTPServer` type reference in `channels/webhook.py`, a missing
+   `import pytest` in `test_provider_health.py` — the rest were
+   B904/B039/B007/B017/F841/SIM102 style fixes) + 84 files needing
+   `ruff format` (whitespace-only, confirmed behavior-neutral via two
+   full local suite runs). Commit `f509878`.
+2. **Test 3.12/3.13**: missing `Pillow` — real production code
+   (`vision/sources.py`'s decompression-bomb guard) imports `PIL` but
+   it was never declared in `pyproject.toml`'s `vision` extra, so real
+   end users following the documented install were affected too, not
+   just CI. Fixed the extra + added an `importorskip` guard fixture.
+   Commit `4c9be5f`.
+3. **Test 3.12**: `PersonaManager` had zero locking around
+   `save()`/`rollback()` despite an existing concurrency test — the
+   test just wasn't aggressive enough (4x5 threads/iterations) to
+   reproduce locally, though it failed once for real in CI. Added
+   `threading.Lock()` around both methods' full bodies; strengthened
+   the test to 20x10 (7/8 pre-fix failures, 10/10 post-fix pass).
+   Commit `c47fe26`.
+4. **Test 3.11 (new failure after pushing fix 3)**: a *different*
+   `PersonaManager` race — `shutil.copy2()` is `copyfile()` +
+   `copystat()` as two separate steps, and fix 3's lock only serializes
+   within one instance, not across the 5 independent instances this
+   test deliberately constructs. A concurrent instance's
+   `_prune_backups()` can unlink the just-copied backup between those
+   two steps, so `copystat()`'s `utime()` raises `FileNotFoundError` on
+   a path that's already gone. Fixed by catching `FileNotFoundError`
+   around `shutil.copy2()` and returning early (nothing left to
+   preserve), the same tolerant treatment already given to the
+   analogous `SameFileError` race. Strengthened the test from 5x10
+   (0/8 local repro) to 20x20 (13/15 pre-fix failures, 0/15 post-fix).
+
+Verified: `pytest tests/agent/test_hatching_persona_stress.py
+tests/agent/test_persona_save_edges.py tests/agent/ -k persona -q`:
+`481 passed`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21570 passed, 18 skipped in 775.99s (0:12:55)
+21575 passed, 18 skipped in 2030.74s (0:33:50)
 ```
 
-**Zero failures**, the ninety-fourth consecutive fully green
-full-suite run. Passed count is up from 21567 to 21570 (the round 82
+**Zero failures**, the ninety-sixth consecutive fully green
+full-suite run. Passed count is unchanged at 21575 from the prior
+(ninety-fifth) run (CI fix 4 strengthens an existing test's
+parameters rather than adding a new test). This run took ~34 minutes
+vs. the typical ~13 due to heavy concurrent system load (the same
+pattern already seen on the round 82 full-suite run) — confirmed not
+a hang by checking the process mid-run: actively CPU-bound and
+progressing through percentages, not stalled. Passed count is up from
+21570 to 21575 (the round 83 checkpoint's 5 new tests in
+`test_hatching_checkpoint_edges.py` — full detail above; all of the
+sixty-first through one-hundred-thirty-sixth checkpoints' fixes are
+confirmed still holding). Passed count is up from 21567 to 21570 (the round 82
 checkpoint's 3 new tests — full detail above; all of the sixty-first
 through one-hundred-thirty-fifth checkpoints' fixes are confirmed
 still holding). Passed count is up from 21564 to 21567 (the round 81

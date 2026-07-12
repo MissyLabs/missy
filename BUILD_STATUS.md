@@ -10793,6 +10793,142 @@ tests/channels/ -q`: `1998 passed`.
 `21570 passed, 18 skipped in 775.99s (0:12:55)` — 0 failed, up from
 21567. Ninety-fourth consecutive fully green full-suite run.
 
+### Post-backlog (one-hundred-thirty-seventh checkpoint): round 83 research pass fixes `HatchingState.from_dict()` crashing with an unhandled `TypeError` on a non-list `steps_completed` scalar in a hand-edited `hatching.yaml`
+
+Round 83 checked `missy/agent/hatching.py`'s `HatchingState.from_dict()`
+against the same "hand-editable YAML/JSON with a wrong scalar type"
+bug class rounds 80-82 kept finding. `steps_completed=list(data.get("steps_completed")
+or [])` looks defensive (the `or []` guards `None`) but `list()` on a
+non-iterable scalar still raises unconditionally: a hand-edited
+`hatching.yaml` containing `steps_completed: 5` (a plausible mistake —
+the field's sibling boolean fields like `persona_generated: true` are
+scalars, so a user editing the file might reasonably assume this one
+is too) produced `TypeError: 'int' object is not iterable` from
+`from_dict()`, propagating out of `HatchingManager.get_state()` and
+`needs_hatching()` — both called unconditionally on every `missy`
+invocation via the hatching bootstrap check, so this was a real
+"assistant becomes unusable until the file is manually fixed or
+deleted" crash, not a cosmetic parsing nit. Fixed by explicitly
+checking `isinstance(raw_steps, list)` before coercing, falling back
+to `[]` for any non-list scalar (int, bool, string) — matching the
+field's own documented "names of individual steps completed" list
+contract. Also broadened `HatchingManager.get_state()`'s except clause
+from `(OSError, yaml.YAMLError)` to `(OSError, yaml.YAMLError,
+ValueError, TypeError)` for defense-in-depth against any other
+malformed-scalar crash in this parsing path, matching the more
+defensive exception surface `persona.py` already uses for the same
+class of hand-edited-file risk.
+
+5 new tests in `tests/agent/test_hatching_checkpoint_edges.py`
+(`test_steps_completed_non_list_scalar_falls_back_to_empty_list`,
+`test_steps_completed_bool_scalar_falls_back_to_empty_list`,
+`test_steps_completed_string_scalar_falls_back_to_empty_list`, and a
+new `TestHatchingManagerMalformedStateFile` class with
+`test_non_list_steps_completed_does_not_crash_needs_hatching`/
+`test_non_list_steps_completed_does_not_crash_get_state`), all 5
+confirmed via `git stash push -- missy/agent/hatching.py` to genuinely
+fail pre-fix with the exact `TypeError: 'int' object is not iterable`.
+
+Verified: `pytest tests/agent/test_hatching_checkpoint_edges.py -q`:
+all passing. `pytest tests/agent/ -k hatching -q`: all passing.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21575 passed, 18 skipped in 786.67s (0:13:06)` — 0 failed, up from
+21570. Ninety-fifth consecutive fully green full-suite run.
+
+### CI pipeline remediation (user-directed, 2026-07-12): four fixes to make GitHub Actions actually pass on PR #31, plus a fifth genuine concurrency bug the fourth fix's own CI run then surfaced
+
+The operator explicitly asked to check why CI was failing on PR #31 and
+fix it — a distinct, user-directed task, tracked separately from the
+round-numbered research-pass checkpoints above. `gh pr checks 31`
+showed all 4 jobs (`Lint & Format`, `Test` x3 Python versions,
+`Coverage`) failing. Each was root-caused from its own real GitHub
+Actions log (`gh api repos/MissyLabs/missy/actions/jobs/<id>/logs`),
+not guessed at, and each was a genuine bug rather than a CI
+configuration artifact to paper over:
+
+1. **Lint & Format (26 ruff errors, 84 files needing reformat).** Two
+   of the 26 lint errors were real production bugs, not just style:
+   `missy/channels/webhook.py` annotated `self._server: HTTPServer |
+   None` while only ever importing and assigning `ThreadingHTTPServer`
+   (`HTTPServer` was never imported at all — this only worked because
+   Python doesn't evaluate string-deferred/PEP 563 annotations at
+   runtime); `tests/providers/test_provider_health.py` called
+   `pytest.fail(...)` with no `import pytest` anywhere in the module.
+   Also fixed: B904 (`raise ... from None` in `agent/runtime.py`'s
+   fallback re-raise), B039 (mutable `ContextVar` default in
+   `gateway/pinned_transport.py`), B007/B017/F841/SIM102 across several
+   test files and `agent/checkpoint.py`/`agent/structured_output.py`.
+   `ruff format` then reformatted 84 files (pure whitespace/line-
+   wrapping, behavior-neutral — confirmed via two full local suite runs
+   both showing `21575 passed`, 0 failed, before this was pushed).
+   Committed as `f509878`.
+2. **Test (Python 3.12/3.13): missing `PIL`.** `missy/vision/sources.py`'s
+   `_peek_image_dimensions()` (the decompression-bomb pre-decode guard)
+   does `from PIL import Image` as real production code, but Pillow was
+   never declared in `pyproject.toml`'s `vision` extra — CI's `pip
+   install -e ".[dev,vision,vector]"` never installed it, and neither
+   would any real end user following the documented install
+   instructions. Fixed by adding `Pillow>=10.0` to the `vision` extra
+   and adding a `pytest.importorskip("PIL", exc_type=ImportError)`
+   autouse fixture to `TestFileSourceDecompressionBombGuard` (matching
+   this codebase's established optional-dependency skip idiom) so an
+   environment without the extra skips these 4 tests instead of
+   crashing the whole run. Committed as `4c9be5f`.
+3. **Test (Python 3.12): PersonaManager concurrent-save race.**
+   `PersonaManager` had zero locking despite an existing test
+   (`test_concurrent_saves_do_not_corrupt`) asserting concurrent-save
+   safety — the test just wasn't reliable enough at its original 4x5
+   thread/iteration parameters to catch it locally (0/30 local
+   reproductions) despite failing once in real CI. Added
+   `self._lock = threading.Lock()` and wrapped the entirety of
+   `save()`/`rollback()`'s bodies in `with self._lock:` (leaving
+   `_create_backup()` itself unlocked, since both callers already hold
+   the lock when they call it — `threading.Lock` is not reentrant).
+   Strengthened the existing test to 20 threads x 10 saves, proven via
+   a standalone stress script to reproduce 7/8 pre-fix, 10/10 pass
+   post-fix. Committed as `c47fe26`.
+4. **Test (Python 3.11): a second, different `PersonaManager` race,
+   surfaced only after fix 3 was pushed.** `TestPersonaAuditLogIntegrity
+   ::test_audit_log_survives_concurrent_appends` (a pre-existing test
+   that constructs 5 *separate* `PersonaManager` instances against the
+   same path, deliberately — this is testing cross-process-style
+   concurrency, not cross-thread-within-one-instance) failed with an
+   unhandled `FileNotFoundError`. Root cause, confirmed by reproducing
+   locally and reading the traceback (the test only appends the bare
+   exception object to a list with no traceback, so this required a
+   standalone repro script to actually see where it originated):
+   `shutil.copy2()` in `_create_backup()` is `copyfile()` +
+   `copystat()` as two separate steps, not one atomic operation. Fix 3's
+   new lock only serializes `save()`/`rollback()` *within a single
+   instance* — it does nothing for the 5 independent instances this
+   test constructs against the same path. A different instance's
+   `_prune_backups()` (itself already defensive — it catches `OSError`
+   around its own `unlink()` and just logs) can unlink the backup file
+   this thread's `copyfile()` just created *between* that `copyfile()`
+   and this thread's own `copystat()` call, and `copystat()`'s
+   `os.utime()` then raises `FileNotFoundError` on a path that no
+   longer exists. Fixed by wrapping `shutil.copy2()` itself in a
+   `try/except FileNotFoundError`, returning early since there is
+   nothing left to preserve — the freshly-made backup was already
+   pruned by the other instance, so this is equivalent in effect to the
+   already-accepted `SameFileError` same-second race the test's own
+   docstring already documents as a known limitation of the backup
+   naming scheme. Strengthened the test from 5 threads x 10 saves (didn't
+   reproduce locally: 0/8) to 20 threads x 20 saves (13/15 pre-fix
+   failures, 0/15 post-fix, confirmed both via `git stash`).
+   Not yet pushed at the time of this checkpoint — see below.
+
+Verified: `pytest tests/agent/test_hatching_persona_stress.py
+tests/agent/test_persona_save_edges.py tests/agent/ -k persona -q`:
+`481 passed`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21575 passed, 18 skipped in 2030.74s (0:33:50)` — 0 failed, same
+count as the round 83 checkpoint (fix 4 strengthens an existing
+test's parameters rather than adding a new one). Ninety-sixth
+consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security
