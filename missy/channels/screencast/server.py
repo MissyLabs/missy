@@ -508,6 +508,25 @@ class ScreencastServer:
             if not self._running:
                 break
 
+            # Re-check the session's active flag on every message, not just
+            # at the initial auth handshake. Without this, `!screen stop`
+            # (ScreencastTokenRegistry.revoke_session()) only ever flipped
+            # session.active in the registry -- it never touched this
+            # already-authenticated connection, so a revoked session kept
+            # streaming frames (and the analyzer kept posting analysis
+            # results to Discord) indefinitely, until the browser tab was
+            # manually closed. Checking here bounds that window to at most
+            # one message interval after revocation instead of forever.
+            session = self._registry.get_session(session_id)
+            if session is None or not session.active:
+                _emit(session_id, "screencast.connection.revoked_disconnect", "deny")
+                with contextlib.suppress(Exception):
+                    await self._send_json(
+                        websocket, {"type": "error", "message": "Session revoked"}
+                    )
+                    await websocket.close(1000, "Session revoked")
+                break
+
             if isinstance(raw, bytes):
                 # Binary frame — this is the frame data following a "frame" JSON message.
                 if pending_meta is None:

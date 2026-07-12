@@ -1,5 +1,48 @@
 # TEST_RESULTS
 
+## Run: 2026-07-12 UTC — round 63 research pass: `!screen stop` did not actually stop an in-flight screencast stream
+
+- Context: round 63 was directed away from re-auditing gateway
+  hot-reload wiring (touched 3 consecutive rounds) into fresh
+  territory: checkpoint/resume correctness, persona/behavior
+  live-reload interaction, vision device health tracking, and
+  compaction's tool_call/tool_result pairing all came back clean or
+  unchanged from prior documented residuals.
+- **Revoked screencast sessions kept streaming**: `!screen stop`
+  (`ScreencastTokenRegistry.revoke_session()`) only ever flipped
+  `session.active = False` in the registry -- it never touched the
+  already-authenticated live WebSocket connection.
+  `ScreencastServer._message_loop()`'s `async for raw in websocket`
+  loop only ever re-checked `self._running` (whole-server shutdown) on
+  each iteration, never `session.active` again after the initial auth
+  handshake. A user running `!screen stop <id>` sees "Session
+  stopped" and reasonably believes sharing has ended, but the browser
+  tab's connection keeps sending frames every `capture_interval_ms`;
+  the server keeps enqueuing them and the analyzer keeps posting
+  vision-model results to Discord, with only generic
+  `censor_response()` secret-scrubbing as an indirect mitigation. No
+  test exercised revoke_session() against a live/mocked connection.
+- Fixed by re-checking `self._registry.get_session(session_id)`/
+  `.active` at the top of every `_message_loop()` iteration -- a
+  revoked session now gets a forced `websocket.close(1000, "Session
+  revoked")` as soon as it sends its next message, bounding the
+  post-revocation exposure window to "until the client's next
+  message" instead of indefinitely. A proactive close-the-connection-
+  from-revoke_session() approach was considered but rejected as
+  needing cross-event-loop coordination between the Discord command
+  handler and the screencast server's own loop; the per-message
+  re-check achieves the same practical protection without that added
+  complexity.
+- Command: `pytest tests/channels/test_screencast_server.py -k revoked_session -v`
+- Result: `1 passed`. New test
+  (test_revoked_session_disconnects_on_next_message) confirmed via
+  `git stash` to genuinely fail pre-fix -- asserting the connection is
+  actually closed and a subsequent "frame" message in the same batch
+  is never processed (state.frame_count == 0), not just that some
+  function was called.
+- Broader sweep: `pytest tests/channels/ -q`: `1990 passed`.
+- Full suite: `python3 -m pytest tests/ -q` → `21494 passed, 14 skipped in 714.99s (0:11:54)` — 0 failed, up from 21493. Seventy-seventh consecutive fully green full-suite run.
+
 ## Run: 2026-07-12 UTC — round 62 research pass: hot-reloaded max_spend_usd never reached already-running gateway daemon runtimes (7th confirmed instance of the family)
 
 - Context: round 62 re-verified (rather than trusted) SubAgentRunner's

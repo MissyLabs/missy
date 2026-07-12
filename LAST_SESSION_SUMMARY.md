@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (124 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for seventy-six consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (125 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for seventy-seven consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -5250,16 +5250,56 @@ Verified: `pytest tests/cli/test_cli_main_gaps.py -k
 HotReloadRefreshes -v`: `1 passed`. `pytest tests/cli/ tests/config/
 tests/scheduler/ tests/agent/ -q`: `6185 passed, 4 skipped`.
 
+### Post-backlog (one-hundred-nineteenth checkpoint): round 63 research pass — `!screen stop` did not actually stop an in-flight screencast stream
+
+Round 63 was directed away from re-auditing gateway hot-reload wiring
+(touched 3 consecutive rounds) into fresh territory: checkpoint/resume
+correctness, persona/behavior live-reload interaction, vision device
+health tracking, and compaction's tool_call/tool_result pairing all
+came back clean.
+
+**Found and fixed a real, security-relevant bug: `!screen stop`
+(`ScreencastTokenRegistry.revoke_session()`) only ever flipped
+`session.active = False` in the registry — it never touched the
+already-authenticated live WebSocket connection, so a revoked
+screencast session kept streaming frames (and the analyzer kept
+posting analysis results to Discord) indefinitely, until the browser
+tab was manually closed.** Traced the full runtime path:
+`verify_token()` is called exactly once, at the initial WebSocket auth
+handshake; `_message_loop()`'s per-iteration loop only ever re-checked
+`self._running` (whole-server shutdown), never `session.active`
+again. A user running `!screen stop` sees "Session stopped" and
+reasonably believes sharing has ended, but the stream — and Discord
+posts of what it sees — continue regardless. Fixed by re-checking
+`self._registry.get_session(session_id)`/`.active` at the top of
+every `_message_loop()` iteration — a revoked session now gets a
+forced `websocket.close(1000, "Session revoked")` as soon as it sends
+its next message, bounding the exposure window to "until the client's
+next message" instead of indefinitely. A proactive
+close-from-`revoke_session()` approach was considered but rejected as
+needing cross-event-loop coordination the codebase doesn't currently
+support; the per-message re-check achieves the same practical
+protection without that complexity. 1 new test, confirmed via `git
+stash` to genuinely fail pre-fix.
+
+Verified: `pytest tests/channels/test_screencast_server.py -k
+revoked_session -v`: `1 passed`. `pytest tests/channels/ -q`: `1990
+passed`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21493 passed, 14 skipped in 710.00s (0:11:50)
+21494 passed, 14 skipped in 714.99s (0:11:54)
 ```
 
-**Zero failures**, the seventy-sixth consecutive fully green
-full-suite run. Passed count is up from 21492 to 21493 (the round 62
+**Zero failures**, the seventy-seventh consecutive fully green
+full-suite run. Passed count is up from 21493 to 21494 (the round 63
 checkpoint's 1 new test:
+`test_revoked_session_disconnects_on_next_message` — full detail
+above; all of the sixty-first through one-hundred-eighteenth
+checkpoints' fixes are confirmed still holding). Passed count is up
+from 21492 to 21493 (the round 62 checkpoint's 1 new test:
 `test_hot_reload_updates_max_spend_usd_on_running_agents_and_scheduler`
 — full detail above; all of the sixty-first through
 one-hundred-seventeenth checkpoints' fixes are confirmed still

@@ -9084,6 +9084,72 @@ tests/scheduler/ tests/agent/ -q`: `6185 passed, 4 skipped`.
 `21493 passed, 14 skipped in 710.00s (0:11:50)` — 0 failed, up from
 21492. Seventy-sixth consecutive fully green full-suite run.
 
+### Post-backlog (one-hundred-nineteenth checkpoint): round 63 research pass fixes `!screen stop` not actually stopping an in-flight screencast stream
+
+Round 63 was explicitly directed away from re-auditing `_apply_config()`/
+`gateway_start()` hot-reload wiring (touched in 3 consecutive prior
+rounds) and into genuinely fresh territory: checkpoint/resume
+correctness, persona/behavior live-reload interaction, vision device
+health tracking, and compaction's tool_call/tool_result pairing all
+came back clean or unchanged from prior documented residuals.
+
+**Found and fixed a real, security-relevant bug: `!screen stop`
+(`ScreencastTokenRegistry.revoke_session()`) only ever flipped
+`session.active = False` in the registry — it never touched the
+already-authenticated live WebSocket connection, so a revoked
+screencast session kept streaming frames (and the vision analyzer
+kept posting analysis results to the Discord channel) indefinitely,
+until the browser tab was manually closed.** Traced the full runtime
+path end-to-end: `ScreencastTokenRegistry.verify_token()`
+(`channels/screencast/auth.py`) is called exactly once, during the
+initial WebSocket auth handshake in `ScreencastServer._handle_connection()`.
+After that, `_message_loop()`'s `async for raw in websocket` loop only
+ever re-checked `self._running` (whole-server shutdown) on each
+iteration — never `session.active` again. `revoke_session()` mutates
+only the registry's in-memory flag; nothing in the connection-handling
+path reads it back. Concretely: a user runs `!screen share`, streams
+their screen, then runs `!screen stop <id>` and sees "Session stopped"
+— reasonably believing sharing has ended — but the browser tab's
+WebSocket connection is still open and still sending frames every
+`capture_interval_ms`; the server keeps accepting and enqueuing them,
+and the analyzer keeps running them through the vision model and
+posting results to Discord, with only generic secret-scrubbing
+(`censor_response()`) as a very indirect mitigation, not a substitute
+for actually stopping the stream. No test exercised `revoke_session()`
+against a live/mocked connection to confirm frames actually stop
+flowing after revocation — existing tests covered the registry's
+`active` flag and `verify_token()` in isolation (auth-time only).
+
+Fixed by re-checking `self._registry.get_session(session_id)`/
+`.active` at the top of every `_message_loop()` iteration (the same
+place `self._running` is already checked) — a revoked session now
+gets an `{"type": "error", "message": "Session revoked"}` response and
+a forced `websocket.close(1000, "Session revoked")` as soon as it
+sends its next message (heartbeat, frame, or any other), rather than
+continuing forever. This bounds the post-revocation exposure window to
+"until the client's next message" (governed by `capture_interval_ms`,
+clamped 2s-5min) instead of "indefinitely, until the browser tab is
+manually closed" — a proactive close-the-live-connection-from-
+`revoke_session()` approach was considered but rejected as needing
+cross-event-loop coordination between the Discord command handler and
+the screencast server's own event loop (`SessionManager` doesn't
+currently expose the live `websocket` object for a cross-loop close);
+the per-message re-check achieves the same practical protection
+without that added complexity/risk. 1 new test
+(`test_revoked_session_disconnects_on_next_message`), confirmed via
+`git stash` to genuinely fail pre-fix — asserting the connection is
+actually closed and that a subsequent "frame" message in the same
+batch is never processed (`state.frame_count == 0`), not just that
+some function was called.
+
+Verified: `pytest tests/channels/test_screencast_server.py -k
+revoked_session -v`: `1 passed`. `pytest tests/channels/ -q`: `1990
+passed`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21494 passed, 14 skipped in 714.99s (0:11:54)` — 0 failed, up from
+21493. Seventy-seventh consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

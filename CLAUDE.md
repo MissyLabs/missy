@@ -120,7 +120,7 @@ VoiceChannel (channels/voice/):
 - `CLIChannel`: Interactive stdin/stdout
 - `DiscordChannel`: Full WebSocket Gateway API with access control (DM allowlist, guild/role policies), slash commands (`/ask`, `/status`, `/model`, `/help`)
 - `WebhookChannel`: HTTP webhook ingress
-- `ScreencastChannel`: Browser-based screen capture with token auth (`ScreencastTokenRegistry`) and session management (`SessionManager`)
+- `ScreencastChannel`: Browser-based screen capture with token auth (`ScreencastTokenRegistry`) and session management (`SessionManager`). `!screen stop` (`revoke_session()`) is re-checked on every subsequent WebSocket message in `ScreencastServer._message_loop()`, not just at the initial auth handshake — a revoked session's already-authenticated connection is force-closed (code 1000) as soon as it sends anything else, rather than continuing to stream frames (and have the analyzer keep posting results to Discord) indefinitely until the browser tab is manually closed.
 - `VoiceChannel`: WebSocket server (default port 8765) accepting connections from edge nodes (ReSpeaker, Raspberry Pi). Protocol: JSON control frames + binary PCM audio. Device pairing with PBKDF2-hashed tokens. Per-node policy modes: `full`, `safe-chat`, `muted`. STT via faster-whisper, TTS via piper binary.
 
 **Agent Loop Components (`missy/agent/`)**:
