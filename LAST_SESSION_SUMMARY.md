@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (138 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for ninety consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (139 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for ninety-one consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -5753,18 +5753,57 @@ Verified: `pytest tests/security/test_landlock.py -v`: `70 passed`.
 `pytest tests/security/test_scanner.py -v -k sec_042`: `5 passed`.
 `pytest tests/security/ -q`: `2069 passed`.
 
+### Post-backlog (one-hundred-thirty-third checkpoint): round 78 research pass — `StructuredOutput._extract_json()`'s naive `rfind()`-based JSON boundary trimming broke when trailing/nested content contained the closer character
+
+Round 78 reviewed `vision/health_monitor.py` (clean) and flagged,
+without fixing, a medium-confidence `ContainerSandbox.execute()`
+timeout gap (can't empirically verify without Docker in this
+environment; zero production callers today anyway).
+
+**Fixed: `OutputSchema._extract_json()`'s trailing-content trimming
+used `rfind(closer)`, finding the LAST occurrence of the closer
+character anywhere in the string, not the one balancing the JSON's
+own nesting.** Two call sites shared this flaw (raw-JSON and
+embedded-in-prose branches). If trailing prose contained a literal
+`}`/`]` (e.g. the model discusses JSON syntax), the trim cut past the
+real close, producing invalid JSON. Live-reproduced:
+`parse('{"value": 1} Do not include the character "}" in
+output.')` — pre-fix, `Extra data` error burned a retry on a
+perfectly valid response. Existing tests only covered remarks without
+a closer character, giving false confidence. Fixed by replacing both
+`rfind()` sites with a bracket-depth-aware `_find_balanced_end()` scan
+that correctly skips over string literals. 3 new tests, 2 confirmed
+via `git stash` to genuinely fail pre-fix.
+
+Verified: `pytest tests/agent/test_structured_output.py -v -k "extract or json"`:
+`26 passed`. `pytest tests/agent/ -q`: `4321 passed, 4 skipped`.
+
+### Round 79 (research-only, no findings requiring a fix)
+
+Investigated a candidate `SkillDiscovery` frontmatter-boundary claim
+(same shape as round 78's fix) and found it does not reproduce with
+valid YAML — a properly-indented block scalar parses correctly;
+"first occurrence wins" is standard, defensible frontmatter-parser
+behavior. Re-examined round 78's `ContainerSandbox` timeout
+observation (confidence raised via static analysis, still deferred —
+no Docker here to empirically verify). No code changed.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21541 passed, 18 skipped in 796.95s (0:13:16)
+21544 passed, 18 skipped in 775.11s (0:12:55)
 ```
 
-**Zero failures**, the ninetieth consecutive fully green full-suite
-run. Passed count is up from 21536 to 21541 (the round 77
-checkpoint's 5 new tests: 2 Landlock, 3 SEC-042 scanner — full detail
-above; all of the sixty-first through one-hundred-thirty-first
-checkpoints' fixes are confirmed still holding). Passed count is up
+**Zero failures**, the ninety-first consecutive fully green
+full-suite run. Passed count is up from 21541 to 21544 (the round 78
+checkpoint's 3 new tests — full detail above; round 79 was
+research-only, no findings requiring a fix, no change; all of the
+sixty-first through one-hundred-thirty-second checkpoints' fixes are
+confirmed still holding). Passed count is up from 21536 to 21541 (the
+round 77 checkpoint's 5 new tests: 2 Landlock, 3 SEC-042 scanner —
+full detail above; all of the sixty-first through one-hundred-thirty-
+first checkpoints' fixes are confirmed still holding). Passed count is up
 from 21533 to 21536 (the round 76 checkpoint's 3 new tests — full
 detail above; all of the sixty-first through one-hundred-thirtieth
 checkpoints' fixes are confirmed still holding). Passed count is up

@@ -37,6 +37,49 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
 
 
+def _find_balanced_end(text: str, start: int) -> int:
+    """Return the index closing the JSON structure that opens at ``text[start]``.
+
+    Scans forward tracking bracket depth, correctly skipping over string
+    literals (including escaped quotes) so a ``}``/``]`` character inside a
+    JSON string value -- or in prose before/after the structure -- never
+    prematurely balances the count. This is what makes trailing-content
+    trimming safe: a naive ``rfind(closer)`` finds the LAST occurrence of
+    the closer character anywhere in the string, not the one that actually
+    closes this structure's own nesting.
+
+    Args:
+        text: The full string to scan.
+        start: Index of the opening ``{`` or ``[`` to balance.
+
+    Returns:
+        The index of the matching closing bracket, or ``-1`` if the
+        structure is never closed.
+    """
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch in "{[":
+            depth += 1
+        elif ch in "}]":
+            depth -= 1
+            if depth == 0:
+                return i
+    return -1
+
+
 @dataclass
 class StructuredResult(Generic[T]):
     """Result of a structured output attempt.
@@ -188,17 +231,20 @@ class OutputSchema(Generic[T]):
             return None
 
         # Raw JSON — starts directly with { or [. Trim any trailing content
-        # the same way the "embedded in prose" branch below already does
-        # (rfind the matching closer) rather than returning the rest of the
-        # string verbatim -- a model that appends even a short trailing
-        # remark after otherwise-valid JSON (e.g. "{...} let me know if you
-        # need anything else!") would otherwise make json.loads() raise
-        # "Extra data", burning a retry attempt on a response that was
-        # actually valid.
+        # (e.g. "{...} let me know if you need anything else!") rather than
+        # returning the rest of the string verbatim -- a model that appends
+        # even a short trailing remark after otherwise-valid JSON would
+        # otherwise make json.loads() raise "Extra data", burning a retry
+        # attempt on a response that was actually valid. Uses a
+        # bracket-depth-aware scan (_find_balanced_end), not rfind(closer):
+        # rfind() finds the LAST occurrence of the closer character
+        # anywhere in the string, not the one that actually balances the
+        # JSON's own nesting -- if the trailing remark itself contains a
+        # literal "}" or "]" (e.g. the model discusses JSON syntax, or
+        # writes an emoticon), rfind() cuts past the real JSON close,
+        # producing an invalid, unparseable snippet.
         if stripped[0] in ("{", "["):
-            opener = stripped[0]
-            closer = "}" if opener == "{" else "]"
-            end = stripped.rfind(closer)
+            end = _find_balanced_end(stripped, 0)
             if end > 0:
                 return stripped[: end + 1]
             return stripped
@@ -210,12 +256,16 @@ class OutputSchema(Generic[T]):
             if candidate:
                 return candidate
 
-        # JSON embedded in prose — find outermost { ... } or [ ... ]
+        # JSON embedded in prose — find outermost { ... } or [ ... ].
+        # Same bracket-depth-aware scan as above, for the same reason:
+        # trailing prose after the embedded JSON containing a literal
+        # closer character would otherwise truncate at the wrong position.
         for opener, closer in (("{", "}"), ("[", "]")):
             start = stripped.find(opener)
-            end = stripped.rfind(closer)
-            if start != -1 and end > start:
-                return stripped[start : end + 1]
+            if start != -1:
+                end = _find_balanced_end(stripped, start)
+                if end > start:
+                    return stripped[start : end + 1]
 
         return None
 

@@ -10398,6 +10398,142 @@ Verified: `pytest tests/security/test_landlock.py -v`: `70 passed`.
 `21541 passed, 18 skipped in 796.95s (0:13:16)` — 0 failed, up from
 21536. Ninetieth consecutive fully green full-suite run.
 
+### Post-backlog (one-hundred-thirty-third checkpoint): round 78 research pass fixes `StructuredOutput._extract_json()`'s naive `rfind()`-based JSON boundary trimming, which broke when trailing/nested content contained the closer character
+
+Round 78 reviewed `missy/vision/health_monitor.py` (clean — locking
+discipline around every mutation path, `HEALTHY`/`DEGRADED`/
+`UNHEALTHY`/`UNKNOWN` status aggregation across both reporting
+methods, and the SQLite persistence's explicit
+`BEGIN`/`COMMIT`/`ROLLBACK` transaction handling all check out) and
+flagged, without fixing, a medium-confidence observation in
+`missy/security/container.py`: `ContainerSandbox.execute()`'s
+`timeout` parameter kills the local `docker exec` client process on
+`subprocess.TimeoutExpired`, but per documented Docker semantics this
+does not itself terminate the process running inside the container's
+namespace via the daemon — the advertised "runaway command is stopped
+after `timeout` seconds" property may not actually hold. Left
+undecided/unfixed this round: `ContainerSandbox` has zero production
+callers today (consistent with `SecurityScanner`'s own honest SEC-090
+finding), and — unlike round 77's Landlock fix, which was a clear-cut
+logic bug reproducible entirely in Python — this rests on Docker
+daemon/containerd behavior this sandbox environment has no Docker
+installation to empirically confirm one way or the other; noted for a
+future round with Docker access, not forced through on inference
+alone.
+
+One real, high-confidence, directly-reproduced finding surfaced in
+`missy/agent/structured_output.py`, fixed this round.
+
+**Fixed: `OutputSchema._extract_json()`'s trailing-content trimming
+used `rfind(closer)` to find where a raw or prose-embedded JSON value
+ends — but `rfind` finds the LAST occurrence of the closer character
+*anywhere* in the string, not the one that actually balances the
+JSON's own bracket nesting.** This function has two call sites
+sharing the identical flaw: the "raw JSON" branch (added in an
+earlier round specifically to trim trailing remarks, per its own
+regression test `test_raw_json_with_trailing_prose_is_trimmed`) and
+the "JSON embedded in prose" branch a few lines below (`end =
+stripped.rfind(closer)`, present since this method's original
+version). Both work correctly when the trailing/surrounding prose
+contains no `}`/`]` character — but if it does (a model discussing
+JSON syntax, quoting the character, writing an emoticon, or simply
+producing a nested JSON string value that itself contains a `}`),
+the naive rfind-based trim cuts past the real JSON close, producing
+an invalid, unparseable snippet. Live-reproduced directly:
+`OutputSchema(Answer).parse('{"value": 1} Do not include the
+character "}" in output.')` — pre-fix, `json.loads` raised `Extra
+data: line 1 column 14`, so `result.success == False`, burning one of
+the bounded `max_retries` attempts on a response whose actual JSON
+payload was perfectly valid — exactly the failure class this code
+was originally written to prevent, just one level deeper (a closer
+character appearing *inside* the trailing prose itself, not merely
+trailing prose with no closer character in it at all, which is all
+the existing test suite exercised). A local/weaker model appending
+something like `"(don't format as {curly braces})"` — a plausible,
+even helpful-sounding aside — would hit this in production via
+`StructuredOutputRunner.complete_structured`, silently wasting retry
+budget on valid answers. Existing tests
+(`test_raw_json_with_trailing_prose_is_trimmed`,
+`test_raw_json_array_with_trailing_prose_is_trimmed`) only used
+remarks that don't themselves contain `}`/`]` (e.g. `"let me know if
+you need anything else!"`), so they gave false confidence about this
+exact code path while missing the deeper gap entirely — a textbook
+case of a regression test covering the shallow version of a bug but
+not the fuller failure mode one level down.
+
+Fixed by replacing both `rfind(closer)` call sites with a new
+module-level `_find_balanced_end()` helper that scans forward from
+the opening bracket tracking nesting depth, correctly skipping over
+string literals (including escaped quotes, so a `}` inside a JSON
+string value like `"label": "a {curly} example"` is never mistaken
+for the structure's own close) — this is what makes trimming safe:
+the scan stops at the character that actually closes *this*
+structure's own nesting, wherever that is, rather than guessing based
+on the last occurrence of a character that could appear for entirely
+unrelated reasons anywhere later (or, for string-embedded braces,
+earlier-but-still-inside-the-structure) in the text. 3 new tests
+(`test_raw_json_with_trailing_prose_containing_closer_char`,
+`test_raw_json_nested_object_with_brace_in_string_value`,
+`test_json_embedded_in_prose_with_trailing_closer_char`), the first
+and third confirmed via `git stash` to genuinely fail pre-fix (the
+second is a same-behavior-before-and-after sanity check confirming
+string-embedded braces were already handled correctly by luck in the
+pre-fix code for that specific non-trailing case, and remain so
+post-fix).
+
+Verified: `pytest tests/agent/test_structured_output.py -v -k "extract or json"`:
+`26 passed`. `pytest tests/agent/ -q`: `4321 passed, 4 skipped`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21544 passed, 18 skipped in 775.11s (0:12:55)` — 0 failed, up from
+21541. Ninety-first consecutive fully green full-suite run.
+
+### Round 79 (research-only, no findings requiring a fix): SkillDiscovery frontmatter-boundary claim investigated and not reproducible with valid input; ContainerSandbox timeout gap re-examined, confidence raised but still deferred
+
+Round 79's research agent proposed a candidate finding: that
+`SkillDiscovery._split_frontmatter()`'s `rest.find("\n---")` (finding
+the FIRST occurrence of the closing delimiter) could silently
+truncate frontmatter if a YAML block-scalar `description: |` value
+legitimately contained an embedded `---` line, using an example with
+a 2-space-indented `  ---` line inside the block scalar. Directly
+tested this exact example against the real
+`SkillDiscovery._split_frontmatter()`: it parses correctly, with the
+full frontmatter (including the trailing `tools: [render]` key) intact
+and only the real markdown body returned separately — the claim does
+not reproduce with properly-indented, valid YAML. The reason: a YAML
+block scalar's content lines must be indented *more* than the key
+itself, so `\n  ---` (with leading whitespace) never matches the
+literal substring `\n---` `_split_frontmatter` searches for in the
+first place. Tested a second variant with the block-scalar content
+deliberately left *unindented* (which is itself invalid YAML,
+independent of this code) and confirmed that variant DOES cut early
+— but since Missy's own hand-rolled `_parse_yaml` doesn't implement
+real YAML block-scalar (`|`/`>`) semantics at all (confirmed via
+inspection — it only understands single-line `key: value` pairs,
+inline `[...]` lists, and block sequences of `-` items), and since
+"first occurrence of the closing delimiter wins" is the standard,
+correct convention most frontmatter-parsing formats use anyway, this
+does not meet the bar of "a genuine bug reachable with realistic,
+valid input" the way rounds 69-78's fixes did. Not fixed; documented
+here as investigated-and-dismissed rather than silently dropped.
+
+Also re-examined `ContainerSandbox.execute()`'s round-78-flagged
+timeout gap (killing the local `docker exec` client on
+`TimeoutExpired` doesn't itself terminate the process running inside
+the container). Confirmed via grep that no `docker exec ... kill`
+fallback or signal-forwarding logic exists anywhere in this file or
+elsewhere in the codebase, raising confidence in the underlying
+mechanism analysis from medium to high — but this environment still
+has no Docker installation to empirically verify against a real
+container, and `ContainerSandbox` still has zero production callers.
+Consistent with round 78's own reasoning, left deferred rather than
+landing an unverified fix to container-kill semantics with no way to
+test it here; a future round with Docker access should revisit this
+with an empirical repro before implementing a fix.
+
+No code changed this round; folded into the next checkpoint that
+contains an actual fix rather than committed/pushed standalone.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

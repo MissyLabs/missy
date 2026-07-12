@@ -1,5 +1,54 @@
 # TEST_RESULTS
 
+## Run: 2026-07-12 UTC — round 78 research pass: StructuredOutput's naive rfind()-based JSON boundary trimming broke when trailing/nested content contained the closer character
+
+- Context: round 78 reviewed `missy/vision/health_monitor.py` (clean
+  — locking discipline, status aggregation, and SQLite transaction
+  handling all check out) and flagged a medium-confidence,
+  not-currently-reachable-from-production observation in
+  `missy/security/container.py`'s `execute()` timeout (documented,
+  not fixed this round — `ContainerSandbox` has zero production
+  callers, and the finding rests on documented Docker `exec` client-
+  vs-remote-process semantics rather than an empirical repro, since
+  Docker isn't available in this environment). One real,
+  high-confidence, directly-reproduced finding surfaced in
+  `missy/agent/structured_output.py`.
+- **Fixed: `OutputSchema._extract_json()`'s trailing-content trimming
+  used `rfind(closer)` to find where a raw or prose-embedded JSON
+  value ends, which finds the LAST occurrence of the closer character
+  ANYWHERE in the string -- not the one that actually balances the
+  JSON's own bracket nesting.** If a trailing remark after otherwise-
+  valid JSON contained a literal `}`/`]` (e.g. the model discusses
+  JSON syntax, quotes the character, or writes an emoticon), the
+  rfind-based trim cut past the real JSON close, producing an
+  invalid, unparseable snippet. The SAME flaw existed in the
+  "embedded in prose" branch a few lines below (`end =
+  stripped.rfind(closer)`), not just the raw-JSON branch the existing
+  regression test suite already covered for the simpler
+  "trailing-prose-with-no-brace-in-it" case. Live-reproduced:
+  `schema.parse('{"value": 1} Do not include the character "}" in
+  output.')` -- pre-fix, `json.loads` raised `Extra data: line 1
+  column 14`, so `result.success == False`, burning a retry attempt
+  on a response whose actual JSON payload was perfectly valid (the
+  exact failure class this code was originally written to prevent,
+  just one level deeper: a closer character appearing in the trailing
+  prose itself, not merely trailing prose with no closer in it at
+  all). Fixed by replacing both `rfind(closer)` call sites with a new
+  `_find_balanced_end()` helper that scans forward from the opening
+  bracket tracking nesting depth, correctly skipping over string
+  literals (including escaped quotes) so a `}`/`]` inside a JSON
+  string value or in prose never prematurely balances the count.
+- Command: `pytest tests/agent/test_structured_output.py -v -k "extract or json"`
+- Result: `26 passed` (3 new:
+  `test_raw_json_with_trailing_prose_containing_closer_char`,
+  `test_raw_json_nested_object_with_brace_in_string_value`,
+  `test_json_embedded_in_prose_with_trailing_closer_char`), the first
+  and third confirmed via `git stash` to genuinely fail pre-fix.
+- Broader sweep: `pytest tests/agent/ -q`: `4321 passed, 4 skipped`.
+- Full suite: `python3 -m pytest tests/ -q` → `21544 passed, 18
+  skipped in 775.11s (0:12:55)` — 0 failed, up from 21541.
+  Ninety-first consecutive fully green full-suite run.
+
 ## Run: 2026-07-12 UTC — round 77 research pass: apply_landlock_from_config() never granted execute access despite the ruleset globally handling EXECUTE (a self-inflicted total subprocess-exec DoS the instant it's ever activated); SEC-042 scanner check missed full-path/version-suffixed shell interpreters
 
 - Context: round 77 re-examined `ToolAnnotation`'s other fields
