@@ -1,5 +1,45 @@
 # TEST_RESULTS
 
+## Run: 2026-07-12 UTC — round 61 research pass: AuditLogger hot-reload was a complete no-op (6th confirmed instance of the "config value never reaches the process that matters" family)
+
+- Context: round 61 systematically re-read _apply_config() (now
+  covering PolicyEngine/ProviderRegistry/OtelExporter as of round 60)
+  against every subsystem _load_subsystems()/gateway_start()
+  constructs, hunting for more instances of the pattern round 60
+  confirmed a fifth time. Confirmed Vault hot-reload is NOT a gap --
+  Vault is never a long-lived singleton; load_config() constructs a
+  fresh Vault(vault_dir) every call, so a changed vault_dir is
+  naturally picked up on the next reload with no extra wiring.
+- **AuditLogger hot-reload never worked**: init_audit_logger() was
+  only ever called once, at process bootstrap, exactly like OTel
+  before round 60's fix. Editing audit_log_path on a running `missy
+  gateway start` daemon had zero effect -- every subsequent event kept
+  being written to the stale path forever, silently (AuditLogger's
+  write path swallows failures internally). The fix infrastructure
+  already existed and was unused: AuditLogger.reconfigure() and
+  init_audit_logger()'s reuse-existing-instance branch were built
+  specifically for this, but nothing called init_audit_logger() a
+  second time. No test combined hot-reload with audit-logger init.
+- Fixed by adding init_audit_logger(new_config.audit_log_path) to
+  _apply_config(), following the same try/except-and-log pattern
+  already used for init_otel().
+- Command: `pytest tests/config/test_hotreload.py -v`
+- Result: `38 passed`. 1 existing test
+  (test_apply_reinitializes_subsystems) updated to also assert
+  init_audit_logger is called with config.audit_log_path; 1 new
+  end-to-end test (test_reload_repoints_audit_logger_at_new_path),
+  both confirmed via `git stash` to genuinely fail pre-fix.
+- Live-verified end-to-end with the REAL AuditLogger/event bus (not
+  mocks): _apply_config() pointed at path A, an event published, then
+  _apply_config() pointed at path B, a second event published -- the
+  first event lands only in file A, the second only in file B,
+  confirming reconfigure()'s in-place repoint genuinely works through
+  the hot-reload path. Also the first test coverage of
+  AuditLogger.reconfigure() at all (previously zero references
+  anywhere in tests/).
+- Broader sweep: `pytest tests/config/ tests/observability/ tests/agent/ tests/cli/ -q`: `5957 passed, 4 skipped`.
+- Full suite: `python3 -m pytest tests/ -q` → `21492 passed, 14 skipped in 661.26s (0:11:01)` — 0 failed, up from 21491. Seventy-fifth consecutive fully green full-suite run.
+
 ## Run: 2026-07-12 UTC — round 60 research pass: OTel hot-reload was a complete no-op
 
 - Context: round 60 checked agent/interactive_approval.py + approval.py

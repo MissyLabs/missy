@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (122 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for seventy-four consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (123 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for seventy-five consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -5175,15 +5175,55 @@ tests/config/test_hotreload.py -v`: `68 passed`. `pytest
 tests/observability/ tests/config/ tests/agent/ tests/cli/ -q`: `5956
 passed, 4 skipped`.
 
+### Post-backlog (one-hundred-seventeenth checkpoint): round 61 research pass — AuditLogger hot-reload was a complete no-op, the sixth confirmed instance of this session's "config value never reaches the process that matters" family
+
+Round 61 systematically re-read `_apply_config()` against every
+subsystem `_load_subsystems()`/`gateway_start()` constructs, hunting
+for more instances of the pattern round 60 confirmed a fifth time
+(PersonaManager, McpManager, ProviderRegistry, SchedulerManager,
+OtelExporter). Confirmed `Vault` hot-reload is *not* a gap — `Vault`
+is never a long-lived singleton; `load_config()` constructs a fresh
+one every call, so a changed `vault_dir` is naturally picked up on the
+next reload.
+
+**Found and fixed a sixth real instance: `init_audit_logger()` was
+only ever called once, at process bootstrap — editing `audit_log_path`
+on a running `missy gateway start` daemon had zero effect, with every
+subsequent event silently continuing to be written to the stale path
+forever.** The fix infrastructure already existed and was unused:
+`AuditLogger.reconfigure()` and `init_audit_logger()`'s
+reuse-existing-instance branch were built specifically so re-calling
+it on a live process safely repoints the same, already-subscribed
+instance — the exact same shape as `OtelExporter`'s round 60 fix.
+Fixed by adding `init_audit_logger(new_config.audit_log_path)` to
+`_apply_config()`, following the identical pattern already used for
+`init_otel()`. Live-verified end-to-end with the REAL `AuditLogger`/
+event bus: `_apply_config()` pointed at path A, an event published,
+then pointed at path B, a second event published — the first event
+lands only in file A, the second only in file B, confirming
+`reconfigure()`'s in-place repoint genuinely works through the
+hot-reload path (also the first test coverage of `reconfigure()` at
+all — previously zero references anywhere in `tests/`). 1 existing
+test updated, 1 new end-to-end test added, both confirmed via `git
+stash` to genuinely fail pre-fix.
+
+Verified: `pytest tests/config/test_hotreload.py -v`: `38 passed`.
+`pytest tests/config/ tests/observability/ tests/agent/ tests/cli/
+-q`: `5957 passed, 4 skipped`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21491 passed, 14 skipped in 591.64s (0:09:51)
+21492 passed, 14 skipped in 661.26s (0:11:01)
 ```
 
-**Zero failures**, the seventy-fourth consecutive fully green
-full-suite run. Passed count is up from 21488 to 21491 (the round 60
+**Zero failures**, the seventy-fifth consecutive fully green
+full-suite run. Passed count is up from 21491 to 21492 (the round 61
+checkpoint's net +1 test: 1 existing hot-reload test updated, 1 new
+end-to-end AuditLogger re-init test added — full detail above; all of
+the sixty-first through one-hundred-sixteenth checkpoints' fixes are
+confirmed still holding). Passed count is up from 21488 to 21491 (the round 60
 checkpoint's net +3 tests: 1 existing hot-reload test updated, 3 new
 OTel re-init tests added — full detail above; all of the sixty-first
 through one-hundred-fifteenth checkpoints' fixes are confirmed still

@@ -122,9 +122,10 @@ class ConfigWatcher:
 
 def _apply_config(new_config) -> None:
     """Re-initialise subsystems with updated config."""
+    from missy.observability.audit_logger import init_audit_logger
+    from missy.observability.otel import init_otel
     from missy.policy.engine import PolicyEngine, init_policy_engine
     from missy.providers.registry import ProviderRegistry, init_registry
-    from missy.observability.otel import init_otel
 
     # Construct both new subsystem instances before installing either one
     # globally. init_policy_engine()/init_registry() each construct their
@@ -162,3 +163,19 @@ def _apply_config(new_config) -> None:
         logger.info("ConfigWatcher: OpenTelemetry exporter updated")
     except Exception as exc:
         logger.warning("ConfigWatcher: OpenTelemetry re-init failed: %s", exc)
+
+    # init_audit_logger() was only ever called once, at process bootstrap
+    # (_load_subsystems()) -- editing audit_log_path on a running `missy
+    # gateway start` daemon (e.g. moving to a different volume, or because
+    # the old location became unwritable/full) had no effect whatsoever:
+    # every subsequent event kept being written to the stale path forever,
+    # with no error surfaced anywhere. init_audit_logger() reuses and
+    # reconfigures the same, already-subscribed AuditLogger instance in
+    # place rather than constructing a new one (see AuditLogger.reconfigure()'s
+    # docstring for why a fresh instance would silently fail to actually
+    # replace it), so this is safe to call on every reload.
+    try:
+        init_audit_logger(new_config.audit_log_path)
+        logger.info("ConfigWatcher: audit logger updated")
+    except Exception as exc:
+        logger.warning("ConfigWatcher: audit logger re-init failed: %s", exc)

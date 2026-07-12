@@ -8951,6 +8951,73 @@ tests/config/ tests/agent/ tests/cli/ -q`: `5956 passed, 4 skipped`.
 `21491 passed, 14 skipped in 591.64s (0:09:51)` — 0 failed, up from
 21488. Seventy-fourth consecutive fully green full-suite run.
 
+### Post-backlog (one-hundred-seventeenth checkpoint): round 61 research pass fixes `AuditLogger` hot-reload being a complete no-op, the sixth confirmed instance of the "config value never reaches the process that matters" family this session
+
+Round 61 was explicitly directed at hunting for more instances of the
+pattern round 60 just confirmed a fifth time (PersonaManager, McpManager,
+ProviderRegistry, SchedulerManager, OtelExporter): does
+`_apply_config()` (the `ConfigWatcher` hot-reload callback) touch
+every config-driven singleton it should? Systematically re-read
+`_apply_config()` (now covering `PolicyEngine`/`ProviderRegistry`/
+`OtelExporter` as of round 60) against every subsystem
+`_load_subsystems()`/`gateway_start()` construct. Confirmed `Vault`
+hot-reload is *not* a gap — `Vault` is never held as a long-lived
+singleton; every `vault://` resolution goes through
+`config/settings.py`'s `load_config()`, which constructs a fresh
+`Vault(vault_dir)` from whatever `vault_dir` is in the config being
+loaded, so a changed `vault_dir` is naturally picked up on the very
+next hot-reload with no extra wiring needed.
+
+**Found and fixed a sixth real instance of the same family:
+`init_audit_logger()` was only ever called once, at process bootstrap
+(`_load_subsystems()`) — editing `audit_log_path` on a running `missy
+gateway start` daemon had zero effect, with every subsequent event
+silently continuing to be written to the stale path forever.** The
+fix infrastructure for this already existed and was simply unused:
+`AuditLogger.reconfigure()` and `init_audit_logger()`'s
+reuse-existing-instance branch were built specifically so re-calling
+`init_audit_logger()` on a live process safely repoints the *same*,
+already-subscribed instance at a new `log_path`/identity (mutating
+`log_path`/`_identity`, both read fresh on every event, rather than
+constructing a new instance whose own `_subscribe()` would layer a
+second wrapper around the bus's `publish()` without ever actually
+replacing the old instance's write target) — the exact same shape as
+`OtelExporter`'s fix in round 60, down to the "safe to call more than
+once, but nothing calls it a second time" pattern. Concretely: an
+operator moves `audit_log_path` to a different mounted volume (a
+realistic ops trigger, e.g. because the old location became
+unwritable/full) while the gateway keeps running; `ConfigWatcher`
+detects the change and calls `_apply_config()`, which updates policy/
+provider/OTel state but the audit trail keeps appending to the old,
+possibly-broken path forever, with no error surfaced anywhere
+(`AuditLogger`'s write path swallows failures internally). No test
+combined hot-reload with audit-logger init, because no production code
+path connected them.
+
+Fixed by adding `init_audit_logger(new_config.audit_log_path)` to
+`_apply_config()`, following the identical try/except-and-log pattern
+already used for `init_otel()`. Live-verified end-to-end with the
+REAL `AuditLogger`/event bus (not mocks): `_apply_config()` pointed at
+path A, an event published, then `_apply_config()` pointed at path B,
+a second event published — the first event lands only in file A, the
+second only in file B, confirming `reconfigure()`'s in-place repoint
+genuinely works through the hot-reload path, not just that the
+function was called. This is also the first test coverage of
+`AuditLogger.reconfigure()` at all (previously zero references
+anywhere in `tests/`). 1 existing test
+(`test_apply_reinitializes_subsystems`) updated to also assert
+`init_audit_logger` is called with `config.audit_log_path`; 1 new
+end-to-end test (`test_reload_repoints_audit_logger_at_new_path`),
+both confirmed via `git stash` to genuinely fail pre-fix.
+
+Verified: `pytest tests/config/test_hotreload.py -v`: `38 passed`.
+`pytest tests/config/ tests/observability/ tests/agent/ tests/cli/
+-q`: `5957 passed, 4 skipped`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21492 passed, 14 skipped in 661.26s (0:11:01)` — 0 failed, up from
+21491. Seventy-fifth consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security
