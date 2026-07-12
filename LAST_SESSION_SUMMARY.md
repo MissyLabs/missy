@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (139 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for ninety-one consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (140 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for ninety-two consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -5788,15 +5788,50 @@ behavior. Re-examined round 78's `ContainerSandbox` timeout
 observation (confidence raised via static analysis, still deferred —
 no Docker here to empirically verify). No code changed.
 
+### Post-backlog (one-hundred-thirty-fourth checkpoint): round 80 research pass — `bool(data.get(key, default))` silently inverted quoted-string YAML boolean values across the entire config-parsing surface (21 call sites, 4 files)
+
+Round 80 verified `SQLiteMemoryStore.cleanup()`'s pinned-turn
+exclusion and `otel.py`'s nested redaction both clean.
+
+**Fixed: `bool(data.get(key, default))` silently inverts a
+security-relevant boolean flag whenever the YAML value is a quoted
+string.** YAML parses `enabled: "false"` (quoted) as the Python
+string `"false"`, and `bool("false")` is `True` in Python. Live-
+reproduced: a config with `shell: {enabled: "false"}` produced
+`cfg.shell.enabled == True` — silently enabling shell execution, the
+opposite of the operator's intent, no error anywhere. This recurred
+at 21 call sites across `config/settings.py`,
+`security/sandbox.py`, `security/container.py`, and
+`channels/discord/config.py`. Fixed by adding a `_coerce_bool()`
+helper recognizing common string forms (`true`/`false`, `yes`/`no`,
+`on`/`off`, `1`/`0`) and raising `ConfigurationError` on anything
+genuinely ambiguous, replacing every bare `bool(...)` call site.
+
+Self-caught regression: the full `tests/security/` sweep surfaced a
+test explicitly asserting the *old* behavior for an empty string
+(`bool("")` → `False`). Updated it to assert the new, consistent
+contract: empty string now raises too, since it's exactly as
+ambiguous as any other unrecognized string. 20 new tests, 3
+confirmed via `git stash` to genuinely fail pre-fix.
+
+Verified: `pytest tests/config/test_settings.py -v -k "CoerceBool or
+QuotedBoolean"`: `20 passed`. `pytest tests/config/ -q`: `427
+passed`. `pytest tests/security/ -q`: `2068 passed` (1 unrelated,
+pre-existing Hypothesis timing flake confirmed via `git stash`).
+`pytest tests/channels/ -q`: `1995 passed`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21544 passed, 18 skipped in 775.11s (0:12:55)
+21564 passed, 18 skipped in 784.25s (0:13:04)
 ```
 
-**Zero failures**, the ninety-first consecutive fully green
-full-suite run. Passed count is up from 21541 to 21544 (the round 78
+**Zero failures**, the ninety-second consecutive fully green
+full-suite run. Passed count is up from 21544 to 21564 (the round 80
+checkpoint's 20 new tests — full detail above; all of the sixty-first
+through one-hundred-thirty-third checkpoints' fixes are confirmed
+still holding). Passed count is up from 21541 to 21544 (the round 78
 checkpoint's 3 new tests — full detail above; round 79 was
 research-only, no findings requiring a fix, no change; all of the
 sixty-first through one-hundred-thirty-second checkpoints' fixes are

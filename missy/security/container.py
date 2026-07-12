@@ -61,10 +61,12 @@ class ContainerConfig:
 
 def parse_container_config(data: dict) -> ContainerConfig:
     """Parse a ``container:`` YAML section into :class:`ContainerConfig`."""
+    from missy.config.settings import _coerce_bool
+
     if not isinstance(data, dict):
         return ContainerConfig()
     return ContainerConfig(
-        enabled=bool(data.get("enabled", False)),
+        enabled=_coerce_bool(data.get("enabled"), False),
         image=str(data.get("image", "python:3.12-slim")),
         memory_limit=str(data.get("memory_limit", "256m")),
         cpu_quota=float(data.get("cpu_quota", 0.5)),

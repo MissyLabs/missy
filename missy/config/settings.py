@@ -493,6 +493,51 @@ def _warn_unknown_keys(section: str, data: dict[str, Any], schema: type) -> None
         )
 
 
+def _coerce_bool(value: Any, default: bool) -> bool:
+    """Coerce a YAML-sourced value to a bool, failing loud on ambiguous strings.
+
+    Guards against a realistic operator/tooling mistake: quoting a
+    boolean literal in YAML (e.g. ``enabled: "false"``) parses as the
+    Python string ``"false"``, not ``False``. A bare ``bool("false")`` is
+    ``True`` (any non-empty string is truthy in Python), which would
+    silently invert a security-relevant flag like ``shell.enabled`` or
+    ``plugins.enabled`` the operator explicitly tried to disable -- with
+    no error, warning, or log line anywhere. This function recognizes the
+    common human-readable string forms and raises rather than silently
+    coercing anything else via Python's truthiness rules.
+
+    Args:
+        value: The raw value from the parsed YAML mapping (``None`` if
+            the key was absent -- callers pass ``data.get(key)`` with no
+            default so this function is the single place that applies
+            *default*).
+        default: Value to use when *value* is ``None``.
+
+    Returns:
+        The coerced boolean.
+
+    Raises:
+        ConfigurationError: If *value* is a string that isn't a
+            recognized boolean spelling.
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in ("true", "yes", "on", "1"):
+            return True
+        if lowered in ("false", "no", "off", "0"):
+            return False
+        raise ConfigurationError(
+            f"Cannot interpret {value!r} as a boolean. Use an unquoted "
+            "YAML boolean (true/false) or one of: true/false, yes/no, "
+            "on/off, 1/0."
+        )
+    return bool(value)
+
+
 def _parse_network(data: dict[str, Any]) -> NetworkPolicy:
     _warn_unknown_keys("network", data, NetworkPolicy)
     presets = list(data.get("presets", []))
@@ -528,7 +573,7 @@ def _parse_network(data: dict[str, Any]) -> NetworkPolicy:
                 existing_cidrs.add(c)
 
     return NetworkPolicy(
-        default_deny=bool(data.get("default_deny", True)),
+        default_deny=_coerce_bool(data.get("default_deny"), True),
         allowed_cidrs=allowed_cidrs,
         allowed_domains=allowed_domains,
         allowed_hosts=allowed_hosts,
@@ -551,7 +596,7 @@ def _parse_filesystem(data: dict[str, Any]) -> FilesystemPolicy:
 def _parse_shell(data: dict[str, Any]) -> ShellPolicy:
     _warn_unknown_keys("shell", data, ShellPolicy)
     return ShellPolicy(
-        enabled=bool(data.get("enabled", False)),
+        enabled=_coerce_bool(data.get("enabled"), False),
         allowed_commands=list(data.get("allowed_commands", [])),
     )
 
@@ -559,7 +604,7 @@ def _parse_shell(data: dict[str, Any]) -> ShellPolicy:
 def _parse_plugins(data: dict[str, Any]) -> PluginPolicy:
     _warn_unknown_keys("plugins", data, PluginPolicy)
     return PluginPolicy(
-        enabled=bool(data.get("enabled", False)),
+        enabled=_coerce_bool(data.get("enabled"), False),
         allowed_plugins=list(data.get("allowed_plugins", [])),
     )
 
@@ -652,14 +697,16 @@ def _parse_tool_intelligence(data: Any) -> ToolIntelligenceConfig:
             f"got {type(candidate_runtime).__name__}."
         )
     return ToolIntelligenceConfig(
-        candidate_generation_enabled=bool(candidate_gen.get("enabled", False)),
+        candidate_generation_enabled=_coerce_bool(candidate_gen.get("enabled"), False),
         min_pattern_count=int(candidate_gen.get("min_pattern_count", 3)),
-        allow_shell=bool(candidate_gen.get("allow_shell", False)),
+        allow_shell=_coerce_bool(candidate_gen.get("allow_shell"), False),
         check_every_n_requests=int(candidate_gen.get("check_every_n_requests", 5)),
-        provider_gating_enabled=bool(provider_gating.get("enabled", False)),
+        provider_gating_enabled=_coerce_bool(provider_gating.get("enabled"), False),
         provider_gating_min_samples=int(provider_gating.get("min_samples", 3)),
         provider_gating_min_composite=float(provider_gating.get("min_composite", 0.4)),
-        candidate_runtime_loading_enabled=bool(candidate_runtime.get("enabled", False)),
+        candidate_runtime_loading_enabled=_coerce_bool(
+            candidate_runtime.get("enabled"), False
+        ),
     )
 
 
@@ -750,7 +797,7 @@ def _parse_providers(
             api_key=api_key,
             base_url=raw.get("base_url"),
             timeout=int(raw.get("timeout", 30)),
-            enabled=bool(raw.get("enabled", True)),
+            enabled=_coerce_bool(raw.get("enabled"), True),
             api_keys=api_keys,
             fast_model=str(raw.get("fast_model", "")),
             premium_model=str(raw.get("premium_model", "")),
@@ -767,7 +814,7 @@ def _parse_providers(
 
 def _parse_scheduling(data: dict[str, Any]) -> SchedulingPolicy:
     return SchedulingPolicy(
-        enabled=bool(data.get("enabled", True)),
+        enabled=_coerce_bool(data.get("enabled"), True),
         max_jobs=int(data.get("max_jobs", 0)),
         active_hours=str(data.get("active_hours", "")),
     )
@@ -775,7 +822,7 @@ def _parse_scheduling(data: dict[str, Any]) -> SchedulingPolicy:
 
 def _parse_heartbeat(data: dict[str, Any]) -> HeartbeatConfig:
     return HeartbeatConfig(
-        enabled=bool(data.get("enabled", False)),
+        enabled=_coerce_bool(data.get("enabled"), False),
         interval_seconds=int(data.get("interval_seconds", 1800)),
         workspace=str(data.get("workspace", "~/workspace")),
         active_hours=str(data.get("active_hours", "")),
@@ -784,7 +831,7 @@ def _parse_heartbeat(data: dict[str, Any]) -> HeartbeatConfig:
 
 def _parse_observability(data: dict[str, Any]) -> ObservabilityConfig:
     return ObservabilityConfig(
-        otel_enabled=bool(data.get("otel_enabled", False)),
+        otel_enabled=_coerce_bool(data.get("otel_enabled"), False),
         otel_endpoint=str(data.get("otel_endpoint", "http://localhost:4317")),
         otel_protocol=str(data.get("otel_protocol", "grpc")),
         otel_service_name=str(data.get("otel_service_name", "missy")),
@@ -795,7 +842,7 @@ def _parse_observability(data: dict[str, Any]) -> ObservabilityConfig:
 
 def _parse_vault(data: dict[str, Any]) -> VaultConfig:
     return VaultConfig(
-        enabled=bool(data.get("enabled", False)),
+        enabled=_coerce_bool(data.get("enabled"), False),
         vault_dir=str(data.get("vault_dir", "~/.missy/secrets")),
     )
 
@@ -817,12 +864,12 @@ def _parse_proactive_trigger(raw: Any) -> ProactiveTriggerConfig:
     return ProactiveTriggerConfig(
         name=str(name),
         trigger_type=str(trigger_type),
-        enabled=bool(raw.get("enabled", True)),
-        requires_confirmation=bool(raw.get("requires_confirmation", True)),
+        enabled=_coerce_bool(raw.get("enabled"), True),
+        requires_confirmation=_coerce_bool(raw.get("requires_confirmation"), True),
         prompt_template=str(raw.get("prompt_template", "")),
         watch_path=str(raw.get("watch_path", "")),
         watch_patterns=list(raw.get("watch_patterns", [])),
-        watch_recursive=bool(raw.get("watch_recursive", False)),
+        watch_recursive=_coerce_bool(raw.get("watch_recursive"), False),
         disk_path=str(raw.get("disk_path", "/")),
         disk_threshold_pct=float(raw.get("disk_threshold_pct", 90.0)),
         load_threshold=float(raw.get("load_threshold", 4.0)),
@@ -835,7 +882,7 @@ def _parse_proactive(data: dict[str, Any]) -> ProactiveConfig:
     """Parse the ``proactive`` section of a Missy config dict."""
     triggers = [_parse_proactive_trigger(raw) for raw in data.get("triggers", [])]
     return ProactiveConfig(
-        enabled=bool(data.get("enabled", False)),
+        enabled=_coerce_bool(data.get("enabled"), False),
         triggers=triggers,
     )
 
@@ -850,7 +897,7 @@ def _parse_sandbox(data: dict[str, Any]) -> SandboxConfig:
 def _parse_vision(data: dict[str, Any]) -> VisionConfig:
     """Parse the ``vision`` section of a Missy config dict."""
     return VisionConfig(
-        enabled=bool(data.get("enabled", True)),
+        enabled=_coerce_bool(data.get("enabled"), True),
         preferred_device=str(data.get("preferred_device", "")),
         capture_width=int(data.get("capture_width", 1920)),
         capture_height=int(data.get("capture_height", 1080)),

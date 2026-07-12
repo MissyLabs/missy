@@ -10534,6 +10534,104 @@ with an empirical repro before implementing a fix.
 No code changed this round; folded into the next checkpoint that
 contains an actual fix rather than committed/pushed standalone.
 
+### Post-backlog (one-hundred-thirty-fourth checkpoint): round 80 research pass fixes `bool(data.get(key, default))` silently inverting quoted-string YAML boolean values across the entire config-parsing surface (21 call sites, 4 files)
+
+Round 80 verified `SQLiteMemoryStore.cleanup()`'s pinned-turn
+exclusion (clean — `json_extract('{"pinned": true}', '$.pinned')`
+returns SQLite integer `1`, correctly compared) and `otel.py`'s
+`_redact_detail` nested-dict/list redaction (clean — recurses fully
+into every leaf before any span attribute is set, so a nested secret
+is censored the same as a top-level one). One severe,
+high-confidence, live-verified finding surfaced in the config-parsing
+surface spanning four files.
+
+**Fixed: `bool(data.get(key, default))`, used throughout config
+parsing, silently inverts a security-relevant boolean flag whenever
+the YAML value is a quoted string instead of a native boolean
+literal.** YAML parses `enabled: "false"` (quoted) as the Python
+string `"false"`, not `False` — and `bool("false")` evaluates to
+`True` in Python, since any non-empty string is truthy. Live-
+reproduced end-to-end via a real `load_config()` call: a config file
+with `shell: {enabled: "false"}` and `plugins: {enabled: "false"}`
+produced `cfg.shell.enabled == True` and `cfg.plugins.enabled ==
+True` — silently *enabling* shell execution and plugin loading, the
+exact opposite of the operator's evident, explicitly-written intent,
+with no error, warning, or log line anywhere to surface the mistake.
+This is a realistic failure mode, not a contrived edge case: any
+operator or tooling that templates YAML from JSON, environment-
+variable substitution, or another config format commonly quotes all
+scalar values including booleans — the module's own docstring claims
+"Callers must explicitly opt in to each capability," but this
+coercion meant an operator could write what looks like an explicit,
+careful opt-out and get the precise opposite. The pattern recurred at
+16 call sites in `missy/config/settings.py` alone (`shell.enabled`,
+`plugins.enabled`, `network.default_deny`, all four
+`tool_intelligence.*` flags, `providers.*.enabled`,
+`scheduling.enabled`, `heartbeat.enabled`,
+`observability.otel_enabled`, `vault.enabled`, both `proactive.*`
+trigger flags, `vision.enabled`), plus 5 more spread across
+`missy/security/sandbox.py` (`enabled`, `network_disabled`,
+`read_only_root`, `require_isolation`), `missy/security/container.py`
+(`enabled`), and `missy/channels/discord/config.py` (guild/account
+`enabled`, `require_mention`, `ignore_bots`,
+`allow_bots_if_mention_only`) — every one of these is a genuine
+security- or capability-relevant flag, not cosmetic configuration.
+
+Existing tests covered explicit YAML boolean literals (`true`/`false`
+unquoted) correctly for several of these fields, but none exercised a
+*quoted* string value for any of them — the entire class of input was
+untested across the whole config surface.
+
+Fixed by adding a new `_coerce_bool(value, default)` helper in
+`config/settings.py` that recognizes common human-readable string
+forms (`true`/`false`, `yes`/`no`, `on`/`off`, `1`/`0`, all
+case-insensitive) and raises `ConfigurationError` on anything
+genuinely ambiguous rather than silently falling back to Python's
+truthiness rules — replacing all 21 bare `bool(...)` call sites
+across the four affected files. Verified there is no circular import
+risk: the three modules outside `config/settings.py` import
+`_coerce_bool` via a lazy, function-body-local import, exactly
+matching the existing lazy-import pattern `settings.py` itself
+already uses in the reverse direction for
+`parse_sandbox_config`/`parse_container_config` — confirmed by
+importing all four modules in both possible orders with no failure.
+
+Self-caught regression during this same checkpoint: running the full
+`tests/security/` sweep (not just the narrowly-targeted new tests)
+surfaced `test_container_config_edges.py::test_parse_string_enabled_falsy`,
+which explicitly asserted the *old* behavior —
+`parse_container_config({"enabled": ""})` silently defaulting to
+`False` via `bool("")`. An empty string is exactly as ambiguous as
+any other unrecognized string (arguably a clearer symptom of a
+problem — plausibly an unset template variable rendering as empty
+rather than a deliberate choice), so silently treating it as `False`
+would be an inconsistent special case in the new helper's contract,
+and would still be silently *wrong* for any boolean field whose
+secure default is `True` (e.g. `network.default_deny`) if the same
+"empty string is falsy" special-casing were applied there. Updated
+the test (renamed to `test_parse_string_enabled_empty_raises`) to
+assert the new, consistent contract: `ConfigurationError` is raised.
+
+20 new tests in `config/test_settings.py` (`TestCoerceBool` unit
+tests for the helper directly, `TestQuotedBooleanConfigValues` for
+the full end-to-end `load_config()` path), 3 of the end-to-end tests
+confirmed via `git stash` to genuinely fail pre-fix.
+
+Verified: `pytest tests/config/test_settings.py -v -k "CoerceBool or
+QuotedBoolean"`: `20 passed`. `pytest
+tests/security/test_container_config_edges.py -v`: `48 passed`.
+`pytest tests/config/ -q`: `427 passed`. `pytest tests/security/ -q`:
+`2068 passed` (the sole remaining item,
+`test_check_host_never_crashes_on_arbitrary_unicode`'s Hypothesis
+`DeadlineExceeded`, confirmed via `git stash` to be an identical,
+pre-existing, timing-based flake — reproduces the same failure with
+this round's changes fully removed, wholly unrelated). `pytest
+tests/channels/ -q`: `1995 passed`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21564 passed, 18 skipped in 784.25s (0:13:04)` — 0 failed, up from
+21544. Ninety-second consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

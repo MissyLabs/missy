@@ -982,3 +982,106 @@ class TestDataclasses:
         p2 = ShellPolicy()
         p1.allowed_commands.append("ls")
         assert p2.allowed_commands == []
+
+
+# ---------------------------------------------------------------------------
+# _coerce_bool -- quoted-string YAML boolean values must not silently invert
+# ---------------------------------------------------------------------------
+
+
+class TestCoerceBool:
+    """Regression: bool(data.get(key, default)) treats ANY non-empty string
+    as truthy in Python, so a quoted YAML boolean like enabled: "false"
+    parses as the string "false" and bool("false") is True -- silently
+    inverting a security-relevant flag the operator explicitly tried to
+    disable, with no error, warning, or log line anywhere. _coerce_bool()
+    must recognize common human-readable string forms and fail loud on
+    anything genuinely ambiguous, rather than falling back to Python's
+    truthiness rules.
+    """
+
+    def test_none_returns_default(self):
+        from missy.config.settings import _coerce_bool
+
+        assert _coerce_bool(None, True) is True
+        assert _coerce_bool(None, False) is False
+
+    def test_real_bool_passed_through(self):
+        from missy.config.settings import _coerce_bool
+
+        assert _coerce_bool(True, False) is True
+        assert _coerce_bool(False, True) is False
+
+    @pytest.mark.parametrize("value", ["true", "True", "TRUE", "yes", "on", "1"])
+    def test_truthy_strings(self, value: str):
+        from missy.config.settings import _coerce_bool
+
+        assert _coerce_bool(value, False) is True
+
+    @pytest.mark.parametrize("value", ["false", "False", "FALSE", "no", "off", "0"])
+    def test_falsy_strings(self, value: str):
+        from missy.config.settings import _coerce_bool
+
+        assert _coerce_bool(value, True) is False
+
+    def test_ambiguous_string_raises(self):
+        from missy.config.settings import _coerce_bool
+
+        with pytest.raises(ConfigurationError, match="Cannot interpret"):
+            _coerce_bool("maybe", False)
+
+    def test_empty_string_raises(self):
+        from missy.config.settings import _coerce_bool
+
+        with pytest.raises(ConfigurationError, match="Cannot interpret"):
+            _coerce_bool("", False)
+
+
+class TestQuotedBooleanConfigValues:
+    """End-to-end regression: a quoted-string boolean in the actual YAML
+    config file must not silently invert the resulting policy flag.
+    """
+
+    def test_quoted_false_shell_enabled_stays_disabled(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            shell:
+              enabled: "false"
+            """,
+        )
+        cfg = load_config(path)
+        assert cfg.shell.enabled is False
+
+    def test_quoted_false_plugins_enabled_stays_disabled(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            plugins:
+              enabled: "false"
+            """,
+        )
+        cfg = load_config(path)
+        assert cfg.plugins.enabled is False
+
+    def test_quoted_true_shell_enabled_is_enabled(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            shell:
+              enabled: "true"
+            """,
+        )
+        cfg = load_config(path)
+        assert cfg.shell.enabled is True
+
+    def test_ambiguous_string_value_raises_configuration_error(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            shell:
+              enabled: "maybe"
+            """,
+        )
+        with pytest.raises(ConfigurationError, match="Cannot interpret"):
+            load_config(path)

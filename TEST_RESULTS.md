@@ -1,5 +1,75 @@
 # TEST_RESULTS
 
+## Run: 2026-07-12 UTC — round 80 research pass: bare bool(data.get(key, default)) silently inverted quoted-string YAML boolean values across the entire config-parsing surface
+
+- Context: round 80 verified `SQLiteMemoryStore.cleanup()`'s pinned-
+  turn exclusion (correct — `json_extract` returns SQLite integer 1,
+  matched correctly) and `otel.py`'s `_redact_detail` nested
+  redaction (correct — recurses fully before any span attribute is
+  set) both clean, no bug. One severe, high-confidence,
+  live-verified finding surfaced in `missy/config/settings.py` and
+  three other config-parsing modules.
+- **Fixed: `bool(data.get(key, default))` used throughout config
+  parsing silently inverts a security-relevant boolean flag when the
+  YAML value is a quoted string instead of a native boolean.** YAML
+  parses `enabled: "false"` (quoted) as the Python string `"false"`,
+  not `False` -- and `bool("false")` is `True` in Python (any
+  non-empty string is truthy). Live-reproduced:
+  `load_config()` on a config with `shell: {enabled: "false"}` and
+  `plugins: {enabled: "false"}` produced `cfg.shell.enabled == True`
+  and `cfg.plugins.enabled == True` -- silently enabling shell
+  execution and plugin loading, the opposite of the operator's
+  evident intent, with no error, warning, or log line anywhere. This
+  pattern appeared at 16 call sites in `config/settings.py` alone
+  (`shell.enabled`, `plugins.enabled`, `network.default_deny`,
+  `tool_intelligence.*`, `providers.*.enabled`, `scheduling.enabled`,
+  `heartbeat.enabled`, `observability.otel_enabled`, `vault.enabled`,
+  `proactive.*`, `vision.enabled`), plus 5 more in
+  `security/sandbox.py`, `security/container.py`, and
+  `channels/discord/config.py` (`sandbox.enabled`,
+  `network_disabled`, `read_only_root`, `require_isolation`,
+  `container.enabled`, Discord guild/account `enabled`,
+  `require_mention`, `ignore_bots`, `allow_bots_if_mention_only`).
+- Fixed by adding a new `_coerce_bool(value, default)` helper in
+  `config/settings.py` that recognizes common human-readable string
+  forms (`true`/`false`, `yes`/`no`, `on`/`off`, `1`/`0`,
+  case-insensitive) and raises `ConfigurationError` on anything
+  genuinely ambiguous (including empty string) rather than silently
+  falling back to Python's truthiness rules -- replacing all 21 bare
+  `bool(...)` call sites across the four files. Verified no circular
+  import (the three other modules import `_coerce_bool` lazily from
+  `config.settings`, matching the existing lazy-import pattern
+  `settings.py` itself already uses for `parse_sandbox_config`/
+  `parse_container_config`).
+- Command: `pytest tests/config/test_settings.py -v -k "CoerceBool or QuotedBoolean"`
+- Result: `20 passed` (new `TestCoerceBool` unit-test class plus new
+  `TestQuotedBooleanConfigValues` end-to-end class), 3 of the
+  end-to-end tests confirmed via `git stash` to genuinely fail
+  pre-fix.
+- Self-caught regression during this same checkpoint: the full
+  `tests/security/` sweep surfaced
+  `test_container_config_edges.py::test_parse_string_enabled_falsy`,
+  which explicitly asserted the OLD behavior --
+  `parse_container_config({"enabled": ""})` silently defaulting to
+  `False` via `bool("")`. An empty string is exactly as ambiguous as
+  any other unrecognized string (arguably more so -- a plausible
+  symptom of an unset template variable), so silently treating it as
+  `False` would be an inconsistent special case, and would still be
+  actively wrong for any boolean field whose secure default is `True`
+  (e.g. `network.default_deny`). Updated the test to assert the new,
+  consistent contract: `ConfigurationError` is raised. Re-verified:
+  `pytest tests/security/test_container_config_edges.py -v`: `48
+  passed`.
+- Broader sweep: `pytest tests/config/ -q`: `427 passed`. `pytest
+  tests/security/ -q`: `2068 passed` (the sole remaining "failure,"
+  `test_check_host_never_crashes_on_arbitrary_unicode`'s Hypothesis
+  `DeadlineExceeded`, confirmed via `git stash` to be an identical,
+  pre-existing, timing-based flake wholly unrelated to this round's
+  changes). `pytest tests/channels/ -q`: `1995 passed`.
+- Full suite: `python3 -m pytest tests/ -q` → `21564 passed, 18
+  skipped in 784.25s (0:13:04)` — 0 failed, up from 21544.
+  Ninety-second consecutive fully green full-suite run.
+
 ## Run: 2026-07-12 UTC — round 78 research pass: StructuredOutput's naive rfind()-based JSON boundary trimming broke when trailing/nested content contained the closer character
 
 - Context: round 78 reviewed `missy/vision/health_monitor.py` (clean
